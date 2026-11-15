@@ -1,1 +1,2 @@
 - SPAWNER-RUN-TREE-S2-PY-RECORD-SHA: launch live Python CLI/MCP supervisors and launch-spec construction from fetched SHA-named code trees; stamp spawn, seat and direct-supervise records with tree identity or an explicit absence reason. Preserve null-event adapters and empty-seat CLI behavior and release tree leases once on late failures or cancellation.
+- Verify the selected-main supervisor import and preserved job cwd with a real child process, and require records from every entry-point fixture.

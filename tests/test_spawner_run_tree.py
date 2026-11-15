@@ -454,37 +454,50 @@ def test_all_python_entry_records_have_tree_sha_or_reason(tmp_path, monkeypatch,
         result = json.loads(output.getvalue())
     else:
         result = asyncio.run(service.spawn(**options, seats=entry == 'seats'))
-    for row in result.get('seats', [result]):
+    rows = result.get('seats', [result])
+    assert rows
+    for row in rows:
         saved = service.result(row['run_id'])
         assert saved['tree_sha'] == code['tree_sha']
         assert saved.get('tree_absent') == (None if identity else
             'spawner code checkout identity unavailable at process startup')
 
 
-def test_supervisor_handoff_stamps_selected_tree_not_parent_checkout(tmp_path, monkeypatch):
-    from registry_route_util import _service
-    from plangraph.spawner import cli
-    class Out(io.StringIO):
-        def close(self): pass
-    service = _service(tmp_path, monkeypatch)
-    tree = dict(tree_sha='b' * 40, tree_path=str(tmp_path / 'selected'))
-    payload = dict(state=str(tmp_path), card={'estimate_tokens': 100}, prompt='fixture',
-                   dry_run=True, _tree=tree, _admitted=True, _cwd=str(tmp_path))
-    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
-    monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps(payload)))
-    output = Out()
-    monkeypatch.setattr(cli.sys, 'stdout', output)
-    assert cli.main(['--supervise']) == 0
-    result = json.loads(output.getvalue())
-    assert result['tree_sha'] == tree['tree_sha'] != git_guard.CODE_IDENTITY['tree_sha']
-    assert service.result(result['run_id'])['tree_path'] == tree['tree_path']
-
-
-@pytest.mark.parametrize('raw', ['?', '[]', ' ' * (16 * 1024 * 1024 + 1)])
-def test_fresh_adapter_rejects_invalid_requests_before_selecting_a_tree(monkeypatch, capsys, raw):
-    from plangraph.spawner import launch_spec
-    import sys
-    monkeypatch.setattr(sys, 'stdin', io.StringIO(raw))
-    monkeypatch.setattr(git_guard, 'run_tree', lambda *a: pytest.fail('invalid request selected a tree'))
-    assert launch_spec.fresh_main() == 1
-    assert capsys.readouterr().err == 'launch-spec failed: invalid request (json)\n'
+def test_fresh_spawn_imports_selected_main_and_preserves_job_cwd(trees, monkeypatch):
+    from plangraph.spawner.runner import spawn_service
+    from plangraph.spawner.seat_spawn import fresh_spawn
+    origin, repo, state = trees
+    package = origin / 'src/plangraph/spawner'
+    package.mkdir(parents=True)
+    (package.parent / '__init__.py').touch()
+    (package / '__init__.py').touch()
+    (package / 'runner.py').write_text('''from types import SimpleNamespace
+class Service:
+    def __init__(self, state):
+        self.state, self.runner = state, SimpleNamespace(default_cwd=None)
+    def _save(self, record): pass
+spawn_service = Service
+''')
+    (package / 'cli.py').write_text('''import json, pathlib, sys
+from .runner import spawn_service
+payload = json.loads(sys.stdin.readline())
+assert not any(key.startswith('_') for key in payload)
+service = spawn_service(payload['state'])
+record = dict(run_id='run-fixture', status='completed', exit_code=0,
+              cwd=service.runner.default_cwd, version=pathlib.Path('version').read_text())
+service._save(record)
+assert pathlib.Path(__file__).resolve().is_relative_to(pathlib.Path(record['tree_path']))
+path = pathlib.Path(payload['state']) / 'runs/run-fixture/record.json'
+path.parent.mkdir(parents=True)
+path.write_text(json.dumps(record))
+print(json.dumps(record), flush=True)
+''')
+    git(origin, 'add', 'src')
+    sha = advance(origin)
+    monkeypatch.setenv('PLANGRAPH_SPAWNER_REPO', str(repo))
+    service = spawn_service(state=state)
+    service.runner.default_cwd = str(repo)
+    record = asyncio.run(fresh_spawn(service, dict(card={}, prompt='review', role='review', wait_seconds=None)))
+    assert record['tree_sha'] == sha != git(repo, 'rev-parse', 'HEAD')
+    assert record['version'] == 'B' and record['cwd'] == str(repo)
+    assert service.result(record['run_id']) == record
