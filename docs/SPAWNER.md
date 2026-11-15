@@ -106,10 +106,11 @@ adds `opencode_reasoning_exhausted`; later completed output is not retried.
 Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
 The monitor's events reach `record.json` through either dispatch path.
 
-For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` retries
+Every supported MiMo OpenCode launch uses shared `opencode_answer.cap_reasoning` to set its own `providers.mimo.models[model].limit.output` to the catalog's 131072 combined reasoning/answer tokens, plus the per-child legacy output-max env. Model package overrides take precedence over the provider package; only the openai-compatible package is supported. Missing entries are never fabricated. Malformed config, limit/body objects, incompatible packages and invalid catalog caps refuse with named `reasoning_output_limit: ...` reasons before launch. Combos resolve before this gate; unknown MiMo IDs retain the named path refusal. Non-MiMo launches and the root config are unchanged. Structured usage counts survive record scrubbing only as nonnegative integers; token secrets stay masked.
+For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` still retries
 once with the same prompt, model and harness, never unchanged. MiMo v2.6 Flash
 and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
-in the isolated child config; the root config and other roles are unchanged.
+in the isolated child config on retry only; other roles do not disable thinking.
 An already-disabled or unsupported control is unavailable, not an unchanged retry.
 The failed attempt and its events stay in the record, with `reasoning_retry=1`
 saved before the retry. Tool denial, fresh job isolation and the original review
@@ -120,8 +121,7 @@ ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare l
 or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
 Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; routed exhaustion keeps normal failure witness metadata, and both callers finalize `ended` and release monitor registrations in `finally`.
 Normal output, nonzero-output truncation and non-review roles retain existing behavior except that base-service watchdog exits now retain one attempt row, matching routed dispatch; `terminal_record` adds no rows, retries do not duplicate watchdog rows, and cancellation rows are unchanged.
-Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and
-`tests/test_spawner_runner_answer.py`; the live #768 seat is an after-merge operator check.
+Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and `tests/test_spawner_runner_answer.py`, with Rust cap contracts in `rust/pg-spawnd/tests/mimo_output_cap.rs`; live seats remain an after-merge operator check.
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
@@ -719,7 +719,7 @@ Review hard walls default to 25 minutes and implement/fix to 90 minutes; progres
 
 Every emitted context pack includes this rule within its size cap: new code is Rust with Rust tests; no new Python or shell file; an allowlist line needs an operator D-id. The planner brief template carries the same rule (D-5912).
 
-D-5966 review route: gemini-4-hydrogen-high, gemini-4-argon-medium, free console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-5-high. No mimo review legs. CLI quota responses use leg-state keys agy:<model> without effort, including native Sonnet; each model resets independently. Route JSON exposes all three agy_quota_states with reset_at evidence. Rust review kinds `agy-cli` and `claude-cli` select admitted review legs; Python MCP rejects these native kinds. Hydrogen and Argon use agy plan mode with preallowed read tools; commands stay unapproved.
+Review route (rule 3.50, D-6028): mimo/mimo-v2.6-pro, mimo/mimo-v2.6-flash (inline-only: skipped without card diff_ref), then the D-5966 order gemini-4-hydrogen-high, gemini-4-argon-medium, free console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-5-high. CLI quota responses use leg-state keys agy:<model> without effort, including native Sonnet; each model resets independently. Route JSON exposes all three agy_quota_states with reset_at evidence. Rust review kinds `agy-cli` and `claude-cli` select admitted review legs; Python MCP rejects these native kinds. Hydrogen and Argon use agy plan mode with preallowed read tools; commands stay unapproved.
 Sonnet uses Claude restricted review tools and high effort. CLI reviews use the checkout rather than inline-diff rollout, requiring a clean worktree and an exact HEAD fast-checks stamp. Rust binds head_sha and records verdict/findings with cli_reported provenance: agy reports the CLI-selected model, not provider telemetry; Claude must report a single Sonnet model. Repository HEAD and tracked cleanliness are rechecked at completion. Failed/quota streams never count. When tests share a Cargo target across worktrees, verify that `CARGO_BIN_EXE_pg-spawnd` belongs to the intended revision: a stale main executable can reject branch-only CLI kinds or misinterpret checkout diff_ref. A controlled main/branch comparison reproduced stale executable and unit-test inventory reuse. Clear affected package artifacts in a private diagnostic target; preserve configured host shared caches. The Unix keeper integration uses production modules with stdlib setup; its direct Python inputs in `tools/ci_select.py` select Rust CI. Record/provenance assertions also run on Windows. Initial launch and quota fallthrough share Rust review preparation: select transport before interpreting diff_ref. CLI checkout refs avoid the inline SHA validator; inline-only legs retain strict validation. Each native CLI retry requires the same stamped HEAD. Keeper counts the final serving attempt after quota refusals, preserving cli_reported trust for Sonnet. Native CLI reviews use card.cwd or legacy diff_ref.repo, then the daemon checkout if neither is supplied. Symbolic diff heads resolve there and must equal its stamped HEAD.
 
 Seat-pool cleanup tests create their initial commit with Git plumbing in an
