@@ -221,7 +221,7 @@ def test_build_applies_the_plan_rules_unless_forced(env, case, prs, message):
     elif case == "max_prs":
         extra = ["--max-prs", "1"]
     else:
-        kw1 = {"lines": 2000}
+        files = {"a.txt": "a\n" * 2000}
     env.branch_pr(1, files, **kw1)
     env.branch_pr(2, {"b.txt": "b\n"}, **kw2)
     res = env.run("build", "--name", "r1", "--prs", prs, *extra)
@@ -265,3 +265,42 @@ def test_build_warns_when_a_union_merge_touched_an_old_line(env, how):
     assert env.run("push", "--name", "w1").stdout == "100\n"
     body = env.load()["prs"]["100"]["body"]
     assert "Check these" in body and "- PR #1: CHANGELOG.md: 1 pre-existing line(s)" in body and "- PR #2" not in body
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_batch_changelog_and_checkpoint_appends_merge_by_default(env, legacy):
+    """New lanes use unique records; historical same-place ledger edits retain both entries."""
+    attrs = (Path(__file__).resolve().parents[1] / ".gitattributes").read_text()
+    env.seed({".gitattributes": attrs, "CHANGELOG.md": LEDGER,
+              "docs/checkpoints/README.md": "Directory is the index.\n"})
+    for n in (1, 2):
+        files = {f"changelog.d/ITEM-{n}.md": f"- change {n}\n",
+                 f"docs/checkpoints/ITEM-{n}.md": f"Checkpoint {n}: done\n"}
+        if legacy:
+            files["CHANGELOG.md"] = LEDGER.replace("- old entry", f"- change {n}\n- old entry")
+        env.branch_pr(n, files, item=f"ITEM-{n}")
+    result = env.run("build", "--name", "docs", "--prs", "1,2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    st = read(env, "docs")
+    assert "CHANGELOG.md" in st["union"]
+    wt = wt_of(env, "docs")
+    for n in (1, 2):
+        assert (wt / f"changelog.d/ITEM-{n}.md").read_text() == f"- change {n}\n"
+        assert (wt / f"docs/checkpoints/ITEM-{n}.md").read_text() == f"Checkpoint {n}: done\n"
+        if legacy:
+            assert f"- change {n}\n" in (wt / "CHANGELOG.md").read_text()
+    assert not any(m["warnings"] for m in st["merged"])
+
+
+@pytest.mark.parametrize("ledger", ["release ledger.md", "docs/#notes.md"])
+def test_union_defaults_come_from_fetched_base_not_callers_worktree(env, ledger):
+    pattern = f'"{ledger}"' if " " in ledger else ledger
+    env.seed({".gitattributes": f"{pattern} merge=union\n", ledger: "- old\n"})
+    for n in (1, 2):
+        env.branch_pr(n, {ledger: f"- change {n}\n- old\n"})
+    (env.repo / ".gitattributes").write_text("# uncommitted caller edit must not erase policy\n")
+    result = env.run("build", "--name", "policy", "--prs", "1,2", "--union", "extra.txt")
+    assert result.returncode == 0, result.stderr
+    assert read(env, "policy")["union"] == [pattern, 'extra.txt']
+    assert (wt_of(env, "policy") / ledger).read_text().splitlines() == [
+        "- change 1", "- change 2", "- old"]

@@ -9,7 +9,8 @@ import time
 from pathlib import Path
 
 from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
-                              gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees)
+                              gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
+                              batch_workflow_gate, part_review)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -91,8 +92,18 @@ def cmd_push(args):
             if not found:
                 raise MergeBatchError(f"gh pr create printed no PR url: {first_line(out)}")
             st.update(pr=int(found.group(1)), url=found.group(0))
+    previous_head = st.get("head")
     st.update(status="pushed", head=head)
+    run_id = args.ci_run or ((st.get("ci") or {}).get("id") if previous_head == head else None)
+    st["ci"] = None  # never keep CI evidence across a new pushed head or a failed lookup
     save_state(st)
+    if run_id:
+        ci = gh_json("run", "view", str(run_id), "--repo", st["repo"], "--json",
+                     "databaseId,headSha,status,conclusion")
+        if ci.get("headSha") != head or ci.get("databaseId") != run_id:
+            raise MergeBatchError(f"CI run {run_id} does not name pushed head {head}")
+        st["ci"] = {"id": run_id, "head": head, "state": ci.get("status"), "conclusion": ci.get("conclusion")}
+        save_state(st)
     print(f"pushed {st['branch']} {head}; {st['url']}; land needs an approval ending in 'HEAD: {head}' and "
           "'VERDICT: PASS'", file=sys.stderr)
     print(st["pr"])
@@ -167,6 +178,92 @@ def require_green(repo, number, names):
                               "not trusting the output")
 
 
+def require_full_run(repo, head, branch):
+    """Use Actions evidence at the batch SHA, independent of branch protection/--checks."""
+    endpoint = f"repos/{repo}/actions"
+    runs = gh_json("api", f"{endpoint}/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")["workflow_runs"]
+    if not runs:
+        raise MergeBatchError("full_ci: no tests run on exact batch head " + head)
+    run = max(runs, key=lambda r: r["id"])
+    if (run.get("head_sha") != head or run.get("head_branch") != branch
+            or run.get("event") != "pull_request" or not branch.startswith("batch/")
+            or run.get("status") != "completed" or run.get("conclusion") != "success"):
+        raise MergeBatchError(f"full_ci: tests run {run['id']} is not green on exact batch head {head}")
+    attempt = run.get("run_attempt", 1)
+    def jobs_for(number, run_id=None):
+        run_id = run["id"] if run_id is None else run_id
+        jobs, page = [], 1
+        while True:
+            data = gh_json("api", f"{endpoint}/runs/{run_id}/attempts/{number}/jobs?per_page=100&page={page}")
+            jobs.extend(data["jobs"])
+            if len(jobs) >= data["total_count"]:
+                return jobs
+            if not data["jobs"]:
+                raise MergeBatchError("full_ci: incomplete job pagination")
+            page += 1
+    jobs = jobs_for(attempt)
+    required = {"select", "scrub", "file-size", "new-code-lang", "changelog-docs", "browser",
+                "rust", "rust-windows", "rust-worker", "rust-spike", "ci-gate"}
+    required.update(f"{suite} ({i})" for suite in ("pytest", "pytest-postgres") for i in range(3))
+    missing = required - {j["name"] for j in jobs}
+    bad = [f"{j['name']}={j.get('conclusion') or j.get('status')}" for j in jobs
+           if j.get("status") != "completed" or j.get("conclusion") != "success"]
+    if missing or bad:
+        raise MergeBatchError("full_ci: " + ", ".join([*(f"{n}=missing" for n in sorted(missing)), *bad]))
+    reruns = []
+    for previous in runs:
+        if previous["id"] != run["id"]:
+            names = ", ".join(sorted(j["name"] for j in jobs_for(previous.get("run_attempt", 1), previous["id"])))
+            reruns.append(f"tests run {run['id']} replaces run {previous['id']} at {head}: {names}")
+    for number in range(2, attempt + 1):
+        names = ", ".join(sorted(j["name"] for j in jobs_for(number)))
+        reruns.append(f"tests run {run['id']} attempt {number} at {head}: {names}")
+    return reruns
+
+
+def record_reruns(repo, number, reruns):
+    if not reruns:
+        return
+    comments, page = [], 1
+    endpoint = f"repos/{repo}/issues/{number}/comments"
+    while True:
+        batch = gh_json("api", f"{endpoint}?per_page=100&page={page}")
+        comments.extend(c.get("body") or "" for c in batch)
+        if len(batch) < 100:
+            break
+        page += 1
+    additions = [line for line in reruns if not any(line in body for body in comments)]
+    if additions:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "body.md")
+            path.write_text("CI reruns (must be explained by a flake fix/quarantine item):\n"
+                            + "\n".join("- " + line for line in additions) + "\n", encoding="utf-8")
+            # A comment is auditable without triggering pull_request: edited.
+            gh("api", "--method", "POST", endpoint, "-F", f"body=@{path}")
+
+
+def require_main_green(repo, head, go_row=None):
+    """Freeze land while main has no completed green full run at its current tip."""
+    tip = gh_json("api", f"repos/{repo}/git/ref/heads/main")["object"]["sha"]
+    runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?branch=main&per_page=1")["workflow_runs"]
+    latest = runs[0] if runs else {}
+    if (latest.get("head_sha") == tip and latest.get("head_branch") == "main"
+            and latest.get("status") == "completed" and latest.get("conclusion") == "success"):
+        return
+    if go_row:
+        try:
+            lines = Path(go_row).read_text(encoding="utf-8").splitlines()
+        except OSError as exc:
+            raise MergeBatchError(f"main_red: cannot read GO row: {exc}") from None
+        for line in lines:
+            tokens = line.split()
+            if "GO" in tokens and head in tokens and "EXCEPTION:main-red-fix" in tokens:
+                print(f"main_red: GO exception for {head} from {go_row}", file=sys.stderr)
+                return
+    raise MergeBatchError("main_red: latest tests run on main is not completed green at its tip; "
+                          "only a GO row for this head with EXCEPTION:main-red-fix permits land")
+
+
 def settle(repo, recs, wait):
     """{pr: GitHub's state and head} of the included PRs, polled for up to ``wait`` seconds until each is MERGED
     or has a moved head (a PR with a new commit does not merge by itself, so it is not waited for)."""
@@ -215,7 +312,7 @@ def cmd_land(args):
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
     check_approval(args.approval, st["head"])
-    fields = "state,headRefOid,isDraft,mergeCommit"
+    fields = "state,headRefOid,isDraft,mergeCommit,baseRefName"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
     if pr["headRefOid"] != st["head"]:
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
@@ -223,7 +320,12 @@ def cmd_land(args):
     if pr["state"] == "OPEN":
         if pr["isDraft"]:
             raise MergeBatchError(f"batch PR #{number} is a draft")
+        if pr.get("baseRefName") != "main":
+            raise MergeBatchError("full_ci: batch PR must target main")
+        reruns = require_full_run(repo, st["head"], st["branch"])
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
+        require_main_green(repo, st["head"], args.go_row)
+        record_reruns(repo, number, reruns)
         gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"])
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
@@ -280,4 +382,56 @@ def cmd_status(args):
     for orphan in orphans:
         print(f"{orphan['name']}  orphan  no state file, but a build left its PR-head refs ({orphan['branch']}, "
               f"worktree {orphan['worktree']}): merge_batch.py abort --name {orphan['name']}")
+    return 0
+
+
+def cmd_review(args):
+    st = load_state(args.name)
+    rec = next((r for r in st["merged"] if r["pr"] == args.pr), None)
+    if rec is None:
+        raise MergeBatchError(f"PR #{args.pr} is not an included part")
+    rec["review"] = part_review(args.file, rec["head"])
+    save_state(st)
+    return 0
+
+
+def cmd_go_req(args):
+    st = load_state(args.name)
+    if st["status"] != "pushed" or not st.get("pr") or not st.get("base_head"):
+        raise MergeBatchError("go-req needs a pushed batch with a recorded base head")
+    wt, head = st["worktree"], st["head"]
+    if git("rev-parse", "HEAD", cwd=wt).stdout.strip() != head:
+        raise MergeBatchError("batch head moved since push; push again and refresh CI")
+    live = gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state,headRefOid")
+    if live.get("state") != "OPEN" or live.get("headRefOid") != head:
+        raise MergeBatchError("batch PR is not open on the saved pushed head; push again")
+    plan = st.get("plan") or ""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", plan):
+        raise MergeBatchError("build needs --plan <keeper key> for the batch PLAN block")
+    parts = []
+    if not st["merged"]:
+        raise MergeBatchError("batch has no included parts")
+    for rec in st["merged"]:
+        review = rec.get("review") or {}
+        if review.get("verdict") != "ACCEPT" or review.get("head") != rec["head"]:
+            raise MergeBatchError(f"part #{rec['pr']} lacks ACCEPT on its own head {rec['head']}")
+        if part_review(review.get("file", ""), rec["head"])["verdict"] != "ACCEPT":
+            raise MergeBatchError(f"part #{rec['pr']} review file no longer says ACCEPT")
+        if git("merge-base", "--is-ancestor", rec["head"], head, cwd=wt, ok=(0, 1)).returncode:
+            raise MergeBatchError(f"part #{rec['pr']} is not in batch head")
+        parts.append(f"#{rec['pr']} sha={rec['head']} review={review['file']} verdict=ACCEPT")
+    ci = st.get("ci") or {}
+    if (ci.get("head") != head or not ci.get("id") or ci.get("state") != "completed" or
+            ci.get("conclusion") != "success"):
+        raise MergeBatchError("batch CI is not green on pushed head; push --ci-run ID after full CI completes")
+    batch_workflow_gate(st)
+    stat = git("diff", "--shortstat", st["base_head"], head, cwd=wt).stdout.strip()
+    declared = st.get("deviations", "none").strip() or "none"
+    deviations = [declared] if declared != "none" else []
+    deviations += st.get("forced", [])
+    deviation = "; ".join(deviations) or "none"
+    line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
+            f"; CI run {ci['id']} state={ci['state']} conclusion={ci['conclusion']}; "
+            f"PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}")
+    print(" ".join(line.split()))
     return 0

@@ -22,7 +22,7 @@ from registry_route_util import CARD, live_policy  # noqa: F401
 
 #: The policy restated literally.  Widening claude_env.CLAUDE_ENV_ALLOW has to change this list too.
 POLICY = (
-    'APPDATA', 'CLAUDE_CONFIG_DIR', 'COMSPEC', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'HTTPS_PROXY', 'HTTP_PROXY',
+    'APPDATA', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL', 'CLAUDE_CONFIG_DIR', 'COMSPEC', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'HTTPS_PROXY', 'HTTP_PROXY',
     'LANG', 'LANGUAGE', 'LOCALAPPDATA', 'LOGNAME', 'NODE_EXTRA_CA_CERTS', 'NO_PROXY', 'PATH', 'PATHEXT',
     'PROGRAMDATA', 'PWD', 'SHELL', 'SSL_CERT_DIR', 'SSL_CERT_FILE', 'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP',
     'TERM', 'TMP', 'TMPDIR', 'TZ', 'USER', 'USERNAME', 'USERPROFILE', 'WINDIR',
@@ -130,7 +130,7 @@ def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path):
                          extra_env={'SMUGGLED_BY_CALLER': 'v', 'XDG_DATA_HOME': '/d'})
     assert env is not None
     check_env(env)
-    expected = {name for name in os.environ if policy_allows(name)} | {'PWD', 'XDG_DATA_HOME'}
+    expected = {name for name in os.environ if policy_allows(name)} | {'PWD', 'XDG_DATA_HOME', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL'}
     assert set(env) == expected, 'allowlisted names went missing: ' + ', '.join(sorted(expected - set(env)))
     home_ok, cfg_ok = env.get('HOME') == '/h', env.get('CLAUDE_CONFIG_DIR') == '/cfg'
     pwd_ok, xdg_ok = env.get('PWD') == str(tmp_path), env.get('XDG_DATA_HOME') == '/d'
@@ -164,12 +164,14 @@ def test_host_skip_reason_names_a_missing_claude_binary(monkeypatch, tmp_path):
 def test_launch_plan_skips_the_haiku_leg_on_a_host_without_claude(monkeypatch, tmp_path):
     plan = plan_spawn(CARD, role='review', writer_families=('mimo',),
                       leg_reader=lambda model, **kw: {'state': 'available', 'evidence': None})
-    only = replace(plan, legs=tuple(l for l in plan.legs if l.id == 'claude-haiku-5.5'))
+    # D-5966 replaces the former Haiku fallback with Sonnet high.
+    only = replace(plan, legs=tuple(l for l in plan.legs if l.id == 'claude-sonnet-5-5-high'))
     assert [l.harness for l in only.legs] == ['claude']
     monkeypatch.setenv('PATH', str(tmp_path))
     launch = resolver.plan_for_launch(only)
     assert launch.legs == ()
-    assert [s['reason'] for s in launch.skipped if s['leg'] == 'claude-haiku-5.5'] == ['harness_missing: claude']
+    assert [s['reason'] for s in launch.skipped if s['leg'] == 'claude-sonnet-5-5-high'] == ['harness_missing: claude']
     monkeypatch.setenv('PATH', str(fake_binary(tmp_path / 'bin', 'claude')))
-    assert [l.id for l in resolver.plan_for_launch(only).legs] == ['claude-haiku-5.5']
-    assert any(l.id == 'claude-haiku-5.5' for l in DEFAULT_LEGS)
+    assert [l.id for l in resolver.plan_for_launch(only).legs] == ['claude-sonnet-5-5-high']
+    from plangraph.planner.legs import spawnable_legs
+    assert any(l.id == 'claude-sonnet-5-5-high' for l in spawnable_legs())

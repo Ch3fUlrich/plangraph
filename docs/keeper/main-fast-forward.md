@@ -4,9 +4,10 @@ At daemon startup, before requests are served, the keeper atomically writes a
 private file beside its configured DB anchor, named `<db filename>.loaded.json`.
 It contains `loaded_sha`, `pid`, wall-clock `start_time`, and the process-start
 `/proc` token when available. The SHA describes the spawner-independent keeper
-code tree at startup; it is not reread after checkout moves. Missing Git identity
+code tree sampled before package imports and verified after publication.
+A changed identity during startup records unknown; it is not refreshed while serving. Missing Git identity
 is recorded as unknown, which makes a running keeper hold updates. Failure to
-publish the state prevents serving rather than leaving an unguarded live process.
+publish the state refuses serving with a named error and nonzero exit, without a traceback.
 Clean shutdown removes the file before releasing the keeper lock; stale crash
 state is rejected using PID/start-token identity by the updater.
 
@@ -57,48 +58,8 @@ Arbitrary renamed/frozen wrappers cannot be inferred from their command lines;
 use the configured unit or published loaded state for those deployments.
 A host with conclusive no-unit/no-process results may fast-forward normally.
 
-An inconclusive unit query holds and names its cause: bus unreachable, timed out,
-query failed, or unreadable unit state. A missing/unreadable `ps`/CIM process-query tool or
-a failed process query also holds with a fixed diagnostic. Tool stderr, command
-lines and config values are not copied into logs. A live unit/process without
-matching state holds with a bootstrap/path diagnostic. After deployment, restart
-the keeper once, then verify the updater's state path is the configured DB filename
-plus `.loaded.json` before enabling the timer. This covers older running keepers
-and accidentally pointing the updater at a different DB. Custom unit names must
-set the same `--keeper-unit` in the template. An unreachable user bus plus a
-not-found system unit and no detected process still holds: the user unit is
-unknown, not proven absent. Do not treat a failed process scan as an empty scan.
-Repair the bus/session or query-tool installation and rerun; this remaining
-operator-recoverable hold is deliberate, including on headless cron hosts.
-
-The startup flock is still not shared with the daemon. Keeper modules are loaded
-at daemon module import time, before `main()`/`run()` or state publication. A lock
-around `write_loaded_state()` would falsely imply those imports were protected.
-Protecting them requires a pre-import bootstrap/launcher for CLI and embedded
-entry points; that is deferred from this narrow review round. The immediate
-pre-merge recheck remains, with a residual race after that check.
-
-Loaded state includes `loaded_branch` (null for detached HEAD) and `dirty`.
-A clean detached checkout has an exact SHA and can be compared normally. Tracked
-local changes make `loaded_sha` unknown, so updates hold until a clean restart;
-untracked files are not a code identity. A non-Git installation records unknown
-SHA/branch/dirt and also holds indefinitely until restarted from identifiable Git
-code (or the keeper is stopped); no arbitrary HEAD is asserted for those installs.
-
-Runtime data trace outside the keeper package:
-
-- `api_routes._phase_plan` -> planner service/routing ->
-  `routing_support.catalog_db.CatalogDB.init_and_seed` reads
-  `src/plangraph/routing_support/catalog_schema.sql`.
-- The same routing path calls `planner.route_policy.load_route_policy`, reading
-  `src/plangraph/planner/route_policy.json`.
-- Routing admission's resolver host probes call `opencode_overlay.overlay_env` /
-  `_load_root_providers`, reading `configuration/opencode/providers.json`.
-
-These three exact existing paths are watched in addition to Python imports and
-keeper-package files. The old spawner catalog schema is not read by this path;
-review `tail*.md` belongs to seat prompt construction, and config/empty-mcp.json
-is passed to a child CLI. The prompt-transport contract loader is not called by
-keeper routing/probes. They are not blanket-watched. DBs, snapshots, tokens,
-keeper.json and operator-selected settings/override files are deployment data,
-not fixed data from this code tree; changing those remains operator configuration.
+The revived probe is implemented by `pg-mainff` in `rust/pg-mainff`.
+`cargo run --manifest-path rust/Cargo.toml -p pg-mainff -- probe [UNIT]`
+prints the detected keeper PID as JSON (zero when conclusively absent);
+`running STATE` prints the loaded SHA or null. Query failures return a fixed
+public diagnostic with exit code 2. Windows liveness never signals a process.

@@ -50,8 +50,18 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
         let Ok(frame) = serde_json::from_str::<Value>(line) else {
             return diagnostic();
         };
-        if frame["type"] == "result" && frame["is_error"] == false {
-            result = frame["result"].as_str().map(str::to_owned);
+        if frame["event"] == "result" {
+            result = if frame["result"]["status"] == "SUCCESS" {
+                frame["result"]["response"].as_str().map(str::to_owned)
+            } else {
+                None
+            };
+        } else if frame["type"] == "result" {
+            result = if frame["is_error"] == false {
+                frame["result"].as_str().map(str::to_owned)
+            } else {
+                None
+            };
         }
     }
     match result {

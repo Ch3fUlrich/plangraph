@@ -1,0 +1,1 @@
+- Require fetched-origin base admission for workers, continuations and seats, acknowledge detached admission before CLI success, and scrub Git redirects during refused-worktree cleanup.

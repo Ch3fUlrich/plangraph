@@ -78,7 +78,8 @@ def test_tail_standing_question(mode):
                    '--- a/src/example.py\n+++ b/src/example.py\n@@ -1 +1 @@\n-value = 0\n+value = 1\n'))
     assert prompts
     for prompt in prompts:
-        assert prompt.endswith(text.rstrip())
+        assert text.rstrip() in prompt
+        assert prompt.index(text.rstrip()) < prompt.index("=== ITEM CONTEXT")
         assert prompt.count('Does the change game tests') == 1
 
 

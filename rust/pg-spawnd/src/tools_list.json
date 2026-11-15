@@ -68,6 +68,10 @@
      "description": "Plan without starting subprocess",
      "type": "boolean"
     },
+    "leg": {
+     "description": "Registered leg reference (explicit override)",
+     "type": "string"
+    },
     "model_or_combo": {
      "description": "Exceptional audited override only; requires override_reason",
      "type": "string"
@@ -225,6 +229,10 @@
   "inputSchema": {
    "additionalProperties": false,
    "properties": {
+    "base_decision": {
+     "description": "Scoped operator decision waiving a stale base, as for spawns",
+     "type": "string"
+    },
     "cwd": {
      "type": "string"
     },

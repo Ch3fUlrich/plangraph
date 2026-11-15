@@ -1,3 +1,7 @@
+> Historical snapshot: Gemini Flash references below preserve prior decisions and
+> benchmark evidence only. Operator order 2026-11-14 retires every version; none
+> is an available route. Hydrogen high (implement) and medium (read-only tools review (agy plan mode)) are enabled by D-5903; both seats remain unwitnessed.
+
 # RFF S2-S5 assertion reconciliation
 
 D-5092 removes single-writer and subscription-before-free pins; D-5113 adds

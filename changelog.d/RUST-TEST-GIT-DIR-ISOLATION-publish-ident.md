@@ -1,0 +1,1 @@
+- Pin finalize-publish fixture author and committer identities after shared Git isolation, preserving exact identity assertions for both fixture commits when no Git environment is inherited.

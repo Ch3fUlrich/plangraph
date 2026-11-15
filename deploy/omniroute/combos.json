@@ -1,5 +1,5 @@
 {
-  "$comment": "generated from catalog/ai-registry.json - do not edit",
+  "$comment": "Registry render with operator 2026-11-14 retirement overlay; retired/omitted ids are cleanup history only and must be pruned from live stores.",
   "retired": [
     "tier1",
     "tier1-clean",
@@ -31,7 +31,9 @@
     "t4-researcher",
     "ovh-qwen3-coder-30b",
     "ovh-qwen3.8-27b",
-    "ovh-gpt-oss-120b"
+    "ovh-gpt-oss-120b",
+    "gemini-3.8-flash",
+    "vertex-gemini-3.8-flash"
   ],
   "omitted": [
     "cheaperinference/glm-5.2",
@@ -43,30 +45,29 @@
     "opus-5-5",
     "samba/MiniMax-M3",
     "samba/gpt-oss-120b",
-    "spark-1.3-contributor"
+    "spark-1.3-contributor",
+    "l1-orchestrator-clean",
+    "l2-orchestrator-clean",
+    "l2-worker-clean",
+    "l3-driver-clean",
+    "l3-implementer-clean",
+    "l3-researcher-clean"
   ],
   "d657_combos": [
     "l1-orchestrator",
-    "l1-orchestrator-clean",
     "l1-orchestrator-free-only",
     "l2-orchestrator",
-    "l2-orchestrator-clean",
     "l2-worker",
-    "l2-worker-clean",
     "l2-worker-free-only",
     "l2-researcher",
     "l3-driver",
-    "l3-driver-clean",
     "l3-driver-free-only",
     "l3-implementer",
-    "l3-implementer-clean",
     "l3-researcher",
-    "l3-researcher-clean",
     "l3-review-diff",
     "l3-review-tests",
     "l3-review-codebase",
-    "t4-rag",
-    "gemini-3.8-flash"
+    "t4-rag"
   ],
   "combos": [
     {
@@ -74,7 +75,6 @@
       "strategy": "priority",
       "context": "128k",
       "models": [
-        "vertex/gemini-3.8-flash",
         "opencode-go/kimi-k3"
       ],
       "contextRequirements": {
@@ -88,7 +88,6 @@
       "strategy": "priority",
       "context": "1M",
       "models": [
-        "vertex/gemini-3.8-flash",
         "opencode-go/glm-5.3-flash"
       ],
       "contextRequirements": {
@@ -102,7 +101,6 @@
       "strategy": "priority",
       "context": "256k",
       "models": [
-        "vertex/gemini-3.8-flash",
         "opencode-go/glm-5.3-flash"
       ],
       "contextRequirements": {
@@ -112,28 +110,11 @@
       "targetTimeoutMs": 300000
     },
     {
-      "name": "gemini-3.8-flash",
-      "strategy": "priority",
-      "context": "1M",
-      "models": [
-        "vertex/gemini-3.8-flash"
-      ]
-    },
-    {
       "name": "l1-orchestrator",
       "strategy": "priority",
       "context": "1M",
       "models": [
-        "bzl/deepseek/deepseek-v4-flash-0731free:free",
-        "vertex/gemini-3.8-flash"
-      ]
-    },
-    {
-      "name": "l1-orchestrator-clean",
-      "strategy": "priority",
-      "context": "1M",
-      "models": [
-        "vertex/gemini-3.8-flash"
+        "bzl/deepseek/deepseek-v4-flash-0731free:free"
       ]
     },
     {
@@ -149,16 +130,7 @@
       "strategy": "priority",
       "context": "1M",
       "models": [
-        "bzl/deepseek/deepseek-v4-flash-0731free:free",
-        "vertex/gemini-3.8-flash"
-      ]
-    },
-    {
-      "name": "l2-orchestrator-clean",
-      "strategy": "priority",
-      "context": "1M",
-      "models": [
-        "vertex/gemini-3.8-flash"
+        "bzl/deepseek/deepseek-v4-flash-0731free:free"
       ]
     },
     {
@@ -176,8 +148,7 @@
       "context": "128k",
       "models": [
         "bzl/deepseek/deepseek-v4-flash-0731free:free",
-        "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
-        "vertex/gemini-3.8-flash"
+        "openrouter/nvidia/nemotron-3-super-120b-a12b:free"
       ]
     },
     {
@@ -186,16 +157,7 @@
       "context": "1M",
       "models": [
         "bzl/deepseek/deepseek-v4-flash-0731free:free",
-        "vertex/gemini-3.8-flash",
         "mimo/mimo-v2.6-flash"
-      ]
-    },
-    {
-      "name": "l2-worker-clean",
-      "strategy": "priority",
-      "context": "128k",
-      "models": [
-        "vertex/gemini-3.8-flash"
       ]
     },
     {
@@ -218,8 +180,7 @@
         "cohere/command-a-plus-05-2026",
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
         "bzl/deepseek/deepseek-v4-flash-0731free:free",
-        "openrouter/cohere/north-mini-code:free",
-        "vertex/gemini-3.8-flash"
+        "openrouter/cohere/north-mini-code:free"
       ]
     },
     {
@@ -229,7 +190,6 @@
       "models": [
         "bzl/deepseek/deepseek-v4-flash-0731free:free",
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "vertex/gemini-3.8-flash",
         "mimo/mimo-v2.6-flash"
       ]
     },
@@ -240,16 +200,7 @@
       "models": [
         "bzl/deepseek/deepseek-v4-flash-0731free:free",
         "openrouter/poolside/laguna-s-2.1:free",
-        "vertex/gemini-3.8-flash",
         "mimo/mimo-v2.6-flash"
-      ]
-    },
-    {
-      "name": "l3-driver-clean",
-      "strategy": "priority",
-      "context": "128k",
-      "models": [
-        "vertex/gemini-3.8-flash"
       ]
     },
     {
@@ -277,16 +228,7 @@
         "cohere/command-a-plus-05-2026",
         "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
         "bzl/deepseek/deepseek-v4-flash-0731free:free",
-        "openrouter/cohere/north-mini-code:free",
-        "vertex/gemini-3.8-flash"
-      ]
-    },
-    {
-      "name": "l3-implementer-clean",
-      "strategy": "priority",
-      "context": "128k",
-      "models": [
-        "vertex/gemini-3.8-flash"
+        "openrouter/cohere/north-mini-code:free"
       ]
     },
     {
@@ -295,16 +237,7 @@
       "context": "1M",
       "models": [
         "bzl/deepseek/deepseek-v4-flash-0731free:free",
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "vertex/gemini-3.8-flash"
-      ]
-    },
-    {
-      "name": "l3-researcher-clean",
-      "strategy": "priority",
-      "context": "1M",
-      "models": [
-        "vertex/gemini-3.8-flash"
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
       ]
     },
     {
@@ -312,8 +245,7 @@
       "strategy": "priority",
       "context": "1M",
       "models": [
-        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-        "vertex/gemini-3.8-flash"
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
       ]
     },
     {
@@ -330,8 +262,7 @@
       "strategy": "priority",
       "context": "1M",
       "models": [
-        "bzl/deepseek/deepseek-v4-flash-0731free:free",
-        "vertex/gemini-3.8-flash"
+        "bzl/deepseek/deepseek-v4-flash-0731free:free"
       ]
     },
     {
@@ -414,14 +345,6 @@
         "cohere/command-r-plus-08-2024",
         "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
         "cohere/command-a-03-2025"
-      ]
-    },
-    {
-      "name": "vertex-gemini-3.8-flash",
-      "strategy": "priority",
-      "context": "1M",
-      "models": [
-        "vertex/gemini-3.8-flash"
       ]
     }
   ]

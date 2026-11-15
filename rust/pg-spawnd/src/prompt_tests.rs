@@ -118,3 +118,22 @@ fn windows_launcher_inspection_native_child() {
         assert_eq!(windows_guard(&l, l.prompt.as_ref().unwrap()), Ok(()));
     }
 }
+
+#[test]
+fn shared_preparation_keeps_inline_only_reference_validation() {
+    let mut carrier = launch("review");
+    let args = json!({"role":"review", "card":{"diff_ref":{
+        "repo":"/caller-selected-checkout", "base":"HEAD", "head":"HEAD"
+    }}});
+    let error = prepare_launch(
+        args.as_object().unwrap(),
+        &json!({"harness":"free", "review_mode":"inline_only"}),
+        &mut carrier,
+        false,
+    )
+    .unwrap_err()
+    .into_error_data();
+    assert_eq!(error.message, "invalid diff_ref");
+    assert_eq!(carrier.prompt.as_deref(), Some("review"));
+    assert_eq!(carrier.stdin.as_deref(), Some("review"));
+}

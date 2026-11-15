@@ -1,4 +1,3 @@
-Keeper startup publishes loaded SHA/process identity; the fleet-sync main-ff command holds updates changing existing keeper/imported code, with hourly templates and HELD status on the existing local drift surface. Unused additions and unrelated spawner changes remain eligible.
-- Recheck keeper state before main updates; hold for live units without matching startup state, track checkout provenance and guard the three traced runtime data files.
-- Distinguish absent keeper units from failed queries, inspect both systemd scopes and standalone processes, and report fixed liveness-probe causes on holds.
-- Detect keeper file/module launch targets only in interpreter processes, remove the pgrep dependency, prefer actionable live-keeper holds, and cover inconclusive probe failure paths.
+Hold main fast-forwards that change loaded keeper imports; refuse failed Git operations.
+Revive the loaded-state fast-forward guard and committed-tree import closure in Rust with fixture-repository Rust tests; the existing Python main-ff command delegates to pg-mainff and retains current production checkout/audit commands.
+Port absent-state unit/process checks, runtime-data protection, and the pre-merge restart recheck to Rust with the original fixture regressions; verify the current keeper import graph parses and keep POSIX timer integration tests scoped to Unix.

@@ -1,0 +1,1 @@
+- Check unsharded CI collection once before accepting empty shards; watch real worktree registrations, collect split tests once, kill timed-out preflight test descendants, and refuse branch pushes when preflight is missing.

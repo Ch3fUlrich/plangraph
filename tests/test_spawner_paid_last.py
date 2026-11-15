@@ -58,10 +58,10 @@ def test_paid_pin(tmp_path, monkeypatch, harness, pin, free_up, reason):
 
 
 def test_only_sol_writes():
-    assert legs.WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash')
+    assert legs.WRITER_ORDER == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high')
     assert [leg.id for leg in legs.DEFAULT_LEGS if 'implement' in leg.roles] == [
         'opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free', 'openrouter-free',
-        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-3.8-flash', 'agy-gemini-4-argon', 'opencode-big-pickle',
+        'cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon', 'opencode-big-pickle',
         'mimo-v2.6-flash', 'mimo-v2.6-pro', 'omniroute-deepseek-flash', 'omniroute-muse-spark', 'deepseek']
     assert {'deepseek', 'openrouter-free', 'mimo-v2.6-pro'} <= {leg.id for leg in legs.DEFAULT_LEGS}
 

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check production checkout every five minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=plangraph-prod-checkout.service
+
+[Install]
+WantedBy=timers.target

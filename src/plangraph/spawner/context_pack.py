@@ -44,6 +44,8 @@ from plangraph.routing_errors import ParameterRefused
 from .env_redact import redact_source, _source_block, _join_prompt
 from .inline_diff import InlineDiffError
 
+LANGUAGE_RULE = ('new code is Rust with Rust tests; no new Python or shell file; '
+                 'an allowlist line needs an operator D-id')
 BIG_FILE_LINES = 400
 DEFAULT_MAX_CHARS = 60_000
 #: Most ``card.context`` entries one spawn may list (more refuses the spawn).  With the char cap this bounds
@@ -266,7 +268,7 @@ def max_chars() -> int:
 
 
 def _assemble(blocks, omitted) -> str:
-    text = '\n\n=== CONTEXT PACK ===\n' + _join_prompt((b for _, b in blocks), '\n')
+    text = '\n\n=== CONTEXT PACK ===\n' + LANGUAGE_RULE + '\n' + _join_prompt((b for _, b in blocks), '\n')
     if omitted:
         text += '\nomitted: ' + ', '.join(omitted)
     return text + '\n=== END CONTEXT PACK ===\n'

@@ -116,7 +116,8 @@ def test_implement_route_still_skips_banned_and_off(tmp_path):
 
 
 def test_review_route_keeps_lifted_families():
-    plan = plan_spawn(CARD, role="review", writer_families=("xiaomi",), leg_reader=_clear_limiter)
+    plan = plan_spawn(CARD, role="review", writer_families=("xiaomi",), leg_reader=_clear_limiter,
+                      legs=tuple(list(DEFAULT_LEGS)))
     ids = {leg.id for leg in plan.legs}
     assert "opencode-go-deepseek-v4-flash" in ids
     assert not {leg.family for leg in plan.legs} & {"glm"}
@@ -128,7 +129,8 @@ def test_review_route_keeps_lifted_families():
 
 
 def test_review_xiaomi_writer_yields_two_new_leg_seat_families():
-    plan = plan_spawn(CARD, role="review", writer_families=("xiaomi",), leg_reader=_clear_limiter)
+    plan = plan_spawn(CARD, role="review", writer_families=("xiaomi",), leg_reader=_clear_limiter,
+                      legs=tuple(list(DEFAULT_LEGS)))
     assert plan.error is None
     fams = {seat_family(leg.family) for leg in plan.legs if leg.id in NEW_IDS}
     assert len(fams) >= 2

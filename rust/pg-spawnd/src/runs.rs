@@ -1,4 +1,4 @@
-//! Local runs; witnesses, retry/fall-through, writer checks/continuation, delivery,
+//! Local runs; review quota fallthrough is supported; writer checks/continuation, delivery,
 //! dispatch refusal and D3622 liveness remain unported; packs/env use Python.
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::run::{
@@ -51,10 +51,19 @@ impl Runs {
         launch: impl FnOnce(&Path, &Value) -> Result<crate::launch::LaunchSpec, ToolError>,
     ) -> Result<Value, ToolError> {
         let (run_id, job_id) = (new_run_id(), new_job_id());
+        let admission = match crate::round_progress::admit(state, args) {
+            Ok(admission) => admission,
+            Err(error) => return crate::round_progress::record_refusal(state, host, args, error),
+        };
         let dry = args.get("dry_run") == Some(&json!(true));
         let cwd =
             std::env::current_dir().map_err(|_| internal("could not read current directory"))?;
         let leg = plan["first_leg"].clone();
+        let cwd = if role == "review" && crate::cli_review::eligible(&leg) {
+            crate::cli_review::cwd(args, cwd)?
+        } else {
+            cwd
+        };
         let mut launch = launch(
             state,
             &json!({
@@ -62,30 +71,19 @@ impl Runs {
                 "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
             }),
         )?;
-        let mut review_args = serde_json::to_value(args).map_err(|_| internal("invalid args"))?;
-        review_args["role"] = role.clone();
-        let mode = crate::prompt::configured_mode(role.as_str().unwrap_or(""));
-        let repos = crate::prompt::repos();
-        if mode == "shadow" && leg["review_mode"] != "inline_only" {
-            let mut shadow: crate::launch::LaunchSpec = serde_json::from_value(json!({
-                "argv":launch.argv,"cwd":launch.cwd,"env":launch.env,"stdin":launch.stdin,
-                "prompt":launch.prompt,"warnings":null,"events":null
-            }))
-            .map_err(|_| internal("invalid shadow launch"))?;
-            let would_inline =
-                crate::prompt::prepare_review(&review_args, &leg, &mut shadow, &repos, true)
-                    .is_ok()
-                    && shadow.prompt != launch.prompt;
-            eprintln!(
-                "inline_review_diff would_inline={}",
-                usize::from(would_inline)
-            );
-        }
-        crate::prompt::prepare_review(&review_args, &leg, &mut launch, &repos, mode == "on")
-            .map_err(|e| internal(&e.to_string()))?;
+        let review_head = crate::prompt::prepare_launch(args, &leg, &mut launch, dry)?;
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
+        if let Some(head) = review_head {
+            base["head_sha"] = json!(head);
+        }
+        base.as_object_mut()
+            .unwrap()
+            .extend(admission.fields.as_object().unwrap().clone());
+        if !dry && base["writer_round"].is_u64() {
+            base["round_work_before"] = json!(crate::round_progress::work_fingerprint(&launch.cwd));
+        }
         store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
@@ -143,9 +141,7 @@ impl Runs {
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
                 events: events.clone(),
-                finish: Some(Box::new(move |record, status| {
-                    finish(record, status, &leg, attempt_id)
-                })),
+                finish: Some(crate::review_retry::hook(args.clone(), leg, attempt_id)),
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}
@@ -162,6 +158,7 @@ impl Runs {
                 Err(_) => return Err(internal("could not start run")),
             }
         }
+        drop(admission);
         self.jobs.lock().unwrap().insert(job_id, run_id.clone());
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
@@ -279,6 +276,7 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
+    crate::round_progress::finish_round(record, status);
     let mut attempts = match record.get("attempts") {
         None if attempt_id == 1 => vec![json!({"legacy_normalized":true})],
         None => Vec::new(),
@@ -296,6 +294,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         record.set("attempts_error", json!("unknown or invalid attempt id"));
         return;
     };
+    crate::cli_review::finish(record, status, leg);
     let (dry, unwitnessed) = (status == Status::DryRun, json!("unwitnessed"));
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
@@ -306,6 +305,18 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         "request_side_model":null,"witness_kind":null,
         "skip_reason":if status == Status::Completed || dry { None } else { record.get("reason") },
         "provider_response":null,"stdout_tail":record.get("stdout_tail"),"stderr_tail":record.get("stderr_tail")});
+    let mut completion = completion;
+    if record.get("witness_kind").and_then(Value::as_str) == Some("cli_reported") {
+        for key in [
+            "served_model",
+            "served_family",
+            "witness_kind",
+            "finish_reason",
+            "verdict",
+        ] {
+            completion[key] = record.get(key).cloned().unwrap_or(Value::Null);
+        }
+    }
     attempt
         .as_object_mut()
         .unwrap()
@@ -321,6 +332,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
     };
     record.set("chosen_leg", chosen);
     record.set("writer_family", leg["family"].clone());
+    crate::review_retry::witness(record, leg, attempt_id);
     if let Some(state) = record
         .path()
         .parent()
@@ -361,6 +373,9 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         }
     }
 }
+#[cfg(all(test, unix))]
+#[path = "runs_progress_tests.rs"]
+mod progress_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_record_tests.rs"]
 mod record_tests;

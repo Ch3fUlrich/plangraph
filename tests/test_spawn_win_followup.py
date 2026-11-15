@@ -52,7 +52,7 @@ def test_runner_agy_stream_result(monkeypatch, status, error):
         monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', AsyncMock(return_value=None))
         prompt = 'x' * 40000
         job = await SpawnerRunner(process_factory=factory).spawn(
-            prompt, 'gemini-3.8-flash', client='agy', role='review', wait_seconds=2)
+            prompt, 'gemini-4-argon-high', client='agy', role='review', wait_seconds=2)
         assert job.status == ('completed' if status == 'SUCCESS' else 'failed')
         assert job.stdout == ('VERDICT: ACCEPT' if status == 'SUCCESS' else '')
         assert error in job.stderr
@@ -141,7 +141,7 @@ def test_long_prompt_missing_flag_fails_named(harness, tail):
 @pytest.mark.parametrize('closed', [False, True])
 def test_unavailable_stdin_records_failure(closed):
     from types import SimpleNamespace
-    import time
+    from plangraph.spawner.runner import JobInfo
     from plangraph.spawner.run_watchdog import collect
 
     async def run():
@@ -152,8 +152,7 @@ def test_unavailable_stdin_records_failure(closed):
             def close(self):
                 pass
 
-        job = SimpleNamespace(role='review', start_time=time.time(), status='running',
-                              exit_code=None, events=[], stderr='', stdout='')
+        job = JobInfo('test', 'running', '', 'fixture/model', role='review')
         runner = SimpleNamespace(jobs={'test': job}, _child_envs={}, _stdin_payloads={'test': b'prompt'})
         proc = SimpleNamespace(stdin=ClosedPipe() if closed else None,
                                stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader())

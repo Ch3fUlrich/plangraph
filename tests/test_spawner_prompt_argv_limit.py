@@ -21,7 +21,8 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
     binary = tmp_path / 'agy'
     binary.write_text(
         f'#!{sys.executable}\n'
-        'import hashlib, json, sys\n'
+        'import hashlib, json, os, sys\n'
+        f'assert os.environ["CARGO_TARGET_DIR"] == {str(tmp_path / "shared-cargo")!r}\n'
         'data = sys.stdin.buffer.read()\n'
         'prompt = json.loads(data)["message"]["content"].encode()\n'
         'digest = hashlib.sha256(prompt).hexdigest()\n'
@@ -34,6 +35,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
     # No inherited PATH, gateway endpoint, state, credentials, or notification hook.
     for name in list(os.environ):
         monkeypatch.delenv(name)
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared-cargo'))
     monkeypatch.setenv('PATH', str(tmp_path))
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
@@ -44,7 +46,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
     async def fixed_plan(plan, **kw):
         return plan
     monkeypatch.setattr(resolver, 'plan_for_launch_async', fixed_plan)
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-3.8-flash')
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-4-argon')
     prompt = 'review this change\n' + 'x' * (size - 20) + '\n\n'
 
     async def run():
@@ -155,7 +157,7 @@ def test_over_leg_limit_has_named_record_reason(tmp_path, monkeypatch, routed):
     from plangraph.planner.routing import SpawnPlan
     from plangraph.spawner import service as base
     from plangraph.spawner import leg_probe
-    leg = replace(next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-3.8-flash'), max_request_tokens=100)
+    leg = replace(next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon'), max_request_tokens=100)
     async def no_probe(*a):
         return None
     monkeypatch.setattr(leg_probe, 'before_launch', no_probe)

@@ -62,6 +62,73 @@ def test_plan_cli_label_json_and_table(env):
     assert env.run("plan", "--max-prs", "0").returncode == 2
 
 
+def test_plan_and_build_use_refreshed_git_sizes_and_full_paths(env):
+    keeper = "src/plangraph/keeper/late.py"
+    env.branch_pr(912, {keeper: "x\n" * 1056}, lines=3278)
+    env.seed({"main-only.txt": "main\n" * 2222})
+    env.git("checkout", "-q", "lane/p912")
+    env.git("merge", "--no-ff", "-qm", "refresh main", "origin/main")
+    head = env.git("rev-parse", "HEAD")
+    env.git("push", "-q", "origin", "lane/p912", f"+{head}:refs/pull/912/head")
+    env.git("checkout", "-q", "main")
+    env.state["prs"]["912"]["headRefOid"] = head
+    env.save()
+    env.branch_pr(921, {"src/plangraph/keeper/b.py": "b\n" * 478}, lines=2722)
+    files = {f"docs/{i:03}.md": "d\n" for i in range(100)}
+    files.update({keeper: "c\n" * 2755})
+    env.branch_pr(928, files, lines=5101)
+    # A truncated gh list hides the only HIGH path, beyond its first 100 files.
+    env.state["prs"]["928"]["files"] = env.state["prs"]["928"]["files"][:100]
+    env.save()
+    fresh = env.fresh_clone()
+    result = env.run("plan", "--max-lines", "6000", "--json", cwd=fresh)
+    assert result.returncode == 0, result.stderr
+    plan = json.loads(result.stdout)
+    rows = {row["number"]: row for row in plan["prs"]}
+    assert [rows[n]["lines"] for n in (912, 921, 928)] == [1056, 478, 2855]
+    assert rows[928]["files"] == 101 and rows[928]["high_paths"] == [keeper]
+    assert [(b["tier"], b["prs"], b["lines"]) for b in plan["batches"]] == [
+        ("HIGH", [912, 921, 928], 4389)]
+    table = env.run("plan", "--max-lines", "6000", cwd=fresh).stdout
+    assert "batch 1 HIGH: --prs 912,921,928" in table and "batch 2" not in table
+    # The first two merge cleanly; build must apply the same corrected caps.
+    result = env.run("build", "--name", "real", "--prs", "912,921", "--max-lines", "2000", cwd=fresh)
+    assert result.returncode == 0, result.stderr
+
+
+def test_plan_counts_generated_churn_separately_inside_total(env):
+    env.branch_pr(1, {"src/a.rs": "a\n", "rust/Cargo.lock": "lock\n" * 3,
+                      "ui/generated/a.js": "generated\n" * 2})
+    plan = json.loads(env.run("plan", "--json").stdout)
+    row = plan["prs"][0]
+    assert row["lines"] == 6 and row["generated_lines"] == 5
+    assert row["generated_files"] == ["rust/Cargo.lock", "ui/generated/a.js"]
+    assert "GENERATED" in env.run("plan").stdout
+    result = env.run("build", "--name", "generated", "--prs", "1", "--max-lines", "5")
+    assert result.returncode == 1 and "over the caps" in result.stderr
+
+
+def test_plan_stack_counts_each_layer_once_against_cap(env):
+    env.branch_pr(1, {"a.txt": "a\n" * 700})
+    env.branch_pr(2, {"b.txt": "b\n" * 100}, base="lane/p1")
+    plan = json.loads(env.run("plan", "--json").stdout)
+    assert [row["lines"] for row in plan["prs"]] == [700, 800]
+    assert [row["batch_lines"] for row in plan["prs"]] == [700, 100]
+    assert plan["batches"][0]["lines"] == 800 and not plan["batches"][0]["over_cap"]
+    result = env.run("build", "--name", "stackcap", "--prs", "1,2")
+    assert result.returncode == 0, result.stderr
+
+
+def test_plan_generated_rename_counts_churn_from_full_diff(env):
+    old, new = "ui/generated/old.js", "ui/generated/new.js"
+    content = "".join(f"line {i}\n" for i in range(100))
+    env.seed({old: content})
+    env.branch_pr(1, {new: content.replace("line 5\n", "changed\n")}, moves={old: new})
+    row = json.loads(env.run("plan", "--json").stdout)["prs"][0]
+    assert row["lines"] == row["generated_lines"] == 2
+    assert row["generated_files"] == [new, old]
+
+
 def test_plan_high_by_the_old_path_of_a_rename(env):
     keeper = "src/plangraph/keeper/store.py"
     env.seed({keeper: "x = 1\n"})
@@ -259,3 +326,70 @@ def test_status_and_abort(env):
     assert env.run("abort", "--name", "x1").returncode == 0
     assert not wt.exists() and not env.state_file("x1").exists() and env.git("branch", "--list", "batch/x1") == ""
     assert env.run("continue", "--name", "x1").returncode == 1
+
+
+@pytest.mark.parametrize("trailer,accepted", [("", False), ("\n\nGate-Edit: D-5952", True),
+                                            ("\n\nGate-Edit: yes", False)])
+def test_go_req_checks_each_workflow_touching_commit(env, trailer, accepted):
+    from test_merge_batch_land import go_ready
+
+    st = go_ready(env)
+    wt = Path(st["worktree"])
+    workflow = wt / ".github/workflows/other.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("jobs: {}\n")
+    env.git("add", ".github", cwd=wt)
+    env.git("commit", "-qm", "workflow change" + trailer, cwd=wt)
+    # A later unrelated trailer cannot authorize the touching commit.
+    env.git("commit", "--allow-empty", "-qm", "unrelated\n\nGate-Edit: D-5952", cwd=wt)
+    head = env.git("rev-parse", "HEAD", cwd=wt)
+    env.load()["runs"]["42"]["headSha"] = head
+    env.save()
+    assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if not accepted:
+        assert "Gate-Edit" in result.stderr and result.stdout == ""
+
+
+@pytest.mark.parametrize("text", ["HEAD: {head}\nVERDICT: PASS\n", "HEAD: {batch}\nVERDICT: ACCEPT\n",
+                                  "VERDICT: REQUEST_CHANGES\nHEAD: {head}\nVERDICT: ACCEPT\n",
+                                  "HEAD: {head}\nVERDICT: ACCEPT\nextra\n"])
+def test_review_requires_accept_on_the_part_head(env, text):
+    from test_merge_batch_land import go_ready
+
+    st = go_ready(env)
+    path = env.tmp / "bad-review.txt"
+    path.write_text(text.format(head=st["merged"][0]["head"], batch=st["head"]))
+    result = env.run("review", "--name", "g1", "--pr", "1", "--file", str(path))
+    assert result.returncode == 1 and "VERDICT: ACCEPT" in result.stderr
+    assert env.run("review", "--name", "g1", "--pr", "3", "--file", str(path)).returncode == 1
+
+
+@pytest.mark.parametrize("trailer,accepted", [("", False), ("\n\nGate-Edit: D-5952", True)])
+def test_go_req_checks_workflow_edits_introduced_by_merge(env, trailer, accepted):
+    from test_merge_batch_land import go_ready
+
+    st = go_ready(env)
+    wt = Path(st["worktree"])
+    env.git("checkout", "-qb", "merge-side", cwd=wt)
+    (wt / "side.txt").write_text("side\n")
+    env.git("add", ".", cwd=wt)
+    env.git("commit", "-qm", "side", cwd=wt)
+    env.git("checkout", "-q", st["branch"], cwd=wt)
+    (wt / "left.txt").write_text("left\n")
+    env.git("add", ".", cwd=wt)
+    env.git("commit", "-qm", "left", cwd=wt)
+    env.git("merge", "--no-ff", "--no-commit", "merge-side", cwd=wt)
+    workflow = wt / ".github/workflows/tests.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text("jobs: {}\n")
+    env.git("add", ".", cwd=wt)
+    env.git("commit", "-qm", "merge introduces workflow" + trailer, cwd=wt)
+    env.load()["runs"]["42"]["headSha"] = env.git("rev-parse", "HEAD", cwd=wt)
+    env.save()
+    assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == (0 if accepted else 1), result.stderr
+    if not accepted:
+        assert "Gate-Edit" in result.stderr and result.stdout == ""

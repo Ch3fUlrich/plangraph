@@ -13,7 +13,7 @@ from plangraph.spawner.cli import main
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-3.8-flash", "openrouter-free",
+WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high", "openrouter-free",
            "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
            "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
 
@@ -44,7 +44,7 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
                for leg in plan.legs)
     record = asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))
     assert record["chosen_leg"]["id"] == expected[0]
-    assert record["chosen_leg"]["effort"] == ("xhigh" if state == "available" else None)
+    assert record["chosen_leg"]["effort"] == ("xhigh" if state == "available" else "high")
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
@@ -57,6 +57,11 @@ def test_implement_family_exclusion_over_all_catalog_rows():
     for row in [*SEED_MODELS, *DEFAULT_FALLBACK_MODELS]:
         # Make every catalog row otherwise eligible, including inactive rows.
         model = row.get("model_id", row.get("id"))
+        from plangraph.retired_models import is_retired
+        if is_retired(model):
+            with pytest.raises(ValueError, match="gemini_flash_retired"):
+                route_card(CARD, legs=(dataclasses.replace(template, model=model), fallback), role="implement")
+            continue
         candidate = dataclasses.replace(template, id="catalog:" + model, model=model,
                                         family=row["family"], claude_family=False)
         route = route_card(CARD, legs=(candidate, fallback), role="implement")
@@ -175,9 +180,11 @@ def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):
         return job
     runner.spawn = spawn
     service = SpawnService(runner, state=tmp_path)
-    record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None))
-    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("gemini-3.8-flash", "agy")]
+    table = tuple(l for l in DEFAULT_LEGS if l.id in ("cx-gpt-6.1-sol-xhigh", "agy-gemini-4-argon"))
+    plan = plan_spawn(CARD, role="implement", legs=table, catalog_rows=())
+    record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None, _plan=plan))
+    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("gemini-4-argon-high", "agy")]
     assert record["status"] == "completed"
-    assert record["chosen_leg"]["id"] == "agy-gemini-3.8-flash"
+    assert record["chosen_leg"]["id"] == "agy-gemini-4-argon"
     assert record["chosen_leg"]["effort"] is None
     assert not (tmp_path / "spawn-overrides.jsonl").exists()

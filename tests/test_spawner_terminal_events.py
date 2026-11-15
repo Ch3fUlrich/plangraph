@@ -6,6 +6,8 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from plangraph.spawner.run_watchdog import terminal_record
 from plangraph.spawner.runner import SpawnerRunner, spawn_service
 
@@ -36,7 +38,8 @@ def test_terminal_record_without_earlier_events_and_for_other_statuses():
     assert terminal_record(record, job("completed")) is False and record["events"] == ANNOTATED
 
 
-def test_dispatch_timeout_keeps_the_big_file_event(tmp_path, monkeypatch):
+@pytest.mark.parametrize('phase,budget', [('watchdog', '5'), ('admission', '0.000001')])
+def test_dispatch_timeout_keeps_the_big_file_event(tmp_path, monkeypatch, phase, budget):
     """The dispatch loop's own terminal branch (runner.py), driven end to end by the run timeout."""
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -44,19 +47,26 @@ def test_dispatch_timeout_keeps_the_big_file_event(tmp_path, monkeypatch):
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
     (repo / "big.py").write_text("".join(f"x{i}\n" for i in range(500)))
     subprocess.run(["git", "-C", str(repo), "add", "big.py"], check=True)
-    monkeypatch.setenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", "0.3")
+    monkeypatch.setenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", budget)
     monkeypatch.setenv("PLANGRAPH_SPAWN_WATCHDOG_INTERVAL", "0.05")
 
+    launched = []
     async def factory(*args, **kwargs):
+        launched.append(True)
         return await asyncio.create_subprocess_exec(sys.executable, "-c", "import time; time.sleep(30)", **kwargs)
 
     async def run():
         service = spawn_service(SpawnerRunner(process_factory=factory, default_cwd=str(repo)), tmp_path / "state")
-        return await service.spawn(card={"estimate_tokens": 1000}, prompt="edit big.py", wait_seconds=None)
+        # Main shares the admission deadline only for read-only reviews.
+        options = dict(role='review', writer_families=['gpt']) if phase == 'admission' else {}
+        return await service.spawn(card={"estimate_tokens": 1000}, prompt="edit big.py", wait_seconds=None, **options)
 
     record = asyncio.run(run())
-    assert record["status"] == "timeout", record["status"]
+    assert record["status"] == ("timed_out" if phase == "admission" else "timeout"), record
     names = [e["event"] for e in record["events"]]
-    assert names.count("big_file_unsliced") == 1 and any(n.startswith("watchdog_") for n in names)
-    assert names.index("big_file_unsliced") < names.index(next(n for n in names if n.startswith("watchdog_")))
+    timeout_event = next((n for n in names if n.startswith("watchdog_")), None) if phase == "watchdog" else "run_timeout"
+    assert bool(launched) == (phase == "watchdog")
+    if phase == "admission": assert not any(n.startswith("watchdog_") for n in names)
+    assert names.count("big_file_unsliced") == 1 and timeout_event is not None
+    assert names.index("big_file_unsliced") < names.index(timeout_event)
     assert record["warnings"] and record["warnings"][0].startswith("big_file_unsliced: big.py 500 lines")

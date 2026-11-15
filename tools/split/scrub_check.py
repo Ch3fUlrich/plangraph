@@ -5,20 +5,8 @@ Rules: hostname, ipv4, ipv6, email, token-shape, high-entropy, credential-shape,
 home-path, private-word, symlink.  Output is ``path:line: rule`` only; the matched
 value is never printed.  Exit 0 clean, 1 on any hit, 2 on a usage/config error.
     scrub_check.py TREE [--rules rules.toml] [--words private_words.txt] [--hash-hits]
-``rules.toml`` (merged over the built-in defaults, lists are extended)::
-
-    [scrub]
-    hostname_patterns = ["build[0-9]+\\.example-lab"]   # regexes
-    allow_email_domains = ["example.org"]
-    allow_home_names = ["alice"]
-    [[scrub.allow]]                                       # skip rules for paths
-    path = "vendor/**"
-    rules = ["ipv4", "high-entropy"]
-    [[scrub.allow_value]]                                 # skip one matched value
-    path = "tests/fixtures/token.json"                    # exact path, no globs
-    rule = "token-shape"                                  # one known rule id
-    value_sha256 = "<sha256 hex of the exact matched text>"
-    why = "reviewed synthetic fixture"                    # required; never printed
+Use --base BASE --head TIP to scan changed committed blobs instead of the worktree.
+Rules files extend defaults; per-path and per-value allowances remain supported.
 A value allowance suppresses a hit only when *path*, *rule* and the sha256 of the
 matched text (the whole regex match, tree-relative line context) all match.  A missing or empty key, a glob in *path*, an unknown rule or a
 malformed hash is a ``ValueError`` naming the entry number only -- neither path
@@ -375,6 +363,8 @@ def report(hits, out=None, skipped=(), words=(), hash_hits=False):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("tree")
+    ap.add_argument("--base", help="base revision for a committed blob scan")
+    ap.add_argument("--head", help="pushed tip for a committed blob scan")
     ap.add_argument("--rules", action="append", default=[], help="rules.toml (repeatable)")
     ap.add_argument("--words", help="private word list file (stays private)")
     ap.add_argument("--resolve", metavar="HASH", help="print the path(s) behind a <path-hash:HASH>")
@@ -400,7 +390,15 @@ def main(argv=None):
                  if path_tag(p.relative_to(args.tree).as_posix()) == f"<path-hash:{args.resolve}>"]
         print("\n".join(found))
         return 0 if found else 1
-    hits, skipped = scan_tree(args.tree, cfg, with_skipped=True)
+    try:
+        if args.base is not None or args.head is not None:
+            from make_public import scan_committed
+            hits, skipped = scan_committed(args.tree, cfg, args.base, args.head)
+        else:
+            hits, skipped = scan_tree(args.tree, cfg, with_skipped=True)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        print("scrub_check: committed content unavailable", file=sys.stderr)
+        return 2
     report(hits, skipped=skipped, words=cfg["_words"], hash_hits=args.hash_hits)
     return 1 if hits else 0
 

@@ -1,10 +1,12 @@
 [package]
 name = "pg-spawnd"
+default-run = "pg-spawnd"
 version = "0.1.0"
 edition = "2021"
 description = "Host capacity probe CLI"
 
 [dependencies]
+tempfile = "3"
 pg-worker-core = { path = "../worker-core" }
 rmcp = { version = "2.2", default-features = false, features = ["server", "transport-async-rw"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -17,6 +19,7 @@ tokio = { version = "1.53", features = ["rt", "net", "io-util", "macros", "time"
 libc = "0.2"
 
 [dev-dependencies]
+pg-worker-core = { path = "../worker-core", features = ["test-support"] }
 syn = { version = "2", features = ["full", "visit"] }
 
 [target.'cfg(windows)'.dependencies]

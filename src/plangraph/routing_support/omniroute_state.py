@@ -15,6 +15,9 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 
 from .clients import effective_gateway_base_url
+from .opencode_render import (
+    _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
+)
 from .host_keys import _gateway_key
 
 TTL_ENV_VAR = "PLANGRAPH_OMNIROUTE_STATE_TTL_S"
@@ -35,7 +38,8 @@ class ProviderState:
 
 def _default_fetch(url, headers, timeout):
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    opener = urllib.request.build_opener(_NoManagementRedirect())
+    with opener.open(request, timeout=timeout) as response:
         return response.status, response.read()
 
 
@@ -129,11 +133,10 @@ class OmniRouteState:
 
 
 def from_env(env=None, *, key_resolver=None, **kwargs):
-    """Resolve configured endpoint first; never resolve a key without one."""
+    """Validate the configured endpoint before resolving a key."""
     source = os.environ if env is None else env
-    base = (effective_gateway_base_url(source) or "").rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-3].rstrip("/")
+    endpoint = effective_gateway_base_url(source) or ""
+    base = gateway_management_base_url(endpoint) if valid_gateway_endpoint(endpoint) else ""
     key = None
     if base:
         try:

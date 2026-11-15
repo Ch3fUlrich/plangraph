@@ -26,6 +26,7 @@ def repo(tmp_path):
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools/new_code_allowlist.txt").write_text(
         "tests/test_*.py | Existing Python module tests\n", encoding="utf-8")
+    (tmp_path / "tools/new_code_decisions_index.txt").write_text("D-5912 | OPERATOR\n")
     (tmp_path / "existing.py").write_text("print('existing')\n", encoding="utf-8")
     git(tmp_path, "add", ".")
     git(tmp_path, "commit", "-qm", "base")
@@ -162,7 +163,7 @@ def test_nested_test_not_allowlisted(repo):
                                       "tests/sub/deep/test_x.py"])
 def test_recursive_allowlist(repo, name):
     assert check(repo, {"tools/new_code_allowlist.txt":
-                       "tests/**/test_*.py | Recursive tests\n",
+                       "tests/**/test_*.py | Recursive tests D-5912\n",
                        name: "assert True\n"}).returncode == 0
 
 
@@ -185,3 +186,16 @@ def test_workflow_requires_language_job():
     workflow = yaml.safe_load((CHECKER.parents[1] / ".github/workflows/tests.yml").read_text())
     assert "new-code-lang" in workflow["jobs"]
     assert "new-code-lang" in workflow["jobs"]["ci-gate"]["needs"]
+
+
+@pytest.mark.parametrize('path,expected', [('src/new_module.py', 1), ('tools/new_tool.sh', 1),
+                                          ('src/new_module.js', 1),
+                                          ('tests/nested/test_regression.py', 0)])
+def test_project_allowlist_enforces_rust_policy(repo, path, expected):
+    rules = CHECKER.with_name('new_code_allowlist.txt').read_text()
+    root, _ = repo
+    (root / 'tools/new_code_allowlist.txt').write_text(rules)
+    git(root, 'add', '.')
+    git(root, 'commit', '-qm', 'historical allowlist')
+    result = check((root, git(root, 'rev-parse', 'HEAD')), {path: 'new content\n'})
+    assert result.returncode == expected, result.stdout

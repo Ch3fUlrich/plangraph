@@ -1,0 +1,1 @@
+- **SPAWNER-MEM-FLOOR-OVERFLOW-DETAIL:** standalone overflow preserves per-host refusal details through retry limits, saves immediate memory-floor refusals in required caller state, and passes local `--state` before `spawn` without forwarding it remotely.

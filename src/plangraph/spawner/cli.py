@@ -13,7 +13,7 @@ _start_supervisor = subprocess.Popen
 from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
-
+from .base_fresh import admitted_spawn, spawn_runs, spawn_exit_code
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
@@ -48,7 +48,6 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
     if pending:
         write(clean(pending.decode('utf-8')))
 
-
 def _prune_supervisor_logs(state):
     logs = []
     for path in state.glob('supervisor-*.stderr.log'):
@@ -73,13 +72,12 @@ def _prune_supervisor_logs(state):
             except OSError:
                 pass
 
-
 def _supervise():
     payload = json.loads(sys.stdin.readline())
     service = SpawnService(state=payload.pop('state'))
     async def run():
         try:
-            record = await service.spawn(**payload, wait_seconds=0)
+            record = await admitted_spawn(service, payload)
         except Exception as exc:
             record = next((r for r in service.ps()['runs'] if r.get('error') == str(exc)), None)
             if record is None:
@@ -88,15 +86,20 @@ def _supervise():
             return record['exit_code']
         print(json.dumps(record), flush=True)
         sys.stdout.close()
-        for run in record.get('seats') or [record]:
+        for run in spawn_runs(record):
             if run['run_id'] in service.tasks:
                 await service.tasks[run['run_id']]
-        return 0
+        return spawn_exit_code(record)
     return asyncio.run(run())
-
 
 def _card(value):
     return json.loads(Path(value[1:]).read_text(encoding='utf-8') if value.startswith('@') else value)
+
+def _read_result(service, run_id):
+    """Local record read; asyncio.run only for a running remote native Codex run, so callers inside an event loop still work."""
+    from .service import remote_native_running
+    record = service.result(run_id)
+    return asyncio.run(service.refresh_result(run_id)) if remote_native_running(record) else record
 
 
 def main(argv=None):
@@ -129,6 +132,10 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps')
     commands.add_parser('catalog')
+    p = commands.add_parser('quota-result')
+    p.add_argument('--model', required=True)
+    p.add_argument('--error', required=True)
+    p.add_argument('--reset-at', type=float)
     commands.add_parser('launch-spec')
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
@@ -141,6 +148,16 @@ def main(argv=None):
     for verb in ('result', 'status', 'cancel'):
         commands.add_parser(verb).add_argument('run_id')
     args = parser.parse_args(argv)
+    if args.verb == 'quota-result':
+        from .env_redact import harness_limit_line
+        from .leg_state import record_harness_limit
+        line = harness_limit_line(1, '', args.error)
+        if line:
+            if args.reset_at is not None and args.reset_at > time.time():
+                line += f' Resets in {args.reset_at - time.time()}s.'
+            record_harness_limit('agy/' + args.model, line, 'pg-spawnd:cli-result')
+        print('{}')
+        return 0
     if args.verb == 'catalog':
         from plangraph.routing_support.resolver import get_catalog_models
         from plangraph.planner.legs import REVIEW_UNFIT_SEATS
@@ -210,7 +227,7 @@ def main(argv=None):
                 service.save_refusal(exc, args.role)
                 raise
             # Explicit model/leg overrides intentionally bypass routing, not admission.
-            if not args.model and not args.leg:
+            if not args.model and not args.leg and args.card.get('run_kind') != 'native-codex':
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
@@ -355,11 +372,11 @@ raise SystemExit(code)
                                          ('\n' + tail if tail else ''))
                 result = json.loads(line)
                 deadline = time.monotonic() + max(0, args.wait)
-                runs = result['seats'] if 'seats' in result else [result]   # --seats: group envelope
+                runs = spawn_runs(result)
                 while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
                     time.sleep(min(.02, max(0, deadline - time.monotonic())))
-                    runs[:] = [service.result(r['run_id']) if r.get('status') == 'running' else r for r in runs]
-                result = result if 'seats' in result else runs[0]
+                    for run in runs:
+                        if run.get('status') == 'running': run.update(_read_result(service, run['run_id']))
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
@@ -368,7 +385,7 @@ raise SystemExit(code)
         elif args.verb == 'wait':
             result = asyncio.run(service.wait(args.run_id, timeout=args.timeout))
         else:
-            result = service.result(args.run_id)
+            result = _read_result(service, args.run_id)
         if isinstance(result, dict):
             seen = set()
             for skipped in list(result.get('skipped', [])) + list(result.get('attempts', [])):
@@ -383,6 +400,10 @@ raise SystemExit(code)
                     seen.add(line)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
+            if 'writers' in result:
+                for run in spawn_runs(result):
+                    if run.get('reason'): print(run['run_id'] + ': ' + run['reason'], file=sys.stderr)
+                return spawn_exit_code(result)
             if 'seats' in result:
                 # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
                 return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in result['seats']) else 1
@@ -394,7 +415,6 @@ raise SystemExit(code)
     except (ValueError, KeyError, OSError, SpawnRefused) as exc:
         print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
-
 
 if __name__ == '__main__':
     raise SystemExit(main())

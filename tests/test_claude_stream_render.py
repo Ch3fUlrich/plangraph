@@ -137,6 +137,8 @@ def fake_claude(tmp_path, lines, exit_code=0):
 
 def run_review(tmp_path, monkeypatch, lines, exit_code=0):
     """Drive the production dispatch path for the claude Haiku leg and return (record, run dir)."""
+    # Stream rendering must not depend on RAM used by concurrent native builds.
+    monkeypatch.setattr('plangraph.spawner.seat_spawn.resources', lambda service: (0, 16000))
     binary = tmp_path / "bin"
     binary.mkdir()
     (binary / "claude").write_text("#!/bin/sh\nexit 0\n")

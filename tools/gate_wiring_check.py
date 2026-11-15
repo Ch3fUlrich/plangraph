@@ -94,8 +94,8 @@ def _trailer_block(message: str) -> list[str]:
     return block
 
 
-def _commit_shas(base: str, head: str, cwd: str | Path | None) -> list[str]:
-    text = _git_out(['log', '--no-merges', '--format=%H', f'{base}..{head}'], cwd)
+def _commit_shas(base: str, head: str, cwd: str | Path | None, include_merges: bool = False) -> list[str]:
+    text = _git_out(['log', *([] if include_merges else ['--no-merges']), '--format=%H', f'{base}..{head}'], cwd)
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
@@ -103,8 +103,10 @@ def _commit_message(sha: str, cwd: str | Path | None) -> str:
     return _git_out(['show', '-s', '--format=%B', sha], cwd)
 
 
-def _commit_paths(sha: str, cwd: str | Path | None) -> list[str]:
-    text = _git_out(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', sha], cwd)
+def _commit_paths(sha: str, cwd: str | Path | None, include_merges: bool = False) -> list[str]:
+    # Combined diffs show a merge's own edits, omitting clean integration of an authorized parent.
+    text = _git_out(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root',
+                     *(['--cc', '--no-renames'] if include_merges else []), sha], cwd)
     return [path for path in text.split('\x00') if path]
 
 
@@ -117,12 +119,13 @@ def has_gate_edit(base: str, head: str, cwd: str | Path | None = None) -> bool:
     return False
 
 
-def commits_touching(base: str, head: str, workflow: str, cwd: str | Path | None = None) -> list[tuple[str, bool]]:
+def commits_touching(base: str, head: str, workflow: str, cwd: str | Path | None = None,
+                     include_merges: bool = False) -> list[tuple[str, bool]]:
     '''Return (sha, has_gate_edit) for commits in base..head touching workflow.'''
     touching: list[tuple[str, bool]] = []
-    for sha in _commit_shas(base, head, cwd):
+    for sha in _commit_shas(base, head, cwd, include_merges):
         message = _commit_message(sha, cwd)
-        paths = _commit_paths(sha, cwd)
+        paths = _commit_paths(sha, cwd, include_merges)
         if workflow not in paths:
             continue
         has_edit = any(_GATE_EDIT.fullmatch(line) for line in _trailer_block(message))
@@ -130,9 +133,11 @@ def commits_touching(base: str, head: str, workflow: str, cwd: str | Path | None
     return touching
 
 
-def commits_missing_gate_edit(base: str, head: str, workflow: str, cwd: str | Path | None = None) -> list[str]:
+def commits_missing_gate_edit(base: str, head: str, workflow: str, cwd: str | Path | None = None,
+                             include_merges: bool = False) -> list[str]:
     '''Return shas in base..head that touch workflow without a strict Gate-Edit line in their message.'''
-    return [sha for sha, has_edit in commits_touching(base, head, workflow, cwd=cwd) if not has_edit]
+    return [sha for sha, has_edit in commits_touching(
+        base, head, workflow, cwd=cwd, include_merges=include_merges) if not has_edit]
 
 
 def _wiring_diff(base_wiring: dict[str, object], head_wiring: dict[str, object]) -> str:
