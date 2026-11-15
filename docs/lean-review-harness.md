@@ -63,8 +63,8 @@ Native agy reviews use plan mode for both Hydrogen and Argon. Sonnet high uses
 Claude model claude-sonnet-5-5 with --effort high and restricted review tools.
 
 Rust `pg-spawnd` cards carrying a nonempty `done_criteria` now receive a
-pre-review self-check prefix. It includes the complete criteria and the top
-three finding classes from the last 30 days of `.txt`/`.md` verdict files in
+pre-review self-check prefix. It includes the complete criteria and all four
+finding classes, ordered by their counts in the last 30 days of `.txt`/`.md` verdict files in
 `card.review_dir` (relative to the launch checkout, default `reviews`). The scan
 is nonrecursive, uses file modification times, ignores symlinks and files over
 1 MiB, and requires a `VERDICT: ` line. HIGH/MED/P1/P2 finding lines are counted
@@ -75,10 +75,12 @@ The writer copies each generated id into its status note as
 `SELF-CHECK <id>: <evidence>`. The review request must carry the same criteria,
 history directory and that note in `card.writer_status`. Before launching the
 reviewer, Rust refuses missing, blank, duplicate or stale criterion answers and
-includes the checklist and answers in the reviewer prompt. An answer is evidence
+includes the checklist and answers in the reviewer prompt; the error names the
+missing line text. Ids hash only the criteria and the fixed class lines. An answer is evidence
 for the reviewer to verify, not an automatic claim that a criterion is met.
-The directory should remain stable between writer and review; a changed top
-class can require an additional answer. Dry runs perform the same validation.
+History changes between writer and review only reorder the classes, never the
+ids. Review seat lines such as `FINDING: MED path - text` and `1. **HIGH**` are
+counted; classes match the text after ` - `, not the path. Dry runs perform the same validation.
 
 This first slice covers standard Rust-spawner launches and their review quota
 fallbacks. Cards without criteria retain their behavior. Native-Codex lifecycle
