@@ -627,3 +627,19 @@ record bound to the merged head, with consistent attempt provenance. Auth/secret
 cards cannot use these low-trust seats; their existing two-seat gate remains.
 
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
+
+### Claude Code review witnesses
+
+Install the Rust `pg-seat-evidence` binary alongside the keeper. Attach evidence
+kind `claude-seat` through the router evidence API with `transcript`, `review_file`
+and full merged part `head` fields. `claude_projects_dir` optionally configures
+its trusted transcript root (default: the keeper account's Claude projects dir).
+The transcript must have the project/session/subagents/agent-ID.jsonl layout.
+Every assistant message must name a Sonnet model and the matching session/agent.
+A successful `Write` tool call must write the exact review file contents; end the
+file with `HEAD: <full head>` followed by `VERDICT: ACCEPT`. Shell write commands
+are not witnesses. Missing, changed or mismatched evidence gets a named refusal.
+`close-merged` rechecks current-epoch transcript evidence, including inside its
+transaction, and counts it with spawner seats. Existing writer-family, high-tier,
+sensitive-card and lane-specific witness requirements continue to apply.
+Lanes citing D-4504 retain their witness rule; a GO row must explicitly say `Witness: claude-seat` to use this kind.

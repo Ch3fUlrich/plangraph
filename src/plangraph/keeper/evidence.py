@@ -412,6 +412,36 @@ class CommitCiVerifier:
         return Result(True, f"commit {commit} on main with Plan-Item and green CI", ref)
 
 
+class ClaudeSeatVerifier:
+    """Bounded transport to the keeper-installed Rust transcript verifier."""
+
+    kind = "claude-seat"
+
+    @_guarded
+    def verify(self, item, ref, ctx):
+        import json
+        import os
+        import subprocess
+        from pathlib import Path
+        ref = _ref(ref)
+        binary = os.environ.get("PG_CLAUDE_SEAT_BIN", "/usr/local/bin/pg-seat-evidence")
+        if not os.path.isabs(binary):
+            return _fail("claude_seat_helper_unavailable", ref)
+        request = {k: ref.get(k) for k in ("transcript", "review_file", "head")}
+        request.update(root=ctx.claude_projects_dir or str(Path.home() / ".claude/projects"),
+                       writer_families=item.get("_seat_writer_families", []))
+        try:
+            proc = subprocess.run([binary], input=json.dumps(request), text=True,
+                                  capture_output=True, timeout=5, env={})
+        except (OSError, subprocess.SubprocessError):
+            return _fail("claude_seat_helper_unavailable", ref)
+        if proc.returncode != 0 or len(proc.stdout) > 4096:
+            return _fail("claude_seat_helper_invalid", ref)
+        answer = json.loads(proc.stdout)
+        return Result(answer.get("ok") is True, answer["detail"],
+                      dict(ref, seat=answer.get("seat")))
+
+
 # --------------------------------------------------------------------------- #
 # run-record
 # --------------------------------------------------------------------------- #
@@ -610,6 +640,7 @@ VERIFIERS: dict[str, Any] = {
         CommitCiVerifier(),
         LegacyCommitVerifier(),
         RunRecordVerifier(),
+        ClaudeSeatVerifier(),
         SemaphoreTaskVerifier(),
         DecisionVerifier(),
         ErrorRecordVerifier(),
@@ -675,6 +706,7 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),
         decisions=DecisionsAdapter(_cfg(config, "decisions_file"), from_origin=True),
+        claude_projects_dir=_cfg(config, "claude_projects_dir"),
         spawner_records=SpawnerRecordAdapter(_cfg(config, "spawner_records_dir")),
         now=time.time() if now is None else float(now),
         claim_time=as_epoch(_cfg(config, "claim_time")),
