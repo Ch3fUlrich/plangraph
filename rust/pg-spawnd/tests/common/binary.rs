@@ -54,6 +54,13 @@ pub(crate) fn resolve(
 }
 
 fn absolute(path: &Path) -> PathBuf {
+    // Compare filesystem spellings on both sides: Windows canonicalization
+    // resolves verbatim prefixes, case and short names for existing paths.
+    if let Ok(canonical) = path.canonicalize() {
+        return canonical;
+    }
+    // A target need not exist yet. Canonicalize its existing ancestors, then
+    // retain the missing suffix so it uses the same spelling as the checkout.
     let mut result = PathBuf::new();
     for component in std::env::current_dir().unwrap().join(path).components() {
         match component {

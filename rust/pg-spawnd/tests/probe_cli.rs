@@ -46,6 +46,8 @@ fn unshared_cli_uses_cargos_executable_without_building() {
 fn cli_builds_stay_with_their_checkout() {
     let scratch = tempfile::tempdir().unwrap();
     let shared = scratch.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    let canonical_shared = shared.canonicalize().unwrap();
     let mut checkouts = Vec::new();
     for marker in ["first", "second"] {
         let root = scratch.path().join(marker);
@@ -61,9 +63,10 @@ fn cli_builds_stay_with_their_checkout() {
             format!("fn main() {{ println!({marker:?}); }}"),
         )
         .unwrap();
+        let canonical_root = root.canonicalize().unwrap();
         let isolated = binary::resolve(&root, Some(&shared), |target| {
-            assert!(target.starts_with(shared.join("cli-tests")));
-            assert!(!target.starts_with(&root));
+            assert!(target.starts_with(canonical_shared.join("cli-tests")));
+            assert!(!target.starts_with(&canonical_root));
             binary::build(&manifest, target, "fixture")
         });
         binary::build(&manifest, &shared, "fixture");
@@ -76,6 +79,28 @@ fn cli_builds_stay_with_their_checkout() {
         let result = Command::new(executable).output().unwrap();
         assert!(result.status.success());
         assert_eq!(String::from_utf8(result.stdout).unwrap().trim(), marker);
+    }
+}
+
+#[test]
+fn checkout_local_targets_use_canonical_paths() {
+    let scratch = tempfile::tempdir().unwrap();
+    let checkout = scratch.path().join("Checkout");
+    let target = checkout.join("Target");
+    std::fs::create_dir_all(&target).unwrap();
+    let canonical_checkout = checkout.canonicalize().unwrap();
+    let canonical_target = target.canonicalize().unwrap();
+    for (root, target) in [
+        (&checkout, canonical_target.clone()),
+        (&canonical_checkout, target),
+        (&checkout, canonical_target.join("missing/../custom")),
+    ] {
+        assert_eq!(
+            binary::resolve(root, Some(&target), |_| panic!(
+                "checkout-local target built a CLI"
+            )),
+            env!("CARGO_BIN_EXE_pg-spawnd")
+        );
     }
 }
 
