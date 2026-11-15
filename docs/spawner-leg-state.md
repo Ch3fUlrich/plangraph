@@ -119,6 +119,12 @@ quota snapshots do not suppress these native CLI models.
 Legacy agy/<model>-<effort> events remain readable under the canonical key.
 Explicit agy resets survive the generic six-hour evidence TTL, up to the existing
 24-hour booking cap.
-The native Sonnet-high fallback reads and books the declared agy:claude-sonnet-5-5
-seat key, including structured CLI limits and provider reset timestamps. Route
+The native Claude-harness Sonnet-high fallback reads and books its own
+claude-sonnet-5-5-high subscription key. It never shares agy:claude-sonnet-5-5
+quota evidence. CLI review quota results carry the serving harness, including
+structured CLI limits and provider reset timestamps. Route
 JSON carries the planning reader/clock snapshot rather than rereading global state.
+Its agy Sonnet quota snapshot reads the agy key independently of the native leg.
+Explicit-leg admission and provider-stop booking/fallback use the same
+harness-aware quota key as dispatch. The helper lives in routing support;
+`leg_probe.key` remains its compatibility alias.

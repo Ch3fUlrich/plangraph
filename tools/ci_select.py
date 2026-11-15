@@ -39,6 +39,9 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/pg-feeder.service",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
+    # D-6054: native/agy quota isolation regressions exercise these boundaries.
+    "src/plangraph/planner/provider_stop.py",
+    "src/plangraph/routing_support/liveness.py",
     ".github/workflows/**",
     "rust-toolchain.toml",
     ".docs-map",

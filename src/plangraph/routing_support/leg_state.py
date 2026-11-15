@@ -26,12 +26,19 @@ EVIDENCE_TTL_S = 6 * 60 * 60
 _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
 
 
+def leg_key(leg):
+    """One leg key for probe and quota bookkeeping (Q16/M8).
+    Prefix only bare agy models; provider-qualified models are their own keys.
+    Legacy rows without a harness keep their historical model-only keys.
+    """
+    return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
+            else leg.model)
+
+
 def quota_key(leg):
-    """D-5966: effort variants share one quota within each agy model, never across models."""
+    """D-5966: agy efforts share a model quota; native harness keys stay separate."""
     if not isinstance(leg, str):
         return leg
-    if leg == "claude-sonnet-5-5-high":
-        leg = "agy/" + leg  # D-5966: the native Sonnet fallback uses this model seat quota.
     return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
                   r'agy:\1', leg)
 
