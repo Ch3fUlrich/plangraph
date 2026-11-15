@@ -272,7 +272,9 @@ The `by` cell must contain the case-insensitive token `operator`, separated from
 other tokens by commas or plus signs. `Waives-seats:` lists exact, space-separated
 item keys. Optional `Cutoff:` in the decision cell replaces rule 3.37's cutoff
 for those keys only. It accepts an ISO UTC date or datetime (`Z` or `+00:00`),
-must occur once, and cannot be later than the waiver row's own date. Dates come
+must occur once, and cannot be later than the waiver row's own date. Malformed
+markers such as `Cutoff:2026-11-14` refuse as `historical_cutoff` instead of falling
+back to rule 3.37. Dates come
 from a `date` column or a unique `Date:` field in the decision cell; missing or
 ambiguous dates refuse. The GO date and merge timestamp must precede the cutoff.
 Without `Cutoff:`, rule 3.37 applies (default 2026-11-13 UTC). Auth/secrets risk
