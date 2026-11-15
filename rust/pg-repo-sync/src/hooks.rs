@@ -27,6 +27,7 @@ pub fn discover(
             }
         }
     }
+    let mut reported = HashSet::new();
     let mut index = 0;
     while index < repos.len() {
         let repo = repos[index].clone();
@@ -60,12 +61,16 @@ pub fn discover(
         }
         for target in targets {
             if let Some(hook_repo) = checkout(&target) {
-                if seen.insert(hook_repo.clone()) {
+                if repo.canonicalize().ok().as_ref() != Some(&hook_repo)
+                    && reported.insert(hook_repo.clone())
+                {
                     println!(
                         "HOOK {:?} via {:?}",
                         hook_repo.display().to_string(),
                         target.display().to_string()
                     );
+                }
+                if seen.insert(hook_repo.clone()) {
                     repos.push(hook_repo);
                 }
             }

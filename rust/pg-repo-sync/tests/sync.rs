@@ -402,8 +402,13 @@ fn symlinked_hook_checkout_is_discovered() {
     let caller = tmp.path().join("caller");
     let git_hooks = caller.join(".git/hooks");
     std::os::unix::fs::symlink(hooks.join("pre-push"), git_hooks.join("pre-push")).unwrap();
-    let out = run(tmp.path(), &["--repo", "caller"]);
+    let out = run(tmp.path(), &["--repo", "caller", "--repo", "checkout"]);
     assert!(out.status.success(), "{:?}", out);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("HOOK"),
+        "{:?}",
+        out
+    );
     assert_eq!(
         git(&hooks, &["rev-parse", "HEAD"]),
         git(&tmp.path().join("source"), &["rev-parse", "HEAD"])
