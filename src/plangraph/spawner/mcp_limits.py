@@ -33,7 +33,8 @@ def ps_reply(runs):
     for run in selected:
         row = {key: run[key] for key in PS_FIELDS if key in run}
         if run.get('status') == 'unknown':
-            row['reason'] = 'host query failed'
+            from .remote_ps import safe_diagnostic
+            row['reason'] = safe_diagnostic(run.get('reason', 'host query failed'))
         leg = run.get('chosen_leg')
         if isinstance(leg, dict) and 'id' in leg:
             row['leg'] = leg['id']

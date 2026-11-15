@@ -1,4 +1,4 @@
-"""Optional, bounded SSH fan-out for ps; transport diagnostics stay private."""
+"""Optional, bounded SSH fan-out for ps; bounded, redacted transport diagnostics."""
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -22,7 +22,34 @@ FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
 
 
 class HostQueryError(ValueError):
-    """Only fixed public reasons cross the transport boundary."""
+    """Transport failure with bounded public diagnostics and an SSH exit code."""
+
+    def __init__(self, reason, *, code=None, stderr=''):
+        super().__init__(reason)
+        self.code, self.stderr = code, stderr
+
+
+def safe_diagnostic(text, *, target=None):
+    """Redact before bounding a single public diagnostic line."""
+    from .env_redact import redact_output, redact_env_values
+    from plangraph.routing_support.host_keys import redaction_env
+    if isinstance(text, bytes):
+        text = text.decode('utf-8', errors='replace')
+    text = redact_output(redact_env_values(text, redaction_env(os.environ)))
+    if target:
+        text = text.replace(target, '[host]')
+    lines = text.splitlines()
+    return ''.join(c for c in (lines[0] if lines else '') if c.isprintable())[:200]
+
+
+def safe_reason(exc, host=None):
+    """Expose the error class and first stderr line, never command arguments."""
+    stderr = getattr(exc, 'stderr', '') or ''
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode('utf-8', errors='replace')
+    label = str(exc) if isinstance(exc, HostQueryError) else 'host query failed'
+    first = safe_diagnostic(stderr, target=host.get('target') if host else None)
+    return (f'{label}: {type(exc).__name__}' + (f': {first}' if first else ''))[:200]
 
 
 SRC_MISSING = 44
@@ -33,6 +60,7 @@ def source_check(host):
         src = host['win_src']
         if not isinstance(src, str) or not re.fullmatch(r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*', src):
             raise ValueError('invalid configuration')
+        src = src.replace('/', '\\')
         return f'if not exist "{src}\\" exit /b {SRC_MISSING}'
     return f'test -d {source_path(host["src"])} || exit {SRC_MISSING}'
 
@@ -49,7 +77,8 @@ def host_command(host, *, query=False):
     if 'win_src' in host:
         command = source_check(host)
         if query:
-            command += (f' & set "PYTHONPATH={host["win_src"]}"&& '
+            src = host['win_src'].replace('/', '\\')
+            command += (f' & set "PYTHONPATH={src}"&& '
                         'python -m plangraph.spawner.remote_ps')
         return command
     command = source_check(host) if 'src' in host else ''
@@ -69,24 +98,35 @@ def exit_reason(code):
 
 
 def query_host(host, timeout):
+    # ConnectTimeout bounds each SSH connection; only SSH exit 255 gets one retry.
+    for attempt in range(2):
+        try:
+            return _query_host(host, timeout)
+        except HostQueryError as exc:
+            if exc.code != 255 or attempt:
+                raise
+
+
+def _query_host(host, timeout):
     command = host_command(host, query=True)
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         ) as process:
         deadline = time.monotonic() + timeout
-        output = bytearray()
+        output, errors = bytearray(), bytearray()
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
+                selector.register(process.stderr, selectors.EVENT_READ)
                 while selector.get_map():
                     remaining = deadline - time.monotonic()
                     events = selector.select(max(0, remaining))
                     if remaining <= 0 or not events:
                         raise TimeoutError('host query failed')
                     for key, _ in events:
-                        buffer = output
+                        buffer = output if key.fileobj is process.stdout else errors
                         chunk = os.read(key.fd, min(65536, MAX_OUTPUT + 1 - len(buffer)))
                         buffer.extend(chunk)
                         if len(buffer) > MAX_OUTPUT:
@@ -96,8 +136,12 @@ def query_host(host, timeout):
             code = process.wait(timeout=max(0, deadline - time.monotonic()))
             reason = exit_reason(code)
             if reason:
-                raise HostQueryError(reason)
+                raise HostQueryError(reason, code=code, stderr=errors.decode('utf-8', errors='replace'))
             return output.decode('utf-8', errors='replace')
+        except Exception as exc:
+            if not isinstance(exc, HostQueryError):
+                exc.stderr = bytes(errors)
+            raise
         finally:
             if process.poll() is None:
                 process.kill()
@@ -144,8 +188,12 @@ def configured_hosts():
 def _fetch(host, transport):
     try:
         if host.get('invalid'):
-            raise ValueError()
-        data = json.loads(transport(host, TIMEOUT))
+            return [dict(host=host['name'], status='unknown', reason='host query failed')]
+        try:
+            payload = transport(host, TIMEOUT)
+        except Exception as exc:
+            return [dict(host=host['name'], status='unknown', reason=safe_reason(exc, host))]
+        data = json.loads(payload)
         rows = data['runs']
         if not isinstance(rows, list):
             raise ValueError()
@@ -163,13 +211,10 @@ def _fetch(host, transport):
                                0xD800 <= ord(c) <= 0xDFFF for c in row[k])
                            for k in FIELDS if k in row and isinstance(row[k], str))):
                 raise ValueError()
-            clean.append({k: row[k] for k in FIELDS if k in row})
+            clean.append(dict({k: row[k] for k in FIELDS if k in row}, host=host['name']))
         return clean
-    except HostQueryError as exc:
-        reason = str(exc) if str(exc) in ('host src missing', 'host unreachable') else 'host query failed'
-        return [dict(host=host['name'], status='unknown', reason=reason)]
-    except Exception:
-        return [dict(host=host['name'], status='unknown', reason='host query failed')]
+    except Exception as exc:
+        return [dict(host=host['name'], status='unknown', reason=safe_reason(exc, host))]
 
 
 def list_runs(local, *, transport=query_host):

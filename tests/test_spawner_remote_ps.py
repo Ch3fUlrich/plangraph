@@ -36,15 +36,15 @@ def test_parallel_partial_and_private(tmp_path, monkeypatch):
         return json.dumps({'runs': [dict(run_id='run-abc', host='true-host',
                                         status='running', stderr='SECRET')]})
     rows = remote_ps.list_runs([], transport=transport)
-    assert rows[0] == dict(run_id='run-abc', host='true-host', status='running')
+    assert rows[0] == dict(run_id='run-abc', host='node-0', status='running')
     assert [r['host'] for r in rows[1:]] == ['node-1', 'node-2']
     assert all(r['status'] == 'unknown' for r in rows[1:])
     assert 'SECRET' not in json.dumps(rows)
     assert 'private-' not in json.dumps(rows)
     compact = ps_reply([dict(status='completed') for _ in range(25)] + rows)
     assert len([r for r in compact['runs'] if r['status'] == 'unknown']) == 2
-    assert all(r['reason'] == 'host query failed' for r in compact['runs']
-               if r['status'] == 'unknown')
+    assert {r['reason'] for r in compact['runs'] if r['status'] == 'unknown'} == {
+        'host query failed: TimeoutExpired', 'host query failed: JSONDecodeError'}
 
 
 @pytest.mark.parametrize('src,distro', [(s, None) for s in [None, '/opt/plangraph/src',
@@ -67,7 +67,7 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
                         '--', 'private-target', command]
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
-        assert kwargs['stderr'] == subprocess.DEVNULL
+        assert kwargs['stderr'] == subprocess.PIPE
         assert kwargs.get('shell', False) is False
         return original([sys.executable, '-c', 'print(\'{"runs": []}\', end="")'], **kwargs)
     monkeypatch.setattr(subprocess, 'Popen', run)
@@ -117,7 +117,7 @@ def test_invalid_wsl_is_invalid_config(tmp_path, monkeypatch, distro, src):
                                      '{"runs": [{"run_id": "run-a"}]}'])
 def test_malformed_is_named_unknown(payload):
     assert remote_ps._fetch(dict(name='node-a'), lambda *args: payload) == [
-        dict(host='node-a', status='unknown', reason='host query failed')]
+        dict(host='node-a', status='unknown', reason='host query failed: ' + ('KeyError' if payload == '{}' else 'ValueError'))]
 def test_unreachable_does_not_log_secrets(caplog):
     def fail(*args):
         raise OSError('private-address secret-token')
@@ -203,7 +203,7 @@ def test_remote_identifiers_reject_controls(field, value, caplog):
     row = dict(run_id='run-a', host='node-a', status='running')
     row[field] = value
     rows = remote_ps._fetch(dict(name='node-a'), lambda *args: json.dumps({'runs': [row]}))
-    assert rows == [dict(host='node-a', status='unknown', reason='host query failed')]
+    assert rows == [dict(host='node-a', status='unknown', reason='host query failed: ValueError')]
     assert ps_reply(rows)['runs'] == rows
     assert caplog.text == ''
 @pytest.mark.parametrize('field', remote_ps.FIELDS)
@@ -215,7 +215,7 @@ def test_every_remote_field_is_typed(field, value, caplog):
     payload = json.dumps({'runs': [dict(run_id='valid', host='node-a',
                                          status='queued'), row]})
     assert remote_ps._fetch(dict(name='node-a'), lambda *args: payload) == [
-        dict(host='node-a', status='unknown', reason='host query failed')]
+        dict(host='node-a', status='unknown', reason='host query failed: ValueError')]
     assert caplog.text == ''
 @pytest.mark.parametrize('ended,exit_code,pid', [(None, None, None), (2.5, 0, 123)])
 def test_valid_remote_field_types(ended, exit_code, pid):
@@ -225,7 +225,7 @@ def test_valid_remote_field_types(ended, exit_code, pid):
         {'runs': [row]})) == [row]
 def test_long_identifiers():
     row = dict(run_id='r' * 256, host='h' * 253, status='running')
-    assert remote_ps._fetch(dict(name='node-a'), lambda *a: json.dumps({'runs': [row]})) == [row]
+    assert remote_ps._fetch(dict(name='node-a'), lambda *a: json.dumps({'runs': [row]})) == [dict(row, host='node-a')]
 def test_local_reason_is_private():
     assert 'reason' not in ps_reply([dict(status='failed', reason='private')])['runs'][0]
 def test_mixed_config(tmp_path, monkeypatch):
@@ -257,7 +257,7 @@ def test_transport_overflow_names_host(monkeypatch):
          '{"run_id": "x" * 2097152, "host": "node-a", "status": "running"}]}))'], **kw))
     rows = remote_ps._fetch(dict(name='node-a', target='target'),
                            lambda host, _: remote_ps.query_host(host, 10))
-    assert rows == [dict(host='node-a', status='unknown', reason='host query failed')]
+    assert rows == [dict(host='node-a', status='unknown', reason='host query failed: ValueError')]
 def test_worker_count_is_capped(monkeypatch):
     hosts = [dict(name='node-a') for _ in range(100)]
     monkeypatch.setattr(remote_ps, 'configured_hosts', lambda: hosts)
@@ -354,7 +354,7 @@ def test_cli_transport_failure(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(remote_ps, 'list_runs', lambda rows: real_list(rows, transport=fail))
     cli.main(['ps'])
     assert json.loads(capsys.readouterr().out)['runs'] == [
-        dict(host='node-a', status='unknown', reason='host query failed')]
+        dict(host='node-a', status='unknown', reason='host query failed: OSError')]
 
 
 def test_executor_failure_is_unknown(monkeypatch):
@@ -386,3 +386,103 @@ def test_mcp_ps_does_not_block(tmp_path, monkeypatch):
             release.set()
         await task
     asyncio.run(check())
+
+
+def test_all_hosts_cli_matches_mcp(tmp_path, monkeypatch, capsys):
+    import asyncio
+    from plangraph.spawner import cli
+    from plangraph.spawner.mcp import MCPSpawnerServer
+    from plangraph.spawner.service import SpawnService
+    local = dict(run_id='local', host='dell', status='running')
+    merged = [local, dict(run_id='remote', host='ws-build', status='queued')]
+    calls = []
+    monkeypatch.setattr(SpawnService, 'ps', lambda self: {'runs': [local]})
+    def fanout(rows):
+        calls.append(rows)
+        return merged
+    monkeypatch.setattr(remote_ps, 'list_runs', fanout)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SpawnService(state=tmp_path))
+    assert cli.main(['ps', '--all-hosts']) == 0
+    cli_rows = json.loads(capsys.readouterr().out)['runs']
+    reply = asyncio.run(MCPSpawnerServer(state=tmp_path).call_tool('plangraph_agent_ps', {}))
+    assert cli_rows == reply['runs'] == merged
+    assert calls == [[local], [local]]
+
+
+def test_failed_query_reason_carries_safe_stderr(monkeypatch):
+    original = subprocess.Popen
+    script = ('import sys; sys.stderr.write("ModuleNotFoundError: token=private-value\\nSECOND\\n"); '
+              'raise SystemExit(1)')
+    monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: original(
+        [sys.executable, '-c', script], **kw))
+    rows = remote_ps._fetch(dict(name='ws-build', target='private-target'), remote_ps.query_host)
+    reason = rows[0]['reason']
+    assert 'HostQueryError' in reason and 'ModuleNotFoundError:' in reason
+    assert 'private-value' not in reason and 'SECOND' not in reason
+    assert ps_reply(rows)['runs'][0]['reason'] == reason
+    assert len(reason) <= 200
+
+
+@pytest.mark.parametrize('code,stderr,attempts', [
+    (255, 'ssh: connect timeout', 2), (1, 'remote command failed', 1),
+    (44, 'source missing', 1), (0, '', 1),
+])
+def test_retry_only_ssh_failure(monkeypatch, code, stderr, attempts):
+    original = subprocess.Popen
+    calls = []
+    def run(argv, **kw):
+        calls.append(argv)
+        actual = code if len(calls) == 1 else 0
+        script = f'import sys; print(\'{{"runs": []}}\'); sys.stderr.write({stderr!r}); sys.exit({actual})'
+        return original([sys.executable, '-c', script], **kw)
+    monkeypatch.setattr(subprocess, 'Popen', run)
+    rows = remote_ps._fetch(dict(name='dell', target='target'), remote_ps.query_host)
+    assert len(calls) == attempts
+    if code in (0, 255):
+        assert rows == []
+    else:
+        assert rows[0]['status'] == 'unknown'
+
+
+def test_remote_hosts_use_configured_name():
+    payload = json.dumps({'runs': [dict(run_id=str(i), host=h, status='running')
+                                  for i, h in enumerate(['18-de-2053.client.unibas.ch', 'dell'])]})
+    rows = remote_ps._fetch(dict(name='dell'), lambda *a: payload)
+    assert [row['host'] for row in rows] == ['dell', 'dell']
+
+
+def test_failed_query_diagnostic_is_bounded(monkeypatch):
+    monkeypatch.setenv('PS_TEST_TOKEN', 'known-private-value')
+    exc = remote_ps.HostQueryError('host query failed', code=1,
+        stderr='ModuleNotFoundError: known-private-value private-target ' + 'x' * 300 + '\nHIDDEN')
+    rows = remote_ps._fetch(dict(name='node-a', target='private-target'),
+        lambda *a: (_ for _ in ()).throw(exc))
+    reason = rows[0]['reason']
+    assert len(reason) == 200
+    assert 'known-private-value' not in reason and 'private-target' not in reason
+    assert 'HIDDEN' not in reason and 'ModuleNotFoundError' in reason
+    assert ps_reply(rows)['runs'][0]['reason'] == reason
+
+
+def test_retry_exhaustion_is_bounded(monkeypatch):
+    original = subprocess.Popen
+    calls = []
+    def ssh(argv, **kwargs):
+        calls.append(argv)
+        return original([sys.executable, '-c',
+            'import sys; sys.stderr.write("ssh: connect timeout\\n"); sys.exit(255)'], **kwargs)
+    monkeypatch.setattr(subprocess, 'Popen', ssh)
+    rows = remote_ps._fetch(dict(name='dell', target='target'), remote_ps.query_host)
+    assert len(calls) == 2
+    assert rows[0]['reason'] == 'host unreachable: HostQueryError: ssh: connect timeout'
+
+
+def test_remote_command_timeout_is_not_retried(monkeypatch):
+    calls = []
+    def query(host, timeout):
+        calls.append(host)
+        raise TimeoutError('remote command timeout')
+    monkeypatch.setattr(remote_ps, '_query_host', query)
+    rows = remote_ps._fetch(dict(name='dell', target='target'), remote_ps.query_host)
+    assert len(calls) == 1
+    assert rows[0]['reason'] == 'host query failed: TimeoutError'

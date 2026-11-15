@@ -1,0 +1,1 @@
+- **SPAWNER-PS-ALL-HOSTS:** Add CLI `ps --all-hosts` using the MCP fan-out function; preserve redacted, 200-character transport diagnostics in unknown rows, retry SSH exit 255 once, normalize remote rows to configured host labels, and normalize Windows cmd.exe source paths while using `python`.
