@@ -44,7 +44,7 @@ from . import events
 from . import db_errors
 from . import oversight_policy
 from .errors import Refused
-from .store_create import _MAX_DEPS
+from .store_create import CreateMixin, _MAX_DEPS
 
 MAX_OPS = 500
 _OPS = {
@@ -198,9 +198,7 @@ class OpsMixin:
         if not isinstance(op.get("key"), str):
             raise Refused("validation", f"{name} needs a key")
         if name == "priority":
-            n = op.get("priority")
-            if isinstance(n, bool) or not isinstance(n, int):
-                raise Refused("validation", "priority must be an integer")
+            CreateMixin._checked_priority(op.get("priority"))
         if name == "set_kind" and not isinstance(op.get("kind"), str):
             raise Refused("validation", "set_kind needs a kind")
         if name in ("add_dep", "remove_dep") \

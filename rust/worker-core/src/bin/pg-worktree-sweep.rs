@@ -8,13 +8,30 @@ use std::{
     time::{Duration, SystemTime},
 };
 fn run() -> io::Result<()> {
-    let (mut repo, mut root, mut pins) = (None, None, None);
+    let (mut repo, mut roots, mut pins) = (None, Vec::new(), None);
     let mut state = env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state/plangraph"));
     let mut reader = env::var_os("PG_SWEEP_CLAIMS_READER").map(PathBuf::from);
     let (mut apply, mut dry, mut daily, mut remote) = (false, false, false, false);
+    let mut remote_targets = Vec::new();
+    let (mut targets, mut idle_minutes) = (Vec::new(), 60);
     let mut args = env::args().skip(1);
     while let Some(flag) = args.next() {
         match flag.as_str() {
+            "--idle-minutes" => {
+                idle_minutes = args
+                    .next()
+                    .ok_or_else(|| io::Error::other("missing idle minutes"))?
+                    .parse::<u64>()
+                    .map_err(io::Error::other)?
+            }
+            "--remote-target" => remote_targets.push(
+                args.next()
+                    .ok_or_else(|| io::Error::other("missing remote target"))?,
+            ),
+            "--target" => targets.push(
+                args.next()
+                    .ok_or_else(|| io::Error::other("missing target"))?,
+            ),
             "--apply" => apply = true,
             "--dry-run" => dry = true,
             "--daily" => daily = true,
@@ -24,9 +41,12 @@ fn run() -> io::Result<()> {
                     args.next()
                         .ok_or_else(|| io::Error::other("missing value"))?,
                 );
+                if path.as_os_str().is_empty() {
+                    return Err(io::Error::other("empty path value"));
+                }
                 match flag.as_str() {
                     "--repo" => repo = Some(path),
-                    "--root" => root = Some(path),
+                    "--root" => roots.push(path),
                     "--pins" => pins = Some(path),
                     "--state" => state = Some(path),
                     _ => reader = Some(path),
@@ -38,11 +58,13 @@ fn run() -> io::Result<()> {
     if apply && dry {
         return Err(io::Error::other("conflicting --apply --dry-run"));
     }
-    if remote && !apply {
+    if (!remote_targets.is_empty() && !remote) || (remote && !apply) {
         return Err(io::Error::other("--delete-remote requires --apply"));
     }
     let repo = repo.ok_or_else(|| io::Error::other("--repo required"))?;
-    let root = root.ok_or_else(|| io::Error::other("--root required"))?;
+    if roots.is_empty() {
+        return Err(io::Error::other("--root required"));
+    }
     let pins = pins.ok_or_else(|| io::Error::other("--pins required"))?;
     let state = state.ok_or_else(|| io::Error::other("HOME or --state required"))?;
     let marker = state.join("merged-sweep.last");
@@ -65,7 +87,10 @@ fn run() -> io::Result<()> {
         "{}",
         merged_sweep::run(&Options {
             repo: &repo,
-            root: &root,
+            roots: &roots,
+            targets: &targets,
+            remote_targets: &remote_targets,
+            idle_minutes,
             pins: &pins,
             state: &state,
             claims_reader: reader.as_deref(),

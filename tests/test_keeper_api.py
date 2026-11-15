@@ -201,3 +201,37 @@ def test_auth_failure_is_audited_never_token(srv, w, monkeypatch):
     assert status == 401
     assert calls[-1] == "missing token"
     assert all(token not in reason for reason in calls)
+
+
+def test_ready_json_separates_reconciliation_rows(srv, w, monkeypatch):
+    from plangraph.keeper import context_sources
+    monkeypatch.setattr(context_sources, "work_index", lambda *a, **kw: {
+        "commits": {"demo:A": [{"sha": "a" * 40, "date": "2026-11-13",
+                                  "subject": "done"}]},
+        "prs": {}, "branches": []})
+    status, _, raw = call(srv, "/v1/ready?fmt=json", token=w.tok("reader"))
+    data = jbody(raw)
+    assert status == 200 and data["items"] == [] and data["in_progress"] == []
+    assert [r["key"] for r in data["needs_reconcile"]] == ["demo:A"]
+    assert "already merged" in data["needs_reconcile"][0]["reason"]
+
+
+def test_ready_unknown_index_warning_is_visible_in_json_and_text(srv, w, monkeypatch):
+    from plangraph.keeper import context_sources
+    import time
+    monkeypatch.setattr(context_sources, "work_index", lambda *a, **kw: {
+        "commits": {}, "prs": None, "branches": [], "stale": True,
+        "origin_stale": True, "verified_at": time.time() - 60,
+        "reason": "origin fetch failed or timed out"})
+    status, _, raw = call(srv, "/v1/ready?fmt=json&n=0", token=w.tok("reader"))
+    data = jbody(raw)
+    assert status == 200 and data["items"] == []
+    assert [r["key"] for r in data["unknown"]] == ["demo:A"]
+    assert len(data["warnings"]) == 1
+    assert data["warnings"][0]["age_seconds"] >= 60
+    assert data["warnings"][0]["reason"] == "origin fetch failed or timed out"
+    status, _, raw = call(srv, "/v1/ready?fmt=text&n=0", token=w.tok("reader"))
+    assert status == 200
+    text = raw.decode()
+    assert text.count("WARNING:") == 1 and "origin fetch failed" in text
+    assert "Unknown:\n  demo:A" in text
