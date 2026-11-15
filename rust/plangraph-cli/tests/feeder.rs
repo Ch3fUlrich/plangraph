@@ -89,7 +89,7 @@ fn pick_skips_exact_runs_families_and_file_or_directory_overlap() {
         .unwrap(),
         "plangraph:BUILD-CI-FIX"
     );
-    assert_eq!(winner(&v, &[run("", &[])]), None);
+    assert_eq!(winner(&v, &[run("", &[])]).unwrap(), "plangraph:PATCH-PR");
 }
 
 fn facts() -> HostFacts {
@@ -361,7 +361,7 @@ fn live_nullable_run_fields_decode_and_still_exclude_unknown_scope() {
     .unwrap();
     assert!(r.writer());
     assert!(r.item_key.is_empty());
-    assert_eq!(winner(&ready(), &[r]), None);
+    assert_eq!(winner(&ready(), &[r]).unwrap(), "plangraph:PATCH-PR");
     let item: Task = serde_json::from_value(json!({"key":"plangraph:A","files":null})).unwrap();
     assert!(item.files.is_empty());
 }
