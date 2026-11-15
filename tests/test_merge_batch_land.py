@@ -12,8 +12,10 @@ check name that fakes a bucket, a check that is neither pass nor skipping read a
 batch PR made by a dead push duplicated.
 """
 import json
+import re
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -271,3 +273,101 @@ def test_push_takes_over_a_batch_pr_a_dead_push_created(env):
     assert again.returncode == 0 and again.stdout == "100\n", again.stderr
     assert len(env.calls("pr", "create")) == 1 and json.loads(env.state_file("d1").read_text())["pr"] == 100
     assert "| #1 |" in env.load()["prs"]["100"]["body"]
+
+
+def go_ready(env):
+    env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
+    env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
+    assert env.run("build", "--name", "g1", "--prs", "1,2", "--plan", "plangraph:BATCH").returncode == 0
+    assert env.run("push", "--name", "g1").returncode == 0
+    st = json.loads(env.state_file("g1").read_text())
+    for rec in st["merged"]:
+        path = env.tmp / f"review-{rec['pr']}.txt"
+        path.write_text(f"HEAD: {rec['head']}\nVERDICT: ACCEPT\n")
+        assert env.run("review", "--name", "g1", "--pr", str(rec["pr"]), "--file", str(path)).returncode == 0
+    env.load()["runs"] = {"42": {"databaseId": 42, "headSha": st["head"],
+                                    "status": "completed", "conclusion": "success"}}
+    env.save()
+    assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
+    return json.loads(env.state_file("g1").read_text())
+
+
+def test_go_req_from_recorded_evidence(env):
+    st = go_ready(env)
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 0, result.stderr
+    assert len(result.stdout.splitlines()) == 1
+    # The router readiness grammar requires exactly one explicit request head.
+    assert re.findall(r"\b(?:GO-HEAD|head|at)\s+([0-9a-fA-F]{8,40})\b", result.stdout) == [st["head"]]
+    assert result.stdout.startswith(f"GO-REQ #100 owner/proj head {st['head']}; diff stat: 2 files changed")
+    for rec in st["merged"]:
+        assert f"#{rec['pr']} sha={rec['head']} review={rec['review']['file']} verdict=ACCEPT" in result.stdout
+    assert "CI run 42 state=completed conclusion=success" in result.stdout
+    assert result.stdout.endswith("PLAN plangraph:BATCH conforms=yes deviations=none\n")
+
+
+@pytest.mark.parametrize("case", ["missing", "wrong_head", "reject", "deleted", "changed"])
+def test_go_req_refuses_missing_or_stale_part_accept(env, case):
+    st = go_ready(env)
+    rec = st["merged"][1]
+    path = Path(rec["review"]["file"])
+    if case == "missing":
+        del rec["review"]
+    elif case == "wrong_head":
+        rec["review"]["head"] = st["head"]
+    elif case == "reject":
+        rec["review"]["verdict"] = "REQUEST_CHANGES"
+    elif case == "deleted":
+        path.unlink()
+    else:
+        path.write_text(f"HEAD: {rec['head']}\nVERDICT: REQUEST_CHANGES\n")
+    env.state_file("g1").write_text(json.dumps(st))
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 1 and result.stdout == ""
+
+
+@pytest.mark.parametrize("field,value", [("status", "in_progress"), ("conclusion", "failure"),
+                                          ("headSha", "a" * 40)])
+def test_go_req_refuses_ci_not_green_on_batch_head(env, field, value):
+    go_ready(env)
+    env.load()["runs"]["42"][field] = value
+    env.save()
+    pushed = env.run("push", "--name", "g1", "--ci-run", "42")
+    assert pushed.returncode == (1 if field == "headSha" else 0)
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 1 and "CI is not green" in result.stderr and result.stdout == ""
+
+
+def test_go_req_new_head_invalidates_ci_and_reports_deviations(env):
+    st = go_ready(env)
+    wt = st["worktree"]
+    env.git("commit", "--allow-empty", "-qm", "batch fix", cwd=wt)
+    assert "head moved" in env.run("go-req", "--name", "g1").stderr
+    assert env.run("push", "--name", "g1").returncode == 0
+    assert json.loads(env.state_file("g1").read_text())["ci"] is None
+    env.load()["runs"]["42"]["headSha"] = env.git("rev-parse", "HEAD", cwd=wt)
+    env.save()
+    assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
+    st = json.loads(env.state_file("g1").read_text())
+    st["deviations"] = "operator approved scope change"
+    env.state_file("g1").write_text(json.dumps(st))
+    assert env.run("go-req", "--name", "g1").stdout.endswith(
+        "PLAN plangraph:BATCH conforms=no deviations=operator approved scope change\n")
+
+
+def test_review_rejection_supersedes_old_accept(env):
+    st = go_ready(env)
+    path = env.tmp / "rejection.txt"
+    path.write_text(f"HEAD: {st['merged'][0]['head']}\nVERDICT: REQUEST_CHANGES\n")
+    result = env.run("review", "--name", "g1", "--pr", "1", "--file", str(path))
+    assert result.returncode == 0, result.stderr
+    rec = json.loads(env.state_file("g1").read_text())["merged"][0]
+    assert rec["review"]["verdict"] == "REQUEST_CHANGES" and rec["review"]["file"] == str(path)
+    assert env.run("go-req", "--name", "g1").returncode == 1
+
+
+def test_go_req_refuses_remote_head_movement(env):
+    st = go_ready(env)
+    env.git("update-ref", "refs/heads/batch/g1", st["base_head"], cwd=env.origin)
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 1 and "saved pushed head" in result.stderr and result.stdout == ""

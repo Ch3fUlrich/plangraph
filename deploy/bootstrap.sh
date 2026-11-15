@@ -10,9 +10,11 @@ AUTOOS_ROOT=""
 CATALOG_DB_PATH=""
 PROBE_HOST=""
 PROBE_CONFIG=""
+CI_TOOLS_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --ci-tools-only) CI_TOOLS_ONLY=1; shift ;;
     --skip-ctx-watchdog) SKIP_CTX_WATCHDOG=1; shift ;;
     --probe-host|--probe-config)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing probe argument" >&2; exit 1; }
@@ -40,6 +42,32 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# Run as the runner user, including WSL2 runners; no sudo or distro Python pin.
+if [[ "$CI_TOOLS_ONLY" -eq 1 ]]; then
+  version=8.30.1
+  case "$(uname -s)/$(uname -m)" in
+    Linux/x86_64) arch=x64; sha=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb ;;
+    Linux/aarch64|Linux/arm64) arch=arm64; sha=e4a487ee7ccd7d3a7f7ec08657610aa3606637dab924210b3aee62570fb4b080 ;;
+    *) echo "CI tools require Linux x86_64 or arm64" >&2; exit 1 ;;
+  esac
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY-RUN] Install gitleaks $version ($arch, SHA-256 $sha) into $HOME/.local/bin"
+    exit 0
+  fi
+  dir=$(mktemp -d)
+  trap 'rm -rf "$dir"' EXIT
+  archive="gitleaks_${version}_linux_${arch}.tar.gz"
+  curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 \
+    "https://github.com/gitleaks/gitleaks/releases/download/v$version/$archive" -o "$dir/$archive"
+  printf '%s  %s\n' "$sha" "$archive" > "$dir/checks.sha256"
+  (cd "$dir" && sha256sum -c checks.sha256)
+  tar -xzf "$dir/$archive" -C "$dir" gitleaks
+  "$dir/gitleaks" version | grep -Fx "$version"
+  mkdir -p "$HOME/.local/bin"
+  install -m 0755 "$dir/gitleaks" "$HOME/.local/bin/gitleaks"
+  exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REQ_FILE="$SCRIPT_DIR/requirements-host.json"

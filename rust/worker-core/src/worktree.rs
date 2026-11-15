@@ -171,6 +171,7 @@ pub fn create(
 
 /// Remove a worktree (forced, discarding local changes). The branch is kept.
 pub fn remove(repo: &Path, path: &Path) -> Result<(), GitError> {
+    disk::remove_legacy_target(path)?;
     git(
         repo,
         &["worktree", "remove", "--force", &path.to_string_lossy()],
@@ -382,3 +383,6 @@ mod tests {
             .is_empty());
     }
 }
+
+#[path = "worktree_disk.rs"]
+pub(crate) mod disk;

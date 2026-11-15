@@ -13,13 +13,14 @@ def enabled():
 def default_reader():
     from .leg_state import LegAdapter, _default_store
     from .omniroute_state import from_env
+    from .quota_snapshots import QuotaGate
     reader = LegAdapter(_default_store(), from_env(), enabled=enabled())
-    original = reader.leg_status
+    original, gate = reader.leg_status, QuotaGate()
     def status(model, **scope):
         result = original(model, **scope)
         if result.get('reason') in ('unknown', 'unreachable', 'stale') or (result.get('reason') or '').startswith('leg_state_snapshot_error:'):
-            return dict(reader.store.leg_status(model, **scope), reason=result['reason'])
-        return result
+            result = dict(reader.store.leg_status(model, **scope), reason=result['reason'])
+        return gate.apply(model, result, scope.get('now'))   # pre-route omniroute quota_snapshots gate
     reader.leg_status = status
     return reader
 

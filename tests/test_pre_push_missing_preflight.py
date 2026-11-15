@@ -15,6 +15,7 @@ def test_missing_preflight_main(tmp_path, skip):
     (tools / "hooks").mkdir(parents=True)
     shutil.copy2(root / "tools/hooks/pre-push", tools / "hooks/pre-push")
     shutil.copytree(root / "tools/split", tools / "split")
+    shutil.copy2(root / "tools/ci_commit_gate.py", tools / "ci_commit_gate.py")
     (tools / "check_file_size.py").write_text("raise SystemExit(0)\n")
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     subprocess.run(["git", "-c", "user.name=Test", "-c",
@@ -22,6 +23,7 @@ def test_missing_preflight_main(tmp_path, skip):
                     "--allow-empty"], cwd=tmp_path, check=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"],
                                    cwd=tmp_path, text=True).strip()
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head], cwd=tmp_path, check=True)
     # An explicit allowlist also excludes ambient PREFLIGHT_TOOLS_DIR.
     path = os.pathsep.join((str(Path(sys.executable).parent),
                             str(Path(shutil.which("git")).parent), os.defpath))

@@ -10,8 +10,8 @@ FETCH_ROWS = gw.fetch_rows
 
 
 @pytest.fixture(autouse=True)
-def isolated(monkeypatch):
-    monkeypatch.setattr(gw.os, 'environ', {})
+def isolated(monkeypatch, tmp_path):
+    monkeypatch.setattr(gw.os, 'environ', {'HOME': str(tmp_path), 'XDG_CONFIG_HOME': str(tmp_path / 'config')})
     monkeypatch.setattr(gw, 'fetch_rows', lambda *a: pytest.fail('transport not injected'))
     monkeypatch.setattr(gw.time, 'sleep', lambda _: None)
 
@@ -85,7 +85,7 @@ def test_missing_management_access(tmp_path):
     seat = job()
     gw.witness(SimpleNamespace(), 'seat', seat, config(),
                fetch=lambda tag, env: FETCH_ROWS(tag, env, secrets={
-                   gw.TOKEN_FILE_ENV: str(tmp_path / 'missing')}, opener=pytest.fail))
+                   gw.TOKEN_FILE_ENV: str(tmp_path / 'missing'), 'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1'}, opener=pytest.fail))
     assert seat.events == [{'event': 'gateway_witness_unavailable', 'reason': 'no ' + gw.TOKEN_ENV}]
 
 
@@ -109,7 +109,8 @@ def test_gateway_endpoint_normalizer_is_named_function():
 
 
 @pytest.mark.parametrize('spelling', ['provider', 'providers'])
-def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
+@pytest.mark.parametrize('role', ['review', 'implement'])
+def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling, role):
     import asyncio
     from fake_pid import FAKE_PID
     from plangraph.spawner import resolver
@@ -133,18 +134,21 @@ def test_final_runner_config_and_mimo_witness(tmp_path, monkeypatch, spelling):
 
     async def factory(*a, **kw):
         seen.update(kw['env'])
+        seen['expected_tag'] = a[a.index('--title') + 1]
         async def communicate(input=None):
             return b'', b''
         return SimpleNamespace(pid=FAKE_PID, returncode=0, communicate=communicate)
 
     def fetch(tag, env):
-        return [{'sessionTag': tag, 'status': 200, 'model': 'mimo/mimo-v2.6-pro'}]
+        return ([{'sessionTag': seen['expected_tag'], 'status': 200,
+                  'model': 'mimo/mimo-v2.6-pro'}]
+                if tag == seen['expected_tag'] else [])
     monkeypatch.setattr(gw, 'fetch_rows', fetch)
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
 
     async def run():
         seat = await runner.spawn('synthetic', model_or_combo='mimo/mimo-v2.6-pro',
-                                  role='review', client='opencode', cwd=str(tmp_path),
+                                  role=role, client='opencode', cwd=str(tmp_path),
                                   wait_seconds=3)
         await runner._tasks[seat.job_id]
         return seat

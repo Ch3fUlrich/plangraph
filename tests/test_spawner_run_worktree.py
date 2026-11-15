@@ -50,7 +50,8 @@ def test_continuation_resumes_tip_in_fresh_directory(repository):
     first = git_guard.create(root, repo, 'lane/resume', False)
     git(first['path'], 'commit', '--allow-empty', '-m', 'lane progress')
     tip = git(first['path'], 'rev-parse', 'HEAD')
-    git(origin, 'commit', '--allow-empty', '-m', 'main advances independently')
+    git(repo, 'fetch', 'origin')
+    # Continuations retain lane progress when the remote base has not advanced.
     resumed = git_guard.create(root, repo, 'lane/resume', True)
     assert resumed['path'] != first['path'] and Path(first['path']).is_dir()
     assert resumed['base_sha'] == tip == git(resumed['path'], 'rev-parse', 'HEAD')
@@ -286,3 +287,13 @@ def test_fixer_continuation_records_new_worktree(repository, tmp_path):
     assert child['run_worktree']['base_sha'] == tip
     assert child['cwd'] == calls[0]['cwd'] != first['path']
     assert child['worktree_attempts'] == [child['run_worktree']]
+
+
+def test_stale_continuation_is_refused_without_another_tree(repository):
+    from plangraph.routing_errors import SpawnRefused
+    origin, repo, root = repository
+    first = git_guard.create(root, repo, 'lane/stale')
+    git(origin, 'commit', '--allow-empty', '-m', 'new main')
+    with pytest.raises(SpawnRefused, match='base_stale'):
+        git_guard.create(root, repo, 'lane/stale', continuation=True)
+    assert list(root.glob('attempt-*')) == [Path(first['path'])]

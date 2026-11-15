@@ -125,6 +125,7 @@ fn remove(repo: &RepoEntry, checkout: &Path) -> Result<(), WriterError> {
         return Err(WriterError::Verify);
     }
     verify_owned(repo, checkout).map_err(|_| WriterError::Verify)?;
+    crate::worktree::disk::remove_legacy_target(checkout)?;
     let mut cmd = crate::workspace_resolver::git_command(Path::new(&repo.root));
     cmd.args([
         "-c",

@@ -1,4 +1,4 @@
-"""python3 -m plangraph.fleet_sync {release,genconfig,drift,advance}."""
+"""Fleet release, rollout, drift, production checkout checks and HEAD audit."""
 import argparse
 import json
 import subprocess
@@ -23,9 +23,26 @@ def main(argv=None):
         command.add_argument('--registry', type=__import__('pathlib').Path,
                              default=genconfig.config_dir() / 'hosts.json')
     commands.choices['drift'].add_argument('--json', action='store_true')
+    for name in ('check-checkout', 'install-audit'):
+        command = commands.add_parser(name)
+        command.add_argument('--repo', required=True)
+        command.add_argument('--state-dir', required=True)
+    check = commands.choices['check-checkout']
+    check.add_argument('--default-branch')
+    commands.choices['install-audit'].add_argument('--apply', action='store_true')
     args = parser.parse_args(argv)
     try:
-        if args.command == 'release':
+        if args.command == 'check-checkout':
+            send = drift.alert_sender()
+            def notify(line):
+                print(line)
+                send(line)
+            return int(bool(drift.check_checkout(args.repo, notify, state_dir=args.state_dir,
+                default_branch=args.default_branch)))
+        if args.command == 'install-audit':
+            print(json.dumps({'apply': args.apply, 'hooks': drift.install_audit(
+                args.repo, args.state_dir, apply=args.apply)}))
+        elif args.command == 'release':
             data = release.record() if args.verb == 'record' else json.loads(release.release_path().read_text())
             print(json.dumps(data))
         elif args.command == 'advance':
@@ -48,7 +65,7 @@ def main(argv=None):
             return 2
         print('fleet sync input or query failed', file=sys.stderr)
         return 1
-    except (OSError, KeyError, TypeError, subprocess.SubprocessError):
+    except (OSError, KeyError, TypeError, RuntimeError, subprocess.SubprocessError):
         print('fleet sync input or query failed', file=sys.stderr)
         return 1
 

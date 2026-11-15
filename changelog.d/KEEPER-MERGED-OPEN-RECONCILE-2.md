@@ -1,0 +1,1 @@
+- Recover cited witnessed review families from the keeper-owned spawner record mirror during merged closes; atomically post run and seat verdict evidence, and refuse missing or unwitnessed records as NO-WITNESS per item.

@@ -1,12 +1,14 @@
 """Shared dispatch outcome policy for base and routed launches."""
 import atexit
+import json
 
 from plangraph.routing_support.leg_state import _down_seconds
-from .env_redact import first_reason, harness_limit_line, unavailable_reason
+from .env_redact import early_refusal, first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
-TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled', 'reasoning_output_limit')
+TERMINAL_REASONS = ('git_config_mutated', 'writer_no_changes', 'cancelled', 'reasoning_output_limit',
+                    'tool_loop', 'stuck', 'disk_run_stopped')
 
 
 def without_progress(text):
@@ -22,13 +24,35 @@ def is_opencode(job):
     return bool(command and Path(command[0]).name == 'opencode')
 
 
-def failure_reason(job, stop=None):
-    text = without_progress(job.stderr) if is_opencode(job) else job.stderr
-    return first_reason(text) or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
+def failure_reason(job, stop=None, *, harness=None):
+    opencode = harness == 'opencode' or is_opencode(job)
+    text = without_progress(job.stderr) if opencode else job.stderr
+    reason = first_reason(text)
+    if not reason and opencode:
+        reason = next((first_reason(e.get('message') or '') for e in reversed(getattr(job, 'events', ()))
+                       if e.get('event') == 'opencode_error' and e.get('message')), None)
+    if not reason and opencode:
+        for line in getattr(job, 'stdout', '').splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            error = event.get('error') if isinstance(event, dict) and event.get('type') == 'error' else None
+            if isinstance(error, dict) and isinstance(error.get('message'), str):
+                reason = first_reason(error['message']) or reason
+    return reason or ('provider_stop' if stop else f'harness exit code {job.exit_code}')
 
 
 def refusal_record(record, job):
     """Persist a safety stop at dispatch, not in the fallthrough classifier."""
+    disk = next((e for e in getattr(job, 'events', ()) if e.get('event') == 'disk_run_stopped'), None)
+    if disk is not None and job.status not in ('cancelled', 'stalled', 'timeout'):
+        record.update(status='failed', exit_code=job.exit_code or 7,
+                      reason='kill_incomplete' if getattr(job, 'survivors', ()) else 'disk_run_stopped',
+                      disk_refusal=disk['reason'], events=record.get('events', []) + job.events)
+        if getattr(job, 'survivors', ()):
+            record['survivors'] = job.survivors
+        return True
     refusal = next((e for e in getattr(job, 'events', ()) if e.get('event') == 'model_refusal'), None)
     if refusal is None and job.status != 'model_refusal' and record.get('reason') != 'model_refusal':
         return False
@@ -173,6 +197,9 @@ def tool_call_only(job, record):
 
 
 def fallthrough_reason(service, chosen, job, record):
+    if any(e.get('event') == 'disk_run_stopped' for e in getattr(job, 'events', ())):
+        refusal_record(record, job)
+        return None  # host capacity never books a provider down or launches another leg
     from .question_bridge import question_exit
     if question_exit(job, record):
         return None
@@ -194,7 +221,12 @@ def fallthrough_reason(service, chosen, job, record):
         streams = tuple('\n'.join(line.split(':', 1)[1].strip()
                         if line.strip().startswith(('usage_limit:', 'credit_limit:')) else line
                         for line in text.splitlines()) for text in streams)
-    line = harness_limit_line(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
+    if is_opencode(job):
+        streams = tuple(map(without_progress, streams))
+    line = harness_limit_line(job.exit_code, *streams)
+    if not line and record.get('role') == 'review':
+        # A provider refusal is authoritative even when its CLI exits zero.
+        line = early_refusal('\n'.join(streams)) or harness_limit_line(1, *streams)
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
         # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
         # not in the captured output) books and notifies like any harness limit.
@@ -232,7 +264,7 @@ def fallthrough_reason(service, chosen, job, record):
         return 'provider_stop'
     # Review/seat failures exhaust the existing route, not the whole run.
     # Ordinary failures carry diagnostics, not booking/notification evidence.
-    return reason or (failure_reason(job) if record.get('role') == 'review'
+    return reason or (failure_reason(job, harness=getattr(chosen, 'harness', None)) if record.get('role') == 'review'
                       and not getattr(job, 'survivors', ())
                       and job.status in ('failed', 'skipped', 'limited') else None)
 
@@ -266,7 +298,7 @@ def terminal_reason(record, job=None):
         return   # survivors outrank every other verdict: the run failed
     events = record.get('events') or ()
     special = next((e['event'] for e in events
-                    if e.get('event') in ('git_config_mutated', 'writer_no_changes')), None)
+                    if e.get('event') in ('disk_run_stopped', 'git_config_mutated', 'writer_no_changes')), None)
     if special is not None:
         record['reason'] = special
         return
@@ -274,6 +306,9 @@ def terminal_reason(record, job=None):
     leg = real[-1].get('leg') if real else None
     leg = leg if isinstance(leg, dict) else {}
     opencode = is_opencode(job) or (record.get('chosen_leg') or leg).get('harness') == 'opencode'
+    last_reason = real[-1].get('skip_reason') if real else None
+    if opencode and last_reason:
+        last_reason = without_progress(last_reason)
     if opencode:
         for field in ('reason', 'error'):
             if record.get(field):
@@ -311,8 +346,8 @@ def terminal_reason(record, job=None):
             # r3: 'timed_out' is the review wall-cap spelling of 'timeout'
             if last.get('status') in ('timeout', 'timed_out'):
                 reason = 'timeout'
-            elif not (last.get('skip_reason') or '').startswith('harness_limit'):
-                reason = last.get('skip_reason') or reason
+            elif not (last_reason or '').startswith('harness_limit'):
+                reason = last_reason or reason
         record['reason'] = reason
         return
     if record.get('exit_code') not in (None, 0):
@@ -325,7 +360,7 @@ def terminal_reason(record, job=None):
                 and not stdout.lstrip().startswith(('{', '['))):
             record['reason'] = 'exit1_after_stdout'
             return
-        record['reason'] = (reason or record.get('error')
+        record['reason'] = (reason or last_reason or record.get('error')
                             or first_reason(stderr)
                             or f"harness exit {record['exit_code']}")
 

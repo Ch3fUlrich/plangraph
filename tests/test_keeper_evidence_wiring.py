@@ -262,7 +262,7 @@ def test_current_claimant_own_claim_is_not_a_floor(w):
 
 
 def test_decision_item_end_to_end(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",), review_tier="high")
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",), review_tier="high")
     epoch = to_claimed(w, key)
 
     out = w.store.add_evidence(w.p("l1main"), key, epoch, "decision",

@@ -17,7 +17,7 @@
 # (symlinks resolved where realpath exists), so a dotted or symlinked path
 # cannot get past the check.
 #
-# This script only copies files: it registers nothing and never edits Claude
+# The default mode only copies files: it registers nothing and never edits Claude
 # Code settings. Register each hook entry point yourself, always through the
 # guarded command form
 #
@@ -42,6 +42,7 @@
 # Python-only copier does not ship it or register any hook.
 #
 # Usage:
+#   tools/hooks/install_hooks.sh --git          # build commit-msg; set checkout core.hooksPath
 #   tools/hooks/install_hooks.sh                 # into $HOME/.local/share/plangraph/hooks
 #   DEST=/elsewhere tools/hooks/install_hooks.sh # into /elsewhere
 #   tools/hooks/install_hooks.sh --help          # print this text
@@ -64,6 +65,14 @@ usage() {
 
 case ${1:-} in
     '') ;;
+    --git)
+        # Git invokes the Rust executable directly; pre-push stays checkout-owned.
+        git_root=$(CDPATH= cd -- "$SELF_DIR/../.." && pwd -P)
+        : "${CARGO_TARGET_DIR:?set the shared host CARGO_TARGET_DIR before installing Git hooks}"
+        cargo build --manifest-path "$git_root/rust/Cargo.toml" -p pg-hook --bin commit-msg
+        "$CARGO_TARGET_DIR/debug/commit-msg" --install "$git_root"
+        exit 0
+        ;;
     -h|--help)
         usage
         exit 0

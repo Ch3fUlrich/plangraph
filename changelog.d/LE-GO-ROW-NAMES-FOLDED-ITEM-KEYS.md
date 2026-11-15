@@ -1,0 +1,1 @@
+- Fix keeper merged-seat waiver authority to read operator tokens from the decisions-log by column; allow bounded per-row UTC cutoffs, retain auth/secrets seat requirements, and name the item and decision in GO scope refusals.

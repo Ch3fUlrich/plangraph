@@ -94,7 +94,7 @@ def test_gate_refuses_change_with_neither_fragment_nor_unreleased_line(test_repo
     assert res.returncode == 1, res.stdout
     assert "check-changelog-docs: FAIL" in res.stdout
     assert "changelog no" in res.stdout
-    assert "requires a line added under '## Unreleased'" in res.stdout
+    assert "requires an entry in changelog.d/<ITEM>.md" in res.stdout
 
 
 @pytest.mark.parametrize("path,content", [

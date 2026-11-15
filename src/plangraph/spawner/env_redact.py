@@ -164,7 +164,7 @@ class OutputLines:
         except Exception:
             return '[autoos:redaction failed; output withheld]\n'
 
-IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'idempotency_key'})
+IDENTIFIER_KEYS = frozenset({'run_id', 'job_id', 'id', 'head_sha', 'branch', 'tree_sha', 'tree_branch', 'idempotency_key'})
 
 #: Credit/auth refusals (D-3605 a): the leg is as unusable as a rate-limited one.
 #: No bare HTTP 401/402/403 alternative: a run that merely prints those codes
@@ -173,14 +173,17 @@ CREDIT_AUTH_MARKER = re.compile(
     r'credits? (?:exhausted|depleted|exceeded|ran out)|out of credits|insufficient (?:credits?|balance|quota)'
     r'|payment required|unauthori[sz]ed|authentication (?:failed|error|required)|invalid api key', re.I)
 _QUOTA_MARKER = re.compile(
-    r'quota reached|quota exceeded|quota threshold|exhausted their quota|rate limit|resets in'
+    r'quota reached|quota exceeded|quota exhausted|quota refusal|quota threshold|exhausted their quota|rate limit|resets in'
     r'|too many requests|\bHTTP 429\b|' + CREDIT_AUTH_MARKER.pattern, re.I)
 #: D-3685: OmniRoute appends "(reset after N)" to its quota line. The suffix is
 #: not quota evidence on its own: a line merely starting with it never marks a
 #: leg (prose stays out, D-3257). It counts only on an error-shaped line or
 #: next to a quota/rate-limit name.
 _RESET_AFTER = re.compile(r'\(reset after \d', re.I)
-_ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)', re.I)
+# Gateway (omniroute) and agy refusal lines are quota evidence by shape alone (no "Error:" prefix, no marker word).
+_GATEWAY = re.compile(r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:RESOURCE_EXHAUSTED(?: \(code \d{3}\):|:|$)|quota policy filtered \d+ account'
+                      r'|All \S+ accounts reached configured quota)', re.I)
+_ERROR_SHAPED = re.compile(r'\s*(?:error:|HTTP \d{3}:)|' + _GATEWAY.pattern, re.I)
 _USAGE_LIMIT = re.compile(
     r'\s*(?:(?:error:|HTTP \d{3}:)\s*)?(?:free |go )?usage limit '
     r'(?:reached|exceeded)(?:\s*[.!]?(?:\s*\(reset after \d[^\n)]*\))?'
@@ -227,8 +230,9 @@ def normalize(text):
 
 def first_reason(text):
     """First diagnostic, excluding the OOM wrapper's structured telemetry."""
+    from .proc_kill import oom_envelope
     return next((line.strip() for line in normalize(text).splitlines()
-                 if line.strip() and not re.search(r'\{\s*"plangraph_oom"\s*:', line)), '')
+                 if line.strip() and oom_envelope(line) is None), '')
 
 
 def opencode_limit(text):
@@ -274,7 +278,7 @@ def harness_limit_line(exit_code, stdout, stderr):
         if re.search(r'usage limit', line, re.I) and not _QUOTA_MARKER.search(line):
             return _USAGE_LIMIT.fullmatch(line)
         if _ERROR_SHAPED.match(line):
-            return _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)
+            return _QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _GATEWAY.match(line)
         # Start-anchored only (D-3257): the reset-after suffix alone never
         # marks; it needs a quota/rate-limit name alongside.
         return _QUOTA_MARKER.match(line.strip()) or (
@@ -292,9 +296,8 @@ def early_refusal(complete_text):
 
     Streamed while the child still runs, so a refused dispatch ends at once
     instead of showing 'running' until a watchdog fires (D-3605 a).  Both
-    streams need an error-shaped line ('Error:' / 'HTTP nnn:' prefix) plus a
-    quota marker: a start-anchored retry log ('Rate limit reached, retrying')
-    or marker prose under an error shape never kills a healthy run (F1).
+    streams need an error shape plus a quota marker, or a known gateway
+    refusal shape. Retry logs and quota prose never kill a healthy run (F1).
     """
     structured = opencode_limit(complete_text)
     if structured:
@@ -320,7 +323,7 @@ def early_refusal(complete_text):
             except (ValueError, TypeError, AttributeError, KeyError):
                 pass
     for line in lines:
-        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line)):
+        if _ERROR_SHAPED.match(line) and (_QUOTA_MARKER.search(line) or _RESET_AFTER.search(line) or _GATEWAY.match(line)):
             return line.strip()
     return None
 

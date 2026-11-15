@@ -130,7 +130,7 @@ def test_unlisted_rust_repository_read_fails_check(tmp_path, read, asset_path):
     ("docs/guide.md", set()), ("docs/schemas-other/input.json", set()),
     ("docs/placement-rules.md", {"rust"}),
     ("tests/fixtures/redact_parity.json", {"pytest", "pytest-postgres", "rust"}),
-    ("src/plangraph/web/agents_schema.json", {"pytest", "pytest-postgres", "rust"}),
+    ("src/plangraph/web/agents_schema.json", {"pytest", "pytest-postgres", "rust", "browser"}),
     ("tools/check_changelog_docs.py", {"pytest", "pytest-postgres", "rust"}),
     ("tests/fixtures/unrelated.json", {"pytest", "pytest-postgres"}),
     ("setup/placement-rules.schema.toml", set(ci_select.SUITES) | {"full"}),
@@ -142,6 +142,7 @@ def test_non_rust_inputs_preserve_other_job_selection(path, expected):
 
 @pytest.mark.parametrize("path, expected", [
     (".docs-map", {"rust"}),
+    ("rust-toolchain.toml", set(ci_select.SUITES) | {"full"}),
     ("docs/rust-hooks.md", {"rust"}),
     ("tests/hooks/parity_payloads.json", {"pytest", "pytest-postgres", "rust"}),
     ("tools/new_code_allowlist.txt", {"pytest", "pytest-postgres", "rust"}),

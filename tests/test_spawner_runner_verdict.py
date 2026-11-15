@@ -215,7 +215,7 @@ def _monitor(tmp_path, monkeypatch, output, *, denied=True, role='review', clien
     asyncio.run(runner._monitor_process(job.job_id, SimpleNamespace(returncode=rc), 'test-model'))
     assert job.exit_code == rc
     assert ({'event': 'opencode_tools_denied'} in job.events) == denied
-    assert witnesses == ([rc] if denied and role == 'review' and client == 'opencode' else [])
+    assert witnesses == ([rc] if client == 'opencode' else [])
     return job
 
 

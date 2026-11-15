@@ -10,9 +10,26 @@ from .credential_guard import mask_all
 
 
 def cmd_close_merged(args, session):
-    from .cli_verbs import write
-    return write(session, "close_merged", {"key": args.key,
-                 "decision_id": args.decision_id, "families": args.families})
+    from .cli_verbs import write, RefusedCli, Unreachable, _refuse
+    body = {"key": args.key, "decision_id": args.decision_id, "families": args.families,
+            "from_open": args.from_open, "apply": args.apply, "waive_seats": args.waive_seats}
+    if args.families is None:
+        body.pop("families")  # omission requests automatic recovery
+    if not args.from_open:
+        return write(session, "close_merged", body)
+    print("key\tclass\treason")
+    try:
+        result = session.call("POST", "close_merged", body=body)
+        classification = "WOULD-CLOSE" if result.get("would_close") else "CLOSED"
+        prs = ",".join(f"#{p['pr']}@{p['head']}" for p in result.get("prs", []))
+        print(f"{args.key}\t{classification}\tmerged PRs with GO and seats {prs}")
+        return 0
+    except RefusedCli as exc:
+        reason = str(exc).replace("\t", " ").replace("\n", " ")
+        print(f"{args.key}\t{'NO-WITNESS' if 'NO-WITNESS' in reason else 'REFUSED'}\t{reason}")
+        return 2
+    except Unreachable as exc:
+        return _refuse(exc)
 
 
 def cmd_legacy(args, session):

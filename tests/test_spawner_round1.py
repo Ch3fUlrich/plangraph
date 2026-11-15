@@ -69,19 +69,19 @@ def test_nonce_header():
 def test_benchmark_entry_roundtrips(tmp_path, capsys, monkeypatch, verb):
     from plangraph.spawner.cli import main
     from plangraph.spawner.mcp import MCPSpawnerServer
-    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.legs import spawnable_legs
     import sqlite3
     path = tmp_path / 'bench.sqlite'
     with sqlite3.connect(path) as db:
         db.execute('CREATE TABLE catalog_benchmarks (model_id TEXT, aa_intelligence REAL)')
-        db.executemany('INSERT INTO catalog_benchmarks VALUES (?, 50)', [(l.model,) for l in DEFAULT_LEGS])
-    # implement keeps operator writer order (D-2683); review shows the benchmark ranking
+        db.executemany('INSERT INTO catalog_benchmarks VALUES (?, 50)', [(l.model,) for l in spawnable_legs()])
+    # Both roles keep operator order; supplied benchmark rows still satisfy strict admission.
     args = ['--state', str(tmp_path), verb, '--card', '{"estimate_tokens":100}', '--role', 'review', '--writer-family', 'claude',
             '--require-bench', '--bench-db', str(path)]
     if verb == 'spawn':
         args += ['task', '--dry-run']
     assert main(args) == 0
-    assert 'benchmark' in capsys.readouterr().out
+    assert 'operator-order' in capsys.readouterr().out
     server = MCPSpawnerServer(state=tmp_path)
     arguments = dict(card={'estimate_tokens': 100}, prompt='task', dry_run=True,
                      require_bench=True, bench_db=str(path))
@@ -98,7 +98,8 @@ def test_benchmark_entry_roundtrips(tmp_path, capsys, monkeypatch, verb):
 
 
 @pytest.mark.parametrize('nonce_kind', ['missing', 'wrong', 'valid'])
-def test_envelope_nonce(tmp_path, nonce_kind):
+def test_envelope_nonce(tmp_path, monkeypatch, nonce_kind):
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.witness', lambda *args: None)
     from plangraph.spawner.runner import SpawnerRunner
     async def run():
         calls = []

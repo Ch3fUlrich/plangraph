@@ -1,0 +1,1 @@
+- Isolate malformed quota snapshots per row with a visible skipped count; recover corrupt JSON state with a retained backup and notice, require explicit Docker container selection and document timer interpreter requirements.

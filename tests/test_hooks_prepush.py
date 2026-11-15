@@ -75,7 +75,7 @@ def commit_file(repo, rel, text):
     p.write_text(text)
     git(repo, "add", "-A")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-        "commit", "-qm", "change")
+        "commit", "-qm", "change\n\nPlan-Item: plangraph:TEST\nWriter: codex/test")
     return git(repo, "rev-parse", "HEAD").strip()
 
 
@@ -88,7 +88,7 @@ def commit_symlink(repo, rel, target):
     os.symlink(target, p)
     git(repo, "add", "-A")
     git(repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
-        "commit", "-qm", "relink")
+        "commit", "-qm", "relink\n\nPlan-Item: plangraph:TEST\nWriter: codex/test")
     return git(repo, "rev-parse", "HEAD").strip()
 
 
@@ -120,7 +120,7 @@ def repo(tmp_path):
     git(r, "config", "user.name", "t")
     git(r, "config", "user.email", "t@example.invalid")
     base = commit_file(r, "app/clean.py", "x = 1\n")
-    return r, base
+    git(r, "update-ref", "refs/remotes/origin/main", base); return r, base
 
 
 def push_line(ref, sha, remote_sha):
@@ -375,7 +375,7 @@ def test_ci_scrub_job_yaml_parses_and_calls_the_scrub():
     cmds = [s["run"] for s in scrub[0]["steps"] if "scrub_check.py" in (s.get("run") or "")]
     assert "--words" not in cmds[0], "CI runs public patterns only, no words list"
     assert "--rules" in cmds[0]
-    assert scrub[0]["runs-on"] == jobs["pytest"]["runs-on"]
+    assert scrub[0]["runs-on"] == "ubuntu-24.04"
 
 
 def test_prepush_runs_changelog_docs_warn_only(repo):

@@ -77,9 +77,6 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          note="free while qoder credits remain, until its rate limit"),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
          "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
-    _leg("agy-gemini-3.8-flash", "free", "agy", "gemini-3.8-flash", "gemini",
-         ("128k", "256k", "1m"), 900000, False,
-         note="gemini after its Friday-evening reset"),
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
          ("128k", "256k", "1m"), 180000, False, claude=True,
          note="Antigravity quota, not Claude Max"),
@@ -109,7 +106,17 @@ DEFAULT_LEGS = (
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
-    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
+    *(Leg(f"agy-gemini-4-hydrogen-{effort}", "subscription", "agy",
+          f"gemini-4-hydrogen-{effort}", "gemini", ("128k", "256k", "1m"), 900000, False,
+          roles=("implement", "review") if effort == "high" else (role,), effort=effort, tool_mode="tools",
+          note="D-5903: enabled; agy models lists Hydrogen low/medium/high/xhigh (2026-11-14); "
+               "agy CLI review verdicts: PR #878 (three heads), #886 (2026-11-14), "
+               "handoffs/plan-order/reviews/{pr878-5ac07d1d,pr886-75c5bd2f}-hydrogen.txt. "
+               "Tier/privacy/windows/request bound inherit agy Claude 5.5: same subscription/harness; "
+               "clients.launch_stdin_payload carries stream JSON on stdin, not prompt argv. "
+               "Review plan mode reads the working tree with tools: plan-order file-marker probe 2026-11-14 09:5xZ. "
+               "Seat unwitnessed: agy emits no served-model telemetry (rule 3.26).")
+      for effort, role in (("high", "implement"), ("medium", "review"))),
     Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
         "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
@@ -126,7 +133,7 @@ DEFAULT_LEGS = (
     Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",)),
-    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
+    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-v4.1-flash",
         "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
     Leg("omniroute-muse-spark", "subscription", "opencode",
         "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
@@ -157,16 +164,26 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
-    Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
-        "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
-        roles=("review",),
-        disabled="D-4193 upstream route not verified",
-        note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
         tool_mode="prompt-only",
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
+)
+
+# Operator 2026-11-14 / D-5966: independent agy model quotas, no mimo seats.
+REVIEW_ORDER = ("agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-medium",
+                "console-deepseek-flash", "opencode-go-beam-free", "claude-sonnet-5-5-high")
+REVIEW_FALLBACK_LEGS = (
+    Leg(REVIEW_ORDER[1], "subscription", "agy", "gemini-4-argon-medium", "gemini",
+        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium"),
+    Leg(REVIEW_ORDER[2], "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
+        ("128k",), 100000, False, roles=("review",)),
+    Leg(REVIEW_ORDER[3], "free", "opencode", "opencode-go/beam-free", "beam",
+        ("128k",), 100000, False, roles=("review",)),
+    Leg(REVIEW_ORDER[4], "subscription", "claude", "claude-sonnet-5-5-high", "claude",
+        ("128k", "256k", "1m"), 900000, False, claude_family=True,
+        roles=("review",), effort="high"),
 )
 
 # Preserve role-neutral keeper admission before applying implement-only policy.
@@ -179,7 +196,7 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
 # D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
-    "agy-gemini-3.8-flash",
+    "agy-gemini-4-hydrogen-high",
 )
 LEAD_WRITER = WRITER_ORDER[0]
 
@@ -196,9 +213,6 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
           roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
-    *(Leg(f"agy-gemini-3.8-flash-{e}", "subscription", "agy", f"gemini-3.8-flash-{e}",
-          "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
-      for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
           "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
@@ -207,6 +221,8 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           tool_mode="inline-only")
       for e in CX_EFFORTS),
 )
+EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS
+
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
 _plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
 _sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
@@ -225,8 +241,6 @@ EXPLICIT_LEGS += tuple(
         claude_family=family == 'claude', roles=(), effort=effort,
         disabled='D-5696: capability evidence required')
     for id, harness, model, family, effort in (
-        ('agy-gemini-4-hydrogen-high', 'agy', 'gemini-4-hydrogen-high', 'gemini', 'high'),
-        ('agy-gemini-4-hydrogen-medium', 'agy', 'gemini-4-hydrogen-medium', 'gemini', 'medium'),
         ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
         ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
         ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),
@@ -244,7 +258,8 @@ def explicit_only_skips(role: str) -> tuple[dict, ...]:
     """`route` output rows for the explicit legs serving ``role``: listed, never routed."""
     return tuple({"leg": leg.id, "reason": "explicit_only", "evidence": {
         "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
-        for leg in EXPLICIT_LEGS if role in leg.roles)
+        for leg in EXPLICIT_LEGS if role in leg.roles
+        and not (role == "review" and leg.id in REVIEW_ORDER))
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
@@ -267,7 +282,12 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if not isinstance(raw, Mapping):
         problems.append(f"{where}: must be an object")
         return None
+    from plangraph.retired_models import check_retired
     start = len(problems)
+    try:
+        check_retired(raw)
+    except ValueError as exc:
+        problems.append(f"{where}: {exc}")
     if isinstance(raw.get("model"), str):
         try:
             check_mimo_path(raw["model"])

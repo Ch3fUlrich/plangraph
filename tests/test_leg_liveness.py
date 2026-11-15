@@ -32,7 +32,7 @@ def test_probe_module_key_semantics():
     """Q16/M8: probe and quota bookkeeping share one leg key -- 'agy/<model>' only
     for an agy leg's bare model. Replaces the token `assert callable(probe)`."""
     from plangraph.spawner.leg_probe import key
-    assert key(SimpleNamespace(harness='agy', model='gemini-3.8-flash')) == 'agy/gemini-3.8-flash'
+    assert key(SimpleNamespace(harness='agy', model='gemini-4-argon-high')) == 'agy/gemini-4-argon-high'
     assert key(SimpleNamespace(harness='agy', model='prov/model')) == 'prov/model'
     assert key(SimpleNamespace(harness='qodercli', model='Qwen3.8-Flash')) == 'Qwen3.8-Flash'
     assert key(SimpleNamespace(model='agy/model')) == 'agy/model'   # legacy rows stay stable

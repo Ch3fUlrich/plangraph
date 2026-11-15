@@ -40,6 +40,9 @@ def quota_paused(state=None, role=None, leg=None):
 
 def admit_leg(leg):
     """An override cannot enable a disabled leg, regardless of override_reason."""
+    from plangraph.retired_models import check_retired
+    if leg is not None:
+        check_retired(vars(leg))
     if leg is not None and not leg_active(leg):
         raise SpawnRefused('leg disabled: ' + leg.id + ': ' + (leg.disabled or 'expired')
                            + '; override cannot enable a disabled leg')
@@ -47,6 +50,8 @@ def admit_leg(leg):
 
 def resolve_target(target, *, chosen=None):
     """Resolve and admit a target; override cannot enable a disabled leg."""
+    from plangraph.retired_models import check_retired
+    check_retired(target)
     from plangraph.planner.legs import EXPLICIT_LEGS, spawnable_legs
     SPAWNABLE_LEGS = spawnable_legs()   # call time: callers rebind DEFAULT_LEGS
     if chosen is not None and target != chosen.model:
