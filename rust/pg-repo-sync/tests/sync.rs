@@ -419,7 +419,7 @@ fn symlinked_hook_checkout_is_discovered() {
 fn pre_push_prints_hook_head_and_refuses_day_old_missing_commits() {
     let tmp = fixture();
     let hooks = tmp.path().join("checkout");
-    git(&hooks, &["fetch", "-q", "origin"]);
+    // Cached origin/main is stale too: the hook must refresh it before judging age.
     let hook = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/hooks/pre-push");
     // Exercise the installed Python entry point using this fixture as its checkout.
     let script = "import runpy,sys; m=runpy.run_path(sys.argv[1]); m['push_main'].__globals__['TOOLS']=__import__('pathlib').Path(sys.argv[2])/'tools'; sys.exit(m['main']())";
@@ -447,6 +447,11 @@ fn pre_push_prints_hook_head_and_refuses_day_old_missing_commits() {
         report.contains("stale hook checkout") && report.contains("origin/main"),
         "{report}"
     );
+    git(&hooks, &["remote", "set-url", "origin", "missing-origin"]);
+    let out = invoke();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot refresh hook checkout"));
+    git(&hooks, &["remote", "set-url", "origin", "../source"]);
     git(&hooks, &["merge", "--ff-only", "origin/main"]);
     let out = invoke();
     assert!(out.status.success(), "{:?}", out);
@@ -462,6 +467,25 @@ fn external_live_unit_checkout_is_listed_and_protected() {
     git(tmp.path(), &["clone", "-q", "source", "caller"]);
     let hooks = tmp.path().join("checkout");
     fs::write(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\ncase \"$*\" in *list-units*) echo 'keeper.service loaded active running Keeper';; *show*) echo '{}';; esac\n", hooks.display())).unwrap();
+    let before = git(&hooks, &["rev-parse", "HEAD"]);
+    let out = run(tmp.path(), &["--repo", "caller"]);
+    assert!(out.status.success(), "{:?}", out);
+    let report = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        report.contains("UNIT") && report.contains("live-unit"),
+        "{report}"
+    );
+    assert_eq!(git(&hooks, &["rev-parse", "HEAD"]), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn external_unit_executable_checkout_is_listed_and_protected() {
+    let tmp = fixture();
+    git(tmp.path(), &["clone", "-q", "source", "caller"]);
+    let hooks = tmp.path().join("checkout");
+    fs::write(hooks.join("daemon"), "fixture executable").unwrap();
+    fs::write(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\ncase \"$*\" in *list-units*) echo 'keeper.service loaded active running Keeper';; *WorkingDirectory*) echo /;; *ExecStart*) echo '{{ path={}/daemon ; argv[]={}/daemon ; }}';; esac\n", hooks.display(), hooks.display())).unwrap();
     let before = git(&hooks, &["rev-parse", "HEAD"]);
     let out = run(tmp.path(), &["--repo", "caller"]);
     assert!(out.status.success(), "{:?}", out);
