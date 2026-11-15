@@ -24,8 +24,9 @@ def live_runner(runner):
             and bool(os.environ.get('PLANGRAPH_SPAWNER_REPO') or (CODE_TREE / '.git').exists()))
 async def fresh_spawn(service, options):
     """Hand off to a durable Popen supervisor; detach once the admission reply arrives."""
-    import subprocess, sys
+    import signal, subprocess, sys
     from contextlib import ExitStack
+    from . import cli
     from .cli import _drain_chunks, _prune_supervisor_logs
     from plangraph.routing_support import background_process_options
     state = service.state.resolve()
@@ -37,7 +38,9 @@ async def fresh_spawn(service, options):
         try:
             tree = await asyncio.shield(acquiring)
         except asyncio.CancelledError:
-            tree = await acquiring
+            while not acquiring.done():
+                try: await asyncio.wait([acquiring])
+                except asyncio.CancelledError: pass
             raise
         src = str(Path(tree['tree_path']) / 'src')
         env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [src, os.environ.get('PYTHONPATH')])),
@@ -99,9 +102,9 @@ raise SystemExit(code)
 '''
         payload = {k: v for k, v in options.items() if k != 'wait_seconds'}
         payload.update(state=str(state), _tree=tree, _admitted=True,
-                       _cwd=getattr(service.runner, 'default_cwd', os.getcwd()))
+                       _cwd=getattr(service.runner, 'default_cwd', None) or os.getcwd())
         with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
-            child = subprocess.Popen([sys.executable, '-c', bootstrap, str(log)],
+            child = cli._start_supervisor([sys.executable, '-c', bootstrap, str(log)],
                 cwd=tree['tree_path'], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=errors, **background_process_options(new_session=True, platform=os.name))
         def handshake():
@@ -138,7 +141,9 @@ raise SystemExit(code)
     except BaseException:
         try:
             if task is None and child is not None:
-                if child.poll() is None: child.kill()
+                if child.poll() is None:
+                    try: os.killpg(child.pid, signal.SIGKILL)
+                    except (AttributeError, OSError): child.kill()
                 await asyncio.to_thread(child.wait)
             if task is not None:
                 task.cancel()

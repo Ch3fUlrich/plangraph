@@ -2,4 +2,4 @@
 - Verify the selected-main supervisor import and preserved job cwd with a real child process, and require records from every entry-point fixture.
 - Preserve acknowledged supervisors across parent exit and caller cancellation, including bounded redacted stderr and supervisor death evidence; exercise live CLI and MCP handoffs and make package-fallback coverage independent of the operator repo override. Live CLI admission reuses the existing prompt-record boundary and preserves bounded waits.
 
-The fresh-tree supervisor now keeps the host PYTHONPATH after the tree source. Launch-spec construction from fetched trees (`fresh_main`) is reachable only via `python -m plangraph.spawner.launch_spec` until the Rust slice S3 wires it.
+The fresh-tree supervisor and launch-spec construction keep the host PYTHONPATH after the tree source. A handshake timeout kills the whole supervisor process group. Launch-spec construction from fetched trees (`fresh_main`) is reachable only via `python -m plangraph.spawner.launch_spec` until the Rust slice S3 wires it.

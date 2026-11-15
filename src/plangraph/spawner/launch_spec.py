@@ -185,7 +185,7 @@ def fresh_main():
         return 1
     try:
         with run_tree(request['state']) as tree:
-            env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
+            env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(tree['tree_path']) / 'src'), os.environ.get('PYTHONPATH')])),
                        PYTHONDONTWRITEBYTECODE='1')
             result = subprocess.run([sys.executable, '-m', 'plangraph.spawner.cli',
                 '--state', request['state'], 'launch-spec'], input=json.dumps(request),

@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import threading
 import asyncio
 import io
@@ -358,9 +359,14 @@ def test_fresh_launch_spec_adds_tree_event_when_child_events_are_null(tmp_path, 
                    dry_run=False, leg={'id': 'fixture'}, prompt='review', card={},
                    cwd=str(tmp_path), state=str(tmp_path))
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(request)))
-    monkeypatch.setattr(subprocess, 'run', lambda *a, **k:
-        SimpleNamespace(returncode=0, stdout=json.dumps({'events': events, 'argv': ['fake']})))
+    seen = {}
+    def run(*a, **k):
+        seen.update(k['env'])
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'events': events, 'argv': ['fake']}))
+    monkeypatch.setenv('PYTHONPATH', '/host/site')
+    monkeypatch.setattr(subprocess, 'run', run)
     assert launch_spec.fresh_main() == 0
+    assert seen['PYTHONPATH'] == os.pathsep.join([str(tmp_path / 'tree' / 'src'), '/host/site'])
     assert json.loads(capsys.readouterr().out)['events'] == [*(events or []), dict(event='run_tree', **tree)]
 
 
@@ -386,7 +392,8 @@ def test_fresh_spawn_releases_context_once_even_after_task_creation(tmp_path, mo
         if failure == 'wait': raise RuntimeError('wait')
         return child.returncode
     child.poll = poll
-    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: child)
+    from plangraph.spawner import cli
+    monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **k: child)
     def result(run_id):
         if failure == 'result': raise RuntimeError('result')
         return dict(run_id=run_id, status='completed', **tree)
@@ -409,6 +416,27 @@ def test_fresh_spawn_releases_context_once_even_after_task_creation(tmp_path, mo
     assert released == [True]
     assert not killed  # A cancelled caller must not kill an admitted supervisor.
     if calls: assert calls[0]['_tree'] == tree
+
+
+def test_handshake_timeout_kills_the_supervisor_group(tmp_path, monkeypatch):
+    from plangraph.spawner import cli, base_fresh
+    from plangraph.spawner.seat_spawn import fresh_spawn
+    killed, groups = [], []
+    tree = dict(tree_sha='a' * 40, tree_path=str(tmp_path / 'tree'))
+    class Context:
+        def __enter__(self): return tree
+        def __exit__(self, *args): pass
+    child = SimpleNamespace(pid=4242, stdin=SimpleNamespace(write=lambda data: None, close=lambda: None),
+        stdout=SimpleNamespace(readline=lambda: time.sleep(.3) or b'', close=lambda: None),
+        poll=lambda: None, kill=lambda: killed.append(True), wait=lambda: 0)
+    monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **k: child)
+    monkeypatch.setattr(os, 'killpg', lambda pid, sig: groups.append(pid))
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', -4.9)
+    service = SimpleNamespace(state=tmp_path, code_tree=lambda state: Context(), tasks={},
+                              runner=SimpleNamespace(default_cwd=None))
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(fresh_spawn(service, dict(card={}, prompt='review', role='review')))
+    assert groups == [4242] and not killed
 
 
 def test_empty_seats_cli_envelope_keeps_main_json_and_exit_code(tmp_path, monkeypatch, capsys):
