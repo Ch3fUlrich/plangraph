@@ -37,15 +37,21 @@ These are performance goals, not assertions to weaken when a host is overloaded.
 
 `tools/preflight.py` runs its Rust family with a private `CARGO_TARGET_DIR`
 (`preflight-cargo-*` under `PLANGRAPH_PREFLIGHT_RUN_DIR`, default the parent of
-the shared target) so concurrent pushes do not wait on one cargo lock. The
-directory is removed when preflight exits, also after a failed or timed-out
-check; a hard kill (SIGKILL, host crash) can leave a `preflight-cargo-*`
-directory behind. When free disk
-there is below `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20), preflight prints
-`rust: shared CARGO_TARGET_DIR (...)` and uses the shared target instead; this
-never fails the push. If `sccache` is on PATH (or `PLANGRAPH_SCCACHE` names it),
-`RUSTC_WRAPPER` is set and `SCCACHE_CACHE_SIZE` comes from
-`PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). Without sccache no wrapper is set.
+the shared target) so concurrent pushes do not wait on one cargo lock, but only
+when `sccache` is on PATH (or `PLANGRAPH_SCCACHE` names it): a fresh target
+without sccache is always cold and exceeds the Rust timeout. Without sccache
+preflight prints `rust: shared CARGO_TARGET_DIR (no sccache; ...)` and uses the
+shared target (`PLANGRAPH_CARGO_TARGET_DIR`). The private directory is removed
+when preflight exits, also after a failed, timed-out or aborted run; a hard kill
+(SIGKILL, host crash) can leave one behind, so each run deletes
+`preflight-cargo-*` directories older than 12 hours before creating its own.
+When free disk there is below `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20), or
+the value is invalid, preflight prints `rust: shared CARGO_TARGET_DIR (...)` and
+uses the shared target instead; this never fails the push. With sccache,
+`RUSTC_WRAPPER` is set only when not already set, and `SCCACHE_CACHE_SIZE` comes
+from `PLANGRAPH_SCCACHE_CACHE_SIZE`, else an inherited `SCCACHE_CACHE_SIZE`,
+else 20G. The shared-target lease taken around each cargo command is a shared
+(non-exclusive) flock, so concurrent runs do not block each other.
 
 ## Isolation
 

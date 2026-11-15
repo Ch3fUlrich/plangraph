@@ -1,1 +1,1 @@
-Preflight's Rust step uses a per-run CARGO_TARGET_DIR removed at the end when disk allows (PLANGRAPH_PREFLIGHT_MIN_FREE_GB, default 20), else the shared target; it sets RUSTC_WRAPPER=sccache when sccache is available.
+Preflight's Rust step uses a per-run CARGO_TARGET_DIR removed at the end only when sccache is available and disk allows (PLANGRAPH_PREFLIGHT_MIN_FREE_GB, default 20), else the shared target; it sets RUSTC_WRAPPER=sccache when unset and prunes orphaned preflight-cargo-* dirs older than 12 hours.

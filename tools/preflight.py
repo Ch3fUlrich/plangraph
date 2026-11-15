@@ -260,24 +260,65 @@ def policy_baseline(root, fallback):
 
 
 # Per-run Rust target: no shared cargo lock between concurrent pushes.
+# The private target is used only with sccache (a fresh target without it is always cold
+# and exceeds RUST_TIMEOUT); otherwise the shared target (PLANGRAPH_CARGO_TARGET_DIR) is kept.
 # PLANGRAPH_PREFLIGHT_MIN_FREE_GB (default 20): free GB needed for a private target.
 # PLANGRAPH_PREFLIGHT_RUN_DIR: parent of the private target (default: parent of the shared target).
 # PLANGRAPH_SCCACHE: sccache binary (default: sccache on PATH); PLANGRAPH_SCCACHE_CACHE_SIZE (default 20G).
 MIN_FREE_GB_DEFAULT = "20"
 SCCACHE_SIZE_DEFAULT = "20G"
+PRIVATE_TARGET_PREFIX = "preflight-cargo-"
+STALE_TARGET_SECONDS = 12 * 3600
+
+
+def prune_stale_targets(parent, now=None):
+    """Remove preflight-cargo-* directories older than STALE_TARGET_SECONDS (orphans of killed runs)."""
+    now = time.time() if now is None else now
+    try:
+        entries = list(parent.glob(PRIVATE_TARGET_PREFIX + "*"))
+    except OSError:
+        return
+    for entry in entries:
+        try:
+            if entry.is_dir() and not entry.is_symlink() and now - entry.stat().st_mtime > STALE_TARGET_SECONDS:
+                shutil.rmtree(entry, ignore_errors=True)
+        except OSError:
+            continue
+
+
+def find_sccache(env):
+    search = env.get("PATH") or os.defpath
+    named = env.get("PLANGRAPH_SCCACHE")
+    found = shutil.which(named, path=search) if named else shutil.which("sccache", path=search)
+    if named and not found:
+        print(f"rust: PLANGRAPH_SCCACHE={named} not found, no sccache", flush=True)
+    return found
 
 
 def rust_target_env(env, cleanup):
-    """Return env for the Rust family: private target when disk allows, sccache when present.
+    """Return env for the Rust family: private target when sccache is present and disk allows.
 
     cleanup is a list that receives the private directory so the caller removes it.
-    Never raises: any problem falls back to the shared target. Without sccache the
-    inherited environment, including any RUSTC_WRAPPER, is left as it is.
+    Never raises: any problem falls back to the shared target. An inherited
+    RUSTC_WRAPPER is never replaced.
     """
     out = dict(env)
+    sccache = find_sccache(env)
+    if sccache:
+        if not env.get("RUSTC_WRAPPER"):
+            out["RUSTC_WRAPPER"] = sccache
+        out["SCCACHE_CACHE_SIZE"] = env.get("PLANGRAPH_SCCACHE_CACHE_SIZE") or env.get(
+            "SCCACHE_CACHE_SIZE") or SCCACHE_SIZE_DEFAULT
+    else:
+        print("rust: shared CARGO_TARGET_DIR (no sccache; a private target would be cold)", flush=True)
+        return out
     parent = Path(env.get("PLANGRAPH_PREFLIGHT_RUN_DIR") or shared_cargo_target().parent).expanduser()
+    raw = env.get("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", MIN_FREE_GB_DEFAULT)
     try:
-        need = float(env.get("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", MIN_FREE_GB_DEFAULT))
+        try:
+            need = float(raw)
+        except ValueError:
+            raise ValueError(f"invalid PLANGRAPH_PREFLIGHT_MIN_FREE_GB={raw!r}") from None
         probe = parent
         while not probe.exists() and probe.parent != probe:
             probe = probe.parent
@@ -286,19 +327,12 @@ def rust_target_env(env, cleanup):
             print(f"rust: shared CARGO_TARGET_DIR (free {free:.1f} GB < {need:g} GB)", flush=True)
         else:
             parent.mkdir(parents=True, exist_ok=True)
-            private = tempfile.mkdtemp(prefix="preflight-cargo-", dir=parent)
+            prune_stale_targets(parent)
+            private = tempfile.mkdtemp(prefix=PRIVATE_TARGET_PREFIX, dir=parent)
             cleanup.append(private)
             out["CARGO_TARGET_DIR"] = private
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, TypeError) as exc:
         print(f"rust: shared CARGO_TARGET_DIR ({exc})", flush=True)
-    search = env.get("PATH") or os.defpath
-    named = env.get("PLANGRAPH_SCCACHE")
-    sccache = shutil.which(named, path=search) if named else shutil.which("sccache", path=search)
-    if named and not sccache:
-        print(f"rust: PLANGRAPH_SCCACHE={named} not found, no sccache", flush=True)
-    if sccache:
-        out["RUSTC_WRAPPER"] = sccache
-        out.setdefault("SCCACHE_CACHE_SIZE", env.get("PLANGRAPH_SCCACHE_CACHE_SIZE", SCCACHE_SIZE_DEFAULT))
     return out
 
 

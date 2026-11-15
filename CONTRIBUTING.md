@@ -23,7 +23,7 @@ without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
 affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 
-The Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); otherwise it prints one line and uses the shared target. It sets `RUSTC_WRAPPER=sccache` and `SCCACHE_CACHE_SIZE` (`PLANGRAPH_SCCACHE_CACHE_SIZE`, default 20G) only when sccache is found. See docs/TESTING.md.
+With sccache on PATH the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned at start. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). See docs/TESTING.md.
 `tools/merge_batch.py push` also waits without an overall deadline and forwards
 git and hook output to stderr while the hook enforces its per-step bounds.
 The shared subprocess runner kills the process group on a caller-supplied
