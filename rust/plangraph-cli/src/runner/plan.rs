@@ -1,0 +1,338 @@
+//! Pure planner: observed host state -> ordered idempotent actions.
+use super::config::Config;
+use super::template;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+pub const CACHE_DIR: &str = "/var/cache/plangraph-runner";
+pub const STATE_DIR: &str = "/var/lib/plangraph-runner";
+pub const SUDOERS_FILE: &str = "/etc/sudoers.d/ci-apt";
+pub const DL_RUNNER: &str = "actions-runner";
+pub const DL_PYTHON: &str = "python-seed";
+
+pub fn cache_file(name: &str) -> PathBuf {
+    PathBuf::from(CACHE_DIR).join(format!("{name}.tar.gz"))
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UserState {
+    pub name: String,
+    pub exists: bool,
+    pub lingering: bool,
+    pub runner_version: Option<String>,
+    pub hosted_cache: bool,
+    pub playwright: bool,
+    pub temporal_link: bool,
+    pub run_one: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct State {
+    pub apt_missing: Vec<String>,
+    pub users: Vec<UserState>,
+    pub sudoers: Option<String>,
+    pub seed_marker: Option<String>,
+    pub requirements_sha: Option<String>,
+    pub playwright_deps: bool,
+    /// Download name -> sha256 of the file already in the cache dir.
+    pub cached: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Action {
+    AptInstall(Vec<String>),
+    CreateUser(String),
+    EnableLinger(String),
+    InstallSudoers {
+        content: String,
+    },
+    Download {
+        name: String,
+        url: String,
+        sha256: String,
+        size: Option<u64>,
+    },
+    UnpackRunner {
+        user: String,
+    },
+    SeedPython {
+        marker: String,
+    },
+    HostedToolcache {
+        user: String,
+    },
+    PlaywrightChromium {
+        user: String,
+    },
+    PlaywrightDeps,
+    TemporalLink {
+        user: String,
+    },
+    RunOne {
+        user: String,
+        content: String,
+    },
+}
+
+impl Action {
+    pub fn describe(&self) -> String {
+        match self {
+            Action::AptInstall(p) => format!("apt install {}", p.join(" ")),
+            Action::CreateUser(u) => format!("create user {u}"),
+            Action::EnableLinger(u) => format!("enable lingering for {u}"),
+            Action::InstallSudoers { .. } => format!("install {SUDOERS_FILE} (visudo checked)"),
+            Action::Download { name, url, .. } => {
+                format!("download {name} from {url}, verify sha256")
+            }
+            Action::UnpackRunner { user } => format!("unpack Actions runner for {user}"),
+            Action::SeedPython { .. } => "seed Python tool cache (read-only, root-owned)".into(),
+            Action::HostedToolcache { user } => format!("writable hostedtoolcache for {user}"),
+            Action::PlaywrightChromium { user } => format!("playwright chromium for {user}"),
+            Action::PlaywrightDeps => "playwright install-deps chromium".into(),
+            Action::TemporalLink { user } => format!("temporal-cli symlink for {user}"),
+            Action::RunOne { user, .. } => format!("write run-one.sh for {user}"),
+        }
+    }
+}
+
+pub fn seed_marker(cfg: &Config, requirements_sha: &str) -> String {
+    format!("{} {requirements_sha}\n", cfg.python_seed.sha256)
+}
+
+fn needs_download(
+    state: &State,
+    name: &str,
+    sha: &str,
+    url: &str,
+    size: Option<u64>,
+) -> Result<Option<Action>, String> {
+    match state.cached.get(name) {
+        Some(have) if have == sha => Ok(None),
+        Some(have) => Err(format!(
+            "refuse: cached {name} has sha256 {have}, config pins {sha}; remove {} or fix the config",
+            cache_file(name).display()
+        )),
+        None => Ok(Some(Action::Download {
+            name: name.into(),
+            url: url.into(),
+            sha256: sha.into(),
+            size,
+        })),
+    }
+}
+
+pub fn plan(cfg: &Config, state: &State) -> Result<Vec<Action>, String> {
+    let mut out = Vec::new();
+    let names: Vec<String> = state.users.iter().map(|u| u.name.clone()).collect();
+    if !state.apt_missing.is_empty() {
+        out.push(Action::AptInstall(state.apt_missing.clone()));
+    }
+    for u in &state.users {
+        if !u.exists {
+            out.push(Action::CreateUser(u.name.clone()));
+        }
+        if !u.lingering {
+            out.push(Action::EnableLinger(u.name.clone()));
+        }
+    }
+    let sudoers = template::sudoers(&names);
+    if state.sudoers.as_deref() != Some(sudoers.as_str()) {
+        out.push(Action::InstallSudoers { content: sudoers });
+    }
+    let ar = &cfg.actions_runner;
+    let stale_runner = |u: &UserState| u.runner_version.as_deref() != Some(ar.version.as_str());
+    if state.users.iter().any(stale_runner) {
+        out.extend(needs_download(state, DL_RUNNER, &ar.sha256, &ar.url, None)?);
+        for u in state.users.iter().filter(|u| stale_runner(u)) {
+            out.push(Action::UnpackRunner {
+                user: u.name.clone(),
+            });
+        }
+    }
+    let req_sha = match (&cfg.python_seed.requirements_file, &state.requirements_sha) {
+        (Some(path), None) => {
+            return Err(format!("requirements file {} unreadable", path.display()))
+        }
+        (_, sha) => sha.clone().unwrap_or_else(|| "-".into()),
+    };
+    let marker = seed_marker(cfg, &req_sha);
+    if state.seed_marker.as_deref() != Some(marker.as_str()) {
+        let ps = &cfg.python_seed;
+        out.extend(needs_download(
+            state,
+            DL_PYTHON,
+            &ps.sha256,
+            &ps.url,
+            Some(ps.size),
+        )?);
+        out.push(Action::SeedPython { marker });
+    }
+    let run_one = template::run_one(&cfg.temporal_test_address);
+    for u in &state.users {
+        let user = u.name.clone();
+        if !u.hosted_cache {
+            out.push(Action::HostedToolcache { user: user.clone() });
+        }
+        if !u.playwright {
+            out.push(Action::PlaywrightChromium { user: user.clone() });
+        }
+        if !u.temporal_link {
+            out.push(Action::TemporalLink { user: user.clone() });
+        }
+        if u.run_one.as_deref() != Some(run_one.as_str()) {
+            out.push(Action::RunOne {
+                user,
+                content: run_one.clone(),
+            });
+        }
+    }
+    if !state.playwright_deps {
+        out.push(Action::PlaywrightDeps);
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+pub(crate) fn complete_state(cfg: &Config, count: u32) -> State {
+    let run_one = template::run_one(&cfg.temporal_test_address);
+    let names = cfg.user_names(count);
+    State {
+        apt_missing: vec![],
+        sudoers: Some(template::sudoers(&names)),
+        seed_marker: Some(seed_marker(cfg, "reqsha")),
+        requirements_sha: Some("reqsha".into()),
+        playwright_deps: true,
+        cached: BTreeMap::new(),
+        users: names
+            .into_iter()
+            .map(|name| UserState {
+                name,
+                exists: true,
+                lingering: true,
+                runner_version: Some(cfg.actions_runner.version.clone()),
+                hosted_cache: true,
+                playwright: true,
+                temporal_link: true,
+                run_one: Some(run_one.clone()),
+            })
+            .collect(),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fresh_state(cfg: &Config, count: u32) -> State {
+    State {
+        apt_missing: cfg.apt_packages.clone(),
+        users: cfg
+            .user_names(count)
+            .into_iter()
+            .map(|name| UserState {
+                name,
+                ..Default::default()
+            })
+            .collect(),
+        requirements_sha: Some("reqsha".into()),
+        ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::config::sample;
+    use super::*;
+
+    #[test]
+    fn fully_set_up_host_has_empty_plan() {
+        let cfg = sample();
+        assert_eq!(plan(&cfg, &complete_state(&cfg, 2)).unwrap(), vec![]);
+    }
+    #[test]
+    fn fresh_host_gets_the_full_ordered_plan() {
+        let cfg = sample();
+        let acts = plan(&cfg, &fresh_state(&cfg, 2)).unwrap();
+        let d: Vec<String> = acts.iter().map(Action::describe).collect();
+        assert!(d[0].starts_with("apt install protobuf-compiler libprotobuf-dev"));
+        let pos = |needle: &str| d.iter().position(|s| s.contains(needle)).unwrap();
+        assert!(pos("create user runner1") < pos("enable lingering for runner1"));
+        assert!(pos("sudoers") < pos("download actions-runner"));
+        assert!(pos("download python-seed") < pos("seed Python"));
+        assert!(pos("seed Python") < pos("playwright chromium for runner1"));
+        assert!(pos("playwright chromium for runner2") < pos("install-deps"));
+        assert_eq!(
+            acts.iter()
+                .filter(|a| matches!(a, Action::RunOne { .. }))
+                .count(),
+            2
+        );
+        assert_eq!(acts.len(), 1 + 4 + 1 + 1 + 2 + 2 + 8 + 1);
+        assert_eq!(plan(&cfg, &fresh_state(&cfg, 2)).unwrap(), acts);
+    }
+    #[test]
+    fn partial_state_plans_only_the_gaps() {
+        let cfg = sample();
+        let mut s = complete_state(&cfg, 3);
+        s.apt_missing = vec!["libprotobuf-dev".into()];
+        s.users[1].playwright = false;
+        s.users[2].run_one = Some("old".into());
+        s.users[2].lingering = false;
+        let acts = plan(&cfg, &s).unwrap();
+        assert_eq!(
+            acts,
+            vec![
+                Action::AptInstall(vec!["libprotobuf-dev".into()]),
+                Action::EnableLinger("runner3".into()),
+                Action::PlaywrightChromium {
+                    user: "runner2".into()
+                },
+                Action::RunOne {
+                    user: "runner3".into(),
+                    content: template::run_one(&cfg.temporal_test_address)
+                },
+            ]
+        );
+    }
+    #[test]
+    fn growing_the_count_adds_only_the_new_user() {
+        let cfg = sample();
+        let mut s = complete_state(&cfg, 1);
+        s.users.push(UserState {
+            name: "runner2".into(),
+            ..Default::default()
+        });
+        s.sudoers = Some(template::sudoers(&["runner1".into()]));
+        let acts = plan(&cfg, &s).unwrap();
+        assert!(acts
+            .iter()
+            .any(|a| *a == Action::CreateUser("runner2".into())));
+        assert!(!acts
+            .iter()
+            .any(|a| matches!(a, Action::CreateUser(u) if u == "runner1")));
+        assert!(acts
+            .iter()
+            .any(|a| matches!(a, Action::InstallSudoers { .. })));
+    }
+    #[test]
+    fn checksum_mismatch_in_cache_is_refused_and_match_skips_download() {
+        let cfg = sample();
+        let mut s = fresh_state(&cfg, 1);
+        s.cached.insert(DL_RUNNER.into(), "f".repeat(64));
+        let err = plan(&cfg, &s).unwrap_err();
+        assert!(err.starts_with("refuse:") && err.contains(DL_RUNNER));
+        s.cached
+            .insert(DL_RUNNER.into(), cfg.actions_runner.sha256.clone());
+        let acts = plan(&cfg, &s).unwrap();
+        assert!(!acts
+            .iter()
+            .any(|a| matches!(a, Action::Download { name, .. } if name == DL_RUNNER)));
+    }
+    #[test]
+    fn changed_requirements_reseed_and_missing_file_is_an_error() {
+        let cfg = sample();
+        let mut s = complete_state(&cfg, 1);
+        s.requirements_sha = Some("newsha".into());
+        let acts = plan(&cfg, &s).unwrap();
+        assert!(matches!(acts.last(), Some(Action::SeedPython { .. })));
+        s.requirements_sha = None;
+        assert!(plan(&cfg, &s).unwrap_err().contains("unreadable"));
+    }
+}

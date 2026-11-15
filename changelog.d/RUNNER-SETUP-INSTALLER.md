@@ -1,0 +1,1 @@
+Add `plangraph runner plan|install|check --os linux`: an idempotent, checksum-pinned setup of the Linux self-hosted CI runner host (users, sudoers, apt, runner tarballs, Python tool-cache seed, Playwright, run-one.sh) with per-user self-checks; see docs/operations/ci-runners.md.
