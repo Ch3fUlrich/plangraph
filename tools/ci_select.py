@@ -48,6 +48,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "changelog.d/SPAWNER-RL12-B1.md",
     "deploy/systemd/plangraph-agents-view.service",
     "deploy/systemd/plangraph-agents-view.timer",
+    "docs/setup.md",
+    "setup/manifest.toml",
     "setup/placement-rules.schema.toml",
     "src/plangraph/web/agents_schema.json",
     "src/plangraph/spawner/**",
