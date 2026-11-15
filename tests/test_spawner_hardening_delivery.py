@@ -61,6 +61,27 @@ def test_keeper_sink_requires_explicit_identity():
         raise AssertionError('missing keeper identity accepted')
 
 
+@pytest.mark.parametrize('configured', [False, True])
+def test_itemless_completion_reaches_inbox_without_keeper_error(tmp_path, monkeypatch, caplog, configured):
+    from plangraph.spawner import runner
+    monkeypatch.delenv('PLANGRAPH_SPAWN_ITEM', raising=False)
+    monkeypatch.setenv('PG_URL', 'http://127.0.0.1:1' if configured else '')
+    monkeypatch.setenv('PG_TOKEN_FILE', str(tmp_path / 'unused-token') if configured else '')
+    monkeypatch.setattr(runner, '_keeper_unconfigured_last_warned', None)
+    service = runner.spawn_service(runner=runner.SpawnerRunner(), state=tmp_path)
+    record = dict(run_id='run-itemless', status='completed', exit_code=0,
+                  role='implement', attempts=[], started=1, ended=2)
+    service._save(record)
+    service.retry_completions()
+    events = [json.loads(line) for line in (tmp_path / 'inbox/parent.jsonl').read_text().splitlines()]
+    assert len(events) == 1 and events[0]['event'] == 'DONE'
+    assert events[0]['item'] is None
+    directory = tmp_path / 'runs/run-itemless'
+    assert (directory / 'parent.delivered').read_text() == 'delivered\n'
+    assert (directory / 'keeper.delivered').read_text() == 'not-applicable: no item\n'
+    assert not caplog.records
+
+
 def test_keeper_sink_http_finished_payload():
     import tempfile
     import threading

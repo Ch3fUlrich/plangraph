@@ -892,11 +892,11 @@ def spawn_service(*args, **kwargs):
                         continue
                     try:
                         no_keeper_item = (recipient == 'keeper' and isinstance(sink, KeeperSink)
-                                          and sink.url and sink.token_file and not record['completion'].get('item'))
+                                          and not record['completion'].get('item'))
                         if not no_keeper_item:
                             sink.deliver(recipient, record['completion'])
                         from .private_io import atomic_write_private
-                        atomic_write_private(marker, 'delivered\n')
+                        atomic_write_private(marker, 'not-applicable: no item\n' if no_keeper_item else 'delivered\n')
                     except KeeperNotConfigured:
                         global _keeper_unconfigured_last_warned
                         now = time.monotonic()
