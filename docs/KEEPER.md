@@ -623,3 +623,14 @@ SQLite rollback retains tables; C4 owns forward audit events, not item events.
 Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure. `quota_alarms.py` (systemd timer, deploy/systemd) reads gateway quota snapshots (sqlite opened read-only via `QUOTA_SNAPSHOT_DB`, else `docker exec`) and sends one routing line per 50/75/90 % threshold per window, deduped in a pruned state file with poll checkpoints and last null-reset observations to recover refills across downtime; timestamp formats are normalized and read-only database paths are URI-escaped; a window with no snapshot for 3 h, or no fresh snapshot at all, sends a `quota-alarm-stale` or `quota-alarm-blind` line (daily while it lasts) instead of exiting silent. Quota alarm polls skip malformed snapshot rows independently and include their count as `malformed=N` in the stale/blind notice; healthy windows continue to alarm. Corrupt JSON state is moved to a timestamped `.corrupt-*` sibling, and the poll starts empty with a recovery notice (dry runs leave the file unchanged). Docker reads require an explicit `QUOTA_GATEWAY_CONTAINER`; prefer the read-only `--db` source. The example systemd unit requires a checkout at `%h/code/plangraph` and `/usr/bin/python3` version 3.11 or newer; override WorkingDirectory, PYTHONPATH and ExecStart for a different checkout or virtualenv.
 
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
+
+`ready` uses the claim guard's merged-work and newer-decision checks. Its JSON
+reply separates startable `items`, `needs_reconcile` rows (with `reason`), and
+`in_progress` rows (with `prs`, the open PR numbers). Text and CLI output mark
+excluded rows `NEEDS_RECONCILE` or `IN_PROGRESS`; `-n` caps only startable work.
+Untouched age and superseded-premise context remain informational, matching claim.
+Merged trailers, branch topology and open PR heads share a per-repository cached
+index (10 seconds), refreshed from origin. All candidate rows are checked;
+ready performs no per-item git/gh calls. Unknown repository/PR facts retain the
+existing best-effort semantics. Claim refreshes the index before enforcement;
+its force-stale override, audit and authorization rules remain unchanged.

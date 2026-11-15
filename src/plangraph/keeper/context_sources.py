@@ -15,8 +15,10 @@ against a strict character set before they reach a git argument.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import subprocess
 import threading
 import time
 
@@ -100,6 +102,113 @@ def _split(key):
         return None, None
     project, _, bare = key.rpartition(":")
     return (project or None), bare
+
+
+def work_index(git, project, *, fresh=False):
+    """One cached origin-refreshed snapshot; no item-dependent subprocesses.
+
+    Read all commit trailers and topology together, including hosted open PR
+    heads. Unknown inputs remain unknown, as in the claim guard.
+    """
+    repo, ref = _repo_ref(git, project)
+    if repo is None:
+        return None
+    cache = getattr(git, "_context_work_index", {})
+    hit = cache.get((repo, ref))
+    if not fresh and hit and time.monotonic() - hit[0] < _REFS_TTL:
+        return hit[1]
+    try:
+        git._maybe_fetch(repo)
+    except Exception:
+        pass  # Adapter absence/failure is unknown, as in the per-item reader.
+    prs = None
+    origin = _ok(git, repo, ["remote", "get-url", "origin"]) or ""
+    # Local default branches may lag origin; ready uses the refreshed authority.
+    if origin and getattr(git, "_fetch_remote", lambda repo: None)(repo) is None:
+        _ok(git, repo, ["fetch", "--no-tags", "origin"])
+        remote_ref = "refs/remotes/origin/" + ref.removeprefix("refs/heads/")
+        if _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", remote_ref]):
+            ref = remote_ref
+    from urllib.parse import urlsplit
+    if (origin.startswith("git" + "@" + "github.com:")
+            or urlsplit(origin.strip()).hostname == "github.com"):
+        try:
+            proc = subprocess.run(
+                ["gh", "pr", "list", "--state", "open", "--limit", "10000",
+                 "--json", "number,headRefOid,headRefName"], cwd=repo,
+                capture_output=True, text=True, timeout=30, check=False)
+            value = json.loads(proc.stdout) if proc.returncode == 0 else None
+            if isinstance(value, list) and len(value) < 10000 and all(
+                    isinstance(p, dict) and type(p.get("number")) is int
+                    and p["number"] > 0 and valid_commit_ref(p.get("headRefOid"))
+                    for p in value):
+                prs = value
+                if prs:
+                    _ok(git, repo, ["fetch", "--no-tags", "origin", *[
+                        f"+refs/pull/{p['number']}/head:refs/keeper/pull/{p['number']}/head"
+                        for p in prs]])
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+    refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
+    target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
+    out = _ok(git, repo, ["log", "--all", "--no-show-signature",
+                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d"])
+    if refs_out is None or target is None or out is None:
+        return None
+    records = {}
+    for record in out.split("\x1d"):
+        fields = record.strip("\n").split("\x1f")
+        if len(fields) == 5 and valid_commit_ref(fields[0]):
+            sha, parents, date, subject, trailers = fields
+            records[sha] = (parents.split(), {"sha": sha, "date": date,
+                            "subject": subject}, trailers.split("\x1e"))
+
+    def ancestors(head):
+        seen, todo = set(), [head]
+        while todo:
+            sha = todo.pop()
+            if sha in seen:
+                continue
+            seen.add(sha)
+            todo.extend(records.get(sha, ([],))[0])
+        return seen
+
+    merged = ancestors(target.strip())
+    commits, pulls = {}, {}
+    for sha, (_, commit, names) in records.items():
+        if sha in merged:
+            for name in names:
+                commits.setdefault(name.strip(), []).append(commit)
+    for pr in prs or []:
+        for sha in ancestors(pr["headRefOid"]) - merged:
+            for name in records.get(sha, ([], {}, []))[2]:
+                pulls.setdefault(name.strip(), []).append(pr["number"])
+    branches = []
+    for line in refs_out.splitlines():
+        name, sha = line.split(" ", 1)
+        if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
+            branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
+    result = {"commits": commits, "prs": pulls if prs is not None else None,
+              "branches": branches, "order": {sha: i for i, sha in enumerate(records)}}
+    cache[(repo, git.repo_ref(project))] = (time.monotonic(), result)
+    git._context_work_index = cache
+    return result
+
+
+def indexed_work(index, key):
+    """Resolve full/bare trailers and lane names without I/O."""
+    if index is None:
+        return {"commits": None, "lanes": None, "prs": None}
+    _, bare = _split(key)
+    names = (key, bare) if key != bare else (key,)
+    commits = {c["sha"]: c for name in names
+               for c in index["commits"].get(name, [])}
+    prs = index["prs"]
+    ordered = sorted(commits.values(), key=lambda c: index.get("order", {}).get(c["sha"], 0))
+    return {"commits": ordered[:COMMIT_LIMIT],
+            "lanes": [b for b in index["branches"] if bare.lower() in b.lower()],
+            "prs": sorted({p for name in names for p in prs.get(name, [])})
+            if prs is not None else None}
 
 
 def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):

@@ -33,12 +33,11 @@ from .. import views
 from . import context_sources as src
 from .brief import ensure_cap
 from .errors import Refused
-from .fmt import ready_context_rows
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
 
 STALE_DAYS = 7
-#: ``ready`` runs the git check on at most this many rows.
+#: Legacy public constant; ready now checks every row through the shared index.
 READY_GIT_LIMIT = 25
 FORCE_STALE_MAX = 500
 BRIEF_DECISIONS = 6
@@ -246,31 +245,50 @@ class ContextMixin:
 
     # -------------------------------------------------------------- ready
     def _ready_items(self, project=None, n=10, owner=None, agent=False):
-        """``views.ready`` rows (copies) with ``context``; stale rows sort last.
-
-        The git check runs on the first :data:`READY_GIT_LIMIT` rows of the
-        whole ready list (after a first stale sort on the keeper-only facts)
-        BEFORE the cut to *n*, so a merged row cannot crowd out a fresh one.
-        """
+        """Candidate rows with shared claim facts and presentation status."""
         items = self._all_items()
         index = {it["key"]: it for it in items}
         rows = [dict(row) for row in
                 views.ready(items, project=project, owner=owner, agent=agent)]
         inputs, activity = self._inputs(index), self._last_activity_map()
+        indexes = {p: src.work_index(self._adapter("git"), p)
+                   for p in {r["project"] for r in rows}}
         for row in rows:
-            row["context"] = self._task_context(row, index, inputs=inputs,
-                                                activity=activity, git=False)
-        rows.sort(key=lambda r: r["context"]["stale"] is not None)  # stable
-        for row in rows[:READY_GIT_LIMIT]:
-            ctx = row["context"]
-            ctx["work_exists"] = self._work(row, fetch=False)
+            ctx = self._task_context(row, index, inputs=inputs,
+                                     activity=activity, git=False)
+            ctx["work_exists"] = src.indexed_work(indexes[row["project"]], row["key"])
             ctx["stale"] = self._stale_reason(row, ctx)
-        rows.sort(key=lambda r: r["context"]["stale"] is not None)
+            row["context"] = ctx
+            facts = self._claim_staleness(ctx)
+            if facts:
+                row["reason"] = " | ".join(facts)
+                row["ready_status"] = "needs_reconcile"
+            elif ctx["work_exists"].get("prs"):
+                row["prs"] = ctx["work_exists"]["prs"]
+                row["ready_status"] = "in_progress"
+            else:
+                row["ready_status"] = "ready"
+        rows.sort(key=lambda r: (r["ready_status"] != "ready",
+                                 r["context"]["stale"] is not None))
+        # Keep the legacy internal all-rows view for context consumers.
         return rows if n is None else rows[:max(0, int(n))]
 
+    def _ready_groups(self, project=None, n=10, owner=None, agent=False):
+        rows = self._ready_items(project=project, n=None, owner=owner, agent=agent)
+        groups = {"items": [], "needs_reconcile": [], "in_progress": []}
+        for row in rows:
+            group = "items" if row["ready_status"] == "ready" else row["ready_status"]
+            groups[group].append(row)
+        if n is not None:
+            groups["items"] = groups["items"][:max(0, int(n))]
+        return groups
+
     def _ready_text(self, project=None, n=10, owner=None, agent=False):
-        rows = self._ready_items(project=project, n=n, owner=owner, agent=agent)
-        return ready_context_rows(rows, views.unblocks(self._all_items()))
+        from .fmt import ready_text
+        groups = self._ready_groups(project=project, n=n, owner=owner, agent=agent)
+        return ready_text(groups["items"], unblocks=views.unblocks(self._all_items()),
+                          server_items=True, needs_reconcile=groups["needs_reconcile"],
+                          in_progress=groups["in_progress"])
 
     # -------------------------------------------------------------- claim
     @staticmethod
@@ -294,8 +312,27 @@ class ContextMixin:
         except src.DecisionsUnreadable:
             path = getattr(self._adapter("decisions"), "_path", None)
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
-        ctx = self._task_context(item, index, inputs=inputs,
-                                 fetch=True)
+        ctx = self._task_context(item, index, inputs=inputs, git=False)
+        gitad = self._adapter("git")
+        ctx["work_exists"] = src.indexed_work(
+            src.work_index(gitad, item["project"], fresh=True), item["key"])
+        commits = ctx["work_exists"]["commits"]
+        if commits:
+            repo, ref = src._repo_ref(gitad, item["project"])
+            merge = src._merge_of(gitad, repo, ref, commits[0]["sha"])
+            if merge:
+                commits[0] = dict(commits[0], merge=merge)
+        facts = self._claim_staleness(ctx)
+        if not facts:
+            return None
+        if reason is None:
+            raise Refused("bad_state", f"{item['key']} stale: " + " | ".join(facts)
+                          + " (override: force_stale=<reason>, audited)")
+        return {"reason": reason, "overrode": facts}
+
+    @staticmethod
+    def _claim_staleness(ctx):
+        """Shared refusal facts for claim and ready; informational age is separate."""
         facts = []
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
@@ -310,12 +347,7 @@ class ContextMixin:
             facts.append("premise outdated: " + ",".join(ctx["newer_decisions"])
                          + " names this item after its definition; re-confirm"
                          " (edit the item to cite it) first")
-        if not facts:
-            return None
-        if reason is None:
-            raise Refused("bad_state", f"{item['key']} stale: " + " | ".join(facts)
-                          + " (override: force_stale=<reason>, audited)")
-        return {"reason": reason, "overrode": facts}
+        return facts
 
     def _not_open_facts(self, item, index):
         """Why a non-claimable item is not claimable, with reasons (for refusals)."""
