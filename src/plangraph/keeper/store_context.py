@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import bisect
 import json
+import time
 
 from .. import views
 from . import context_sources as src
@@ -256,7 +257,14 @@ class ContextMixin:
         for row in rows:
             ctx = self._task_context(row, index, inputs=inputs,
                                      activity=activity, git=False)
-            ctx["work_exists"] = src.indexed_work(indexes[row["project"]], row["key"])
+            work_index = indexes[row["project"]]
+            if work_index and work_index.get("stale"):
+                verified = work_index.get("verified_at")
+                row["work_index"] = {
+                    "project": row["project"], "status": "stale",
+                    "age_seconds": max(0, int(time.time() - verified)) if verified is not None else None,
+                    "reason": work_index["reason"]}
+            ctx["work_exists"] = src.indexed_work(work_index, row["key"])
             ctx["stale"] = self._stale_reason(row, ctx)
             row["context"] = ctx
             facts = self._claim_staleness(ctx)
@@ -266,6 +274,8 @@ class ContextMixin:
             elif ctx["work_exists"].get("prs"):
                 row["prs"] = ctx["work_exists"]["prs"]
                 row["ready_status"] = "in_progress"
+            elif row.get("work_index"):
+                row["ready_status"] = "unknown"
             else:
                 row["ready_status"] = "ready"
         rows.sort(key=lambda r: (r["ready_status"] != "ready",
@@ -275,8 +285,13 @@ class ContextMixin:
 
     def _ready_groups(self, project=None, n=10, owner=None, agent=False):
         rows = self._ready_items(project=project, n=None, owner=owner, agent=agent)
-        groups = {"items": [], "needs_reconcile": [], "in_progress": []}
+        groups = {"items": [], "needs_reconcile": [], "in_progress": [],
+                  "unknown": [], "warnings": []}
         for row in rows:
+            warning = row.get("work_index")
+            if warning and not any(w["project"] == warning["project"]
+                                   for w in groups["warnings"]):
+                groups["warnings"].append(warning)
             group = "items" if row["ready_status"] == "ready" else row["ready_status"]
             groups[group].append(row)
         if n is not None:
@@ -288,7 +303,8 @@ class ContextMixin:
         groups = self._ready_groups(project=project, n=n, owner=owner, agent=agent)
         return ready_text(groups["items"], unblocks=views.unblocks(self._all_items()),
                           server_items=True, needs_reconcile=groups["needs_reconcile"],
-                          in_progress=groups["in_progress"])
+                          in_progress=groups["in_progress"], unknown=groups["unknown"],
+                          warnings=groups["warnings"])
 
     # -------------------------------------------------------------- claim
     @staticmethod
@@ -316,12 +332,6 @@ class ContextMixin:
         gitad = self._adapter("git")
         ctx["work_exists"] = src.indexed_work(
             src.work_index(gitad, item["project"], fresh=True), item["key"])
-        commits = ctx["work_exists"]["commits"]
-        if commits:
-            repo, ref = src._repo_ref(gitad, item["project"])
-            merge = src._merge_of(gitad, repo, ref, commits[0]["sha"])
-            if merge:
-                commits[0] = dict(commits[0], merge=merge)
         facts = self._claim_staleness(ctx)
         if not facts:
             return None

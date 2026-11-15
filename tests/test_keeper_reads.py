@@ -154,7 +154,8 @@ def test_ready_partitions_claim_staleness_and_open_pr_without_item_io(tmp_path, 
     monkeypatch.setenv("GIT_AUTHOR_EMAIL", "t@example.invalid")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "t")
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "t@example.invalid")
-    _commit(repo, "merged", "done\n\nPlan-Item: demo:MERGED")
+    merged = _commit(repo, "merged", "done\n\nPlan-Item: demo:MERGED")
+    _git(repo, "update-ref", "refs/remotes/origin/main", merged)
     _git(repo, "checkout", "-qb", "unrelated-branch-name")
     head = _commit(repo, "pending", "pending\n\nPlan-Item: demo:PENDING")
     _git(repo, "checkout", "-q", "main")
@@ -231,7 +232,10 @@ def test_ready_refreshes_origin_instead_of_using_a_stale_local_branch(tmp_path, 
     _commit(origin, "base", "base")
     checkout = tmp_path / "checkout"
     _git(tmp_path, "clone", "-q", str(origin), str(checkout))
+    _git(origin, "checkout", "-qb", "feature")
     sha = _commit(origin, "merged", "done\n\nPlan-Item: demo:A")
+    _git(origin, "checkout", "-q", "main")
+    _git(origin, "merge", "--no-ff", "-qm", "Merge pull request #42", "feature")
     adapter = GitAdapter({"demo": {"path": str(checkout), "ref": "main"}})
     world = World(tmp_path)
     try:
@@ -239,11 +243,13 @@ def test_ready_refreshes_origin_instead_of_using_a_stale_local_branch(tmp_path, 
         world.store.ctx = {"git": adapter}
         groups = world.store._ready_groups()
         assert groups["items"] == []
-        assert sha[:8] in groups["needs_reconcile"][0]["reason"]
+        reason = groups["needs_reconcile"][0]["reason"]
+        assert sha[:8] in reason and "via PR #42" in reason
         assert _git(checkout, "rev-parse", "main") != sha
         # Claim reads the same authority and preserves its audited override.
-        with pytest.raises(Refused, match="already merged"):
+        with pytest.raises(Refused, match="already merged") as exc:
             world.store.claim(world.p("l1main"), "demo:A")
+        assert reason in exc.value.msg
         assert context_sources.indexed_work(
             context_sources.work_index(adapter, "demo"), "demo:A")["commits"][0]["sha"] == sha
     finally:
@@ -261,3 +267,108 @@ def test_ready_and_claim_keep_partial_git_adapters_best_effort(w, tmp_path):
     w.store.ctx = {"git": PartialGit()}
     assert [r["key"] for r in w.store._ready_groups()["items"]] == ["demo:A"]
     assert w.store.claim(w.p("l1main"), "demo:A")["epoch"] == 1
+
+
+@pytest.mark.parametrize("failure", ["origin", "pr", "missing-head", "gh"])
+def test_ready_reports_unknown_remote_facts_without_using_stale_authority(w, tmp_path, monkeypatch, failure):
+    import json
+    import subprocess
+    from plangraph.keeper import context_sources as src
+    from plangraph.keeper.evidence_git import GitAdapter
+    sha, head = "a" * 40, "b" * 40
+    adapter = GitAdapter({"demo": {"path": str(tmp_path), "ref": "origin/main"}})
+    failed = False
+    calls = []
+
+    def run(repo, args, **kwargs):
+        calls.append(args)
+        if args[0] == "remote":
+            out = "https://github.com/example/repo\n"
+        elif args[0] == "fetch":
+            if failed and ((failure == "origin" and len(args) == 3)
+                           or (failure == "pr" and len(args) > 3)):
+                raise subprocess.TimeoutExpired("git", 1)
+            out = ""
+        elif args[0] == "rev-parse":
+            out = sha
+        elif args[0] == "for-each-ref":
+            out = f"refs/remotes/origin/main {sha}\n"
+        elif args[0] == "log":
+            # Old on-disk authority says A was merged. A failed origin fetch
+            # must neither use this to exclude A nor declare A startable.
+            trailer = "demo:A" if failure == "origin" else ""
+            out = f"{sha}\x1f\x1f2026-11-15\x1fbase\x1f{trailer}\x1d"
+            if not (failed and failure == "missing-head"):
+                out += f"{head}\x1f{sha}\x1f2026-11-15\x1fpending\x1fdemo:A\x1d"
+        else:
+            pytest.fail(f"unexpected git call {args}")
+        return subprocess.CompletedProcess(args, 0, out, "")
+
+    def gh(args, **kwargs):
+        assert args[0] == "gh"
+        return subprocess.CompletedProcess(args, 1 if failed and failure == "gh" else 0,
+            json.dumps([{"number": 71, "headRefOid": head}]), "")
+
+    monkeypatch.setattr(adapter, "_run", run)
+    monkeypatch.setattr(subprocess, "run", gh)
+    monkeypatch.setattr(src.time, "time", lambda: 1000)
+    initial = src.work_index(adapter, "demo")
+    assert not initial["stale"]
+    failed = True
+    monkeypatch.setattr(src.time, "time", lambda: 1065)
+    stale = src.work_index(adapter, "demo", fresh=True)
+    assert stale["stale"]
+    facts = src.indexed_work(stale, "demo:A")
+    assert facts["prs"] is None
+    assert facts["commits"] is None if failure == "origin" else facts["commits"] == []
+    w.store.ctx = {"git": adapter}
+    groups = w.store._ready_groups(n=0)
+    assert groups["items"] == groups["needs_reconcile"] == groups["in_progress"] == []
+    assert [r["key"] for r in groups["unknown"]] == ["demo:A"]
+    warning = groups["warnings"][0]
+    assert warning["age_seconds"] == (65 if failure == "origin" else 0)
+    assert warning["status"] == "stale" and warning["reason"]
+    text = w.store.ready(w.p("reader"), n=0)
+    assert text.count("WARNING:") == 1 and "Unknown:\n  demo:A" in text
+    assert f"age {warning['age_seconds']}s" in text and warning["reason"] in text
+    # Cached failed reads preserve the warning, with no extra network calls.
+    assert sum(args[0] == "log" for args in calls) == 2
+    if failure == "origin":
+        adapter._context_work_index.clear()
+        assert src.work_index(adapter, "demo")["verified_at"] is None
+        assert w.store._ready_groups()["warnings"][0]["age_seconds"] is None
+        assert "age unknown" in w.store.ready(w.p("reader"))
+    assert w.store.claim(w.p("l1main"), "demo:A")["epoch"] == 1
+
+
+def test_ready_text_sections_preserve_startable_line_contract():
+    from plangraph.keeper import fmt
+    from keeper_util import defn
+    clean, merged, pending = [dict(defn(k), key=f"demo:{k}", context={})
+                              for k in ("CLEAN", "MERGED", "PENDING")]
+    merged.update(ready_status="needs_reconcile", reason="already merged")
+    pending.update(ready_status="in_progress", prs=[71])
+    text = fmt.ready_text([clean], server_items=True,
+                          needs_reconcile=[merged], in_progress=[pending])
+    assert text.startswith("demo:CLEAN |")
+    assert "\n\nNeeds reconcile:\n  demo:MERGED |" in text
+    assert "\n\nIn progress:\n  demo:PENDING |" in text
+    assert [line.split(" |", 1)[0] for line in text.splitlines()
+            if line.startswith("demo:")] == ["demo:CLEAN"]
+    empty = fmt.ready_text([], server_items=True, needs_reconcile=[merged])
+    assert empty.startswith("Needs reconcile:\n  demo:MERGED |")
+
+
+def test_work_index_cache_uses_normalized_repo_ref(tmp_path, monkeypatch):
+    from plangraph.keeper import context_sources as src
+    from plangraph.keeper.evidence_git import GitAdapter
+    from test_task_context_guard import _git
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+         "commit", "--allow-empty", "-qm", "base")
+    adapter = GitAdapter({"demo": {"path": str(tmp_path), "ref": "main"}})
+    monkeypatch.setattr(src, "_repo_ref", lambda *args: (str(tmp_path), "refs/heads/main"))
+    index = src.work_index(adapter, "demo")
+    assert index is not None
+    monkeypatch.setattr(adapter, "_run", lambda *a, **kw: pytest.fail("cache miss"))
+    assert src.work_index(adapter, "demo") is index

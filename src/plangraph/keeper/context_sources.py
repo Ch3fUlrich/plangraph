@@ -114,21 +114,27 @@ def work_index(git, project, *, fresh=False):
     if repo is None:
         return None
     cache = getattr(git, "_context_work_index", {})
-    hit = cache.get((repo, ref))
+    cache_key = (repo, ref)
+    hit = cache.get(cache_key)
     if not fresh and hit and time.monotonic() - hit[0] < _REFS_TTL:
         return hit[1]
-    try:
-        git._maybe_fetch(repo)
-    except Exception:
-        pass  # Adapter absence/failure is unknown, as in the per-item reader.
+    problems = []
+    verified_at = (hit[1].get("verified_at") if hit else None)
     prs = None
     origin = _ok(git, repo, ["remote", "get-url", "origin"]) or ""
-    # Local default branches may lag origin; ready uses the refreshed authority.
-    if origin and getattr(git, "_fetch_remote", lambda repo: None)(repo) is None:
-        _ok(git, repo, ["fetch", "--no-tags", "origin"])
-        remote_ref = "refs/remotes/origin/" + ref.removeprefix("refs/heads/")
+    # Always observe this fetch's result, including for remote-tracking refs.
+    if origin:
+        if _ok(git, repo, ["fetch", "--no-tags", "origin"]) is None:
+            problems.append("origin fetch failed or timed out")
+        else:
+            verified_at = time.time()
+        branch = ref.removeprefix("refs/heads/").removeprefix("refs/remotes/")
+        remote_ref = "refs/remotes/origin/" + branch.removeprefix("origin/")
         if _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", remote_ref]):
             ref = remote_ref
+        else:
+            problems.append("origin target ref unavailable")
+    origin_stale = bool(problems)
     from urllib.parse import urlsplit
     if (origin.startswith("git" + "@" + "github.com:")
             or urlsplit(origin.strip()).hostname == "github.com"):
@@ -144,19 +150,26 @@ def work_index(git, project, *, fresh=False):
                     for p in value):
                 prs = value
                 if prs:
-                    _ok(git, repo, ["fetch", "--no-tags", "origin", *[
-                        f"+refs/pull/{p['number']}/head:refs/keeper/pull/{p['number']}/head"
-                        for p in prs]])
+                    if _ok(git, repo, ["fetch", "--no-tags", "origin", *[
+                            f"+refs/pull/{p['number']}/head:refs/keeper/pull/{p['number']}/head"
+                            for p in prs]]) is None:
+                        prs = None
+                        problems.append("PR head fetch failed or timed out")
         except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
+        if prs is None and not problems:
+            problems.append("open PR inventory unavailable")
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
     out = _ok(git, repo, ["log", "--all", "--no-show-signature",
                          "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d"])
     if refs_out is None or target is None or out is None:
-        return None
+        if not origin:
+            return None
+        origin_stale = True
+        problems.append("repository index unavailable")
     records = {}
-    for record in out.split("\x1d"):
+    for record in (out or "").split("\x1d"):
         fields = record.strip("\n").split("\x1f")
         if len(fields) == 5 and valid_commit_ref(fields[0]):
             sha, parents, date, subject, trailers = fields
@@ -173,7 +186,34 @@ def work_index(git, project, *, fresh=False):
             todo.extend(records.get(sha, ([],))[0])
         return seen
 
-    merged = ancestors(target.strip())
+    if prs is not None and any(p["headRefOid"] not in records for p in prs):
+        prs = None
+        problems.append("PR head commit unavailable")
+    merged = ancestors((target or "").strip())
+    # Annotate introducing merges once from the same refreshed target topology.
+    chain, cursor = [], (target or "").strip()
+    while cursor in records:
+        chain.append(cursor)
+        parents = records[cursor][0]
+        cursor = parents[0] if parents else None
+    seen = set()
+    for landing in reversed(chain):
+        parents, commit, _ = records[landing]
+        todo, introduced = [landing], []
+        while todo:
+            sha = todo.pop()
+            if sha in seen:
+                continue
+            seen.add(sha)
+            introduced.append(sha)
+            todo.extend(records.get(sha, ([],))[0])
+        if len(parents) > 1:
+            match = _PR_RE.search(commit["subject"])
+            merge = {"sha": landing, "subject": commit["subject"],
+                     "pr": int(match.group(1)) if match else None}
+            for sha in introduced:
+                if sha != landing and sha in records:
+                    records[sha][1]["merge"] = merge
     commits, pulls = {}, {}
     for sha, (_, commit, names) in records.items():
         if sha in merged:
@@ -184,20 +224,23 @@ def work_index(git, project, *, fresh=False):
             for name in records.get(sha, ([], {}, []))[2]:
                 pulls.setdefault(name.strip(), []).append(pr["number"])
     branches = []
-    for line in refs_out.splitlines():
+    for line in (refs_out or "").splitlines():
         name, sha = line.split(" ", 1)
         if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
             branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
     result = {"commits": commits, "prs": pulls if prs is not None else None,
-              "branches": branches, "order": {sha: i for i, sha in enumerate(records)}}
-    cache[(repo, git.repo_ref(project))] = (time.monotonic(), result)
+              "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
+              "stale": bool(problems), "origin_stale": origin_stale,
+              "reason": "; ".join(problems),
+              "verified_at": verified_at}
+    cache[cache_key] = (time.monotonic(), result)
     git._context_work_index = cache
     return result
 
 
 def indexed_work(index, key):
     """Resolve full/bare trailers and lane names without I/O."""
-    if index is None:
+    if index is None or index.get("origin_stale"):
         return {"commits": None, "lanes": None, "prs": None}
     _, bare = _split(key)
     names = (key, bare) if key != bare else (key,)

@@ -18,7 +18,8 @@ __all__ = [
 
 
 def ready_text(items, project=None, n=10, unblocks=None, owner=None, agent=False,
-               server_items=False, needs_reconcile=None, in_progress=None) -> str:
+               server_items=False, needs_reconcile=None, in_progress=None,
+               unknown=None, warnings=None) -> str:
     """The brief; *unblocks* is the server's full-graph map (the ``items`` of a
     JSON ``ready`` reply are only the ready subset, so recounting there is 0).
 
@@ -27,8 +28,20 @@ def ready_text(items, project=None, n=10, unblocks=None, owner=None, agent=False
     dependencies against the reply subset and drop items whose done dependency
     is not in it (PG-CLI-READY-FIX).  The offline snapshot path keeps the filter."""
     if server_items:
-        rows = list(items) + list(needs_reconcile or []) + list(in_progress or [])
-        return ready_context_rows(rows, unblocks or {})
+        parts = [ready_context_rows(items, unblocks or {})]
+        for title, rows in (("Needs reconcile", needs_reconcile),
+                            ("In progress", in_progress), ("Unknown", unknown)):
+            if rows:
+                body = ready_context_rows(rows, unblocks or {})
+                parts.append(title + ":\n" + "\n".join("  " + line for line in body.splitlines()))
+        if warnings:
+            details = []
+            for warning in warnings:
+                age = warning.get("age_seconds")
+                details.append(f"{warning['project']}: age {str(age) + 's' if age is not None else 'unknown'}"
+                               f"; {warning['reason']}")
+            parts.append("WARNING: work index stale; " + " | ".join(details))
+        return "\n\n".join(part for part in parts if part)
     return views.brief(items, project=project, n=n, ub=unblocks, owner=owner, agent=agent)
 
 

@@ -626,11 +626,23 @@ Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure
 
 `ready` uses the claim guard's merged-work and newer-decision checks. Its JSON
 reply separates startable `items`, `needs_reconcile` rows (with `reason`), and
-`in_progress` rows (with `prs`, the open PR numbers). Text and CLI output mark
-excluded rows `NEEDS_RECONCILE` or `IN_PROGRESS`; `-n` caps only startable work.
+`in_progress` rows (with `prs`, the open PR numbers), and `unknown` rows when
+remote facts cannot be verified. Text and CLI print startable rows first, then
+separate, indented Needs reconcile, In progress and Unknown sections; only
+startable rows retain the top-level `key | ...` line format. `-n` caps only
+startable work.
 Untouched age and superseded-premise context remain informational, matching claim.
 Merged trailers, branch topology and open PR heads share a per-repository cached
 index (10 seconds), refreshed from origin. All candidate rows are checked;
-ready performs no per-item git/gh calls. Unknown repository/PR facts retain the
-existing best-effort semantics. Claim refreshes the index before enforcement;
-its force-stale override, audit and authorization rules remain unchanged.
+ready performs no per-item git/gh calls. Failed origin fetches never classify
+items from stale local facts. Failed PR-head fetches, missing head commits and
+unavailable PR inventories remain unknown. A single visible text WARNING line
+and the JSON `warnings` list report each affected project's stale index, reason
+and `age_seconds` since the last successful origin fetch (null / age unknown
+if none was observed). Cached failures retain their warning and age; they are
+retried after 10 seconds. Independently verified decision/merge facts can still
+require reconciliation. Unconfigured or unavailable local adapters retain the
+existing best-effort behavior. Claim refreshes the index before enforcement;
+unknown facts never refuse a claim. Its force-stale override, audit and
+authorization rules remain unchanged. Ready and claim share merge PR metadata
+computed from the refreshed target topology, even when local main lags origin.
