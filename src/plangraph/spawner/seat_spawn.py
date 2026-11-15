@@ -19,42 +19,62 @@ def live_runner(runner):
     """Default-equivalent runners use fresh code; injected transports stay local."""
     from .runner import SpawnerRunner
     from .proc_kill import oom_process_factory
-    return type(runner) is SpawnerRunner and runner.process_factory is oom_process_factory
+    from .git_guard import CODE_TREE
+    return (type(runner) is SpawnerRunner and runner.process_factory is oom_process_factory
+            and bool(os.environ.get('PLANGRAPH_SPAWNER_REPO') or (CODE_TREE / '.git').exists()))
 
 
 async def fresh_spawn(service, options):
-    """Run freshly imported code in a child; one owner releases its tree lease."""
-    import asyncio
-    import json
-    import sys
+    """Hand off to a durable Popen supervisor; cancellation only detaches after admission."""
+    import subprocess, sys
+    from contextlib import ExitStack
+    from .cli import _drain_chunks, _prune_supervisor_logs
     from plangraph.routing_support import background_process_options
     state = service.state.resolve()
-    context = service.code_tree(state)
-    acquiring = asyncio.create_task(asyncio.to_thread(context.__enter__))
+    context = ExitStack()
+    acquiring = asyncio.create_task(asyncio.to_thread(context.enter_context, service.code_tree(state)))
     tree, child, task = None, None, None
-    released = False
-    def release():
-        nonlocal released
-        if tree is not None and not released:
-            released = True
-            context.__exit__(None, None, None)
+    release = context.close
     try:
         try:
             tree = await asyncio.shield(acquiring)
         except asyncio.CancelledError:
-            tree = await acquiring  # A running Git thread cannot be cancelled.
+            tree = await acquiring
             raise
         env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
                    PYTHONDONTWRITEBYTECODE='1')
-        # The selected main may predate the handoff contract. Install metadata
-        # before running its entry point, rather than passing it unknown kwargs.
-        bootstrap = '''import io, json, runpy, sys
-from plangraph.spawner import runner
+        state.mkdir(parents=True, exist_ok=True)
+        _prune_supervisor_logs(state)
+        log = state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
+        bootstrap = '''import io, json, logging, os, pathlib, sys, threading, traceback
+from logging.handlers import RotatingFileHandler
+from plangraph.spawner import cli as supervisor
 payload = json.loads(sys.stdin.readline())
-tree = payload.pop('_tree')
-admitted = payload.pop('_admitted', False)
-cwd = payload.pop('_cwd')
-factory = runner.spawn_service
+tree, admitted, cwd = payload.pop('_tree'), payload.pop('_admitted', False), payload.pop('_cwd')
+sys.stdin = io.StringIO(json.dumps(payload) + '\\n')
+path = sys.argv[1]
+pathlib.Path(path + '.pid').write_text(str(os.getpid()))
+if sys.platform.startswith('linux'):
+    from plangraph.spawner.proc_kill import _stat
+    tree['supervisor_pid_start'] = (_stat(os.getpid()) or (None,) * 5)[4]
+tree['supervisor_stderr_path'] = path
+read_fd, write_fd = os.pipe()
+os.dup2(write_fd, 2)
+os.close(write_fd)
+class PrivateLog(RotatingFileHandler):
+    def _open(self): return os.fdopen(os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'a', encoding='utf-8', newline='')
+    def shouldRollover(self, record): return self.stream.tell() + len(self.format(record).encode('utf-8')) + 1 > self.maxBytes
+logging.raiseExceptions = False
+handler = PrivateLog(path, maxBytes=1024 * 1024, backupCount=1)
+handler.terminator = ''
+def drain():
+    try:
+        supervisor._drain_chunks(iter(lambda: os.read(read_fd, 8192), b''), lambda data:
+            handler.emit(logging.makeLogRecord(dict(msg=data[-(1024 * 1024 - 16):].decode('utf-8', errors='replace'), args=()))))
+    finally:
+        handler.close(); os.close(read_fd)
+thread = threading.Thread(target=drain, daemon=True); thread.start()
+factory = supervisor.SpawnService
 def service_with_tree(*args, **kwargs):
     service = factory(*args, **kwargs)
     service.fresh_tree = False
@@ -66,33 +86,43 @@ def service_with_tree(*args, **kwargs):
         return save(record)
     service._save = save_tree
     return service
-runner.spawn_service = service_with_tree
-sys.stdin = io.StringIO(json.dumps(payload) + '\\n')
-sys.argv = ['plangraph.spawner.cli', '--supervise']
-runpy.run_module('plangraph.spawner.cli', run_name='__main__')
+supervisor.SpawnService = service_with_tree
+try:
+    code = supervisor.main(['--supervise'])
+except Exception:
+    traceback.print_exc()
+    code = 1
+finally:
+    sys.stderr.flush()
+    os.close(2)
+    thread.join(timeout=5)
+raise SystemExit(code)
 '''
-        child = await asyncio.create_subprocess_exec(sys.executable, '-c', bootstrap,
-            cwd=tree['tree_path'], env=env,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            limit=4 * 1024 * 1024, **background_process_options(new_session=True, platform=os.name))
         payload = {k: v for k, v in options.items() if k != 'wait_seconds'}
         payload.update(state=str(state), _tree=tree, _admitted=True,
                        _cwd=getattr(service.runner, 'default_cwd', os.getcwd()))
-        child.stdin.write((json.dumps(payload) + '\n').encode())
-        await child.stdin.drain()
-        child.stdin.close()
+        with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
+            child = subprocess.Popen([sys.executable, '-c', bootstrap, str(log)],
+                cwd=tree['tree_path'], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=errors, **background_process_options(new_session=True, platform=os.name))
+        def handshake():
+            child.stdin.write((json.dumps(payload) + '\n').encode()); child.stdin.close()
+            return child.stdout.readline()
         from .base_fresh import ADMISSION_TIMEOUT, spawn_runs
-        line = await asyncio.wait_for(child.stdout.readline(), ADMISSION_TIMEOUT + 5)
+        line = await asyncio.wait_for(asyncio.to_thread(handshake), ADMISSION_TIMEOUT + 5)
         if not line:
-            raise RuntimeError('run_tree_worker_failed')
+            tail = []
+            _drain_chunks([log.read_bytes()], tail.append)
+            raise ValueError('run_tree_worker_failed\n' + b''.join(tail).decode('utf-8', errors='replace')[-4096:])
         result = json.loads(line)
         async def finish():
             try:
-                await child.wait()
+                while child.poll() is None:
+                    await asyncio.sleep(.05)
             finally:
                 release()
         task = asyncio.create_task(finish())
-        task.add_done_callback(lambda done: release())  # Also if cancelled before its first step.
+        task.add_done_callback(lambda done: release())
         for record in spawn_runs(result):
             if 'run_id' in record:
                 service.tasks[record['run_id']] = task
@@ -104,17 +134,23 @@ runpy.run_module('plangraph.spawner.cli', run_name='__main__')
                 await asyncio.wait_for(asyncio.shield(task), wait)
             except asyncio.TimeoutError:
                 pass
-        return service.result(result['run_id']) if 'run_id' in result else result
+        for record in spawn_runs(result):
+            if 'run_id' in record: record.update(service.result(record['run_id']))
+        return result
     except BaseException:
         try:
-            if child is not None and child.returncode is None:
-                child.kill()
-                await child.wait()
-        finally:
+            if task is None and child is not None:
+                if child.poll() is None: child.kill()
+                await asyncio.to_thread(child.wait)
             if task is not None:
+                task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
+        finally:
             release()
         raise
+    finally:
+        if child is not None:
+            child.stdout.close()
 
 
 def resources(service):

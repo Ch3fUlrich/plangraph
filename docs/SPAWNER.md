@@ -272,7 +272,7 @@ modified within seven days, and dirty trees. A missing/invalid `tree_sha` on a
 nonterminal or survivor record, or corrupt/unreadable records, disables reaping
 for that call. Only older, clean, unpinned trees with available locks and leases
 are removed. Windows selection does no reaping.
-Live Python CLI/MCP launches import a supervisor from the selected tree, stamping its SHA before persistence; custom transports, dry runs and direct supervision use process-load identity. Job cwd and empty seat envelopes retain their existing behavior. The tree lease is released once on completion or failure. The launch-spec module adapter imports launch construction from the selected tree and appends a `run_tree` event, including when child events are null.
+Live Python CLI/MCP launches import a supervisor from the selected tree, stamping its SHA before persistence; custom transports, dry runs and direct supervision use process-load identity. Job cwd and empty seat envelopes retain their existing behavior. The tree lease is released once when the supervisor finishes or the caller detaches; durable running records keep the tree pinned. The launch-spec module adapter imports launch construction from the selected tree and appends a `run_tree` event, including when child events are null.
 Terminal means `runner.is_terminal`; `needs_input` and `orphaned` keep their trees.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)

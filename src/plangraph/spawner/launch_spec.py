@@ -172,17 +172,13 @@ class WindowsEnvIncomplete(Exception):
 
 def fresh_main():
     """Import launch construction in the fetched SHA tree, not the daemon's package."""
-    import subprocess
-    import sys
+    import subprocess, sys
     from .git_guard import run_tree
     try:
         raw = sys.stdin.read(16 * 1024 * 1024 + 1)
-        if len(raw) > 16 * 1024 * 1024:
-            raise InvalidRequest('json')
-        try:
-            request = json.loads(raw)
-        except (ValueError, UnicodeError):
-            raise InvalidRequest('json') from None
+        if len(raw) > 16 * 1024 * 1024: raise InvalidRequest('json')
+        try: request = json.loads(raw)
+        except (ValueError, UnicodeError): raise InvalidRequest('json') from None
         _validate(request)
     except InvalidRequest as exc:
         sys.stderr.write(f'launch-spec failed: invalid request ({exc})\n')

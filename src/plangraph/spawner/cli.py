@@ -75,17 +75,7 @@ def _prune_supervisor_logs(state):
 
 def _supervise():
     payload = json.loads(sys.stdin.readline())
-    tree = payload.pop('_tree', None)
     service = SpawnService(state=payload.pop('state'))
-    service._parent_admitted = payload.pop('_admitted', False) is True
-    if '_cwd' in payload:
-        service.runner.default_cwd = payload.pop('_cwd')
-    if tree:
-        save = service._save
-        def save_tree(record):
-            for key, value in tree.items(): record.setdefault(key, value)
-            return save(record)
-        service._save = save_tree
     async def run():
         try:
             record = await admitted_spawn(service, payload)
@@ -246,18 +236,8 @@ def main(argv=None):
             elif (live_runner(getattr(service, 'runner', None)) and _start_supervisor is subprocess.Popen
                   and args.card.get('run_kind') != 'native-codex'):
                 service.fresh_tree = True
-                # The per-run child owns its event loop until all launched runs end.
                 async def fresh():
-                    result = await admitted_spawn(service, payload)
-                    deadline = time.monotonic() + max(0, args.wait)
-                    runs = spawn_runs(result)
-                    while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
-                        await asyncio.sleep(min(.02, max(0, deadline - time.monotonic())))
-                        for run in runs:
-                            if run.get('status') == 'running':
-                                run.update(await service.refresh_result(run['run_id']))
-                    # asyncio.run cancels pending tasks: detach only after the
-                    # child's durable records protect its tree from reaping.
+                    result = await service.spawn(**payload, wait_seconds=args.wait)
                     for task in set(service.tasks.values()):
                         if not task.done(): task.cancel()
                     await asyncio.gather(*service.tasks.values(), return_exceptions=True)
@@ -443,7 +423,7 @@ raise SystemExit(code)
             code = result.get('exit_code')
             return code if code is not None else (0 if result.get('status') == 'running' else 1)
         return 0
-    except (ValueError, KeyError, OSError, SpawnRefused) as exc:
+    except (ValueError, KeyError, OSError, RuntimeError, subprocess.SubprocessError, SpawnRefused) as exc:
         print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
 
