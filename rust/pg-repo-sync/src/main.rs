@@ -1,4 +1,5 @@
 mod drift;
+mod hooks;
 use drift::text;
 use std::{
     env, fs,
@@ -132,6 +133,12 @@ fn run() -> Result<bool, &'static str> {
     } else {
         Ok(Vec::new())
     };
+    hooks::discover(
+        &mut repos,
+        live.as_ref().ok().map(Vec::as_slice).unwrap_or(&[]),
+        &excludes,
+    )
+    .map_err(|_| "hook checkout discovery failed")?;
     let mut alerts = false;
     for repo in repos {
         if fs::symlink_metadata(repo.join(".repo-sync-pin")).is_ok()

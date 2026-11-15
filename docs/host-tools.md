@@ -92,3 +92,18 @@ No sync timer is installed or enabled by this change; deployment remains separat
 Systemd's optional-directory `!` marker is decoded; a missing optional directory
 cannot protect a checkout. User-manager `~` resolves to HOME; unresolved system
 manager homes fail closed. Unreadable unit protection also returns exit 1.
+
+Hook discovery follows each selected checkout's effective `core.hooksPath`
+(including inherited and relative paths) and symlinked hook files into their
+owning checkout. Targets outside `$HOME/code`, such as a dedicated
+`plangraph-hooks` checkout, are included recursively and printed as `HOOK` lines.
+Running service WorkingDirectory checkouts are also listed as `UNIT` lines;
+existing live-unit protection still prevents their automatic fast-forward.
+Pinned and excluded checkouts are not inspected for hook targets.
+
+Pre-push prints its own checkout HEAD before evaluating pushed refs. If its
+locally fetched `origin/main` contains a missing commit older than 24 hours,
+it refuses with a stale-checkout diagnostic and the `pg-repo-sync --repo PATH`
+repair command. The hourly sync owns fetching; an old HEAD with no missing
+upstream commits is current. Gate changes in a topic branch take effect in the
+shared hook checkout after they merge into main and that checkout syncs.

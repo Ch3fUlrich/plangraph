@@ -17,10 +17,11 @@ pub fn git(repo: &Path, args: &[&str]) -> Command {
             cmd.env_remove(key);
         }
     }
-    cmd.arg("-C")
-        .arg(repo)
-        .args(["-c", "core.hooksPath=/dev/null"])
-        .args(args)
+    cmd.arg("-C").arg(repo);
+    if args.first() != Some(&"config") {
+        cmd.args(["-c", "core.hooksPath=/dev/null"]);
+    }
+    cmd.args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
