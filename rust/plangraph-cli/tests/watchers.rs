@@ -66,6 +66,9 @@ fn killed_orchestrator_keeps_detached_watcher_result() {
         Ok("workload") => {
             let mut stream =
                 UnixStream::connect(std::env::var("PG_WATCHER_TEST_SOCKET").unwrap()).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
             stream.write_all(b"ready").unwrap();
             let mut go = [0; 1];
             stream.read_exact(&mut go).unwrap();
@@ -164,4 +167,18 @@ fn killed_orchestrator_keeps_detached_watcher_result() {
         "/bin/true",
     ]);
     assert!(!duplicate.status.success());
+}
+
+#[test]
+fn interrupted_admission_does_not_hide_other_watcher_results() {
+    let job = tempfile::tempdir().unwrap();
+    let root = job.path().join("watchers");
+    std::fs::create_dir_all(root.join("interrupted")).unwrap();
+    std::fs::create_dir(root.join("completed")).unwrap();
+    std::fs::write(root.join("completed/result.toml"), "code = 0\n").unwrap();
+    let output = cli(&["resume-digest", job.path().to_str().unwrap()]);
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(text.contains("completed: exit 0"));
+    assert!(text.contains("interrupted: record error:"));
 }

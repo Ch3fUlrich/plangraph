@@ -149,25 +149,28 @@ pub fn digest(job: &Path) -> io::Result<Vec<String>> {
         let dir = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
         let result = dir.join("result.toml");
-        let state = if result.exists() {
-            let outcome: Outcome = read(&result)?;
-            format!(
-                "exit {}{}",
-                outcome.code,
-                outcome
-                    .error
-                    .map(|e| format!(" error: {e}"))
-                    .unwrap_or_default()
-            )
-        } else {
-            let request: Request = read(&dir.join("request.toml"))?;
-            let error = match fs::read_to_string(dir.join("launch-error.txt")) {
-                Ok(error) => format!(" admission error: {error}"),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
-                Err(error) => return Err(error),
-            };
-            format!("pending unit={}{}", request.unit, error)
-        };
+        let state = (|| -> io::Result<String> {
+            Ok(if result.exists() {
+                let outcome: Outcome = read(&result)?;
+                format!(
+                    "exit {}{}",
+                    outcome.code,
+                    outcome
+                        .error
+                        .map(|e| format!(" error: {e}"))
+                        .unwrap_or_default()
+                )
+            } else {
+                let request: Request = read(&dir.join("request.toml"))?;
+                let error = match fs::read_to_string(dir.join("launch-error.txt")) {
+                    Ok(error) => format!(" admission error: {error}"),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
+                    Err(error) => return Err(error),
+                };
+                format!("pending unit={}{}", request.unit, error)
+            })
+        })()
+        .unwrap_or_else(|error| format!("record error: {error}"));
         rows.push(format!("{name}: {state} ({})", dir.display()));
     }
     rows.sort();

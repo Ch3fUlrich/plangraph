@@ -5,6 +5,8 @@ codes or execution errors. Duplicate submission and completed-command replay are
 `plangraph resume-digest JOB` lists pending units and completed results without consuming
 them. Spawner and orchestration skills require startup recovery and place authorized
 wait continuations inside the service so a session kill cannot discard a pending action.
+Incomplete watcher records are reported individually so interrupted admission cannot
+hide another watcher's completed outcome.
 Requires Linux user systemd; no session-child fallback is provided. Host reboot and
 explicit service termination recovery remain manual (pending records retain unit IDs).
 Host regression: `cargo test -p plangraph-cli --features systemd-tests --test watchers`
