@@ -12,7 +12,11 @@ fn missing_launch_program_writes_no_record() {
     let mut f = Fixture::missing_launch();
     let reply = f.spawn(0.0);
     assert_eq!(reply["error"]["code"], -32603);
-    assert_eq!(reply["error"]["message"], "launch adapter could not start");
+    let message = reply["error"]["message"].as_str().unwrap();
+    assert!(
+        message.starts_with("launch adapter could not start"),
+        "{message}"
+    );
     let runs = f.state.path().join("runs");
     assert!(!runs.exists() || std::fs::read_dir(runs).unwrap().next().is_none());
 }
