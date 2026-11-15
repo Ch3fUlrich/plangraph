@@ -6,6 +6,9 @@ fn main() {
 }
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("fast-checks") {
+        return plangraph_cli::fast_checks::run(&args[1..]);
+    }
     if args == ["--version"] {
         println!("plangraph {}", env!("CARGO_PKG_VERSION"));
         return 0;

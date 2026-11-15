@@ -456,3 +456,24 @@ Fixed brief rules and output contracts precede `=== ITEM CONTEXT`; item-specific
 content follows it so different items reuse the same prompt cache prefix.
 
 Append-only ledger paths are declared once using `merge=union` in the root `.gitattributes` (currently the historical `CHANGELOG.md` ledger, retained for historical merges and releases; current PRs still need fragments). `tools/merge_batch.py build` reads these defaults from the fetched base and persists them for continue/recovery; `--union GLOB` adds extra paths. Union can preserve both old and reworded entries, so review its warnings. Do not apply union to reference docs: edit substantive documentation in place, and put checkpoint/status records in `docs/checkpoints/<ITEM>.md` without updating a central list. See the [append audit](docs/checkpoints/LE-APPEND-ONLY-DOCS-CONFLICT.md).
+
+## Fast local CI (D-6054)
+
+Run `cargo run --manifest-path rust/Cargo.toml -p plangraph-cli -- fast-checks`
+from a checkout. Use `--base <revision>` to override `origin/main`, or
+`--plan --files <paths...>` to inspect fixture selection without executing checks.
+The command delegates job selection to `tools/ci_select.py`, includes committed,
+tracked local and untracked changes, and prints CI job booleans before its steps.
+It runs the four always-required tree guards, commit and whitespace gates,
+affected Python tests with the existing full-suite refusal, and fmt/clippy/tests
+for touched Rust crates and local reverse dependencies in their own workspaces.
+The Rust test environment guard runs even when Python files were untouched,
+checking that Rust-launched Python snippets have no pytest dependencies. Changed Rust
+inputs with CRLF fail early with a normalization diagnostic. Worker tests use
+the existing CI Temporal wrapper and require the Temporal CLI and protobuf tools.
+Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
+Each step and the total report wall seconds; exceeding 300 seconds emits a
+warning and returns failure after checks, without interrupting or weakening them.
+This is the cheap local projection of CI; hosted browser, Postgres and Windows
+runners remain CI responsibilities. A coding.vm timing measurement is still
+required before claiming that host's five-minute done criterion.
