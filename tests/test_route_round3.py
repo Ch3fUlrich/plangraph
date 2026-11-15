@@ -19,9 +19,10 @@ def assert_review_seat_safety(estimate):
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        # D-6028: with diff metadata the inline-only mimo-v2.6-pro leads; without it main's seats stay.
+        # LE-PROBE-ROLE-MISMATCH-REVIEW: console-deepseek-flash is not reachable in the review isolation, so
+        # the Go beam leg takes its seat. D-6028: with diff metadata the inline-only mimo-v2.6-pro leads; without it main's seats stay.
         expected = (["mimo-v2.6-pro", "agy-gemini-4-hydrogen-high"] if diff else
-                    ["agy-gemini-4-hydrogen-high", "console-deepseek-flash"
+                    ["agy-gemini-4-hydrogen-high", "opencode-go-beam-free"
                      if estimate <= 72089 else "claude-sonnet-5-5-high"])
         assert [leg.id for leg in review.review_seats] == expected
 

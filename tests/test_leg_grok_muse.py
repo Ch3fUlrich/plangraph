@@ -101,11 +101,14 @@ def test_muse_never_automatic_even_if_lifted(role):
     """Historical name retained: D-5113 admits Muse automatically unless policy bans it."""
     legs = tuple(replace(BY_ID[mid], roles=(role,)) for mid in (*MUSE, 'omniroute-muse-spark'))
     policy = RoutePolicy(review_allowed_families=("muse",))
+    # LE-PROBE-ROLE-MISMATCH-REVIEW: a review child cannot reach the console provider.
+    unreachable = {"opencode-console-muse-spark"} if role == "review" else set()
     for leg in legs:
-        assert policy.skip_reason(leg, role) is None
+        assert policy.skip_reason(leg, role) == (
+            "review_provider_unreachable" if leg.id in unreachable else None)
     plan = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs, policy=policy,
                       catalog_rows=())
-    assert set(plan.legs) == set(legs)
+    assert set(plan.legs) == {leg for leg in legs if leg.id not in unreachable}
     denied = plan_spawn(CARD, role=role, writer_families=("gpt",), legs=legs,
                         policy=RoutePolicy(banned_families=("muse",)), catalog_rows=())
     assert not denied.legs

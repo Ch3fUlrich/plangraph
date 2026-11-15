@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from plangraph.planner.legs import (DEFAULT_LEGS, REVIEW_ORDER, REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH,
-                                    REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_BEAM)
+                                    REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_BEAM, REVIEW_DEEPSEEK)
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 
@@ -21,6 +21,9 @@ FREE = ["opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free", "ope
 DISABLED_FREE = {"opencode-deepseek-v4.1-flash-free", "opencode-glm-5.3-flash-free"}
 # D-4196: both retained Zen rows stay permanently disabled as on main.
 ACTIVE_FREE = ["openrouter-free"]
+# LE-PROBE-ROLE-MISMATCH-REVIEW: the console provider is unreachable in the isolated review child,
+# so the routed review legs are REVIEW_ORDER without REVIEW_DEEPSEEK; it is skipped, not listed.
+REVIEW_ROUTED = tuple(id for id in REVIEW_ORDER if id != REVIEW_DEEPSEEK)
 SUBS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-argon", "mimo-v2.6-pro", "mimo-v2.6-flash"]
 WRITERS = [SUBS[0], "agy-gemini-4-hydrogen-high", "openrouter-free", "opencode-big-pickle", "agy-gemini-4-argon",
            "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash",
@@ -169,14 +172,15 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
                             "agy-gemini-4-argon-medium", "console-deepseek-flash",
                             "opencode-go-beam-free", "claude-sonnet-5-5-high")
     plan = plan_spawn(CARD, role="review", writer_families=("openai",))
-    assert [leg.id for leg in plan.legs] == list(REVIEW_ORDER)
+    assert [leg.id for leg in plan.legs] == list(REVIEW_ROUTED)
+    assert {s["leg"]: s["reason"] for s in plan.skipped}[REVIEW_DEEPSEEK] == "review_provider_unreachable"
     assert plan.legs[0].model == "mimo/mimo-v2.6-pro"
 
 
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids == list(REVIEW_ORDER[:-1])  # Claude writer excludes Sonnet.
+    assert ids == list(REVIEW_ROUTED[:-1])  # Claude writer excludes Sonnet.
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
 
@@ -222,7 +226,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids == list(REVIEW_ORDER[:-1])  # Claude writer excludes Sonnet.
+    assert ids == list(REVIEW_ROUTED[:-1])  # Claude writer excludes Sonnet.
     assert DISABLED_FREE.isdisjoint(ids)
     assert ids.index(REVIEW_MIMO_PRO) == 0 and ids.index(REVIEW_HYDROGEN) == 2  # D-6028
 
@@ -247,8 +251,10 @@ def test_fixed_review_order():
     legs = tuple(replace(table[id], roles=("review",), disabled=None) for id in ids)
     plan = plan_spawn(CARD, role="review", writer_families=("gpt",), legs=legs,
                       policy=RoutePolicy(), leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
-    assert [leg.id for leg in plan.legs] == ["qodercli-qwen3.8-flash", *FREE,
+    # openrouter-free is not a provider the isolated review child can reach (LE-PROBE-ROLE-MISMATCH-REVIEW).
+    assert [leg.id for leg in plan.legs] == ["qodercli-qwen3.8-flash", *FREE[:-1],
         "mimo-v2.6-flash", "agy-gemini-4-argon", "claude-haiku-5.5", "deepseek"]
+    assert {s["leg"]: s["reason"] for s in plan.skipped} == {FREE[-1]: "review_provider_unreachable"}
 
 
 def test_no_anthropic_implement_leg_removes_sonnet():
@@ -399,7 +405,10 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert not {leg.family for leg in review.review_seats} & set(writers)
         # D-6028: mimo-v2.6-pro leads; a mimo writer excludes its own family and falls to Hydrogen.
         assert review.first_leg.id == (REVIEW_HYDROGEN if "mimo" in writers else REVIEW_MIMO_PRO)
-        assert "deepseek" in {leg.family for leg in review.legs}
+        # LE-PROBE-ROLE-MISMATCH-REVIEW: the console deepseek leg is unreachable in the review isolation.
+        assert REVIEW_DEEPSEEK not in {leg.id for leg in review.legs}
+        assert "deepseek" not in {leg.family for leg in review.legs}
+        assert {s["leg"]: s["reason"] for s in review.skipped}[REVIEW_DEEPSEEK] == "review_provider_unreachable"
         assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
         "qodercli-qwen3.8-flash", *FREE, *SUBS, "agy-gemini-4-hydrogen-high", "agy-gemini-4-hydrogen-medium", "cx-gpt-6-luna", "agy-sonnet-5.5", "agy-gemini-4-argon", "opencode-big-pickle",

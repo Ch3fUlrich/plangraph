@@ -61,7 +61,7 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     );
     assert_eq!(
         result["argon"]["first_leg"]["model"],
-        "console-deepseek/deepseek-flash"
+        "opencode-go/beam-free"
     );
     assert_eq!(result["later"]["state"], "limited");
     assert_eq!(
@@ -104,12 +104,13 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
         .iter()
         .map(|l| l["model"].as_str().unwrap())
         .collect();
+    // The console deepseek leg is unreachable in the isolated review child (review_provider_unreachable).
+    assert!(!models.contains(&"console-deepseek/deepseek-flash"));
     assert_eq!(
         models,
         [
             "gemini-4-hydrogen-high",
             "gemini-4-argon-medium",
-            "console-deepseek/deepseek-flash",
             "opencode-go/beam-free",
             "claude-sonnet-5-5-high"
         ]
