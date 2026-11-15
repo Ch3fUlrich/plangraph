@@ -55,8 +55,11 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
     assert_eq!(text.lines().count(), 1);
     let row: Value = serde_json::from_str(text.trim()).unwrap();
     assert_eq!(row["host"], "fixture");
-    assert_eq!(row["model"], "gpt-6.1-sol");
-    assert_eq!(row["effort"], "medium");
+    assert_eq!(row["model"], WRITER_MODEL);
+    assert_eq!(row["effort"], WRITER_EFFORT);
+    let args = model_args();
+    assert_eq!(args[1], row["model"].as_str().unwrap());
+    assert!(args[3].ends_with(row["effort"].as_str().unwrap()));
     assert_eq!(row["tokens"], 1290);
     assert_eq!(row["wall_minutes"], 2.0);
     assert_eq!(row["items_given"], 1);

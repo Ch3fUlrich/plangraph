@@ -10,6 +10,18 @@ use std::{
     time::Duration,
 };
 
+const WRITER_MODEL: &str = "gpt-6.1-sol";
+const WRITER_EFFORT: &str = "medium";
+/// Model and effort flags for the codex invocation; the ledger row records the same constants.
+fn model_args() -> [String; 4] {
+    [
+        "-m".into(),
+        WRITER_MODEL.into(),
+        "-c".into(),
+        format!("model_reasoning_effort={WRITER_EFFORT}"),
+    ]
+}
+
 struct Host {
     repo: PathBuf,
     run_id: String,
@@ -78,7 +90,7 @@ impl Host {
         let accepted = record["review"]["verdict"] == "ACCEPT";
         Ok(
             json!({"schema_version":1,"kind":"writer","run_id":record["run_id"],
-            "host":record["host"],"model":"gpt-6.1-sol","effort":"medium",
+            "host":record["host"],"model":WRITER_MODEL,"effort":WRITER_EFFORT,
             "started":record["started"],"ended":record["ended"],"exit_code":record["exit_code"],
             "item_key":record["item_key"],"items_given":item.map(|_| 1),"items_done":done,
             "changed_lines":lines,"wall_minutes":wall,"tokens":crate::writer_ledger::tokens(&log)?,
@@ -168,12 +180,9 @@ impl Driver for Host {
             command.args(["resume", id]);
         }
         command
+            .args(["--json"])
+            .args(model_args())
             .args([
-                "--json",
-                "-m",
-                "gpt-6.1-sol",
-                "-c",
-                "model_reasoning_effort=medium",
                 "-c",
                 "approval_policy=never",
                 "-c",
