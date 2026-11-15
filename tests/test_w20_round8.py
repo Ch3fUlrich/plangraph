@@ -91,7 +91,20 @@ def test_override_writer_family_excluded(tmp_path):
             model=leg.model, writer_families=[leg.family], override_reason='operator selection', dry_run=True))
 
 
-def test_supervisor_refusal_reason_and_code(tmp_path):
+@pytest.fixture
+def supervisor_host(tmp_path, monkeypatch):
+    """Import/refusal probes reach routing without depending on live host RAM."""
+    config = tmp_path / 'config' / 'plangraph'
+    config.mkdir(parents=True)
+    (config / 'hosts.json').write_text(json.dumps({'self': 'supervisor-test', 'hosts': [{
+        'id': 'supervisor-test', 'caps': {'max_runs': 4, 'mem_floor_mb': 0},
+        'warmup': {'ramp_mb': {'implement': 1, 'review': 1}},
+    }]}))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(config.parent))
+    monkeypatch.setenv('PLANGRAPH_HOST_NAME', 'supervisor-test')
+
+
+def test_supervisor_refusal_reason_and_code(tmp_path, supervisor_host):
     import os
     import subprocess
     import sys
