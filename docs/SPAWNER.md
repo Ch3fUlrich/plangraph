@@ -1,5 +1,10 @@
 # Plangraph Spawner & Model Routing Architecture — [disk admission](operations/spawner-disk-admission.md)
 
+Gateway snapshot HTTP 401/403 produces an `auth_refused` skip with the gateway
+URL and `PLANGRAPH_PRINCIPAL` (or `unknown`), never credentials or response bodies.
+This refusal bypasses transport recovery retries/probes; saved plan exclusions
+retain structured auth evidence and attempt skips retain the diagnostic.
+
 | Config key | Values | Default / details |
 | --- | --- | --- |
 | `work_mode` | `auto`, `piecewise`, `batch` | `batch`; [files, precedence, schema and example](work-mode.md) |

@@ -110,6 +110,45 @@ def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
         assert record['plan']['review_seats'] == [record['chosen_leg']]
 
 
+def test_snapshot_auth_refused_in_plan_and_run_record(service, monkeypatch, tmp_path):
+    from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
+    from plangraph.routing_support.omniroute_state import from_env
+    svc = service()
+    healthy = svc._route(CARD, 'review', ['mimo'], benchmark={})
+    calls = []
+
+    def fetch(*args):
+        calls.append(args)
+        return 401, 'fixture-key must never appear'
+
+    provider = from_env({'OMNIROUTE_BASE_URL': 'http://127.0.0.1:20128/v1',
+                         'PLANGRAPH_PRINCIPAL': 'reviewer'},
+                        key_resolver=lambda _: 'fixture-key', fetch=fetch)
+    adapter = LegAdapter(LegStateStore(tmp_path / 'auth-state'), provider,
+                         [LUNA.model], enabled=True)
+    original = svc.runner.leg_reader.leg_status
+    svc.runner.leg_reader.leg_status = lambda model, **kw: (
+        adapter(model, **kw) if model == LUNA.model else original(model, **kw))
+    plan = svc._route(CARD, 'review', ['mimo'], benchmark={})
+    skipped = next(row for row in plan.candidates if row['leg'] == LUNA.id)
+    assert skipped['reason'] == 'auth_refused'
+    assert skipped['evidence']['principal'] == 'reviewer'
+    monkeypatch.setattr(svc, '_route', lambda *a, **k: healthy)
+    answer = asyncio.run(svc.spawn(card=CARD, role='review', writer_families=['mimo'],
+                                   seats=True, wait_seconds=None, benchmark={}))
+    run = next(r for r in answer['seats'] if any(
+        isinstance(a['leg'], dict) and a['leg']['id'] == LUNA.id for a in r['attempts']))
+    saved = json.loads(svc._path(run['run_id']).read_text())
+    for record in (run, saved):
+        attempt = next(a for a in record['attempts'] if isinstance(a['leg'], dict)
+                       and a['leg']['id'] == LUNA.id)
+        assert attempt['skip_reason'] == ('auth_refused: HTTP 401 '
+            'gateway=http://127.0.0.1:20128 principal=reviewer')
+        assert 'fixture-key' not in json.dumps(record)
+        assert 'OmniRouteUnreachable' not in json.dumps(record)
+    assert len(calls) == 1  # auth refusal is cached, never retried/probed as transport failure
+
+
 def test_unfilled_slot_names_distinct_family_refusal(service, monkeypatch):
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'legs', (GEMINI, LUNA))
     svc = service(skip=GEMINI.model)

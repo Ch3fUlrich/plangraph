@@ -399,11 +399,16 @@ class LegAdapter:
             return dict(state='unavailable', evidence=None)
         now = self.clock()
         if self._at is None or now - self._at >= self.ttl_s:
+            from .omniroute_state import OmniRouteAuthRefused
+            self._auth_error = None
             try:
                 states = self.provider.snapshot()
                 served = {self.identity(mid) for mid in (self.models() if callable(self.models) else self.models)}
                 self._states, self._served = states, served
                 self._error = None if states else 'unreachable'
+            except OmniRouteAuthRefused as exc:
+                self._error = str(exc)
+                self._auth_error = exc.evidence
             except Exception as exc:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
@@ -421,4 +426,4 @@ class LegAdapter:
                 state = 'ok' if provider.available else 'unavailable'
         # Legacy planner understands limited/down only; preserve explicit reason.
         return dict(state='ok' if state == 'ok' else 'limited',
-                    reason=state, evidence=None)
+                    reason=state, evidence=dict(self._auth_error) if self._auth_error else None)
