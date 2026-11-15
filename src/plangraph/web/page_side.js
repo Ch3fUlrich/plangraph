@@ -268,7 +268,7 @@
     } catch (e) { workModeBusy = false; workModeError = "Work mode unavailable on this page."; }
   }
 
-  function renderSettings() {
+  function renderSettings(load) {
     var box = $("sb-panel-settings");
     if (!box) return;
     clear(box);
@@ -299,7 +299,7 @@
       refresh.addEventListener("click", function () { requestWorkMode(); renderSettings(); });
       box.appendChild(refresh);
     }
-    if (!workModeData && !workModeBusy && !workModeError) {
+    if (load && !workModeData && !workModeBusy && !workModeError) {
       if (typeof global.XMLHttpRequest === "function") requestWorkMode();
       else { workModeError = "Work mode unavailable on this page."; status.textContent = workModeError; }
     }
@@ -380,7 +380,7 @@
     if (tab === "projects") renderProjects();
     else if (tab === "qa") PlanUI.SideTables.renderQA();
     else if (tab === "answers") PlanUI.SideTables.renderAnswers();
-    else if (tab === "settings") renderSettings();
+    else if (tab === "settings") renderSettings(true);
     else PlanUI.SideTables.renderNeeds();
   }
 

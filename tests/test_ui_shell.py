@@ -258,6 +258,8 @@ function main() {
     PlanUI.Sidebar.mount(ui, vm);
     function check(value) { if (!value) throw Error('work mode assertion'); }
     function select() { return doc.querySelector("select[aria-label='Work mode']"); }
+    check(select().disabled && calls.length === 0);
+    ui.set("sidebar", { open: true, tab: "settings" });
     check(select().disabled && calls.length === 1);
     check(calls[0].params.name === 'plangraph_work_mode');
     check(Object.keys(calls[0].params.arguments).length === 0);
