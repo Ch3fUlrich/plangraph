@@ -18,6 +18,19 @@ fn scratch_commit_is_isolated_from_inherited_git_metadata() {
     std::fs::create_dir(&sentinel).unwrap();
     let work = root.path().join("work");
     std::fs::create_dir(&work).unwrap();
+    // A global config pointing core.hooksPath at a marker-writing hook must not run.
+    let hooks = root.path().join("hooks");
+    let marker = root.path().join("hook-ran");
+    std::fs::create_dir(&hooks).unwrap();
+    let hook = hooks.join("pre-commit");
+    std::fs::write(&hook, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();
+    std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let global = root.path().join("gitconfig");
+    std::fs::write(
+        &global,
+        format!("[core]\n\thooksPath = {}\n", hooks.display()),
+    )
+    .unwrap();
     let status = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -29,9 +42,17 @@ fn scratch_commit_is_isolated_from_inherited_git_metadata() {
         .env("GIT_WORK_TREE", &sentinel)
         .env("GIT_INDEX_FILE", sentinel.join("index"))
         .env("GIT_COMMON_DIR", &sentinel)
+        .env("GIT_CONFIG_GLOBAL", &global)
+        .env("GIT_CONFIG_COUNT", "1")
+        .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+        .env("GIT_CONFIG_VALUE_0", &hooks)
         .status()
         .unwrap();
     assert!(status.success());
+    assert!(
+        !marker.exists(),
+        "inherited git hooks ran in the scratch commit"
+    );
     assert_eq!(std::fs::read_dir(sentinel).unwrap().count(), 0);
 }
 #[test]
