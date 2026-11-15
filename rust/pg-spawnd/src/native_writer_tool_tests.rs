@@ -3,9 +3,7 @@ use super::*;
 #[test]
 fn refuses_windows_mount_codex_before_launch() {
     for drive in ["c", "d"] {
-        let path = PathBuf::from(format!(
-            "/mnt/{drive}/Users/writer/AppData/Roaming/npm/codex"
-        ));
+        let path = PathBuf::from(format!("/mnt/{drive}/codex-fixture/bin/codex"));
         let error = checked_path(path).unwrap_err();
         assert!(error.starts_with("tool_wrong_platform:"), "{error}");
         assert!(error.contains(&format!("/mnt/{drive}/")), "{error}");
