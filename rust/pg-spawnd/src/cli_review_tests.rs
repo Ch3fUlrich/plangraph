@@ -145,36 +145,75 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     }
     std::fs::copy(record.path(), mirror.join("record.json")).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3").current_dir(&root)
-        .env("PYTHONPATH", format!("{}:{}", root.join("src").display(), root.join("tests").display()))
-        .args(["-c", r#"
+    let output = Command::new("python3")
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .args([
+            "-c",
+            r#"
 import json, sys
 from pathlib import Path
-import pytest
-import test_keeper_close_merged as fixture
+from types import SimpleNamespace
+from unittest.mock import patch
+from plangraph.keeper import auth, db, context_sources
+from plangraph.keeper.store import Store
+from plangraph.keeper.evidence import DecisionVerifier
+from plangraph.keeper.evidence_types import Result
+from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
 from plangraph.keeper.errors import Refused
-fixture.HEAD = sys.argv[2]
-root = Path(sys.argv[1]); work = root / 'keeper'; work.mkdir()
-with pytest.MonkeyPatch.context() as patch:
-    gen = fixture.unseated_w.__wrapped__(work, patch)
-    world = next(gen)
-    world.store.ctx['spawner_records'] = SpawnerRecordAdapter(root / 'mirror')
-    world.decision_path.write_text(f'| D-5504 | demo | GO {fixture.HEAD}; Review-Runs: {sys.argv[3]} |\n')
+root = Path(sys.argv[1]); head = sys.argv[2]; merge = '1' * 40
+class MergedGit:
+    def repo_path(self, project):
+        assert project == 'demo'
+        return 'fixture-repo'
+    def repo_ref(self, project):
+        return 'main'
+    def merge_commit_of(self, repo, sha, ref):
+        return (merge, 'fixture@example.invalid') if sha == head else None
+    def _run(self, repo, args):
+        assert args == ['show', '-s', '--format=%P', '--end-of-options', merge]
+        return SimpleNamespace(returncode=0, stdout=f"{'2' * 40} {head}")
+conn = db.open_db(root / 'keeper.db', create=True, backend='sqlite')
+router = auth.authenticate(conn, auth.add_principal(conn, 'router', 'router', []))
+writer = auth.authenticate(conn, auth.add_principal(conn, 'writer', 'l1', ['demo'], family='teamA'))
+store = Store(conn, clock=lambda: 1700000000.0,
+              verifiers={'decision': SimpleNamespace(verify=lambda *a: Result(True, 'verified'))})
+store.create_items(router, [dict(
+    project='demo', id=name, title=name, kind=kind, track='T0', owner='tester',
+    estimate_h=1, depends_on=deps, done_criteria='criteria', evidence_kinds=['any'],
+    operator=False, review_tier='standard'
+) for name, kind, deps in [('A', 'lane', []), ('G', 'goal', ['demo:A'])]])
+epoch = store.claim(writer, 'demo:A')['epoch']
+store.add_evidence(writer, 'demo:A', epoch, 'decision', {'id':'D-1'})
+store.submit(writer, 'demo:A', epoch)
+decision_path = root / 'DECISIONS.md'
+decision_path.write_text(f'| D-5504 | demo | GO {head}; Review-Runs: {sys.argv[3]} |\n')
+store.ctx = {'decisions': DecisionsAdapter(decision_path), 'git': MergedGit(),
+             'spawner_records': SpawnerRecordAdapter(root / 'mirror')}
+store.verifiers['decision'] = DecisionVerifier()
+with patch.object(context_sources, 'plan_item_commits', return_value=[
+    {'sha':head, 'date':'2026-01-01', 'merge':{'pr':1}}
+]):
     for risk in ['auth', 'secrets']:
-        world.store.put_card(world.p('router'), 'demo:A', dict(outcome='fixture', risk_tags=[risk]))
+        store.put_card(router, 'demo:A', dict(outcome='fixture', risk_tags=[risk]))
         try:
-            world.store.close_merged(world.p('router'), 'demo:A', 'D-5504')
+            store.close_merged(router, 'demo:A', 'D-5504')
         except Refused as exc:
             assert 'NO-WITNESS' in exc.msg, exc.msg
         else:
             raise AssertionError('sensitive CLI review was accepted')
-    world.store.put_card(world.p('router'), 'demo:A', dict(outcome='fixture', risk_tags=[]))
-    result = world.store.close_merged(world.p('router'), 'demo:A', 'D-5504')
+    store.put_card(router, 'demo:A', dict(outcome='fixture', risk_tags=[]))
+    result = store.close_merged(router, 'demo:A', 'D-5504')
     print(json.dumps(result))
-    try: next(gen)
-    except StopIteration: pass
-"#]).arg(dir.path()).arg(&head).arg(&id).output().unwrap();
+conn.close()
+"#,
+        ])
+        .arg(dir.path())
+        .arg(&head)
+        .arg(&id)
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "{}",

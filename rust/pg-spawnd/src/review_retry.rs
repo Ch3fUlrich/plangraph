@@ -133,30 +133,16 @@ fn prepare(
         }),
         Duration::from_secs(30),
     )?;
-    let head = if crate::cli_review::eligible(leg) {
-        let head = crate::cli_review::prepare(args, &mut launch, leg)?;
-        if value["head_sha"]
+    let head = crate::prompt::prepare_launch(args, leg, &mut launch, false)?;
+    if head.is_some()
+        && value["head_sha"]
             .as_str()
             .is_some_and(|old| head.as_deref() != Some(old))
-        {
-            return Err(crate::placement::parameter(
-                "CLI review head changed between attempts",
-            ));
-        }
-        head
-    } else {
-        let mut review_args = json!(args);
-        review_args["role"] = json!("review");
-        crate::prompt::prepare_review(
-            &review_args,
-            leg,
-            &mut launch,
-            &crate::prompt::repos(),
-            crate::prompt::configured_mode("review") == "on",
-        )
-        .map_err(|e| crate::errors::ToolError::Internal(e.to_string()))?;
-        None
-    };
+    {
+        return Err(crate::placement::parameter(
+            "CLI review head changed between attempts",
+        ));
+    }
     Ok((job_id, launch, head))
 }
 

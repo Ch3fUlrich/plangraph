@@ -31,17 +31,25 @@ fn payload(reply: &Value) -> Value {
 }
 #[test]
 fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
-    run_review(false, false);
+    run_review(false, false, "on");
 }
 #[test]
 fn quota_retry_between_agy_models_keeps_stamped_cli_provenance() {
-    run_review(true, false);
+    run_review(true, false, "on");
 }
 #[test]
 fn quota_retry_from_other_transport_prepares_sonnet_cli_review() {
-    run_review(true, true);
+    run_review(true, true, "on");
 }
-fn run_review(retry: bool, sonnet: bool) {
+#[test]
+fn stamped_cli_reviews_keep_their_transport_with_inline_rollout_off_or_shadow() {
+    for mode in ["off", "shadow"] {
+        run_review(false, false, mode);
+        run_review(true, false, mode);
+        run_review(true, true, mode);
+    }
+}
+fn run_review(retry: bool, sonnet: bool, mode: &str) {
     let state = TempDir::new();
     let repo = state.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
@@ -117,7 +125,7 @@ fn run_review(retry: bool, sonnet: bool) {
         .env("PG_SPAWND_ADAPTER", &route)
         .env("PG_SPAWND_LAUNCH_CMD", &launch)
         .env("PLANGRAPH_RELIABILITY_LEG_REF", "on")
-        .env("PLANGRAPH_RELIABILITY_INLINE_REVIEW_DIFF", "on")
+        .env("PLANGRAPH_RELIABILITY_INLINE_REVIEW_DIFF", mode)
         .spawn()
         .unwrap();
     let _guard = ChildGuard { child };
@@ -171,6 +179,7 @@ fn run_review(retry: bool, sonnet: bool) {
     )
     .unwrap();
     assert!(prompt.contains("Read-only repository review of HEAD"));
+    assert!(!prompt.contains("<!-- PLANGRAPH INLINE DIFF BEGIN -->"));
     if sonnet {
         assert!(!prompt.contains("INLINE_REVIEW_DIFF"));
     }

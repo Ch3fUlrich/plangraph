@@ -716,6 +716,9 @@ command tools stay unapproved; native CLI reviews use the checkout rather than o
 stamp, binds head_sha, and records verdict/findings plus cli_reported provenance.
 For agy this is the CLI-selected model, not authenticated provider telemetry; Claude must report a single Sonnet model in its stream.
 Repository HEAD and tracked cleanliness are rechecked at completion. Failed/quota streams never count.
+When diagnosing CLI review test failures after testing another worktree in the same Cargo target, verify the executable belongs to the intended revision. Integration tests launch Cargo's `CARGO_BIN_EXE_pg-spawnd` path; a stale main server there can reject branch-only CLI kinds or interpret their checkout diff_ref as an inline reference. A controlled main/branch comparison reproduced this, including Cargo reusing main's smaller unit-test inventory. Clear the affected package artifacts in a private diagnostic target before attributing this result to a merge; keep configured host shared-cache paths intact.
+The Rust keeper integration test uses production keeper modules with stdlib setup; those direct Python inputs are listed in `tools/ci_select.py` so their changes select Rust CI.
+Initial launches and quota fallthrough share one Rust review-preparation entry point: choose the transport before interpreting diff_ref. CLI checkout refs never enter the registry-rooted inline SHA validator; inline-only legs retain its strict validation.
 Quota fallthrough prepares each native CLI retry against the same stamped HEAD; keeper counts the final serving attempt after quota refusals, preserving cli_reported trust for Sonnet.
 Native CLI reviews use card.cwd (or the legacy diff_ref.repo checkout), falling
 back to the daemon checkout only when neither is supplied. Symbolic diff heads
