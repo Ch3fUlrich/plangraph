@@ -21,8 +21,9 @@ Preflight clears every name reported by
 `git rev-parse --local-env-vars`, all `GIT_CONFIG*` variables, `GIT_PREFIX`, `GIT_NAMESPACE`,
 `GIT_CEILING_DIRECTORIES` and `GIT_DISCOVERY_ACROSS_FILESYSTEM`
 before starting the selector. The selector repeats this before pytest, and the
-pytest session clears inherited bindings and disables global/system Git config
-before collection and test fixtures.
+pytest conftest clears inherited bindings and disables global/system Git config
+before initial nested conftests load, then repeats the guard at session start and
+before test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
 Rust source changes always select `tests/test_spawner_import_guard.py` in affected

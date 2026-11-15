@@ -20,6 +20,12 @@ import threading
 from contextlib import contextmanager
 import pytest
 from pathlib import Path
+from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
+    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
+
+# Initial nested conftests load before sessionstart and may invoke Git at import.
+_clear_inherited_git_environment()
+
 from pgtest_shm import _sweep_dead_pgtest_dirs
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
@@ -90,8 +96,6 @@ def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
     with thread_scope(request):
         yield
 
-from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
-    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
 @pytest.fixture(scope="session", autouse=True)
 def no_leaked_keeper_fixture_threads(request):
     import _keeper_threads as guard
