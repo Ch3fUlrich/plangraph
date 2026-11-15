@@ -253,6 +253,11 @@ Remotes are public unless `git config remote.<name>.plangraph-private true` is s
 that skips private-word matching, not public patterns. Classification uses local config only.
 Diagnostics never show matched values or the words-file path.
 
+For an existing branch refreshed by merging known `origin/main` history, the hook
+selects affected tests from the merge-base with `origin/main` when that base
+descends from the remote branch head. Public scrub still covers the original
+pushed range, passed separately to preflight as `--scrub-base`.
+
 ## Shadow merge decision (D-5252, slice 1)
 
 `python3 tools/merge_gate.py facts.json` prints `GO <sha>` (exit 0) or
