@@ -10,6 +10,9 @@ gates retain their existing behavior. Whole-tree CI size checks are unchanged.
 Rust regression: push_tool_and_baseline_change_passes_but_oversize_and_scrub_fail
 failed before the fix on the removed baseline row. It also exercises dirty disk
 contents, attempted candidate exemptions, baseline growth and the public scrub.
+Repository review also caught lossy filename decoding in changed-path matching;
+the checker now preserves raw Git filename bytes, with a failing-then-passing
+Rust regression for non-UTF-8 and carriage-return filenames.
 
 Open: the analogous language-policy checker/allowlist-directory migration needs
 its own compatibility rule. This change does not execute candidate gate code.

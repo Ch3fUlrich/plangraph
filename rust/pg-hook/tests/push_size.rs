@@ -138,3 +138,37 @@ fn push_tool_and_baseline_change_passes_but_oversize_and_scrub_fail() {
         "{out:?}"
     );
 }
+
+#[test]
+fn push_size_preserves_non_utf8_and_carriage_return_paths() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    git(root, &["init", "-q", "-b", "main"]);
+    fs::write(root.join("seed.rs"), "// baseline\n").unwrap();
+    let base = commit(root);
+    git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+    for name in [b"oversize-\xff.rs".as_slice(), b"oversize-\r.rs".as_slice()] {
+        fs::write(
+            root.join(OsString::from_vec(name.to_vec())),
+            "// line\n".repeat(801),
+        )
+        .unwrap();
+    }
+    let head = commit(root);
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for push_mode in [false, true] {
+        let mut command = common::python(&source.join("tools/check_file_size.py"));
+        isolated(&mut command, root);
+        command.args(["--head", &head]);
+        if push_mode {
+            command.args(["--push-base", &base]);
+        }
+        let out = command.output().unwrap();
+        assert_eq!(out.status.code(), Some(1), "push mode {push_mode}: {out:?}");
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("2 violation(s)"),
+            "push mode {push_mode}: {out:?}"
+        );
+    }
+}

@@ -211,6 +211,8 @@ the same range in `FILESIZE_PUSH_BASE`, restricted to policy subprocesses;
 scrub and changelog gates are unchanged. CI and direct local checks still scan
 the whole tree. After merging hook changes, update the shared hooks checkout
 to main so pushes use the merged checker and hook.
+Changed-path matching preserves Git filename bytes, including non-UTF-8 names
+and carriage returns, so those files retain the same size limits.
 
 New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for

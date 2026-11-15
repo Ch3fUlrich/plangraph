@@ -106,3 +106,5 @@ It pins checker/baseline changes in one commit, new-branch pushes, committed
 rather than dirty content, non-HEAD refs, main's baseline/exemptions and scrub
 refusals. This is regression coverage for the existing hook, not a hook port.
 Its preflight and size-configuration inputs select Rust CI alongside the hook.
+The companion filename regression pins non-UTF-8 and carriage-return paths,
+which must be refused at the same size boundary in whole-tree and push modes.

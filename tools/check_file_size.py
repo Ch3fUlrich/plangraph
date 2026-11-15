@@ -343,11 +343,14 @@ def main(argv=None):
         counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
     measured, binaries = measure(root, allowed, args.head)
     if args.push_base:
-        changed = git(root, "diff", "--no-renames", "--name-only", "-z",
-                      args.push_base, args.head, "--")
+        # Match measure()'s byte-preserving path decoding: text-mode Git
+        # output replaces invalid UTF-8 and translates carriage returns.
+        changed = subprocess.run(
+            ["git", "-C", str(root), "diff", "--no-renames", "--name-only", "-z",
+             args.push_base, args.head, "--"], capture_output=True)
         if changed.returncode:
             raise SystemExit("check-file-size: cannot read pushed changes")
-        paths = set(changed.stdout.split("\0"))
+        paths = {os.fsdecode(path) for path in changed.stdout.split(b"\0") if path}
         measured = {path: count for path, count in measured.items() if path in paths}
     required = os.environ.get(REQUIRE_BASE_ENV, "")
     if required:
