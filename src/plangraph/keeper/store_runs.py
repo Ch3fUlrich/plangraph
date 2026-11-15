@@ -279,7 +279,7 @@ class RunsMixin:
         """Give every merged head an accepted GO row of this item (one document read).
 
         Per head the first accepted row in sorted id order wins unless it is
-        undated and a later accepted row carries a date: the seat waiver
+        undated and a later accepted row (a larger id) carries a date: the seat waiver
         compares that date with its cutoff, and an old undated row can never
         be edited into a dated one.
         """
@@ -298,7 +298,8 @@ class RunsMixin:
             if other_head not in proofs or dated.get(other_head):
                 continue
             row_dated = self._go_row_dated(decisions, did)
-            if "decision_id" not in proofs[other_head] or row_dated:
+            held = proofs[other_head].get("decision_id")
+            if held is None or (row_dated and did > held):
                 proofs[other_head]["decision_id"] = did
                 dated[other_head] = row_dated
 

@@ -247,3 +247,10 @@ def test_client_timeout_without_a_commit_exits_non_zero(capsys):
     from plangraph.keeper.cli_output_verbs import cmd_close_merged
     assert cmd_close_merged(close_args(), FakeSession("in_review")) == 3
     assert "keeper unreachable" in capsys.readouterr().err
+
+
+def test_a_go_row_that_sorts_before_the_supplied_id_never_replaces_it(unseated_w, monkeypatch):
+    result = two_head_close(unseated_w, monkeypatch, [go_row("D-4000", HEAD), go_row("D-9001", "f" * 40)])
+    assert result["state"] == "done"
+    prs = unseated_w.store._evidence("demo:H")[-1]["ref"]["prs"]
+    assert {p["head"]: p["decision_id"] for p in prs}[HEAD] == "D-5504"
