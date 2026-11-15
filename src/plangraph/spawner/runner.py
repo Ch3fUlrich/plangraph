@@ -34,7 +34,7 @@ from plangraph.spawner.clients import (
 from plangraph.spawner.claude_env import claude_child_env
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
-from plangraph.spawner.mimo_policy import check_mimo_path
+from plangraph.spawner.mimo_policy import is_mimo_id
 from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
 from plangraph.routing_support import background_process_options
@@ -135,6 +135,9 @@ class JobInfo:
 
     def to_dict(self) -> dict[str, Any]:
         return mismatch_flag(asdict(self))
+
+
+_REVIEW_OPENCODE_ENV_ALLOW += ('OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX',)
 
 
 def _opencode_tools_denied(config_json, env) -> bool:
@@ -273,7 +276,7 @@ class SpawnerRunner:
                     raise ValueError
             except ValueError:
                 raise ValueError('invalid run timeout: PLANGRAPH_SPAWN_RUN_TIMEOUT') from None
-        job_id = f"job-{uuid.uuid4().hex[:8]}"
+        job_id = f"job-{uuid.uuid4().hex}"
         work_dir = cwd or self.default_cwd
 
         import secrets
@@ -365,7 +368,8 @@ class SpawnerRunner:
                 os.mkdir(xdg_config, 0o700)
                 child_env['XDG_CONFIG_HOME'] = xdg_config
                 for name in [n for n in child_env
-                             if str(n).startswith('OPENCODE_') and n not in _REVIEW_OPENCODE_ENV_ALLOW]:
+                             if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
+                                 or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
                     del child_env[name]
                 # D-2905 (1): deny every tool for the review seat, then record
                 # the spawner's own check of the FINAL env value.
@@ -378,9 +382,15 @@ class SpawnerRunner:
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
+            if render_reason is None and (is_mimo_id(model_or_combo) or role == 'review' and reasoning_cap):
                 from .opencode_answer import cap_reasoning
-                if reasoning_cap and not cap_reasoning(child_env, model_or_combo):
-                    render_reason = 'reasoning_output_limit: no supported reasoning cap'
+                from plangraph.routing_errors import SpawnRefused
+                try:
+                    if not cap_reasoning(child_env, model_or_combo, refuse=True, thinking_off=role == 'review' and reasoning_cap):
+                        render_reason = 'reasoning_output_limit: reasoning_already_disabled'
+                except SpawnRefused as exc:
+                    render_reason = str(exc)
+            if role == 'review':
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
             # Response-side gateway evidence applies to writers as well as reviews.
@@ -892,11 +902,11 @@ def spawn_service(*args, **kwargs):
                         continue
                     try:
                         no_keeper_item = (recipient == 'keeper' and isinstance(sink, KeeperSink)
-                                          and sink.url and sink.token_file and not record['completion'].get('item'))
+                                          and not record['completion'].get('item'))
                         if not no_keeper_item:
                             sink.deliver(recipient, record['completion'])
                         from .private_io import atomic_write_private
-                        atomic_write_private(marker, 'delivered\n')
+                        atomic_write_private(marker, 'not-applicable: no item\n' if no_keeper_item else 'delivered\n')
                     except KeeperNotConfigured:
                         global _keeper_unconfigured_last_warned
                         now = time.monotonic()

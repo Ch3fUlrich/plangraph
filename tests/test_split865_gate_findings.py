@@ -71,6 +71,15 @@ def test_standalone_crate_is_checked(rust_selection):
     assert select('rust/worker/src/lib.rs') == standalone_checks(rust / 'worker/Cargo.toml')
 
 
+def test_excluded_worker_is_checked_by_own_manifest(rust_selection):
+    rust, select = rust_selection
+    manifest = rust / 'worker/Cargo.toml'
+    manifest.write_text(manifest.read_text().replace('[workspace]\n', ''))
+    (rust / 'Cargo.toml').write_text(
+        '[workspace]\nmembers = ["one"]\nexclude = ["worker"]\n')
+    assert select('rust/worker/src/lib.rs') == standalone_checks(manifest)
+
+
 @pytest.mark.parametrize('section', ['dependencies', 'dev-dependencies', 'build-dependencies',
                                       "target.'cfg(unix)'.dependencies"])
 def test_standalone_path_dependents_are_checked(rust_selection, section):

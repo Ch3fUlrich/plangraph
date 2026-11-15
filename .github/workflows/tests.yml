@@ -470,7 +470,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: (command -v protoc >/dev/null && test -f /usr/include/google/protobuf/field_mask.proto) || (sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y protobuf-compiler libprotobuf-dev)
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
@@ -503,7 +503,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install protobuf compiler
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: (command -v protoc >/dev/null && test -f /usr/include/google/protobuf/field_mask.proto) || (sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y protobuf-compiler libprotobuf-dev)
       - uses: ./.github/actions/setup-rust
       - uses: actions/cache@v4
         with:

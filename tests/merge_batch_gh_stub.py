@@ -136,7 +136,7 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
             key, value = field.split("=", 1)
             pr[key] = open(value[1:]).read() if value.startswith("@") else value
     save()
-    print("{}")
+    print(S.get("label_response", json.dumps(pr["labels"])) if method == "POST" else "{}")
 elif cmd == ["label", "create"]:
     if S.get("label_fail"):
         die("HTTP 403: Resource not accessible")

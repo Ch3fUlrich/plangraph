@@ -94,6 +94,23 @@ def test_ttl_stale_expiration_recovery():
     assert len(h.calls) == 5
 
 
+@pytest.mark.parametrize('status', [401, 403])
+def test_auth_refused_never_uses_stale_health(status):
+    from plangraph.routing_support.omniroute_state import OmniRouteAuthRefused
+    h = Harness(payload(row()), (status, 'sensitive-body'), RuntimeError(), payload(row()),
+                principal='reviewer')
+    h.reader.snapshot()
+    h.now = 10
+    with pytest.raises(OmniRouteAuthRefused, match='auth_refused') as error:
+        h.reader.snapshot()
+    assert 'synthetic' not in str(error.value)
+    assert 'sensitive-body' not in str(error.value)
+    with pytest.raises(OmniRouteUnreachable, match='transport_error'):
+        h.reader.snapshot()
+    assert not h.reader.snapshot()['p'].stale
+    assert len(h.calls) == 4
+
+
 @pytest.mark.parametrize("ttl", [0, -1, float("inf"), float("nan"), "bad"])
 def test_invalid_ttl(ttl):
     with pytest.raises(ValueError):

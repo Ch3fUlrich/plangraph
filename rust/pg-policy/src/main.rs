@@ -1,4 +1,6 @@
 //! New-code language policy. All authority is read from committed revisions.
+mod test_sources;
+
 use regex::Regex;
 use std::{collections::HashMap, env, path::Path, process::Command};
 
@@ -127,6 +129,10 @@ fn entries(text: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 fn run() -> Result<Vec<String>, String> {
+    if env::args().nth(1).as_deref() == Some("--test-sources") {
+        let root = env::args().nth(2).unwrap_or_else(|| ".".into());
+        return test_sources::check(Path::new(&root));
+    }
     let mut base = env::var("NEWCODE_BASE").unwrap_or_else(|_| "origin/main".into());
     let mut head = String::from("HEAD");
     let mut args = env::args().skip(1);

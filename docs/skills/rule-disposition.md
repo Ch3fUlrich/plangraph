@@ -112,3 +112,10 @@ later slice before its enforcement cell can name a `path::test_name`:
 - R-worker-06: needs a named test that leaf roles never spawn.
 - R-worker-07: needs a named test forbidding local shellcheck of run-tests.sh.
 - R-worker-09: needs a named test forbidding activate_project from a worktree.
+
+## Detached watcher recovery
+
+D-6054: wait continuations use transient user services and durable job results.
+Enforcement: `rust/plangraph-cli/src/watchers.rs::tests::watcher_service_is_detached_and_executes_durable_runner`
+and `rust/plangraph-cli/tests/watchers.rs::resume_digest_keeps_pending_and_completed_watcher_outcomes`.
+Protocol and startup recovery: `skills/plangraph-spawn/SKILL.md`.
