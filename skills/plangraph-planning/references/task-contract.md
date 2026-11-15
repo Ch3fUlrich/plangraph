@@ -1,6 +1,8 @@
 # Task contract (brief template)
 
-The phase agent hands each implementer exactly this; nothing else is assumed.
+Render the fixed prefix from `src/plangraph/review/writer_brief.md` first, then
+the item-specific fields below. Reviewers use `review_brief.md` with every context
+field filled, followed by the diff and lens. Stable rules precede item data for prompt cache reuse.
 
 ```
 TASK <id> | phase <phase-id> | layer 3 | role implementer

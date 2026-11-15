@@ -23,7 +23,7 @@ fn save(state: &Path, host: &str, base: Value, status: Status) -> Result<Value, 
     .map(|record| record.to_value())
     .map_err(|_| ToolError::Internal("could not save run record".into()))
 }
-fn validate(args: &Args) -> Result<(), ToolError> {
+pub(crate) fn validate(args: &Args) -> Result<(), ToolError> {
     crate::leg_ref::check_review_role(args)?;
     if !args.contains_key("prompt") {
         return Err(ToolError::Key("prompt".into()));
@@ -124,6 +124,12 @@ pub(crate) fn spawn(
     host: &str,
     runs: &crate::runs::Runs,
 ) -> Result<Value, ToolError> {
+    if args
+        .get("card")
+        .is_some_and(|card| card["run_kind"] == "native-codex")
+    {
+        return placement::native_spawn(state, args);
+    }
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     let admitted = crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)
         .and_then(|a| validate(&a).map(|()| a));

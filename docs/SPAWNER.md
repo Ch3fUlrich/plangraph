@@ -136,7 +136,7 @@ bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
 and no publish/push is attempted. Changed tracked files use the Python CI gate's
 800-line rule (D-5840), exemptions, binary detection, splitlines counting and baseline
 ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
-The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI fragment/skip-trailer rule. It rejects each non-release `CHANGELOG.md` edit, including merge resolutions that lose inherited additions or invent lines (ordinary merges preserving parent edits pass); only a nonempty `Release:` final-paragraph trailer permits that commit to edit the ledger. Failures return `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require fragments or skip reasons, but the release restriction still applies.
 The S1c Rust docs-map gate reads `.docs-map` from the committed head and compares changed paths over `merge-base(base, head)..head`. Each matching rule needs at least one mapped doc in that range; failures return `HOLD gate docs-map:` with unmatched `source -> doc` pairs before export/content gates or publication. Missing maps pass; malformed rules/dates hold. `# enforce-after:` begins enforcement inclusively on that local calendar date (earlier missing-doc matches do not hold); entries have no expiry syntax. CI retains its stricter union of merge-base and head policies, so removing head rules cannot disable CI enforcement. Shared JSON cases exercise Rust/Python parsing and glob parity.
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
@@ -249,7 +249,7 @@ Explicit cwd takes precedence over `diff_ref.repo` for placement; explicit-cwd r
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
 the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
-`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg.
+`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
 Review/seat routes record each failed, limited or not-served attempt with its reason
 and try the next leg in the same run, failing only after route exhaustion. Ordinary
 failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; only
@@ -674,7 +674,6 @@ OOM wrapper lines are recognized by their known event shape, including `wrapper:
 See [admission contracts](operations/spawner-admission-contracts.md) for split admission and cleanup details.
 
 Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.
-Checkpoint 4: Fresh bases and registry guard is included in this checkpoint.
 
 Stale-base waivers require PLANGRAPH_BASE_DECISIONS_FILE configured by the operator. Admission fetches its origin/main, requires one decision row whose DECISION cell contains Source: operator, Waives: spawn-base:<checked-base-sha> and Origin: <fetched-origin-sha>, and refuses missing, duplicate, unreadable or mismatched proof. A card D-id alone never waives lag or failed fetches. Refused-worktree cleanup requires matching created_by_run_id and never removes continuations or admitted workers.
 
@@ -693,7 +692,6 @@ Continuation evidence remains protected from automatic removal.
 Launch-admission refusals apply the same safe branch cleanup to owned new
 attempts, so a named lane can retry after origin advances during creation.
 
-
 Spawner startup checkout identity reads decode Git output explicitly as UTF-8 with replacement for invalid bytes, matching the other spawner subprocess reads.
 
 Gemini Flash retirement (operator 2026-11-14): all versions and effort variants
@@ -703,15 +701,18 @@ older databases. D-5903 enables Hydrogen high for implement after Sol and medium
 Both inherit the agy Claude capability bounds and remain unwitnessed: AGY emits no served-model telemetry.
 Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
-
-Checkpoint 8: MCP source guard snapshots the derived transitive import closure, including function-level imports; lazy modules execute startup source after checkout updates while optional platform dependencies stay lazy. Non-object launch arguments return Invalid params on fresh servers and SourceChanged on stale servers.
-See [parallel CI isolation](ci-parallel.md) for test pipes and Temporal servers.
-Checkpoint 9: Worker core crate is included in this checkpoint.
-Checkpoint 6: Terminal events and run tree is included in this checkpoint.
-Checkpoint 3: Run watchdog and stall detection is included in this checkpoint.
+Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md).
 
 Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
 
 Every emitted context pack includes this rule within its size cap: new code is Rust with Rust
 tests; no new Python or shell file; an allowlist line needs an operator D-id.
 The planner brief template carries the same rule (D-5912).
+
+Seat-pool cleanup tests create their initial commit with Git plumbing in an
+isolated fixture environment, without signing, hooks, index updates or automatic
+maintenance. Fixture Git failures retain stderr; Windows fixture subprocesses
+use CREATE_NO_WINDOW. The cache-survival assertion also runs in a 50-iteration
+stress test. Windows CI and recorded reruns provide platform evidence.
+
+[Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.

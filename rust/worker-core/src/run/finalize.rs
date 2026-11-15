@@ -3,7 +3,7 @@ use super::{
     capture::Capture,
     group::StopOutcome,
     record::{RunRecord, Status},
-    supervise::FinishHook,
+    supervise::{FinishHook, RunSpec},
 };
 use serde_json::json;
 use std::{
@@ -57,12 +57,30 @@ pub fn finish(
     cancelled: bool,
     stop: StopOutcome,
     capture: Option<&Capture>,
-) {
+) -> Option<RunSpec> {
     if let Some(c) = capture {
         output(record, c, true);
     }
     let mut code = code;
-    let status = match stop {
+    if !cancelled
+        && matches!(stop, StopOutcome::Empty)
+        && record.get("role").and_then(|v| v.as_str()) == Some("review")
+    {
+        if let Some(reason) = super::review_quota::reason(
+            record
+                .get("stdout_tail")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+            record
+                .get("stderr_tail")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        ) {
+            record.set("reason", json!(reason));
+            code = 7;
+        }
+    }
+    let mut status = match stop {
         StopOutcome::Survivors(mut pids) => {
             pids.sort_unstable();
             if code == 0 {
@@ -80,7 +98,7 @@ pub fn finish(
         }
         StopOutcome::Empty if code == 0 => Status::Completed,
         _ => {
-            if record.get("reason").is_none() {
+            if record.get("reason").is_none_or(serde_json::Value::is_null) {
                 let text = strip_ansi(
                     record
                         .get("stderr_tail")
@@ -108,9 +126,25 @@ pub fn finish(
     };
     record.set("exit_code", json!(code));
     if let Some(h) = hook.take() {
-        if catch_unwind(AssertUnwindSafe(|| h(record, status))).is_err() {
-            let _ = record.push_event(json!({"event":"finish_hook_failed"}));
+        match catch_unwind(AssertUnwindSafe(|| h(record, status))) {
+            Ok(Some(next))
+                if !cancelled
+                    && record.get("survivors").is_none()
+                    && !record.path().with_file_name("cancelled").exists() =>
+            {
+                record.set("exit_code", serde_json::Value::Null);
+                return Some(next);
+            }
+            Err(_) => {
+                let _ = record.push_event(json!({"event":"finish_hook_failed"}));
+            }
+            _ => {}
         }
+    }
+    if record.get("survivors").is_none() && record.path().with_file_name("cancelled").exists() {
+        status = Status::Cancelled;
+        record.set("reason", json!("cancelled"));
+        record.set("exit_code", json!(1));
     }
     let _ = record.transition(status, now());
     for attempt in 0..3 {
@@ -121,4 +155,5 @@ pub fn finish(
             thread::sleep(Duration::from_millis(100));
         }
     }
+    None
 }

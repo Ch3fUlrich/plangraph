@@ -141,3 +141,81 @@ pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
     argv.push("--json".into());
     run(state, argv, Duration::from_secs_f64(timeout), true)
 }
+
+/// Native cards share Python's existing RAM/SSH admission, then one Rust lifecycle.
+pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError> {
+    crate::spawn::validate(args)?;
+    if !args["card"]
+        .get("repo")
+        .and_then(Value::as_str)
+        .is_some_and(|repo| !repo.trim().is_empty() && Path::new(repo).is_absolute())
+    {
+        return Err(parameter("native-codex requires an absolute card.repo"));
+    }
+    if args.get("dry_run") == Some(&Value::Bool(true)) {
+        return Err(parameter("native-codex dry_run is not supported"));
+    }
+    if args.get("cwd").is_some_and(|v| !v.is_null())
+        || args["card"].get("cwd").is_some()
+        || args.get("run_worktree") == Some(&Value::Bool(true))
+    {
+        return Err(parameter("native-codex owns its worktree; use card.repo"));
+    }
+    if args.get("role").is_some_and(|role| role != "implement") {
+        return Err(parameter("native-codex requires implement role"));
+    }
+    let prompt = args
+        .get("prompt")
+        .and_then(Value::as_str)
+        .ok_or_else(|| parameter("prompt must be a string"))?;
+    let mut argv = route_args(args)?;
+    argv[0] = "spawn".into();
+    argv.extend(["--".into(), prompt.into()]);
+    if let Some(wait) = args.get("wait_seconds") {
+        if !wait.as_f64().is_some_and(|n| n >= 0.0) {
+            return Err(parameter("wait_seconds must be a number >= 0"));
+        }
+        // The adapter only waits for base admission; callers poll the durable record.
+    }
+    native_call(state, &argv, Duration::from_secs(200))
+}
+fn native_call(state: &Path, argv: &[String], timeout: Duration) -> Result<Value, ToolError> {
+    let (code, bytes, line) = Adapter(state).run(argv, timeout)?;
+    serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .filter(|record| record["run_id"].is_string())
+        .ok_or_else(|| match code {
+            2 | 3 => ToolError::Refused {
+                kind: if code == 2 {
+                    RefusalKind::Spawn
+                } else {
+                    RefusalKind::Benchmark
+                },
+                message: if line.is_empty() {
+                    "spawn refused".into()
+                } else {
+                    line
+                },
+                legs: vec![],
+            },
+            1 => ToolError::Value(line),
+            _ => ToolError::Internal(format!("native operation returned no run record: {line}")),
+        })
+}
+/// The Python owner already handles target-host refresh and proven cancellation.
+pub(crate) fn native_control(state: &Path, record: &Value, verb: &str) -> Result<Value, ToolError> {
+    if !["result", "cancel"].contains(&verb) {
+        return Err(parameter("invalid native control verb"));
+    }
+    let id = record["run_id"]
+        .as_str()
+        .filter(|id| pg_worker_core::run::record::valid_run_id(id))
+        .ok_or_else(|| parameter("invalid native run id"))?;
+    let result = native_call(state, &[verb.into(), id.into()], Duration::from_secs(30))?;
+    if result["run_id"] != id || result["run_kind"] != "native-codex" {
+        return Err(ToolError::Internal(
+            "native owner returned a different run".into(),
+        ));
+    }
+    Ok(result)
+}

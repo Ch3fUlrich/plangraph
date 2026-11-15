@@ -54,6 +54,8 @@ def test_local_selection_keeps_changed_tests_and_reverse_consumers(tmp_path, bro
              'tests/test_written.py': 'def test_written(): pass\n',
              'tests/test_contract.py': repr(broad) + '\n',
              'tests/test_unrelated.py': 'def test_unrelated(): pass\n'}
+    if broad.endswith('.py'):
+        files[broad] = ''  # Existing suite controls; deletions use the base graph.
     for name, text in files.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -69,6 +71,7 @@ def test_local_selection_keeps_changed_tests_and_reverse_consumers(tmp_path, bro
 def test_local_shared_controls_keep_all_named_consumers(tmp_path):
     directory = tmp_path / 'tests'
     directory.mkdir()
+    (directory / 'conftest.py').write_text('')
     for index in range(30):
         (directory / f'test_ref_{index:02}.py').write_text('"tests/conftest.py"\n')
     (directory / 'test_written.py').write_text('def test_written(): pass\n')

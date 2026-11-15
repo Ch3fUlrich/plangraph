@@ -19,7 +19,11 @@ class RefusalGate:
 
     def candidate(self, text, now):
         if not self.refused.is_set():
-            self.pending = (text, now)
+            if getattr(self.job, 'role', None) == 'review':
+                self.job.refusal = self.scrub(text)
+                self.refused.set()  # reviews never wait for quiet or a provider reset
+            else:
+                self.pending = (text, now)
 
     def scan_late(self, lines, now):   # REMOVE-AT-R10 (D-3769)
         """An upstream limit line in this output chunk arms the late booking; a later chunk without one disarms it."""

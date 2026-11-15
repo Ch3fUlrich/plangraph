@@ -3,13 +3,17 @@
 import argparse
 import ast
 import json
+import io
 import importlib.util
 import os
+import re
 from pathlib import Path
 import subprocess
 import shutil
+import shlex
 import sys
 import time
+import tarfile
 
 
 def revision_asset(root, path, cache=None):
@@ -92,31 +96,46 @@ def local_control_tests(texts, path):
     return selected
 
 
-def select_tests(root, changed, within=None, *, files_only=False, local=False):
-    root = Path(root)
-    paths = sorted(p for folder in ("src", "tests") for p in (root / folder).rglob("*.py"))
+def dependency_graph(texts):
+    """Reverse imports plus static module launches and tool-script consumers."""
     modules = {}
-    for p in paths:
-        rel = p.relative_to(root)
-        parts = list(rel.with_suffix("").parts)
+    tool_aliases = {}
+    for rel in texts:
+        p = Path(rel)
+        if p.suffix != ".py":
+            continue
+        parts = list(p.with_suffix("").parts)
         if parts[0] == "src":
             parts.pop(0)
         if parts[-1] == "__init__":
             parts.pop()
-        modules[".".join(parts)] = rel.as_posix()
-        if rel.parts[0] == "tests":
-            modules.setdefault(p.stem, rel.as_posix())
+        modules[".".join(parts)] = rel
+        if p.parts[0] == "tests":
+            modules.setdefault(p.stem, rel)
+        elif p.parts[0] == "tools":
+            # Executable tools add their own directory to sys.path. A bare
+            # import may name several tools; retaining all candidates is safe.
+            tool_aliases.setdefault(p.stem, set()).add(rel)
     reverse = {}
-    texts = {}
-    try:
-        for p in paths:
-            rel = p.relative_to(root).as_posix()
-            texts[rel] = p.read_text(encoding="utf-8")
-            tree = ast.parse(texts[rel])
+    tool_paths = [rel for rel in texts if rel.startswith("tools/")]
+    for rel, text in texts.items():
+        names = []
+        launches = []
+        if rel.endswith(".py"):
+            tree = ast.parse(text)
             module = next(k for k, v in modules.items() if v == rel)
-            package = module if p.name == "__init__.py" else module.rpartition(".")[0]
-            names = []
+            package = module if Path(rel).name == "__init__.py" else module.rpartition(".")[0]
+            strings = []
+            tool_commands = []
             for node in ast.walk(tree):
+                if isinstance(node, ast.Call) and (
+                        getattr(node.func, "attr", None) or getattr(node.func, "id", None)) in {
+                            "run", "Popen", "call", "check_output", "check_call", "run_path"}:
+                    arguments = node.args[:1] + [kw.value for kw in node.keywords
+                                                 if kw.arg in {"args", "path_name"}]
+                    for argument in arguments:
+                        tool_commands.extend(child.value for child in ast.walk(argument)
+                                             if isinstance(child, ast.Constant) and isinstance(child.value, str))
                 if isinstance(node, ast.Import):
                     names.extend(a.name for a in node.names)
                 elif isinstance(node, ast.ImportFrom):
@@ -126,18 +145,117 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False):
                         prefix = ".".join(parent[:len(parent) - node.level + 1] + ([prefix] if prefix else []))
                     names.append(prefix)
                     names.extend(prefix + "." + a.name for a in node.names)
-            for name in names:
-                # Importing a child also executes package __init__ modules.
-                for end in range(1, len(name.split(".")) + 1):
-                    dep = modules.get(".".join(name.split(".")[:end]))
-                    if dep:
-                        reverse.setdefault(dep, set()).add(rel)
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    strings.append(node.value)
+            # Literal argv entries, runpy module names, and shell command strings.
+            launches.extend(value for value in strings
+                            if value in modules or value + ".__main__" in modules)
+            command_text = "\n".join(strings)
+        else:
+            # Shell scripts may contain Python heredocs as well as -m commands.
+            command_text = text
+            # Shell expansion/operators can make a literal Python body
+            # unparsable before execution. Keep its statically named imports
+            # conservatively, even inside quotes or command substitution.
+            names.extend(re.findall(r"\bfrom\s+([\w.]+)\s+import\b", text))
+            for prefix, imported in re.findall(
+                    r"\b(?:from\s+([\w.]+)\s+)?import\s+\(?\s*"
+                    r"([\w.*]+(?:\s+as\s+\w+)?(?:\s*,\s*[\w.*]+(?:\s+as\s+\w+)?)*)", text):
+                names.extend((prefix + "." if prefix else "") + alias.split()[0]
+                             for alias in imported.split(","))
+            snippets = re.findall(r"^\s*(?:from\s+[\w.]+\s+import|import)\s+[^\n]+", text, re.M)
+            # Parse complete heredocs so parenthesized and continued imports
+            # retain their child modules. Non-Python heredocs are ignored.
+            snippets.extend(match.group(3) for match in re.finditer(
+                r"<<-?[ \t]*(['\"]?)([A-Za-z_]\w*)\1[^\n]*\n(.*?)^[ \t]*\2[ \t]*$",
+                text, re.M | re.S))
+            commands, scanned = [text], set()
+            while commands:
+                command = commands.pop()
+                if command in scanned:
+                    continue
+                scanned.add(command)
+                try:
+                    words = shlex.split(command, comments=True)
+                except ValueError:
+                    # Heredoc prose may have shell-unbalanced quotes; valid
+                    # same-line commands elsewhere still carry dependencies.
+                    commands.extend(command.splitlines() if "\n" in command else [])
+                    continue
+                for index, word in enumerate(words):
+                    body = (words[index + 1] if word == "-c" and index + 1 < len(words)
+                            else word[2:] if word.startswith("-c") and len(word) > 2 else "")
+                    if body:
+                        snippets.append(body)
+                        if "-c" in body:
+                            commands.append(body)  # Literal nested shell command.
+            for snippet in snippets:
+                try:
+                    statements = ast.walk(ast.parse(snippet.strip()))
+                except SyntaxError:
+                    continue
+                for statement in statements:
+                    if isinstance(statement, ast.ImportFrom):
+                        prefix = statement.module or ""
+                        names.append(prefix)
+                        names.extend(prefix + "." + alias.name for alias in statement.names)
+                    elif isinstance(statement, ast.Import):
+                        names.extend(alias.name for alias in statement.names)
+        launches.extend(re.findall(r"(?<!\w)-m\s+['\"]?([\w.]+)", command_text))
+        names.extend(launches)
+        names.extend(name + ".__main__" for name in launches if name + ".__main__" in modules)
+        for name in names:
+            # Importing or launching a child also executes package __init__ modules.
+            for end in range(1, len(name.split(".")) + 1):
+                prefix = ".".join(name.split(".")[:end])
+                deps = set(tool_aliases.get(prefix, ()))
+                if prefix in modules:
+                    deps.add(modules[prefix])
+                for dep in deps:
+                    reverse.setdefault(dep, set()).add(rel)
+        for script in tool_paths:
+            # Production prose may recommend a Python tool without executing it.
+            references = ("\n".join(tool_commands) if script.endswith(".py")
+                          and rel.endswith(".py") and not rel.startswith("tests/") else text)
+            if script in references or Path(script).name in references:
+                reverse.setdefault(script, set()).add(rel)
+    return reverse
+
+
+def base_dependency_graph(root, base, head):
+    """Read the comparison's merge base without restoring deleted checkout files."""
+    revision = subprocess.check_output(
+        ["git", "merge-base", base, head or "HEAD"], cwd=root,
+        stderr=subprocess.DEVNULL, text=True, timeout=30).strip()
+    archive = subprocess.check_output(["git", "archive", revision], cwd=root,
+                                      stderr=subprocess.DEVNULL, timeout=30)
+    texts = {}
+    with tarfile.open(fileobj=io.BytesIO(archive)) as tree:
+        for entry in tree:
+            p = Path(entry.name)
+            if entry.isfile() and p.parts[0] in {"src", "tests", "tools"} and (
+                    p.suffix == ".py" or p.parts[0] == "tools" and p.suffix == ".sh"):
+                texts[entry.name] = tree.extractfile(entry).read().decode("utf-8")
+    return dependency_graph(texts)
+
+
+def select_tests(root, changed, within=None, *, files_only=False, local=False,
+                 base="HEAD", head=None):
+    root = Path(root)
+    texts = {}
+    try:
+        for folder in ("src", "tests", "tools"):
+            for p in sorted((root / folder).rglob("*")):
+                if p.is_file() and (p.suffix == ".py" or folder == "tools" and p.suffix == ".sh"):
+                    texts[p.relative_to(root).as_posix()] = p.read_text(encoding="utf-8")
+        reverse = dependency_graph(texts)
     except (SyntaxError, UnicodeError, OSError) as exc:
         if files_only:
             return {"tests": [], "reason": "graph unreadable: " + str(exc), "error": True}
         return {"tests": filter_within(["tests"], within), "reason": "graph unreadable: " + str(exc)}
     selected = set()
     asset_cache = {}
+    base_reverse = None
     for raw in changed:
         path = Path(raw).as_posix()
         def fallback(reason):
@@ -171,14 +289,37 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False):
             # scratch files stay skippable here.
             if not revision_asset(root, path, asset_cache):
                 continue
+        if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
+            if p.name == "conftest.py":
+                return fallback("deleted shared fixture")
+            try:
+                if base_reverse is None:
+                    base_reverse = base_dependency_graph(root, base, head)
+                for dep, consumers in base_reverse.items():
+                    reverse.setdefault(dep, set()).update(consumers)
+            except (OSError, subprocess.SubprocessError, tarfile.TarError,
+                    SyntaxError, UnicodeError):
+                return fallback("deleted module graph unreadable")
+            seen, todo = set(), [path]
+            while todo:
+                current = todo.pop()
+                if current not in seen:
+                    seen.add(current)
+                    todo.extend(reverse.get(current, ()))
+            hits = {s for s in seen if s in texts and s.startswith("tests/")
+                    and Path(s).name.startswith("test_") and not s.startswith("tests/browser/")}
+            hits.update(s for s, text in texts.items() if s.startswith("tests/")
+                        and Path(s).name.startswith("test_") and not s.startswith("tests/browser/")
+                        and (p.name in text or path in text))
+            if not hits:
+                return fallback("deleted module importers unresolved")
+            selected.update(hits)
+            continue
         if p.name == "conftest.py" or (not local and path.startswith("tests/") and not p.name.startswith("test_")):
             if files_only:
                 selected.update(local_control_tests(texts, path))
                 continue
             return fallback("shared fixture")
-        if p.parts[0] in {"src", "tests", "tools"} and path not in texts and p.suffix == ".py":
-            selected.update(smoke_tests(texts, path))
-            continue
         seen, todo = set(), [path]
         while todo:
             current = todo.pop()
@@ -246,7 +387,8 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, local=args.local)
+    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, local=args.local,
+                        base=args.base, head=args.head)
     print(json.dumps(plan), flush=True)
     if args.local and args.run and "tests" in plan["tests"]:
         print('local preflight refuses the full suite; specify affected test files with --within', file=sys.stderr)

@@ -3,6 +3,11 @@ name: unattended-orchestration
 description: Orchestrating unattended work via the plangraph spawner and keeper.
 ---
 
+Brief order: use the versioned `src/plangraph/review/{writer,review}_brief.md`
+templates via `plangraph.review.prompt.render_brief`. Keep role, rules, Rust language
+line, gates and commit trailer format first; put item context and task data last.
+A byte-identical fixed prefix lets the prompt cache reuse it across items.
+
 # Unattended Orchestration
 
 ## When to use

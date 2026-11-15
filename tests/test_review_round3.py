@@ -48,7 +48,11 @@ def test_down_leg_not_rerun_when_no_replacement(tmp_path, monkeypatch):
     # Two parts; part 1 puts the only leg down, part 2 must NOT re-run it.
     only = (family.Leg("openai", "gateway", "ovh/gpt-oss-120b", "openai"),)
     monkeypatch.setattr(family, "LEGS", only)
-    monkeypatch.setattr(seat.prompt, "assemble_all", lambda v, f, lim: ["p1", "p2"])
+    def two_parts(v, f, lim, *, context):
+        assert context["item_key"] == "k"
+        return ["p1", "p2"]
+
+    monkeypatch.setattr(seat.prompt, "assemble_all", two_parts)
     calls = []
 
     def gw(model, text, title=None):

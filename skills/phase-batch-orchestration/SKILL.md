@@ -3,6 +3,11 @@ name: phase-batch-orchestration
 description: Orchestrating work as phase batches (rule 3.1) with long-lived package writers, one checkpoint PR and one review per checkpoint. Use instead of one agent and one PR per small task.
 ---
 
+Brief order: use the versioned `src/plangraph/review/{writer,review}_brief.md`
+templates via `plangraph.review.prompt.render_brief`. Keep role, rules, Rust language
+line, gates and commit trailer format first; put item context and task data last.
+A byte-identical fixed prefix lets the prompt cache reuse it across items.
+
 # Phase-batch orchestration
 
 Use this when several plan items change one repository and can land together.
