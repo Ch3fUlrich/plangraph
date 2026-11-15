@@ -1,0 +1,1 @@
+- Release shared Cargo cleanup flocks explicitly when reclaim ends, so descriptors inherited by concurrent process spawns cannot retain a finished lease; isolate cache fixtures and synchronize supervisor and quota tests with process state.
