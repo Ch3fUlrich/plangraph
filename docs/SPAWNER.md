@@ -111,6 +111,7 @@ reasoning and answer share this budget. V2 reads `limit.output`; the env also li
 `run_watchdog.py:collect` detects open-pipe reasoning-only length, records the reason and reaps immediately.
 `seat_spawn.py:SeatSpawnMixin._launch_session` retries once with `--session` and the same
 private store, capped at 120 seconds and the remaining original card `max_min`/run timeout.
+The retry requires more than 30 seconds remaining; at 30 seconds or less, reasoning-only exhaustion ends as `failed/reasoning_only_length`, not timeout.
 Each turn sends `answer now: findings, then the VERDICT line; no further analysis`; context is not replayed.
 `reasoning_continuations` and `reasoning_continuation` events persist count and both token counters;
 repeated exhaustion is `failed/reasoning_only_length`; watchdog timeout remains `timeout` (`timed_out` on review records).

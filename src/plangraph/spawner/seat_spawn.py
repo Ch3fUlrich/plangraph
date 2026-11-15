@@ -306,7 +306,7 @@ class SeatSpawnMixin:
             if self._path(record['run_id']).with_name('cancelled').exists():
                 job.status = 'cancelled'
                 return job
-            if retry or record['reasoning_continuations'] or remaining <= 0:
+            if retry or record['reasoning_continuations'] or remaining <= 30:
                 break
             if session is None or not (getattr(job, 'session_id', None) or session.id):
                 failure = 'reasoning_session_missing'  # never silently start a fresh context

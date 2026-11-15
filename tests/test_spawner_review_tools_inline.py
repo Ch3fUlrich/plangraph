@@ -100,7 +100,7 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
     ('already-capped', 2, True), ('stderr-error', 2, True),
     ('zero-exit', 2, True), ('cancelled', 1, False),
     ('timeout', 1, False), ('retry-timeout', 2, False), ('deadline', 1, True),
-    ('provider-stop', 2, True), ('thin-budget', 2, True),
+    ('provider-stop', 2, True), ('thin-budget', 1, True),
     ('stalled', 1, False), ('retry-stalled', 2, False), ('retry-cancelled', 2, False),
     ('ordinary-timeout', 1, False), ('ordinary-cancelled', 1, False),
 ])
@@ -151,10 +151,10 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
             status = 'stalled' if scenario.endswith('stalled') else 'timeout'
             runner.jobs[jid].status, runner.jobs[jid].exit_code = status, 6 if status == 'stalled' else 124
             runner.jobs[jid].events.append({'event': 'watchdog_' + status, 'rule': 'max'})
-        if terminal and len(calls) == launches:
-            clock[:] = [time.time() + 2000]
-        elif scenario == 'thin-budget':
+        if scenario == 'thin-budget':
             clock[:] = [time.time() + 1475]
+        elif terminal and len(calls) == launches:
+            clock[:] = [time.time() + 2000]
         if scenario == 'provider-stop':
             runner.provider_responses[jid] = {'status': 429}
         if scenario == 'stderr-error':

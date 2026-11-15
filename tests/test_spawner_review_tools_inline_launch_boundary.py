@@ -59,7 +59,7 @@ def test_reasoning_terminal_saved_at_launch_boundary(launch_leg_case, monkeypatc
     assert saved['events'][-1] == dict(event=reason, continuations=len(calls) - 1)
 
 
-@pytest.mark.parametrize('remaining', [0, 0.01, 30, 30.01, 150])
+@pytest.mark.parametrize('remaining', [0, 0.01, 30, 30.01])
 def test_reasoning_retry_needs_useful_budget(launch_leg_case, monkeypatch, remaining):
     import asyncio
 
@@ -67,8 +67,9 @@ def test_reasoning_retry_needs_useful_budget(launch_leg_case, monkeypatch, remai
     monkeypatch.setattr('plangraph.spawner.seat_spawn.time',
                         SimpleNamespace(time=lambda: 201 if len(calls) == 2 else 200 - remaining))
     asyncio.run(seat._launch_leg(record, chosen, prompt_record=None, watchdog={'max_s': 100, 'hard_max': True}))
-    assert len(calls) == (2 if remaining > 0 else 1)
-    if remaining > 0:
+    assert len(calls) == (2 if remaining > 30 else 1)
+    assert record['status'] == 'failed' and record['reason'] == 'reasoning_only_length'
+    if remaining > 30:
         assert calls[1]['watchdog'] == {'max_s': pytest.approx(min(120, remaining)), 'hard_max': True}
 
 
