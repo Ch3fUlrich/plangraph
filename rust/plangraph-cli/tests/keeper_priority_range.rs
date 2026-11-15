@@ -36,21 +36,27 @@ const CASE: &str = r#"
 import sys
 import tempfile
 from pathlib import Path
-sys.path.insert(0, 'tests')
-from keeper_util import World, defn
+from plangraph.keeper import auth, db
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.oversight_operator import r8_operator
+from plangraph.keeper.store import Store
 
 with tempfile.TemporaryDirectory() as directory:
-    w = World(Path(directory), backend='sqlite')
-    s, p = w.store, w.p('router')
+    conn = db.open_db(Path(directory) / 'keeper.db', create=True, backend='sqlite')
+    token = auth.add_principal(conn, 'router', 'router', [])
+    p = auth.authenticate(conn, token)
+    clock = [1_700_000_000.0]
+    s = Store(conn, clock=lambda: clock[0])
     def item(name, **fields):
-        return defn(name, kind='goal', description='Why: test bounds\nHow: validate priority', **fields)
+        return {'project': 'demo', 'id': name, 'kind': 'goal', 'title': name,
+                'description': 'Why: test bounds\nHow: validate priority',
+                'track': 'T0', 'owner': 'tester', 'estimate_h': 1,
+                'done_criteria': 'criteria', 'evidence_kinds': ['any'], **fields}
     s.create_items(p, [item('A')])
     assert s._item('demo:A')['priority'] == 0
     def snapshot():
-        return ([tuple(r) for r in w.conn.execute('SELECT * FROM items ORDER BY key')],
-                [tuple(r) for r in w.conn.execute('SELECT * FROM events ORDER BY seq')])
+        return ([tuple(r) for r in conn.execute('SELECT * FROM items ORDER BY key')],
+                [tuple(r) for r in conn.execute('SELECT * FROM events ORDER BY seq')])
     if sys.argv[1] == 'refuse':
         failures = []
         for n in (-1, 11, True, 1.5, '9'):
@@ -89,13 +95,13 @@ with tempfile.TemporaryDirectory() as directory:
             assert s._item('demo:A')['priority'] == n
         assert s._item('demo:P0')['priority'] == 0
         assert s._item('demo:A')['priority'] == 10
-        s.create_items(p, [defn('OP', kind='operator_task', description='Why: test\nHow: inspect'),
+        s.create_items(p, [item('OP', kind='operator_task'),
                            item('GATE', depends_on=['demo:OP'], priority=8)])
-        w.clock.advance(86401)
+        clock[0] += 86401
         for n, expected in ((8, False), (9, True), (10, True)):
             s.set_priority(p, 'demo:GATE', n)
-            findings = r8_operator(w.conn, w.clock())
+            findings = r8_operator(conn, clock[0])
             assert not any(f['kind'] == 'oversight_check_failed' for f in findings), findings
             assert any(f['kind'] == 'operator_step_stale' for f in findings) == expected, findings
-    w.close()
+    conn.close()
 "#;
