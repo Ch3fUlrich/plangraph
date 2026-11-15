@@ -269,33 +269,22 @@
     box.appendChild(el("h3", "sb-h", "Settings"));
     var mode = el("select");
     mode.setAttribute("aria-label", "Work mode");
-    ["auto", "piecewise", "batch"].forEach(function (value) {
-      var option = el("option", null, value);
-      option.value = value;
-      mode.appendChild(option);
-    });
-    mode.value = workModeData ? workModeData.work_mode : "batch";
-    mode.disabled = workModeBusy || !workModeData;
+    WM.forEach(function (v) { var o = el("option", null, v); o.value = v; mode.appendChild(o); });
+    mode.value = wm ? wm.work_mode : "batch";
+    mode.disabled = wmBusy || !wm;
     mode.addEventListener("change", function () { requestWorkMode(mode.value); renderSettings(); });
     box.appendChild(block("Work mode", mode));
-    var message = workModeError || (workModeBusy ? "Loading work mode…" : "");
-    if (!message && workModeData) {
-      var row = workModeData;
-      if (row.work_mode !== row.effective_work_mode) message = "Repository override: " + row.effective_work_mode + ". ";
-      if (row.work_mode === "auto" || row.effective_work_mode === "auto") message += "Resolved: " + (row.resolved_work_mode || "unavailable") + ". " + row.work_mode_reason;
+    var msg = wmErr || (wmBusy ? "Loading…" : "");
+    if (!msg && wm) {
+      if (wm.work_mode !== wm.effective_work_mode) msg = "Repo override: " + wm.effective_work_mode + ". ";
+      if (wm.work_mode === "auto" || wm.effective_work_mode === "auto") msg += "Resolved: " + (wm.resolved_work_mode || "unavailable") + ". " + wm.work_mode_reason;
     }
-    var status = el("p", "set-row", message);
-    status.setAttribute("role", "status");
-    box.appendChild(status);
-    if (!workModeBusy && (workModeData || workModeError)) {
-      var refresh = el("button", null, "Refresh work mode");
+    box.appendChild(el("p", "set-row", msg)).setAttribute("role", "status");
+    if (!wmBusy && (wm || wmErr)) {
+      var refresh = box.appendChild(el("button", null, "Refresh"));
       refresh.addEventListener("click", function () { requestWorkMode(); renderSettings(); });
-      box.appendChild(refresh);
     }
-    if (load && !workModeData && !workModeBusy && !workModeError) {
-      if (typeof global.XMLHttpRequest === "function") requestWorkMode();
-      else { workModeError = "Work mode unavailable on this page."; status.textContent = workModeError; }
-    }
+    if (load && !wm && !wmBusy && !wmErr) requestWorkMode();
     box.appendChild(block("Text size (root px)", seg([["S", "S"], ["M", "M"], ["L", "L"]],
       s.textSize, function (v) { pick("textSize", v); }, "Text size")));
     box.appendChild(block("Theme", seg([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]],
