@@ -351,7 +351,8 @@ before the cursor are not detected (transcripts are append-only), and records ov
 1 MiB are skipped.
 
 The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
-existing watchdog binaries; `tools/hooks/install_hooks.sh` remains Python-only.
+existing watchdog binaries. The default `tools/hooks/install_hooks.sh` mode
+copies Python hooks; its `--git` mode installs the Rust Git hook.
 Build, registration examples, injectable state paths and the polling-recognition
 boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
 Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p
@@ -398,6 +399,16 @@ configuration is supplied; explicit jail settings are preserved and other check 
 Rust test builds, including nested admission checks and Python placement fixtures, inherit `CARGO_TARGET_DIR`; keep the host shared target when it is configured.
 
 Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.
+
+Install Git message validation with `tools/hooks/install_hooks.sh --git`
+(using the shared host `CARGO_TARGET_DIR`). Non-merge commits require a strict
+`Writer:` or `Hand-Edit:` trailer. See `docs/rust-hooks.md`.
+
+Writer handoffs named `STATUS-*.txt` are ignored at every depth. Keep them
+outside the checkout; the changelog/docs PR gate also rejects added status
+notes, including forced additions and renames into that naming pattern.
+The status-note check also inspects additions in every non-merge commit, so
+adding and then deleting a note within the PR still fails.
 
 The pre-push hook checks commit trailers on `origin/main..head` before scrub and
 preflight, including when `PREFLIGHT_SKIP=1`. It queries open PR heads and checks
