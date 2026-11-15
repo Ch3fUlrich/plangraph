@@ -91,3 +91,49 @@ def test_unchanged_refusals_remain(unseated_w, monkeypatch):
         world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
     assert world.store._item("demo:H")["state"] == "in_review"
 
+
+
+def long_history(path, merges=700, item_at=50):
+    """A repository whose main has *merges* first-parent merges; merge *item_at* carries a Plan-Item commit."""
+    import subprocess
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    lines, when = [], 1_760_000_000
+    def commit(ref, mark, message, parents):
+        nonlocal when
+        when += 60
+        lines.extend([f"commit {ref}", f"mark :{mark}",
+                      f"committer T <t@example.invalid> {when} +0000",
+                      f"data {len(message.encode())}", message])
+        for n, parent in enumerate(parents):
+            lines.append(f"{'from' if n == 0 else 'merge'} :{parent}")
+        lines.append("")
+    commit("refs/heads/main", 1, "base", [])
+    mark = 2
+    for n in range(1, merges + 1):
+        body = f"work {n}" + ("\n\nPlan-Item: demo:H" if n == item_at else "")
+        previous = 1 if n == 1 else mark - 1  # mark of the main tip before this PR
+        commit(f"refs/heads/pr{n}", mark, body, [previous])
+        commit("refs/heads/main", mark + 1, f"merge (#{n})", [previous, mark])
+        mark += 2
+    subprocess.run(["git", "-C", str(path), "fast-import", "--quiet"], input="\n".join(lines) + "\n",
+                   text=True, check=True)
+
+
+def test_item_650_merges_behind_main_closes(unseated_w, monkeypatch, tmp_path):
+    import subprocess
+    from plangraph.keeper.evidence_git import GitAdapter
+    world = unseated_w
+    repo = tmp_path / "long"
+    long_history(repo)
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "pr50"], text=True,
+                          capture_output=True, check=True).stdout.strip()
+    world.decision_path.write_text(
+        HEADER + go_row("D-5504", head)
+        + "| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H | OPERATOR | 2026-11-14 |\n")
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits",
+                        world.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    world.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    result = world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert result["state"] == "done"
+    assert [p["head"] for p in world.store._evidence("demo:H")[-1]["ref"]["prs"]] == [head]
