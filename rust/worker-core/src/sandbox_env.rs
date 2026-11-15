@@ -36,23 +36,28 @@ pub fn is_passed_check(name: &str) -> bool {
 /// `home` as files ([`HomeGuard::stage_harness_auth`]), never passed by
 /// environment.
 pub fn confine_harness(cmd: &mut Command, home: &Path) {
-    confine_with(cmd, home, is_passed);
+    confine_with(cmd, home, is_passed, std::env::vars_os());
 }
 /// Confine a card check child: [`PASS`] only, a private `HOME`, and what the
 /// caller set on `cmd`. Agent credentials never reach it.
 pub fn confine_check(cmd: &mut Command, home: &Path) {
-    confine_with(cmd, home, is_passed_check);
+    confine_with(cmd, home, is_passed_check, std::env::vars_os());
 }
 /// Replace `cmd`'s environment with the names `pass` accepts, a private `HOME`,
 /// and the variables the caller set on `cmd` explicitly (the caller's own by
 /// construction, for example `OPENCODE_DISABLE_AUTOUPDATE` or a test's marker).
-fn confine_with(cmd: &mut Command, home: &Path, pass: fn(&str) -> bool) {
+fn confine_with(
+    cmd: &mut Command,
+    home: &Path,
+    pass: fn(&str) -> bool,
+    parent: impl IntoIterator<Item = (OsString, OsString)>,
+) {
     let explicit: Vec<(OsString, OsString)> = cmd
         .get_envs()
         .filter_map(|(k, v)| v.map(|v| (k.to_os_string(), v.to_os_string())))
         .collect();
     cmd.env_clear();
-    for (k, v) in std::env::vars_os() {
+    for (k, v) in parent {
         if k.to_str().is_some_and(pass) {
             cmd.env(k, v);
         }
@@ -125,7 +130,14 @@ impl HomeGuard {
     /// removed on drop, even when the home pre-existed and is not taken as a
     /// whole.
     pub fn stage_harness_auth(&mut self) -> std::io::Result<()> {
-        stage_auth_into(&self.path, &mut self.staged)
+        self.stage_harness_auth_from(
+            std::env::var_os(HARNESS_AUTH_DIR_ENV)
+                .as_deref()
+                .map(Path::new),
+        )
+    }
+    fn stage_harness_auth_from(&mut self, source: Option<&Path>) -> std::io::Result<()> {
+        stage_auth_into(&self.path, &mut self.staged, source)
     }
 }
 
@@ -147,15 +159,18 @@ impl Drop for HomeGuard {
 /// the staged files, never from the environment.
 pub const HARNESS_AUTH_DIR_ENV: &str = "PG_HARNESS_AUTH_DIR";
 
-fn stage_auth_into(home: &Path, staged: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    let Some(dir) = std::env::var_os(HARNESS_AUTH_DIR_ENV) else {
+fn stage_auth_into(
+    home: &Path,
+    staged: &mut Vec<PathBuf>,
+    source: Option<&Path>,
+) -> std::io::Result<()> {
+    let Some(src) = source else {
         return Ok(());
     };
-    let src = PathBuf::from(dir);
     if !src.is_dir() {
         return Ok(());
     }
-    for entry in std::fs::read_dir(&src)? {
+    for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         if worker_credential_name(&entry.file_name())
             || crate::sandbox_push::excluded(&entry.file_name())
@@ -244,19 +259,37 @@ fn stage_file(from: &Path, to: &Path, staged: &mut Vec<PathBuf>) -> std::io::Res
 mod tests {
     use super::*;
 
+    fn parent_env() -> Vec<(OsString, OsString)> {
+        let mut parent: Vec<_> = std::env::vars_os().collect();
+        parent.extend(
+            [
+                ("PG_SENTINEL_SECRET_SANDBOX_ENV", "hunter2"),
+                ("CLAUDE_CODE_OAUTH_TOKEN", "sentinel-wf8-oauth"),
+                ("CLAUDE_CODE_MESSAGING_TOKEN", "sentinel-wf8-messaging"),
+                ("OPENCODE_API_KEY", "sentinel-wf8-opkey"),
+                ("OPENCODE_FOO_SECRET", "sentinel-wf8-foosec"),
+                ("ANTHROPIC_API_KEY", "sentinel-wf8-anth"),
+                ("MY_PASSWORD", "sentinel-wf8-pw"),
+                ("OPENCODE_CONFIG_CONTENT", "ambient-sentinel"),
+            ]
+            .map(|(k, v)| (k.into(), v.into())),
+        );
+        parent
+    }
+
     /// Run `env` through `confine` and return the child's variables.
     fn child_env(prep: impl FnOnce(&mut Command), home: &Path) -> Vec<String> {
-        child_env_with(confine_harness, prep, home)
+        child_env_with(is_passed, prep, home)
     }
 
     fn child_env_with(
-        confine: fn(&mut Command, &Path),
+        pass: fn(&str) -> bool,
         prep: impl FnOnce(&mut Command),
         home: &Path,
     ) -> Vec<String> {
         let mut c = Command::new("env");
         prep(&mut c);
-        confine(&mut c, home);
+        confine_with(&mut c, home, pass, parent_env());
         let out = c.output().expect("env runs");
         String::from_utf8_lossy(&out.stdout)
             .lines()
@@ -298,12 +331,9 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(env)]
     fn child_sees_allowlist_explicit_vars_and_private_home_only() {
         let home = tempfile::tempdir().unwrap();
-        // A secret-looking variable in the worker's own environment. The name
-        // is unique to this test, so no other test reads or sets it.
-        std::env::set_var("PG_SENTINEL_SECRET_SANDBOX_ENV", "hunter2");
+        // The supplied parent environment contains a secret-looking sentinel.
         let lines = child_env(
             |c| {
                 c.env("PG_MARK", "explicit");
@@ -334,10 +364,9 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(env)]
     fn agent_credentials_reach_neither_harness_nor_check_child() {
         let home = tempfile::tempdir().unwrap();
-        // Sentinel values unique to this test; no other test reads them.
+        // These sentinels are supplied by parent_env without process mutation.
         let secrets: [(&str, &str); 6] = [
             ("CLAUDE_CODE_OAUTH_TOKEN", "sentinel-wf8-oauth"),
             ("CLAUDE_CODE_MESSAGING_TOKEN", "sentinel-wf8-messaging"),
@@ -346,10 +375,7 @@ mod tests {
             ("ANTHROPIC_API_KEY", "sentinel-wf8-anth"),
             ("MY_PASSWORD", "sentinel-wf8-pw"),
         ];
-        for (name, value) in &secrets {
-            std::env::set_var(name, value);
-        }
-        for confine in [confine_harness, confine_check] {
+        for confine in [is_passed, is_passed_check] {
             let lines = child_env_with(confine, |_| {}, home.path());
             for (name, value) in &secrets {
                 assert!(
@@ -367,7 +393,6 @@ mod tests {
     /// deliberately *not* on the allowlist: it reaches a child only when the
     /// harness sets it on its own `Command`, which `confine_with` re-applies.
     #[test]
-    #[serial_test::serial(env)]
     fn harness_config_survives_only_when_the_harness_sets_it() {
         let home = tempfile::tempdir().unwrap();
         let cfg = r#"{"permission":{"external_directory":"deny"}}"#;
@@ -375,8 +400,7 @@ mod tests {
         assert!(!is_passed_check("OPENCODE_CONFIG_CONTENT"));
         // Ambient in the worker: neither child may inherit it — not the check,
         // and not a harness that did not set its own.
-        std::env::set_var("OPENCODE_CONFIG_CONTENT", "ambient-sentinel");
-        for confine in [confine_harness, confine_check] {
+        for confine in [is_passed, is_passed_check] {
             let lines = child_env_with(confine, |_| {}, home.path());
             assert!(
                 !lines.iter().any(|l| {
@@ -396,7 +420,6 @@ mod tests {
             lines.contains(&format!("OPENCODE_CONFIG_CONTENT={cfg}")),
             "{lines:?}"
         );
-        std::env::remove_var("OPENCODE_CONFIG_CONTENT");
     }
 
     #[test]
@@ -430,16 +453,14 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(env)]
     fn stage_harness_auth_stages_plain_files_and_refuses_symlinks() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
         let src = root.path().join("auth");
         let dir = root.path().join("c1-3");
         // Unset is a no-op: an auth-less harness run stays empty.
-        std::env::remove_var(HARNESS_AUTH_DIR_ENV);
         let mut g = HomeGuard::for_dir(&dir).unwrap();
-        g.stage_harness_auth().unwrap();
+        g.stage_harness_auth_from(None).unwrap();
         assert_eq!(std::fs::read_dir(g.path()).unwrap().count(), 0);
         drop(g);
 
@@ -450,10 +471,9 @@ mod tests {
             std::fs::write(src.join(name), "synthetic-control-plane").unwrap();
             std::fs::write(src.join("sub").join(name), "synthetic-control-plane").unwrap();
         }
-        std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
         {
             let mut g = HomeGuard::for_dir(&dir).unwrap();
-            g.stage_harness_auth().unwrap();
+            g.stage_harness_auth_from(Some(&src)).unwrap();
             for name in ["PG_KEEPER_TOKEN", "temporal-key", "keeper-token", "tls-key"] {
                 assert!(!g.path().join(name).exists());
                 assert!(!g.path().join("sub").join(name).exists());
@@ -484,11 +504,9 @@ mod tests {
 
         // A symlink anywhere in the source tree is refused outright: staging
         // must not hand the agent a path outside the auth dir.
-        std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
         std::os::unix::fs::symlink("/etc/passwd", src.join("evil")).unwrap();
         let mut g = HomeGuard::for_dir(&dir).unwrap();
-        assert!(g.stage_harness_auth().is_err());
-        std::env::remove_var(HARNESS_AUTH_DIR_ENV);
+        assert!(g.stage_harness_auth_from(Some(&src)).is_err());
     }
 
     #[test]
@@ -536,14 +554,12 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(env)]
     fn staged_auth_is_removed_even_from_a_pre_existing_home() {
         let root = tempfile::tempdir().unwrap();
         let src = root.path().join("auth");
         let dir = root.path().join("c1-4");
         std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("credentials.json"), "sentinel-wf8-auth").unwrap();
-        std::env::set_var(HARNESS_AUTH_DIR_ENV, &src);
         // The home pre-exists (an enclosing attempt owns it), so the guard
         // must not take it down — but everything it staged must still go.
         let home = home_for(&dir);
@@ -551,10 +567,9 @@ mod tests {
         std::fs::write(home.join("operator-file"), "keep").unwrap();
         {
             let mut g = HomeGuard::for_dir(&dir).unwrap();
-            g.stage_harness_auth().unwrap();
+            g.stage_harness_auth_from(Some(&src)).unwrap();
             assert!(home.join("credentials.json").exists());
         }
-        std::env::remove_var(HARNESS_AUTH_DIR_ENV);
         assert!(!home.join("credentials.json").exists());
         assert!(home.join("operator-file").exists());
         assert!(home.is_dir());

@@ -1,40 +1,6 @@
 use super::*;
 
-struct Restore(Vec<(&'static str, Option<std::ffi::OsString>)>);
-impl Restore {
-    fn set(&mut self, name: &'static str, value: &std::ffi::OsStr) {
-        self.0.push((name, std::env::var_os(name)));
-        std::env::set_var(name, value);
-    }
-}
-impl Drop for Restore {
-    fn drop(&mut self) {
-        for (name, value) in self.0.drain(..).rev() {
-            match value {
-                Some(v) => std::env::set_var(name, v),
-                None => std::env::remove_var(name),
-            }
-        }
-    }
-}
-
 #[test]
-#[serial_test::serial(env)]
-fn environment_restores_on_panic() {
-    let name = "PG_PILOT_RESTORE_TEST";
-    let before = std::env::var_os(name);
-    let panic = std::panic::catch_unwind(|| {
-        let mut guard = Restore(vec![]);
-        guard.set(name, std::ffi::OsStr::new("changed"));
-        assert_eq!(std::env::var(name).unwrap(), "changed");
-        panic!("exercise restoration");
-    });
-    assert!(panic.is_err());
-    assert_eq!(std::env::var_os(name), before);
-}
-
-#[test]
-#[serial_test::serial(env)]
 fn pilot_credentials_absent_with_parent_positive_control() {
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
@@ -86,9 +52,8 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         String::from_utf8_lossy(&parent.stderr)
     );
     assert!(String::from_utf8_lossy(&parent.stdout).contains("password=fixture"));
-    let mut restore = Restore(vec![]);
-    restore.set(HARNESS_AUTH_DIR_ENV, source.as_os_str());
-    restore.set("HOME", source.as_os_str());
+    let mut parent_env: Vec<_> = std::env::vars_os().collect();
+    parent_env.push(("HOME".into(), source.clone().into_os_string()));
     let names = [
         "GIT_ASKPASS",
         "GIT_SSH_COMMAND",
@@ -100,18 +65,18 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         "GIT_CONFIG_COUNT",
     ];
     for name in names {
-        restore.set(name, std::ffi::OsStr::new("pilot-parent"));
+        parent_env.push((name.into(), "pilot-parent".into()));
     }
     let dir = root.path().join("work");
     std::fs::create_dir(&dir).unwrap();
     for (confine, mut home) in [
         (
-            confine_harness as fn(&mut Command, &Path),
+            is_passed as fn(&str) -> bool,
             HomeGuard::for_dir(&dir).unwrap(),
         ),
-        (confine_check, HomeGuard::for_check(&dir).unwrap()),
+        (is_passed_check, HomeGuard::for_check(&dir).unwrap()),
     ] {
-        home.stage_harness_auth().unwrap();
+        home.stage_harness_auth_from(Some(&source)).unwrap();
         for name in blocked {
             for base in [home.path().to_path_buf(), home.path().join("sub")] {
                 assert!(
@@ -132,7 +97,7 @@ fn pilot_credentials_absent_with_parent_positive_control() {
             .args(["-c", &format!("env; {lookup}")])
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_CONFIG_NOSYSTEM", "1");
-        confine(&mut cmd, home.path());
+        confine_with(&mut cmd, home.path(), confine, parent_env.clone());
         // Pin Git's diagnostic language after confinement for the exact match below.
         cmd.env("LC_ALL", "C");
         let out = cmd.output().unwrap();
@@ -149,7 +114,9 @@ fn pilot_credentials_absent_with_parent_positive_control() {
         assert!(!String::from_utf8_lossy(&out.stdout).contains("fixture"));
         assert!(!String::from_utf8_lossy(&out.stderr).contains("fixture"));
         for name in names {
-            assert_eq!(std::env::var(name).unwrap(), "pilot-parent");
+            assert!(parent_env
+                .iter()
+                .any(|(k, v)| k == name && v == "pilot-parent"));
             assert!(!String::from_utf8_lossy(&out.stdout)
                 .lines()
                 .any(|l| l.starts_with(&format!("{name}="))));

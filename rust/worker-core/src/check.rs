@@ -211,8 +211,23 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(env)]
     fn check_runs_without_worker_secrets_and_with_a_private_home() {
+        if std::env::var_os("PG_SENTINEL_SECRET_CHECK").is_none() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "check::tests::check_runs_without_worker_secrets_and_with_a_private_home",
+                ])
+                .env("PG_SENTINEL_SECRET_CHECK", "hunter2")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        assert_eq!(
+            std::env::var("PG_SENTINEL_SECRET_CHECK").unwrap(),
+            "hunter2"
+        );
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("c1-1");
         std::fs::create_dir(&dir).unwrap();
@@ -221,7 +236,6 @@ mod tests {
         std::fs::create_dir(&harness_home).unwrap();
         std::fs::write(harness_home.join("harness-login"), "t").unwrap();
         // Unique to this test: no other test reads or sets it.
-        std::env::set_var("PG_SENTINEL_SECRET_CHECK", "hunter2");
         let r = run_check("env; ls -a \"$HOME\"; echo done", &dir, T, 500).unwrap();
         assert!(r.passed());
         assert!(!r.tail.contains("harness-login"), "{}", r.tail);

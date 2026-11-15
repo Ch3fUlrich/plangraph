@@ -119,7 +119,11 @@ fn fixture_process() {
             "GIT_CONFIG_PARAMETERS",
             "GIT_FUTURE_HOOK_SENTINEL",
         ] {
-            assert_eq!(vars[std::ffi::OsStr::new(key)], None, "{key}");
+            assert_eq!(
+                vars.get(std::ffi::OsStr::new(key)).copied().flatten(),
+                None,
+                "{key}"
+            );
         }
         if api != "resolver" {
             assert_eq!(vars[std::ffi::OsStr::new("HOME")], Some(root.as_os_str()));

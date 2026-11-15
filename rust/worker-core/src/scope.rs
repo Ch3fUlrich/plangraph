@@ -235,7 +235,19 @@ mod tests {
 
     #[test]
     fn vars_the_harness_never_set_stay_out_of_argv() {
-        std::env::set_var("PG_SECRET_PROBE", "sekrit");
+        if std::env::var_os("PG_SECRET_PROBE").is_none() {
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "scope::tests::vars_the_harness_never_set_stay_out_of_argv",
+                ])
+                .env("PG_SECRET_PROBE", "sekrit")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+        assert_eq!(std::env::var("PG_SECRET_PROBE").unwrap(), "sekrit");
         let (bin, mut cmd) = sample();
         cmd.env_remove("GONE");
         let wrapped = wrap(cmd, &ScopeLimits::default(), &sample_jail(&bin));
@@ -245,7 +257,6 @@ mod tests {
             .all(|x| !x.contains("sekrit") && !x.starts_with("PG_SECRET_PROBE=")));
         // env_remove entries are removals, not assignments: never emitted.
         assert!(a.iter().all(|x| !x.starts_with("GONE=")));
-        std::env::remove_var("PG_SECRET_PROBE");
     }
 
     #[test]

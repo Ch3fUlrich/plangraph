@@ -1,0 +1,1 @@
+- **FLAKE-WORKER-CORE-PROCESS-ENV-GIT-CONFIG-RACE:** Remove process environment mutations from worker-core tests by supplying sandbox parent environments and auth sources explicitly, and isolate Git fixtures from inherited configuration at command construction.

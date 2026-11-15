@@ -7,15 +7,40 @@ use std::{
 /// Discard all caller Git controls, including hook redirects and config injection.
 /// HOME and XDG paths belong to the fixture; neither host config nor hooks participate.
 pub fn configure(command: &mut Command, root: &Path) {
-    let mut keys: Vec<_> = std::env::vars_os().map(|(key, _)| key).collect();
-    keys.extend(command.get_envs().map(|(key, _)| key.to_owned()));
-    for key in keys {
+    configure_from(command, root, std::env::vars_os());
+}
+
+fn configure_from(
+    command: &mut Command,
+    root: &Path,
+    parent: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+) {
+    let explicit: Vec<_> = command
+        .get_envs()
+        .map(|(key, value)| (key.to_owned(), value.map(ToOwned::to_owned)))
+        .collect();
+    // Freeze inheritance now: removing just the currently visible GIT_* names
+    // lets a later parent change inject a previously absent key at spawn time.
+    command.env_clear();
+    for (key, value) in parent
+        .into_iter()
+        .map(|(k, v)| (k, Some(v)))
+        .chain(explicit)
+    {
         if key
             .to_string_lossy()
             .to_ascii_uppercase()
             .starts_with("GIT_")
         {
-            command.env_remove(key);
+            continue;
+        }
+        match value {
+            Some(value) => {
+                command.env(key, value);
+            }
+            None => {
+                command.env_remove(key);
+            }
         }
     }
     let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
@@ -48,6 +73,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fixture_filters_parent_config_case_insensitively() {
+        let root = tempfile::tempdir().unwrap();
+        let mut git = Command::new("git");
+        git.env("fixture_explicit", "kept")
+            .env_remove("fixture_removed");
+        configure_from(
+            &mut git,
+            root.path(),
+            std::env::vars_os().chain([
+                ("GIT_CONFIG_COUNT".into(), "pilot-parent".into()),
+                ("Git_Config_Key_9".into(), "user.name".into()),
+                ("git_config_value_9".into(), "hostile".into()),
+                ("fixture_parent".into(), "kept".into()),
+                ("fixture_removed".into(), "removed".into()),
+            ]),
+        );
+        let vars: std::collections::BTreeMap<_, _> = git.get_envs().collect();
+        for key in ["GIT_CONFIG_COUNT", "Git_Config_Key_9", "git_config_value_9"] {
+            assert!(!vars.contains_key(std::ffi::OsStr::new(key)));
+        }
+        for key in ["fixture_parent", "fixture_explicit"] {
+            assert_eq!(
+                vars[std::ffi::OsStr::new(key)],
+                Some(std::ffi::OsStr::new("kept"))
+            );
+        }
+        assert_eq!(
+            vars.get(std::ffi::OsStr::new("fixture_removed"))
+                .copied()
+                .flatten(),
+            None
+        );
+        let output = git.args(["init", "-q"]).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
     fn configure_removes_explicit_redirects_and_config_injection() {
         let fixture = tempfile::tempdir().unwrap();
         let mut git = Command::new("git");
@@ -65,9 +131,9 @@ mod tests {
             "GIT_CONFIG_KEY_0",
             "GIT_CONFIG_VALUE_0",
         ] {
-            assert!(git
+            assert!(!git
                 .get_envs()
-                .any(|(name, value)| name == key && value.is_none()));
+                .any(|(name, value)| name == key && value.is_some()));
         }
     }
 
@@ -87,7 +153,7 @@ mod tests {
             "GIT_CONFIG_KEY_0",
             "GIT_CONFIG_VALUE_0",
         ] {
-            assert_eq!(vars[std::ffi::OsStr::new(key)], None);
+            assert_eq!(vars.get(std::ffi::OsStr::new(key)).copied().flatten(), None);
         }
         assert_eq!(cmd.get_current_dir(), Some(root.path()));
         assert_eq!(
