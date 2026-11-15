@@ -76,3 +76,14 @@ fn rpc_rejects_error_and_eof_without_model_requests() {
     )
     .is_err());
 }
+#[test]
+fn read_only_mode_skips_the_commit_point_but_writable_modes_probe_it() {
+    let missing = PathBuf::from("/nonexistent/pg-readiness/repo");
+    let mut host = Host {
+        repo: missing.clone(),
+        mode: "read-only".into(),
+    };
+    assert_eq!(host.check("commit"), Ok(()));
+    host.mode = "workspace-write".into();
+    assert!(host.check("commit").is_err());
+}

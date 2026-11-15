@@ -307,6 +307,8 @@ impl Probe for Host {
             "login" => output(self.codex().args(["login", "status"])).map(|_| ()).map_err(|_| "run codex login on this host".into()),
             "prompts" => self.prompts(),
             "sandbox" => output(&mut self.sandbox_command(&self.repo, "true", &[])).map(|_| ()).map_err(|_| "cannot start chosen sandbox (check bwrap/RTM_NEWADDR permissions)".into()),
+            // A read-only sandbox cannot commit by design; nothing to probe there.
+            "commit" if self.mode == "read-only" => Ok(()),
             "commit" => self.commit().map_err(|_| "scratch linked-worktree commit failed (check read-only git metadata, identity and hooks)".into()),
             "memory" => {
                 let info = std::fs::read_to_string("/proc/meminfo").map_err(|_| "free memory unavailable (Linux required)")?;
