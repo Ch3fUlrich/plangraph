@@ -6,6 +6,9 @@ fn main() {
 }
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(code) = plangraph_cli::watchers::cli(&args) {
+        return code;
+    }
     if args == ["--version"] {
         println!("plangraph {}", env!("CARGO_PKG_VERSION"));
         return 0;
