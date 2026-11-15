@@ -38,7 +38,9 @@ These are performance goals, not assertions to weaken when a host is overloaded.
 `tools/preflight.py` runs its Rust family with a private `CARGO_TARGET_DIR`
 (`preflight-cargo-*` under `PLANGRAPH_PREFLIGHT_RUN_DIR`, default the parent of
 the shared target) so concurrent pushes do not wait on one cargo lock. The
-directory is removed at the end, also on failure or timeout. When free disk
+directory is removed when preflight exits, also after a failed or timed-out
+check; a hard kill (SIGKILL, host crash) can leave a `preflight-cargo-*`
+directory behind. When free disk
 there is below `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20), preflight prints
 `rust: shared CARGO_TARGET_DIR (...)` and uses the shared target instead; this
 never fails the push. If `sccache` is on PATH (or `PLANGRAPH_SCCACHE` names it),

@@ -271,13 +271,17 @@ def rust_target_env(env, cleanup):
     """Return env for the Rust family: private target when disk allows, sccache when present.
 
     cleanup is a list that receives the private directory so the caller removes it.
-    Never raises: any problem falls back to the shared target.
+    Never raises: any problem falls back to the shared target. Without sccache the
+    inherited environment, including any RUSTC_WRAPPER, is left as it is.
     """
     out = dict(env)
     parent = Path(env.get("PLANGRAPH_PREFLIGHT_RUN_DIR") or shared_cargo_target().parent).expanduser()
     try:
         need = float(env.get("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", MIN_FREE_GB_DEFAULT))
-        free = disk_free_gb(parent)
+        probe = parent
+        while not probe.exists() and probe.parent != probe:
+            probe = probe.parent
+        free = disk_free_gb(probe)
         if free < need:
             print(f"rust: shared CARGO_TARGET_DIR (free {free:.1f} GB < {need:g} GB)", flush=True)
         else:
@@ -287,12 +291,14 @@ def rust_target_env(env, cleanup):
             out["CARGO_TARGET_DIR"] = private
     except (OSError, ValueError) as exc:
         print(f"rust: shared CARGO_TARGET_DIR ({exc})", flush=True)
-    sccache = env.get("PLANGRAPH_SCCACHE") or shutil.which("sccache", path=env.get("PATH", ""))
+    search = env.get("PATH") or os.defpath
+    named = env.get("PLANGRAPH_SCCACHE")
+    sccache = shutil.which(named, path=search) if named else shutil.which("sccache", path=search)
+    if named and not sccache:
+        print(f"rust: PLANGRAPH_SCCACHE={named} not found, no sccache", flush=True)
     if sccache:
         out["RUSTC_WRAPPER"] = sccache
         out.setdefault("SCCACHE_CACHE_SIZE", env.get("PLANGRAPH_SCCACHE_CACHE_SIZE", SCCACHE_SIZE_DEFAULT))
-    else:
-        out.pop("RUSTC_WRAPPER", None)
     return out
 
 
