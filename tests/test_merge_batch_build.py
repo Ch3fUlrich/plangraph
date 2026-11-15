@@ -345,13 +345,13 @@ def test_push_waits_for_slow_hook_and_records_pr(env, tools_importable, monkeypa
     assert "slow Rust check" in capfd.readouterr().err
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux pidfd liveness check")
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux process-tree liveness check")
 @pytest.mark.parametrize("nested_preflight", [False, True])
 def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch, nested_preflight):
     import os
-    import select
     import signal
     import merge_batch_util
+    from plangraph.spawner.proc_kill import alive
 
     env.branch_pr(1, {"rust/demo/src/lib.rs": "pub fn demo() {}\n"})
     hook = env.repo / ".git/hooks/pre-push"
@@ -377,14 +377,7 @@ def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch, n
         assert len(records) == 2, "hook and its child must both have started"
         for record in records:
             pid = int(record.read_text())
-            try:
-                fd = os.pidfd_open(pid)
-            except ProcessLookupError:
-                continue
-            try:
-                assert select.select([fd], [], [], 2)[0], f"hook process {pid} survived timeout"
-            finally:
-                os.close(fd)
+            assert not alive(pid, None), f"hook process {pid} survived timeout"
         assert not env.git("for-each-ref", "refs/heads/timeout", cwd=env.origin)
     finally:
         for record in env.tmp.glob("hook-pids*"):
