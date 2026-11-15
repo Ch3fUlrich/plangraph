@@ -61,3 +61,12 @@ constructing argv; D-5903 enables Hydrogen high for implement and medium for rea
 
 Native agy reviews use plan mode for both Hydrogen and Argon. Sonnet high uses
 Claude model claude-sonnet-5-5 with --effort high and restricted review tools.
+
+CLI spawner reviews may record PASS only when the rendered review names a
+changed path from the requested diff or an explicit file:line. Without a diff
+base, paths come from the reviewed HEAD commit. A weak positive verdict retains
+its text with `verdict` and `review_status` set to `no_verdict`, reason
+`weak_verdict`, and no passing seat evidence; process completion is unchanged.
+The CLI prompt forbids background commands and requires the reviewer to wait
+for commands to finish. Native writer review files apply the same citation rule
+to ACCEPT, recording review status `no_verdict` and reason `weak_verdict` (exit 4).

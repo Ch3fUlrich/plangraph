@@ -61,7 +61,7 @@ if 'hold marker' in prompt:
 if 'resume' in sys.argv:
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
     head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
-    pathlib.Path('reviews', head[:8] + '-hydrogen.txt').write_text('VERDICT: ACCEPT\n')
+    pathlib.Path('reviews', head[:8] + '-hydrogen.txt').write_text('Reviewed writer.txt\nVERDICT: ACCEPT\n')
 else:
     pathlib.Path('writer.txt').write_text('written on selected host\n')
     subprocess.run(['git','add','writer.txt'], check=True)

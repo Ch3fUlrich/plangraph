@@ -61,7 +61,7 @@ pub(crate) fn cwd(
     Ok(path)
 }
 
-fn git(cwd: &Path, args: &[&str]) -> Result<String, ToolError> {
+pub(crate) fn git(cwd: &Path, args: &[&str]) -> Result<String, ToolError> {
     let result = pg_worker_core::workspace_resolver::git_command(cwd)
         .args(args)
         .output()
@@ -128,7 +128,7 @@ pub(crate) fn prepare(
     } else {
         ""
     };
-    let prompt = format!("{access}Read-only repository review of HEAD {head}. Open callers and tests; never edit. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
+    let prompt = format!("{access}Read-only repository review of HEAD {head}. Open callers and tests; never edit. Do not run background commands; wait for every command to finish before deciding. Name at least one reviewed path from the diff or a file:line in your review. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
     if launch.stdin.as_deref() == Some(old) {
         launch.stdin = Some(prompt.clone());
     } else {
@@ -289,6 +289,15 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         ["FAIL"] => "fail",
         _ => return,
     };
+    let paths =
+        crate::review_citation::diff_paths(Path::new(cwd), value["review_base"].as_str(), head);
+    if verdict == "pass" && !crate::review_citation::names_file(&text, &paths) {
+        record.set("stdout_tail", json!(text));
+        record.set("verdict", json!("no_verdict"));
+        record.set("review_status", json!("no_verdict"));
+        record.set("reason", json!("weak_verdict"));
+        return;
+    }
     let gaming: Vec<_> = text
         .lines()
         .filter_map(|l| l.strip_prefix("TEST_GAMING: "))
@@ -327,3 +336,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
 #[cfg(test)]
 #[path = "cli_review_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cli_review_weak_tests.rs"]
+mod weak_tests;
