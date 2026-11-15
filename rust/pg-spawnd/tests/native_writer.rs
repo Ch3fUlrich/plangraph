@@ -49,6 +49,31 @@ fn native_writer_pushed_base_handshake_review_resume_and_record() {
     fs::write(&codex, r#"#!/usr/bin/env python3
 import sys, pathlib, subprocess, json
 prompt = sys.stdin.read()
+if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in prompt:
+    import os, signal
+    attempts = pathlib.Path('attempts')
+    attempt = int(attempts.read_text()) + 1 if attempts.exists() else 1
+    attempts.write_text(str(attempt))
+    if 'fail marker' in prompt:
+        sys.exit(127)
+    if attempt == 1:
+        if 'missing marker' in prompt:
+            print(json.dumps({'type':'thread.started','thread_id':'incomplete-session'}))
+            sys.exit(0)
+        pathlib.Path('partial.txt').write_text('preserved writer work')
+        subprocess.run(['git','add','partial.txt'], check=True)
+        subprocess.run(['git','commit','-m','partial writer work'], check=True, stdout=subprocess.DEVNULL)
+        checkout = pathlib.Path(os.environ['FIXTURE_DIR'])/'checkout'
+        (checkout/'fresh.txt').write_text('new main base')
+        subprocess.run(['git','-C',str(checkout),'add','fresh.txt'], check=True)
+        subprocess.run(['git','-C',str(checkout),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fresh main'], check=True, stdout=subprocess.DEVNULL)
+        subprocess.run(['git','-C',str(checkout),'push','origin','main'], check=True, stdout=subprocess.DEVNULL)
+        print(json.dumps({'type':'thread.started','thread_id':'killed-session'}), flush=True)
+        os.kill(os.getpid(), signal.SIGKILL)
+    if 'kill marker' in prompt:
+        assert pathlib.Path('fresh.txt').read_text() == 'new main base'
+        assert pathlib.Path('partial.txt').read_text() == 'preserved writer work'
+
 assert 'brief marker' in prompt or 'no required review' in prompt
 assert 'model_reasoning_effort=medium' in sys.argv
 assert sys.argv[sys.argv.index('-m') + 1] == 'gpt-6.1-sol'
@@ -67,11 +92,18 @@ else:
     subprocess.run(['git','add','writer.txt'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','writer'], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}))
+if 'reject marker' in prompt:
+    head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+    pathlib.Path('reviews', head[:8] + '-rejected.txt').write_text('VERDICT: REQUEST_CHANGES\n')
+    sys.exit(1)
+print(json.dumps({'type':'turn.completed'}))
 "#).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let out = Command::new("python3").current_dir(&root).env("PYTHONPATH", root.join("src"))
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
+        .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+        .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
         .env("NATIVE_BINARY", env!("CARGO_BIN_EXE_pg-spawnd"))
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base)
         .args(["-c", r#"
@@ -107,6 +139,21 @@ async def check():
         await service.tasks[bad['run_id']]
     assert service.result(bad['run_id'])['exit_code'] == 5
     card['base_ref'] = 'refs/heads/main'
+    for marker, tries, status in [('kill marker', 2, 'completed'), ('fail marker', 3, 'failed'), ('missing marker', 2, 'completed'), ('reject marker', 1, 'failed')]:
+        with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
+            retried = await admitted_spawn(service, dict(card=card, prompt='brief marker ' + marker))
+            await service.tasks[retried['run_id']]
+        final = service.result(retried['run_id'])
+        assert final['status'] == status, final
+        assert final['manifest']['try_count'] == tries, final
+        assert final['manifest']['brief'] == 'brief marker ' + marker, final
+        assert final['manifest']['worktree'] == final['cwd'], final
+        if marker == 'reject marker':
+            assert final['exit_code'] == 3 and final['review']['verdict'] == 'REQUEST_CHANGES', final
+        elif status == 'failed':
+            assert final['result'] == 'BLOCKED' and final['exit_code'] == 9, final
+        else:
+            assert final['session_id'] == 'fixture-session', final
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         holding = await admitted_spawn(service, dict(card=card, prompt='brief marker hold marker'))
         holding = service.result(holding['run_id'])

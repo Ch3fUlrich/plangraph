@@ -4,7 +4,7 @@ use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
@@ -97,6 +97,16 @@ impl Driver for Host {
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
         Ok(base)
     }
+    fn refresh_base(&mut self) -> Result<String, String> {
+        self.git(&[
+            "fetch",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ])?;
+        // Preserve writer commits and dirty files: conflicts fail closed for the orchestrator.
+        self.git(&["merge", "--no-edit", "origin/main"])?;
+        self.git(&["rev-parse", "origin/main"])
+    }
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
         let directory = self
             .record_path
@@ -108,6 +118,7 @@ impl Driver for Host {
             .append(true)
             .open(&log_path)
             .map_err(|e| e.to_string())?;
+        let log_start = log.metadata().map_err(|e| e.to_string())?.len();
         let mut command = Command::new("codex");
         command.arg("exec");
         if let Some(id) = session {
@@ -158,17 +169,27 @@ impl Driver for Host {
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
-            if let Some(id) = session {
-                return Ok(id.into());
+            let mut log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
+            log.seek(SeekFrom::Start(log_start))
+                .map_err(|e| e.to_string())?;
+            let mut completed = false;
+            let mut thread_id = session.map(str::to_owned);
+            for line in BufReader::new(log).lines() {
+                let line = line.map_err(|e| e.to_string())?;
+                let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if event["type"] == "turn.completed" {
+                    completed = true;
+                }
+                if event["type"] == "thread.started" {
+                    thread_id = event["thread_id"].as_str().map(str::to_owned);
+                }
             }
-            let log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
-            BufReader::new(log.take(1024 * 1024))
-                .lines()
-                .map_while(Result::ok)
-                .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-                .find(|event| event["type"] == "thread.started")
-                .and_then(|event| event["thread_id"].as_str().map(str::to_owned))
-                .ok_or_else(|| "codex did not report a session id".into())
+            if !completed {
+                return Err("codex ended without a result line".into());
+            }
+            thread_id.ok_or_else(|| "codex did not report a session id".into())
         })();
         if result.is_err() {
             #[cfg(unix)]
@@ -298,6 +319,7 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         record_path,
         base_ref: record["base_ref"].as_str().unwrap_or("").into(),
     };
+    record["cwd"] = json!(host.cwd);
     host.save(&record)?;
     native_writer::run(
         &mut host,

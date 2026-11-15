@@ -26,6 +26,25 @@ Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
 final head, resume count, review path/text/verdict and exit code. Exits are 0
 accepted, 3 review changes, 4 missing review, 5 base refusal, 6 writer failure,
 7 final gate failure, 8 start disk refusal. Worktrees and logs remain for recovery.
+Exit 9 reports `result: BLOCKED` when writer relaunches are exhausted or their
+disk/base preparation fails.
+
+The live Rust supervisor persists a `manifest` in the run record before launching
+Codex: name (run ID), host, worktree, original brief, effort and `try_count`.
+A killed/crashed CLI, failed CLI execution (including exit 127), or exit without a
+`turn.completed` result event starts a new Codex session with the same brief.
+Before relaunch it checks the existing disk floor, fetches and merges origin/main
+into the same worktree, preserving writer commits. Dirty-tree or merge failures
+stop with BLOCKED; no reset or cleanup discards work. There are at most three
+writer attempts (two relaunches), separate from missing-review session resumes.
+REQUEST_CHANGES is terminal, including when a review was saved before a crash.
+The last writer failure remains in the record for the orchestrator.
+
+This first relaunch slice covers failure of the writer child while the native
+supervisor survives. Recovery after supervisor death or a host restart, including
+startup manifest discovery and process-identity fencing, remains open. Persisted
+manifests retain the inputs needed for that recovery; they are not yet replayed
+by a replacement supervisor.
 This slice uses the existing POSIX SSH overflow transport; Windows readiness,
 worktree paths, disk probing and native process supervision need a later port.
 The plan-order launcher scripts remain until the migration slice.
