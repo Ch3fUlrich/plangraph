@@ -261,6 +261,20 @@ selects affected tests from the merge-base with `origin/main` when that base
 descends from the remote branch head. Public scrub still covers the original
 pushed range, passed separately to preflight as `--scrub-base`.
 
+For a merge batch, the hook fetches and prunes origin branch refs before selecting
+tests. When the range starts in known `origin/main` history and every second
+parent is reachable from `refs/remotes/origin/*`, local
+affected tests cover each merge's `git show --remerge-diff` (conflict resolutions
+and evil-merge edits), files changed by at least two parts, and every non-merge
+commit on the batch's first-parent chain. Exact commit ancestry is required;
+unpushed or locally rewritten heads, unavailable fetch/history, octopus merges,
+and ranges without a first-parent base fall back to normal affected selection.
+Existing feature or partially published batch tips outside main history also
+retain normal selection, preserving interactions with their earlier commits.
+The selection log names the mode and counts parts, delta files, and selected tests.
+This changes only test selection: scrub, policy and Rust steps still run, and
+batch CI runs the full suite (rule 3.42 a).
+
 ## Shadow merge decision (D-5252, slice 1)
 
 `python3 tools/merge_gate.py facts.json` prints `GO <sha>` (exit 0) or
