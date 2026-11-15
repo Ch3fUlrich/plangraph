@@ -77,6 +77,31 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
             .skipped
             .push("build running: cache cleanup deferred".into());
     }
+    if !building {
+        let worktrees = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"])?
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .map(PathBuf::from)
+            .filter(|path| path.starts_with(&canonical_root))
+            .collect::<Vec<_>>();
+        let mut private_guards = Guards {
+            pinned: guards.pinned.clone(),
+            live: guards.live.clone(),
+        };
+        private_guards
+            .pinned
+            .extend(pg_worker_core::cargo_cache::shared_cache_roots()?);
+        if let Err(error) = pg_worker_core::private_targets::sweep(
+            &PathBuf::from("/tmp"),
+            &worktrees,
+            &private_guards,
+            apply,
+            &mut report,
+        ) {
+            report.alarm = true;
+            report.error = Some(error.to_string());
+        }
+    }
     {
         for cache in pg_worker_core::cargo_cache::shared_cache_roots()? {
             if let Err(error) = disk_runtime::shared_cache_capped(

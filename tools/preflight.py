@@ -13,6 +13,9 @@ import sys
 import time
 import tomllib
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from plangraph.spawner.host_ready import cargo_child_env, cargo_lease, running_disk_refusal
+
 CHECK_TIMEOUT = 60
 # Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
 # Leave ample room for slower hosts, multiple affected crates and test suites.
@@ -233,7 +236,7 @@ def main(argv=None, root=None):
     policy_base = policy_baseline(root, args.base)
     policy_bases = dict(FILESIZE_REQUIRE_BASE=policy_base, NEWCODE_BASE=policy_base,
                         CHANGELOG_BASE=policy_base)
-    env = dict(os.environ, CARGO_BUILD_JOBS="4")
+    env = cargo_child_env(dict(os.environ, CARGO_BUILD_JOBS="4"))
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():
         env['PATH'] = str(cargo_bin) + os.pathsep + env.get('PATH', '')
@@ -244,6 +247,18 @@ def main(argv=None, root=None):
 
     def python(name, *extra):
         return [interpreter, str(tools / name), *extra]
+
+    def invoke(command, cwd, command_env):
+        if command[0] != 'cargo':
+            return run(command, cwd, command_env)
+        # Share the spawner's target, cap checks and cleanup lease.
+        with cargo_lease():
+            refusal = running_disk_refusal(root)
+            if refusal:
+                return 1, refusal + '\n'
+            code, output = run(command, cwd, command_env)
+            refusal = running_disk_refusal(root)
+            return (1, output + refusal + '\n') if refusal else (code, output)
 
     scrub = python("split/scrub_check.py", ".", "--base", args.scrub_base or args.base, "--head", args.head,
                    "--rules", str(tools / "split/manifest.toml"),
@@ -298,12 +313,12 @@ def main(argv=None, root=None):
                         command_env = dict(family_env)
                         command_env.setdefault("PG_JAIL", "off")
                         command_env.setdefault("PG_TEST_ALLOW_UNJAILED", "1")
-                    code, output = run(command, cwd, command_env)
+                    code, output = invoke(command, cwd, command_env)
                     print(output, end="", flush=True)
                     infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     if infra:
                         print(f"{family}: INFRA HTTP 5xx; rerun once", flush=True)
-                        code, output = run(command, cwd, command_env)
+                        code, output = invoke(command, cwd, command_env)
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")
