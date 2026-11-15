@@ -1,21 +1,75 @@
-//! CLI tests must not execute the mutable, shared Cargo output path.
-use std::{path::Path, process::Command, sync::OnceLock};
+//! Resolve checkout-owned CLI binaries only when Cargo's target is shared.
+use sha2::{Digest, Sha256};
+use std::{
+    path::{Component, Path, PathBuf},
+    process::Command,
+    sync::OnceLock,
+};
 
 pub(crate) fn spawnd() -> &'static str {
     static BINARY: OnceLock<String> = OnceLock::new();
     BINARY.get_or_init(|| {
         let manifest = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        // CARGO_BIN_EXE_pg-spawnd names target/debug/pg-spawnd even when
-        // different worktrees share that target. Another build can overwrite
-        // it after Cargo releases its lock, including while tests are running.
-        // Keep this suite's executable and Cargo fingerprints in this checkout.
-        let target = test_target(&manifest);
-        build(&manifest, &target, "pg-spawnd")
+        let checkout = manifest.parent().unwrap().join("../..");
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .or_else(|| std::env::var_os("CARGO_BUILD_TARGET_DIR"));
+        // Cargo starts tests in the crate directory, which can differ from
+        // the invocation directory that relative target variables refer to.
+        // Cargo's integration-test scratch path records the actual target root.
+        let target = target.map(PathBuf::from).map(|target| {
+            if target.is_relative() {
+                Path::new(env!("CARGO_TARGET_TMPDIR"))
+                    .parent()
+                    .unwrap()
+                    .to_owned()
+            } else {
+                target
+            }
+        });
+        resolve(&checkout, target.as_deref(), |target| {
+            build(&manifest, target, "pg-spawnd")
+        })
     })
 }
 
-pub(crate) fn test_target(manifest: &Path) -> std::path::PathBuf {
-    manifest.parent().unwrap().join("target/cli-tests")
+pub(crate) fn resolve(
+    checkout: &Path,
+    target: Option<&Path>,
+    build_cli: impl FnOnce(&Path) -> String,
+) -> String {
+    let Some(target) = target else {
+        return env!("CARGO_BIN_EXE_pg-spawnd").to_owned();
+    };
+    let checkout = absolute(checkout);
+    let target = absolute(target);
+    if target.starts_with(&checkout) {
+        return env!("CARGO_BIN_EXE_pg-spawnd").to_owned();
+    }
+    // Cargo's uplifted target/debug executable can be replaced by another
+    // checkout after Cargo releases its lock. Isolate fingerprints as well as
+    // the executable, while keeping all extra build output in the shared cap.
+    let hash = Sha256::digest(checkout.as_os_str().as_encoded_bytes());
+    let key = format!("{hash:x}");
+    build_cli(&target.join("cli-tests").join(&key[..16]))
+}
+
+fn absolute(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in std::env::current_dir().unwrap().join(path).components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                result.pop();
+            }
+            other => {
+                result.push(other.as_os_str());
+                if let Ok(canonical) = result.canonicalize() {
+                    result = canonical;
+                }
+            }
+        }
+    }
+    result
 }
 
 pub(crate) fn build(manifest: &Path, target: &Path, name: &str) -> String {

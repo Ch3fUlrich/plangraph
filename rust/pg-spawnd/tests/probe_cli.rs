@@ -7,6 +7,42 @@ fn cli(args: &[&str]) -> Output {
 }
 
 #[test]
+fn unshared_cli_uses_cargos_executable_without_building() {
+    if std::env::var_os("PG_TEST_UNSHARED_CLI").is_some() {
+        assert_eq!(binary::spawnd(), env!("CARGO_BIN_EXE_pg-spawnd"));
+        return;
+    }
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "unshared_cli_uses_cargos_executable_without_building",
+        ])
+        .env("PG_TEST_UNSHARED_CLI", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        child.status.success(),
+        "{}",
+        String::from_utf8_lossy(&child.stdout)
+    );
+    let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for target in [
+        None,
+        Some(checkout.join("rust/target")),
+        Some(checkout.join("rust/../target/custom")),
+    ] {
+        assert_eq!(
+            binary::resolve(&checkout, target.as_deref(), |_| panic!(
+                "unshared target built a CLI"
+            )),
+            env!("CARGO_BIN_EXE_pg-spawnd")
+        );
+    }
+}
+
+#[test]
 fn cli_builds_stay_with_their_checkout() {
     let scratch = tempfile::tempdir().unwrap();
     let shared = scratch.path().join("shared");
@@ -25,7 +61,11 @@ fn cli_builds_stay_with_their_checkout() {
             format!("fn main() {{ println!({marker:?}); }}"),
         )
         .unwrap();
-        let isolated = binary::build(&manifest, &binary::test_target(&manifest), "fixture");
+        let isolated = binary::resolve(&root, Some(&shared), |target| {
+            assert!(target.starts_with(shared.join("cli-tests")));
+            assert!(!target.starts_with(&root));
+            binary::build(&manifest, target, "fixture")
+        });
         binary::build(&manifest, &shared, "fixture");
         checkouts.push((marker, isolated));
     }

@@ -1,1 +1,1 @@
-pg-spawnd CLI tests build in a checkout-local test target instead of executing the shared Cargo binary path, preventing another worktree's build from replacing their executable. Preflight logs the Rust target directory.
+pg-spawnd CLI tests reuse Cargo's binary for unshared targets and isolate builds under `<shared target>/cli-tests/<checkout path hash>` when a target directory environment variable points outside the checkout, preventing another worktree from replacing their executable without extra builds in ordinary CI. Preflight logs the Rust target directory.
