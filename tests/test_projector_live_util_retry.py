@@ -101,3 +101,59 @@ def test_first_ready_no_delay(fake):
     assert len(fake.processes) == 1
     assert fake.sleeps == []
     assert fake.server.address == fake.addresses[0]
+
+
+
+def rig_with_start_results(monkeypatch, fake, results, *, clock_jump=0.3):
+    import asyncio
+    calls = []
+
+    async def start(*args, **kwargs):
+        calls.append((args, kwargs))
+        assert len(calls) <= 100, "unbounded namespace readiness retry"
+        value = results.pop(0) if len(results) > 1 else results[0]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    async def sleep(seconds):
+        fake.sleeps.append(seconds)
+        fake.clock += clock_jump
+
+    rig = object.__new__(util.LiveRig)
+    rig.client = SimpleNamespace(start_workflow=start)
+    rig.gate_queue = "live-gate"
+    rig.run = asyncio.run
+    monkeypatch.setattr(util.asyncio, "sleep", sleep)
+    return rig, calls
+
+
+def test_gate_start_retries_namespace_cache_race(monkeypatch, fake):
+    unavailable = RPCError("Namespace default is not found.", RPCStatusCode.NOT_FOUND, b"")
+    rig, calls = rig_with_start_results(monkeypatch, fake,
+        [unavailable, SimpleNamespace(result_run_id="R2")])
+    assert rig.start_gate("card:A", "demo:A") == "R2"
+    assert len(calls) == 2 and fake.sleeps == [0.3]
+    assert all(kwargs["memo"] == {"plan_key": "demo:A"} for _, kwargs in calls)
+
+
+@pytest.mark.parametrize("status,message", [
+    (RPCStatusCode.NOT_FOUND, "workflow missing"),
+    (RPCStatusCode.PERMISSION_DENIED, "Namespace default is not found."),
+])
+def test_gate_start_preserves_non_readiness_errors(monkeypatch, fake, status, message):
+    problem = RPCError(message, status, b"")
+    rig, calls = rig_with_start_results(monkeypatch, fake, [problem])
+    with pytest.raises(RPCError) as exc:
+        rig.start_gate("card:A", "demo:A")
+    assert exc.value is problem
+    assert len(calls) == 1 and fake.sleeps == []
+
+
+def test_gate_start_namespace_retry_has_a_deadline(monkeypatch, fake):
+    problem = RPCError("Namespace default is not found.", RPCStatusCode.NOT_FOUND, b"")
+    rig, calls = rig_with_start_results(monkeypatch, fake, [problem], clock_jump=100)
+    with pytest.raises(RPCError) as exc:
+        rig.start_gate("card:A", "demo:A")
+    assert exc.value is problem
+    assert len(calls) <= 2 and fake.sleeps == [0.3]
