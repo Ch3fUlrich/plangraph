@@ -238,8 +238,44 @@ function main() {
   require(WEB + "/page_side_tables.js");     // PlanUI.SideTables (sidebar tables)
   require(WEB + "/page_details.js");         // PlanUI.DetailPanel (D6 mount)
 
+  if (mode === "work-mode") {
+    var pending = [], calls = [];
+    global.XMLHttpRequest = function () {
+      this.open = function (method, url) { if (method !== 'POST' || url !== '/mcp') throw Error('endpoint'); };
+      this.setRequestHeader = function () {};
+      this.send = function (body) { calls.push(JSON.parse(body)); pending.push(this); };
+    };
+    var respond = function (row, refused) {
+      var x = pending.shift(); x.status = 200;
+      x.responseText = JSON.stringify(refused ? {error:{message:'refused'}} : {result:{content:[{text:JSON.stringify(row)}]}});
+      x.onload();
+    };
+  }
   var ui = new PlanUI.Store({});
   var vm = PlanUI.buildViewModel(JSON.parse(fs.readFileSync(FIXTURE, "utf8")));
+
+  if (mode === "work-mode") {
+    PlanUI.Sidebar.mount(ui, vm);
+    function check(value) { if (!value) throw Error('work mode assertion'); }
+    function select() { return doc.querySelector("select[aria-label='Work mode']"); }
+    check(select().disabled && calls.length === 0);
+    ui.set("sidebar", { open: true, tab: "settings" });
+    check(select().disabled && calls.length === 1);
+    check(calls[0].params.name === 'plangraph_work_mode');
+    check(Object.keys(calls[0].params.arguments).length === 0);
+    respond({work_mode:'batch', effective_work_mode:'batch'});
+    check(!select().disabled && select().value === 'batch');
+    select().value = 'auto'; select().listeners.change[0]();
+    check(calls[1].params.arguments.work_mode === 'auto' && select().disabled);
+    respond({work_mode:'auto', effective_work_mode:'auto', resolved_work_mode:'piecewise', work_mode_reason:'auto: no writer legs served'});
+    check(select().value === 'auto' && ui.get('settings').workMode === 'auto');
+    check(doc.getElementById('sb-panel-settings').textContent.indexOf('Resolved: piecewise. auto: no writer legs served') >= 0);
+    select().value = 'batch'; select().listeners.change[0](); respond(null, true);
+    check(select().value === 'auto' && !select().disabled);
+    check(doc.getElementById('sb-panel-settings').textContent.indexOf('could not be loaded or saved') >= 0);
+    emit({ok: true});
+    return;
+  }
 
   if (mode === "sidebar") {
     PlanUI.Sidebar.mount(ui, vm);
@@ -351,3 +387,8 @@ def test_boot_exposes_store_alias_and_keeps_ui_and_jump():
     assert "store: ui" in boot
     assert "ui: ui" in boot
     assert "jump:" in boot or "jump :" in boot
+
+
+@need_node
+def test_settings_page_reads_writes_auto_and_keeps_saved_value_on_refusal(tmp_path):
+    assert run_node(tmp_path, "work-mode") == {"ok": True}

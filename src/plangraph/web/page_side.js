@@ -236,12 +236,55 @@
     return b;
   }
 
-  function renderSettings() {
+  var wm = null, wmBusy = false, wmErr = "", WM = ["auto", "piecewise", "batch"];
+  function requestWorkMode(mode) {
+    wmBusy = true;
+    wmErr = "";
+    function done(e) { wmBusy = false; wmErr = e || ""; renderSettings(); }
+    try {
+      var x = new global.XMLHttpRequest();
+      x.open("POST", "/mcp", true);
+      x.setRequestHeader("Content-Type", "application/json");
+      x.onload = function () {
+        try {
+          var r = JSON.parse(x.responseText);
+          var row = JSON.parse(r.result.content[0].text);
+          if (x.status !== 200 || r.result.isError || WM.indexOf(row.work_mode) < 0) throw 0;
+          wm = row;
+          pick("workMode", row.work_mode);
+          done();
+        } catch (e) { done("Work mode could not be loaded or saved."); }
+      };
+      x.onerror = function () { done("Work mode offline."); };
+      x.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+        name: "plangraph_work_mode", arguments: mode ? { work_mode: mode } : {} } }));
+    } catch (e) { done("Work mode offline."); }
+  }
+
+  function renderSettings(load) {
     var box = $("sb-panel-settings");
     if (!box) return;
     clear(box);
     var s = UI.get("settings");
     box.appendChild(el("h3", "sb-h", "Settings"));
+    var mode = el("select");
+    mode.setAttribute("aria-label", "Work mode");
+    WM.forEach(function (v) { var o = el("option", null, v); o.value = v; mode.appendChild(o); });
+    mode.value = wm ? wm.work_mode : "batch";
+    mode.disabled = wmBusy || !wm;
+    mode.addEventListener("change", function () { requestWorkMode(mode.value); renderSettings(); });
+    box.appendChild(block("Work mode", mode));
+    var msg = wmErr || (wmBusy ? "Loading…" : "");
+    if (!msg && wm) {
+      if (wm.work_mode !== wm.effective_work_mode) msg = "Repo override: " + wm.effective_work_mode + ". ";
+      if (wm.work_mode === "auto" || wm.effective_work_mode === "auto") msg += "Resolved: " + (wm.resolved_work_mode || "unavailable") + ". " + wm.work_mode_reason;
+    }
+    box.appendChild(el("p", "set-row", msg)).setAttribute("role", "status");
+    if (!wmBusy && (wm || wmErr)) {
+      var refresh = box.appendChild(el("button", null, "Refresh"));
+      refresh.addEventListener("click", function () { requestWorkMode(); renderSettings(); });
+    }
+    if (load && !wm && !wmBusy && !wmErr) requestWorkMode();
     box.appendChild(block("Text size (root px)", seg([["S", "S"], ["M", "M"], ["L", "L"]],
       s.textSize, function (v) { pick("textSize", v); }, "Text size")));
     box.appendChild(block("Theme", seg([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]],
@@ -319,7 +362,7 @@
     if (tab === "projects") renderProjects();
     else if (tab === "qa") PlanUI.SideTables.renderQA();
     else if (tab === "answers") PlanUI.SideTables.renderAnswers();
-    else if (tab === "settings") renderSettings();
+    else if (tab === "settings") renderSettings(true);
     else PlanUI.SideTables.renderNeeds();
   }
 
