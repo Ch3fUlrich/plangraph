@@ -357,6 +357,58 @@ def changed_files(root, base, head=None):
     return sorted(set(p.decode() for p in (tracked + untracked).split(b"\0") if p))
 
 
+def pushed_parts_files(root, base, head):
+    """Return interaction paths only for a verifiable batch; otherwise use normal diff."""
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "--no-replace-objects", *args], cwd=root,
+            stderr=subprocess.DEVNULL, timeout=30)
+
+    def paths(*args):
+        return {os.fsdecode(p) for p in git(*args).split(b"\0") if p}
+
+    try:
+        # Do not trust incomplete history or walk across a base on a side branch
+        # (notably the origin/main refresh base chosen by the hook).
+        if git("rev-parse", "--is-shallow-repository").strip() != b"false":
+            return None
+        previous = git("rev-parse", "--verify", base + "^{commit}").strip().decode()
+        # A previously pushed feature/batch tip can already contain interacting
+        # changes outside this range. Keep its normal selection, including #957's
+        # divergent-main fallback; optimize only a base in known main history.
+        git("merge-base", "--is-ancestor", previous, "refs/remotes/origin/main")
+        commits = git("rev-list", "--first-parent", "--reverse", "--parents",
+                      f"{base}..{head}").decode().splitlines()
+        selected, touched, parts = set(), set(), 0
+        for row in commits:
+            commit, *parents = row.split()
+            if not parents or parents[0] != previous or len(parents) > 2:
+                return None
+            previous = commit
+            if len(parents) == 1:
+                selected.update(paths("diff", "--name-only", "--no-renames", "-z",
+                                      parents[0], commit))
+                continue
+            # Exact ancestry, never patch equivalence: a rewritten/unpushed
+            # head must not inherit the original head's test exemption.
+            refs = git("for-each-ref", "--format=%(refname)",
+                       "--contains=" + parents[1], "refs/remotes/origin/")
+            if not any(not ref.endswith(b"/HEAD") for ref in refs.splitlines()):
+                return None
+            common = git("merge-base", *parents).strip().decode()
+            changed = paths("diff", "--name-only", "--no-renames", "-z", common, parents[1])
+            selected.update(touched & changed)
+            touched.update(changed)
+            # Unlike the first-parent diff this includes only resolutions and
+            # edits made by the merge itself, including clean evil merges.
+            selected.update(paths("show", "--remerge-diff", "--format=",
+                                  "--name-only", "--no-renames", "-z", commit))
+            parts += 1
+        return (sorted(selected), parts) if parts else None
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return None
+
+
 def test_environment(root, env):
     """Detach test subprocesses from every Git-advertised repository binding."""
     local = set(subprocess.check_output(
@@ -392,9 +444,22 @@ def main(root=None):
             if not (root / w).exists():
                 print(f"unknown --within path: {w}", file=sys.stderr)
                 return 2
-    plan = select_tests(root, args.changed if args.changed is not None else changed_files(root, args.base, args.head), within=args.within, files_only=args.files_only, local=args.local,
+    changed = args.changed
+    batch = None
+    pushed_range = os.environ.get("PLANGRAPH_PUSH_RANGE", "").split(":")
+    hook_selection = args.files_only and args.local and args.head and args.changed is None
+    if hook_selection and len(pushed_range) == 2 and pushed_range[1] == args.head:
+        batch = pushed_parts_files(root, pushed_range[0], args.head)
+    if changed is None:
+        changed = batch[0] if batch else changed_files(root, args.base, args.head)
+    plan = select_tests(root, changed, within=args.within, files_only=args.files_only, local=args.local,
                         base=args.base, head=args.head)
+    # Preflight's timeout diagnostics parse the first combined output line.
     print(json.dumps(plan), flush=True)
+    if hook_selection:
+        print(f"pre-push selection: mode={'pushed-parts' if batch else 'normal'} "
+              f"parts={batch[1] if batch else 0} delta_files={len(changed)} "
+              f"selected_tests={len(plan['tests'])}", file=sys.stderr, flush=True)
     if args.local and args.run and "tests" in plan["tests"]:
         print('local preflight refuses the full suite; specify affected test files with --within', file=sys.stderr)
         return 2
