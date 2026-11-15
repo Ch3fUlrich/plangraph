@@ -35,7 +35,7 @@ def pool_of(model):
     """Provider pool serving a leg model, or None for a leg with no known pool."""
     head, _, rest = str(model or '').partition('/')
     if head == 'agy':
-        return 'antigravity'
+        return None  # D-5966: CLI quotas belong to individual models, not the gateway pool.
     alias = re.match(r'(cx|cc|gc|gh)[-/]', rest) if head == 'omniroute' else None
     return ALIASES[alias[1]] if alias else None
 

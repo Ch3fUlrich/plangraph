@@ -342,13 +342,13 @@ def test_writer_order_d2683_review_order_unchanged():
     # D-4196: without a diff, disabled Zen and inline-only Go cannot lead.
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "opencode-big-pickle"
+    assert plan.first_leg.id == "agy-gemini-4-hydrogen-high"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "opencode-big-pickle"
+    assert plan_rev.first_leg.id == "agy-gemini-4-hydrogen-high"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.1-sol-xhigh" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs

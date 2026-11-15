@@ -65,7 +65,7 @@ def test_seats_and_impossible_fence():
     assert {l.id for l in p.legs if l.family == "claude"} == {
         "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "agy-opus", "claude-haiku-5.5"}
     assert all(l.claude_family for l in p.legs if l.family == "claude")
-    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "glm"
+    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gemini"
     # With all other automatic families fenced, only Claude remains.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo", "muse"),
@@ -74,7 +74,7 @@ def test_seats_and_impossible_fence():
     assert p.error == "two distinct review families unavailable"
     # Impossible fence: every family but the single writer's is excluded.
     p = plan_spawn(CARD, role="review", writer_families=("qwen",),
-                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok"))
+                   exclude_families=("deepseek", "glm", "gpt", "gemini", "mimo", "muse", "claude", "grok", "beam"))
     assert not p.review_seats and p.error
 
 
@@ -85,7 +85,7 @@ def test_operator_order_and_roles_roundtrip(tmp_path):
         "mimo-v2.6-flash", "mimo-v2.6-pro", "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
     assert [l.id for l in DEFAULT_LEGS if "review" in l.roles] == [
         "qodercli-qwen3.8-flash", "opencode-deepseek-v4.1-flash-free",
-        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-4-hydrogen-medium", "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b", "mimo-v2.6-flash", "mimo-v2.6-pro",
+        "opencode-glm-5.3-flash-free", "cx-gpt-6-luna", "agy-gemini-4-hydrogen-high", "agy-gemini-4-hydrogen-medium", "agy-gemini-4-argon", "opencode-big-pickle", "agy-gpt-oss-120b", "mimo-v2.6-flash", "mimo-v2.6-pro",
         "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "omniroute-deepseek-flash", "omniroute-muse-spark",
         "agy-opus", "opencode-gemini-4-argon", "opencode-go-gemini-4-argon",
         "opencode-go-glm-5.2", "opencode-go-qwen3.8-max",

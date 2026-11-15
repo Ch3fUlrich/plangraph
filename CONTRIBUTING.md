@@ -65,7 +65,7 @@ install step; the keeper tests need Linux, macOS or WSL, the rest run anywhere.
 The MCP snapshot guard has a path-specific `tools/new_code_allowlist.txt` entry
 with `(D-5062), retired by MCP-RUST`; keep lane exceptions scoped to that lane's files.
 The D-5504/D-5506 `mcp_tools.py` exception only splits schema data out of the full Python MCP transport; it also retires with MCP-RUST.
-Interim (operator D-5830): `**/*.py` and `**/*.sh` are allowlisted, so new Python and shell files pass the new-code gate; Rust stays the preferred language for new code, and the gate, its CI job and its tests stay in place for the other blocked extensions. Keep both OOM diagnostic regression and quota snapshot module/test entries in `tools/new_code_allowlist.txt` when merging these concurrent in-flight changes.
+Keep both OOM diagnostic regression and quota snapshot module/test entries in `tools/new_code_allowlist.txt` when merging these concurrent in-flight changes.
 
 ```bash
 python -m pip install -r requirements-ci.txt  # dev deps, including pytest-xdist and jsonschema>=4
@@ -88,6 +88,9 @@ Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
+Rust review record assertions run on every platform; keeper-backed assertions run only on Unix because the keeper imports POSIX `fcntl`.
+Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py` and `src/plangraph/planner/routing.py` select Rust CI through `RUST_INPUTS`.
+
 CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 `RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
 select both `rust` and `rust-windows` via the shared `rust` output without changing
@@ -98,6 +101,7 @@ and `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cac
 Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
 `docs/rust-hooks.md`, `tools/new_code_allowlist.txt` and its parity corpus at
 `tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
+`setup/manifest.toml` and `docs/setup.md` select the Rust job because the CLI setup contract test (`rust/plangraph-cli/tests/setup_contract.rs`) reads them.
 
 Run `cargo test -p <crate>` from `rust/` for each affected crate. Documentation
 mapping for a crate covers its own paths, not shared workspace manifests or locks.
@@ -206,7 +210,7 @@ The `spawner/gateway_models.py` entry covers a responsibility-only extraction of
 
 ## Changelog and documentation
 
-Every PR records its changelog only in `changelog.d/<ITEM-KEY>.md` (several parts of one item: `<ITEM-KEY>-<n>.md`). Add a non-heading entry line against the merge-base; fragments must be direct children and README.md is excluded. Do not edit `CHANGELOG.md` in an ordinary PR, including doc-only edits, deletions or edits later reverted in the range. The gate checks each commit; merges may inherit parent ledger edits, but must preserve additions and cannot invent ledger lines or discard common base lines (unless a parent already deleted them) without a release trailer. A release commit is recognized only by a nonempty `Release: <version or release description>` trailer in its final trailer paragraph (case-insensitive); body prose and empty trailers do not qualify. Release maintainers run `python3 tools/changelog_fold.py`, then commit the folded changelog and fragment deletions with that trailer. `--check` writes nothing and exits 1 while fragments remain; empty and heading-only fragments remain with a warning. A release trailer permits the CHANGELOG edit but does not waive the fragment requirement for code changes. Non-doc changes may instead carry `Changelog: skip (<reason>)` on every non-doc commit, with a nonempty reason for typos or format-only edits; merge commits do not count. Neither skip trailers nor fragments excuse a non-release CHANGELOG edit. Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. Globs: `*` stays inside one path segment, `**` spans segments; the `# enforce-after:` date is the first day the mapping is an error (earlier days warn). `python3 tools/check_changelog_docs.py` (range `merge-base(base, --head)..head`) verifies this in CI and runs with `--warn-only` on each pushed sha in the pre-push hook.
+Every PR records its changelog only in `changelog.d/<ITEM-KEY>.md` (several parts of one item: `<ITEM-KEY>-<n>.md`). Add a non-heading entry line against the merge-base; fragments must be direct children and README.md is excluded. Do not edit `CHANGELOG.md` in an ordinary PR, including doc-only edits, deletions or edits later reverted in the range. The gate checks each commit; merges may inherit parent ledger edits, but must preserve additions and cannot invent ledger lines or discard common base lines (unless a parent already deleted them) without a release trailer. A release commit is recognized only by a nonempty `Release: <version or release description>` trailer in its trailing trailer block (case-insensitive); body prose and empty trailers do not qualify. Release maintainers run `python3 tools/changelog_fold.py`, then commit the folded changelog and fragment deletions with that trailer. `--check` writes nothing and exits 1 while fragments remain; empty and heading-only fragments remain with a warning. A release trailer permits the CHANGELOG edit but does not waive the fragment requirement for code changes. Non-doc changes may instead carry `Changelog: skip (<reason>)` on every non-doc commit, with a nonempty reason for typos or format-only edits; merge commits do not count. Neither skip trailers nor fragments excuse a non-release CHANGELOG edit. The changelog/docs checker imports `ci_commit_gate._trailer_block_lines`: the block is the maximal trailing run of paragraphs made entirely of trailer-shaped lines. Attribution paragraphs such as `Co-Authored-By` and `Claude-Session` may follow policy trailers across blank lines; prose after a skip ends its eligibility. Furthermore, repository documentation mappings in `.docs-map` pair path globs with their corresponding doc files; changes touching a mapped path must update at least one of its listed docs. Globs: `*` stays inside one path segment, `**` spans segments; the `# enforce-after:` date is the first day the mapping is an error (earlier days warn). `python3 tools/check_changelog_docs.py` (range `merge-base(base, --head)..head`) verifies this in CI and runs with `--warn-only` on each pushed sha in the pre-push hook.
 
 `tests/fixtures/writer_docs_map.json` is the shared glob/parser case table for Rust writer finalization and `test_writer_docs_map_shared_parity` in `tests/test_check_changelog_docs.py`; run the latter with `python3 -m pytest -q -n 2 tests/test_check_changelog_docs.py`. Rust reads the head map; CI additionally retains merge-base rules (see [writer finalization](docs/SPAWNER.md#writer-result-finalization)).
 
@@ -251,6 +255,11 @@ An explicit missing or unreadable list refuses pushes to any remote. The env lis
 Remotes are public unless `git config remote.<name>.plangraph-private true` is set:
 that skips private-word matching, not public patterns. Classification uses local config only.
 Diagnostics never show matched values or the words-file path.
+
+For an existing branch refreshed by merging known `origin/main` history, the hook
+selects affected tests from the merge-base with `origin/main` when that base
+descends from the remote branch head. Public scrub still covers the original
+pushed range, passed separately to preflight as `--scrub-base`.
 
 ## Shadow merge decision (D-5252, slice 1)
 
@@ -409,6 +418,11 @@ outside the checkout; the changelog/docs PR gate also rejects added status
 notes, including forced additions and renames into that naming pattern.
 The status-note check also inspects additions in every non-merge commit, so
 adding and then deleting a note within the PR still fails.
+
+The new-code language gate is implemented in Rust (`rust/pg-policy`), with the
+existing Python command retained as a launcher. Added allowlist entries need
+base-revision OPERATOR authority; D-5840 and D-5830 do not count. See
+[the migration plan](docs/PY-TO-RUST-MIGRATION-PLAN.md) for the index and first ports.
 
 The pre-push hook checks commit trailers on `origin/main..head` before scrub and
 preflight, including when `PREFLIGHT_SKIP=1`. It queries open PR heads and checks

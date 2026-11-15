@@ -183,8 +183,34 @@ fn tools_list_matches_embedded_fixture() {
     let mut client = McpClient::connect(&socket);
     client.initialize();
     let response = client.request("tools/list", serde_json::json!({}));
-    let fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture");
-    assert_eq!(response["result"]["tools"], fixture);
+    let mut fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture");
+    let mut listed = response["result"]["tools"].clone();
+    for (catalogue, native) in [(&mut listed, true), (&mut fixture, false)] {
+        for tool in catalogue.as_array_mut().expect("tool array") {
+            if matches!(
+                tool["name"].as_str(),
+                Some("plangraph_agent_route" | "plangraph_agent_spawn")
+            ) {
+                let selector = tool["inputSchema"]["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("leg");
+                if native {
+                    let selector = selector.expect("native selector advertised on the wire");
+                    assert_eq!(selector["type"], "string");
+                    assert_eq!(
+                        selector["enum"],
+                        serde_json::json!(["agy-cli", "claude-cli"])
+                    );
+                    assert!(selector["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains("role=review"));
+                }
+            }
+        }
+    }
+    assert_eq!(listed, fixture);
     assert_eq!(
         response["result"]["tools"].as_array().expect("array").len(),
         15
@@ -267,9 +293,7 @@ fn unknown_tool_is_protocol_error_naming_no_internals() {
 fn stale_socket_is_replaced() {
     let tmp = TempDir::new();
     let socket = tmp.path().join("spawnd.sock");
-    {
-        let _stale = std::os::unix::net::UnixListener::bind(&socket).expect("bind stale");
-    }
+    drop(common::bind_stale_socket(&socket));
     assert!(socket.exists(), "stale socket file left behind");
     let _guard = spawn_serve(&socket);
     let mut client = McpClient::connect(&socket);
@@ -357,7 +381,7 @@ fn parallel_stale_sockets_are_independent() {
             scope.spawn(|| {
                 let tmp = TempDir::new();
                 let socket = tmp.path().join("spawnd.sock");
-                drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+                drop(common::bind_stale_socket(&socket));
                 barrier.wait();
                 let _guard = spawn_serve(&socket);
                 let mut client = McpClient::connect(&socket);

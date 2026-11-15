@@ -622,6 +622,10 @@ Preserve audit rows; reapplication requires an explicit restore plan.
 SQLite rollback retains tables; C4 owns forward audit events, not item events.
 Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure. `quota_alarms.py` (systemd timer, deploy/systemd) reads gateway quota snapshots (sqlite opened read-only via `QUOTA_SNAPSHOT_DB`, else `docker exec`) and sends one routing line per 50/75/90 % threshold per window, deduped in a pruned state file with poll checkpoints and last null-reset observations to recover refills across downtime; timestamp formats are normalized and read-only database paths are URI-escaped; a window with no snapshot for 3 h, or no fresh snapshot at all, sends a `quota-alarm-stale` or `quota-alarm-blind` line (daily while it lasts) instead of exiting silent. Quota alarm polls skip malformed snapshot rows independently and include their count as `malformed=N` in the stale/blind notice; healthy windows continue to alarm. Corrupt JSON state is moved to a timestamped `.corrupt-*` sibling, and the poll starts empty with a recovery notice (dry runs leave the file unchanged). Docker reads require an explicit `QUOTA_GATEWAY_CONTAINER`; prefer the read-only `--db` source. The example systemd unit requires a checkout at `%h/code/plangraph` and `/usr/bin/python3` version 3.11 or newer; override WorkingDirectory, PYTHONPATH and ExecStart for a different checkout or virtualenv.
 
+Rule 3.26: merged-close backfill may count a passing spawner cli_reported review
+record bound to the merged head, with consistent attempt provenance. Auth/secrets
+cards cannot use these low-trust seats; their existing two-seat gate remains.
+
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
 
 `ready` uses the claim guard's merged-work and newer-decision checks. Its JSON

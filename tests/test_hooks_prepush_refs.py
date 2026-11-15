@@ -268,3 +268,45 @@ def test_new_stacked_branch_scrubs_inherited_phase_additions(repo, tmp_path, kno
     assert result.returncode == 1, result.stderr
     assert ':1: private-word' in result.stdout + result.stderr
     assert fake_word() not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('case', ['refresh', 'main-ahead', 'divergent-remote',
+                                  'unknown-main', 'unrelated-merge', 'no-merge'])
+def test_pushed_branch_refresh_affected_base(repo, monkeypatch, case):
+    import runpy
+    r, initial = repo
+    remote = commit_file(r, 'published.txt', 'published branch\n')
+    git(r, 'checkout', '-q', '-b', 'lane')
+    commit_file(r, 'branch.txt', 'branch work\n')
+    git(r, 'checkout', '-q', 'main')
+    if case == 'divergent-remote':
+        git(r, 'reset', '--hard', initial)
+    commit_file(r, 'upstream-one.txt', 'unrelated main work\n')
+    main = commit_file(r, 'upstream-two.txt', 'more unrelated main work\n')
+    git(r, 'update-ref', 'refs/remotes/origin/main', main)
+    git(r, 'checkout', '-q', 'lane')
+    if case == 'unrelated-merge':
+        git(r, 'checkout', '-q', '-b', 'other', remote)
+        commit_file(r, 'other.txt', 'other branch work\n')
+        git(r, 'checkout', '-q', 'lane')
+        git(r, 'merge', '--no-ff', 'other', '-m', 'merge other branch')
+    elif case != 'no-merge':
+        git(r, 'merge', '--no-ff', 'main', '-m', 'refresh from main')
+    head = commit_file(r, 'after.txt', 'change after refresh\n')
+    if case == 'main-ahead':
+        git(r, 'checkout', '-q', 'main')
+        newer = commit_file(r, 'upstream-later.txt', 'not merged yet\n')
+        git(r, 'update-ref', 'refs/remotes/origin/main', newer)
+    elif case == 'unknown-main':
+        git(r, 'update-ref', '-d', 'refs/remotes/origin/main')
+    monkeypatch.chdir(r)
+    hook = runpy.run_path(str(HOOK))
+    affected = hook['affected_base_commit'](remote, head)
+    narrowed = case in ('refresh', 'main-ahead')
+    assert affected == (main if narrowed else remote)
+    paths = git(r, 'diff', '--name-only', affected, head).splitlines()
+    if narrowed:
+        assert paths == ['after.txt', 'branch.txt']
+    elif case in ('divergent-remote', 'unknown-main'):
+        assert 'upstream-one.txt' in paths and 'upstream-two.txt' in paths
+    assert hook['base_commit'](remote, head) == remote

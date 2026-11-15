@@ -154,6 +154,11 @@ for _tool in TOOLS_METADATA:
             'require_bench': {'type': 'boolean'}, 'bench_db': {'type': 'string'}})
 
 
+for _tool in TOOLS_METADATA:
+    if _tool['name'] == 'plangraph_agent_spawn':
+        _tool['inputSchema']['properties']['leg'] = {'type': 'string', 'description': 'Registered leg reference (explicit override)'}
+
+
 class MCPSpawnerServer:
     """Server implementing the Model Context Protocol (MCP) JSON-RPC standard."""
 
@@ -180,6 +185,9 @@ class MCPSpawnerServer:
         self._source_guard.check(name, arguments)
         if isinstance(name, str) and name.startswith('plangraph_session_'):
             return await self._session_tool(name, arguments)
+        if (name == 'plangraph_agent_route' and 'leg' in arguments
+                or name == 'plangraph_agent_spawn' and arguments.get('leg') in ('agy-cli', 'claude-cli')):
+            raise ParameterRefused('leg selection requires the Rust pg-spawnd server')
         if name == 'plangraph_agent_probe':
             try:
                 return await leg_probe.probe_many(self.runner, arguments.get('leg', ()),
@@ -211,7 +219,7 @@ class MCPSpawnerServer:
                 self.service.save_refusal(exc, arguments.get('role', 'implement'))
                 raise exc
             return await self.service.spawn(card=arguments.get('card'), prompt=arguments['prompt'],
-                role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'),
+                role=arguments.get('role', 'implement'), model=arguments.get('model_or_combo'), leg=arguments.get('leg'),
                 override_reason=arguments.get('override_reason'), review_of=arguments.get('review_of'),
                 writer_families=arguments.get('writer_families', ()),
                 review_scope=arguments.get('review_scope'), seats=arguments.get('seats', False),
