@@ -1,4 +1,4 @@
-"""Optional, bounded SSH fan-out for ps; bounded, redacted transport diagnostics."""
+"""Optional, bounded SSH fan-out for ps; transport diagnostics stay private."""
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -22,34 +22,28 @@ FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
 
 
 class HostQueryError(ValueError):
-    """Transport failure with bounded public diagnostics and an SSH exit code."""
+    """Transport failure with a public SSH exit code; stderr stays private."""
 
     def __init__(self, reason, *, code=None, stderr=''):
         super().__init__(reason)
         self.code, self.stderr = code, stderr
 
 
-def safe_diagnostic(text, *, target=None):
-    """Redact before bounding a single public diagnostic line."""
-    from .env_redact import redact_output, redact_env_values
-    from plangraph.routing_support.host_keys import redaction_env
-    if isinstance(text, bytes):
-        text = text.decode('utf-8', errors='replace')
-    text = redact_output(redact_env_values(text, redaction_env(os.environ)))
-    if target:
-        text = text.replace(target, '[host]')
-    lines = text.splitlines()
-    return ''.join(c for c in (lines[0] if lines else '') if c.isprintable())[:200]
+def safe_diagnostic(text):
+    """Only structured transport metadata is public; stderr stays private."""
+    if isinstance(text, str) and re.fullmatch(
+            r'(?:HostQueryError \(SSH exit (?:[0-9]{1,3})\)|'
+            r'HostQueryError|TimeoutError|TimeoutExpired|FileNotFoundError|'
+            r'PermissionError|OSError|ValueError)', text):
+        return text
+    return 'host query failed'
 
 
-def safe_reason(exc, host=None):
-    """Expose the error class and first stderr line, never command arguments."""
-    stderr = getattr(exc, 'stderr', '') or ''
-    if isinstance(stderr, bytes):
-        stderr = stderr.decode('utf-8', errors='replace')
-    label = str(exc) if isinstance(exc, HostQueryError) else 'host query failed'
-    first = safe_diagnostic(stderr, target=host.get('target') if host else None)
-    return (f'{label}: {type(exc).__name__}' + (f': {first}' if first else ''))[:200]
+def safe_reason(exc):
+    """Keep the fixed reason contract, regardless of exception text."""
+    if isinstance(exc, HostQueryError):
+        return exit_reason(exc.code) or 'host query failed'
+    return 'host query failed'
 
 
 SRC_MISSING = 44
@@ -99,35 +93,24 @@ def exit_reason(code):
 
 
 def query_host(host, timeout):
-    # ConnectTimeout bounds each SSH connection; only SSH exit 255 gets one retry.
-    for attempt in range(2):
-        try:
-            return _query_host(host, timeout)
-        except HostQueryError as exc:
-            if exc.code != 255 or attempt:
-                raise
-
-
-def _query_host(host, timeout):
     command = host_command(host, query=True)
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         ) as process:
         deadline = time.monotonic() + timeout
-        output, errors = bytearray(), bytearray()
+        output = bytearray()
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
-                selector.register(process.stderr, selectors.EVENT_READ)
                 while selector.get_map():
                     remaining = deadline - time.monotonic()
                     events = selector.select(max(0, remaining))
                     if remaining <= 0 or not events:
                         raise TimeoutError('host query failed')
                     for key, _ in events:
-                        buffer = output if key.fileobj is process.stdout else errors
+                        buffer = output
                         chunk = os.read(key.fd, min(65536, MAX_OUTPUT + 1 - len(buffer)))
                         buffer.extend(chunk)
                         if len(buffer) > MAX_OUTPUT:
@@ -137,12 +120,8 @@ def _query_host(host, timeout):
             code = process.wait(timeout=max(0, deadline - time.monotonic()))
             reason = exit_reason(code)
             if reason:
-                raise HostQueryError(reason, code=code, stderr=errors.decode('utf-8', errors='replace'))
+                raise HostQueryError(reason, code=code)
             return output.decode('utf-8', errors='replace')
-        except Exception as exc:
-            if not isinstance(exc, HostQueryError):
-                exc.stderr = bytes(errors)
-            raise
         finally:
             if process.poll() is None:
                 process.kill()
@@ -193,7 +172,11 @@ def _fetch(host, transport):
         try:
             payload = transport(host, TIMEOUT)
         except Exception as exc:
-            return [dict(host=host['name'], status='unknown', reason=safe_reason(exc, host))]
+            error = type(exc).__name__
+            if isinstance(exc, HostQueryError) and type(exc.code) is int and 0 <= exc.code <= 255:
+                error += f' (SSH exit {exc.code})'
+            return [dict(host=host['name'], status='unknown', reason=safe_reason(exc),
+                         error=safe_diagnostic(error))]
         data = json.loads(payload)
         rows = data['runs']
         if not isinstance(rows, list):
@@ -214,8 +197,8 @@ def _fetch(host, transport):
                 raise ValueError()
             clean.append(dict({k: row[k] for k in FIELDS if k in row}, host=host['name']))
         return clean
-    except Exception as exc:
-        return [dict(host=host['name'], status='unknown', reason=safe_reason(exc, host))]
+    except Exception:
+        return [dict(host=host['name'], status='unknown', reason='host query failed')]
 
 
 def list_runs(local, *, transport=query_host):

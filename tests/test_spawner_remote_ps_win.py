@@ -33,7 +33,7 @@ def test_windows_native_command(tmp_path, monkeypatch, win_src):
                         f'set "PYTHONPATH={win_src}"&& python -m plangraph.spawner.remote_ps']
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
-        assert kwargs['stderr'] == subprocess.PIPE
+        assert kwargs['stderr'] == subprocess.DEVNULL
         assert kwargs.get('shell', False) is False
         return original([sys.executable, '-c', 'print(\'{"runs": []}\', end="")'],
                         **kwargs)
