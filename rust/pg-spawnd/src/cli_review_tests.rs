@@ -134,16 +134,22 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     assert_eq!(value["findings"], "No findings.");
     assert_eq!(value["attempts"][0]["witness_kind"], "cli_reported");
     record.save().unwrap();
-    let mirror = dir.path().join("mirror/fixture").join(&id);
-    std::fs::create_dir_all(&mirror).unwrap();
+    // Keeper imports fcntl and is POSIX-only; record/provenance assertions run everywhere.
     #[cfg(unix)]
+    assert_keeper_accepts_cli_review(dir.path(), record.path(), &head, &id);
+}
+
+#[cfg(unix)]
+fn assert_keeper_accepts_cli_review(dir: &Path, record: &Path, head: &str, id: &str) {
+    let mirror = dir.join("mirror/fixture").join(id);
+    std::fs::create_dir_all(&mirror).unwrap();
     {
         use std::os::unix::fs::PermissionsExt;
         for path in [mirror.clone(), mirror.parent().unwrap().into()] {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
     }
-    std::fs::copy(record.path(), mirror.join("record.json")).unwrap();
+    std::fs::copy(record, mirror.join("record.json")).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new("python3")
         .current_dir(&root)
@@ -209,9 +215,9 @@ with patch.object(context_sources, 'plan_item_commits', return_value=[
 conn.close()
 "#,
         ])
-        .arg(dir.path())
-        .arg(&head)
-        .arg(&id)
+        .arg(dir)
+        .arg(head)
+        .arg(id)
         .output()
         .unwrap();
     assert!(
@@ -290,10 +296,22 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
 fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind() {
     let dir = tempfile::tempdir().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // CI may have no fetchable default branch in its detached source checkout.
+    // Give the fixture its own local origin, pinned to the revision under test.
+    let origin = dir.path().join("origin.git");
+    assert!(Command::new("git")
+        .args(["clone", "-q", "--bare", "--shared"])
+        .arg(&root)
+        .arg(&origin)
+        .status()
+        .unwrap()
+        .success());
+    git_ok(&origin, &["update-ref", "refs/heads/main", "HEAD"]);
+    git_ok(&origin, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     let checkout = dir.path().join("checkout");
     assert!(Command::new("git")
         .args(["clone", "-q", "--shared"])
-        .arg(&root)
+        .arg(&origin)
         .arg(&checkout)
         .status()
         .unwrap()

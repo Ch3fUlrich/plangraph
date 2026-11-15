@@ -705,24 +705,16 @@ Native Codex writer placement and lifecycle: [run contract](native-codex-writer.
 
 Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
 
-D-5966 review route: gemini-4-hydrogen-high, gemini-4-argon-medium, free
-console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-5-high.
-No mimo review legs. CLI RESOURCE_EXHAUSTED/quota-reached responses use the existing
-leg-state store, keyed agy:<model> without effort (including the native Sonnet fallback). Each model has an independent
-reset; route JSON exposes all three agy_quota_states including reset_at evidence.
+D-5966 review route: gemini-4-hydrogen-high, gemini-4-argon-medium, free console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-5-high. No mimo review legs. CLI quota responses use leg-state keys agy:<model> without effort, including native Sonnet; each model resets independently. Route JSON exposes all three agy_quota_states with reset_at evidence.
 
-Rust native review kinds `agy-cli` and `claude-cli` select only admitted review legs; Python MCP rejects these native kinds. Hydrogen high and Argon medium use agy plan mode with preallowed read tools;
-command tools stay unapproved; native CLI reviews use the checkout rather than optional inline-diff rollout. Sonnet uses Claude restricted review tools and high effort. Rust requires a clean worktree and its exact HEAD fast-checks
-stamp, binds head_sha, and records verdict/findings plus cli_reported provenance.
-For agy this is the CLI-selected model, not authenticated provider telemetry; Claude must report a single Sonnet model in its stream.
+Rust review kinds `agy-cli` and `claude-cli` select admitted review legs; Python MCP rejects these native kinds. Hydrogen and Argon use agy plan mode with preallowed read tools; commands stay unapproved.
+Sonnet uses Claude restricted review tools and high effort. CLI reviews use the checkout rather than inline-diff rollout, requiring a clean worktree and an exact HEAD fast-checks stamp.
+Rust binds head_sha and records verdict/findings with cli_reported provenance: agy reports the CLI-selected model, not provider telemetry; Claude must report a single Sonnet model.
 Repository HEAD and tracked cleanliness are rechecked at completion. Failed/quota streams never count.
-When diagnosing CLI review test failures after testing another worktree in the same Cargo target, verify the executable belongs to the intended revision. Integration tests launch Cargo's `CARGO_BIN_EXE_pg-spawnd` path; a stale main server there can reject branch-only CLI kinds or interpret their checkout diff_ref as an inline reference. A controlled main/branch comparison reproduced this, including Cargo reusing main's smaller unit-test inventory. Clear the affected package artifacts in a private diagnostic target before attributing this result to a merge; keep configured host shared-cache paths intact.
-The Rust keeper integration test uses production keeper modules with stdlib setup; those direct Python inputs are listed in `tools/ci_select.py` so their changes select Rust CI.
-Initial launches and quota fallthrough share one Rust review-preparation entry point: choose the transport before interpreting diff_ref. CLI checkout refs never enter the registry-rooted inline SHA validator; inline-only legs retain its strict validation.
-Quota fallthrough prepares each native CLI retry against the same stamped HEAD; keeper counts the final serving attempt after quota refusals, preserving cli_reported trust for Sonnet.
-Native CLI reviews use card.cwd (or the legacy diff_ref.repo checkout), falling
-back to the daemon checkout only when neither is supplied. Symbolic diff heads
-resolve in that checkout and must equal its stamped HEAD.
+When tests share a Cargo target across worktrees, verify that `CARGO_BIN_EXE_pg-spawnd` belongs to the intended revision: a stale main executable can reject branch-only CLI kinds or misinterpret checkout diff_ref. A controlled main/branch comparison reproduced stale executable and unit-test inventory reuse. Clear affected package artifacts in a private diagnostic target; preserve configured host shared caches.
+The Unix keeper integration uses production modules with stdlib setup; its direct Python inputs in `tools/ci_select.py` select Rust CI. Record/provenance assertions also run on Windows.
+Initial launch and quota fallthrough share Rust review preparation: select transport before interpreting diff_ref. CLI checkout refs avoid the inline SHA validator; inline-only legs retain strict validation. Each native CLI retry requires the same stamped HEAD. Keeper counts the final serving attempt after quota refusals, preserving cli_reported trust for Sonnet.
+Native CLI reviews use card.cwd or legacy diff_ref.repo, then the daemon checkout if neither is supplied. Symbolic diff heads resolve there and must equal its stamped HEAD.
 
 Seat-pool cleanup tests create their initial commit with Git plumbing in an
 isolated fixture environment, without signing, hooks, index updates or automatic
