@@ -1,0 +1,1 @@
+- **LE-CLOSE-MERGED-GO-GRAMMAR-AND-CLIENT-TIMEOUT:** close-merged accepts a GO row worded `GO <project> PR #N ... GO-HEAD <sha40>`; the `close-merged` CLI waits up to 120 s and, when it times out after a committed close, prints the read-back state `done` and exits 0 (still exit 3 when nothing committed).

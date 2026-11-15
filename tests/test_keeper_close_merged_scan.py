@@ -189,3 +189,61 @@ def test_single_head_go_dated_in_the_decision_cell_passes_the_d6295_cutoff(unsea
     assert result["state"] == "done"
     assert world.store._evidence("demo:H")[-1]["ref"]["prs"] == [
         {"pr": 415, "head": HEAD, "decision_id": "D-6283"}]
+
+
+def pr_wording_close(world, monkeypatch, text):
+    row = f"| D-5809 | demo | (16:10Z, date -u) {text} | ROUTER | 2026-11-12 |\n"
+    scan_world(world, monkeypatch, [row], [HEAD])
+    return world.store.close_merged(world.p("router"), "demo:H", "D-5809", waive_seats="D-6000")
+
+
+def test_go_project_pr_wording_closes(unseated_w, monkeypatch):
+    result = pr_wording_close(unseated_w, monkeypatch,
+                              f"GO demo PR #840 H (high) at GO-HEAD {HEAD}: 4 files, CI green")
+    assert result["state"] == "done"
+
+
+@pytest.mark.parametrize("text", [
+    f"GO demo PR #840 H at GO-HEAD {HEAD} and GO-HEAD {'f' * 40}",
+    f"GO demo PR #840 H at GO-HEAD {'f' * 40}",
+    f"GO other PR #840 H at GO-HEAD {HEAD}",
+])
+def test_go_project_pr_wording_refuses_other_heads(unseated_w, monkeypatch, text):
+    with pytest.raises(Refused, match="go_row_head_mismatch"):
+        pr_wording_close(unseated_w, monkeypatch, text)
+    assert unseated_w.store._item("demo:H")["state"] == "in_review"
+
+
+class FakeSession:
+    json_mode = False
+
+    def __init__(self, state, post_error=True):
+        self.state, self.calls = state, []
+
+    def call(self, method, verb, params=None, body=None, timeout=None):
+        from plangraph.keeper.cli_verbs import Unreachable
+        self.calls.append((method, verb, timeout))
+        if method == "POST":
+            raise Unreachable("timed out")
+        return {"key": "demo:H", "state": self.state}
+
+
+def close_args():
+    return SimpleNamespace(key="demo:H", decision_id="D-5504", families=None, from_open=False,
+                           apply=False, waive_seats="D-6000")
+
+
+def test_client_timeout_after_a_committed_close_reads_back_and_exits_zero(capsys):
+    from plangraph.keeper.cli_output_verbs import cmd_close_merged
+    from plangraph.keeper.cli_verbs import SLOW_TIMEOUT
+    session = FakeSession("done")
+    assert cmd_close_merged(close_args(), session) == 0
+    captured = capsys.readouterr()
+    assert "done" in captured.out and "close committed" in captured.err
+    assert session.calls[0] == ("POST", "close_merged", SLOW_TIMEOUT) and SLOW_TIMEOUT >= 120
+
+
+def test_client_timeout_without_a_commit_exits_non_zero(capsys):
+    from plangraph.keeper.cli_output_verbs import cmd_close_merged
+    assert cmd_close_merged(close_args(), FakeSession("in_review")) == 3
+    assert "keeper unreachable" in capsys.readouterr().err

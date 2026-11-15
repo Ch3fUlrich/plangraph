@@ -74,10 +74,13 @@ The existing decisions index must verify the D-id; only its DECISION cell
 authorizes, beginning with `GO <head>` (8+ hex prefix, optional backticks) or
 `GO #PR ... GO-HEAD <sha40>`, optionally prefixed by `(HH:MMZ, date -u)`.
 The PR number may be backticked or followed by punctuation (for example,
-`GO #786, ...` or ``GO `#786` ...``).
+`GO #786, ...` or ``GO `#786` ...``). The wording `GO <project> PR #N ... GO-HEAD <sha40>`
+(the item's own project) is read the same way.
 The latter requires exactly one full-length GO-HEAD binding; later review
 narrative is not a verdict. A negated or quoted leading GO never authorizes;
 the head must uniquely match an actual merged PR head.
+If the CLI times out (120 s) on a plain `close-merged`, it reads the item back:
+state `done` prints a note and exits 0, any other state exits 3 (unreachable).
 
 Standard needs at least one known cross-writer-family seat; high needs at
 least two distinct families. Every supplied family, for either tier, must be

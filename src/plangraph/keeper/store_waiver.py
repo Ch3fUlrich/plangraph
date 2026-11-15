@@ -96,7 +96,9 @@ class WaiverMixin:
                           r"(?:, date -u)?\)\s+", "", text)
         if not isinstance(text, str) or not re.match(r"^GO(?=$|\s)", text):
             raise Refused("evidence_unverified", "go_row_not_go")
-        if re.match(r"^GO\s+(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])", text):
+        pr = r"(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])"
+        if (re.match(rf"^GO\s+{pr}", text)
+                or re.match(rf"^GO\s+{re.escape(item['project'])}\s+PR\s+{pr}", text)):
             # Review prose may itself discuss a NO GO; authority is the leading
             # GO verdict and its one explicit, full-length GO-HEAD token.
             bounds = re.findall(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])", text)

@@ -10,16 +10,16 @@ from .credential_guard import mask_all
 
 
 def cmd_close_merged(args, session):
-    from .cli_verbs import write, RefusedCli, Unreachable, _refuse
+    from .cli_verbs import SLOW_TIMEOUT, RefusedCli, Unreachable, _refuse
     body = {"key": args.key, "decision_id": args.decision_id, "families": args.families,
             "from_open": args.from_open, "apply": args.apply, "waive_seats": args.waive_seats}
     if args.families is None:
         body.pop("families")  # omission requests automatic recovery
     if not args.from_open:
-        return write(session, "close_merged", body)
+        return _close_merged_with_read_back(session, args.key, body)
     print("key\tclass\treason")
     try:
-        result = session.call("POST", "close_merged", body=body)
+        result = session.call("POST", "close_merged", body=body, timeout=SLOW_TIMEOUT)
         classification = "WOULD-CLOSE" if result.get("would_close") else "CLOSED"
         prs = ",".join(f"#{p['pr']}@{p['head']}" for p in result.get("prs", []))
         print(f"{args.key}\t{classification}\tmerged PRs with GO and seats {prs}")
@@ -30,6 +30,35 @@ def cmd_close_merged(args, session):
         return 2
     except Unreachable as exc:
         return _refuse(exc)
+
+
+def _close_merged_with_read_back(session, key, body):
+    """POST close_merged; a timeout after a committed close reads the item back and exits 0."""
+    from . import outbox
+    from .cli_verbs import (
+        EXIT_UNREACHABLE,
+        SLOW_TIMEOUT,
+        RefusedCli,
+        Unreachable,
+        _emit,
+        _refuse,
+    )
+    try:
+        return _emit(session, session.call("POST", "close_merged", body=body, timeout=SLOW_TIMEOUT),
+                     lambda r: fmt.result_text("close_merged", r))
+    except RefusedCli as exc:
+        return _refuse(exc)
+    except Unreachable as exc:
+        try:
+            state = session.call("GET", "show", {"key": key}).get("state")
+        except (RefusedCli, Unreachable):
+            state = None
+        if state != "done":
+            return outbox.on_unreachable("close_merged", body, exc, exit_unreachable=EXIT_UNREACHABLE)
+        note = f"the client gave up waiting ({exc}) but the close committed; read back state: done"
+        print(note, file=sys.stderr)
+        return _emit(session, {"key": key, "state": "done", "note": note},
+                     lambda r: f"{r['key']} -> done ({r['note']})")
 
 
 def cmd_legacy(args, session):
