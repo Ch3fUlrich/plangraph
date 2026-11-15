@@ -358,6 +358,7 @@ def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch, n
     hook.write_text("#!/usr/bin/env python3\nimport os, signal\n"
                     "child = os.fork()\n"
                     f"with open({str(env.tmp / 'hook-pids')!r} + str(os.getpid()), 'w') as f: f.write(str(os.getpid()))\n"
+                    f"with open({str(env.tmp / 'hook-ready')!r}, 'wb', buffering=0) as f: f.write(b'x')\n"
                     "signal.pause()\n")
     if nested_preflight:
         payload = hook.read_text()
@@ -369,7 +370,7 @@ def test_push_timeout_kills_slow_hook_tree(env, tools_importable, monkeypatch, n
     for key, value in env.env.items():
         monkeypatch.setenv(key, value)
     try:
-        with pytest.raises(merge_batch_util.MergeBatchError, match="did not finish"):
+        with env.hook_readiness(monkeypatch), pytest.raises(merge_batch_util.MergeBatchError, match="did not finish"):
             merge_batch_util.run(["git", "push", "origin", "lane/p1:refs/heads/timeout"],
                                  cwd=env.repo, timeout=0.3)
         records = list(env.tmp.glob("hook-pids*"))
