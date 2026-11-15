@@ -5,6 +5,11 @@ it blocks on scrub, CI policy (including commit trailers), changed-crate Rust ch
 and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/INFRA
 summary; failed checks with HTTP 5xx output in any family (including policy) are
 inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
+
+Rust packages outside the `rust/` workspace (including `rust/worker`) run through
+their owning `Cargo.toml` with `--manifest-path`, including excluded packages
+without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
+
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
 affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
