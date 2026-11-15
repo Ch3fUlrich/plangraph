@@ -85,7 +85,7 @@ def test_hydrogen_replaces_writer_position_without_inventing_admission():
     assert WRITER_ORDER[:2] == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high')
     for effort, role in (('high', 'implement'), ('medium', 'review')):
         leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-hydrogen-' + effort)
-        assert leg.disabled is None and leg.roles == (role,)
+        assert leg.disabled is None and leg.roles == (("implement", "review") if effort == "high" else (role,))
         assert (leg.tier, leg.harness, leg.family, leg.effort) == ('subscription', 'agy', 'gemini', effort)
         assert (leg.windows, leg.max_request_tokens, leg.trains_on_data) == (('128k', '256k', '1m'), 900000, False)
         assert leg.tool_mode == 'tools'
@@ -100,9 +100,8 @@ def test_spawner_review_routes_hydrogen_in_retired_flash_position(tmp_path, monk
     card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
     plan = service.route(card, role='review', writer_families=(writer,))
     ids = [leg.id for leg in plan.legs]
-    assert 'agy-gemini-4-hydrogen-medium' in ids
-    assert ids.index('mimo-v2.6-pro') < ids.index('agy-gemini-4-hydrogen-medium')
-    assert ids.index('agy-gemini-4-hydrogen-medium') < ids.index('agy-gemini-4-argon')
+    assert ids[:2] == ['agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon-medium']
+    assert not any('mimo' in id for id in ids)
     from plangraph.planner.legs import spawnable_legs
     from plangraph.planner.review_order import payment_order
     for tier, first in (('high', 'agy-gemini-4-hydrogen-medium'), ('standard', 'mimo-v2.6-pro')):
@@ -192,7 +191,7 @@ def test_no_diff_review_keeps_hydrogen_when_other_seats_unavailable():
     plan = plan_spawn(dict(estimate_tokens=1000), role='review',
                       writer_families=('gpt', 'claude'), leg_reader=reader, catalog_rows=[])
     assert plan.error is None
-    assert 'agy-gemini-4-hydrogen-medium' in [leg.id for leg in plan.legs]
+    assert 'agy-gemini-4-hydrogen-high' in [leg.id for leg in plan.legs]
 
 
 @pytest.mark.parametrize('field', ['leg', 'chosen_leg', 'legs', 'override'])

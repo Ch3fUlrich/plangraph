@@ -33,6 +33,8 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
 RUST_INPUTS: tuple[str, ...] = (
+    "src/plangraph/keeper/errors.py",
+    "src/plangraph/planner/routing.py",
     ".github/workflows/**",
     "rust-toolchain.toml",
     ".docs-map",
@@ -53,6 +55,14 @@ RUST_INPUTS: tuple[str, ...] = (
     "setup/placement-rules.schema.toml",
     "src/plangraph/web/agents_schema.json",
     "src/plangraph/spawner/**",
+    "src/plangraph/keeper/__init__.py",
+    "src/plangraph/keeper/auth.py",
+    "src/plangraph/keeper/context_sources.py",
+    "src/plangraph/keeper/db.py",
+    "src/plangraph/keeper/evidence.py",
+    "src/plangraph/keeper/evidence_decisions.py",
+    "src/plangraph/keeper/evidence_types.py",
+    "src/plangraph/keeper/store.py",
     "src/plangraph/keeper/evidence_spawner.py",
     "src/plangraph/routing_support/leg_state.py",
     "tests/fixtures/doctor_sources.json",

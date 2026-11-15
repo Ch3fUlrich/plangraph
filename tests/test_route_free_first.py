@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_ORDER
 from plangraph.planner.routing import plan_spawn
 from plangraph.spawner.cli import main
 
@@ -156,7 +156,7 @@ def test_route_and_refusal(tmp_path, capsys):
     plan = json.loads(capsys.readouterr().out)
     assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.1-sol-xhigh'
     assert plan['first_leg']['effort'] == 'xhigh'
-    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement'}
+    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement', 'agy_quota_states'}
     assert plan['placement'] == {'host': None, 'reason': 'placement_not_evaluated', 'free_mb': None}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
@@ -165,7 +165,7 @@ def test_route_and_refusal(tmp_path, capsys):
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:4] == ["opencode-big-pickle", "opencode-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro"]
+    assert ids == list(REVIEW_ORDER[:-1])  # Claude writer excludes Sonnet.
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
 
@@ -182,7 +182,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons[FREE[0]].startswith("disabled: D-4196 ")
     assert reasons[FREE[1]].startswith("disabled: D-4196 ")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
-    assert [leg.id for leg in rev.legs][:3] == ["opencode-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro"]
+    assert [leg.id for leg in rev.legs] == [REVIEW_ORDER[0], REVIEW_ORDER[1], REVIEW_ORDER[3]]
     assert reasons["opencode-big-pickle"] == "off_family"
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
@@ -210,9 +210,9 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids[:4] == ["opencode-big-pickle", "opencode-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro"]
+    assert ids == list(REVIEW_ORDER[:-1])  # Claude writer excludes Sonnet.
     assert DISABLED_FREE.isdisjoint(ids)
-    assert ids.index("opencode-big-pickle") == 0
+    assert ids.index("agy-gemini-4-hydrogen-high") == 0
 
 
 def test_route_sol_unavailable_keeps_tier_writer_order():
@@ -386,7 +386,7 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert not {leg.family for leg in review.legs} & set(writers)
         assert not {leg.family for leg in review.review_seats} & set(writers)
         # D-4196: the Zen deepseek leg is disabled, so mimo writers fall to the next family.
-        assert review.first_leg.id == "opencode-gemini-4-argon"
+        assert review.first_leg.id == "agy-gemini-4-hydrogen-high"
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" not in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {

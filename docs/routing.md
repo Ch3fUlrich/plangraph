@@ -140,3 +140,6 @@ model-named combos and clean routes that have no remaining servable legs.
 D-5903 round 3 explicitly retains the Hydrogen tools review seat for cards without `diff_ref`, including when Mimo/OpenCode/Muse seats are unavailable. Like other agy tools seats it reviews the selected checkout (explicit `cwd`, otherwise the runner default); a no-diff card does not request an automatic checkout of another revision. Hydrogen reviews use read-only plan mode.
 
 The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.
+
+D-5966 reviews prefer agy Hydrogen high, agy Argon medium, DeepSeek flash and Beam
+free legs, then Sonnet high. Each agy model has an independent quota reset.

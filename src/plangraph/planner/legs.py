@@ -108,7 +108,7 @@ DEFAULT_LEGS = (
         tool_mode="inline-only"),
     *(Leg(f"agy-gemini-4-hydrogen-{effort}", "subscription", "agy",
           f"gemini-4-hydrogen-{effort}", "gemini", ("128k", "256k", "1m"), 900000, False,
-          roles=(role,), effort=effort, tool_mode="tools",
+          roles=("implement", "review") if effort == "high" else (role,), effort=effort, tool_mode="tools",
           note="D-5903: enabled; agy models lists Hydrogen low/medium/high/xhigh (2026-11-14); "
                "agy CLI review verdicts: PR #878 (three heads), #886 (2026-11-14), "
                "handoffs/plan-order/reviews/{pr878-5ac07d1d,pr886-75c5bd2f}-hydrogen.txt. "
@@ -171,6 +171,21 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
+# Operator 2026-11-14 / D-5966: independent agy model quotas, no mimo seats.
+REVIEW_ORDER = ("agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-medium",
+                "console-deepseek-flash", "opencode-go-beam-free", "claude-sonnet-5-5-high")
+REVIEW_FALLBACK_LEGS = (
+    Leg(REVIEW_ORDER[1], "subscription", "agy", "gemini-4-argon-medium", "gemini",
+        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium"),
+    Leg(REVIEW_ORDER[2], "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
+        ("128k",), 100000, False, roles=("review",)),
+    Leg(REVIEW_ORDER[3], "free", "opencode", "opencode-go/beam-free", "beam",
+        ("128k",), 100000, False, roles=("review",)),
+    Leg(REVIEW_ORDER[4], "subscription", "claude", "claude-sonnet-5-5-high", "claude",
+        ("128k", "256k", "1m"), 900000, False, claude_family=True,
+        roles=("review",), effort="high"),
+)
+
 # Preserve role-neutral keeper admission before applying implement-only policy.
 READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'implement'),
                                disabled=leg.disabled or (
@@ -206,6 +221,8 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           tool_mode="inline-only")
       for e in CX_EFFORTS),
 )
+EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS
+
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
 _plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
 _sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
@@ -241,7 +258,8 @@ def explicit_only_skips(role: str) -> tuple[dict, ...]:
     """`route` output rows for the explicit legs serving ``role``: listed, never routed."""
     return tuple({"leg": leg.id, "reason": "explicit_only", "evidence": {
         "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
-        for leg in EXPLICIT_LEGS if role in leg.roles)
+        for leg in EXPLICIT_LEGS if role in leg.roles
+        and not (role == "review" and leg.id in REVIEW_ORDER))
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",
