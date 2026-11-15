@@ -1,4 +1,6 @@
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
@@ -116,7 +118,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     };
     executable(&launch, &launch_text);
     let socket = state.path().join("socket");
-    let child = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+    let child = Command::new(binary::spawnd())
         .args(["serve", "--no-scope", "--socket"])
         .arg(&socket)
         .arg("--state")

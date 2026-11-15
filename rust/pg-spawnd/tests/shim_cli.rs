@@ -1,6 +1,8 @@
 //! Hermetic `pg-spawnd shim` integration tests (Unix sockets, no network).
 
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 #[cfg(unix)]
 mod common;
 
@@ -11,7 +13,7 @@ use std::path::Path;
 use std::time::Duration;
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_pg-spawnd")
+    binary::spawnd()
 }
 
 fn spawn_shim(socket: &Path) -> ChildGuard {

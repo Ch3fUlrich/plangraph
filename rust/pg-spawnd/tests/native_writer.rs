@@ -1,5 +1,7 @@
 //! End-to-end Python admission -> Rust worker -> native CLI, without a model seat.
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = pg_worker_core::git_test_support::command(repo)
@@ -146,7 +148,7 @@ else:
     pg_worker_core::git_test_support::configure(&mut command, &dir);
     let out = command.current_dir(&root).env("PYTHONPATH", root.join("src"))
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
-        .env("NATIVE_BINARY", env!("CARGO_BIN_EXE_pg-spawnd"))
+        .env("NATIVE_BINARY", binary::spawnd())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base)
         .args(["-c", r#"
 import asyncio, json, os, pathlib

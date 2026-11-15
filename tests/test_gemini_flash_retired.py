@@ -100,8 +100,8 @@ def test_spawner_review_routes_hydrogen_in_retired_flash_position(tmp_path, monk
     card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
     plan = service.route(card, role='review', writer_families=(writer,))
     ids = [leg.id for leg in plan.legs]
-    assert ids[:2] == ['agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon-medium']
-    assert not any('mimo' in id for id in ids)
+    # D-6028: mimo-v2.6-pro and mimo-v2.6-flash lead; Hydrogen holds the retired flash position after them.
+    assert ids[:4] == ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon-medium']
     from plangraph.planner.legs import spawnable_legs
     from plangraph.planner.review_order import payment_order
     for tier, first in (('high', 'agy-gemini-4-hydrogen-medium'), ('standard', 'mimo-v2.6-pro')):
