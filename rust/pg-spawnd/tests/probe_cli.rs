@@ -1,7 +1,107 @@
+#[path = "common/binary.rs"]
+mod binary;
 use std::process::{Command, Output};
 
 fn cli(args: &[&str]) -> Output {
-    output(Command::new(env!("CARGO_BIN_EXE_pg-spawnd")).args(args))
+    output(Command::new(binary::spawnd()).args(args))
+}
+
+#[test]
+fn unshared_cli_uses_cargos_executable_without_building() {
+    if std::env::var_os("PG_TEST_UNSHARED_CLI").is_some() {
+        assert_eq!(binary::spawnd(), env!("CARGO_BIN_EXE_pg-spawnd"));
+        return;
+    }
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "unshared_cli_uses_cargos_executable_without_building",
+        ])
+        .env("PG_TEST_UNSHARED_CLI", "1")
+        .env_remove("CARGO_TARGET_DIR")
+        .env_remove("CARGO_BUILD_TARGET_DIR")
+        .output()
+        .unwrap();
+    assert!(
+        child.status.success(),
+        "{}",
+        String::from_utf8_lossy(&child.stdout)
+    );
+    let checkout = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for target in [
+        None,
+        Some(checkout.join("rust/target")),
+        Some(checkout.join("rust/../target/custom")),
+    ] {
+        assert_eq!(
+            binary::resolve(&checkout, target.as_deref(), |_| panic!(
+                "unshared target built a CLI"
+            )),
+            env!("CARGO_BIN_EXE_pg-spawnd")
+        );
+    }
+}
+
+#[test]
+fn cli_builds_stay_with_their_checkout() {
+    let scratch = tempfile::tempdir().unwrap();
+    let shared = scratch.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    let canonical_shared = shared.canonicalize().unwrap();
+    let mut checkouts = Vec::new();
+    for marker in ["first", "second"] {
+        let root = scratch.path().join(marker);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let manifest = root.join("Cargo.toml");
+        std::fs::write(
+            &manifest,
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/main.rs"),
+            format!("fn main() {{ println!({marker:?}); }}"),
+        )
+        .unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        let isolated = binary::resolve(&root, Some(&shared), |target| {
+            assert!(target.starts_with(canonical_shared.join("cli-tests")));
+            assert!(!target.starts_with(&canonical_root));
+            binary::build(&manifest, target, "fixture")
+        });
+        binary::build(&manifest, &shared, "fixture");
+        checkouts.push((marker, isolated));
+    }
+    // Both checkouts have built the same package name to the shared target;
+    // the second has replaced its public executable. Each test keeps its own.
+    assert_ne!(checkouts[0].1, checkouts[1].1);
+    for (marker, executable) in checkouts {
+        let result = Command::new(executable).output().unwrap();
+        assert!(result.status.success());
+        assert_eq!(String::from_utf8(result.stdout).unwrap().trim(), marker);
+    }
+}
+
+#[test]
+fn checkout_local_targets_use_canonical_paths() {
+    let scratch = tempfile::tempdir().unwrap();
+    let checkout = scratch.path().join("Checkout");
+    let target = checkout.join("Target");
+    std::fs::create_dir_all(&target).unwrap();
+    let canonical_checkout = checkout.canonicalize().unwrap();
+    let canonical_target = target.canonicalize().unwrap();
+    for (root, target) in [
+        (&checkout, canonical_target.clone()),
+        (&canonical_checkout, target),
+        (&checkout, canonical_target.join("missing/../custom")),
+    ] {
+        assert_eq!(
+            binary::resolve(root, Some(&target), |_| panic!(
+                "checkout-local target built a CLI"
+            )),
+            env!("CARGO_BIN_EXE_pg-spawnd")
+        );
+    }
 }
 
 #[test]
@@ -102,7 +202,7 @@ fn non_utf8_argument_exits_two() {
     use std::os::unix::ffi::OsStrExt;
     for prefix in [vec![], vec!["probe", "--json", "--host-id"]] {
         let output = output(
-            Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+            Command::new(binary::spawnd())
                 .args(prefix)
                 .arg(std::ffi::OsStr::from_bytes(&[0xff])),
         );

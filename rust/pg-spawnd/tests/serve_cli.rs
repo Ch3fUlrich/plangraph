@@ -1,6 +1,8 @@
 //! Hermetic `pg-spawnd serve` integration tests (Unix sockets, no network).
 
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 #[cfg(unix)]
 mod common;
 
@@ -55,7 +57,7 @@ fn state_is_required_and_never_created() {
 }
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_pg-spawnd")
+    binary::spawnd()
 }
 
 fn spawn_serve(socket: &Path) -> ChildGuard {

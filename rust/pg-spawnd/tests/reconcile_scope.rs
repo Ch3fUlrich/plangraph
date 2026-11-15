@@ -1,5 +1,7 @@
 //! Real scope survives its daemon owner and is settled once after disappearance.
 #![cfg(target_os = "linux")]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 use common::{ChildGuard, TempDir};
 use pg_worker_core::run::record::{RunRecord, Status};
@@ -86,7 +88,7 @@ fn scope_child_is_adopted_then_orphaned_once() {
     let events = std::fs::read(scope.join("cgroup.events")).unwrap();
     let log = tmp.path().join("shadow.log");
     let mut shadow = ChildGuard {
-        child: Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        child: Command::new(binary::spawnd())
             .args(["serve", "--state"])
             .arg(&state)
             .arg("--socket")
@@ -111,7 +113,7 @@ fn scope_child_is_adopted_then_orphaned_once() {
     shadow.child.wait().unwrap();
     for pass in 0..3 {
         let mut daemon = ChildGuard {
-            child: Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+            child: Command::new(binary::spawnd())
                 .args(["serve", "--state"])
                 .arg(&state)
                 .arg("--socket")
