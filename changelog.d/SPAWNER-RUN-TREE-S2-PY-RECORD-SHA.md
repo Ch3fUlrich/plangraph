@@ -1,3 +1,5 @@
 - SPAWNER-RUN-TREE-S2-PY-RECORD-SHA: launch live Python CLI/MCP supervisors and launch-spec construction from fetched SHA-named code trees; stamp spawn, seat and direct-supervise records with tree identity or an explicit absence reason. Preserve null-event adapters and empty-seat CLI behavior and release tree leases once on late failures or cancellation.
 - Verify the selected-main supervisor import and preserved job cwd with a real child process, and require records from every entry-point fixture.
 - Preserve acknowledged supervisors across parent exit and caller cancellation, including bounded redacted stderr and supervisor death evidence; exercise live CLI and MCP handoffs and make package-fallback coverage independent of the operator repo override. Live CLI admission reuses the existing prompt-record boundary and preserves bounded waits.
+
+The fresh-tree supervisor now keeps the host PYTHONPATH after the tree source. Launch-spec construction from fetched trees (`fresh_main`) is reachable only via `python -m plangraph.spawner.launch_spec` until the Rust slice S3 wires it.

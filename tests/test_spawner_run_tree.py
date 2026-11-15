@@ -448,7 +448,7 @@ def main(argv):
     service = SpawnService(payload['state'])
     assert service._parent_admitted
     record = dict(run_id='run-fixture', status='running', base_admitted=True,
-                  cwd=payload.get('cwd') or service.runner.default_cwd, version=pathlib.Path('version').read_text())
+                  cwd=payload.get('cwd') or service.runner.default_cwd, version=pathlib.Path('version').read_text(), pythonpath=os.environ['PYTHONPATH'])
     service._save(record)
     assert pathlib.Path(__file__).resolve().is_relative_to(pathlib.Path(record['tree_path']))
     print(json.dumps(record), flush=True)
@@ -463,6 +463,7 @@ if __name__ == '__main__': raise SystemExit(main(sys.argv[1:]))
     sha = advance(origin)
     monkeypatch.setenv('PLANGRAPH_SPAWNER_REPO', str(repo))
     monkeypatch.setenv('TEST_SERVICE_TOKEN', 'fixture-secret-do-not-log')
+    monkeypatch.setenv('PYTHONPATH', '/host-deps')
     driver = '''import asyncio, json, sys
 from plangraph.spawner import cli
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
@@ -475,11 +476,14 @@ server = MCPSpawnerServer(SpawnerRunner(default_cwd=sys.argv[3]), state=sys.argv
 print(json.dumps(asyncio.run(server.call_tool('plangraph_agent_spawn', dict(card={'estimate_tokens':100}, prompt='Review fixture', role='review', writer_families=['openai'])))))
 '''
     result = subprocess.run([sys.executable, '-c', driver, entry, str(state), str(repo)],
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, timeout=30,
+                            env={**os.environ, 'PYTHONPATH': os.pathsep.join(
+                                filter(None, [str(Path(cli.__file__).parents[2]), os.environ.get('PYTHONPATH')]))})
     assert result.returncode == 0, result.stderr
     record = json.loads(result.stdout)
     assert record['tree_sha'] == sha != git(repo, 'rev-parse', 'HEAD')
     assert record['version'] == 'B' and record['cwd'] == str(repo)
+    assert record['pythonpath'].endswith(os.pathsep + '/host-deps')
     log = Path(record['supervisor_stderr_path'])
     pid = int(Path(str(log) + '.pid').read_text())
     if sys.platform.startswith('linux'): assert record['supervisor_pid_start'] == proc_kill._stat(pid)[4]

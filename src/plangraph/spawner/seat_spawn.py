@@ -39,7 +39,8 @@ async def fresh_spawn(service, options):
         except asyncio.CancelledError:
             tree = await acquiring
             raise
-        env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
+        src = str(Path(tree['tree_path']) / 'src')
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [src, os.environ.get('PYTHONPATH')])),
                    PYTHONDONTWRITEBYTECODE='1')
         state.mkdir(parents=True, exist_ok=True)
         _prune_supervisor_logs(state)
