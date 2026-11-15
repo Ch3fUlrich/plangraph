@@ -72,6 +72,23 @@ def _review_text_from_log(live_log: str) -> str:
     text = completed if completed is not None else ""
     return text if event_log else live_log
 
+def _operator_order(reason):
+    """D-5874: only an indexed operator order may exempt an override."""
+    match = re.match(r"^(D-[0-9]+) operator\b", reason) if isinstance(reason, str) else None
+    if not match:
+        return False
+    # Same private-data checkout convention as tools/check_import.py.
+    data = Path(os.environ.get("PG_DATA_DIR") or
+                Path(__file__).resolve().parents[2] / "plangraph-data")
+    try:
+        rows = [line.split("\t") for line in
+                (data / "router/decisions-index.tsv").read_text("utf-8").splitlines()]
+    except (OSError, UnicodeError):
+        return False
+    rows = [row for row in rows if row[0].strip() == match[1]]
+    return (len(rows) == 1 and len(rows[0]) >= 2
+            and rows[0][1].strip().lower() == "operator")
+
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
 
@@ -110,11 +127,13 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
                          f"run dir name {run_dir.name!r}")
     if record.get("role") != "review":
         raise ValueError(f"record role {record.get('role')!r} is not 'review'")
+    operator_order = _operator_order(record.get("override_reason"))
     if (any(isinstance(part, dict) and any(k in part and part[k] is not False
             for k in ("pin", "pinned", "spawn_pin"))
             for part in (record, record.get("plan"), record.get("chosen_leg")))
-            or record.get("override_reason") or isinstance(record.get("plan"), dict)
-            and record["plan"].get("p_source") == "override"):
+            or not operator_order and (record.get("override_reason")
+                or isinstance(record.get("plan"), dict)
+                and record["plan"].get("p_source") == "override")):
         raise ValueError("pinned seat")
     if record.get("status") != "completed":
         raise ValueError(f"record status {record.get('status')!r} is not 'completed'")
@@ -172,6 +191,8 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     if isinstance(served, str) and served and served != "unwitnessed":
         evidence["served_model"] = served
     else:
+        if operator_order:
+            raise ValueError("operator-ordered seat served_model unwitnessed")
         if not isinstance(chosen, str) or not chosen:
             raise ValueError("record chosen_leg.model missing; seat model unwitnessed")
         # F2/D-2905: an unwitnessed served model may be replaced by the chosen
