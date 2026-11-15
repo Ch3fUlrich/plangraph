@@ -123,7 +123,7 @@ fn members(path: &Path, out: &mut Vec<u32>) -> io::Result<()> {
     }
     Ok(())
 }
-fn vanished(e: &io::Error) -> bool {
+pub(super) fn vanished(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ESRCH)
 }
 #[cfg(test)]

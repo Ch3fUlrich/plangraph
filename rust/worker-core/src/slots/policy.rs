@@ -198,3 +198,25 @@ pub fn decide(
         Decision::Queue(request.clone())
     }
 }
+
+/// Physical writer headroom using the same caps and RAM accounting as admission.
+/// Does not grant slots or bypass queued tickets; callers must still use `decide`.
+pub fn writer_capacity(
+    active: &[ActiveSlot],
+    caps: &Caps,
+    mem_available_mb: u64,
+    rss_of: impl Fn(&ActiveSlot) -> u64,
+    reservation_mb: u64,
+) -> u64 {
+    let counts = class_counts(active);
+    let free = effective_free_mb(mem_available_mb, active, rss_of);
+    if reservation_mb == 0
+        || !room_for(counts, SlotClass::Writer, caps)
+        || !mem_fit(free, reservation_mb, caps)
+    {
+        return 0;
+    }
+    (caps.max_writers - counts.writers)
+        .min(caps.max_runs - counts.runs)
+        .min((free - caps.mem_floor_mb) / reservation_mb)
+}

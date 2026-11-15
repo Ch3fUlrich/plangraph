@@ -19,7 +19,8 @@ def require_available(leg, reader, card):
     """Overrides cannot bypass the same state boundary used by routing."""
     from .leg_state import leg_status
     from plangraph.planner.routing import SpawnRefused
+    from .leg_state import leg_key as key
     read = getattr(reader, 'leg_status', reader) or leg_status
-    state = read(leg.model, account=card.get('account'), combo=card.get('combo'))
+    state = read(key(leg), account=card.get('account'), combo=card.get('combo'))
     if unavailable(state):
         raise SpawnRefused('leg ' + state['state'] + ': ' + leg.id)

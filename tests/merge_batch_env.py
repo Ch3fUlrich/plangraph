@@ -4,6 +4,7 @@ PATH holds ONLY the stub gh and a bin dir with git, sh, env and python3, so a re
 other live tool) is unreachable; the tool under test runs as a subprocess with a minimal env.
 """
 import json
+from contextlib import contextmanager
 import shutil
 import subprocess
 import sys
@@ -88,6 +89,34 @@ class Env:
         self.git("commit", "-q", "-m", "seed")
         self.git("push", "-q", "origin", "main")
         self.save()
+
+    @contextmanager
+    def hook_readiness(self, monkeypatch):
+        """Start the push deadline only after both fake hook workers report ready."""
+        import os
+        import select
+
+        ready = self.tmp / 'hook-ready'
+        os.mkfifo(ready)
+        fd = os.open(ready, os.O_RDWR)
+        original = subprocess.Popen
+
+        class ReadyPush(original):
+            def communicate(process, *args, **kwargs):
+                if process.args[:2] == ['git', 'push'] and not getattr(process, 'hook_ready', False):
+                    data = b''
+                    while len(data) < 2:
+                        assert select.select([fd], [], [], 10)[0], 'fake hook workers did not start'
+                        data += os.read(fd, 2 - len(data))
+                    process.hook_ready = True
+                return super().communicate(*args, **kwargs)
+
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(subprocess, 'Popen', ReadyPush)
+                yield
+        finally:
+            os.close(fd)
 
     def git(self, *args, cwd=None):
         proc = subprocess.run(["git", *args], cwd=cwd or self.repo, env=self.env, capture_output=True, text=True)

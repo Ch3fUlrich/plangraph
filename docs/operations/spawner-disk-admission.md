@@ -37,3 +37,16 @@ Its alarm and cleanup defaults are 5 GiB and 10 GB (decimal) respectively.
 nested `__pycache__` / `.pytest_cache` directories in eligible idle worktrees.
 Other ignored data, tracked cache files, dirty trees and protection records
 prevent reclaim. Worktree removal remains a separate `pg-worktree-sweep` step.
+
+Pre-push preflight also pins the shared target, disables incremental builds and
+holds its shared lease while Cargo runs. Cap checks run before and after each
+Cargo command. Native Codex launches pin the same target; briefs forbid private
+targets. Continuous cap sampling in these two paths and exact-head fast-check
+stamps remain open.
+
+Hygiene additionally reclaims Cargo-marked private targets under /tmp (two levels)
+and ignored, untracked rust/target directories in registered worktrees under
+--root after 30 minutes without writes. This cleanup runs without disk pressure;
+shared targets, pinned/live paths, active builds, process cwds, foreign ownership,
+leases and symlinks prevent deletion. Worktree source dirtiness alone does not
+protect ignored build artifacts in this narrower cleanup.

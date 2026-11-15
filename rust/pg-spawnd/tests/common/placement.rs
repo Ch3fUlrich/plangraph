@@ -37,7 +37,7 @@ impl Fixture {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let socket = state.path().join("socket");
-        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
+        let mut cmd = std::process::Command::new(crate::binary::spawnd());
         cmd.args(["serve", "--no-scope", "--socket"])
             .arg(&socket)
             .arg("--state")

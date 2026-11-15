@@ -78,3 +78,19 @@ fn version_needs_no_home_and_later_slice_commands_are_not_dispatched() {
     }
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
 }
+
+#[test]
+fn feeder_dry_run_error_and_missing_once_write_nothing() {
+    let root = tempfile::tempdir().unwrap();
+    let output = cli(root.path(), &["feed", "--dry-run"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("requires --once"));
+    let output = cli(root.path(), &["feed", "--once", "--dry-run"]);
+    assert_eq!(output.status.code(), Some(2));
+    let row: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(row["decision"], "refused");
+    assert_eq!(row["dry_run"], true);
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+}

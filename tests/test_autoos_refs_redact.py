@@ -95,9 +95,9 @@ def test_cli_prints_no_secret_for_any_line_shape(tmp_path: Path) -> None:
 
 def test_text_that_is_not_a_secret_is_kept(ar) -> None:
     for text in (
-        '{"command": "/home/x/code/AutoOS/h.py", "n": 1}',
+        '{"command": "/synthetic-home/x/code/AutoOS/h.py", "n": 1}',
         "Description=Test AutoOS Service",
-        "ExecStart=/home/x/code/AutoOS/bin/daemon --verbose",
+        "ExecStart=/synthetic-home/x/code/AutoOS/bin/daemon --verbose",
         "AutoOS tests passed: 41, author: someone, keyboard=us",
     ):
         assert ar.redact(text) == text
