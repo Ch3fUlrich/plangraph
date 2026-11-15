@@ -63,15 +63,6 @@ def write(kp, verb, who, body):
     return resp.json
 
 
-def link(prev_hash, new_hash, event, t_before, t_after):
-    """The ``ts`` for which *event* chains *prev_hash* to *new_hash*, else ``None``."""
-    for second in range(int(t_before) - 1, int(t_after) + 2):
-        candidate = dict(event, ts=stamp(second))
-        if chain_hash(prev_hash, candidate) == new_hash:
-            return candidate["ts"]
-    return None
-
-
 def make_plan(kp, n=1):
     tag = uuid.uuid4().hex[:7].upper()
     lanes = [{"project": "demo", "id": f"L{i}-{tag}", "kind": "lane", "title": f"lane {i} {tag}",
@@ -83,16 +74,32 @@ def make_plan(kp, n=1):
     return [f"demo:{i['id']}" for i in lanes]
 
 
+def link_all(prev_hash, new_hash, events, t_before, t_after):
+    """True when *events*, in order, chain *prev_hash* to *new_hash* at some ``ts``."""
+    if not events:
+        return prev_hash == new_hash
+    for second in range(int(t_before) - 1, int(t_after) + 2):
+        candidate = dict(events[0], ts=stamp(second))
+        if link_all(chain_hash(prev_hash, candidate), new_hash, events[1:],
+                    t_before, t_after):
+            return True
+    return False
+
+
 def expect_event(kp, before, event, step):
-    """Run *step*, then require exactly one new event equal to *event* on the chain."""
+    """Run *step*, then require exactly the new event(s) *event* on the chain.
+
+    *event* is one event dict, or a list of them when the verb writes several.
+    """
+    events = event if isinstance(event, list) else [event]
     seq0, hash0 = before
     t0 = time.time()
     out = step()
     t1 = time.time()
     seq1, hash1 = head(kp)
-    assert seq1 == seq0 + 1 and hash1 != hash0
-    assert link(hash0, hash1, event, t0, t1) is not None, (
-        f"head after {event['type']} is not sha256(previous head + that event)")
+    assert seq1 == seq0 + len(events) and hash1 != hash0
+    assert link_all(hash0, hash1, events, t0, t1), (
+        f"head after {events[-1]['type']} is not sha256(previous head + those events)")
     return out, (seq1, hash1)
 
 
@@ -107,8 +114,14 @@ def test_each_write_extends_the_chain_by_the_documented_rule(kp):
     _, state = expect_event(
         kp, state, {**router, "type": "priority_set", "payload": {"priority": 0}},
         lambda: write(kp, "set_priority", "router", {"key": key, "n": 0}))
+    # make_plan's goal depends on the lane, so cancelling the lane is two events:
+    # the cancel, then the goal's recorded drop of its edge to the cancelled lane.
+    goal = f"demo:G-{key.rsplit('-', 1)[1]}"
     _, state = expect_event(
-        kp, state, {**router, "type": "cancelled", "payload": {"reason": "chain check é中"}},
+        kp, state,
+        [{**router, "type": "cancelled", "payload": {"reason": "chain check é中"}},
+         {**router, "key": goal, "type": "item_defined",
+          "payload": {"fields": ["depends_on"], "dropped_cancelled_dependency": key}}],
         lambda: write(kp, "cancel", "router", {"key": key, "reason": "chain check é中"}))
 
 
