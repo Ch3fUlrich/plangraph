@@ -1,6 +1,7 @@
 use super::*;
 use crate::process::{Error, Output};
-struct Fake(Box<dyn Fn(&[&str]) -> Result<Output, Error>>);
+type Query = dyn Fn(&[&str]) -> Result<Output, Error>;
+struct Fake(Box<Query>);
 impl Runner for Fake {
     fn run(&self, args: &[&str]) -> Result<Output, Error> {
         (self.0)(args)

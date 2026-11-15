@@ -33,6 +33,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
 RUST_INPUTS: tuple[str, ...] = (
+    "pyproject.toml",  # pg-mainff verifies the keeper console-entry inventory.
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
     ".github/workflows/**",
