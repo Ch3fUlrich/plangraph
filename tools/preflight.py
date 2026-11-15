@@ -39,21 +39,24 @@ class FailFamily(ValueError):
 
 
 def run_test_process(command, **kwargs):
-    """Bound the selector and its pytest workers as one process tree."""
+    """Run a command and kill its process group on timeout or interruption."""
     timeout = kwargs.pop('timeout')
     with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
         try:
-            stdout, _ = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException:
             if os.name == 'posix':
-                os.killpg(process.pid, signal.SIGKILL)
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             else:
                 subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
                                capture_output=True, timeout=CHECK_TIMEOUT)
                 process.kill()
             process.communicate()
-            raise exc
-        return subprocess.CompletedProcess(command, process.returncode, stdout)
+            raise
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def run(command, cwd, env):
