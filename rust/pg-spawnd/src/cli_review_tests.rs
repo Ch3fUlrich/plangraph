@@ -2,7 +2,7 @@ use super::*;
 use pg_worker_core::run::record::new_run_id;
 use std::process::Command;
 
-fn git_ok(dir: &Path, args: &[&str]) {
+pub(super) fn git_ok(dir: &Path, args: &[&str]) {
     assert!(Command::new("git")
         .current_dir(dir)
         .args(args)
@@ -64,6 +64,16 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
         Some(head)
     );
     assert!(launch.argv.iter().any(|s| s == "--settings"));
+    assert!(launch
+        .prompt
+        .as_deref()
+        .unwrap()
+        .contains("Do not run background commands"));
+    assert!(launch
+        .prompt
+        .as_deref()
+        .unwrap()
+        .contains("at least one reviewed path"));
     assert!(!launch.argv.iter().any(|s| s.contains("command(*)")));
     let wrong = json!({"card":{"head_sha":"wrong"}});
     assert!(prepare(
@@ -114,7 +124,7 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     .ok()
     .unwrap();
     let log = record.path().with_file_name("live.log");
-    let answer = "No findings.\nVERDICT: PASS\nTEST_GAMING: no\n";
+    let answer = "No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n";
     std::fs::write(
         &log,
         format!(
@@ -131,7 +141,7 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     assert_eq!(value["witness_kind"], "cli_reported");
     assert_eq!(value["completion"]["head_sha"], head);
     assert_eq!(value["verdict"], "pass");
-    assert_eq!(value["findings"], "No findings.");
+    assert_eq!(value["findings"], "No findings in src/lib.rs:1.");
     assert_eq!(value["attempts"][0]["witness_kind"], "cli_reported");
     record.save().unwrap();
     // Keeper imports fcntl and is POSIX-only; record/provenance assertions run everywhere.
@@ -266,13 +276,14 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
     }
     let output = Command::new("python3").current_dir(&root)
         .env("PYTHONPATH", root.join("src")).env("XDG_STATE_HOME", dir.path())
-        .args(["-c", "import json; from plangraph.routing_support.leg_state import _default_store; print(json.dumps({m:_default_store().leg_status('agy:'+m) for m in ['gemini-4-hydrogen','gemini-4-argon','claude-sonnet-5-5']}))"])
+        .args(["-c", "import json; from plangraph.routing_support.leg_state import _default_store; print(json.dumps({m:_default_store().leg_status(k) for m,k in [('gemini-4-hydrogen','agy:gemini-4-hydrogen'),('gemini-4-argon','agy:gemini-4-argon'),('claude-sonnet-5-5','claude-sonnet-5-5-high'),('agy-sonnet','agy:claude-sonnet-5-5')]}))"])
         .output().unwrap();
     assert!(output.status.success());
     let states: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(states["gemini-4-hydrogen"]["state"], "limited");
     assert_eq!(states["claude-sonnet-5-5"]["state"], "limited");
     assert_eq!(states["gemini-4-argon"]["state"], "ok");
+    assert_eq!(states["agy-sonnet"]["state"], "ok");
     let id = new_run_id();
     let record = crate::runs::create(
         dir.path(),

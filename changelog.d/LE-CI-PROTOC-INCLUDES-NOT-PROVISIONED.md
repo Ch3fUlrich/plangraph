@@ -1,0 +1,1 @@
+- Install protobuf-compiler and libprotobuf-dev in the rust-worker and rust-spike CI jobs when protoc exists but the well-known proto includes (google/protobuf/field_mask.proto) are missing.

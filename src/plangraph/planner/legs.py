@@ -136,7 +136,7 @@ DEFAULT_LEGS = (
     Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-v4.1-flash",
         "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
     Leg("omniroute-muse-spark", "subscription", "opencode",
-        "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
+        "omniroute/spark-1.3-contributor", "muse", ("128k",), 100000, False,
         roles=("implement", "review", "orchestrate")),
     Leg("agy-opus", "subscription", "agy", "claude-opus-5-5-medium", "claude",
         ("128k",), 100000, False, claude_family=True, roles=("review", "orchestrate")),
@@ -171,17 +171,22 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# Operator 2026-11-14 / D-5966: independent agy model quotas, no mimo seats.
-REVIEW_ORDER = ("agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-medium",
-                "console-deepseek-flash", "opencode-go-beam-free", "claude-sonnet-5-5-high")
+# Rule 3.50 (OPERATOR D-6028, 2026-11-15): reviews start on mimo-v2.6-pro, then mimo-v2.6-flash,
+# then the rule 3.26 order (D-5966: independent agy model quotas, free legs, Sonnet high last).
+REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH = "mimo-v2.6-pro", "mimo-v2.6-flash"
+REVIEW_HYDROGEN, REVIEW_ARGON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-medium"
+REVIEW_DEEPSEEK, REVIEW_BEAM = "console-deepseek-flash", "opencode-go-beam-free"
+REVIEW_SONNET = "claude-sonnet-5-5-high"
+REVIEW_ORDER = (REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH, REVIEW_HYDROGEN, REVIEW_ARGON,
+                REVIEW_DEEPSEEK, REVIEW_BEAM, REVIEW_SONNET)
 REVIEW_FALLBACK_LEGS = (
-    Leg(REVIEW_ORDER[1], "subscription", "agy", "gemini-4-argon-medium", "gemini",
+    Leg(REVIEW_ARGON, "subscription", "agy", "gemini-4-argon-medium", "gemini",
         ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium"),
-    Leg(REVIEW_ORDER[2], "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
+    Leg(REVIEW_DEEPSEEK, "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
         ("128k",), 100000, False, roles=("review",)),
-    Leg(REVIEW_ORDER[3], "free", "opencode", "opencode-go/beam-free", "beam",
+    Leg(REVIEW_BEAM, "free", "opencode", "opencode-go/beam-free", "beam",
         ("128k",), 100000, False, roles=("review",)),
-    Leg(REVIEW_ORDER[4], "subscription", "claude", "claude-sonnet-5-5-high", "claude",
+    Leg(REVIEW_SONNET, "subscription", "claude", "claude-sonnet-5-5-high", "claude",
         ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",), effort="high"),
 )

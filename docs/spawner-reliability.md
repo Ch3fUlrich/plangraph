@@ -91,6 +91,20 @@ Seed timed and no-time parked observations for the operator check. No network
 is used by the verb. Synthetic public fixtures are not historical measurements
 and do not satisfy this live gate or independent ACCEPT.
 
+### Witnessed-share alerts
+
+Health reports add `witness_alerts` and one human `ALERT` line per leg when
+fewer than 20% of at least five distinct runs in the recent six hours are
+witnessed. The previous six hours supply context, not a prerequisite: sustained
+loss and 0/N in both windows continue to alert. Four recent runs or exactly 20%
+is quiet. Runs are deduplicated per leg; dry/unlaunched attempts are excluded.
+Served models (including native telemetry) count, except child-writable OpenCode
+store identity. Missing identity/time fields are skipped. JSON stays one document;
+alerts are advisory and do not change routing.
+
+Alerts use the canonical outcome leg key, so run records and outcome evidence
+for the same run/leg merge into a single observation.
+
 ## RL11: family floor and served-rate ordering
 
 Pure `health::family_floor` and `health::order_legs` use first plan metadata per

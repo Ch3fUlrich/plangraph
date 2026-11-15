@@ -123,3 +123,12 @@ evidence.
 
 To add or change a rule, update its row in docs/skills/rule-disposition.md first,
 then the named test or role card. A rule with no disposition is not in force.
+
+## Session-independent waits (D-6054)
+
+Use [the spawner watcher protocol](../plangraph-spawn/SKILL.md) for every wait
+with a pending continuation. Launch it through `plangraph watcher-launch` and
+persist the job directory in the handoff. On start, including successor sessions,
+read `plangraph resume-digest JOB` before spawning or scheduling follow-up work.
+The detached service owns the wait and its authorized push/merge steps; result
+files are the recovery contract when the orchestrator is killed.
