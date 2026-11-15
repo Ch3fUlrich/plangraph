@@ -1,0 +1,1 @@
+- **LE-KEEPER-CLOSE-MERGED-SCANS-DECISIONS-LOG-PER-ID:** `close_merged` reads and parses the decisions document once per request phase (before the write lock and under it) instead of once per decision id, so a key with several merged PR heads closes in seconds.

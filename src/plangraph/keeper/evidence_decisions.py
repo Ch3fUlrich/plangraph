@@ -29,6 +29,7 @@ by a non-space) do not act as boundaries.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import subprocess
@@ -185,11 +186,39 @@ class DecisionsAdapter:
     def __init__(self, path: str | Path | None, *, from_origin: bool = False) -> None:
         self._path = Path(path) if path else None
         self._from_origin = from_origin
+        self._snapshot = None
+        self._snapshot_depth = 0
+
+    @contextlib.contextmanager
+    def snapshot(self):
+        """Serve every read inside the block from one read and parse of the document.
+
+        A nested block shares the outer snapshot; a block entered after the
+        outer one closed reads the document again.
+        """
+        if self._snapshot_depth == 0:
+            self._snapshot = {}
+        self._snapshot_depth += 1
+        try:
+            yield self
+        finally:
+            self._snapshot_depth -= 1
+            if self._snapshot_depth == 0:
+                self._snapshot = None
 
     def _rows_strict(self) -> dict[str, list[str]]:
         return self._rows(_strict=True)
 
     def _document(self, *, _strict=False):
+        snap = self._snapshot
+        if snap is not None and "text" in snap:
+            return snap["text"]
+        text = self._read_document(_strict=_strict)
+        if snap is not None and (_strict or text):
+            snap["text"] = text  # a best-effort empty read is never reused for a strict one
+        return text
+
+    def _read_document(self, *, _strict=False):
         if self._path is None:
             return ""
         if self._from_origin:
@@ -241,11 +270,16 @@ class DecisionsAdapter:
     def _rows(self, *, _strict=False) -> dict[str, list[str]]:
         """Normalised prose rows; origin failures raise, local reads can be best effort."""
         text = self._document(_strict=_strict)
+        snap = self._snapshot
+        if snap is not None and "rows" in snap and snap["rows"][0] is text:
+            return snap["rows"][1]
         rows: dict[str, list[str]] = {}
         for line in _prose_lines(text):
             match = DECISION_LINE_RE.match(line)
             if match:
                 rows.setdefault(f"D-{int(match.group(1))}", []).append(line)
+        if snap is not None:
+            snap["rows"] = (text, rows)
         return rows
 
     def decisions(self) -> set[str]:

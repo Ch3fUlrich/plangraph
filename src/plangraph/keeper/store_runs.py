@@ -5,6 +5,7 @@ The spawner records which models ran on an item (``run_recorded`` events);
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 
@@ -116,6 +117,12 @@ def normalise_run(run) -> dict:
 class RunsMixin:
     """The spawner-only ``record_run`` verb."""
 
+    def _decisions_snapshot(self, item, now):
+        """One read and parse of the decisions document for the block (no-op when unsupported)."""
+        decisions = self._ctx(item, now).decisions
+        snapshot = getattr(decisions, "snapshot", None)
+        return snapshot() if callable(snapshot) else contextlib.nullcontext()
+
     def _merged_open_prs(self, item, decision_id, head, now):
         try:
             return self._merged_open_prs_checked(item, decision_id, head, now)
@@ -208,9 +215,10 @@ class RunsMixin:
         except Exception:
             return False
 
-    def _merged_go_scope_matches(self, decision_id, item, now, *, require_key=True):
+    def _merged_go_scope_matches(self, decision_id, item, now, *, require_key=True, decisions=None):
         """Additional PR GOs must name this project and this item explicitly."""
-        rows = self._ctx(item, now).decisions._rows_strict().get(decision_id, ())
+        decisions = decisions or self._ctx(item, now).decisions
+        rows = decisions._rows_strict().get(decision_id, ())
         if len(rows) != 1:
             return False
         cells = [c.strip() for c in rows[0].split("|")[1:]]
@@ -250,14 +258,23 @@ class RunsMixin:
             proofs[parents[1]] = {"pr": merge["pr"], "head": parents[1]}
         if not proofs or head not in proofs:
             raise Refused("evidence_unverified", "merged_pr_missing")
-        if not self._merged_go_scope_matches(decision_id, item, now, require_key=False):
-            raise Refused("evidence_unverified",
-                          f"merged_pr_go_scope_mismatch: {item['key']} in {decision_id}")
-        proofs[head]["decision_id"] = decision_id
-        for did in sorted(self._ctx(item, now).decisions.decisions()):
+        with self._decisions_snapshot(item, now):
+            if not self._merged_go_scope_matches(decision_id, item, now, require_key=False):
+                raise Refused("evidence_unverified",
+                              f"merged_pr_go_scope_mismatch: {item['key']} in {decision_id}")
+            proofs[head]["decision_id"] = decision_id
+            self._merged_scan_go_rows(item, proofs, now)
+        if any("decision_id" not in p for p in proofs.values()):
+            raise Refused("evidence_unverified", "merged_pr_go_missing")
+        return sorted(proofs.values(), key=lambda p: (p["pr"], p["head"]))
+
+    def _merged_scan_go_rows(self, item, proofs, now):
+        """Give every merged head the first accepted GO row of this item (one document read)."""
+        decisions = self._ctx(item, now).decisions
+        for did in sorted(decisions.decisions()):
             if all("decision_id" in p for p in proofs.values()):
                 break
-            if not self._merged_go_scope_matches(did, item, now):
+            if not self._merged_go_scope_matches(did, item, now, decisions=decisions):
                 continue
             try:
                 other_head, _ = self._merged_go_proof(item, did, now, all_work=True)
@@ -265,9 +282,6 @@ class RunsMixin:
                 continue
             if other_head in proofs:
                 proofs[other_head].setdefault("decision_id", did)
-        if any("decision_id" not in p for p in proofs.values()):
-            raise Refused("evidence_unverified", "merged_pr_go_missing")
-        return sorted(proofs.values(), key=lambda p: (p["pr"], p["head"]))
 
     def _record_merged_seats(self, principal, item, decision_id, seats, now):
         """Mirror a verified historical seat bundle while holding the close lock."""

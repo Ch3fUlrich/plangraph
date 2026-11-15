@@ -214,16 +214,17 @@ class WaiverMixin:
         self._assert_unlocked(item)
         if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
             raise Refused("validation", "decision_id must look like D-NNN")
-        head, _ = self._merged_go_proof(item, decision_id, now, all_work=from_open)
-        prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
-        waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
-        backfill = families is None and waiver is None
-        witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
-        families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
-        seats = self._merged_seats(item, families, now, witnessed) if waiver is None else []
-        if from_open and not apply:
-            return {"key": key, "state": item["state"], "would_close": True, "prs": prs}
-        with self._write():
+        with self._decisions_snapshot(item, now):
+            head, _ = self._merged_go_proof(item, decision_id, now, all_work=from_open)
+            prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
+            waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
+            backfill = families is None and waiver is None
+            witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
+            families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
+            seats = self._merged_seats(item, families, now, witnessed) if waiver is None else []
+            if from_open and not apply:
+                return {"key": key, "state": item["state"], "would_close": True, "prs": prs}
+        with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock
             fresh = self._get_or_refuse(key)
             self._merged_review_state(fresh, from_open)
             self._assert_unlocked(fresh)
