@@ -7,13 +7,12 @@ import types
 from pathlib import Path
 
 import pytest
-
-from plangraph.planner.phase_finish import phase_branch
-
 from keeper_util import World, defn
-from plangraph.keeper.errors import Refused
+
 from plangraph.keeper.db_pg import PgConnection
+from plangraph.keeper.errors import Refused
 from plangraph.planner import gitenv
+from plangraph.planner.phase_finish import phase_branch
 from plangraph.planner.worker_claim import build_claim, worker_claim
 
 

@@ -20,9 +20,11 @@ def test_handback_clears_owner_and_accepts_new_run(tmp_path, transition):
     w = World(tmp_path)
     try:
         kind = "semaphore-task" if transition == "withdraw_non_code" else "decision"
-        key, = seed(w, [("A", [])], evidence_kinds=(kind,))
+        key, = seed(w, [("A", [])], evidence_kinds=(kind,) if kind != "decision" else ("any",))
         w.store.ctx = SimpleNamespace(decisions=_decisions(
             tmp_path, "| D-900 | redo | Closes: demo:A |\n"))
+        if transition == "withdraw_decision":
+            w.store.edit_definition(w.p("router"), key, {"review_tier": "none", "evidence_kinds": ["decision"]})
         epoch = claimed_owner(w, key)
         worker = w.p("workerA")
         w.store.add_evidence(worker, key, epoch, kind, {"id": "D-900"})

@@ -63,9 +63,29 @@ book `down`; one is a `reprobe` hint. `PLANGRAPH_LEG_DOWN_S` defaults to 1800; a
 is `reprobe`. A later successful probe clears it. State is local to this host's
 state directory. `PLANGRAPH_LEG_PROBE_TIMEOUT_S` defaults to 180 seconds.
 Before a normal writer dispatch, stale or missing probe evidence triggers a
-probe; failure skips that leg and tries the next. Reviews and dry runs never
-probe. `PLANGRAPH_LEG_PROBE_TTL_S` defaults to 1800 seconds; 0 disables
+probe; failure skips that leg and tries the next. Dry runs never probe.
+`PLANGRAPH_LEG_PROBE_TTL_S` defaults to 1800 seconds; 0 disables ordinary
 automatic probing. Explicit probes still run when TTL is 0.
+
+### Snapshot read errors (slice 1)
+
+The cause in run-e99aae2287e541b48886d0f04e46c37e was
+`src/plangraph/routing_support/leg_state.py:LegAdapter.leg_status`: its refresh
+block caught an exception and replaced the cause with `unknown`.
+Refresh now retains the exception type and redacted message in
+`leg_state_snapshot_error: TYPE: MESSAGE`, without treating cached health as
+a successful read. `src/plangraph/spawner/leg_probe.py:before_launch` retries
+that read once before any snapshot-error skip. If it still fails, admission
+probes the same leg, including reviews and TTL 0. A successful retry restores
+ordinary admission; a successful probe admits despite the read error, while
+a failed probe skips with both the underlying read error and probe reason. Read errors are logged even when a probe succeeds or the retry recovers; an ordinary successful probe also admits if its snapshot re-read fails again.
+Infrastructure failure alone does not admit a leg with an unreadable snapshot.
+Successful probe evidence, including passes during an unreadable snapshot, cannot suppress this recovery
+probe. Booked provider limits and quota pauses still take precedence; dry runs
+remain read/probe-free. This slice changes neither seat ordering nor route slots.
+The default service reader retains its declared-state fallback for snapshot read
+errors (as for the former `unknown` reason), preserving the detailed reason so
+`before_launch` still retries and probes instead of mistaking fallback for a read.
 
 A `running` record on the same model/harness wins over a failed probe when its
 nonempty `live.log` grew within `LIVE_RUN_WRITE_WINDOW_S` (120 seconds).

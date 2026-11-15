@@ -257,7 +257,7 @@ fn live_scope() {
             &unit,
             &LaunchSpec {
                 program: OsStr::new("sh"),
-                args: &["-c".into(), "echo \"$FOO:${HOME-unset}\"; sleep 30".into()],
+                args: &["-c".into(), "echo \"$FOO:${HOME:-unset}\"; sleep 30".into()],
                 cwd: Path::new("/"),
                 env: &[("FOO".into(), "bar".into())],
                 stdin_piped: false,
@@ -278,6 +278,7 @@ fn live_scope() {
     std::io::BufReader::new(g.child.stdout.take().unwrap())
         .read_line(&mut line)
         .unwrap();
+    // systemd-run may provide an empty HOME; neither form exposes the caller home.
     assert_eq!(line, "bar:unset\n");
     assert_eq!(
         stop_group(

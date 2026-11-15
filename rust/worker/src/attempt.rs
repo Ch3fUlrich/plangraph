@@ -738,7 +738,7 @@ mod tests {
         include!("attempt_pilot_tests.rs");
     }
     use super::*;
-    use std::process::{Command, Stdio};
+    use std::process::Command;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
@@ -850,25 +850,10 @@ mod tests {
         run_attempt(&h, &tiny(), &Patterns::default(), &inp, &|| false).unwrap()
     }
 
-    /// Local git runner: worker-core's helper is `pub(crate)` there and its
-    /// hermetic env only applies inside worker-core's own tests, so pin the
-    /// identity here with `-c`.
+    /// All fixture Git commands use worker-core's shared test environment.
     fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .args([
-                "-c",
-                "user.name=tester",
-                "-c",
-                "user.email=t@example.com",
-                "-c",
-                "commit.gpgsign=false",
-            ])
+        let out = pg_worker_core::git_test_support::command(dir)
             .args(args)
-            .current_dir(dir)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::null())
             .output()
             .expect("git runs");
         assert!(
@@ -1140,10 +1125,14 @@ mod tests {
         assert_legacy_change_path("");
     }
     #[test]
+    fn raw_empty_check_kind_runs_red_first_then_writer() {
+        assert_eq!(assert_legacy_change_path("raw-json-empty"), "change");
+    }
+    #[test]
     fn legacy_json_without_check_kind_runs_red_first_then_writer() {
         assert_legacy_change_path("json");
     }
-    fn assert_legacy_change_path(kind: &str) {
+    fn assert_legacy_change_path(kind: &str) -> String {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
         let mut c = claim(
@@ -1152,9 +1141,14 @@ mod tests {
             &["out.txt"],
             "if test ! -f out.txt; then echo scratch > marker; exit 1; fi",
         );
-        if kind == "json" {
+        if matches!(kind, "json" | "raw-json-empty") {
             let mut value = serde_json::to_value(&c).unwrap();
-            value.as_object_mut().unwrap().remove("check_kind");
+            if kind == "json" {
+                value.as_object_mut().unwrap().remove("check_kind");
+            } else {
+                value["check_kind"] = "".into();
+                assert_eq!(value["check_kind"], "");
+            }
             c = serde_json::from_value::<Claim>(value).unwrap();
         } else {
             c.check_kind = Claim::default().check_kind;
@@ -1181,6 +1175,7 @@ mod tests {
         assert_eq!(res.exit_class, ExitClass::ContractDefect);
         assert!(res.check_tail.starts_with("red-first:"));
         assert_eq!(h.runs(), 0);
+        inp.claim.check_kind
     }
     #[test]
     fn unknown_check_kind_is_a_contract_defect() {

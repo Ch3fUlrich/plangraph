@@ -98,7 +98,8 @@ def test_benchmark_entry_roundtrips(tmp_path, capsys, monkeypatch, verb):
 
 
 @pytest.mark.parametrize('nonce_kind', ['missing', 'wrong', 'valid'])
-def test_envelope_nonce(tmp_path, nonce_kind):
+def test_envelope_nonce(tmp_path, monkeypatch, nonce_kind):
+    monkeypatch.setattr('plangraph.spawner.gateway_witness.witness', lambda *args: None)
     from plangraph.spawner.runner import SpawnerRunner
     async def run():
         calls = []

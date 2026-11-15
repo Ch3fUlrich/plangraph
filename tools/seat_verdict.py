@@ -31,12 +31,13 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from seat_backfill import apply_backfill
-from seat_record import evidence_from_record
+from seat_backfill import apply_backfill, repost_transport, _SEND_STATE
+from seat_record import evidence_from_record, RecordPending
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
 EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
@@ -206,7 +207,7 @@ def send(url, token, payload):
         return exc.code, exc.read(65536).decode("utf-8", "replace")
 
 
-def read_record_identity(seat_dir):
+def read_record_identity(seat_dir, key=None):
     """Read binding identity independently of evidence; absent fields are legacy."""
     record_path = seat_dir / "record.json"
     try:
@@ -215,14 +216,20 @@ def read_record_identity(seat_dir):
         if record_path.is_symlink():
             raise ValueError("cannot read record identity") from exc
         return {}
-    except (OSError, ValueError) as exc:
+    except IsADirectoryError as exc:
         raise ValueError("cannot read record identity") from exc
+    except (OSError, ValueError, RecursionError) as exc:
+        raise RecordPending("cannot read record identity") from exc
     if not isinstance(record, dict):
         raise ValueError("cannot read record identity")
+    if key is not None and "item_key" in record and record["item_key"] != key:
+        raise ValueError("record item_key does not match --key")
     return {"item_key": record["item_key"]} if "item_key" in record else {}
 
 
-def main(argv=None):
+def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
+    send_state = _SEND_STATE.get()
+    if send_state is not None: send_state["started"] = False
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--key", help="item key to review")
     ap.add_argument("--seat-dir", type=Path)
@@ -231,6 +238,7 @@ def main(argv=None):
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--backfill-dry-run", action="store_true")
     mode.add_argument("--backfill-apply", action="store_true")
+    mode.add_argument("--repost-transport", action="store_true")
     ap.add_argument("--snapshot", type=Path, default=Path("plan.snapshot.json"))
     ap.add_argument("--records-dir", type=Path)
     ap.add_argument("--pr-cache", type=Path, help="JSON object mapping evidenced SHA to merged PR number")
@@ -243,33 +251,43 @@ def main(argv=None):
     args = ap.parse_args(argv)
     if (args.backfill_dry_run or args.backfill_apply) and any(v is not None for v in (args.key, args.seat_dir, args.head, args.writer_family)):
         ap.error("backfill modes cannot use single-seat arguments: --key, --seat-dir, --head, --writer-family")
-    if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None):
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    if args.backfill_dry_run or args.backfill_apply or (args.key is None and args.seat_dir is None and not args.repost_transport):
         if args.backfill_apply and (not args.url or not args.token_dir or args.dry_run):
             ap.error("--backfill-apply requires --url and --token-dir, without --dry-run")
         from seat_record import backfill
         return backfill(args, main)
     if args.key is None:
         ap.error("the following arguments are required: --key")
+    if args.repost_transport:
+        if not args.url or args.seat_dir is None or args.token_dir is None or args.writer_family is not None or args.dry_run:
+            ap.error("repost requires --url, --seat-dir and --token-dir, without --writer-family or --dry-run")
+        return repost_transport(args, main)
     if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
     writer_families = parse_writer_families(args.writer_family)
-    try:
-        record_identity = read_record_identity(args.seat_dir)
-    except ValueError as exc:
-        print(f"seat_verdict: refused, {exc}", file=sys.stderr)
-        return EXIT_REFUSED
-    if "item_key" in record_identity and record_identity["item_key"] != args.key:
-        print("seat_verdict: refused, record item_key does not match --key", file=sys.stderr)
-        return EXIT_REFUSED
     from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
     if from_record:
-        try:
-            evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
-        except ValueError as exc:
-            print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
-            return EXIT_REFUSED
+        deadline = clock() + record_wait
+        while True:
+            try:
+                read_record_identity(args.seat_dir, args.key)
+                evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
+                break
+            except ValueError as exc:
+                # Windows write/replace lock contention can raise PermissionError;
+                # allow persistence to finish, but never wait past this deadline.
+                remaining = deadline - clock()
+                if isinstance(exc, RecordPending) and remaining > 0:
+                    sleep(min(1, remaining))
+                    continue
+                print(f"seat_verdict: refused, record: {exc}", file=sys.stderr)
+                return EXIT_REFUSED
     else:
+        try:
+            read_record_identity(args.seat_dir, args.key)
+        except ValueError as exc:
+            print(f"seat_verdict: refused, {exc}", file=sys.stderr)
+            return EXIT_REFUSED
         try:
             evidence = json.loads((args.seat_dir / "evidence.json").read_text("utf-8"))
             text = (args.seat_dir / "review.txt").read_text("utf-8")
@@ -358,12 +376,22 @@ def main(argv=None):
         return EXIT_IO
     try:
         token = (args.token_dir / f"reviewer-{family}.token").read_text("utf-8").strip()
+        if not token: raise ValueError("empty reviewer token")
+    except (OSError, ValueError) as exc:
+        print(f"seat_verdict: send failed (token read): {type(exc).__name__}", file=sys.stderr)
+        return EXIT_IO
+    try:
+        if send_state is not None: send_state["started"] = True
         status, reply = send(args.url, token, payload)
     except (OSError, ValueError) as exc:
+        if send_state is not None: send_state["started"] = False
         print(f"seat_verdict: send failed: {type(exc).__name__}", file=sys.stderr)
         return EXIT_IO
+    except BaseException:
+        if send_state is not None: send_state["started"] = False
+        raise
     short = " ".join(reply.split())[:120]
-    print(f"key={args.key} family={family} ok={ok} http={status} reply={short}")
+    print(f"key={args.key} family={family} ok={ok} http={status} reply={short}", flush=True)
     return 0 if 200 <= status < 300 else EXIT_IO
 if __name__ == "__main__":
     sys.exit(main())

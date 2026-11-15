@@ -1,0 +1,4 @@
+- D-5595 / D-5233 (D-5632), S01: add the packaged prompt-transport registry, single reason-name loader and hermetic I1 fixtures; preserve compatibility exports with no behavior change for any launch.
+- Round 2: retain literal launch constants without resource I/O on import, pin full raw contracts, and test resource packaging, capacity drift and platform-safe fixture isolation.
+- Round 3: exercise specific refusal branches before authoritative comparison, cache parsed data with isolated returns, trap import-time reads and test polluted-env cleanup; limit packaging/capacity claims to tested scope.
+- CI fix: point the fresh-interpreter import probe at this checkout's source tree rather than an absent or unrelated installed package; retain both import-time read traps and verify resource errors remain deferred until first loader use.

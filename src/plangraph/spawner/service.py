@@ -1,9 +1,9 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
-from .env_redact import first_reason
+from .env_redact import first_reason, harness_limit_line, redact, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
-from .exit_outcome import fallthrough_reason, release_attempts, terminal_reason
-from .git_guard import prepare_worktree, writer_launch
+from .exit_outcome import failure_reason, fallthrough_reason, refusal_record, release_attempts, terminal_reason
+from .git_guard import annotate_tree, prepare_worktree, selected_checkout, writer_launch
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 from dataclasses import asdict, replace
@@ -11,10 +11,18 @@ from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
+from .remote_ps import native_receipt
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item
+from .base_fresh import admit_base
+def remote_native_running(record):
+    """True for a running native Codex run placed on another host; only these need a remote refresh."""
+    return (record.get('run_kind') == 'native-codex' and bool(record.get('overflow_remote'))
+            and record.get('status') == 'running')
+
+
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -33,18 +41,28 @@ class SpawnService(SeatSpawnMixin):
     def result(self, run_id, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
-            return json.loads(read_text_retry(self._path(run_id), **read_retry))
+            record = json.loads(read_text_retry(self._path(run_id), **read_retry))
+            return record
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 
+    async def refresh_result(self, run_id):
+        """Refresh remote evidence off the event loop; result() stays a local read."""
+        record = self.result(run_id)
+        if remote_native_running(record):
+            from .remote_ps import native_result
+            record = await asyncio.to_thread(native_result, record)
+            self._save(record)
+        return record
+
     def _save(self, record):
-        self._sync_seat(record)
+        native_receipt(record); self._sync_seat(record)
+        if not self._path(record['run_id']).exists(): annotate_tree(record)
         from .private_io import atomic_write_private
         from .runner import redact
         from .seat_artifact import publish
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
-        # Host identity of the writing machine (C1): only PLANGRAPH_HOST may
-        # override it; setdefault keeps a re-saved record's original host.
+        # Only PLANGRAPH_HOST overrides host identity; preserve it on re-save.
         record.setdefault('host', os.environ.get('PLANGRAPH_HOST') or socket.gethostname())
         record.setdefault('served_model', 'unwitnessed')
         record.setdefault('served_family', 'unwitnessed')
@@ -110,6 +128,31 @@ class SpawnService(SeatSpawnMixin):
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 
+    async def wait(self, run_id, timeout=None):
+        if timeout is not None and timeout < 0:
+            raise ValueError('timeout must be nonnegative')
+        deadline = None if timeout is None else time.monotonic() + timeout
+        next_refresh = 0
+        while True:
+            record = self.result(run_id)
+            if remote_native_running(record) and time.monotonic() >= next_refresh:
+                remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                try:
+                    record = await asyncio.wait_for(self.refresh_result(run_id), remaining)
+                except TimeoutError:
+                    raise TimeoutError('run wait timed out: ' + run_id) from None
+                next_refresh = time.monotonic() + 1
+            if record.get('ended') is not None and record['status'] != 'running':
+                return record
+            from .exit_outcome import orphaned
+            gone = orphaned(record, time.time())
+            if gone is not None:
+                self._save(gone)
+                return gone
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('run wait timed out: ' + run_id)
+            await asyncio.sleep(.02)
+
     def ps(self):
         from .stall_watchdog import read_runs
         return {'runs': sorted(read_runs(self.state), key=lambda r: r.get('started', 0), reverse=True)}
@@ -153,7 +196,7 @@ class SpawnService(SeatSpawnMixin):
         if reason != 'remaining_gaps' or record.get('continuation_run_id'):
             return
         child = dict(run_id='run-' + uuid.uuid4().hex, parent_run_id=record['run_id'],
-                     continuation=1, role='implement', cwd=None if record.get('run_worktree') else record['cwd'],
+                     continuation=1, role='implement', cwd=None if record.get('run_worktree') else record['cwd'], selected_cwd=selected_checkout(self, record),
                      chosen_leg=record['chosen_leg'], started=time.time(), ended=None,
                      status='running', exit_code=None, gaps=gaps)
         record['continuation_run_id'] = child['run_id']
@@ -161,16 +204,17 @@ class SpawnService(SeatSpawnMixin):
         self._save(record)
         self._save(child)
         try:
-            chosen = child['chosen_leg']
-            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True)
+            chosen, card = child['chosen_leg'], dict(record.get('card') or {}, **({'base_decision': record['base_decision']} if 'base_decision' in record else {}))
+            if not record.get('run_worktree') and not await admit_base(self, child, card): return
+            worktree = await prepare_worktree(self, child, {'lane_branch': (record.get('run_worktree') or {}).get('branch')}, bool(record.get('run_worktree')), continuation=True, repo=child['selected_cwd'])
+            if not await admit_base(self, child, card, launch=True): return
             job = await self.runner.spawn(prompt=render_fixer_brief([{'text': g} for g in gaps]),
-                model_or_combo=chosen['model'], client=chosen['harness'], role='implement', cwd=worktree.get('cwd', child['cwd']), wake_variant='fixer',  # REMOVE-AT-R10
+                model_or_combo=chosen['model'], client=chosen['harness'], role=child['role'], cwd=worktree.get('cwd', child['cwd']), wake_variant='fixer',  # REMOVE-AT-R10
                 prompt_record=(self._path(child['run_id']).with_name('prompt.txt'), child, self._save))  # REMOVE-AT-R10
             child['job_id'] = job.job_id
             self._save(child)
             task = self.runner._tasks.get(job.job_id)
-            if task:
-                await asyncio.shield(task)
+            if task: await asyncio.shield(task)
             child.update(status=job.status, exit_code=job.exit_code, stdout_tail=job.stdout)
             await self._continue_writer(child, job.stdout)
         except Exception as exc:
@@ -189,8 +233,7 @@ class SpawnService(SeatSpawnMixin):
                       refusal=type(exc).__name__, error=str(exc),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
-        if placement is not None:
-            record.update(placement=placement, host=placement['host'])
+        if placement is not None: record.update(placement=placement, host=placement['host'])
         try:
             annotate_item(record, card)
             self._save(record)
@@ -203,19 +246,18 @@ class SpawnService(SeatSpawnMixin):
     async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                     review_of=None, model=None, leg=None, override_reason=None,
                     dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                    seats=False, _plan=None, run_worktree=False, _placement=None):
+                    seats=False, _plan=None, run_worktree=False, _placement=None, cwd=None):
         from plangraph.settings import admit_review_scope
         admit_review_scope(card, role, review_scope)
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
         from plangraph.planner.legs import spawnable_legs
-        if not card:
-            raise ParameterRefused('spawn by card; card required')
+        if not card: raise ParameterRefused('spawn by card; card required')
         if seats:
             return await self._spawn_seats(card=card, prompt=prompt, role=role,
                 writer_families=writer_families, review_of=review_of, model=model, leg=leg,
                 dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=no_fallthrough,
                 benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                override_reason=override_reason, run_worktree=run_worktree, _placement=_placement)
+                override_reason=override_reason, run_worktree=run_worktree, _placement=_placement, cwd=cwd)
         if _plan is not None:
             plan = _plan
         elif model is not None or leg is not None or not card:
@@ -226,11 +268,9 @@ class SpawnService(SeatSpawnMixin):
             plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *reviewed])
             chosen = next((l for l in spawnable_legs() if l.id == leg), None) if leg else None
             if leg and chosen is None: raise SpawnRefused('unknown leg')
-            if model and chosen and model != chosen.model:
-                raise SpawnRefused('model and leg disagree')
+            if model and chosen and model != chosen.model: raise SpawnRefused('model and leg disagree')
             target = model if model is not None else (chosen.model if chosen else None)
-            if not target:
-                raise SpawnRefused('spawn by card; explicit model required for override')
+            if not target: raise SpawnRefused('spawn by card; explicit model required for override')
             from .target import resolve_target
             target, resolved_leg = resolve_target(target, chosen=chosen)
             chosen = resolved_leg or chosen
@@ -299,18 +339,20 @@ class SpawnService(SeatSpawnMixin):
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
             served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
-            cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
+            cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
+        if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(record['run_id'])
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
         async def execute():
             try:
-                from .run_watchdog import prepare_run, terminal_record
+                from .run_watchdog import leg_limits, prepare_run, terminal_record
                 limits, live_log = prepare_run(self, record, card)
                 launched = False
                 for chosen in plan.legs:
+                    if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
                     from .inline_diff import InlineDiffError
                     try:
                         leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run,
-                            deadline=record['started'] + limits['max_s'] if role == 'review' else None)   # Dry runs never launch; live document reviews require --leg.
+                            deadline=watchdog.get('deadline'))   # Dry runs never launch; live document reviews require --leg.
                     except InlineDiffError as exc:
                         record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                             skip_reason='inline_diff_failed: ' + str(exc),
@@ -319,30 +361,30 @@ class SpawnService(SeatSpawnMixin):
                         continue
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
-                    worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                    record['base_admitted'] = False; worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                    if not await admit_base(self, record, card, launch=True): return
+                    if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
-                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
+                        role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                     if record.get('reason') in ('reasoning_output_limit', 'reasoning_only_length', 'reasoning_session_missing'):
                         break
-                    stop = self.runner.provider_responses.get(job.job_id)
-                    if terminal_record(record, job):
-                        record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
+                    stop = redact(self.runner.provider_responses.get(job.job_id))
+                    if terminal_record(record, job) or refusal_record(record, job):
+                        record['attempts'].append(dict(leg=asdict(chosen), status=job.status if job.status in ('stalled', 'timeout') else 'failed', skip_reason=record['reason'],
                             served_model=job.served_model, served_family=job.served_family,
                             served_witness_reason=job.served_witness_reason,
-                            stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events))
+                            stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events, provider_response=stop))
                         break
                     unavailable = fallthrough_reason(self, chosen, job, record)
-                    if unavailable:
-                        job.status = 'failed'
-                        job.exit_code = job.exit_code or 1
-                    reason = unavailable or (('provider_stop' if stop else first_reason(job.stderr) or f'harness exit code {job.exit_code}')
+                    if unavailable: job.status, job.exit_code = 'failed', job.exit_code or 1
+                    reason = unavailable or (failure_reason(job, stop, harness=chosen.harness)
                         if job.status in ('failed', 'skipped') else None)
                     if stop and any(isinstance(slot, dict) and slot.get('seat_group')
                             and slot.get('leg') == chosen.id for slot in (plan.seat_coverage or ())):
                         reason = reason or 'provider_stop'
                     stop_status = stop.get('status') if isinstance(stop, dict) else None
-                    down_token = (unavailable or '').split(':', 1)[0].strip()
+                    down_token = (unavailable or '').split(':', 1)[0].strip() if (unavailable_reason(job.exit_code, job.stdout, job.stderr) or harness_limit_line(job.exit_code, job.stdout, job.stderr)) else ''
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
                         # Only failed/skipped attempts count; only 402/429 override unavailable.
                         down_reason=('credit_limit' if stop_status == 402 else 'usage_limit' if stop_status == 429 else
@@ -359,12 +401,14 @@ class SpawnService(SeatSpawnMixin):
                         writer_family=chosen.family if job.served_family in (None, '', 'unwitnessed') else job.served_family,
                         stdout_tail=record.get('stdout_tail', '') + job.stdout,
                         stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
+                    if role == 'review' and (unavailable or (stop and chosen != plan.legs[-1])) and not (no_fallthrough or dry_run): record.update(status='running', exit_code=None)
                     self._save(record)
-                    if (not stop and not unavailable) or no_fallthrough or dry_run:
-                        if not dry_run:
+                    if record.get('reason') == 'model_refusal' or (not stop and not unavailable) or no_fallthrough or dry_run:
+                        if not dry_run and record.get('reason') != 'model_refusal':
                             await self._continue_writer(record, job.stdout)
                         break
-                if not launched:
+                if role == 'review' and record['status'] == 'running': record.update(status='failed', exit_code=1)
+                if not launched and record.get('status') not in ('timed_out', 'timeout'):
                     record.update(status='failed', exit_code=1, error='; '.join(
                         a['skip_reason'] for a in record['attempts']) or 'no leg launched')
             except Exception as exc:

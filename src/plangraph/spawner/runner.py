@@ -17,7 +17,7 @@ import os
 import re
 import sqlite3  # tests patch runner.sqlite3.connect (test_opencode_served_witness)
 import subprocess
-import sys
+import sys  # noqa: F401 -- compatibility: callers patch runner.sys.platform
 import time
 import uuid
 from dataclasses import asdict, dataclass, field, replace
@@ -47,10 +47,17 @@ _keeper_unconfigured_last_warned = None
 
 
 from .env_redact import first_reason, redact, redact_output, _redact_prompt
-from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, release_attempts, terminal_reason
+from .exit_outcome import failure_reason, fallthrough_reason, is_opencode, notify_leg_refused, refusal_record, release_attempts, terminal_reason
 from .git_guard import prepare_worktree, writer_launch
+from .base_fresh import admit_base
+from . import opencode_isolation as _opencode_isolation
+from .opencode_isolation import (
+    _DENIED_TOOLS,
+    _REVIEW_OPENCODE_ENV_ALLOW,
+    _opencode_managed_dir,
+)
 from .proc_kill import KillIncomplete, kill_process_tree, root_identity
-from . import proc_kill
+from . import proc_kill, env_redact
 from .reap import kill_proven, reap, sample_tree, unproven_survivors
 from .served_telemetry import _claude_stream_model, _opencode_served_model, extract_served_telemetry, mismatch_flag, witness_native  # re-export: tests import and patch these on runner
 
@@ -130,91 +137,13 @@ class JobInfo:
         return mismatch_flag(asdict(self))
 
 
-#: Every tool key the opencode 2.1.0 config schema knows ('*' exists only in
-#: the engine's internal Permission.Ruleset actions): a review child must have
-#: all of them denied (D-2905 (1)).
-_DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'grep',
-                 'list', 'lsp', 'question', 'read', 'skill', 'task', 'todowrite',
-                 'webfetch', 'websearch')
-
-
-def _opencode_managed_dir(env: Mapping) -> Path:
-    """opencode's system (managed) config dir as the child will resolve it.
-
-    Fixed on Linux/macOS; on win32 opencode reads ProgramData from its own
-    env, so the CHILD env is read here (the same value the child sees).
-    """
-    if sys.platform == 'darwin':
-        return Path('/Library/Application Support/opencode')
-    if sys.platform == 'win32':
-        return Path(env.get('ProgramData') or 'C:\\ProgramData', 'opencode')
-    return Path('/etc/opencode')
-
-#: The only OPENCODE_* env names a review child may carry. Anything else a
-#: caller sets (e.g. OPENCODE_CLI_CONFIG_CONTENT, OPENCODE_TEST_HOME) is
-#: dropped before launch so no caller-set override can re-enable a tool or add
-#: a config layer (REVIEW-WITNESS-OPENCODE R1).
-_REVIEW_OPENCODE_ENV_ALLOW = ('OPENCODE_CONFIG_CONTENT', 'OPENCODE_CONFIG',
-                              'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_PROJECT_CONFIG',
-                              'OPENCODE_DISABLE_CLAUDE_CODE', 'OPENCODE_DISABLE_CLAUDE_CODE_SKILLS',
-                              'OPENCODE_DISABLE_AUTOUPDATE', 'OPENCODE_API_KEY',
-                              'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')
+_REVIEW_OPENCODE_ENV_ALLOW += ('OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX',)
 
 
 def _opencode_tools_denied(config_json, env) -> bool:
-    """True only when the child's final config AND env prove every tool denied.
-
-    Checked, all required: 'permission' maps '*' and every _DENIED_TOOLS key
-    to 'deny'; the managed config dir (_opencode_managed_dir, resolved from
-    the child env) holds no opencode.json/opencode.jsonc; 'mcp' is {} and
-    'plugin' is [] in config_json; HOME,
-    XDG_CONFIG_HOME, XDG_DATA_HOME and OPENCODE_CONFIG_DIR all resolve inside
-    the same per-job dir (XDG_DATA_HOME); OPENCODE_CONFIG is an existing file
-    inside that dir whose content parses to {};
-    OPENCODE_DISABLE_PROJECT_CONFIG, OPENCODE_DISABLE_CLAUDE_CODE and
-    OPENCODE_DISABLE_CLAUDE_CODE_SKILLS are each '1'; and no OPENCODE_* env
-    name outside _REVIEW_OPENCODE_ENV_ALLOW is present. This proves only the
-    env/config shape: the runtime behaviour of opencode is not proven by this
-    function (an L1 runtime probe covers that).
-    """
-    try:
-        cfg = json.loads(config_json or '{}')
-    except (ValueError, TypeError):
-        return False
-    if not isinstance(cfg, dict):
-        return False
-    permission = cfg.get('permission')
-    if not isinstance(permission, dict) or not all(
-            permission.get(tool) == 'deny' for tool in ('*',) + _DENIED_TOOLS):
-        return False
-    if cfg.get('mcp') != {} or cfg.get('plugin') != []:
-        return False
-    if not isinstance(env, Mapping):
-        return False
-    managed = _opencode_managed_dir(env)
-    if any((managed / name).exists() for name in ('opencode.json', 'opencode.jsonc')):
-        return False
-    for name in env:
-        if str(name).startswith('OPENCODE_') and name not in _REVIEW_OPENCODE_ENV_ALLOW:
-            return False
-    if (env.get('OPENCODE_DISABLE_PROJECT_CONFIG') != '1'
-            or env.get('OPENCODE_DISABLE_CLAUDE_CODE') != '1'
-            or env.get('OPENCODE_DISABLE_CLAUDE_CODE_SKILLS') != '1'):
-        return False
-    try:
-        job_dir = Path(env.get('XDG_DATA_HOME') or '')
-        if not job_dir.name:
-            return False
-        for key in ('HOME', 'XDG_CONFIG_HOME', 'OPENCODE_CONFIG_DIR'):
-            path = Path(env.get(key) or '')
-            if not path.name or not path.resolve().is_relative_to(job_dir.resolve()):
-                return False
-        cfg_path = Path(env.get('OPENCODE_CONFIG') or '')
-        return (bool(cfg_path.name) and cfg_path.is_file()
-                and cfg_path.resolve().is_relative_to(job_dir.resolve())
-                and json.loads(cfg_path.read_text()) == {})
-    except (OSError, ValueError):
-        return False
+    return _opencode_isolation._opencode_tools_denied(config_json, env,
+        managed_dir=_opencode_managed_dir, denied_tools=_DENIED_TOOLS,
+        env_allow=_REVIEW_OPENCODE_ENV_ALLOW)
 
 
 class NonceCapacity(RuntimeError):
@@ -259,7 +188,8 @@ class SpawnerRunner:
         if not isinstance(model, str) or not model.strip():
             raise ValueError('missing served model')
         model = model.strip()
-        family = detect_model_family(model)
+        from .gateway_witness import served_family
+        family = served_family(model)
         if '/' not in model or family not in MODEL_FAMILIES:
             raise ValueError('served model is not an admitted model id: ' + model)
         job = self.jobs[job_id]
@@ -390,6 +320,8 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        from .host_ready import cargo_child_env
+        child_env = cargo_child_env(child_env)
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
@@ -450,8 +382,6 @@ class SpawnerRunner:
                         raise ValueError('not an object')
                     cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
                     cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
-                    from .gateway_witness import tag_session
-                    tag_session(cfg, job_id)   # D-3226: the gateway logs this run's sessionTag
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
@@ -460,6 +390,15 @@ class SpawnerRunner:
             from .opencode_answer import cap_reasoning
             if render_reason is None and model_or_combo.startswith('mimo/') and not cap_reasoning(child_env, model_or_combo):
                 render_reason = 'reasoning_output_limit: no supported output cap'
+            # Response-side gateway evidence applies to writers as well as reviews.
+            # Tag after the final provider merge and review permission changes.
+            try:
+                cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+                from .gateway_witness import tag_session
+                tag_session(cfg, job_id)
+                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+            except (ValueError, TypeError, AttributeError):
+                pass  # An unparseable config cannot supply a session-tag witness.
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
         if render_reason is None:
@@ -570,6 +509,9 @@ class SpawnerRunner:
                     self._git_guards[job_id] = guard
                 from .opencode_isolation import record_baseline
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
+            from .host_ready import cargo_lease
+            self._cargo_leases = getattr(self, '_cargo_leases', {})
+            self._cargo_leases[job_id] = await asyncio.to_thread(cargo_lease)
             try:
                 proc = await self.process_factory(
                     resolved_exe,
@@ -640,6 +582,8 @@ class SpawnerRunner:
         finally:
             # A running monitor owns the environment until output is scrubbed.
             if job_id not in self._tasks:
+                lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
+                if lease is not None: lease.close()
                 self._child_envs.pop(job_id, None)
                 self._git_guards.pop(job_id, None)
                 self._stdin_payloads.pop(job_id, None)
@@ -695,6 +639,10 @@ class SpawnerRunner:
             return
         reaped.add(job_id)
         await reap(self, job_id, proc)
+        # Reap also runs when cancellation beats the monitor's first step.
+        if not getattr(self.jobs[job_id], 'survivors', ()):
+            lease = getattr(self, '_cargo_leases', {}).pop(job_id, None)
+            if lease is not None: lease.close()
 
     async def _monitor_process(
         self,
@@ -704,22 +652,30 @@ class SpawnerRunner:
     ) -> None:
         """Monitor process execution until completion."""
         try:
-            from .run_watchdog import collect
-            stdout_bytes, stderr_bytes = await collect(self, job_id, proc)
+            from .host_ready import collect_with_disk_guard
+            stdout_bytes, stderr_bytes = await collect_with_disk_guard(self, job_id, proc)
             stdout_text = stdout_bytes.decode("utf-8", errors="replace")
             stderr_text = stderr_bytes.decode("utf-8", errors="replace")
             exit_code = self.jobs[job_id].exit_code if (self.jobs[job_id].status in ('stalled', 'timeout', 'cancelled')
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None) or any(e.get('event') == 'reasoning_only_length' for e in self.jobs[job_id].events)) else proc.returncode
             job = self.jobs[job_id]
-            for line in stderr_text.splitlines():
+            kept = []
+            for line in stderr_text.splitlines(keepends=True):
+                telemetry = proc_kill.oom_envelope(line)
+                if telemetry is not None:
+                    proc_kill.record_oom_envelope(job.events, telemetry)
+                    extras = {k: v for k, v in telemetry.items() if k != 'plangraph_oom'}
+                    if extras:
+                        job.events.append(dict(event='oom_telemetry_detail', detail=redact_output(
+                            env_redact.redact_env_values(json.dumps(extras), self._child_envs.get(job_id, os.environ)))))
+                    continue
+                kept.append(line)
                 try:
                     envelope = json.loads(line)
                 except (ValueError, TypeError):
                     continue
                 if not isinstance(envelope, dict) or set(envelope) != {'autoos_provider_response'}:
-                    from .proc_kill import record_oom_envelope
-                    record_oom_envelope(job.events, envelope)
                     continue
                 response = envelope['autoos_provider_response']
                 if not isinstance(response, dict) or response.get('nonce') != self._nonces.get(job_id) or not self._nonces.get(job_id):
@@ -734,13 +690,13 @@ class SpawnerRunner:
                         and all(isinstance(k, str) and isinstance(v, str) for k, v in response['headers'].items())):
                     self.provider_response(job_id, **response, source='stderr_envelope',
                                            nonce=self._nonces[job_id])
-            from .env_redact import redact_env_values
+            stderr_text = ''.join(kept)
             env = self._child_envs.get(job_id, os.environ)
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
             record_steps(job, stdout_text, stderr_text, env)
             decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
-            job.stdout = redact_output(redact_env_values(decoded, env))
-            job.stderr = redact_output(redact_env_values(stderr_text, env))
+            job.stdout = redact_output(env_redact.redact_env_values(decoded, env))
+            job.stderr = redact_output(env_redact.redact_env_values(stderr_text, env))
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
@@ -780,9 +736,10 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-opencode-store'
                 elif oc_dir and denied:
                     job.events.append({'event': 'opencode_witness_unavailable'})
-                if denied:   # D-3226 response-side, any exit code: the gateway call log names the model
-                    from .gateway_witness import witness
-                    await asyncio.to_thread(witness, self, job_id, job, env)
+            # The trusted response-side log is independent of child tool permissions.
+            if is_opencode(job):
+                from .gateway_witness import witness
+                await asyncio.to_thread(witness, self, job_id, job, env)
 
             if job.command and job.command[0] == 'claude' and last_stop_reason(stdout_text) == 'refusal':
                 answer = final_text(stdout_text)
@@ -796,7 +753,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
-                                        lambda text: redact_output(redact_env_values(text, env)))
+                                        lambda text: redact_output(env_redact.redact_env_values(text, env)))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
@@ -902,7 +859,6 @@ def spawn_service(*args, **kwargs):
         async def _continue_writer(self, record, output):
             if record.get('status') != 'needs_input':
                 return await super()._continue_writer(record, output)
-
         def __init__(self, *args, completion_sink=None, keeper_sink=None, **kwargs):
             super().__init__(*args, **kwargs)
             from .notify import FileInbox
@@ -913,11 +869,9 @@ def spawn_service(*args, **kwargs):
             if hasattr(self.runner, '__dict__'):
                 self.runner.state = self.state  # probes share this service's run directory
                 self.runner.on_sample = lambda jid: self._save(self._running_records[jid]) if jid in self._running_records else None
-
         async def cancel(self, run_id):   # D-3505: the leg loop of the supervisor stops on this marker
             self._path(run_id).parent.exists() and self._path(run_id).with_name('cancelled').touch()
             return await super().cancel(run_id)
-
         def _save(self, record, *, retry=False):
             import socket
             record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
@@ -929,7 +883,8 @@ def spawn_service(*args, **kwargs):
                     record[stream + '_tail'] = getattr(job, stream, '')
                 for attempt in record.get('attempts', []):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
-                        attempt['skip_reason'] = redact(failure_reason(job))
+                        meta = attempt.get('leg')
+                        attempt['skip_reason'] = redact(failure_reason(job, harness=meta.get('harness') if isinstance(meta, dict) else None))
             terminal = record.get('ended') is not None and record.get('status') != 'running'
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry:
@@ -976,7 +931,6 @@ def spawn_service(*args, **kwargs):
                                 atomic_write_private(marker, 'delivered\n')
                             except Exception:
                                 logging.getLogger(__name__).exception('completion hook failed')
-
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
@@ -990,24 +944,6 @@ def spawn_service(*args, **kwargs):
                         self._save(record, retry=True)
                     except Exception:
                         logging.getLogger(__name__).exception('completion retry failed')
-
-        async def wait(self, run_id, timeout=None):
-            if timeout is not None and timeout < 0:
-                raise ValueError('timeout must be nonnegative')
-            deadline = None if timeout is None else time.monotonic() + timeout
-            while True:
-                record = self.result(run_id)
-                if record.get('ended') is not None and record['status'] != 'running':
-                    return record
-                from .exit_outcome import orphaned
-                gone = orphaned(record, time.time())
-                if gone is not None:
-                    self._save(gone)
-                    return gone
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise TimeoutError('run wait timed out: ' + run_id)
-                await asyncio.sleep(.02)
-
         def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
             original = self.leg_reader
@@ -1017,13 +953,12 @@ def spawn_service(*args, **kwargs):
                 return super()._route(card, role, writer_families, review_of, **options)
             finally:
                 self.leg_reader = original
-
         async def _spawn(self, card=None, prompt='', role='implement', writer_families=(),
                         review_of=None, model=None, leg=None, override_reason=None,
                         dry_run=False, wait_seconds=0, no_fallthrough=False, benchmark=None, require_bench=False, review_scope=None,
-                        seats=False, _plan=None, run_worktree=False, _placement=None):
+                        seats=False, _plan=None, run_worktree=False, _placement=None, cwd=None):
             from .private_io import SAVE_READ_ATTEMPTS
-            from .run_watchdog import terminal_status, thresholds
+            from .run_watchdog import leg_limits, terminal_status, thresholds, watchdog_reason
             from .question_bridge import rounds_exhausted
             if rounds_exhausted(self, card, role):
                 from plangraph.routing_errors import SpawnRefused
@@ -1035,7 +970,7 @@ def spawn_service(*args, **kwargs):
                     review_of=review_of, model=model, leg=leg, override_reason=override_reason,
                     dry_run=dry_run, wait_seconds=wait_seconds, no_fallthrough=not seats or no_fallthrough,
                     benchmark=benchmark, require_bench=require_bench, review_scope=review_scope,
-                    seats=seats, run_worktree=run_worktree, _placement=_placement,
+                    seats=seats, run_worktree=run_worktree, _placement=_placement, cwd=cwd,
                 )
             from plangraph.settings import admit_review_scope
             admit_review_scope(card, role, review_scope)
@@ -1053,9 +988,10 @@ def spawn_service(*args, **kwargs):
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
                 given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
-                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
+                ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
+            if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(run_id)
             pack = await asyncio.to_thread(annotate, record, prompt, card, record['cwd'])   # D-3622: bad context refuses; big-file warnings (D-3649: built once, off the loop)
             annotate_item(record, card)
             for skipped in plan.to_dict()['skipped']:
@@ -1064,7 +1000,6 @@ def spawn_service(*args, **kwargs):
                     record['attempts'].append(dict(leg=skipped.get('leg'), status='skipped',
                         skip_reason=skipped.get('skip_reason') or skipped.get('reason')))
             self._save(record)
-
             if not plan.legs or plan.error:
                 host_skips = [s for s in plan.skipped if any(marker in str(s) for marker in ('not_served_on_host', 'harness_missing'))]
                 from plangraph.routing_support.liveness import provider_exhausted
@@ -1075,7 +1010,6 @@ def spawn_service(*args, **kwargs):
                               evidence=plan.to_dict()['skipped'])
                 self._save(record)
                 return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
-
             async def execute():
                 tried = set()
                 current = plan
@@ -1084,6 +1018,8 @@ def spawn_service(*args, **kwargs):
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     for _ in range(len(plan.legs) + 2):
+                        if (watchdog := leg_limits(record, limits)) is None:
+                            self._save(record); return
                         chosen = next((l for l in current.legs if l.id not in tried), None)
                         if chosen is None or current.error:
                             break
@@ -1098,15 +1034,18 @@ def spawn_service(*args, **kwargs):
                             continue
                         from .inline_diff import InlineDiffError
                         try:
-                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=record['started'] + limits['max_s'] if role == 'review' else None)
+                            leg_prompt = await self._prepare_leg_prompt(prompt, card, role, chosen, pack, document_review=leg is not None or dry_run, deadline=watchdog.get('deadline'))
                         except InlineDiffError as exc:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped',
                                 skip_reason='inline_diff_failed: ' + redact(str(exc))))
                             continue
                         leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, run_id)
-                        worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        record['base_admitted'] = False; worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                        if not await admit_base(self, record, card, launch=True): return
+                        if (watchdog := leg_limits(record, limits)) is None:
+                            self._save(record); return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
-                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=limits, live_log=live_log, extra_env=writer_env, **worktree,
+                            role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         if record.get('reason') in ('reasoning_output_limit', 'reasoning_only_length', 'reasoning_session_missing'):
                             return
@@ -1117,21 +1056,17 @@ def spawn_service(*args, **kwargs):
                             return
                         if self._path(run_id).with_name('cancelled').exists():   # D-3505: a CLI cancel from
                             job.status = 'cancelled'   # another process ends the run, never a fall-through leg
-                        stop = self.runner.provider_responses.get(job.job_id)
+                        stop = redact(self.runner.provider_responses.get(job.job_id))
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
-                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=job.status,
+                            record['attempts'].append(dict(leg=asdict(chosen), status=job.status, skip_reason=watchdog_reason(job),
                                 served_model=job.served_model or 'unwitnessed', served_family=job.served_family or 'unwitnessed'))
-                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=job.status,
+                            record.update(status=terminal_status(job.status, role), exit_code=1 if job.exit_code is None else job.exit_code, reason=watchdog_reason(job),
                                 watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                                 events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s events
                             return
-                        refusal = next((e for e in job.events if e.get('event') == 'model_refusal'), None)
-                        if refusal is not None:   # terminal safety stop: no booking, reroute, or writer continuation
-                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason='model_refusal',
-                                stdout_tail=job.stdout, stderr_tail=job.stderr))
-                            record.update(status='failed', reason='model_refusal', exit_code=job.exit_code,
-                                stop_reason=refusal['stop_reason'], refusal_text_chars=refusal['refusal_text_chars'],
-                                events=record.get('events', []) + job.events)
+                        if refusal_record(record, job):   # no booking, reroute, or writer continuation
+                            record['attempts'].append(dict(leg=asdict(chosen), status='failed', skip_reason=record['reason'],
+                                stdout_tail=job.stdout, stderr_tail=job.stderr, provider_response=stop))
                             return
                         reason = None
                         unavailable = fallthrough_reason(self, chosen, job, record)
@@ -1139,7 +1074,7 @@ def spawn_service(*args, **kwargs):
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1
                         if job.status in ('failed', 'skipped'):
-                            reason = redact(failure_reason(job, stop))
+                            reason = redact(failure_reason(job, stop, harness=chosen.harness))
                         if unavailable:
                             reason = redact(unavailable)
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
@@ -1164,6 +1099,8 @@ def spawn_service(*args, **kwargs):
                             if not dry_run and job.status != 'needs_input':
                                 await self._continue_writer(record, job.stdout)
                             return
+                        if role == 'review': record.update(status='running', exit_code=None)
+                        self._save(record)
                         current = plan if unavailable else self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
                         if hasattr(current, '__dataclass_fields__'):
                             current = restrict(await plan_for_launch_async(replace(current, placement=_placement or current.placement), dry_run=dry_run), tried)
@@ -1205,7 +1142,6 @@ def spawn_service(*args, **kwargs):
                     terminal_reason(record, job if record.get('job_id') else None)
                     release_attempts(self, record)
                     self._save(record)
-
             task = asyncio.create_task(execute())
             self.tasks[run_id] = task
             if dry_run or wait_seconds is None:
@@ -1216,5 +1152,4 @@ def spawn_service(*args, **kwargs):
                 except asyncio.TimeoutError:
                     pass
             return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
-
     return DispatchService(*args, **kwargs)

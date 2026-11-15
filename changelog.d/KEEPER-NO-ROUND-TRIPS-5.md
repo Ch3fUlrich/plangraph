@@ -1,0 +1,1 @@
+- KEEPER-NO-ROUND-TRIPS round 2: waived high reviews retain two-seat coverage and two distinct non-Anthropic families for auth/secrets cards, sharing fail-closed risk-tag validation with merged closes. Regression coverage includes early/late waivers, family aliases, disallowed tiers with stored waivers, and waiver-before-first-verdict family normalisation.

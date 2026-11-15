@@ -16,7 +16,7 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
-pub type FinishHook = Box<dyn FnOnce(&mut RunRecord, Status) + Send>;
+pub type FinishHook = Box<dyn FnOnce(&mut RunRecord, Status) -> Option<RunSpec> + Send>;
 pub struct RunSpec {
     pub run_id: String,
     pub job_id: String,

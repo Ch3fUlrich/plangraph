@@ -45,7 +45,7 @@ _LEGACY_MISSING = {
     ("leg:cx-gpt-6.1-sol-medium@omniroute/cx-gpt-6.1-sol-medium", "medium"),
     ("leg:cx-gpt-6.1-sol-xhigh@omniroute/cx-gpt-6.1-sol-xhigh", "xhigh"),
     ("leg:deepseek@omniroute/deepseek-direct-flash", None),
-    ("leg:omniroute-deepseek-flash@omniroute/deepseek-flash", None),
+    ("leg:omniroute-deepseek-flash@omniroute/deepseek-v4.1-flash", None),
     ("leg:omniroute-grok-4.7@omniroute/gc/grok-4.7", None),
     ("leg:omniroute-muse-spark@omniroute/muse-spark-1.3-contributor", None),
     ("leg:opencode-big-pickle@opencode/big-pickle", None),
@@ -204,8 +204,13 @@ def _pending_keys(pending):
 def _assert_contract(rows, models, legs, pending=()):
     issues = _violations(rows, models, legs)
     allowed = _pending_keys(list(pending))
-    if issues - allowed:
-        raise AssertionError(f"unlisted benchmark violations: {issues - allowed}")
+    # D-5903 operator admission: these exact seats may run without benchmark
+    # scores. Keep the missing-row diagnosis and frozen debt ceiling intact.
+    operator_admitted = {('missing_row', f'leg:agy-gemini-4-hydrogen-{effort}@agy/'
+                          f'gemini-4-hydrogen-{effort}', effort)
+                         for effort in ('high', 'medium')}
+    if issues - allowed - operator_admitted:
+        raise AssertionError(f"unlisted benchmark violations: {issues - allowed - operator_admitted}")
     if allowed - issues:
         raise AssertionError(f"remove resolved pending entries: {allowed - issues}")
 
@@ -362,3 +367,16 @@ def test_pending_allows_real_partial_resolution():
     entry = next(entry for entry in pending if entry["subject"] == rows[0]["model_id"])
     entry["problems"].remove("source_url")
     _assert_contract(rows, SEED_MODELS, spawnable_legs(), pending)
+
+
+def test_d5903_benchmark_gap():
+    legs = [leg for leg in spawnable_legs() if 'hydrogen' in leg.id]
+    assert len(legs) == 2
+    assert _violations([], [], legs) == {
+        ('missing_row', f'leg:agy-gemini-4-hydrogen-{effort}@agy/'
+                          f'gemini-4-hydrogen-{effort}', effort)
+        for effort in ('high', 'medium')}
+    _assert_contract([], [], legs)
+    for field, value in (('model', 'gemini-4-hydrogen-low'), ('effort', 'low'), ('id', 'renamed')):
+        with pytest.raises(AssertionError, match='unlisted benchmark violations'):
+            _assert_contract([], [], [replace(legs[0], **{field: value})])

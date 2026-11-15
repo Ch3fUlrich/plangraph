@@ -1,17 +1,18 @@
-# Only ci-gate required; selected must pass; unselected suites skip. Main/nightly/manual run all.
+# Only ci-gate required; full tier requires every job. Draft/sub-PRs select affected suites.
 
 name: tests
 
 on:
   pull_request:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
   workflow_dispatch:
   schedule:
     - cron: '23 3 * * *'
 
-# CI runs only on PRs into main (operator order); a newer push to the PR cancels the stale run,
+# Draft/sub-PRs use bounded selection; ready PRs into main and batch/* run all tests.
+# A newer push to the PR cancels the stale run,
 # but never a workflow_dispatch run (timing measurements must finish).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'pr' }}
@@ -29,6 +30,7 @@ jobs:
       rust: ${{ steps.sel.outputs.rust }}
       rust-worker: ${{ steps.sel.outputs.rust-worker }}
       rust-spike: ${{ steps.sel.outputs.rust-spike }}
+      browser: ${{ steps.sel.outputs.browser }}
       full: ${{ steps.sel.outputs.full }}
     steps:
       - uses: actions/checkout@v4
@@ -38,8 +40,13 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
+          if [ "${{ github.event_name }}" = "pull_request" ] &&
+             [[ "$PR_HEAD_REF" != batch/* ]] &&
+             { [ "$PR_BASE_REF" != "main" ] || [ "$PR_DRAFT" = "true" ]; }; then
             python3 tools/ci_select.py select --base "$BASE_SHA" --head "$HEAD_SHA"
           else
             python3 tools/ci_select.py select --full
@@ -93,9 +100,15 @@ jobs:
         run: python3 tools/check_changelog_docs.py
 
   pytest:
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: ${{ fromJSON(vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '[0,1,2,3]' || '[0,1,2]') }}
+    env:
+      PYTEST_SHARD: ${{ matrix.shard }}/${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 4 || 3 }}
     needs: select
     if: needs.select.outputs.pytest == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -107,7 +120,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: Build fleet projection helper
         run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
@@ -167,12 +180,24 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: b=$(git rev-parse --verify --end-of-options "HEAD^1^{commit}") && git show "$b":tests/test_workflow_archive.py > .git/workflow_archive_base.py && python .git/workflow_archive_base.py "$b"
+      - name: Check nonempty selection
+        if: matrix.shard == 0
+        timeout-minutes: 3
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+            python tools/affected_tests.py --base "$BASE_SHA" > "$RUNNER_TEMP/plan.json"
+          else
+            echo '{"tests": ["tests"]}' > "$RUNNER_TEMP/plan.json"
+          fi
+          python -c 'import json, sys; plan = json.load(open(sys.argv[1])); print(json.dumps(plan), flush=True); sys.exit(0 if plan["tests"] else (print("Empty test selection", file=sys.stderr) or 5))' "$RUNNER_TEMP/plan.json"
       - name: pytest
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --run -n auto
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+            python tools/affected_tests.py --base "$BASE_SHA" --run -n auto --maxfail 10
           else
             python -m pytest -q -n auto --dist loadgroup --durations=30 tests
           fi
@@ -180,6 +205,8 @@ jobs:
   # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
   # committed local assets, so the job never needs network access to a CDN.
   browser:
+    needs: select
+    if: needs.select.outputs.browser == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -207,6 +234,10 @@ jobs:
           if-no-files-found: warn
 
   pytest-postgres:
+    strategy:
+      fail-fast: true
+      matrix:
+        shard: [0, 1, 2]
     needs: select
     if: needs.select.outputs.pytest-postgres == 'true'
     runs-on: ubuntu-24.04
@@ -227,14 +258,15 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      PYTEST_SHARD: ${{ matrix.shard }}/3
       PG_KEEPER_BACKEND: postgres
-      # per-route keeper latency table at the end of the run (tests/contract/conftest.py)
-      PG_CONTRACT_LATENCY_DIR: /tmp/pg-contract-latency
       # root-cause hunt (CI-PG-CONTRACT-TIMEOUT): on a hung request dump the keeper's thread stacks
       PG_CONTRACT_ABORT_ON_TIMEOUT: "1"
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      - name: Isolate contract latency output
+        run: echo "PG_CONTRACT_LATENCY_DIR=$(mktemp -d "$RUNNER_TEMP/pg-contract-latency.XXXXXX")" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-rust
       - uses: actions/cache@v4
         with:
@@ -242,7 +274,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: Build fleet projection helper
         run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
@@ -267,6 +299,18 @@ jobs:
           git config --global user.name "plangraph-ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
+      - name: Check nonempty collection
+        if: matrix.shard == 0
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
+                  | xargs grep -L sqlite3 | tr '\n' ' ')
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+            PYTEST_SHARD= python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run --collect-only
+          else
+            PYTEST_SHARD= python -m pytest -q --collect-only tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
+          fi
       - name: pytest (contract suite + keeper storage tests on Postgres)
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -274,8 +318,8 @@ jobs:
           # keeper modules that never open the SQLite file directly
           FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
                   | xargs grep -L sqlite3 | tr '\n' ' ')
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto --maxfail 10
             exit $?
           fi
           # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
@@ -285,7 +329,7 @@ jobs:
   rust:
     needs: select
     if: needs.select.outputs.rust == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     defaults:
       run:
         working-directory: rust
@@ -303,7 +347,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
+          key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy
@@ -320,7 +365,7 @@ jobs:
   rust-windows:
     needs: select
     if: needs.select.outputs.rust == 'true'
-    runs-on: windows-latest
+    runs-on: ${{ vars.CI_SELF_HOSTED_WIN == '1' && vars.CI_WIN_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_WIN_RUNNER_LABELS) || 'windows-latest' }}
     timeout-minutes: 45
     defaults:
       run:
@@ -334,7 +379,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock') }}
+          # The dev profile lives in rust/Cargo.toml: a profile change must not reuse a target directory built with the old one.
+          key: rust-dev-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: cargo test -p pg-spawnd
         run: cargo test -p pg-spawnd
       - name: cargo test -p pg-worker-core
@@ -343,8 +389,10 @@ jobs:
   rust-worker:
     needs: select
     if: needs.select.outputs.rust-worker == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/worker/target
     defaults:
       run:
         working-directory: rust/worker
@@ -361,44 +409,25 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/worker/target
-          key: rust-worker-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker-core/Cargo.toml') }}
+          key: rust-worker-dev-${{ runner.os }}-${{ hashFiles('rust/worker/Cargo.lock', 'rust/worker/Cargo.toml', 'rust/worker-core/Cargo.toml', 'rust/pg-spawnd/Cargo.toml', 'rust/Cargo.lock', 'rust/Cargo.toml') }}
       - uses: ./.github/actions/setup-temporal
-      - name: Start Temporal dev server
-        run: |
-          "$TEMPORAL_CLI" server start-dev --ip 127.0.0.1 --port 17233 > /tmp/temporal.log 2>&1 &
-          for i in $(seq 1 30); do
-            if "$TEMPORAL_CLI" operator cluster health --address 127.0.0.1:17233 2>/dev/null; then
-              echo "Temporal server is healthy"
-              break
-            fi
-            if [ "$i" -eq 30 ]; then
-              echo "Temporal server failed to start"
-              exit 1
-            fi
-            sleep 1
-          done
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: cargo test
         env:
-          PG_TEMPORAL_ADDR: http://127.0.0.1:17233
           # Unit tests run attempts without the jail helper; the jail is covered by the rust job.
           PG_JAIL: "off"
           PG_TEST_ALLOW_UNJAILED: "1"
-        run: cargo test
-      - name: Dev server log tail
-        if: always()
-        run: |
-          if [ -f /tmp/temporal.log ]; then
-            tail -n 100 /tmp/temporal.log
-          fi
+          # Inside the cached rust/worker/target: the guard's nested cargo checks stay warm between runs.
+          PG_ADMISSION_GUARD_TARGET_DIR: ${{ github.workspace }}/rust/worker/target/admission-guard
+        run: cargo run --manifest-path ../Cargo.toml -p pg-spawnd --bin ci-temporal -- cargo test
 
   rust-spike:
     needs: select
     if: needs.select.outputs.rust-spike == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -418,7 +447,7 @@ jobs:
   ci-gate:
     name: ci-gate
     runs-on: ubuntu-24.04
-    needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike]
+    needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike, rust-windows, browser]
     if: ${{ always() }}
     steps:
       - uses: actions/checkout@v4

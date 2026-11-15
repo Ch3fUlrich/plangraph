@@ -1,0 +1,3 @@
+- Extend response-side gateway session tagging and call-log witnesses to OpenCode writers and all Sol effort legs; retain fail-closed evidence checks and add a synthetic route-table witness-path report.
+- Record gateway served-model mismatches after alias normalization, admit only route-table model identities, bind fixture rows to the expected session tag, and document writer access to the gateway key/tag.
+- Extract gateway model identity admission and call-log row parsing into a separate module, retaining gateway witness imports and behavior while keeping both files below the file-size limit.

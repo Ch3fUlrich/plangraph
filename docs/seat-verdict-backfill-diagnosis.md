@@ -75,6 +75,7 @@ reviewer verdict.
 No live verdict application, seat spawning, merge, or deployment was performed
 for this diagnosis. The forward completion bridge remains implementation work;
 the existing discovery fallback is not evidence that it is live.
+For a saved `verdict.json` with `status: retry` and reason `keeper verdict transport not configured`, re-post with `python3 tools/seat_verdict.py --repost-transport --key K --seat-dir RUN --url URL --token-dir DIR [--head FULLSHA]`; recorded writers/head and all verifier gates remain required, terminal or ambiguous sends refuse, and pre-send failures preserve retry authority.
 
 ## Round 1 fail-closed backfill corrections
 

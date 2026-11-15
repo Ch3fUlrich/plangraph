@@ -60,7 +60,7 @@ def srv(tmp_path):
     w.store.create_items(r, [
         defn("MINE", owner="l1main", priority=5),
         defn("THEIRS", owner="l1other", priority=9),
-        defn("Q", owner="l1main", kind="question", evidence_kinds=["decision"], priority=9),
+        defn("Q", owner="l1main", kind="question", review_tier="none", evidence_kinds=["decision"], priority=9),
         defn("GOAL", kind="goal", deps=["demo:MINE", "demo:THEIRS", "demo:Q"])])
     cfg = tmp_path / "keeper.json"
     cfg.write_text(json.dumps({"db": str(w.path), "snapshot": str(tmp_path / "s.json"),

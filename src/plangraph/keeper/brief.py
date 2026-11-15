@@ -22,9 +22,9 @@ BRIEF_WARNING = "description missing: brief will be empty"
 
 
 def creation_error(items):
-    """Front-door policy only; storage and legacy imports remain permissive."""
+    """Creation policy; legacy imports and existing-item edits are exempt."""
     for item in items if isinstance(items, list) else []:
-        if not isinstance(item, dict) or item.get("kind") == "decision":
+        if not isinstance(item, dict):
             continue
         description = item.get("description")
         if description is not None and not isinstance(description, str):

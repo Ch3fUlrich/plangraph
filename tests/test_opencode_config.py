@@ -22,9 +22,9 @@ def test_gateway_gemini_seat_bounds_silent_requests(settings, expected):
     from plangraph.routing_support.opencode_render import render_gateway_providers
     env = {"OMNIROUTE_BASE_URL": "http://gateway.invalid",
            "OPENCODE_CONFIG_CONTENT": json.dumps({"providers": {
-               "omniroute": {"settings": settings, "models": {"agy/gemini-3.8-flash-high": {}}},
+               "omniroute": {"settings": settings, "models": {"agy/gemini-4-argon-high": {}}},
                "other": {"settings": {"headerTimeout": False}}}})}
-    assert render_gateway_providers(env, "omniroute/agy/gemini-3.8-flash-high") is None
+    assert render_gateway_providers(env, "omniroute/agy/gemini-4-argon-high") is None
     providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
     rendered = providers["omniroute"]["settings"]
     for key, want in zip(("headerTimeout", "chunkTimeout"), expected):
@@ -41,7 +41,7 @@ def test_gateway_gemini_exact_leg_model_sets_both_bounds():
     # Isolate timeout rendering from endpoint validation.
     from unittest.mock import patch
     with patch("plangraph.routing_support.opencode_render._is_valid_url", return_value=True):
-        assert render_gateway_providers(env, "omniroute/agy/gemini-3.8-flash-high") is None
+        assert render_gateway_providers(env, "omniroute/agy/gemini-4-argon-high") is None
     settings = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]["omniroute"]["settings"]
     assert settings["headerTimeout"] == 60000
     assert settings["chunkTimeout"] == 60000
@@ -170,8 +170,8 @@ def test_mimo_overlay_uses_configured_gateway(monkeypatch, tmp_path, caplog,
                 "omniroute": {"settings": {"baseURL": url}}}}))
         else:
             monkeypatch.setenv(source, url)
-    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
-    root_config = tmp_path / "opencode.jsonc"
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(tmp_path / "providers.json"))
+    root_config = tmp_path / "providers.json"
     root_config.write_text(json.dumps(load_config()), encoding="utf-8")
     sentinel = "fixture-gateway-key-do-not-render"
     monkeypatch.setenv("AUTOOS_OMNIROUTE_KEY", sentinel)
@@ -210,8 +210,8 @@ def test_config_only_gateway_survives_later_env_overrides(monkeypatch, tmp_path,
     for name in ("OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL", "AUTOOS_OMNIROUTE_URL",
                  "PLANGRAPH_REVIEW_URL", "OPENCODE_CONFIG_CONTENT"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
-    (tmp_path / "opencode.jsonc").write_text(json.dumps(load_config()), encoding="utf-8")
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(tmp_path / "providers.json"))
+    (tmp_path / "providers.json").write_text(json.dumps(load_config()), encoding="utf-8")
     env = build_child_env(config={"gateway_url": "https://configured.invalid"})
     env[source] = "https://unused.invalid/v1"
     env = overlay_env(env)
@@ -231,10 +231,10 @@ def test_config_gateway_preserves_unrelated_root_placeholder(monkeypatch, tmp_pa
     for name in ("OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL", "AUTOOS_OMNIROUTE_URL",
                  "PLANGRAPH_REVIEW_URL", "OPENCODE_CONFIG_CONTENT"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(tmp_path / "providers.json"))
     monkeypatch.setenv("OTHER_GATEWAY_URL", "https://root.invalid/v1")
     providers = {name: {section: {"baseURL": placeholder}} for name in ("mimo", "omniroute")}
-    (tmp_path / "opencode.jsonc").write_text(json.dumps({"providers": providers}), encoding="utf-8")
+    (tmp_path / "providers.json").write_text(json.dumps({"providers": providers}), encoding="utf-8")
     generated = {name: {section: {"baseURL": "https://generated.invalid/v1"}} for name in providers}
     generated["omniroute"].setdefault("settings", {"baseURL": "https://generated.invalid/v1"})
     env = overlay_env(build_child_env(config={"gateway_url": "https://generated.invalid/v1"},
@@ -269,12 +269,12 @@ def test_mimo_config_only_gateway_preserves_concrete_root_url(monkeypatch, tmp_p
     for name in ("OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL", "AUTOOS_OMNIROUTE_URL",
                  "PLANGRAPH_REVIEW_URL", "OPENCODE_CONFIG_CONTENT"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(tmp_path / "providers.json"))
     config = load_config()
     root_url = "https://root.invalid/v1"
     for provider in ("mimo", "omniroute"):
         config["providers"][provider]["settings"]["baseURL"] = root_url
-    (tmp_path / "opencode.jsonc").write_text(json.dumps(config), encoding="utf-8")
+    (tmp_path / "providers.json").write_text(json.dumps(config), encoding="utf-8")
     env = overlay_env(build_child_env(config={"gateway_url": "https://generated.invalid/v1"}))
     assert render_gateway_providers(env, "mimo/mimo-v2.6-flash") is None
     providers = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]
@@ -296,8 +296,8 @@ def test_mimo_config_gateway_rejects_invalid_url(monkeypatch, tmp_path, caplog, 
     for name in ("PLANGRAPH_REVIEW_URL", "OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL",
                  "AUTOOS_OMNIROUTE_URL", "OPENCODE_CONFIG_CONTENT"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("AUTOOS_ROOT", str(tmp_path))
-    (tmp_path / "opencode.jsonc").write_text(json.dumps(load_config()), encoding="utf-8")
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(tmp_path / "providers.json"))
+    (tmp_path / "providers.json").write_text(json.dumps(load_config()), encoding="utf-8")
     env = overlay_env(build_child_env(config={"gateway_url": url}))
     before = dict(env)
     assert not _is_valid_url(url)

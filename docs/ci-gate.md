@@ -8,7 +8,7 @@ The `select` job (`tools/ci_select.py`) maps changed paths to suites: `scrub`, `
 
 The `ci-gate` job fails if any selected suite failed, was skipped, or was cancelled.
 
-A non-doc change satisfies the changelog check with a new or edited direct-child `changelog.d/<ITEM-KEY>.md` fragment that adds an entry line against the merge-base (excluding README.md), or with a line added under `## Unreleased`; `tools/changelog_fold.py` folds fragments before release.
+A non-doc change satisfies the changelog check with a new or edited direct-child `changelog.d/<ITEM-KEY>.md` fragment that adds an entry line against the merge-base (excluding README.md). Ordinary PRs must not edit `CHANGELOG.md`, even for docs-only changes or with a skip trailer. `tools/changelog_fold.py` folds fragments in a release commit recognized by a nonempty `Release: <version or description>` trailer in its final trailer paragraph. CI and the Rust writer gate check each commit, including merge-resolution edits.
 
 Branch protection on `main` requires only the `ci-gate` check — no review requirement, admins not enforced. Rollback: delete the protection.
 

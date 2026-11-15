@@ -125,6 +125,8 @@ def test_render_includes_hosts_asset():
 
 
 def test_persisted_registry_snapshot_hosts_page(tmp_path, monkeypatch):
+    from _spawnd import require_spawnd
+    require_spawnd()
     from types import SimpleNamespace
     from keeper_util import World
     from plangraph.keeper.snapshot_io import read_snapshot, write_snapshot

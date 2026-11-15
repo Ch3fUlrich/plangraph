@@ -1,5 +1,12 @@
 # OpenCode gateway provider URLs
 
+The spawner reads its provider block from plangraph's shipped
+`configuration/opencode/providers.json`, not an external checkout. A non-empty
+`PLANGRAPH_PROVIDERS_FILE` overrides that file with an operator-selected file
+(JSON or JSONC). To refresh it, copy the `providers` block of the operator's
+gateway config into a `{"providers": {...}}` file, omitting unrelated providers;
+credentials must remain environment-variable references, never secret values.
+
 The per-run overlay and renderer route both `mimo` and `omniroute` through
 the configured gateway. The renderer first honours a valid child OmniRoute
 provider URL already present in `OPENCODE_CONFIG_CONTENT`, including a
@@ -29,3 +36,9 @@ Credential handling is unchanged: config contains environment references, not
 credential values, and rendering does not read or log keys. The shared validator
 refuses URL userinfo, queries, fragments (including bare delimiters), and
 non-HTTP(S) schemes; a refusal leaves the caller's config unchanged.
+
+Plain-shell CLI runs resolve a missing deployment endpoint from
+`plangraph/omniroute-base-url` under XDG_CONFIG_HOME (otherwise HOME/.config).
+The witness and child configuration share the same resolver; private call-log
+credentials stay in the parent. Existing explicit child URLs and config-only
+root-placeholder precedence remain unchanged.

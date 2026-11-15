@@ -1,14 +1,14 @@
-# Plangraph Spawner & Model Routing Architecture
+# Plangraph Spawner & Model Routing Architecture — [disk admission](operations/spawner-disk-admission.md)
+
+| Config key | Values | Default / details |
+| --- | --- | --- |
+| `work_mode` | `auto`, `piecewise`, `batch` | `batch`; [files, precedence, schema and example](work-mode.md) |
 
 ### QUOTA-PAUSE-GATE
 
-The usage owner creates `quota-pause` in the spawner state directory at usage
->=95% and unlinks it at reset. Presence alone (including a dangling symlink)
-pauses admission: no second meter, expiry or automatic clearing. Flag read errors
-also pause admission.
-An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then
-`$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses
-`~/.local/state/plangraph`.
+The usage owner creates `quota-pause` in the spawner state directory at usage >=95% and unlinks it at reset.
+Presence alone (including a dangling symlink) pauses admission: no second meter, expiry or automatic clearing. Flag read errors also pause admission.
+An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then `$XDG_STATE_HOME/plangraph`; an empty/unset XDG root uses `~/.local/state/plangraph`.
 Session `launch` and `relaunch` refuse with `quota pause` before invoking the
 action or stopping an existing session, without a model filter. Dry runs do not
 bypass the quota check or write audit records.
@@ -40,10 +40,12 @@ P is skipped entirely if either shield character already occurs in the text.
 Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
 token catalog and JWT. P protects only OLD matched names; the unchanged joins can still eat wider names.
 Source mode (`redact_source`) skips P and both assignment stages; its order is unchanged.
-Python masks wider plain assignments and exact `os.environ` subscript assignments through the physical line end (CR/LF only), before P; OLD behavior and both joins are unchanged.
+Python masks wider plain assignments and exact `os.environ` subscript assignments through the physical line end (CR/LF only), before P. D-5703 extends those masks through any intersecting wrapped span that pre-A1 main already masked, including its final physical line; OLD behavior and both joins are unchanged. A1 masks the value before a join can eat the wider name (a1-J03); slice C still owns name preservation.
 Exact new double-quoted colon keys remain open gap A2, the JSON-key rule. Next-line and backslash continuation forms remain open gap slice C REDACT-ASSIGN-JOIN-GAPS; neither join is fixed.
 JSON-tail limit-loss: a wider plain assignment hides the rest of its line, including later limit evidence inside JSON strings or dict-style text. Structured 429/402 JSON readers can lose limit evidence after scrubbing; dict-style lines are not read even raw, while raw streaming refusal detection and raw step accounting still run before scrubbing.
 Slice A2 also owns three known gaps: a wider name starting where an older-rule match ends is not masked yet; a wider name hides the whole rest of its line, including a later older-rule label; and quoted keys with blanks before the colon stay as on main.
+Under D-5703, fixture-known readable credential portions are compared against local git-loaded pre-A1 e7964367 modules and tagged with their owner, not endorsed as correct. A2 owns below-floor wrapped assignment continuation a1-J04 (5); slice C owns remaining join gaps; Rust-readable expectations belong to slice B `plangraph:REDACT-RUST-NAME-SCOPE-ALIGN`. The old Python assignment rule already consumes the stray closing bracket in `API_KEY=[REDACTED]]`.
+D-5751 pins both historical modules to full commit `e7964367542646ea603a1fc84f67f7036b298bcb` and checks helper identity plus an A1-only behavior difference, preventing absolute imports from silently using the current scanner. The LF/CRLF-before-separator rows and wrapped U+E000/U+E001/indexed-marker rows are equally readable before and after A1, so their fixture rows retain slice C ownership; no production or Rust change is warranted. Mask-growth tests preserve literal placeholders and reject ambiguous alignments. Both Python modules' work is counted, with a separate child CPU limit covering C-regex blank-run work.
 Secrecy-safe over-masks remain unchanged: mismatched or half quotes around wider names, Unicode line and paragraph separators counted as blanks, and a comparison sign after a subscript name.
 The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
 share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
@@ -51,36 +53,15 @@ Source spans must start and end on line boundaries; invalid spans (even empty on
 Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
 only on child output via Python's `redact_output`, and as part of Rust's `redact`.
 Python never runs these broad rules on prompts or record structures: SHAs and hashes
-must stay readable there, including run IDs, card hashes and prompt SHA-256 fields.
+must stay readable there, including run IDs, card hashes and prompt SHA-256 fields. Run records add immutable process-load `tree_sha` and `tree_branch` (or `detached`) captured once by a bounded Git read when the spawner code loads, independent of the job cwd and later checkout moves; record persistence performs no Git I/O; old records may omit them. A code path without its own `.git` marker records null identity and a warning, including installed packages within an enclosing project checkout. See [checkout auditing](fleet-sync.md#production-checkout-guard-and-audit).
 Stored stdout/stderr tails have already passed the output scrubber at collection.
 A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
 
 ### Prompt delivery
 
-Every harness and helper receives the prompt by stdin or file, never argv, for
-all prompt sizes on every OS (D-5233). Python's Linux OOM child inherits the stdin
-pipe; pg-spawnd uses the same launch-spec transport.
-Child env construction drops only known legacy task carriers (`PROMPT`, `PROMPT_TEXT`,
-`PROMPT_SUFFIX`, `TASK_PROMPT`, `PLANGRAPH_TASK_PROMPT`, case-insensitive), including
-overlays; unrelated shell/theme/template configuration survives. Rust refuses exact
-prompt carriers and embedded prompts of at least 16 bytes in argv/env, without
-mistaking short incidental substrings of flags or model names for task transport.
-SSH overflow passes a staged UTF-8 file to the real spawn CLI's `--prompt-file`
-option, preserving trailing newlines without shell command substitution.
-Request-budget refusals keep the launch adapter's exit status in their run record;
-pre-exec refusals without an exit code also retain the named `prompt_too_large` reason.
-Qoder retains an explicit empty `-p` value with `--input-format text`; missing prompt flags fail with
-`stdin_prompt_flag_missing` in launch-spec refusals and Python run records. All agy commands use
-`--input-format stream-json --output-format stream-json -p ""`, with
-one UTF-8 NDJSON user event on stdin followed by EOF. The last result's
-`response` supplies the answer and verdict; an ERROR or missing result fails
-explicitly, without publishing an unsuccessful response as an answer.
-OpenCode, Claude, Gemini and Qwen read text stdin; Codex uses `exec -`. Fleet sessions
-also read stdin; SSH overflow uses `--prompt-file` without shell expansion. Assembled
-prompts exceeding the leg budget (three chars/token) record `prompt_too_large`.
-Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
-the watchdog never retries a rejected payload as an empty prompt. Gateway config
-size refusal leaves the caller's environment unchanged.
+Prompts travel by stdin or file on every launch path (D-5233). See
+[spawner prompt rules](operations/spawner-prompt-rules.md) for transport contracts,
+carrier validation, failure behavior, fixer reports and retry bounds.
 
 ### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
 
@@ -114,7 +95,7 @@ Before decoding display stdout, `opencode_answer.record_steps` retains each
 `step_finish` as an `opencode_step_finish` event with `finish_reason`,
 `output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
 Structured `output-limit` errors and the matching OpenCode stderr diagnostic
-add `opencode_output_limit`. These are diagnostic events, not served-model witnesses.
+add `opencode_output_limit`. These are diagnostic events, not served-model witnesses. Review tool-denial validation and its defaults live in `spawner/opencode_isolation.py`. The `spawner.runner` gate wrapper passes its own `_DENIED_TOOLS`, `_REVIEW_OPENCODE_ENV_ALLOW` and `_opencode_managed_dir` at call time, preserving rebinding of those three dependencies. The wrapper also resolves the isolation implementation at call time; isolation internals such as `json`, `Path` and `Mapping` are not runner override points. Patching the shared `sys.platform` attribute still reaches managed-directory resolution, while replacing runner module objects is outside this contract. All managed-directory, permission and child-environment checks remain mandatory; only the runner wrapper supplies explicit dependency values. Direct isolation calls resolve omitted or `None` inputs from the isolation module at call time.
 A final `length` step with positive reasoning usage and no answer text (even output 1), legacy output-zero length, or that error with no text/output,
 adds `opencode_reasoning_exhausted`; later completed output is not retried.
 Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
@@ -145,15 +126,16 @@ Terminal saves dispatch review verdicts to the keeper:
 - Remove both journal and marker explicitly to requeue after repair.
 - Delivery markers stop retries even when the completion field is absent.
 Spawn records take `item_key` (or the legacy `item` alias) from the card, falling back to `PLANGRAPH_SPAWN_ITEM` only when neither card field supplies a value. Python and `pg-spawnd` require an ASCII `project:ID` key (at most 200 characters total and 180 in the ID); invalid explicit values stay null with a warning rather than falling through to another identity. Prompt mentions never supply an item key. Review/judge records without a key retain a `seat_item_missing` warning event. Main's verdict outbox above is the only automatic posting path; record-derived posting refuses a `--key` that differs from a recorded `item_key`, including null. Legacy records without the field retain the manual CLI path.
+Python spawn identity removes repeated copies of the same project prefix before launching (for example, `demo:demo:KEY` becomes `demo:KEY`); other colon-qualified IDs remain intact. Record-derived completion SHAs must be exactly 40 hex characters, without trailing newlines; malformed heads refuse immediately rather than entering the persistence retry budget.
 The `evidence.json` manual path also refuses any supplied `item_key` or `key` that differs from `--key`, including null or conflicting aliases, before reading reviewer tokens or posting. Missing-seat events are deduplicated against launch events and remain persisted on dry runs and queue refusals.
 Companion records still bind the target when `evidence.json` is present: missing evidence identity cannot override a record's explicit null or different key, and malformed companion records fail closed. Git-config capture refusals also retain validated identity and launch/missing-seat events. The record-only path checks record identity independently of the evidence builder. Manual invocations always require `--key` (including legacy records); omission exits 2 before reading seat files or tokens. Non-dry completed Python dispatch saves also preserve missing-seat and launch events.
 `worker-core::writer_result::check_result` runs the mandatory Rust file-size
 gate before returning a checked result; export rechecks it before content gates,
 bundle sealing or publication. A refusal returns `HOLD gate file-size: <detail>`
 and no publish/push is attempted. Changed tracked files use the Python CI gate's
-400-line rule, exemptions, binary detection, splitlines counting and baseline
+800-line rule (D-5840), exemptions, binary detection, splitlines counting and baseline
 ratchet. CI still runs unchanged `tools/check_file_size.py` over all tracked files.
-The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI entry/skip-trailer rule, returning `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require skip reasons; section boundaries include indented headings in both Rust and CI.
+The adjacent Rust changelog gate in slice S1b uses the run-base merge-base and the CI fragment/skip-trailer rule. It rejects each non-release `CHANGELOG.md` edit, including merge resolutions that lose inherited additions or invent lines (ordinary merges preserving parent edits pass); only a nonempty `Release:` final-paragraph trailer permits that commit to edit the ledger. Failures return `HOLD gate changelog: <detail>` before export or publish/push when an entry is required. Doc-only and empty commits do not require fragments or skip reasons, but the release restriction still applies.
 The S1c Rust docs-map gate reads `.docs-map` from the committed head and compares changed paths over `merge-base(base, head)..head`. Each matching rule needs at least one mapped doc in that range; failures return `HOLD gate docs-map:` with unmatched `source -> doc` pairs before export/content gates or publication. Missing maps pass; malformed rules/dates hold. `# enforce-after:` begins enforcement inclusively on that local calendar date (earlier missing-doc matches do not hold); entries have no expiry syntax. CI retains its stricter union of merge-base and head policies, so removing head rules cannot disable CI enforcement. Shared JSON cases exercise Rust/Python parsing and glob parity.
 
 Cross-host ps distinguishes missing source paths and unreachable SSH hosts; doctor checks configured source directories in parallel (see [cross-host ps](spawner-ps.md)).
@@ -255,13 +237,42 @@ python -m plangraph.spawner.cli result run-ID
 ```
 Cards may also be inline JSON; `spawn --prompt-file FILE` replaces the prompt argument for prompts over the argv limit; it reads UTF-8, strips a BOM, and a bad file exits 2 with a `prompt_file_*` or `prompt_input_*` refusal. `card.context` (`path:start-end` slices, at most 64) is inlined as a CONTEXT PACK for inline-only legs (cap `PLANGRAPH_CONTEXT_PACK_MAX_CHARS`, default 60000; built once per spawn, each slice file read once and passed through `redact`; a secret-looking name, a `.git` part or an untracked file is skipped with a `context_path_refused` warning; with entries, no git work tree, a symlink loop or too many entries refuse the spawn (without entries a failed listing only adds `big_file_scan_skipped`); a range past the end of the file adds `context_range_past_eof`) and a brief naming a 400+ line file without a slice adds a `big_file_unsliced` warning (D-3622, D-3649). `--state PATH` precedes the verb; otherwise
 `PLANGRAPH_SPAWN_STATE` or the XDG plangraph state directory is used.
+`spawn --cwd PATH` or card `cwd` selects an absolute existing Git checkout;
+relative, missing, non-checkout and conflicting flag/card paths are refused.
+Without either, the caller's cwd is unchanged. The selected path is recorded in
+`record.cwd` and passed to the runner; `completion.head_sha` is that checkout's
+HEAD at completion, not at launch. `seat_verdict --head` must still match it.
+Explicit cwd takes precedence over `diff_ref.repo` for placement; explicit-cwd runs stay local regardless of the public allowlist (below-floor runs queue). SSH overflow is only eligible without explicit cwd and requires every checkout/diff repository to pass the public allowlist; a supplied `diff_ref` without `repo` is refused. Run worktrees retain `selected_cwd` for fresh attempts and fixer continuations even after the parent's attempt is pruned; legacy records recover the service's default checkout. Cwd must be a checkout root with a committed HEAD and is stored as its resolved absolute path. Validation runs once off the async loop; checkout Git operations ignore repository redirects, injected config parameters and alternate object directories.
 `--dry-run` plans without a child. Spawn returns a `wait_cmd`:
 `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
 the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
-`--no-fallthrough` disables automatic advancement after a captured provider stop.
+`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
+Review/seat routes record each failed, limited or not-served attempt with its reason
+and try the next leg in the same run, failing only after route exhaustion. Ordinary
+failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; only
+recognized availability/quota evidence does. Review `usage_limit:`/`credit_limit:` labels book only when their payload is recognized quota evidence (for example `error: usage limit reached`/`error: credits exhausted`); a label plus `task diagnostic` does not book. Writer
+generic failures keep their stop rule; cancellation, safety refusals and watchdog
+terminals still stop immediately. Safety refusal attempts precede provider-stop classification without overwriting distinct terminal reasons; specific unavailable diagnostics outrank generic provider stops. Provider-stop responses pass through spawner redaction before being added to attempts, including safety refusals. OOM wrapper marker lines (including prefixed telemetry) are not failure reasons. A `plangraph_oom` envelope on stderr is recorded only as an event and removed from the captured stderr, so each failed attempt keeps its own reason and a later attempt's OOM line cannot overwrite it.
 Plain stdout, including text saying 429, is never provider evidence.
+
+### SHA-named run-tree primitive (SPAWNER-RUN-TREE-S1)
+
+`git_guard.run_tree(state, repo)` attempts to fetch `origin/main`, then selects
+its verified commit SHA and uses the detached tree at `<state>/trees/<sha>`.
+If fetching fails or times out, it uses the verified tracking ref, not cache
+directory mtimes. It creates the tree when its directory is missing, including
+when Git still has a stale registration for that path, even if locked (double `--force`).
+
+POSIX reaping keeps the selected tree, trees named by nonterminal run records
+or records with survivors, trees with held creation locks or context leases, directories
+modified within seven days, and dirty trees. A missing/invalid `tree_sha` on a
+nonterminal or survivor record, or corrupt/unreadable records, disables reaping
+for that call. Only older, clean, unpinned trees with available locks and leases
+are removed. Windows selection does no reaping. Supervisor integration and
+run-record stamping are outside this primitive's slice.
+Terminal means `runner.is_terminal`; `needs_input` and `orphaned` keep their trees.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
 
@@ -288,8 +299,29 @@ and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
 attempt's starting commit (main head or continuation tip). A failed fixer creation
 records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
 process cwd and child PWD use that path. With the flag off, cwd is unchanged;
-dry runs create nothing. No worktrees are removed, no pg-reap lock sharing is
+dry runs create nothing. Admission fetches origin's default branch and refuses stale workers, continuations and seats (`base_stale`); a card `base_decision` needs scoped operator proof from the configured decision authority to waive known lag; cleanup removes only unadmitted attempts created by this run and never continuations; detached CLI waits for admission (180-second timeout: `base_admission_timeout`, exit 1); no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
+
+OpenCode gateway runs carry a per-job session tag for every role, including Sol
+writers and effort variants. After exit (successful or failed), the parent reads
+the response-side gateway call log independently of review tool permissions. Only
+a unique admitted model from successful rows for that tag supplies a witness;
+missing, mismatched tags, failed rows and unknown model IDs stay unwitnessed. Plain-shell CLI runs share the child URL resolver: environment first, existing config mapping next, then `plangraph/omniroute-base-url` under XDG_CONFIG_HOME or HOME/.config. Unresolvable home directories and unreadable, non-regular or over-8-KiB endpoint files mean unconfigured. Management URLs preserve the scheme, host, port and path prefix, removing only a final `/v1` path segment. The private management-key lookup stays parent-only. Serialized witness failures retain endpoint-not-configured, explicit-direct-MiMo, and no-call-log-row reasons through native telemetry fallback; non-gateway legs keep the native reason.
+Model identity admission and call-log row parsing live in `spawner/gateway_models.py`;
+`spawner/gateway_witness.py` retains compatible re-exports and owns session tagging,
+transport and witness orchestration. Admission matches exact model segments in the route table, stripping transport
+provider prefixes and the registered `cx-` GPT alias prefix. A different admitted
+model keeps its family witness and records `served_model_mismatch` with the raw
+requested and served IDs, including when an effort variant serves its base model.
+A writer child holds the gateway API key and session tag and can submit calls
+with that tag. The witness proves the model served for tagged gateway calls;
+it does not prove independence from the child or bind a response to its answer.
+The management log credential stays in the parent. The child-writable OpenCode
+store remains review-only request-side evidence.
+Run `python -m pytest -q -s tests/test_gateway_witness.py -k route_table_witness_paths`
+to list default and explicit legs without a witness path, including disabled
+legs. The check uses synthetic rows, assumes gateway-backed MiMo, and also checks
+model-family admission; it never contacts a gateway or reads management keys.
 
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
@@ -309,10 +341,10 @@ it does not close items or bypass the keeper's authorization checks.
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.
 Failed hooks are logged and retried on re-save; local inbox replay is idempotent.
-`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds each child execution in seconds; unset gives a 25-minute review cap, while empty means no review cap;
+`PLANGRAPH_SPAWN_RUN_TIMEOUT` optionally bounds execution in seconds; reviews share one run deadline across all legs and prompt preparation (writers retain per-child limits); unset gives a 25-minute review cap, while empty means no review-specific cap (the ordinary 90-minute maximum still applies); internal `max_s: null` limits have no deadline;
 expiry kills its process tree and records rc 124 with FAILED completion.
 Terminal stall/timeout records preserve their outcome and events even without a watchdog event (`watchdog: null`). A provider stop leaves the harness status and exit code unchanged (completed with exit 0 stays completed), adding `provider_stop` only when no reason exists and the stopped leg's own coverage slot names a seat group, preserving it in the attempt and unfilled-slot error while leaving completed non-seat reasons unset and tolerating empty, absent or non-dict coverage entries.
-The detached supervisor must survive the child; killing the supervisor itself
+Mixed seat/non-seat coverage never resolves a seat to an unrelated chosen leg. The detached supervisor must survive the child; killing the supervisor itself
 requires a future recovery service. This interim event contract carries over to
 the later Temporal implementation (also covers FLEET-STATUS-HOOK).
 Writing run roles (implement/fix) guard shared .git/config against in-place mutations (e.g. core.autocrlf), restoring original bytes and failing the run if changed. The spawner kills only the process tree it started: the root is proven ours at spawn (direct child, own group; or Job Object member), a snapshot of its descendants is taken before any signal, and a kill is verified (up to 10 s). Survivors fail the run with reason `kill_incomplete` (event `kill_incomplete`, `survivors` pids): no fall-through leg, no second writer. Runs use argv exec only (no shell wrapper), enforced by a static guard test.
@@ -323,8 +355,8 @@ audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
-A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables automatic probes). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness.
-Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key.
+A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables ordinary automatic probes, not snapshot-error recovery). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness. `src/plangraph/spawner/leg_probe.py:before_launch` retries snapshot read errors once, then probes before admitting/skipping; failed-probe reasons retain the probe's own cause; only an empty or `unknown` reason is recorded as `leg_probe_failed` (`host_not_ready` for a missing host binary), never as `unknown` (run-e99aae2287e541b48886d0f04e46c37e). See [snapshot recovery](spawner-leg-state.md#snapshot-read-errors-slice-1).
+Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key. Gateway quota refusals (omniroute "quota policy filtered" / "reached configured quota threshold", agy `RESOURCE_EXHAUSTED`) book like any harness limit. Before routing, `src/plangraph/routing_support/quota_snapshots.py::QuotaGate` reads omniroute `quota_snapshots` (read-only `QUOTA_SNAPSHOT_DB` mount/copy when configured, otherwise the management API; cached 60 s) and reads a leg `limited` while every account of its provider pool is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1) until the earliest reset (`next_reset_at`; a reset-less row holds 30 min from its timestamp or API observation); a missing or unreadable snapshot never blocks routing. A gateway leg silent for 60 s is checked against the call log (`sessionTag`) at the next 30 s watchdog tick (detected 60-90 s after the stall, bounded 3 s per check) and a logged quota error ends the run (exit 7) so the next leg runs; agy is not a gateway leg and its printed refusal is caught by the output refusal gate.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
 on the same model/harness with a nonempty `live.log` grown within
@@ -354,7 +386,7 @@ import `plangraph.spawner` at runtime; the boundary is enforced by
 
 `planner.routing.plan_spawn(card, role="implement"|"review")` applies the
 canonical `route_card` eligibility and tier rules to role-tagged `DEFAULT_LEGS`.
-Writers use Sol xhigh then agy Gemini Flash (`WRITER_ORDER`); plain Sol is explicit-only. See [implement route defaults](routing.md); banned/off families are skipped for writers too.
+The declared `WRITER_ORDER` is Sol xhigh then agy Hydrogen high (D-5903); Hydrogen medium serves read-only tools review (agy plan mode); both seats remain unwitnessed; plain Sol is explicit-only. See [implement route defaults](routing.md); banned/off families are skipped for writers too.
 Other roles and the remaining implementation fallbacks put eligible free inputs before subscriptions and paid inputs (D-5092). Catalog cost tiers project onto registered legs without changing their roles, safety exclusions, or family metadata. Sonnet, main's Opus registration, high-effort Opus, gateway DeepSeek/Muse, personal Argon, and Big Pickle remain registered (D-5113). Grok's manual-only gate, both Zen free legs' exact permanent D-4196/D-3828 disables, and Qoder's stop remain enforced; Muse retains main's implementation/review/orchestration admission, and Big Pickle retains its GLM family. Sonnet retains orchestration/review, high-effort Opus review only, and medium-effort Opus review/orchestration. No Claude-family leg may enter an automatic implement route, including custom role-bearing tables; explicitly audited effort-variant writer picks remain available.
 
 `plan_spawn` shares one catalog snapshot for admission and tier projection.
@@ -363,7 +395,7 @@ an empty snapshot uses the registered leg tiers and still rejects unknown models
 Exact-order tests pin this input and isolate benchmark discovery from host files. Role-neutral keeper routes over the default table retain main's D-3828 readiness admission; S5's implementation fallbacks apply to role-bearing routes, not readiness. Custom tables remain explicit inputs.
 Review ordering preserves main's cost-first, per-leg measurement gate: measured rows precede missing rows within the same tier; unmeasured rows retain MiMo's existing role preference and Haiku's last-within-tier fallback. Provider-qualified tier identities win over unrelated bare names. Neither Haiku nor a measured paid row crosses a cheaper tier. A no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
 Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
-(agy harness, review and implement), `agy-gemini-3.8-flash-{low,medium,high}` (review),
+(agy harness, review and implement), Hydrogen high and medium are enabled, unwitnessed (see retirement below),
 `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
 `cx-gpt-6.1-sol-{low,medium,high,xhigh,max}` (implement). The ids are what `agy models` and
 OmniRoute `/v1/models` served that day; agy serves no Sonnet xhigh and cx serves no `-ultra`, so neither is a leg.
@@ -622,7 +654,6 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 Benchmark catalog and ranking invariants: see [verified benchmarks](spawner-benchmarks.md).
 
 Continue with [review protocol, interfaces, and operations](spawner-operations.md); see [OOM policy](../deploy/oom-policy.md) for repository checks versus live-pressure evidence.
-See [spawner prompt rules](operations/spawner-prompt-rules.md) for fixer reports and retry bounds.
 The served-model probe cache has a five-minute freshness bound,
 not a five-minute completion or delivery SLA; see the operations guide for details.
 
@@ -630,10 +661,55 @@ Cross-host ps: see [site configuration and transport](spawner-ps.md); [host read
 # Remote ps protocol
 
 The SSH ps endpoint serializes only running and queued records. Terminal history
-does not consume the 1 MiB transport budget; malformed terminal fields do not
-hide live runs. Malformed live replies and oversized replies name the queried
-host as unknown rather than silently omitting it.
+does not consume the 1 MiB transport budget.
+Malformed terminal fields do not hide live runs; malformed live or oversized replies name the queried host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits
 to the same accepted/rejected cases. Rust embeds JSON, never Python source or
 an interpreter; CRLF checkouts cannot break the doctor's deadline-limit checks.
+
+OOM wrapper lines are recognized by their known event shape, including `wrapper:` prefixes and extra metadata. The known event is retained in `events`; extra metadata is redacted into an `oom_telemetry_detail` event. Unknown or diagnostic-bearing envelopes remain in stderr. These untrusted telemetry events confer no provider identity or authorization. OpenCode structured `type=error` messages survive display-text decoding and supply attempt diagnostics. When all legs fail, the run reason selects the last real attempt before accumulated errors or stderr. The three Dell incident captures are replayed by `tests/test_spawner_oom_reason.py` using `tests/fixtures/spawner_dell_oom.json`. Failure classification also uses the route harness for jobs without command metadata and filters progress from a stored final-attempt reason.
+
+See [admission contracts](operations/spawner-admission-contracts.md) for split admission and cleanup details.
+
+Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.
+
+Stale-base waivers require PLANGRAPH_BASE_DECISIONS_FILE configured by the operator. Admission fetches its origin/main, requires one decision row whose DECISION cell contains Source: operator, Waives: spawn-base:<checked-base-sha> and Origin: <fetched-origin-sha>, and refuses missing, duplicate, unreadable or mismatched proof. A card D-id alone never waives lag or failed fetches. Refused-worktree cleanup requires matching created_by_run_id and never removes continuations or admitted workers.
+
+Run-worktree spawns validate the selected creation base before cutting a tree, then
+validate its checkout and any review diff before launch. Caller HEAD does not
+admit or reject a new worktree. Clean main is fast-forwarded when behind; a main
+checkout already at origin/main needs no mutation and may retain local edits.
+Session launch (`src/plangraph/spawner/sessions.py`), routing `bin/fleet-launch`,
+and the external package-worktree script do not call this gate in this part.
+
+Cancellation waits for an in-flight worktree creation thread before returning;
+new unlaunched attempts are removed, and normal Git branch deletion removes the
+new lane only when it is unoccupied and merged into the fetched origin/main.
+Continuation evidence remains protected from automatic removal.
+
+Launch-admission refusals apply the same safe branch cleanup to owned new
+attempts, so a named lane can retry after origin advances during creation.
+
+Spawner startup checkout identity reads decode Git output explicitly as UTF-8 with replacement for invalid bytes, matching the other spawner subprocess reads.
+
+Gemini Flash retirement (operator 2026-11-14): all versions and effort variants
+are refused with `gemini_flash_retired` before dispatch, including card targets,
+CLI overrides and MCP requests. The model list filters retired rows even from
+older databases. D-5903 enables Hydrogen high for implement after Sol and medium for read-only tools review (agy plan mode).
+Both inherit the agy Claude capability bounds and remain unwitnessed: AGY emits no served-model telemetry.
+Historical records remain readable; the retired benchmark model row exists only
+for benchmark foreign keys and never appears in the model list.
+Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md).
+
+Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
+
+Seat-pool cleanup tests create their initial commit with Git plumbing in an
+isolated fixture environment, without signing, hooks, index updates or automatic
+maintenance. Fixture Git failures retain stderr; Windows fixture subprocesses
+use CREATE_NO_WINDOW. The cache-survival assertion also runs in a 50-iteration
+stress test. Windows CI and recorded reruns provide platform evidence.
+
+Native writer progress admission: [run contract](native-writer-progress-admission.md).
+
+[Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.

@@ -64,11 +64,48 @@ class DecisionsOriginUnreadable(OSError):
     """The configured repository or origin/main decisions blob is unreadable."""
 
 
+def _global_credential_entries() -> list[tuple[str, str]]:
+    """The caller's global credential helpers, read without following includes.
+
+    Only these keys cross into the isolated fetch env; values are never logged.
+    """
+    try:
+        proc = subprocess.Popen(
+            ["git", "config", "--global", "--no-includes", "--null", "--get-regexp", r"^credential\..*helper$"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        try:
+            out, _ = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            return []
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    entries = []
+    for record in out.decode("utf-8", "replace").split("\0"):
+        key, sep, value = record.partition("\n")
+        if sep and key.startswith('credential.') and key.endswith('.helper'):
+            entries.append((key, value))
+    return entries
+
+
 def _origin_git_env() -> dict[str, str]:
-    """Ignore caller repository/config overrides; retain transport safety guards."""
+    """Ignore caller repository/config overrides; retain transport safety guards.
+
+    The caller's global credential helpers are re-injected via GIT_CONFIG_COUNT so a
+    private https origin can still authenticate.
+    """
     env = {name: value for name, value in os.environ.items()
            if not name.startswith("GIT_") or name in {"GIT_ALLOW_PROTOCOL", "GIT_TERMINAL_PROMPT"}}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    entries = _global_credential_entries()
+    if entries:
+        env["GIT_CONFIG_COUNT"] = str(len(entries))
+        for index, (key, value) in enumerate(entries):
+            env[f"GIT_CONFIG_KEY_{index}"] = key
+            env[f"GIT_CONFIG_VALUE_{index}"] = value
     return env
 
 
@@ -152,23 +189,58 @@ class DecisionsAdapter:
     def _rows_strict(self) -> dict[str, list[str]]:
         return self._rows(_strict=True)
 
-    def _rows(self, *, _strict=False) -> dict[str, list[str]]:
-        """Normalised prose rows; origin failures raise, local reads can be best effort."""
+    def _document(self, *, _strict=False):
         if self._path is None:
-            return {}
+            return ""
         if self._from_origin:
             text = read_decisions_origin(self._path)
         else:
             if not self._path.is_file():
                 if _strict:
                     raise OSError("decisions path is not a regular file")
-                return {}
+                return ""
             try:
                 text = self._path.read_text(encoding="utf-8")
             except OSError:
                 if _strict:
                     raise
-                return {}
+                return ""
+        return text
+
+    def seat_waiver_cutoff(self):
+        """Rule 3.37's sole ISO date; absent rule uses the historical default.
+
+        Read the same authoritative document as decisions, including origin
+        mode. A present ambiguous/malformed rule must never use the default.
+        """
+        rows = []
+        for line in _prose_lines(self._document(_strict=True)):
+            if re.match(r"^\s*\|\s*`?3\.37`?\s*\|", line):
+                rows.append(line)
+        if not rows:
+            return "2026-11-13"
+        dates = re.findall(r"(?<![\w-])\d{4}-\d{2}-\d{2}(?![\w-])", rows[0])
+        if len(rows) != 1 or len(dates) != 1:
+            raise ValueError("rule 3.37 cutoff unavailable or ambiguous")
+        return dates[0]
+
+    def fields(self, decision_id):
+        """Unique row by named table columns; absent/ambiguous headers refuse."""
+        canonical = self._canonical(decision_id)
+        header, found = None, []
+        for line in _prose_lines(self._document(_strict=True)):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            names = [c.lower() for c in cells]
+            if len(names) >= 3 and names[2] == "decision":
+                header = names if len(set(names)) == len(names) else None
+            match = DECISION_LINE_RE.match(line)
+            if match and f"D-{int(match[1])}" == canonical:
+                found.append(dict(zip(header, cells)) if header and len(header) == len(cells) else {})
+        return found[0] if len(found) == 1 else {}
+
+    def _rows(self, *, _strict=False) -> dict[str, list[str]]:
+        """Normalised prose rows; origin failures raise, local reads can be best effort."""
+        text = self._document(_strict=_strict)
         rows: dict[str, list[str]] = {}
         for line in _prose_lines(text):
             match = DECISION_LINE_RE.match(line)

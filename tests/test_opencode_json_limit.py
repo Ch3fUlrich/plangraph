@@ -83,6 +83,7 @@ def test_outcome_paths(status, token, path, tmp_path, monkeypatch):
 @pytest.mark.parametrize('status,reason', [(429, 'usage_limit'), (402, 'credit_limit')])
 @pytest.mark.parametrize('suffix,retained', [('N20', True), ('A04', False), ('A05', False)])
 def test_a1_scrubbed_reader_boundary(status, reason, suffix, retained, monkeypatch):
+    # D-5672 accepts A04/A05 whole-line masking losing later 429/402 evidence.
     from pathlib import Path
     from types import SimpleNamespace as NS
     from unittest.mock import Mock

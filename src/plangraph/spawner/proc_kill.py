@@ -310,9 +310,28 @@ async def finish(root, ident, members, *, platform=None, command_factory=None,
                  live_pids=live_pids, reterminate=reterminate)
 
 
+def oom_envelope(line):
+    """Recognize only the wrapper's known telemetry, including its diagnostic prefix."""
+    from .env_redact import normalize
+    text = normalize(line).strip()
+    if text.startswith('wrapper: '):
+        text = text[len('wrapper: '):]
+    try:
+        envelope = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+    event = envelope.get('plangraph_oom') if isinstance(envelope, dict) else None
+    if not isinstance(event, dict) or event.get('event') not in {
+            'oom_score_adj', 'oom_score_adj_denied', 'oom_score_adj_failed'}:
+        return None
+    if set(event) - {'event', 'value', 'errno'}:
+        return None   # arbitrary diagnostics cannot be hidden inside telemetry
+    return envelope
+
+
 def record_oom_envelope(events, envelope):
     """Child transport is untrusted: retain at most one event of each known kind."""
-    if not isinstance(envelope, dict) or set(envelope) != {'plangraph_oom'}:
+    if not isinstance(envelope, dict) or 'plangraph_oom' not in envelope:
         return
     event = envelope['plangraph_oom']
     if not isinstance(event, dict) or event.get('event') not in {

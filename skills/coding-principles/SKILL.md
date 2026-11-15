@@ -103,7 +103,7 @@ Use semantic tools before brute-force file reads, and verify through the tool th
 observes the real thing. Four servers are **mandatory**, not optional: Serena (LSP
 symbols/refs/refactor), Graphify (code-structure graph), Omnigraph (structured
 cross-project memory), and Playwright (browser verification of anything rendered).
-See the `structured-memory` and `mcp-servers-setup` skills.
+See the [structured-memory](../structured-memory/SKILL.md) and `mcp-servers-setup` skills.
 
 - Session start: activate Serena, and load project structure and prior decisions
   from memory/graph before editing.

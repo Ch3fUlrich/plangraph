@@ -9,9 +9,9 @@ from plangraph.spawner.clients import build_command
 
 
 def test_agy_harness_dispatch():
-    assert build_command('hello', 'gemini-3.8-flash', client='agy') == [
+    assert build_command('hello', 'gemini-4-argon-high', client='agy') == [
         'agy', '--dangerously-skip-permissions', '--model',
-        'gemini-3.8-flash-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
+        'gemini-4-argon-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
 
 
 def test_opencode_harness_dispatch():
@@ -30,7 +30,7 @@ def test_qodercli_harness_dispatch():
 
 
 @pytest.mark.parametrize('harness,model,native_model', [
-    ('agy', 'gemini-3.8-flash', 'gemini-3.8-flash-high'),
+    ('agy', 'gemini-4-argon-high', 'gemini-4-argon-high'),
     ('opencode', 'omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6.1-sol')])
 def test_unmocked_harness_popen(tmp_path, harness, model, native_model):
     binary = tmp_path / harness

@@ -34,7 +34,8 @@ def w(tmp_path):
     world = World(tmp_path)
     world.store.create_items(world.p("router"), [
         defn("Q", kind="question", operator=None),
-        defn("DEC", kind="decision", operator=None),
+        defn("DEC", kind="decision", operator=None,
+             description="Why: choose\nHow: answer"),
         defn("L"), defn("G", ["Q", "DEC", "L"], kind="goal")])
     world.store.ctx = SimpleNamespace(decisions=_decisions(
         tmp_path, _row("demo:Q") + _row("demo:DEC", "D-501") + _row("demo:L", "D-502")

@@ -58,10 +58,8 @@ from plangraph.spawner.sessions_agents import (
 class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
     """Launch / stop / relaunch Claude Code sessions.
 
-    One injectable runner carries every subprocess call (argv list, never a
-    shell string). Constructor: ``state_root`` (session state directory),
-    ``config_path`` (else $PLANGRAPH_SESSIONS_CONFIG), ``run``
-    (injectable), ``now`` (clock), ``platform``, ``resolve_budget`` (seconds to
+    Subprocesses use an injectable runner and argv. Constructor: ``state_root``,
+    ``config_path``, ``run``, ``now``, ``platform``, ``resolve_budget`` (seconds to
     keep polling ``claude agents`` for the new session's row, 0.5 s apart),
     ``which`` (exe resolver, consulted on win32 only), ``sleep`` (poll wait).
     """
@@ -151,6 +149,8 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
             raise _refuse("dry_run must be a real boolean")
         if parent is not None and (not isinstance(parent, str) or not parent):
             raise _refuse("parent must be a non-empty string")
+        from plangraph.retired_models import check_retired
+        check_retired(model)
         cfg = self._load_config()
         name = self._check_name(self._launch_name(cfg, name))
         cwd_path = self._check_cwd(cwd, cfg)

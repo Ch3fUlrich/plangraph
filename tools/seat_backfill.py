@@ -7,11 +7,22 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+import sys
+from contextvars import ContextVar
 from pathlib import Path
 
+_SEND_STATE = ContextVar("seat_verdict_send_state", default=None)
 
-def apply_backfill(args, item, seat, poster, row):
+
+def _add_src():
+    src = str(Path(__file__).resolve().parents[1] / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+
+
+def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
     """Use the forward outbox lock without waiting; ambiguous state never sends."""
     from contextlib import redirect_stdout, redirect_stderr
     from io import StringIO
@@ -27,6 +38,10 @@ def apply_backfill(args, item, seat, poster, row):
     journal = directory / "verdict.json"
     phase = "verdict outbox check"
     try:
+        if retry_reason is not None and (not re.fullmatch(r"[0-9a-fA-F]{40}", seat["head_sha"] or "")
+                or not isinstance(item["writer_families"], list) or not item["writer_families"] or any(
+                    not isinstance(w, str) or not w.strip() or w.lstrip().startswith("-") for w in item["writer_families"])):
+            raise ValueError("invalid repost head or writer bindings")
         if journal.is_symlink() or Path(str(journal) + ".lock").is_symlink():
             row["reasons"].append("ambiguous verdict journal")
             return 0
@@ -43,7 +58,8 @@ def apply_backfill(args, item, seat, poster, row):
                 import fcntl
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             phase = "verdict journal read"
-            previous = json.loads(journal.read_text()) if journal.exists() else {}
+            previous_text = journal.read_text() if journal.exists() else "{}"
+            previous = json.loads(previous_text)
             if (not isinstance(previous, dict) or journal.exists() and previous.get("status") not in
                     ("sending", "delivered", "skipped", "retry")
                     or type(previous.get("attempts", 0)) is not int or previous.get("attempts", 0) < 0):
@@ -52,21 +68,34 @@ def apply_backfill(args, item, seat, poster, row):
                     or previous.get("status") in ("sending", "delivered", "skipped")):
                 row["reasons"].append("verdict already terminal or sending")
                 return 0
+            if retry_reason is not None and (previous.get("status") != "retry" or previous.get("reason") != retry_reason):
+                row["delivery"] = "failed"
+                row["reasons"].append("journal is not a transport-only retry")
+                return 1
             phase = "verdict sending journal write"
             atomic_write_private(journal, json.dumps(dict(status="sending",
                 attempts=previous.get("attempts", 0))) + "\n")
             phase = "verdict poster or verifier result"
-            with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
-                             "--writer-family", ",".join(item["writer_families"]), "--token-dir",
-                              str(args.token_dir), "--url", url])
+            context = _SEND_STATE.set(state := {})
+            try:
+                with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                    rc = poster(["--key", item["key"], "--seat-dir", str(directory), "--head", seat["head_sha"],
+                                 "--writer-family", ",".join(item["writer_families"]), "--token-dir",
+                                  str(args.token_dir), "--url", url])
+            finally:
+                _SEND_STATE.reset(context)
+                if retry_reason is not None and state.get("started") is False:
+                    atomic_write_private(journal, previous_text)
             if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
             row["verifier_exit"] = rc
+            if rc and retry_reason is not None: row["reasons"].append(f"poster exit {rc}")
             phase = "verdict outcome write"
-            _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
+            if retry_reason is None or state.get("started") is not False:
+                _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
             row["delivery"] = "failed" if rc else "delivered"
             return int(bool(rc))
-    except Exception as exc:
+    except (Exception, SystemExit) as exc:
+        if retry_reason is None and isinstance(exc, SystemExit): raise
         if phase == "verdict lock" and isinstance(exc, BlockingIOError):
             row["reasons"].append("verdict lock busy")
             return 0
@@ -78,9 +107,28 @@ def apply_backfill(args, item, seat, poster, row):
         return 1
 
 
+def repost_transport(args, poster):
+    """Recheck a record through the verifier under the shared outbox lock."""
+    row = {"reasons": []}
+    try:
+        if (args.seat_dir / "evidence.json").exists():
+            print("seat_verdict: repost refused: evidence.json exists; record-only seat required", file=sys.stderr)
+            return 1
+        if args.dry_run: raise ValueError("record seat without --dry-run required")
+        record = json.loads((args.seat_dir / "record.json").read_text("utf-8"))
+        args.backfill_apply = True
+        apply_backfill(args, {"key": args.key, "writer_families": record.get("given_writer_families")},
+                       {"seat_dir": args.seat_dir, "head_sha": args.head or record.get("completion", {}).get("head_sha")}, poster, row,
+                       retry_reason="keeper verdict transport not configured")
+    except (Exception, SystemExit) as exc:
+        row["reasons"].append(type(exc).__name__)
+    if row.get("delivery") != "delivered": print("seat_verdict: repost refused: " + "; ".join(row["reasons"]), file=sys.stderr)
+    return int(row.get("delivery") != "delivered")
+
+
 def backfill(args, poster, pr_lookup=None):
     """Print TSV discovery and optionally invoke the existing single-seat CLI."""
-    import sys
+    _add_src()
     from collections import Counter
     from plangraph.keeper.evidence_git import GitAdapter
     from seat_record import record_index, snapshot_item, merged_pr, eligible_records

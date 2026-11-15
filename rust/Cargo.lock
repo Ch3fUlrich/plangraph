@@ -2169,6 +2169,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-repo-sync"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+]
+
+[[package]]
 name = "pg-spawnd"
 version = "0.1.0"
 dependencies = [
@@ -2180,6 +2187,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "syn 2.0.119",
+ "tempfile",
  "tokio",
  "windows-sys 0.61.2",
 ]
@@ -2191,6 +2199,7 @@ dependencies = [
  "chrono",
  "globset",
  "libc",
+ "pg-reap",
  "pg-worker-core",
  "rand 0.9.5",
  "regex",

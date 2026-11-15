@@ -17,6 +17,7 @@ required-features = ["test-support"]
 test-support = []
 
 [dependencies]
+pg-reap = { path = "../pg-reap" }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -32,6 +33,7 @@ tempfile = "3"
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
+    # Status publication: DELETE access and FileRenameInfoEx; tests pin sharing.
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_JobObjects",
@@ -44,3 +46,5 @@ windows-sys = { version = "0.61", features = [
 pg-worker-core = { path = ".", package = "pg-worker-core", features = ["test-support"] }
 tempfile = "3"
 serial_test = "3"
+# Exercise the real FILE_RENAME_INFO layout and buffer on non-Windows builders.
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

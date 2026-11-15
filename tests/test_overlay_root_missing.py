@@ -7,11 +7,11 @@ from plangraph.routing_support import opencode_overlay as o, resolver as r
 
 @pytest.fixture(autouse=True)
 def root_config(tmp_path, monkeypatch):
-    monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(tmp_path / 'providers.json'))
     monkeypatch.setattr(o, '_missing_warned', False, raising=False)
     monkeypatch.setattr(r, 'admitted_by_render', lambda model: False)
     monkeypatch.setattr(r, 'host_probe_env', lambda env: o.overlay_env(env or {}))
-    return tmp_path / 'opencode.jsonc'
+    return tmp_path / 'providers.json'
 
 
 def test_missing_root_warns_once(root_config, caplog):
@@ -50,21 +50,20 @@ def test_utf8_root_parses(root_config, monkeypatch):
 
 
 def test_overlay_roots_keep_independent_reasons(tmp_path, monkeypatch):
-    missing = tmp_path / 'missing'
-    present = tmp_path / 'present'
-    present.mkdir()
-    (present / 'opencode.jsonc').write_text('{"providers": {}}', encoding='utf-8')
-    monkeypatch.setenv('AUTOOS_ROOT', str(missing))
+    missing = tmp_path / 'missing.json'
+    present = tmp_path / 'present.json'
+    present.write_text('{"providers": {}}', encoding='utf-8')
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(missing))
     missing_env = o.overlay_env({})
-    monkeypatch.setenv('AUTOOS_ROOT', str(present))
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(present))
     present_env = o.overlay_env({})
-    assert missing_env[o.OVERLAY_ROOT_MISSING] == str(missing / 'opencode.jsonc')
+    assert missing_env[o.OVERLAY_ROOT_MISSING] == str(missing)
     assert o.OVERLAY_ROOT_MISSING not in present_env
     monkeypatch.setattr(r, 'host_probe_env', lambda env: env)
     row = {'harness': 'opencode', 'model': 'test/absent'}
     assert r.host_skip_reason(row, env=missing_env, probe=lambda env: set()) == (
         f'not_served_on_host: test/absent '
-        f'(root_provider_config_missing: {missing / "opencode.jsonc"})')
+        f'(root_provider_config_missing: {missing})')
     assert r.host_skip_reason(row, env=present_env, probe=lambda env: set()) == (
         'not_served_on_host: test/absent')
 

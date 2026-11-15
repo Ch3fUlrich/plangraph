@@ -219,18 +219,27 @@ def test_mcp_show_without_brief_is_unchanged(live):
     assert "reviews" in reply["result"]["content"][0]["text"]
 
 
-def test_mcp_create_reports_the_warning(live):
+def test_mcp_create_with_sections_has_no_warnings(live):
     reply = mcp.handle(
         {"jsonrpc": "2.0", "id": 3, "method": "tools/call",
          "params": {"name": "create", "arguments": {"items": [
              defn("W1", description="Why: Test creation.\nHow: Create a lane."),
              defn("W1G", ["W1", "W1D"], kind="goal",
                   description="Why: Test creation.\nHow: Create a goal."),
-             defn("W1D", kind="decision")]}}},
+             defn("W1D", kind="decision",
+                  description="Why: Test creation.\nHow: Create a decision.")]}}},
         _client(live, "router"))
     assert reply["result"]["isError"] is False
-    assert "description missing: brief will be empty" in \
-        reply["result"]["content"][0]["text"]
+    assert "warnings" not in json.loads(reply["result"]["content"][0]["text"])
+
+
+def test_mcp_create_reports_the_warning(live):
+    # MCP create cannot warn; test real emission through its direct HTTP client.
+    text, is_error = _client(live, "router").call(
+        "POST", "create_items", {"items": [defn("W2", kind="goal")]})
+    assert is_error is False
+    assert json.loads(text)["created"] == ["demo:W2"]
+    assert json.loads(text)["warnings"] == [brief_mod.BRIEF_WARNING]
 
 
 # ------------------------------------------------------------------ stats

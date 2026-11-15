@@ -161,7 +161,7 @@ def test_bypass_needs_kind_lane(w):
     w.store.create_items(
         w.p("router"),
         [
-            defn("LONG", kind="decision"),
+            defn("LONG", kind="decision", description="Why: choose\nHow: answer"),
             defn("PH-D", ["LONG"], kind="gate"),
             defn("GOAL3", ["PH-D"], kind="goal"),
         ],

@@ -13,13 +13,16 @@
             stacked on a PR outside the batch is refused) and the plan rules apply to the set (red CI,
             needs-update, HIGH with standard PRs, caps) unless --force-set, which is logged in the
             state and the batch PR. A conflict stops with exit 3 (resolve, commit, run `continue`) or,
-            with --skip-conflicts, skips the PR and labels it needs-update. --union GLOB merges an
+            with --skip-conflicts, skips the PR and labels it needs-update. Root .gitattributes sets default
+            union paths; --union GLOB adds an
             append-only ledger (CHANGELOG.md) line by line instead; build warns when a PR changed old
             lines of such a path, because a union keeps the old text beside the new.
   continue  resume after the resolution commit, or after a crash: the state is saved before the
             worktree and before each merge, so a merge that was made is recorded, not lost.
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
+  review    record a part review ending in HEAD: <full part sha> and VERDICT: ACCEPT.
+  go-req    print the batch GO request from saved reviews, CI and PLAN evidence.
   land      merge the batch PR only if its head is the pushed head, every required check is
             green and --approval ends in `HEAD: <sha>` (the batch head in full, all 40 hex
             digits) and `VERDICT: PASS` lines, with
@@ -42,7 +45,7 @@ import sys
 import merge_batch_build as build
 import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
-from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, add_extra_paths, fetch_pr,
+from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, refresh_diff, fetch_pr,
                               gh_json, norm_pr, parse_prs, repo_info)
 
 
@@ -58,7 +61,7 @@ def cmd_plan(args):
         raw = gh_json("pr", "list", "--repo", repo, "--state", "open", "--label", args.label,
                       "--limit", "200", "--json", PR_FIELDS)
         prs = [norm_pr(item) for item in raw]
-    add_extra_paths(base, prs)  # the old paths of renames: a keeper file moved away is still a keeper change
+    refresh_diff(base, prs)  # Git owns sizes and paths, including both ends of renames
     plan = plan_batches(prs, base, args.max_prs, args.max_lines, patterns)
     plan.update(repo=repo, label=None if args.prs else args.label)
     print(json.dumps(plan, indent=2) if args.json else render_table(plan))
@@ -101,6 +104,8 @@ def parser():
     cmd = add("build", build.cmd_build, "merge PRs into batch/NAME", repo=True)
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--prs", required=True, help="comma separated PR numbers, in merge order")
+    cmd.add_argument("--plan", help="keeper key for the batch PLAN block")
+    cmd.add_argument("--deviations", default="none", help="batch plan deviations (default: none)")
     cmd.add_argument("--skip-conflicts", action="store_true", help="skip a conflicting PR and label it needs-update")
     set_options(cmd)
     cmd.add_argument("--force-set", action="store_true",
@@ -108,18 +113,26 @@ def parser():
                           "logged in the state and the batch PR")
     cmd.add_argument("--worktree", help="worktree path (default: <repo>-worktrees/batch-NAME)")
     cmd.add_argument("--union", action="append", default=[], metavar="GLOB",
-                     help="merge this path line by line (git merge=union) instead of conflicting, "
+                     help="add to the fetched base .gitattributes union defaults; merge this path line by line (git merge=union) instead of conflicting, "
                           "for append-only ledgers such as CHANGELOG.md (repeatable)")
     cmd = add("continue", build.cmd_continue, "resume after a conflict resolution commit")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--skip-conflicts", action="store_true")
-    add("push", land.cmd_push, "push batch/NAME and open the batch PR").add_argument("--name", required=True)
+    cmd = add("push", land.cmd_push, "push batch/NAME and open the batch PR")
+    cmd.add_argument("--name", required=True)
+    cmd.add_argument("--ci-run", type=positive, help="full batch CI run id; repeat push after CI completes")
+    cmd = add("review", land.cmd_review, "record a review on a part's full head")
+    cmd.add_argument("--name", required=True)
+    cmd.add_argument("--pr", required=True, type=positive)
+    cmd.add_argument("--file", required=True)
+    add("go-req", land.cmd_go_req, "print the batch GO request").add_argument("--name", required=True)
     cmd = add("land", land.cmd_land, "merge the batch PR and report the included PRs")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--batch-pr", required=True, type=int)
     cmd.add_argument("--approval", metavar="PATH",
                      help="seat verdict text ending in 'HEAD: <the batch head sha in full>' and "
                           "'VERDICT: PASS' lines")
+    cmd.add_argument("--go-row", metavar="PATH", help="recorded GO row; red-main exception must name this full head and EXCEPTION:main-red-fix")
     cmd.add_argument("--checks", metavar="NAME,..", help="check names to require instead of the required checks")
     cmd.add_argument("--wait", type=float, default=20.0, help="seconds to wait for GitHub to mark PRs merged")
     add("status", land.cmd_status, "batches in progress").add_argument("--json", action="store_true")

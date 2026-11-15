@@ -1,22 +1,21 @@
 """OmniRoute ACP-First Client Adapter with Tailnet Coexistence.
 
-All model providers route first through the local model gateway; its base URL is
-deployment config (``OMNIROUTE_BASE_URL``, ``PLANGRAPH_GATEWAY_URL`` or the
-spawner/keeper config, see ``effective_gateway_base_url``), never a source
-literal. Standalone direct CLI spawning (agy,
-qodercli, codex, claude) is reserved strictly as an offline emergency fallback
-when gateway_online=False.
-
+Model providers use the configured local gateway (``effective_gateway_base_url``).
+Direct CLI spawning is an emergency fallback when gateway_online=False.
 Preserves Windows SystemRoot/COMSPEC/PATHEXT/TEMP environment variables (D-2090 BUG-B).
 """
 from __future__ import annotations
 
 import json
 import os
+import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+from .opencode_render import valid_gateway_endpoint
 
+from plangraph.retired_models import check_retired
 from plangraph.routing_support.claude_seat import claude_access_args
 from plangraph.routing_support.review_mode import leg_tool_mode, prompt_only_command, review_prompt
 
@@ -62,39 +61,34 @@ def effective_gateway_base_url(env: Mapping[str, str] | None = None,
     environment by default) wins, else ``gateway_url`` (``PLANGRAPH_GATEWAY_URL``,
     then the *config* mapping's ``gateway_url`` key).  ``build_child_env`` and
     the ``plangraph_agent_health`` report both call this helper, so the reported
-    URL cannot diverge from the effective one.
+    URL cannot diverge from the effective one. If neither env nor config names
+    an endpoint, read plangraph/omniroute-base-url under XDG_CONFIG_HOME (or
+    HOME/.config). Missing/unreadable/non-regular or oversized files mean unconfigured.
     """
     source = os.environ if env is None else env
     override = ((source or {}).get(OMNIROUTE_BASE_URL_ENV_VAR) or "").strip()
-    return override or gateway_url(source, config)
-
-
-#: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,
-#: unparsable content, or a provider block ``build_child_env`` builds from scratch.
-_ABSENT = object()
-
-
-def _child_settings(env: Mapping[str, str]) -> Any:
-    """The ``providers.omniroute.settings`` node the child's config already holds.
-
-    Whatever JSON value sits under ``settings`` is returned as-is: a ``dict`` is
-    what ``build_child_env`` merges into with ``setdefault``, any other value
-    blocks the ``baseURL`` write outright.  ``_ABSENT`` means there is nothing
-    to honour yet, so the deployment-config sources decide instead.
-    """
-    raw = (env or {}).get("OPENCODE_CONFIG_CONTENT")
-    if not isinstance(raw, str) or not raw.strip():
-        return _ABSENT
+    override = override if override.rstrip("/") else ""
+    configured = override or gateway_url(source, config)
+    if configured:
+        return configured
     try:
-        parsed = json.loads(raw)
-    except ValueError:
-        return _ABSENT
-    node: Any = parsed
-    for key in ("providers", "omniroute", "settings"):
-        if not isinstance(node, dict) or key not in node:
-            return _ABSENT
-        node = node[key]
-    return node
+        config_home = source.get('XDG_CONFIG_HOME')
+        root = (Path(config_home) if config_home else
+                Path(source.get('HOME') or Path.home()) / '.config') / 'plangraph'
+        # Nonblocking open also covers a file replaced with a FIFO after lookup.
+        fd = os.open(root / 'omniroute-base-url', os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0))
+        with os.fdopen(fd, 'rb') as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                return None
+            value = stream.read(8193)
+        if len(value) > 8192:
+            return None
+        value = value.decode('utf-8').strip()
+        return value if valid_gateway_endpoint(value) else None
+    except (OSError, UnicodeError, ValueError, RuntimeError):
+        return None
+
+from .opencode_overlay import _ABSENT, _child_settings
 
 
 def effective_child_base_url(env: Mapping[str, str] | None = None,
@@ -175,6 +169,10 @@ def build_child_env(
     redirection (GIT_DIR and kin) that a plain update cannot express.
     """
     env = dict(os.environ)
+    gateway = effective_gateway_base_url(env, config)
+    if gateway and not (gateway_url(env, config) or
+                        str(env.get(OMNIROUTE_BASE_URL_ENV_VAR) or "").strip().rstrip("/")):
+        env[GATEWAY_URL_ENV_VAR] = gateway
 
     if os.name == "nt":
         critical_windows_vars = (
@@ -284,7 +282,8 @@ def build_opencode_command(
     headers: Mapping[str, str] | None = None, extra_flags: Sequence[str] = (), tool_mode: str = "tools",
 ) -> list[str]:
     """Build opencode command for execution via OmniRoute ACP/Gateway."""
-    # --standalone: the shared background service ignores the child's config overlay
+    check_retired(model_or_combo)
+    # The shared background service ignores the child config overlay.
     cmd = ["opencode", "run", "--standalone", "--model", model_or_combo]
     if serve_port is not None:
         cmd.extend(["--port", str(serve_port)])
@@ -316,11 +315,13 @@ def build_standalone_fallback_command(
     role: str = "implement", tool_mode: str = "tools",
 ) -> list[str]:
     """Build direct CLI command as offline emergency fallback when gateway is offline."""
+    check_retired(model)
     cname = client_name.lower()
     if cname == "agy":
-        cmd = ["agy", "--dangerously-skip-permissions"]
+        plan = role == "review" and (model or "").lower().removeprefix("agy/").startswith("gemini-4-hydrogen-")
+        cmd = ["agy", *(["--mode", "plan"] if plan else ["--dangerously-skip-permissions"])]
         if model:
-            cmd.extend(["--model", {"gemini-3.8-flash": "gemini-3.8-flash-high"}.get(model, model)])
+            cmd.extend(["--model", model])
         cmd.extend(["-p", "", "--input-format", "stream-json", "--output-format", "stream-json"])
         return cmd
     if cname in ("qoder", "qodercli"):
@@ -373,6 +374,7 @@ def build_command(
 ) -> list[str]:
     """Explicit harness is authoritative; else gateway-first. Unknown pairs use tools."""
     from plangraph.mimo_policy import check_mimo_path
+    check_retired(model_or_combo)
     tool_mode = tool_mode if tool_mode is not None else leg_tool_mode(client, model_or_combo)
     prompt = review_prompt(prompt, tool_mode, client) if role == "review" else prompt
     check_mimo_path(model_or_combo)

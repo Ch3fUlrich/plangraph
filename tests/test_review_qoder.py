@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import sys
 import stat
 import subprocess
 from pathlib import Path
@@ -164,10 +165,14 @@ def test_run_garbage_stdout():
     assert res.text == ""
 
 
-def test_run_uses_empty_temp_cwd(tmp_path):
+def test_run_uses_empty_temp_cwd(tmp_path, monkeypatch):
     """Real stub sees an empty dir that is not the repo cwd."""
+    poison = tmp_path / "python3"
+    poison.write_text("#!/bin/sh\necho unexpected-PATH-python >&2\nexit 91\n")
+    poison.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     stub = tmp_path / "qodercli"
-    stub.write_text("#!/usr/bin/env python3\n"
+    stub.write_text(f"#!{sys.executable}\n"
                     "import json, os, sys\n"
                     "doc = {'cwd': os.getcwd(), 'ls': sorted(os.listdir('.'))}\n"
                     "out = {'type': 'result', 'subtype': 'success',\n"

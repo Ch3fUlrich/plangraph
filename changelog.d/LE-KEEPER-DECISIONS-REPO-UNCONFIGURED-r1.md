@@ -1,0 +1,1 @@
+Devstack keeper startup reuses an established valid private config when the decisions environment variable is unset; explicit decisions updates preserve unrelated settings and repository mappings, while new configs still require an explicit checkout path.

@@ -9,12 +9,15 @@ re-checks the chain over HTTP (head after each write == sha256(previous head + e
 head against SQLite through the adapter.
 """
 import re
+import hashlib
 import atexit
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
+from contextlib import contextmanager
 import pytest
 from pathlib import Path
 from pgtest_shm import _sweep_dead_pgtest_dirs
@@ -24,7 +27,6 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 _TOOLS = Path(__file__).resolve().parents[1] / "tools"
-
 
 def _oom_worker_count(count, meminfo=Path('/proc/meminfo')):
     override = os.environ.get('PYTEST_XDIST_AUTO_NUM_WORKERS')
@@ -38,11 +40,9 @@ def _oom_worker_count(count, meminfo=Path('/proc/meminfo')):
         return min(count, 4)  # Unknown capacity is not permission for unbounded workers.
     return max(1, min(count, 4, total // (1024 * 1024)))
 
-
 @pytest.hookimpl(optionalhook=True)
 def pytest_xdist_auto_num_workers(config):
     return _oom_worker_count(os.cpu_count() or 1)
-
 
 @pytest.hookimpl(specname='pytest_configure')
 def pytest_oom_configure(config):
@@ -52,8 +52,6 @@ def pytest_oom_configure(config):
         event = raise_oom_score()
         if event['event'] == 'oom_score_adj_denied':
             warnings.warn('oom_score_adj_denied: EACCES raising pytest worker to 500')
-
-
 @pytest.fixture
 def bounded_shutdown_cleanup(monkeypatch):
     """Finish cleanup before a mocked exit can close the database."""
@@ -80,14 +78,10 @@ def bounded_shutdown_cleanup(monkeypatch):
 
     monkeypatch.setattr(daemon, "run", run)
     yield
-
-
 @pytest.fixture
 def keeper_thread_guard():
     from _keeper_threads import guard_new_threads
     return guard_new_threads
-
-
 @pytest.fixture(autouse=True)
 def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
     """Test-body starts stay test-owned; fixture starts follow their own scope."""
@@ -96,7 +90,8 @@ def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
     with thread_scope(request):
         yield
 
-
+from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
+    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
 @pytest.fixture(scope="session", autouse=True)
 def no_leaked_keeper_fixture_threads(request):
     import _keeper_threads as guard
@@ -106,14 +101,12 @@ def no_leaked_keeper_fixture_threads(request):
     with guard.guard_new_threads(scope=lambda: guard.current_scope(request)) as watch_scope:
         yield watch_scope
 
-
 @pytest.fixture
 def w(tmp_path):
     from keeper_util import World
     world = World(tmp_path / "keeper")
     yield world
     world.close()
-
 
 @pytest.fixture
 def tools_importable():
@@ -141,7 +134,6 @@ _policy_dir = tempfile.mkdtemp(prefix="pg-route-policy-")
 atexit.register(shutil.rmtree, _policy_dir, True)
 Path(_policy_dir, "route-policy.json").write_text(_NEUTRAL_POLICY)
 os.environ["PLANGRAPH_ROUTE_POLICY"] = str(Path(_policy_dir, "route-policy.json"))
-
 
 def _use_tmpfs_tempdir() -> None:
     # The suite is fsync-bound (SQLite commits); tmpfs avoids slow-disk stalls.
@@ -174,9 +166,7 @@ def _use_tmpfs_tempdir() -> None:
     os.environ["TMPDIR"] = path
     tempfile.tempdir = path
 
-
 _use_tmpfs_tempdir()
-
 
 @pytest.fixture(autouse=True)
 def hermetic_writer_env(monkeypatch):
@@ -192,7 +182,6 @@ def hermetic_writer_env(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
 
-
 @pytest.fixture
 def short_socket_dir():
     """Bound Unix sockets avoid pytest's long per-test directory names."""
@@ -204,7 +193,6 @@ def short_socket_dir():
 
 from plangraph.spawner import resolver as _resolver
 _real_served_models = getattr(_resolver, '_served_models_real', _resolver.served_models)
-
 
 def _remove_windows_basetemp(root):
     """Retry transient child-process handles as well as read-only git objects."""
@@ -233,7 +221,6 @@ def _remove_windows_basetemp(root):
                 raise  # report the leftover rather than silently leaking it
             time.sleep(1)
 
-
 def pytest_configure(config):
     if sys.platform == "win32" and config.option.basetemp is None:
         # Avoid numbered-root/pytest-current symlink cleanup on Windows mounts
@@ -244,12 +231,11 @@ def pytest_configure(config):
         atexit.register(_remove_windows_basetemp, root)
     config.addinivalue_line('markers', 'real_probe: exercise the real served-model probe, not the host stub')
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
-
+    config.addinivalue_line('markers', 'real_base_fresh: use real admission against a local origin')
 
 @pytest.fixture
 def real_served_models():
     return _real_served_models
-
 
 @pytest.fixture
 def fixed_catalog_rows(monkeypatch):
@@ -257,13 +243,18 @@ def fixed_catalog_rows(monkeypatch):
     from plangraph.planner.routing import plan_spawn
     monkeypatch.setitem(plan_spawn.__kwdefaults__, 'catalog_rows', ())
 
-
 @pytest.fixture(autouse=True)
 def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
-    """UNKNOWN host; tests may opt into config with monkeypatch.setenv('AUTOOS_ROOT', ...)."""
+    """UNKNOWN host; tests opt into providers with PLANGRAPH_PROVIDERS_FILE."""
     root = tmp_path_factory.mktemp('empty-autoos')
     monkeypatch.setenv('AUTOOS_ROOT', str(root))
+    providers = tmp_path_factory.mktemp('empty-providers') / 'providers.json'
+    monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(providers))
     state = tmp_path_factory.mktemp('xdg-state')  # never the production spawner/leg state (D-2844)
+    # An absent child of the already-owned state root costs no extra mkdir.
+    # Keep HOME for git/SSH/toolchains; a nonempty XDG root prevents gateway
+    # lookup from falling back to the operator's HOME/.config.
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(state / 'config'))
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
     monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(state / 'absent-catalog.db'))
@@ -321,8 +312,15 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     yield
     probe.cache_clear()
 
-_PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
+@pytest.fixture(autouse=True)
+def fake_base_fresh(monkeypatch, request):
+    if request.node.get_closest_marker('real_base_fresh') is None:
+        from plangraph.spawner import base_fresh
+        fresh = lambda *a, **k: dict(ok=True, reason=None, origin_sha='0' * 40, base_sha='0' * 40, behind=0)
+        monkeypatch.setattr(base_fresh, 'base_fresh', fresh)
+        monkeypatch.setattr(base_fresh, '_check', fresh)
 
+_PG = os.environ.get("PG_KEEPER_BACKEND") == "postgres"
 #: tests that read the SQLite file itself (contract: dump/copy ``keeper.db`` via stdlib sqlite3).
 _READS_SQLITE_FILE = {
     "tests/test_keeper_brief.py::test_brief_stats_reports_median_and_p90",   # opens the file mode=ro
@@ -332,14 +330,12 @@ _READS_SQLITE_FILE = {
     "tests/contract/test_events.py::test_admin_verify_passes_and_flags_tampering",
 }
 
-
 def _targets_browser_dir(config) -> bool:
     """True when the invocation explicitly points at tests/browser (path or -m)."""
     args = list(getattr(config.option, "file_or_dir", None) or [])
     if any("browser" in str(a) for a in args):
         return True
     return "browser" in (getattr(config.option, "markexpr", "") or "")
-
 
 def pytest_ignore_collect(collection_path, config):
     # UI-BROWSER-TESTS W1: tests/browser needs Playwright and runs in its own CI
@@ -356,9 +352,13 @@ def pytest_ignore_collect(collection_path, config):
             if "sqlite3" in text and "test_keeper_pg_" not in collection_path.name:
                 return True
     return None
-
-
+from _split_ci_environment import shard_items, shard_selector
 def pytest_collection_modifyitems(config, items):
+    if os.environ.get('PYTEST_SHARD'):
+        selected = shard_items(items, os.environ['PYTEST_SHARD'])
+        identities = {id(item) for item in selected}
+        config.hook.pytest_deselected(items=[item for item in items if id(item) not in identities])
+        items[:] = selected
     if sys.platform == "win32":
         from win_skips import skip_reason
         for item in items:
@@ -373,8 +373,6 @@ def pytest_collection_modifyitems(config, items):
     if dropped:
         config.hook.pytest_deselected(items=dropped)
         items[:] = kept
-
-
 @pytest.fixture
 def fake_ownership(monkeypatch):
     """r3 V3: stub pids are "ours" (fixed token) and invisible in /proc, so no test depends on which
@@ -383,7 +381,20 @@ def fake_ownership(monkeypatch):
     from plangraph.spawner import proc_kill
     from plangraph.spawner.runner import SpawnerRunner
     real_stat, real_identity = proc_kill._stat, proc_kill.root_identity
-
     born = real_stat(os.getpid())[4]   # only processes started after this test session exist for the stubbed view
     monkeypatch.setattr(proc_kill, '_stat', lambda pid, root='/proc': (lambda st: st if st and st[4] >= born else None)(real_stat(pid, root)))
     monkeypatch.setattr(SpawnerRunner, 'identity_provider', staticmethod(lambda pid, **k: real_identity(pid, **k) or 'fake-token'))
+def pytest_sessionfinish(session, exitstatus):
+    # An affected selection can legitimately assign no items to this shard.
+    if exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED and os.environ.get('PYTEST_SHARD'):
+        session.exitstatus = pytest.ExitCode.OK
+@pytest.fixture(autouse=True)
+def isolated_build_cache(tmp_path, monkeypatch):
+    """Isolate disk and default RAM readings; admission tests override either seam."""
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path.with_name(tmp_path.name + '-cargo-target')))
+    monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '0')
+    from plangraph.spawner import seat_spawn, overflow
+    default_memory, default_read = overflow.available_memory_mb, Path.read_text
+    def resources(service):
+        return 0, (64000 if overflow.available_memory_mb is default_memory and Path.read_text is default_read else overflow.available_memory_mb())
+    monkeypatch.setattr(seat_spawn, 'resources', resources)

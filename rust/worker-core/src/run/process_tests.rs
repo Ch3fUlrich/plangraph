@@ -54,6 +54,7 @@ fn completed_fields_and_log() {
     s.finish = Some(Box::new(|r, status| {
         assert_eq!(status, super::record::Status::Completed);
         r.set("hook_status", serde_json::json!(status.as_str()));
+        None
     }));
     let h = start(&rt, s).unwrap();
     assert_eq!(h.run_id(), "run-test");

@@ -153,8 +153,10 @@ class Status(MoreCase):
         self.assertEqual(lines, ["s1 level=hard ctx=?k cwd=/w", "s2 level=handoff ctx=?k cwd=/w"])
 
     def test_status_lists_ready_markers_with_their_handoff_path(self):
-        self.assertEqual(self.run_cmd("ready", "/h/handoff.md", CLAUDE_CODE_SESSION_ID=SID).returncode, 0)
-        self.assertEqual(self.run_cmd("status").stdout.strip(), "%s ready handoff=/h/handoff.md" % SID)
+        from test_context_guard import ReadyAndStatus
+        handoff, env = ReadyAndStatus.ready_pair(self)
+        self.assertEqual(self.run_cmd("ready", handoff, **env).returncode, 0)
+        self.assertEqual(self.run_cmd("status").stdout.strip(), "%s ready handoff=%s" % (SID, handoff))
 
     def test_ready_needs_both_a_path_and_a_valid_session_id(self):
         for args, env in (((), {"CLAUDE_CODE_SESSION_ID": SID}), (("/h/x.md",), {}),

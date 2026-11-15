@@ -1,0 +1,1 @@
+- New-code language gate: new Python and shell files are accepted for now (operator D-5830: Rust preferred, Python accepted); the gate script, its CI job and its tests stay.

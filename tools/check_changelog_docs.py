@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """check_changelog_docs.py - Changelog and docs gate (rule D-653).
 
-Guards that changes touching non-doc paths add a line under '## Unreleased' in
-CHANGELOG.md, or that every commit touching non-doc paths carries its own
-'Changelog: skip (<reason>)' trailer (in the commit's trailer block, merge
-commits excluded), and that changes to paths mapped in .docs-map touch at
-least one of their documentation files. The range is <merge-base(base, head)>..head.
+Non-release commits may only write changelog.d/<ITEM>.md, never CHANGELOG.md.
+A release is recognized by a nonempty Release: trailer in the final trailer block.
+Non-doc changes require a fragment or per-commit Changelog: skip (<reason>).
+Mapped source changes must also touch their docs. Range: merge-base(base, head)..head.
 """
 from __future__ import annotations
 
@@ -22,7 +21,6 @@ TODAY_ENV = "CHANGELOG_DOCS_TODAY"
 SKIP_TRAILER_RE = re.compile(
     r"^\s*changelog\s*:\s*skip(?:\s*\((.*?)\))?\s*$", re.IGNORECASE
 )
-UNRELEASED_RE = re.compile(r"^##\s+\[?unreleased\]?\s*$", re.IGNORECASE)
 
 
 def git(root: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -121,22 +119,6 @@ def glob_to_regex(pattern: str) -> re.Pattern[str]:
     return re.compile("".join(out) + r"\Z")
 
 
-def unreleased_lines(changelog: str) -> collections.Counter[str]:
-    """Non-blank, non-heading lines under '## Unreleased', stripped, as a multiset."""
-    found: collections.Counter[str] = collections.Counter()
-    inside = False
-    for raw in changelog.splitlines():
-        line = raw.strip()
-        if UNRELEASED_RE.match(line):
-            inside = True
-        # Match boundaries on stripped headings too, just like the opener.
-        elif re.match(r"^##\s+", line):
-            inside = False
-        elif inside and line and not line.startswith("#"):
-            found[line] += 1
-    return found
-
-
 def fragment_entry_added(root: str, paths: list[str], merge_base: str, head: str) -> bool:
     """True when a direct-child fragment adds an entry against the merge-base."""
     for path in paths:
@@ -151,15 +133,6 @@ def fragment_entry_added(root: str, paths: list[str], merge_base: str, head: str
         if run.returncode == 0 and entries(run.stdout) - entries(before.stdout):
             return True
     return False
-
-
-def changelog_entry_added(root: str, merge_base: str, head: str) -> bool:
-    """True when head's '## Unreleased' holds a line the merge-base's does not."""
-    def read(rev: str) -> str:
-        run = git(root, "show", f"{rev}:CHANGELOG.md")
-        return run.stdout if run.returncode == 0 else ""
-
-    return bool(unreleased_lines(read(head)) - unreleased_lines(read(merge_base)))
 
 
 class GitFailure(Exception):
@@ -200,6 +173,39 @@ def commit_skips(root: str, sha: str) -> tuple[list[str], int]:
 def commit_paths(root: str, sha: str) -> list[str]:
     out = git_checked(root, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "--no-renames", sha)
     return [p.strip().replace("\\", "/") for p in out.splitlines() if p.strip()]
+
+
+def changelog_edited(root: str, sha: str) -> bool:
+    """A merge may inherit ledger lines, but cannot invent or discard them.
+
+    Account for parent deletions from their common base and preserve additions.
+    A multiset avoids treating an ordinary union merge as a new ledger edit.
+    """
+    changed = git_checked(root, "diff-tree", "--root", "--no-commit-id", "--name-only",
+                          "-r", "-m", "--no-renames", sha, "--", "CHANGELOG.md")
+    if not changed.strip():
+        return False
+    parents = git_checked(root, "rev-list", "--parents", "-n", "1", sha).split()[1:]
+    if len(parents) < 2:
+        return True
+
+    def read(rev: str) -> collections.Counter[str]:
+        listed = git_checked(root, "ls-tree", "--name-only", rev, "--", "CHANGELOG.md")
+        return collections.Counter(git_checked(root, "show", f"{rev}:CHANGELOG.md").split("\n")) if listed.strip() else collections.Counter()
+
+    base = read(git_checked(root, "merge-base", "--octopus", *parents).strip())
+    inherited = [read(parent) for parent in parents]
+    merged = read(sha)
+    for line in set(base).union(merged, *inherited):
+        counts = [parent[line] for parent in inherited]
+        added = [max(0, count - base[line]) for count in counts]
+        # Keep common base lines unless a parent deleted them; keep every
+        # distinct parent addition. Duplicated additions may combine or coalesce.
+        lower = min(base[line], *counts) + max(added)
+        upper = min(base[line], max(counts)) + sum(added)
+        if not lower <= merged[line] <= upper:
+            return True
+    return False
 
 
 def bail(msg: str, warn_only: bool) -> int:
@@ -281,14 +287,43 @@ def main(argv: list[str] | None = None) -> int:
         return bail(f"check-changelog-docs: git rev-list failed: {revs.stderr.strip()}", warn_only)
     commits = revs.stdout.split()
 
-    problems: list[str] = []
+    # NUL-delimited and without rename detection: renaming a tracked file to a
+    # status note is an addition too, including names Git would normally quote.
+    added = git(root, "diff", "--name-only", "--diff-filter=A", "--no-renames", "-z",
+                merge_base, head_sha)
+    if added.returncode != 0:
+        return bail(f"check-changelog-docs: git diff failed: {added.stderr.strip()}", warn_only)
+    status_notes = [p for p in added.stdout.split("\0")
+                    if re.fullmatch(r"STATUS-[^/]*\.txt", p.rsplit("/", 1)[-1])]
+    problems: list[str] = [f"writer status file must not be committed: {p}"
+                           for p in status_notes]
+    # Include merges while distinguishing inherited lines from resolution edits.
+    try:
+        for sha in git_checked(root, "rev-list", f"{merge_base}..{head_sha}").split():
+            if not changelog_edited(root, sha):
+                continue
+            trailers = git_checked(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
+            if not re.search(r"^Release:[ \t]*\S.*$", trailers, re.IGNORECASE | re.MULTILINE):
+                problems.append(f"commit {sha[:8]} edits CHANGELOG.md outside a release; "
+                                "write changelog.d/<ITEM>.md or use a nonempty Release: trailer")
+    except GitFailure as exc:
+        return bail(f"check-changelog-docs: {exc}", warn_only)
+
     warnings: list[str] = []
     skipped: list[str] = []
     uncovered: list[str] = []
     for sha in commits:
+        added_in_commit = git(root, "diff-tree", "--root", "--no-commit-id", "--name-only",
+                              "-r", "--no-renames", "--diff-filter=A", "-z", sha)
+        if added_in_commit.returncode != 0:
+            return bail(f"check-changelog-docs: git diff-tree failed (commit {sha[:8]}): {added_in_commit.stderr.strip()}", warn_only)
+        for path in added_in_commit.stdout.split("\0"):
+            if re.fullmatch(r"STATUS-[^/]*\.txt", path.rsplit("/", 1)[-1]):
+                problems.append(f"commit {sha[:8]}: writer status file must not be committed: {path}")
         try:
             reasons, empty = commit_skips(root, sha)
-            touches_non_doc = any(not is_doc_path(p) for p in commit_paths(root, sha))
+            paths = commit_paths(root, sha)
+            touches_non_doc = any(not is_doc_path(p) for p in paths)
         except GitFailure as exc:
             return bail(f"check-changelog-docs: {exc} (commit {sha[:8]})", warn_only)
         if not touches_non_doc:
@@ -304,8 +339,7 @@ def main(argv: list[str] | None = None) -> int:
 
     has_non_doc = any(not is_doc_path(p) for p in raw_paths)
     entry_added = (
-        changelog_entry_added(root, merge_base, head_sha)
-        or fragment_entry_added(root, raw_paths, merge_base, head_sha)
+        fragment_entry_added(root, raw_paths, merge_base, head_sha)
     )
 
     if entry_added:
@@ -318,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
     if has_non_doc and changelog_status == "no":
         which = f" (commits without their own skip: {', '.join(uncovered)})" if uncovered else ""
         problems.append(
-            "non-doc change requires a line added under '## Unreleased' in CHANGELOG.md, "
+            "non-doc change requires an entry in changelog.d/<ITEM>.md, "
             f"or a 'Changelog: skip (<reason>)' trailer on every such commit{which}"
         )
 

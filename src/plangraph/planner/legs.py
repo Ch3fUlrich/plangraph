@@ -54,8 +54,8 @@ class Leg:
     model: str
     family: str
     windows: tuple[str, ...]
-    max_request_tokens: int
-    trains_on_data: bool
+    max_request_tokens: int | None
+    trains_on_data: bool | None
     claude_family: bool = False
     note: str = ""
     roles: tuple[str, ...] = ("orchestrate",)
@@ -77,9 +77,6 @@ DEFAULT_LEGS: tuple[Leg, ...] = (
          note="free while qoder credits remain, until its rate limit"),
     _leg("mimo-v2.6-flash", "subscription", "opencode",
          "mimo/mimo-v2.6-flash", "mimo", ("128k", "256k", "1m"), 200000, False),
-    _leg("agy-gemini-3.8-flash", "free", "agy", "gemini-3.8-flash", "gemini",
-         ("128k", "256k", "1m"), 900000, False,
-         note="gemini after its Friday-evening reset"),
     _leg("agy-sonnet-5.5", "subscription", "agy", "claude-sonnet-5-5-medium", "claude",
          ("128k", "256k", "1m"), 180000, False, claude=True,
          note="Antigravity quota, not Claude Max"),
@@ -109,7 +106,17 @@ DEFAULT_LEGS = (
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
-    _replace(_legacy["agy-gemini-3.8-flash"], roles=("implement", "review")),
+    *(Leg(f"agy-gemini-4-hydrogen-{effort}", "subscription", "agy",
+          f"gemini-4-hydrogen-{effort}", "gemini", ("128k", "256k", "1m"), 900000, False,
+          roles=(role,), effort=effort, tool_mode="tools",
+          note="D-5903: enabled; agy models lists Hydrogen low/medium/high/xhigh (2026-11-14); "
+               "agy CLI review verdicts: PR #878 (three heads), #886 (2026-11-14), "
+               "handoffs/plan-order/reviews/{pr878-5ac07d1d,pr886-75c5bd2f}-hydrogen.txt. "
+               "Tier/privacy/windows/request bound inherit agy Claude 5.5: same subscription/harness; "
+               "clients.launch_stdin_payload carries stream JSON on stdin, not prompt argv. "
+               "Review plan mode reads the working tree with tools: plan-order file-marker probe 2026-11-14 09:5xZ. "
+               "Seat unwitnessed: agy emits no served-model telemetry (rule 3.26).")
+      for effort, role in (("high", "implement"), ("medium", "review"))),
     Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
         "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
@@ -126,7 +133,7 @@ DEFAULT_LEGS = (
     Leg("agy-opus-5.5", "subscription", "agy", "claude-opus-5-5-high",
         "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
         roles=("review",)),
-    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-flash",
+    Leg("omniroute-deepseek-flash", "subscription", "opencode", "omniroute/deepseek-v4.1-flash",
         "deepseek", ("128k",), 100000, False, roles=("implement", "review", "orchestrate")),
     Leg("omniroute-muse-spark", "subscription", "opencode",
         "omniroute/muse-spark-1.3-contributor", "muse", ("128k",), 100000, False,
@@ -157,11 +164,6 @@ DEFAULT_LEGS = (
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
         "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
         False, roles=("review",)),
-    Leg("omniroute-gemini-3.8-flash", "subscription", "opencode",
-        "omniroute/gemini-3.8-flash", "gemini", ("128k",), 100000, True,
-        roles=("review",),
-        disabled="D-4193 upstream route not verified",
-        note="D-4193 upstream route not verified, conservative"),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
@@ -179,7 +181,7 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
 # D-5206/D-5212 change writer priority, not the registered fallback roles.
 WRITER_ORDER: tuple[str, ...] = (
     "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
-    "agy-gemini-3.8-flash",
+    "agy-gemini-4-hydrogen-high",
 )
 LEAD_WRITER = WRITER_ORDER[0]
 
@@ -194,11 +196,8 @@ LEAD_WRITER = WRITER_ORDER[0]
 EXPLICIT_LEGS: tuple[Leg, ...] = (
     *(Leg(f"agy-claude-{m}-5-5-{e}", "subscription", "agy", f"claude-{m}-5-5-{e}",
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
-          roles=("review", "implement"), note="operator 2026-11-09: Antigravity quota")
+          roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
-    *(Leg(f"agy-gemini-3.8-flash-{e}", "subscription", "agy", f"gemini-3.8-flash-{e}",
-          "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",))
-      for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
           "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
@@ -217,6 +216,18 @@ READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
+
+# Order-only declarations: unknown capabilities stay disabled and role-less.
+# JSON overrides still require all capability fields, even for declarations.
+EXPLICIT_LEGS += tuple(
+    Leg(id, 'subscription', harness, model, family, (), None, None,
+        claude_family=family == 'claude', roles=(), effort=effort,
+        disabled='D-5696: capability evidence required')
+    for id, harness, model, family, effort in (
+        ('cx-gpt-6.1-terra-medium', 'opencode', 'omniroute/cx-gpt-6.1-terra-medium', 'gpt', 'medium'),
+        ('cx-gpt-6.1-terra-xhigh', 'opencode', 'omniroute/cx-gpt-6.1-terra-xhigh', 'gpt', 'xhigh'),
+        ('muse-ember-max', 'opencode', 'omniroute/muse-ember-max', 'muse', 'max'),
+        ('claude-fable-5.2-high', 'claude', 'claude-fable-5-2', 'claude', 'high')))
 
 
 def spawnable_legs() -> tuple[Leg, ...]:
@@ -253,7 +264,12 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
     if not isinstance(raw, Mapping):
         problems.append(f"{where}: must be an object")
         return None
+    from plangraph.retired_models import check_retired
     start = len(problems)
+    try:
+        check_retired(raw)
+    except ValueError as exc:
+        problems.append(f"{where}: {exc}")
     if isinstance(raw.get("model"), str):
         try:
             check_mimo_path(raw["model"])

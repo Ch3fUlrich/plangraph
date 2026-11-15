@@ -16,6 +16,8 @@ mod health_report_rows;
 mod jobs;
 mod launch;
 mod leg_ref;
+mod native_writer;
+mod native_writer_host;
 mod placement;
 mod prompt;
 mod prompt_git;
@@ -34,6 +36,8 @@ mod reconcile_time;
 mod reconcile_watch;
 mod records;
 mod review_artifacts;
+mod review_retry;
+mod round_progress;
 mod runs;
 mod serve;
 mod serve_options;
@@ -47,6 +51,8 @@ mod tools;
 mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
+#[allow(dead_code)] // Setting consumed by later work-mode slices.
+mod work_mode_config;
 
 use pg_worker_core::host_probe::probe;
 

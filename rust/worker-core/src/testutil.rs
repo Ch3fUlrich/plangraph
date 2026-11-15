@@ -1,4 +1,4 @@
-//! Test helpers: throwaway git repositories.
+//! Test helpers: throwaway repositories; git::git uses the shared isolated Git command.
 
 use crate::git::git;
 use std::path::Path;
