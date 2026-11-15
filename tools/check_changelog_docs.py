@@ -286,7 +286,17 @@ def main(argv: list[str] | None = None) -> int:
     if revs.returncode != 0:
         return bail(f"check-changelog-docs: git rev-list failed: {revs.stderr.strip()}", warn_only)
     commits = revs.stdout.split()
-    problems: list[str] = []
+
+    # NUL-delimited and without rename detection: renaming a tracked file to a
+    # status note is an addition too, including names Git would normally quote.
+    added = git(root, "diff", "--name-only", "--diff-filter=A", "--no-renames", "-z",
+                merge_base, head_sha)
+    if added.returncode != 0:
+        return bail(f"check-changelog-docs: git diff failed: {added.stderr.strip()}", warn_only)
+    status_notes = [p for p in added.stdout.split("\0")
+                    if re.fullmatch(r"STATUS-[^/]*\.txt", p.rsplit("/", 1)[-1])]
+    problems: list[str] = [f"writer status file must not be committed: {p}"
+                           for p in status_notes]
     # Include merges while distinguishing inherited lines from resolution edits.
     try:
         for sha in git_checked(root, "rev-list", f"{merge_base}..{head_sha}").split():
@@ -303,6 +313,13 @@ def main(argv: list[str] | None = None) -> int:
     skipped: list[str] = []
     uncovered: list[str] = []
     for sha in commits:
+        added_in_commit = git(root, "diff-tree", "--root", "--no-commit-id", "--name-only",
+                              "-r", "--no-renames", "--diff-filter=A", "-z", sha)
+        if added_in_commit.returncode != 0:
+            return bail(f"check-changelog-docs: git diff-tree failed (commit {sha[:8]}): {added_in_commit.stderr.strip()}", warn_only)
+        for path in added_in_commit.stdout.split("\0"):
+            if re.fullmatch(r"STATUS-[^/]*\.txt", path.rsplit("/", 1)[-1]):
+                problems.append(f"commit {sha[:8]}: writer status file must not be committed: {path}")
         try:
             reasons, empty = commit_skips(root, sha)
             paths = commit_paths(root, sha)
