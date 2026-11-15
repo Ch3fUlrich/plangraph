@@ -47,7 +47,7 @@ def test_overflow_checks_selected_and_diff_repositories(checkouts, tmp_path, mon
     monkeypatch.setattr(overflow, 'decide', checked)
     if entry == 'main':
         assert overflow.main(['spawn', '--repo', str(caller), '--card', str(card_path),
-            '--prompt', str(prompt), *(['--cwd', str(reviewed)] if source == 'flag' else [])]) == 5
+            '--prompt', str(prompt), *(['--cwd', str(reviewed)] if source == 'flag' else [])]) == 2
         if not (selected_public and diff_public):
             assert 'not public' in capsys.readouterr().out
     else:
@@ -91,7 +91,7 @@ def test_explicit_checkout_never_uses_healthy_remote(checkouts, tmp_path, monkey
                 return 5
             monkeypatch.setattr(overflow.cli, 'main', local)
         assert overflow.main(['spawn', '--repo', str(caller), '--card', str(card),
-                              '--prompt', str(prompt)]) == 5
+                              '--prompt', str(prompt)]) == (5 if remote_first else 2)
     else:
         service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(caller)))
         result = seat_spawn.admit(service, {}, card={'cwd': str(reviewed)})

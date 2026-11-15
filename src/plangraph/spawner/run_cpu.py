@@ -1,4 +1,9 @@
-"""Process-tree CPU accounting for the run watchdog."""
+"""Process-tree CPU accounting for the run watchdog.
+
+Live-descendant detection is Linux-only. ``_watchdog_child_active`` is reset to
+False on every sample and stays False on other platforms, including Windows
+Job Object CPU accounting; there it means unobserved, not proof of no child.
+"""
 import asyncio
 import os
 import sys
@@ -13,13 +18,15 @@ def proc_scan():
         try:
             fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
             result[int(path.name)] = (int(fields[1]), int(fields[3]),
-                                      sum(int(fields[i]) for i in (11, 12, 13, 14)))
+                                      sum(int(fields[i]) for i in (11, 12, 13, 14)), fields[0])
         except (OSError, ValueError, IndexError):
             continue
     return result
 
 
 async def cpu_seconds(runner, job_id, pid, tick):
+    job = getattr(runner, 'jobs', {}).get(job_id)
+    if job is not None: job._watchdog_child_active = False
     try:
         handle = getattr(runner, '_win_jobs', {}).get(job_id)
         if handle is not None:
@@ -30,7 +37,7 @@ async def cpu_seconds(runner, job_id, pid, tick):
         if cache is None or cache[0] != tick:
             # Cache the task before awaiting: concurrent monitors share ONE scan.
             cache = runner._watchdog_cpu_cache = (tick, asyncio.create_task(asyncio.to_thread(proc_scan)))
-        rows = await cache[1]
+        rows = await asyncio.shield(cache[1])
         def belongs(child):
             seen = set()
             while child in rows and child not in seen:
@@ -39,6 +46,10 @@ async def cpu_seconds(runner, job_id, pid, tick):
                 seen.add(child)
                 child = rows[child][0]
             return False
-        return sum(row[2] for child, row in rows.items() if belongs(child)) / os.sysconf('SC_CLK_TCK')
+        members = [(child, row) for child, row in rows.items() if belongs(child)]
+        if job is not None:
+            job._watchdog_child_active = any(child != pid and len(row) > 3 and row[3] not in ('Z', 'X')
+                                              for child, row in members)
+        return sum(row[2] for _, row in members) / os.sysconf('SC_CLK_TCK')
     except Exception:
         return None

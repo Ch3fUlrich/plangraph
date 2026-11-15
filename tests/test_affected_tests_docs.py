@@ -52,6 +52,21 @@ def test_suite_config_and_shared_fixtures_still_run_full_suite(tmp_path, path):
     assert selector().select_tests(tmp_path, [path])["tests"] == ["tests"]
 
 
+@pytest.mark.parametrize("changed,expected", [
+    (["docs/conf.py"], ["tests/test_affected_tests.py"]),
+    (["status/x.toml"], ["tests/test_affected_tests.py"]),
+    (["docs/requirements.txt"], ["tests"]),
+    (["docs/x.md"], []),
+    (["docs/img/a.png", "status/y.rst"], []),
+])
+def test_docs_status_only_documentation_files_skip(tmp_path, changed, expected):
+    _repo(tmp_path, {
+        "docs/conf.py": "x = 1", "docs/requirements.txt": "sphinx", "docs/x.md": "# x",
+        "docs/img/a.png": "png", "status/x.toml": "a = 1", "status/y.rst": "y",
+        "tests/test_affected_tests.py": "",
+    })
+    assert selector().select_tests(tmp_path, changed)["tests"] == expected
+
 @pytest.mark.parametrize('asset', ['tests/shared.py', 'tests/fixtures/capture.json'])
 def test_local_shared_asset_selects_its_consumers(tmp_path, asset):
     _repo(tmp_path, {asset: '', 'tests/test_consumer.py':
@@ -66,3 +81,11 @@ def test_local_run_refuses_full_suite_fallback(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(module.subprocess, 'run', lambda *a, **kw: pytest.fail('full suite launched'))
     assert module.main(tmp_path) == 2
     assert 'full suite' in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('asset', ['tests/shared.py', 'tests/fixtures/capture.json'])
+def test_local_file_only_mode_keeps_shared_asset_consumers(tmp_path, asset):
+    _repo(tmp_path, {asset: '', 'tests/test_consumer.py':
+                    'import shared\n# capture.json', 'tests/test_unrelated.py': ''})
+    plan = selector().select_tests(tmp_path, [asset], local=True, files_only=True)
+    assert plan['tests'] == ['tests/test_consumer.py']

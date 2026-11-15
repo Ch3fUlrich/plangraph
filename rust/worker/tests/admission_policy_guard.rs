@@ -1,17 +1,11 @@
 //! Compile production targets without dev-dependency feature unification.
 use std::{path::Path, process::Command};
 
-fn check(
-    manifest: &Path,
-    target: &Path,
-    defaults: bool,
-    features: &[String],
-) -> std::process::Output {
+fn check(manifest: &Path, defaults: bool, features: &[String]) -> std::process::Output {
     let mut command = Command::new(env!("CARGO"));
     command
         .args(["check", "--workspace", "--lib", "--bins", "--manifest-path"])
-        .arg(manifest)
-        .env("CARGO_TARGET_DIR", target);
+        .arg(manifest);
     if !defaults {
         command.arg("--no-default-features");
     }
@@ -25,10 +19,10 @@ fn check(
 fn unrestricted_policy_is_test_only() {
     // Allow Cargo to fetch dependencies: CI may not have cached the parent
     // workspace's dev-dependencies. Resolution/build failures must still fail.
-    // A separate target directory avoids the outer cargo test's build lock.
+    // Nested checks inherit Cargo's target configuration, including the host's
+    // shared CARGO_TARGET_DIR. Cargo releases its build lock before running tests.
     // Rustc checks callers under their actual cfg attributes, independently
     // of checkout paths, comments, and unrelated test modules.
-    let target = tempfile::tempdir().unwrap();
     let worker = Path::new(env!("CARGO_MANIFEST_DIR"));
     for manifest in [
         worker.join("Cargo.toml"),
@@ -100,7 +94,7 @@ fn unrestricted_policy_is_test_only() {
             (true, Vec::new()),
             (false, all_features),
         ] {
-            let output = check(&manifest, target.path(), defaults, &features);
+            let output = check(&manifest, defaults, &features);
             assert!(
                 output.status.success(),
                 "production targets in {} with {features:?} must compile without the test-only admission bypass:\n{}",
@@ -126,7 +120,6 @@ fn unrestricted_policy_is_test_only() {
     let output = Command::new(env!("CARGO"))
         .args(["check", "--manifest-path"])
         .arg(probe.path().join("Cargo.toml"))
-        .env("CARGO_TARGET_DIR", target.path())
         .output()
         .expect("compile bypass probe");
     assert!(

@@ -1,5 +1,6 @@
 """Hermetic reader regressions; no live acceptance claim."""
 import json
+import os
 import socket
 import subprocess
 from datetime import datetime, timezone
@@ -132,12 +133,14 @@ def test_from_env_injected_resolution():
     def resolve(env):
         calls.append(env)
         return None
-    reader = from_env({}, key_resolver=resolve, fetch=lambda *a: pytest.fail("fetch"))
+    # Explicit env mappings do not inherit the suite's isolated config root.
+    reader = from_env({"XDG_CONFIG_HOME": os.environ["XDG_CONFIG_HOME"]},
+                      key_resolver=resolve, fetch=lambda *a: pytest.fail("fetch"))
     with pytest.raises(OmniRouteUnreachable, match="no_endpoint"):
         reader.snapshot()
     assert not calls
-    reader = from_env({"OMNIROUTE_BASE_URL": "injected-endpoint/v1"},
+    reader = from_env({"OMNIROUTE_BASE_URL": "https://gw.example/v1"},
                       key_resolver=resolve, fetch=lambda *a: pytest.fail("fetch"))
-    assert reader.base_url == "injected-endpoint"
+    assert reader.base_url == "https://gw.example"
     with pytest.raises(OmniRouteUnreachable, match="no_key"):
         reader.snapshot()

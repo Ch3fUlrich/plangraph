@@ -1,0 +1,1 @@
+Lock in affected-test selection through function-local imports, including the real spawner CLI caller in test_w9_regressions.py. Preserve the selector's existing recursive AST walk and cover both import forms without broadening unrelated selections.

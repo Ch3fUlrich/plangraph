@@ -7,6 +7,19 @@ import subprocess
 import sys
 
 
+def test_rust_source_changes_always_select_dependency_guard(tmp_path):
+    script = Path(__file__).resolve().parents[1] / 'tools/affected_tests.py'
+    spec = importlib.util.spec_from_file_location('affected_tests', script)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    guard = tmp_path / 'tests/test_spawner_import_guard.py'
+    guard.parent.mkdir()
+    guard.write_text('def test_guard(): pass')
+    for options in ({}, {'local': True}, {'files_only': True}):
+        plan = module.select_tests(tmp_path, ['rust/crate/tests/new.rs'], **options)
+        assert plan['tests'] == ['tests/test_spawner_import_guard.py']
+
+
 def test_head_excludes_untracked_staged_and_worktree_changes(tmp_path, monkeypatch):
     script = Path(__file__).resolve().parents[1] / "tools/affected_tests.py"
     env = dict((key, value) for key, value in os.environ.items() if not key.startswith("GIT_"))

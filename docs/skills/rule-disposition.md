@@ -69,6 +69,18 @@ role card.
 | R-lead-05 | card | role card: orchestrator | D-5658 prove live fixes with live runs |
 | R-lead-06 | card | role card: orchestrator | D-5658 route before seat family claims |
 | R-lead-07 | card | role card: orchestrator | D-5661 stop spawns on stale bases |
+| R-batch-01 | card | role card: batch | D-5952 one writer per related change set |
+| R-batch-02 | card | role card: batch | D-5952 fixed brief fields and status line |
+| R-batch-03 | card | role card: batch | D-5952 fast checks before any review |
+| R-batch-04 | card | role card: batch | D-5964 native progress gate: rust/pg-spawnd/src/round_progress_tests.rs; D-5927 narrow fix; automatic replan pending |
+| R-batch-05 | card | role card: batch | D-5952 free legs then Sonnet, never wait for quota |
+| R-batch-06 | card | role card: batch | D-5952 one verdict vocabulary, full head sha |
+| R-batch-07 | card | role card: batch | D-5946 disk floor 5 GB, stop 2 GB |
+| R-batch-08 | card | role card: batch | D-5952 spawner host placement, no local launcher |
+| R-batch-09 | card | role card: batch | D-5938 one batch PR, full CI, merge-delta review |
+| R-batch-10 | card | role card: batch | D-5952 one GO per batch, Gate-Edit D-id |
+| R-batch-11 | card | role card: batch | D-5852 lessons become LE items same beat |
+| R-batch-12 | card | role card: batch | D-5952 close merged items, sweep worktrees |
 | R-worker-01 | card | role card: worker | derive cells from registry render |
 | R-worker-02 | card | role card: worker | portable failing-first tests |
 | R-worker-03 | card | role card: worker | keep runs cheap |

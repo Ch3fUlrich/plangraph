@@ -123,7 +123,10 @@ fn report_is_sorted_stable_and_read_only() {
             .spawn()
             .unwrap();
         let mut stdin = child.stdin.take().unwrap();
-        write!(stdin, "{value}").unwrap();
+        // Serialize first: invalid input may make the child close stdin immediately.
+        stdin
+            .write_all(&serde_json::to_vec(value).unwrap())
+            .unwrap();
         drop(stdin);
         child.wait_with_output().unwrap()
     };

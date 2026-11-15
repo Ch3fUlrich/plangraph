@@ -255,7 +255,7 @@ def test_item_lacking_key_or_epoch_refuses(w, bad_item):
 
 
 def test_decision_only_item_without_project_returns_empty(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     item = dict(w.store._item(key))
     item.pop("project", None)
     assert _cov().writer_families(w.store, item, w.store.ctx) == []

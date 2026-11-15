@@ -29,7 +29,7 @@ def merge_gate(core):
 @pytest.fixture
 def facts():
     required = ["ci-gate", "select", "scrub", "file-size", "new-code-lang",
-                "changelog-docs", "pytest", "pytest-postgres", "rust", "rust-worker", "rust-spike"]
+                "changelog-docs", "pytest", "pytest-postgres", "rust", "rust-worker", "rust-spike", "browser"]
     return dict(head_sha_at_check=SHA, head_sha_now=SHA,
                 required_checks=required,
                 ci_checks=[dict(name=name, head_sha=SHA, status="completed",

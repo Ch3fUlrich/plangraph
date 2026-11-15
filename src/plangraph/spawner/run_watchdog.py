@@ -23,7 +23,6 @@ LIVE_LOG_ERRORS = 3           # record at most this many live.log failures per r
 READER_GRACE_S = 5.0          # bounded drain once the run is gone (M6)
 EDIT_RETRY_S = 15.0           # retry cadence while the edit baseline is unreadable (Q7)
 
-
 def terminal_status(status, role):
     return 'timed_out' if status == 'timeout' and role == 'review' else status
 
@@ -32,21 +31,18 @@ def terminal_record(record, job):
     if job.status not in ('stalled', 'timeout'):
         return False
     status = terminal_status(job.status, record.get('role'))
-    record.update(status=status, exit_code=job.exit_code, reason=job.status,
+    record.update(status=status, exit_code=job.exit_code, reason=watchdog_reason(job),
                   watchdog=next((e for e in job.events if e['event'].startswith('watchdog_')), None),
                   events=record.get('events', []) + job.events)   # D-3649: keep annotate()'s and earlier legs' events
     return True
-
 
 def prepare_run(service, record, card):
     record['live_log'] = str(service._path(record['run_id']).parent / 'live.log')
     return thresholds(card, role=record.get('role')), record['live_log']
 
-
 def is_activity(line):
     line = ANSI.sub('', line).strip()
     return bool(line and not HEADER.match(line))
-
 
 class Watchdog:
     def __init__(self, limits, start, edit, writer=True):
@@ -54,6 +50,7 @@ class Watchdog:
         self.limits, self.start, self.edit, self.writer = limits, start, edit, writer
         self.edited, self.edit_baseline_known = False, edit is not None
         self.cpu = None
+        self.cpu_idle_since = None
         self.progress = dict(edit=start, activity=start, cpu=start)
 
     def budget(self):
@@ -72,7 +69,12 @@ class Watchdog:
                                        if self.writer and not self.edited and self.edit is not None
                                        else 0)
 
-    def decide(self, now, edit, activity, cpu):
+    def decide(self, now, edit, activity, cpu, *, stdout_activity=None, waiting=False):
+        # A live child defers only CPU-based stuck detection, never output/progress stalls.
+        if cpu is None:
+            self.cpu_idle_since = None
+        elif waiting or self.cpu is None or cpu != self.cpu:
+            self.cpu_idle_since = now
         if edit is not None:
             if self.edit is None:
                 # Q7/M4: the spawn baseline was unreadable; adopt the first
@@ -91,6 +93,10 @@ class Watchdog:
         rule = None
         if now - self.start >= self.budget():
             rule = 'max'
+        elif (self.cpu_idle_since is not None
+              and now - max(self.cpu_idle_since, stdout_activity if stdout_activity is not None else activity or self.start)
+              >= self.limits.get('stuck_s', stall + 300)):
+            rule = 'stuck'
         elif not self.writer:
             pass
         elif not self.edited:
@@ -120,7 +126,6 @@ class Watchdog:
                         unavailable=(['cpu'] if cpu is None else []) + (['edit'] if edit is None else []),
                         **{k: self.limits[k] for k in ('stall_s', 'first_edit_s', 'max_s')})
 
-
 def edit_signature(cwd):
     try:
         count = size = newest = entries = 0
@@ -148,7 +153,6 @@ def edit_signature(cwd):
     except (OSError, subprocess.TimeoutExpired):
         return None
 
-
 async def run_gone(proc):
     """Resolve once the run has exited. ``Process.wait()`` cannot signal this: asyncio resolves
     its waiters only after every pipe transport disconnects (CPython base_subprocess._try_finish),
@@ -157,7 +161,6 @@ async def run_gone(proc):
     while getattr(proc, 'returncode', None) is None:
         await asyncio.sleep(delay)
         delay = min(2.0, delay * 2)
-
 
 class LiveLog:
     """Batched, error-tolerant live.log appender (Q4/M3/Q5)."""
@@ -203,11 +206,10 @@ class LiveLog:
             except Exception:
                 pass
 
-
 async def collect(runner, job_id, proc):
     from .runner import redact
     from .reap import cancel_and_close
-    from .env_redact import early_refusal, redact_env_values, OutputLines
+    from .env_redact import early_refusal, harness_limit_line, redact_env_values, OutputLines
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
@@ -219,15 +221,20 @@ async def collect(runner, job_id, proc):
     def scrub(text):
         return redact(redact_env_values(text, env))
     gate = RefusalGate(refused, job, scrub)
+    from .stall_probe import ToolLoop
+    tools, loop_found = ToolLoop(), asyncio.Event()
+    stdout_at = job.start_time
     async def reader(stream, name):
         pending, tail = '', ''
         log = LiveLog(job)
         output_lines = OutputLines(scrub)
         decoder = codecs.getincrementaldecoder('utf-8')('replace')
         def consume(text):
-            nonlocal pending, tail
+            nonlocal pending, tail, stdout_at
             if not text:
                 return
+            if name == 'stdout':
+                stdout_at = time.time()
             captured[name].append(text)   # raw; kept even if a drain grace cancels us
             pending += text
             lines = pending.splitlines(keepends=True)
@@ -238,16 +245,20 @@ async def collect(runner, job_id, proc):
                 if not line.endswith(('\n', '\r')):
                     pending = line
                     continue
+                if name == 'stdout' and tools.feed(line):
+                    loop_found.set()
                 if is_activity(line):
                     active = True
-                    if seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES:   # F1: banner/spinner frames may precede the refusal
+                    if getattr(job, 'role', None) == 'review' or (seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES):   # F1: banner/spinner frames may precede the refusal
                         candidates.append(line)
                     seen['n' if line.endswith('\n') else 'r'] += 1   # F1: '\r'-alone spinner frames eat the frame cap, never the 40-line budget
             # F3: check the unterminated tail too; a refusal line printed
             # without a trailing newline while the child hangs must be seen.
-            if pending and seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES:
+            if pending and (getattr(job, 'role', None) == 'review' or (seen['n'] < REFUSAL_MAX_LINES and seen['r'] < REFUSAL_MAX_FRAMES)):
                 candidates.append(pending)   # tail is a candidate only, never counted
-            found = candidates and not refused.is_set() and time.time() - job.start_time < REFUSAL_WINDOW_S and early_refusal(''.join(candidates))
+            found = candidates and not refused.is_set() and (getattr(job, 'role', None) == 'review' or time.time() - job.start_time < REFUSAL_WINDOW_S) and early_refusal(''.join(candidates))
+            if not found and getattr(job, 'role', None) == 'review':
+                found = harness_limit_line(1, ''.join(candidates) if name == 'stdout' else '', ''.join(candidates) if name == 'stderr' else '')
             if found or active:   # F2: a refusal is booked only after a quiet period; later activity cancels it
                 (gate.candidate(found, time.time()) if found else gate.activity(time.time()))
             gate.scan_late(lines, time.time())   # REMOVE-AT-R10 (D-3769)
@@ -328,13 +339,28 @@ async def collect(runner, job_id, proc):
         return await proc.communicate()
     task = asyncio.create_task(output())
     refusal_wait = asyncio.ensure_future(refused.wait())
-    waiters = [task, refusal_wait]
+    loop_wait = asyncio.ensure_future(loop_found.wait())
+    waiters = [task, refusal_wait, loop_wait]
     quota = QuotaWatch(job, env)
     ticker = asyncio.ensure_future(gate.run())
     try:
+        sample_interval = min(limits['interval'], 30)
+        async def sample_cpu():
+            # A short review cannot reach the stuck threshold; its hard wall has priority.
+            remaining = job.start_time + w.budget() - time.time()
+            if (not w.writer and w.budget() <= limits.get('stuck_s', limits['stall_s'] + 300)) or remaining <= 0:
+                return None
+            try:
+                return await asyncio.wait_for(cpu_seconds(runner, job_id, getattr(proc, 'pid', None),
+                    int(time.time() / sample_interval)), min(1, remaining))
+            except asyncio.TimeoutError:
+                return None
+        w.decide(time.time(), baseline, job.last_activity_ts,
+                 await sample_cpu(),
+                 stdout_activity=stdout_at, waiting=getattr(job, '_watchdog_child_active', False))
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
-            delay = quota.delay(min(limits['interval'], max(.001, job.start_time + w.budget() - time.time())))
+            delay = quota.delay(min(sample_interval, max(.001, job.start_time + w.budget() - time.time())))
             if limits.get('hard_first_edit') and w.writer and not w.edited and w.edit_baseline_known and w.edit is not None:
                 delay = min(delay, max(.001, job.start_time + limits['first_edit_s'] - time.time()))
             if w.writer and w.edit is None:
@@ -344,7 +370,7 @@ async def collect(runner, job_id, proc):
                 # Q14/M9/M15: a cancel/stall/timeout verdict is never stomped;
                 # the refusal is booked (job.refusal) but the verdict stands.
                 # Drop the resolved waiter so the loop keeps sampling normally.
-                waiters = [task]
+                waiters = [task, loop_wait]
             elif refused.is_set() and not task.done():
                 # D-3605 (a): a refused/rate-limited/credit/auth dispatch ends the run now,
                 # never 'running' until a stall rule fires; the leg loop records leg_state.
@@ -367,12 +393,17 @@ async def collect(runner, job_id, proc):
             line = await quota.refusal(job_id, job, env, refused)
             if line:   # a refusal the harness never printed, read from the gateway call log
                 job.refusal = scrub(line); refused.set(); continue
-            edit = (await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
-                    if w.writer else None)
-            now = time.time()
-            cpu = (await cpu_seconds(runner, job_id, getattr(proc, 'pid', None), int(now / limits['interval']))
-                   if w.writer and now - job.start_time < limits['max_s'] else None)
-            event = w.decide(now, edit, job.last_activity_ts, cpu); gate.progress(w.progress['edit'])   # REMOVE-AT-R10 (D-3769)
+            if loop_found.is_set() and job.status in ('cancelled', 'stalled', 'timeout'):
+                waiters = [task] if refused.is_set() else [task, refusal_wait]
+            if loop_found.is_set() and job.status not in ('cancelled', 'stalled', 'timeout'):
+                event = dict(event='watchdog_stalled', rule='tool_loop')
+            else:
+                edit = (await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
+                        if w.writer else None)
+                now = time.time()
+                cpu = await sample_cpu()
+                event = w.decide(now, edit, job.last_activity_ts, cpu, stdout_activity=stdout_at, waiting=getattr(job, '_watchdog_child_active', False))
+            gate.progress(w.progress['edit'])   # REMOVE-AT-R10 (D-3769)
             try:
                 callback = getattr(runner, 'on_sample', None)
                 if callback:
@@ -394,7 +425,13 @@ async def collect(runner, job_id, proc):
                 break
         return await gate.finish(runner, job_id, proc, await task)
     finally:
-        refusal_wait.cancel(); ticker.cancel()
+        refusal_wait.cancel(); ticker.cancel(); loop_wait.cancel()
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+def watchdog_reason(job):
+    if job.status != 'stalled':
+        return job.status
+    return next((e['rule'] for e in reversed(job.events)
+                 if e.get('rule') in ('tool_loop', 'stuck') and e.get('event') == 'watchdog_stalled'), job.status)

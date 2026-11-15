@@ -58,3 +58,44 @@ Merge policy tests retain the unique crate-local mapping and its existing doc,
 and preserve all workspace members in main's path order, including `pg-reap`.
 Hook ports, property tests, 14-day zero-diff observation, rollback canary and settings
 integration remain deferred; the production switch belongs to **RUST-HOOKS-SWITCH**.
+
+## Git commit messages
+
+Run `tools/hooks/install_hooks.sh --git` with the host's shared
+`CARGO_TARGET_DIR` set. It builds the Rust `commit-msg` executable, installs it
+into the checkout's `tools/hooks`, and sets worktree-scoped `core.hooksPath` to that directory
+(including its existing pre-push). Re-run after changing the Rust entry point or validator.
+The installer snapshots `tools/ci_commit_gate.py` into the ignored
+`tools/hooks/.commit-msg-gate`; the binary calls that installed validator: both CI and Git use `message_violations` for Writer, strict Hand-Edit,
+and `Changelog: skip (<reason>)` validation. An active merge (`MERGE_HEAD`) bypasses the hook.
+Missing files, interpreters, and failed Git probes refuse the commit.
+Git editor comments are stripped for validation with `git stripspace --strip-comments`
+(respecting `core.commentChar` and `core.commentString`); the original message file stays intact.
+Verbose editor scissors sections are excluded too.
+
+Git does not tell commit-msg whether the invocation is `--amend`. Once
+`MERGE_HEAD` is gone, amending a trailerless merge requires adding attribution
+or using Git's explicit `--no-verify` override. Inferring an amendment from
+HEAD or matching messages would also exempt new non-merge commits after a merge;
+the hook keeps those guarded. CI still exempts all actual merge objects.
+
+The installer enables `extensions.worktreeConfig` and writes only the current
+worktree's hook path. Removing that worktree leaves other worktrees' hooks intact.
+The existing `check_push_gate.py --install` accepts the equivalent absolute path
+and also preserves worktree scope. Scissors detection supports Git's automatic
+comment-character selection.
+
+The validator snapshot survives branch switches to revisions without the new
+CLI subcommand. It is generated from the shared source at installation, never
+maintained as a second policy implementation. The hook path is relative within
+the worktree, so moving a worktree preserves its hooks. No-editor commits keep
+comment lines under Git's default cleanup; editor `auto` prefixes are inferred
+from Git's generated comment block when no scissors line exists.
+
+The commit-msg binary reads the installed validator's trailer block and value
+violations through a JSON bridge. It accepts policy trailers followed by a separate
+attribution paragraph, using the same maximal trailing trailer-shaped paragraphs
+as CI and the changelog/docs checker. A `Plan-Item`, `Writer`, `Hand-Edit`,
+`Changelog`, or `Gate-Edit` key outside that block refuses the commit and names
+its line in the cleaned message. Value validation still runs, so misplaced keys
+cannot hide malformed attribution or skip reasons.

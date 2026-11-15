@@ -1,5 +1,68 @@
 # Fleet code sync
 
+## Production checkout guard and audit
+
+`python3 -m plangraph.fleet_sync check-checkout --repo CHECKOUT --state-dir STATE`
+checks HEAD against `origin/HEAD`'s default branch and examines staged/unstaged
+tracked changes. Use `--default-branch main` if the symbolic default is absent.
+Detached HEAD, the wrong branch, unavailable refs, and local default-branch
+commits not merged into `origin/<default>` alarm. Behind-only main is allowed.
+Skip-worktree and assume-unchanged flags alarm as hidden tracked files: a
+production checkout must not hide changes from inspection. Untracked files do
+not alarm. This check never fetches, resets, switches or cleans the checkout.
+
+Delivery uses the existing live-follow keeper-alert interface:
+`PLANGRAPH_ALERT_CMD` is parsed as argv and receives the message as its last
+argument. Configure the deployed keeper alert handler, with no hardcoded fleet
+session address. A missing/unexecutable handler or failed delivery exits nonzero;
+the unit failure remains visible. State is private, per checkout and locked:
+one alarm on healthy-to-bad, one clear on recovery, and at most one successful
+reminder per hour while bad. Delivery first reserves the private checkpoint; a
+write failure sends nothing, and a failed send restores the prior state for retry.
+Unreadable or invalid state resets to a healthy/unsent baseline. A crash between
+reservation and delivery may omit that transition; a bad checkout reminds in an hour.
+Healthy checks require an available alert command too, so broken alarm
+configuration is not silent.
+
+`deploy/systemd/plangraph-prod-checkout.{service,timer}` are uninstalled templates
+with a five-minute interval. Adapt the checkout, Python environment and default
+branch, and supply the required `prod-checkout.env` with `PLANGRAPH_ALERT_CMD`
+before operator installation. This package does not install or start units.
+
+`python3 -m plangraph.fleet_sync install-audit --repo CHECKOUT --state-dir STATE`
+prints the planned hook paths and writes nothing. `--apply` copies a self-contained
+stdlib runtime to private `STATE/head-audit.py`, and installs `post-checkout` and
+`reference-transaction` shell stubs. Other hooks are refused before any write;
+exact prior plangraph audit stubs can be upgraded. Git's hooks path is honored,
+so ensure it is dedicated to this production repository before applying.
+The stubs use the absolute interpreter and copied script with `-I -S`; they do
+not import the changing checkout and do not require Python on PATH/PYTHONPATH.
+
+Prepared/aborted transactions and file-only checkouts return immediately in sh.
+Only committed HEAD moves start the runtime, at most once per move: per-worktree
+markers in Git’s hooks directory suppress the second observer. Linked worktrees use their own HEAD and
+worktree path. Every stub exits zero, including runtime/import/missing-script
+failures. The runtime starts in the background with its own session via `setsid`,
+with stdin, stdout and stderr redirected to `/dev/null`; Git never waits for it.
+Log writes may finish after Git returns. The shell snapshots the process chain
+before detaching (synchronous local `/proc` reads) so the originating Git process remains in the audit record.
+An external `timeout -s KILL 1` bounds interpreter startup and runtime, and the
+runtime also arms its own alarm. Without `setsid` or `timeout`, the hook skips
+observation. Four nonblocking `flock` slots in Git's hooks directory cap live
+supervisors/runtimes per hook installation, including linked worktrees sharing
+that directory. Children inherit the slot fd, retaining it if a supervisor dies.
+The hook performs no audit state-directory I/O. A bounded 4096-byte local HEAD
+reflog read resolves zero old OIDs before Git returns. Audit remains best-effort: deadline expiry or errors may omit
+observations. Uninterruptible runtime I/O cannot hold Git waiting for timeout.
+
+The private JSONL log records UTC time, old/new SHA, worktree path, its branch or
+`detached`, and /proc pid/ppid/command-name chains. Process arguments/environment
+are never read. Appends serialize with rotation under an exclusive lock and use
+one O_APPEND write per complete line; they never scan the whole log.
+At 1 MiB the log rotates to `head-moves.jsonl.1`, retaining one previous file.
+Auditing observes moves; it never authorizes or prevents them. No hooks are
+installed by this package.
+
 Run `python3 -m plangraph.fleet_sync release record` after fetching origin/main.
 The newest of the last 50 locally known first-parent main commits with successful required branch checks is
 recorded privately and atomically in `~/.local/state/plangraph/release.json`.

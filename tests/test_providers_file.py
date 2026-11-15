@@ -22,7 +22,6 @@ EXPECTED_MISSING = {
     'cx-gpt-6.1-sol-max': OWNER_ITEM,
     'cx-gpt-6.1-sol-medium': OWNER_ITEM,
     'cx-gpt-6.1-sol-xhigh': OWNER_ITEM,
-    'deepseek-flash': OWNER_ITEM,
     'cx-gpt-6.1-terra-medium': OWNER_ITEM,
     'cx-gpt-6.1-terra-xhigh': OWNER_ITEM,
     'gc/grok-4.7': OWNER_ITEM,
@@ -30,7 +29,7 @@ EXPECTED_MISSING = {
     'muse-spark-1.3-contributor': OWNER_ITEM,
 }
 EXPECTED_EXTRA = {
-    'agy-claude-sonnet-5-5-high': OWNER_ITEM, 'agy-gemini-3.8-flash': OWNER_ITEM,
+    'agy-claude-sonnet-5-5-high': OWNER_ITEM,
     'auto': OWNER_ITEM, 'auto/cheap': OWNER_ITEM, 'auto/smart': OWNER_ITEM,
     'l1-orchestrator': OWNER_ITEM, 'l1-orchestrator-clean': OWNER_ITEM,
     'l1-orchestrator-free-only': OWNER_ITEM, 'l2-orchestrator': OWNER_ITEM,
@@ -47,8 +46,6 @@ EXPECTED_EXTRA = {
     'opencode-go/minimax-m3': OWNER_ITEM, 'opencode-go/qwen3.8-flash': OWNER_ITEM,
     'or-laguna-s-2.1-free': OWNER_ITEM, 'or-nemotron-3-super-free': OWNER_ITEM,
     'or-north-mini-code-free': OWNER_ITEM, 't4-rag': OWNER_ITEM,
-    'vertex-3.6-flash': OWNER_ITEM, 'vertex-3.7-flash': OWNER_ITEM,
-    'vertex-3.8-flash': OWNER_ITEM, 'vertex-gemini-3.8-flash': OWNER_ITEM,
 }
 
 
