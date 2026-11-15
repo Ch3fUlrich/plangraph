@@ -5,6 +5,11 @@ it blocks on scrub, CI policy (including commit trailers), changed-crate Rust ch
 and affected tests, in that order. Each family ends with a timed PASS/FAIL/SKIP/INFRA
 summary; failed checks with HTTP 5xx output in any family (including policy) are
 inferred as INFRA and retried once; persistent INFRA exits 3, other failures exit 1.
+The Rust step prints `CARGO_TARGET_DIR` (or its default `rust/target`) before running
+Cargo. pg-spawnd CLI integration tests reuse Cargo's executable unless
+`CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`) points outside the checkout. For
+that shared case they build into `<shared target>/cli-tests/<checkout path hash>`,
+so another checkout cannot replace their CLI and extra output stays under the shared cap.
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
 affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
@@ -98,6 +103,7 @@ other suites. `tests/test_ci_select_rust_inputs.py` scans `rust/` for include
 literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs must be added to `RUST_INPUTS`, not inline to the workflow. `rust/pg-spawnd/`
 and `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
+Python files executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
 Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
 `docs/rust-hooks.md`, `tools/new_code_allowlist.txt` and its parity corpus at
 `tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
@@ -266,6 +272,20 @@ For an existing branch refreshed by merging known `origin/main` history, the hoo
 selects affected tests from the merge-base with `origin/main` when that base
 descends from the remote branch head. Public scrub still covers the original
 pushed range, passed separately to preflight as `--scrub-base`.
+
+For a merge batch, the hook fetches and prunes origin branch refs before selecting
+tests. When the range starts in known `origin/main` history and every second
+parent is reachable from `refs/remotes/origin/*`, local
+affected tests cover each merge's `git show --remerge-diff` (conflict resolutions
+and evil-merge edits), files changed by at least two parts, and every non-merge
+commit on the batch's first-parent chain. Exact commit ancestry is required;
+unpushed or locally rewritten heads, unavailable fetch/history, octopus merges,
+and ranges without a first-parent base fall back to normal affected selection.
+Existing feature or partially published batch tips outside main history also
+retain normal selection, preserving interactions with their earlier commits.
+The selection log names the mode and counts parts, delta files, and selected tests.
+This changes only test selection: scrub, policy and Rust steps still run, and
+batch CI runs the full suite (rule 3.42 a).
 
 ## Shadow merge decision (D-5252, slice 1)
 
