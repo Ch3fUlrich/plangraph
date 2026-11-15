@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import selectors
+import secrets
 import shlex
 import time
 from .runner import is_terminal
@@ -187,6 +188,57 @@ def list_runs(local, *, transport=query_host):
     except RuntimeError:
         return list(local) + [dict(host=h['name'], status='unknown',
                                   reason='host query failed') for h in hosts]
+
+
+def native_receipt(record):
+    """A target PID is evidence, never an origin-side process identity."""
+    if record.get('run_kind') == 'native-codex' and record.get('overflow_remote'):
+        record['origin_receipt'] = True
+        identity = {key: record.pop(key) for key in list(record)
+                    if key in ('pid', 'pid_start', 'job_id', 'job_name', 'escapees')
+                    or key.startswith('supervisor_')}
+        if identity:
+            record['remote_process'] = dict(record.get('remote_process') or {}, **identity)
+    return record
+
+
+def native_result(record, *, verb='result'):
+    """Refresh a native overflow receipt with target-host terminal evidence."""
+    from .private_io import read_text_retry
+    from plangraph.keeper.credential_guard import mask
+    try:
+        if verb not in ('result', 'cancel'):
+            raise ValueError('unsupported native control verb')
+        config_path = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS',
+                          '~/.config/plangraph/overflow-hosts.json')).expanduser()
+        host = json.loads(read_text_retry(config_path))['hosts'][record['host']]
+        run_id = record['run_id']
+        if not re.fullmatch(r'run-[A-Za-z0-9]+', run_id):
+            raise ValueError('invalid run id')
+        nonce = secrets.token_hex(16)
+        begin, end = (f'PLANGRAPH_RECEIPT_{nonce}_{suffix}' for suffix in ('BEGIN', 'END'))
+        command = 'cd ' + shlex.quote(host['repo']) + ' && '
+        if host.get('env_file'):
+            command += 'set -a && . ' + shlex.quote(host['env_file']) + ' >/dev/null 2>&1 && set +a && '
+        command += "printf '%s\\n' " + shlex.quote(begin) + ' && '
+        command += ('PYTHONPATH=' + shlex.quote(host['spawner_src']) +
+                    ' python3 -m plangraph.spawner.cli ' + verb + ' ' + shlex.quote(run_id))
+        command += "; printf '\\n%s\\n' " + shlex.quote(end)
+        reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
+                                '--', host['ssh'], command], capture_output=True,
+                               text=True, encoding='utf-8', errors='replace', timeout=10)
+        # A terminal nonzero exit is the writer's exit, with a valid JSON record.
+        text, _ = mask(reply.stdout)
+        lines = text.splitlines()
+        if lines.count(begin) != 1 or lines.count(end) != 1 or lines.index(begin) >= lines.index(end):
+            raise ValueError('receipt unbracketed')
+        remote = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
+        if remote.get('run_id') != run_id or remote.get('run_kind') != 'native-codex':
+            raise ValueError('receipt mismatch')
+        return native_receipt(dict(remote, host=record['host'], overflow_remote=True,
+                    overflow_reason=record.get('overflow_reason')))
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return native_receipt(dict(record, remote_query_error='host query failed'))
 
 
 def collect_local(state):

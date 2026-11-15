@@ -196,6 +196,7 @@ def test_gate_all_selected_success():
                 "rust": "true",
                 "rust-worker": "true",
                 "rust-spike": "true",
+                "browser": "true",
             },
         },
         "scrub": {"result": "success"},
@@ -207,6 +208,8 @@ def test_gate_all_selected_success():
         "rust": {"result": "success"},
         "rust-worker": {"result": "success"},
         "rust-spike": {"result": "success"},
+        "browser": {"result": "success"},
+        "rust-windows": {"result": "success"},
     }
     assert gate(needs) == []
 
@@ -215,7 +218,7 @@ def test_gate_selected_suite_skipped():
     needs = {
         "select": {
             "result": "success",
-            "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"},
+            "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "browser": "false", "rust-spike": "false"},
         },
         "scrub": {"result": "skipped"},
         "file-size": {"result": "success"},
@@ -229,7 +232,7 @@ def test_gate_selected_suite_failure():
     needs = {
         "select": {
             "result": "success",
-            "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"},
+            "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "browser": "false", "rust-spike": "false"},
         },
         "scrub": {"result": "failure"},
         "file-size": {"result": "success"},
@@ -248,7 +251,7 @@ def test_gate_unselected_suite_skipped():
                 "pytest-postgres": "false",
                 "rust": "false",
                 "rust-worker": "false",
-                "rust-spike": "false",
+                "browser": "false", "rust-spike": "false",
             },
         },
         "scrub": {"result": "success"},
@@ -299,7 +302,7 @@ def test_gate_docs_only_selection_passes():
                 "pytest-postgres": "false",
                 "rust": "false",
                 "rust-worker": "false",
-                "rust-spike": "false",
+                "browser": "false", "rust-spike": "false",
             },
         },
         "scrub": {"result": "success"},
@@ -351,7 +354,7 @@ def test_cli_gate_bad_json(capsys):
 
 def test_cli_gate_success(capsys):
     needs_json = (
-        '{"select": {"result": "success", "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"}}, '
+        '{"select": {"result": "success", "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "browser": "false", "rust-spike": "false"}}, '
         '"scrub": {"result": "success"}, "file-size": {"result": "success"}, "new-code-lang": {"result": "success"}, "changelog-docs": {"result": "success"}}'
     )
     ret = main(["gate", "--needs", needs_json])
@@ -362,7 +365,7 @@ def test_cli_gate_success(capsys):
 
 def test_cli_gate_problems(capsys):
     needs_json = (
-        '{"select": {"result": "success", "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "rust-spike": "false"}}, '
+        '{"select": {"result": "success", "outputs": {"pytest": "false", "pytest-postgres": "false", "rust": "false", "rust-worker": "false", "browser": "false", "rust-spike": "false"}}, '
         '"scrub": {"result": "failure"}, "file-size": {"result": "success"}, "new-code-lang": {"result": "success"}, "changelog-docs": {"result": "success"}}'
     )
     ret = main(["gate", "--needs", needs_json])

@@ -14,7 +14,7 @@ def test_preamble_first_line():
     with_pre = p.assemble(["v"], [("A", "text")])
     assert with_pre.splitlines()[0] == p.NO_TOOLS_PREAMBLE
     without = p.assemble(["v"], [("A", "text")], preamble=False)
-    assert without.splitlines()[0] == "=== VECTORS"
+    assert without.splitlines()[0].startswith("Role: independent reviewer")
 
 
 def test_vector_numbering():
@@ -36,13 +36,14 @@ def test_empty_vectors_error():
 
 
 def test_tail_is_last():
-    """Tail reminder closes every prompt, preamble or not."""
+    """Output contract precedes item data, preamble or not."""
     tail = p.load_tail()
     assert TAIL_PATH.is_file() and tail
     for prompt in (p.assemble(["v"], [("A", "x")]),
                    p.assemble(["v"], [("A", "x")], preamble=False),
                    *p.assemble_all(["v"], {"a.txt": "x"})):
-        assert prompt.endswith(tail.rstrip())
+        assert tail.rstrip() in prompt
+        assert prompt.index(tail.rstrip()) < prompt.index("=== ITEM CONTEXT")
 
 
 def test_split_boundaries():
@@ -97,7 +98,8 @@ def test_assemble_all_carries_map():
         assert "\n=== FILE-PART MAP\n" in prompt
         assert "part 1:" in prompt and "part 2:" in prompt
         assert "V1. do X" in prompt
-        assert prompt.endswith(tail.rstrip())
+        assert tail.rstrip() in prompt
+        assert prompt.index(tail.rstrip()) < prompt.index("=== ITEM CONTEXT")
 
 
 def test_sha256():

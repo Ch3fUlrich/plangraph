@@ -3,7 +3,7 @@ import atexit
 import json
 
 from plangraph.routing_support.leg_state import _down_seconds
-from .env_redact import first_reason, harness_limit_line, unavailable_reason
+from .env_redact import early_refusal, first_reason, harness_limit_line, unavailable_reason
 
 #: Verdicts a guard or a cancel owns.  No later fallthrough outcome may stomp
 #: them and terminal_reason never pops them (M9/M15, Q14).
@@ -221,7 +221,12 @@ def fallthrough_reason(service, chosen, job, record):
         streams = tuple('\n'.join(line.split(':', 1)[1].strip()
                         if line.strip().startswith(('usage_limit:', 'credit_limit:')) else line
                         for line in text.splitlines()) for text in streams)
-    line = harness_limit_line(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
+    if is_opencode(job):
+        streams = tuple(map(without_progress, streams))
+    line = harness_limit_line(job.exit_code, *streams)
+    if not line and record.get('role') == 'review':
+        # A provider refusal is authoritative even when its CLI exits zero.
+        line = early_refusal('\n'.join(streams)) or harness_limit_line(1, *streams)
     if not line and getattr(job, 'refusal', None) and job.exit_code == 7:
         # F3: a confirmed refusal (e.g. a 402 provider envelope whose reason is
         # not in the captured output) books and notifies like any harness limit.

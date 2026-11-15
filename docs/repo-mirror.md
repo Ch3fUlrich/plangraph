@@ -90,3 +90,6 @@ checking every probe's child-owned endpoint (including non-200 and OSError
 retries). Keeper mirror wiring remains a later slice.
 
 Mirror test fixtures use worker-core’s shared Git test helper, including integration tests through the `test-support` dev feature. Hook Git redirects and host HOME/XDG configuration cannot select a repository outside their temporary fixture.
+
+`pg-ctx`'s `brief_templates` Rust integration tests exercise the production brief
+renderers with fixture item context and repository evidence paths.
