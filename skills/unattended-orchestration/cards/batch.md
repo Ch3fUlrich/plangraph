@@ -62,3 +62,12 @@ already ship. When a port lands and enforces the rule, replace its procedure wit
 | R-batch-10 | BATCH-PORT-GO-REQ |
 | R-batch-11 | LESSON-TO-GATE (cross-cutting) |
 | R-batch-12 | MERGED-WORKTREE-BRANCH-SWEEP, LE-CLOSE-MERGED-AFTER-BATCH-MERGE |
+
+R-batch-13: Freeze `land` and `merge-part` while main's latest tests run is not
+  completed green on main's tip. Only a GO row naming the exact head and token
+  `EXCEPTION:main-red-fix` waives the freeze (`merge_batch land --go-row PATH`);
+  the candidate still needs its own full green CI and reviews. Trial runner
+  variables on a non-main branch with a full green workflow_dispatch run first,
+  and record that run, head and labels in the D-row before switching runners.
+  See docs/ci-parallel.md for the procedure; router-owned merge-part is external.
+  (why: a red main tip hides each new batch's regressions; source: plangraph:LAND-FREEZE-ON-RED-MAIN, docs/ci-parallel.md)

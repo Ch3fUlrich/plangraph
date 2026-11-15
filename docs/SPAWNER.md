@@ -249,7 +249,7 @@ Explicit cwd takes precedence over `diff_ref.repo` for placement; explicit-cwd r
 Never use `pgrep -f` wait loops, including in writer/seat briefs: they can match
 the waiting shell itself. Wait reads atomic run records, not process names;
 its timeout stops waiting, not the writer.
-`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg.
+`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
 Review/seat routes record each failed, limited or not-served attempt with its reason
 and try the next leg in the same run, failing only after route exhaustion. Ordinary
 failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; only
@@ -701,8 +701,15 @@ older databases. D-5903 enables Hydrogen high for implement after Sol and medium
 Both inherit the agy Claude capability bounds and remain unwitnessed: AGY emits no served-model telemetry.
 Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
+Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md).
 
 Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
+
+Seat-pool cleanup tests create their initial commit with Git plumbing in an
+isolated fixture environment, without signing, hooks, index updates or automatic
+maintenance. Fixture Git failures retain stderr; Windows fixture subprocesses
+use CREATE_NO_WINDOW. The cache-survival assertion also runs in a 50-iteration
+stress test. Windows CI and recorded reruns provide platform evidence.
 
 Native writer progress admission: [run contract](native-writer-progress-admission.md).
 

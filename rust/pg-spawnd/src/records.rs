@@ -1,5 +1,5 @@
-//! Read shared records without rewriting them. Python's watchdog/bad-records.json
-//! diagnostic output is intentionally not ported; malformed rows are skipped.
+//! Read shared records; refresh native overflow through its Python owner.
+//! Python watchdog/bad-records.json diagnostics remain unported; malformed rows are skipped.
 use crate::errors::ToolError;
 use pg_worker_core::run::record::{run_dir, valid_run_id};
 use serde_json::{json, Value};
@@ -180,7 +180,14 @@ pub(crate) fn read_record(state: &Path, run_id: &Value) -> Result<Value, ToolErr
         .filter(|id| valid_run_id(id))
         .ok_or_else(|| ToolError::Value("unknown run id".into()))?;
     let path = run_dir(state, id).map_err(|_| ToolError::Value("unknown run id".into()))?;
-    read_record_file(&path.join("record.json"))
+    let record = read_record_file(&path.join("record.json"))?;
+    if record["run_kind"] == "native-codex"
+        && record["overflow_remote"] == true
+        && record["status"] == "running"
+    {
+        return crate::placement::native_control(state, &record, "result");
+    }
+    Ok(record)
 }
 
 pub(crate) fn list_runs(state: &Path) -> Vec<Value> {
