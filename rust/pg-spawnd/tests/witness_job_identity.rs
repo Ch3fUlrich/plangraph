@@ -21,7 +21,7 @@ async def launch():
     with patch.object(runner.uuid, 'uuid4', side_effect=lambda: next(ids)):
         jobs = [await owner.spawn('prompt', model_or_combo='omniroute/cx-gpt-6-luna',
                                   client='opencode', dry_run=True) for _ in range(2)]
-    return [gateway_witness.session_tag(job.job_id) for job in jobs]
+    return [{'tag': gateway_witness.session_tag(job.job_id), 'command': job.command} for job in jobs]
 print(json.dumps(asyncio.run(launch())))
 "#,
         )
@@ -36,7 +36,28 @@ print(json.dumps(asyncio.run(launch())))
     let tags: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(tags.len(), 2);
     assert_ne!(
-        tags[0], tags[1],
+        tags[0]["tag"], tags[1]["tag"],
         "launches with equal UUID prefixes must differ"
     );
+    let contract: Value = serde_json::from_slice(
+        &std::fs::read(root.join("src/plangraph/config/prompt_transport_v1.json")).unwrap(),
+    )
+    .unwrap();
+    let metadata = &contract["metadata"];
+    let pattern = regex::Regex::new(metadata["title_pattern"].as_str().unwrap()).unwrap();
+    for job in tags {
+        let command = job["command"].as_array().unwrap();
+        let title = command
+            .windows(2)
+            .find(|pair| pair[0] == "--title")
+            .unwrap()[1]
+            .as_str()
+            .unwrap();
+        assert_eq!(title, job["tag"].as_str().unwrap());
+        assert_eq!(
+            title.len() as u64,
+            metadata["title_ascii_bytes"].as_u64().unwrap()
+        );
+        assert!(pattern.is_match(title));
+    }
 }

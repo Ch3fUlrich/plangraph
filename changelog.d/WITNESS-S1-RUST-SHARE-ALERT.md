@@ -2,3 +2,4 @@
 - Revive against current main and exercise launch-tag collision protection from a Rust integration test.
 - Keep supervisor stderr stress cases on one test worker, allow loaded hosts time to drain their workload, and reap children after timeout.
 - Align MCP stdio protocol-test startup allowances with the existing handshake test on loaded CI hosts.
+- Normalize witness observations to canonical outcome leg keys, align full-UUID launch metadata, and retain Python affected-test coverage for the runner fix.

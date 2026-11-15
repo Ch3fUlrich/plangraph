@@ -313,3 +313,54 @@ fn witness_missing_fields_native_taxonomy_and_run_deduplication() {
         json!([])
     );
 }
+
+#[test]
+fn witness_records_and_outcomes_share_the_canonical_leg_key() {
+    for (leg, key) in [
+        (
+            json!({"id":"agy-route", "harness":"agy", "model":"model"}),
+            "agy/model",
+        ),
+        (
+            json!({"id":"gateway-route", "harness":"opencode", "model":"omniroute/model"}),
+            "omniroute/model",
+        ),
+        (
+            json!({"id":"qualified-agy", "harness":"agy", "model":"agy/model"}),
+            "agy/model",
+        ),
+        (
+            json!({"id":"explicit-route", "leg_key":"canonical", "model":"model"}),
+            "canonical",
+        ),
+    ] {
+        for witnessed_count in [0, 5, 10] {
+            let records: Vec<_> = (0..10)
+                .map(|i| {
+                    let id = format!("run-{i}");
+                    let mut record = json!({"run_id":id, "status":"completed", "ended":90000,
+                    "chosen_leg":leg, "served_model":if i >= 10 - witnessed_count {"model"} else {"unwitnessed"},
+                    "witness_kind":"response-side-gateway-call-log",
+                    "attempts":[{"leg":leg, "status":"completed", "ended":90000}]});
+                    // Reconciled attempts carry outcome evidence; ordinary
+                    // witnessed attempts may have only the record metadata.
+                    if i < 5 {
+                        record["attempts"][0]["outcome"] = json!({"run_id":id,
+                            "attempt":0,"ts":90000,"leg_key":key,
+                            "outcome":"orphaned","duration_s":1});
+                    }
+                    record
+                })
+                .collect();
+            let report = build_report(&records, &[], 0, 100000).unwrap();
+            let alerts = report["witness_alerts"].as_array().unwrap();
+            assert_eq!(alerts.len(), usize::from(witnessed_count == 0), "{leg}");
+            if witnessed_count == 0 {
+                assert_eq!(
+                    alerts[0],
+                    format!("ALERT witnessed share collapsed: leg={key} previous=0/0 recent=0/10")
+                );
+            }
+        }
+    }
+}

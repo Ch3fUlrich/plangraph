@@ -197,6 +197,22 @@ pub(crate) fn build_report(
         "parked":parked,"no_time_episodes":episodes,"stale_alarms":stale,"baseline":null,"target":null,"missing_fields":{"outcome":missing,"observations":invalid}}),
     )
 }
+fn witness_leg_key(leg: &Value) -> Option<String> {
+    if let Some(key) = leg["leg_key"].as_str() {
+        return Some(key.into());
+    }
+    // Match leg_probe.key() and the reconciliation outcome writer. Route IDs
+    // differ from the model keys stored in outcome evidence.
+    if let Some(model) = leg["model"].as_str() {
+        return Some(if leg["harness"] == "agy" && !model.contains('/') {
+            format!("agy/{model}")
+        } else {
+            model.into()
+        });
+    }
+    leg["id"].as_str().or(leg.as_str()).map(String::from)
+}
+
 fn witness_alerts(records: &[Value], rows: &[Value], until: i64) -> Vec<String> {
     // One observation per run/leg, even when an attempt was retried or also
     // appears in outcome evidence. A child-writable session store is not a witness.
@@ -204,10 +220,11 @@ fn witness_alerts(records: &[Value], rows: &[Value], until: i64) -> Vec<String> 
     let mut observe = |row: &Value, parent: &Value| {
         let leg = row["leg_key"]
             .as_str()
-            .or(row["leg"]["id"].as_str())
-            .or(row["leg"].as_str())
-            .or(row["chosen_leg"]["id"].as_str())
-            .or(parent["chosen_leg"]["id"].as_str());
+            .or(row["outcome"]["leg_key"].as_str())
+            .map(String::from)
+            .or_else(|| witness_leg_key(&row["leg"]))
+            .or_else(|| witness_leg_key(&row["chosen_leg"]))
+            .or_else(|| witness_leg_key(&parent["chosen_leg"]));
         let id = row["run_id"].as_str().or(parent["run_id"].as_str());
         let ts = [
             &row["ts"],
@@ -231,7 +248,7 @@ fn witness_alerts(records: &[Value], rows: &[Value], until: i64) -> Vec<String> 
         if leg.is_empty() || id.is_empty() {
             return;
         }
-        let final_leg = parent["chosen_leg"]["id"].as_str() == Some(leg);
+        let final_leg = witness_leg_key(&parent["chosen_leg"]).as_deref() == Some(leg.as_str());
         let model = row["served_model"]
             .as_str()
             .or_else(|| final_leg.then(|| parent["served_model"].as_str()).flatten());
@@ -240,7 +257,7 @@ fn witness_alerts(records: &[Value], rows: &[Value], until: i64) -> Vec<String> 
             .or_else(|| final_leg.then(|| parent["witness_kind"].as_str()).flatten());
         let witnessed = model.is_some_and(|m| !m.is_empty() && m != "unwitnessed")
             && kind != Some("request-side-opencode-store");
-        runs.entry((id.into(), leg.into()))
+        runs.entry((id.into(), leg))
             .and_modify(|r| {
                 r.0 = r.0.max(ts);
                 r.1 |= witnessed;
