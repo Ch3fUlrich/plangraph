@@ -1,7 +1,7 @@
 //! MCP tool catalogue and dispatch for `pg-spawnd`.
 //!
 //! `tools_list.json` is the committed `TOOLS_METADATA` fixture; `tools/list`
-//! serves it verbatim so the Rust and Python servers share one contract.
+//! shares the base catalogue; Rust-only native review parameters are added below.
 
 use rmcp::model::{
     CallToolRequestParams, CallToolResult, ContentBlock, ErrorCode, ListToolsResult, Tool,
@@ -18,7 +18,20 @@ pub(crate) fn tools() -> Vec<Tool> {
     static TOOLS: OnceLock<Vec<Tool>> = OnceLock::new();
     TOOLS
         .get_or_init(|| {
-            serde_json::from_str(TOOLS_JSON).expect("tools_list.json must be a tool array")
+            let mut catalogue: serde_json::Value =
+                serde_json::from_str(TOOLS_JSON).expect("tool catalogue");
+            for tool in catalogue.as_array_mut().expect("tool array") {
+                if matches!(
+                    tool["name"].as_str(),
+                    Some("plangraph_agent_route" | "plangraph_agent_spawn")
+                ) {
+                    tool["inputSchema"]["properties"]["leg"] = serde_json::json!({
+                        "type":"string", "enum":["agy-cli", "claude-cli"],
+                        "description":"Native review kind (role=review): agy-cli or claude-cli"
+                    });
+                }
+            }
+            serde_json::from_value(catalogue).expect("valid native tool catalogue")
         })
         .clone()
 }
@@ -324,8 +337,39 @@ mod tests {
     #[test]
     fn lists_the_embedded_fixture() {
         let listed = list_tools().tools;
-        let fixture: serde_json::Value = serde_json::from_str(TOOLS_JSON).expect("fixture");
-        assert_eq!(serde_json::to_value(&listed).expect("tools"), fixture);
+        let mut fixture: serde_json::Value = serde_json::from_str(TOOLS_JSON).expect("fixture");
+        let mut base = serde_json::to_value(&listed).expect("tools");
+        for tool in base.as_array_mut().unwrap() {
+            if matches!(
+                tool["name"].as_str(),
+                Some("plangraph_agent_route" | "plangraph_agent_spawn")
+            ) {
+                let leg = tool["inputSchema"]["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("leg")
+                    .unwrap();
+                assert_eq!(leg["type"], "string");
+                assert_eq!(leg["enum"], serde_json::json!(["agy-cli", "claude-cli"]));
+                assert!(leg["description"].as_str().unwrap().contains("agy-cli"));
+            }
+        }
+        for tool in fixture.as_array_mut().unwrap() {
+            tool["inputSchema"]["properties"]
+                .as_object_mut()
+                .unwrap()
+                .remove("leg");
+        }
+        // Probe keeps its existing array selector in both catalogues.
+        for tool in base.as_array_mut().unwrap() {
+            if tool["name"] == "plangraph_agent_probe" {
+                tool["inputSchema"]["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("leg");
+            }
+        }
+        assert_eq!(base, fixture);
         assert_eq!(listed.len(), 15);
     }
 

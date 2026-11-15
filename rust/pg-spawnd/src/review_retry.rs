@@ -78,9 +78,8 @@ fn next(
         }
         match prepare(record, &args, leg) {
             Ok(_) if record.path().with_file_name("cancelled").exists() => return Ok(None),
-            Ok((job_id, launch)) => {
-                return advance(record, args, previous, attempt, leg.clone(), job_id, launch)
-                    .map(Some)
+            Ok(prepared) => {
+                return advance(record, args, previous, attempt, leg.clone(), prepared).map(Some)
             }
             Err(error) => {
                 let mut attempts = record.get("attempts").cloned().unwrap_or(json!([]));
@@ -106,11 +105,12 @@ fn family(value: &Value) -> String {
         _ => low,
     }
 }
+type Prepared = (String, crate::launch::LaunchSpec, Option<String>);
 fn prepare(
     record: &RunRecord,
     args: &Args,
     leg: &Value,
-) -> Result<(String, crate::launch::LaunchSpec), crate::errors::ToolError> {
+) -> Result<Prepared, crate::errors::ToolError> {
     let value = record.to_value();
     let state = record
         .path()
@@ -120,30 +120,39 @@ fn prepare(
         .unwrap();
     let run_id = value["run_id"].as_str().unwrap();
     let job_id = new_job_id();
-    let mut launch = LaunchAdapter::from_env().request(state, &json!({
-        "run_id":run_id,"job_id":job_id,"role":"review","dry_run":false,"leg":leg,
-        "prompt":args["prompt"],"card":args["card"],"cwd":value["cwd"],"state":state.to_string_lossy()
-    }), Duration::from_secs(30))?;
-    let mut review_args = json!(args);
-    review_args["role"] = json!("review");
-    crate::prompt::prepare_review(
-        &review_args,
-        leg,
-        &mut launch,
-        &crate::prompt::repos(),
-        crate::prompt::configured_mode("review") == "on",
-    )
-    .map_err(|e| crate::errors::ToolError::Internal(e.to_string()))?;
-    Ok((job_id, launch))
+    let cwd = if crate::cli_review::eligible(leg) {
+        crate::cli_review::cwd(args, value["cwd"].as_str().unwrap().into())?
+    } else {
+        value["cwd"].as_str().unwrap().into()
+    };
+    let mut launch = LaunchAdapter::from_env().request(
+        state,
+        &json!({
+            "run_id":run_id,"job_id":job_id,"role":"review","dry_run":false,"leg":leg,
+            "prompt":args["prompt"],"card":args["card"],"cwd":cwd,"state":state.to_string_lossy()
+        }),
+        Duration::from_secs(30),
+    )?;
+    let head = crate::prompt::prepare_launch(args, leg, &mut launch, false)?;
+    if head.is_some()
+        && value["head_sha"]
+            .as_str()
+            .is_some_and(|old| head.as_deref() != Some(old))
+    {
+        return Err(crate::placement::parameter(
+            "CLI review head changed between attempts",
+        ));
+    }
+    Ok((job_id, launch, head))
 }
+
 fn advance(
     record: &mut RunRecord,
     args: Args,
     previous: &Value,
     attempt: u32,
     leg: Value,
-    job_id: String,
-    mut launch: crate::launch::LaunchSpec,
+    prepared: Prepared,
 ) -> Result<RunSpec, crate::errors::ToolError> {
     let value = record.to_value();
     let state = record
@@ -153,7 +162,11 @@ fn advance(
         .and_then(Path::parent)
         .unwrap();
     let run_id = value["run_id"].as_str().unwrap();
-    let mut metadata = json!({});
+    let (job_id, mut launch, head) = prepared;
+    let mut metadata = json!({"cwd":launch.cwd});
+    if let Some(head) = head {
+        metadata["head_sha"] = json!(head);
+    }
     runs::store_prompt(state, run_id, &mut launch, &mut metadata, false)?;
     let log = record.path().with_file_name("live.log");
     let archive = record
@@ -177,6 +190,11 @@ fn advance(
         "exit_code",
         "request_side_model",
         "witness_kind",
+        "verdict",
+        "findings",
+        "test_gaming",
+        "finish_reason",
+        "completion",
     ] {
         record.set(key, Value::Null);
     }
@@ -221,7 +239,7 @@ fn advance(
 pub(crate) fn witness(record: &mut RunRecord, leg: &Value, attempt: u32) {
     // Claude's init metadata is response-side evidence. Never infer a witness
     // from the requested model, review prose, or child-writable database.
-    if leg["harness"] != "claude" {
+    if leg["harness"] != "claude" || crate::cli_review::eligible(leg) {
         return;
     }
     let models: std::collections::BTreeSet<String> = record

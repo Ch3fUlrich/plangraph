@@ -21,6 +21,8 @@ def boundary(tmp_path, monkeypatch):
 
 
 def plan(store, role='review', **kwargs):
+    # Exercise the retained legacy registrations; native defaults have Rust fixtures.
+    kwargs.setdefault('legs', tuple(list(DEFAULT_LEGS)))
     return plan_spawn(
         dict(estimate_tokens=1000, diff_ref=dict(repo=str(Path.cwd()), base='HEAD', head='HEAD')), role=role,
         writer_families=('xiaomi',), leg_reader=store, now=100,

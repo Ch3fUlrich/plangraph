@@ -1,0 +1,1 @@
+- Session launch now shares spawn base admission, refusing stale checkouts before launch preparation and accepting the same scoped operator waiver through `base_decision`.

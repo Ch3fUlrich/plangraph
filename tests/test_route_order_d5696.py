@@ -68,13 +68,12 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
     effort, hydrogen = ('xhigh', 'high') if order_class == 'complex' else ('medium', 'medium')
     assert OPERATOR_ROUTE_ORDERS['review'][order_class][:3] == (
         f'cx-gpt-6.1-sol-{effort}', f'cx-gpt-6.1-terra-{effort}', f'agy-gemini-4-hydrogen-{hydrogen}')
-    assert ('review' in catalog[f'agy-gemini-4-hydrogen-{hydrogen}'].roles) == (hydrogen == 'medium')
+    assert 'review' in catalog[f'agy-gemini-4-hydrogen-{hydrogen}'].roles
     assert all('review' not in catalog[id].roles
                for id in OPERATOR_ROUTE_ORDERS['review'][order_class][:2])
     result = ordered(catalog.values(), 'review', order_class=order_class,
                      writer_families=('claude',), diff_tokens=1000)
-    assert signature(result) == ([('agy-gemini-4-hydrogen-medium', 'medium')]
-        if order_class == 'high' else []) + [('mimo-v2.6-pro', None),
+    assert signature(result) == [(f'agy-gemini-4-hydrogen-{hydrogen}', hydrogen)] + [('mimo-v2.6-pro', None),
         ('opencode-go-deepseek-v4-flash', None), ('mimo-v2.6-flash', None),
         ('omniroute-deepseek-flash', None)]
 
@@ -104,9 +103,10 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
     reasons = {
         'role': '''openrouter-free cx-gpt-6.1-sol-xhigh deepseek cx-gpt-6.1-sol
             cx-gpt-6.1-sol-low cx-gpt-6.1-sol-medium cx-gpt-6.1-sol-high cx-gpt-6.1-sol-max
-            agy-gemini-4-hydrogen-high cx-gpt-6.1-terra-medium
+            cx-gpt-6.1-terra-medium
             cx-gpt-6.1-terra-xhigh muse-ember-max claude-fable-5.2-high''',
-        'not_in_order': '''agy-gemini-4-hydrogen-medium qodercli-qwen3.8-flash opencode-deepseek-v4.1-flash-free
+        'not_in_order': '''agy-gemini-4-hydrogen-high agy-gemini-4-argon-medium
+            console-deepseek-flash opencode-go-beam-free claude-sonnet-5-5-high agy-gemini-4-hydrogen-medium qodercli-qwen3.8-flash opencode-deepseek-v4.1-flash-free
             opencode-glm-5.3-flash-free cx-gpt-6-luna agy-gemini-4-argon
             opencode-big-pickle agy-gpt-oss-120b agy-sonnet-5.5 agy-claude-opus agy-opus-5.5
             omniroute-muse-spark agy-opus opencode-gemini-4-argon opencode-go-gemini-4-argon

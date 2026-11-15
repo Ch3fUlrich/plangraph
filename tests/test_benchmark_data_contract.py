@@ -209,6 +209,12 @@ def _assert_contract(rows, models, legs, pending=()):
     operator_admitted = {('missing_row', f'leg:agy-gemini-4-hydrogen-{effort}@agy/'
                           f'gemini-4-hydrogen-{effort}', effort)
                          for effort in ('high', 'medium')}
+    # D-5966: new review registrations have no measured benchmark scores.
+    operator_admitted |= {('missing_row', subject, effort) for subject, effort in (
+        ('leg:agy-gemini-4-argon-medium@agy/gemini-4-argon-medium', 'medium'),
+        ('leg:console-deepseek-flash@console-deepseek/deepseek-flash', None),
+        ('leg:opencode-go-beam-free@opencode-go/beam-free', None),
+        ('leg:claude-sonnet-5-5-high@claude/claude-sonnet-5-5-high', 'high'))}
     if issues - allowed - operator_admitted:
         raise AssertionError(f"unlisted benchmark violations: {issues - allowed - operator_admitted}")
     if allowed - issues:
