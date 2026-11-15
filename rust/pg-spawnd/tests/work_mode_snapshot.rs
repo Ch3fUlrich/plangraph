@@ -11,8 +11,8 @@ fn writer_snapshot_preserves_catalog_score_and_planner_quota_filter() {
 from types import SimpleNamespace as N
 from unittest.mock import patch
 from plangraph.spawner import cli
-strong = N(id='strong', model='strong-model', roles=['implement'])
-weak = N(id='weak', model='weak-model', roles=['implement'])
+strong = N(id='strong', model='strong-model', harness='opencode', roles=['implement'])
+weak = N(id='weak', model='weak-model', harness='opencode', roles=['implement'])
 writer = N(to_dict=lambda: dict(legs=[dict(id=weak.id)], skipped=[dict(leg=strong.id, reason='limited')]))
 service = N(route=lambda *a, **kw: writer, _route=lambda *a, **kw: writer)
 rows = [dict(id=strong.model, aa_intelligence=60), dict(id=weak.model, aa_intelligence=40)]
@@ -23,6 +23,12 @@ with patch.object(cli, 'SpawnService', return_value=service), patch('plangraph.p
         .args(["-c", script])
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
+        .env(
+            "PLANGRAPH_CATALOG_DB",
+            std::env::temp_dir()
+                .join(format!("pg-no-catalog-{}", std::process::id()))
+                .join("catalog.db"),
+        )
         .output()
         .unwrap();
     assert!(
