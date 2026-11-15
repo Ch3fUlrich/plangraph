@@ -260,7 +260,7 @@ class WaiverMixin:
             if waiver:
                 self._card_requires_non_anthropic_seats(fresh)  # validate the recorded risk tags
                 card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?", (key,)).fetchone()
-                ref.update(waiver=waiver, prs=prs, review_tier=fresh["review_tier"],
+                ref.update(waiver={k: v for k, v in waiver.items() if k != "scope"}, prs=prs, review_tier=fresh["review_tier"],
                            risk_tags=json.loads(card["risk_tags"]) if card else [],
                            seat_rule_waived_by=waive_seats)
             if from_open:
