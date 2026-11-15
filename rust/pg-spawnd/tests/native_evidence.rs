@@ -57,7 +57,8 @@ with tempfile.TemporaryDirectory() as tmp:
         probe = AsyncMock()
         probe.returncode = 0
         probe.communicate.return_value = (b'{"tool_path":"/fixture","resolved_tools":{}}', b'')
-        with patch('asyncio.create_subprocess_exec', side_effect=[probe, OSError('fixture')]):
+        with patch('plangraph.fleet_snapshot._projection_binary', return_value='/fixture/pg-spawnd'), \
+             patch('asyncio.create_subprocess_exec', side_effect=[probe, OSError('fixture')]):
             record = await native_spawn(service, card, dict(prompt='brief'))
         assert record['item_key'] == 'project:item', record
         assert service.result(record['run_id'])['item_key'] == 'project:item'
