@@ -25,6 +25,17 @@ pytest session clears inherited bindings and disables global/system Git config
 before collection and test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
+Rust source changes always select `tests/test_spawner_import_guard.py` in affected
+CI runs; its tree-wide scan rejects Python command bodies depending on pytest or test helpers.
+
+`tools/merge_batch.py plan` and `build` fetch origin and measure each PR against
+`origin/<base>...<head sha>` with Git, so refresh merges and GitHub's truncated
+file lists do not inflate sizes or hide HIGH paths. The `GENERATED` column
+reports Cargo.lock, `generated/` trees and minified-file lines separately; these
+lines are also included in `LINES` and the batch cap. Both rename paths count
+for HIGH checks. For stacks, each PR still displays its diff against the batch
+base; the batch cap counts each layer against its parent head once (`batch_lines`
+in JSON), preserving per-PR stack contributions.
 
 `tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
 batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions

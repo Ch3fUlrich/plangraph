@@ -258,6 +258,11 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
     base_reverse = None
     for raw in changed:
         path = Path(raw).as_posix()
+        # CI's affected run must enforce the Rust Python dependency guard too.
+        if path.startswith('rust/') and path.endswith('.rs'):
+            guard = 'tests/test_spawner_import_guard.py'
+            if guard in texts:
+                selected.add(guard)
         def fallback(reason):
             return {"tests": filter_within(["tests"], within), "reason": reason + ": " + path}
         p = Path(path)

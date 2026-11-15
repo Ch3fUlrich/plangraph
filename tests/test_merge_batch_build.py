@@ -221,7 +221,7 @@ def test_build_applies_the_plan_rules_unless_forced(env, case, prs, message):
     elif case == "max_prs":
         extra = ["--max-prs", "1"]
     else:
-        kw1 = {"lines": 2000}
+        files = {"a.txt": "a\n" * 2000}
     env.branch_pr(1, files, **kw1)
     env.branch_pr(2, {"b.txt": "b\n"}, **kw2)
     res = env.run("build", "--name", "r1", "--prs", prs, *extra)

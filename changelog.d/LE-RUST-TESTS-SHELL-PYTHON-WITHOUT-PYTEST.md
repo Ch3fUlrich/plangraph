@@ -1,0 +1,1 @@
+Extend the existing always-run import guard to reject Rust Python snippets importing pytest or test helpers, including helper-passed scripts and Rust string escapes, with file and line diagnostics and negative fixtures. Select the guard for every Rust source change in affected CI runs as well as local fast checks.

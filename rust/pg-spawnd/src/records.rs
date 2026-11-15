@@ -120,7 +120,7 @@ mod tests {
     }
 }
 
-fn open_record(path: &Path) -> std::io::Result<std::fs::File> {
+pub(crate) fn open_record(path: &Path) -> std::io::Result<std::fs::File> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]

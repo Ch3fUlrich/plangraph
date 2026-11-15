@@ -173,3 +173,25 @@ def test_interpreter_startup_is_inside_deadline(checkout, tmp_path):
     assert time.monotonic() - start < 1.8
     assert run('rev-parse', 'HEAD') == first
     wait_for_runtime_exit(pidfile)
+
+
+def test_runtime_exits_before_status_read(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    pidfile = tmp_path / 'pid'
+    with subprocess.Popen(['/bin/sleep', '30']) as child:
+        pidfile.write_text(str(child.pid))
+        status = Path(f'/proc/{child.pid}/status')
+        with status.open() as opened:
+            child.kill()
+            child.wait(timeout=5)
+            read_text = Path.read_text
+
+            def read_after_exit(path, *args, **kwargs):
+                return opened.read() if path == status else read_text(path, *args, **kwargs)
+
+            monkeypatch.setattr(Path, 'read_text', read_after_exit)
+            # Linux returns ESRCH for the already-open proc file after reaping.
+            with pytest.raises(ProcessLookupError):
+                opened.read()
+            wait_for_runtime_exit(pidfile)
