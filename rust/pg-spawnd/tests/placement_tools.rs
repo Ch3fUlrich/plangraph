@@ -53,6 +53,62 @@ impl Fixture {
     }
 }
 #[test]
+fn work_mode_settings_round_trip_refuses_invalid_and_resolves_auto() {
+    let mut f = Fixture::new(r#"{"legs":[],"work_mode_writer_legs":[]}"#, 0, "");
+    let repo = f.state.path().join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    let call = |f: &mut Fixture, mut args: Value| {
+        args["repo"] = json!(repo);
+        let r = f.client.request(
+            "tools/call",
+            json!({
+                "name":"plangraph_work_mode", "arguments":args
+            }),
+        );
+        assert!(r.get("error").is_none(), "{r}");
+        serde_json::from_str::<Value>(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+    };
+    assert_eq!(call(&mut f, json!({}))["work_mode"], "batch");
+    let path = f.state.path().join("config/plangraph/work-mode.json");
+    assert!(!path.exists(), "reads must not create config");
+    for mode in ["piecewise", "batch", "auto"] {
+        let row = call(&mut f, json!({"work_mode":mode}));
+        assert_eq!(row["work_mode"], mode);
+        assert_eq!(call(&mut f, json!({}))["work_mode"], mode);
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved, json!({"work_mode":mode}));
+        if mode == "auto" {
+            assert_eq!(row["resolved_work_mode"], "piecewise");
+            assert_eq!(row["work_mode_reason"], "auto: no writer legs served");
+            let argv = std::fs::read_to_string(f.state.path().join("argv")).unwrap();
+            assert!(argv.contains("--writer-snapshot"));
+            assert!(argv.contains(r#""estimate_tokens":0"#));
+        }
+    }
+    let before = std::fs::read(&path).unwrap();
+    for value in [json!("future"), json!(null), json!(3), json!({"auto":null})] {
+        let r = f.client.request(
+            "tools/call",
+            json!({
+                "name":"plangraph_work_mode", "arguments":{"repo":repo,"work_mode":value}
+            }),
+        );
+        assert!(r.get("error").is_some(), "{r}");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+    std::fs::create_dir(repo.join(".plangraph")).unwrap();
+    std::fs::write(
+        repo.join(".plangraph/work-mode.json"),
+        r#"{"work_mode":"batch"}"#,
+    )
+    .unwrap();
+    let row = call(&mut f, json!({"work_mode":"piecewise"}));
+    assert_eq!(row["work_mode"], "piecewise");
+    assert_eq!(row["effective_work_mode"], "batch");
+    assert_eq!(row["resolved_work_mode"], "batch");
+}
+
+#[test]
 fn route_reports_resolved_work_mode_and_reason() {
     let mut f = Fixture::new(r#"{"legs":[],"work_mode_writer_legs":[]}"#, 0, "");
     let r = f.call("route", json!({"card":{}}));

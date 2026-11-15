@@ -42,6 +42,7 @@ mod round_progress;
 mod runs;
 mod serve;
 mod serve_options;
+mod settings_web;
 mod shim;
 mod spawn;
 mod state;
@@ -53,6 +54,7 @@ mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
 mod work_mode_config;
+mod work_mode_settings;
 
 use pg_worker_core::host_probe::probe;
 

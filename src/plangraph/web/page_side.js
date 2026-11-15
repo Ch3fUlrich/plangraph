@@ -236,12 +236,73 @@
     return b;
   }
 
+  var workModeData = null, workModeBusy = false, workModeError = "";
+  function requestWorkMode(mode) {
+    workModeBusy = true;
+    workModeError = "";
+    var args = mode === undefined ? {} : { work_mode: mode };
+    try {
+      var x = new global.XMLHttpRequest();
+      x.open("POST", "/mcp", true);
+      x.setRequestHeader("Content-Type", "application/json");
+      function finish(error) {
+        workModeBusy = false;
+        workModeError = error || "";
+        renderSettings();
+      }
+      x.onload = function () {
+        try {
+          if (x.status !== 200) throw new Error("Request failed");
+          var rpc = JSON.parse(x.responseText);
+          if (rpc.error || !rpc.result || rpc.result.isError) throw new Error("Request refused");
+          var row = JSON.parse(rpc.result.content[0].text);
+          if (["auto", "piecewise", "batch"].indexOf(row.work_mode) < 0) throw new Error("Invalid response");
+          workModeData = row;
+          pick("workMode", row.work_mode);
+          finish();
+        } catch (e) { finish("Work mode could not be loaded or saved."); }
+      };
+      x.onerror = function () { finish("Work mode connection failed."); };
+      x.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call",
+        params: { name: "plangraph_work_mode", arguments: args } }));
+    } catch (e) { workModeBusy = false; workModeError = "Work mode unavailable on this page."; }
+  }
+
   function renderSettings() {
     var box = $("sb-panel-settings");
     if (!box) return;
     clear(box);
     var s = UI.get("settings");
     box.appendChild(el("h3", "sb-h", "Settings"));
+    var mode = el("select");
+    mode.setAttribute("aria-label", "Work mode");
+    ["auto", "piecewise", "batch"].forEach(function (value) {
+      var option = el("option", null, value);
+      option.value = value;
+      mode.appendChild(option);
+    });
+    mode.value = workModeData ? workModeData.work_mode : "batch";
+    mode.disabled = workModeBusy || !workModeData;
+    mode.addEventListener("change", function () { requestWorkMode(mode.value); renderSettings(); });
+    box.appendChild(block("Work mode", mode));
+    var message = workModeError || (workModeBusy ? "Loading work mode…" : "");
+    if (!message && workModeData) {
+      var row = workModeData;
+      if (row.work_mode !== row.effective_work_mode) message = "Repository override: " + row.effective_work_mode + ". ";
+      if (row.work_mode === "auto" || row.effective_work_mode === "auto") message += "Resolved: " + (row.resolved_work_mode || "unavailable") + ". " + row.work_mode_reason;
+    }
+    var status = el("p", "set-row", message);
+    status.setAttribute("role", "status");
+    box.appendChild(status);
+    if (!workModeBusy && (workModeData || workModeError)) {
+      var refresh = el("button", null, "Refresh work mode");
+      refresh.addEventListener("click", function () { requestWorkMode(); renderSettings(); });
+      box.appendChild(refresh);
+    }
+    if (!workModeData && !workModeBusy && !workModeError) {
+      if (typeof global.XMLHttpRequest === "function") requestWorkMode();
+      else { workModeError = "Work mode unavailable on this page."; status.textContent = workModeError; }
+    }
     box.appendChild(block("Text size (root px)", seg([["S", "S"], ["M", "M"], ["L", "L"]],
       s.textSize, function (v) { pick("textSize", v); }, "Text size")));
     box.appendChild(block("Theme", seg([["auto", "Auto"], ["light", "Light"], ["dark", "Dark"]],

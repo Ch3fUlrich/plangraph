@@ -215,7 +215,7 @@ fn tools_list_matches_embedded_fixture() {
     assert_eq!(listed, fixture);
     assert_eq!(
         response["result"]["tools"].as_array().expect("array").len(),
-        15
+        16
     );
 }
 
