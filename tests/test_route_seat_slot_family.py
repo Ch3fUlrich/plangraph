@@ -121,7 +121,7 @@ def test_snapshot_auth_refused_in_plan_and_run_record(service, monkeypatch, tmp_
         calls.append(args)
         return 401, 'fixture-key must never appear'
 
-    provider = from_env({'OMNIROUTE_BASE_URL': 'http://127.0.0.1:20128/v1',
+    provider = from_env({'OMNIROUTE_BASE_URL': 'https://gateway.example.invalid/v1',
                          'PLANGRAPH_PRINCIPAL': 'reviewer'},
                         key_resolver=lambda _: 'fixture-key', fetch=fetch)
     adapter = LegAdapter(LegStateStore(tmp_path / 'auth-state'), provider,
@@ -143,7 +143,7 @@ def test_snapshot_auth_refused_in_plan_and_run_record(service, monkeypatch, tmp_
         attempt = next(a for a in record['attempts'] if isinstance(a['leg'], dict)
                        and a['leg']['id'] == LUNA.id)
         assert attempt['skip_reason'] == ('auth_refused: HTTP 401 '
-            'gateway=http://127.0.0.1:20128 principal=reviewer')
+            'gateway=https://gateway.example.invalid principal=reviewer')
         assert 'fixture-key' not in json.dumps(record)
         assert 'OmniRouteUnreachable' not in json.dumps(record)
     assert len(calls) == 1  # auth refusal is cached, never retried/probed as transport failure
