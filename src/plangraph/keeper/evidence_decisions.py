@@ -213,9 +213,18 @@ class DecisionsAdapter:
         snap = self._snapshot
         if snap is not None and "text" in snap:
             return snap["text"]
-        text = self._read_document(_strict=_strict)
-        if snap is not None and (_strict or text):
-            snap["text"] = text  # a best-effort empty read is never reused for a strict one
+        if snap is None:
+            return self._read_document(_strict=_strict)
+        # Inside a snapshot every read is strict, so the cached text can serve a
+        # strict caller; a best-effort caller falls back to the lenient read
+        # without caching it.
+        try:
+            text = self._read_document(_strict=True)
+        except Exception:  # noqa: BLE001
+            if _strict:
+                raise
+            return self._read_document(_strict=False)
+        snap["text"] = text
         return text
 
     def _read_document(self, *, _strict=False):
