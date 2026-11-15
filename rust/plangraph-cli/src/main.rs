@@ -31,6 +31,15 @@ fn run() -> i32 {
         println!("environment checked {} keys", effective.len());
         return 0;
     }
+    if args.first().is_some_and(|arg| arg == "ci-watch") {
+        return match plangraph_cli::ci_watch::run(&home, &effective, &args[1..]) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("ci-watch: {error}");
+                2
+            }
+        };
+    }
     let mode = match args
         .iter()
         .map(String::as_str)
@@ -42,7 +51,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | ci-watch [--dry-run] [--keeper] | --version"
             );
             return 2;
         }

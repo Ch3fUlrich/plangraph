@@ -8,6 +8,7 @@ All units are user units (`systemctl --user`), not system units.
 | --- | --- | --- |
 | pg-snapshot-pull.service | reader-host local plan copy refresh every 5 min | reader host |
 | pg-snapshot-pull.timer | timer driving pg-snapshot-pull.service every 5 min | reader host |
+| pg-ci-watch.service + .timer | Rust CI failure scan and keeper fix tasks every 5 min; see [CI watch](../../docs/ci-watch.md) | CI watcher host |
 | plangraph-keeper.service | persistent keeper daemon | keeper host |
 | plangraph-projector.service | continuous projector run loop (30 s poll): attempts reach the keeper | keeper host |
 | plangraph-projector-reconcile.service | one nightly run: reconcile open Temporal workflows vs keeper state | keeper host |

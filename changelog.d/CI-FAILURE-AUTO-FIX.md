@@ -1,0 +1,1 @@
+- Add Rust `plangraph ci-watch`: scan tests workflow failures, rerun known flakes once, persist priority 10 fix tasks, and optionally define them in keeper; provide five-minute user systemd units and usage documentation.
