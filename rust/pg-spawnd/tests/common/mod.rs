@@ -134,6 +134,36 @@ pub(crate) fn assert_mode_eventually(path: &Path, expected: u32) {
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     std::fs::DirBuilder::new().mode(0o700).create(path)
 }
+
+/// Bind without listening so even a descriptor inherited by a concurrent spawn
+/// cannot accept clients before exec closes it. Dropping this leaves a stale path.
+pub(crate) fn bind_stale_socket(path: &Path) -> socket2::Socket {
+    let socket = socket2::Socket::new(socket2::Domain::UNIX, socket2::Type::STREAM, None)
+        .expect("create stale socket");
+    socket
+        .bind(&socket2::SockAddr::unix(path).expect("socket address"))
+        .expect("bind stale socket");
+    socket
+}
+
+#[test]
+fn stale_socket_refuses_connections_with_inherited_descriptor() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("stale.sock");
+    let socket = bind_stale_socket(&path);
+    // Keep a duplicate alive, as a child between fork and exec would do.
+    let inherited = socket.try_clone().unwrap();
+    drop(socket);
+    assert!(path.exists(), "stale socket file left behind");
+    assert_eq!(
+        std::os::unix::net::UnixStream::connect(&path)
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::ConnectionRefused
+    );
+    drop(inherited);
+}
+
 #[test]
 fn temp_dir_creation_is_exclusive_and_private() {
     let parent = TempDir::new();
