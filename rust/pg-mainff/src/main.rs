@@ -39,6 +39,10 @@ fn main() {
         std::process::exit(code);
     }
     let result = match args.first().map(String::as_str) {
+        Some("status") if args.len() == 2 => Ok(json!(advance::status(
+            &System,
+            std::path::Path::new(&args[1])
+        ))),
         Some("probe") => probe::main_pid(
             &System,
             args.get(1)

@@ -440,3 +440,5 @@ Append-only ledger paths are declared once using `merge=union` in the root `.git
 The `pg-mainff` Rust regression checks the keeper launch inventory against
 `pyproject.toml`. Packaging metadata changes therefore select Rust CI through
 `tools/ci_select.py` as well as the ordinary packaging checks.
+The hourly main-ff service/timer templates also select Rust CI: Rust integration
+regressions check that the service invokes the guard and can find Cargo.

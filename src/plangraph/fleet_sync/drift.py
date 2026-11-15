@@ -260,7 +260,12 @@ def rows(registry, release, query=transport, count=None):
                 behind = count(live, release)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
             behind = 'unknown'
-        result.append({'host': host['id'], 'live_sha': live, 'release_sha': release, 'behind': behind})
+        row = {'host': host['id'], 'live_sha': live, 'release_sha': release, 'behind': behind}
+        if host.get('transport') == 'local':
+            repo = host.get('repos', {}).get('plangraph', {}).get('live_dir')
+            if repo and (status := main_ff_status(repo)):
+                row['main_ff'] = status
+        result.append(row)
     return result
 
 
@@ -268,4 +273,15 @@ def pid_start(pid):
     try:
         return (Path('/proc') / str(pid) / 'stat').read_text().rsplit(')', 1)[1].split()[19]
     except (OSError, IndexError):
+        return None
+
+
+def main_ff_status(repo):
+    """Read optional local update status through the Rust compatibility transport."""
+    from .advance import _rust_mainff
+
+    try:
+        result = _rust_mainff('status', str(repo))
+        return json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None

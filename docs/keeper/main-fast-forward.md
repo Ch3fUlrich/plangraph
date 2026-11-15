@@ -63,3 +63,8 @@ The revived probe is implemented by `pg-mainff` in `rust/pg-mainff`.
 prints the detected keeper PID as JSON (zero when conclusively absent);
 `running STATE` prints the loaded SHA or null. Query failures return a fixed
 public diagnostic with exit code 2. Windows liveness never signals a process.
+
+The Rust `status CHECKOUT` command reads the cached line from that checkout's Git
+directory and prints JSON (null if absent/unreadable). The Python drift command
+uses this same status reader for local hosts. The template includes the standard
+user Cargo bin directory in PATH; adapt it if Rust is installed elsewhere.

@@ -222,3 +222,7 @@ Absent or stale loaded state now requires conclusive absence from both unit scop
 and the process probe. A live keeper, unreadable unit, or failed process query holds
 updates; the guard rechecks state immediately before a fast-forward. Existing
 catalog SQL, route-policy data, and provider configuration are watched too.
+
+Local drift status uses the Rust `status CHECKOUT` reader through the existing
+Python command. Missing/unreadable status adds no field; text and JSON display
+the same cached line. Linked worktrees keep independent status files.
