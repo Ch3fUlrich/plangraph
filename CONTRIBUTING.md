@@ -490,3 +490,12 @@ prints a `pg-repo-sync --repo PATH` repair command. Sync discovers effective
 shared hook checkout on a clean main branch. Old cached upstream tips are
 fetched before checking freshness; a failed refresh refuses the push. Changes to
 gates on topic branches take effect in the shared hook checkout after merge and sync.
+
+The new-code policy gate also scans test sources for portability hazards. Rust
+`read_to_string` results must normalize CRLF before splitting on LF literals;
+`.lines()` is already CRLF aware. The guard follows local bindings and aliases,
+not cross-function data flow or macro expansions. Test sources must use temporary
+or synthetic paths instead of literal `/home/<user>` paths, including fixtures.
+Run it alone with `cargo run --manifest-path rust/Cargo.toml -p pg-policy --
+--test-sources .`; `python3 tools/check_new_code_lang.py` runs it in fast checks
+and CI. No allowlist is provided.
