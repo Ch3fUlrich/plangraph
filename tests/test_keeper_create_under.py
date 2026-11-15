@@ -368,12 +368,20 @@ def test_all_cancelled_gate_refusals_create_nothing_and_batch_stays_atomic(w):
     assert _snapshot(w) == before
 
 
-def test_cancel_cannot_orphan_live_work_by_dropping_gate_edge(w):
+def test_cancel_gate_with_live_children_stays_legal_and_keeps_stranding_edge(w):
+    """Cancelling a gate with live children was legal before the edge drop and
+    stays so; the goal's edge to the gate is the children's only path to the
+    goal, so it is kept (legacy ``depends_on_cancelled``) instead of dropped."""
     w.store.create_items(w.p("router"), [
         defn("CHILD"), defn("GATE", ["CHILD"], kind="gate", under="GOAL")])
-    before = _snapshot(w)
-    with pytest.raises(Refused) as exc:
-        w.store.cancel(w.p("router"), "demo:GATE", "abandoned")
-    assert "unreachable_goal" in exc.value.msg
-    assert _snapshot(w) == before
+    edges = _edges(w)
+    events = w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+    out = w.store.cancel(w.p("router"), "demo:GATE", "abandoned")
+    assert out == {"key": "demo:GATE", "state": "cancelled"}
+    assert _edges(w) == edges
+    assert w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == events + 1
+    assert w.conn.execute(
+        "SELECT COUNT(*) FROM events WHERE payload LIKE '%dropped_cancelled%'"
+    ).fetchone()[0] == 0
+    assert {p["code"] for p in _problems(w)} == {"depends_on_cancelled"}
     assert w.store.verify_integrity() == []

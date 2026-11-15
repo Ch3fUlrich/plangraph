@@ -11,6 +11,7 @@ normalisation, evidence checks, authorisation) live on the ``Store`` base class.
 """
 from __future__ import annotations
 
+from .. import views
 from . import auth, events
 from .errors import Refused
 from .evidence_floor import record_bases
@@ -297,6 +298,23 @@ class VerbsMixin:
         return self._run(principal, "submit", key,
                          lambda now: self._submit(principal, key, epoch, now))
 
+    @staticmethod
+    def _without_dep(items, gate_key, dep):
+        """A shallow copy of *items* with *gate_key*'s edge to *dep* removed."""
+        out = []
+        for item in items:
+            copy = dict(item)
+            if copy["key"] == gate_key:
+                copy["depends_on"] = [d for d in item["depends_on"] if d != dep]
+            out.append(copy)
+        return out
+
+    def _drop_would_orphan(self, items, gate_key, dep):
+        """True when removing the gate's edge to *dep* adds a validation problem."""
+        known = {(p["code"], p["key"]) for p in views.validate(items)}
+        after = views.validate(self._without_dep(items, gate_key, dep))
+        return any((p["code"], p["key"]) not in known for p in after)
+
     def _submit(self, principal, key, epoch, now):
         # Read and validate inside one immediate transaction so a competing
         # writer cannot slip between the check and the guarded UPDATE.
@@ -366,12 +384,19 @@ class VerbsMixin:
             self._row_guard(cursor, key, fresh["state"], fresh["epoch"])
             # Frozen gates retain their history. Live gates no longer wait for
             # abandoned work; ordinary work dependencies keep their meaning.
+            # An edge that is the only path from live work to a goal stays
+            # (legacy ``depends_on_cancelled``): dropping it would strand that
+            # work, and cancelling a gate with live children stays legal.
             gates = self.conn.execute(
                 "SELECT i.key,i.state,i.epoch FROM edges e JOIN items i ON i.key=e.src"
                 " WHERE e.dst=? AND i.kind IN ('gate','goal')"
                 " AND i.state NOT IN ('done','cancelled') ORDER BY i.key",
                 (key,)).fetchall()
+            current = self._all_items()
             for gate in gates:
+                if self._drop_would_orphan(current, gate["key"], key):
+                    continue
+                current = self._without_dep(current, gate["key"], key)
                 active = gate["state"] in ("claimed", "in_review")
                 payload = {"fields": ["depends_on"],
                            "dropped_cancelled_dependency": key}
