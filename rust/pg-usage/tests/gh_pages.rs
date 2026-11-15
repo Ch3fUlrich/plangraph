@@ -38,13 +38,41 @@ fn gh_path(dir: &Path) -> OsString {
 }
 
 #[test]
-fn fake_gh_refuses_slurp() {
+fn merged_prs_come_from_concatenated_gh_pages() {
     let dir = tempfile::tempdir().unwrap();
-    let run = |flag| {
-        Command::new("gh")
-            .args(["api", flag])
-            .env("PATH", gh_path(dir.path()))
-            .status()
-    };
-    assert!(!run("--slurp").unwrap().success());
+    let projects = dir.path().join("projects");
+    fs::create_dir_all(projects.join("p")).unwrap();
+    let turn = json!({"type": "assistant", "timestamp": "2026-11-06T12:00:00Z",
+        "message": {"id": "a", "usage": {"input_tokens": 1}}});
+    fs::write(
+        projects.join("p/s.jsonl"),
+        format!(
+            "{turn}
+"
+        ),
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_pg-usage"))
+        .args([
+            "--census",
+            "--json",
+            "--since",
+            "2026-11-06",
+            "--until",
+            "2026-11-09",
+        ])
+        .arg("--projects")
+        .arg(&projects)
+        .env("PATH", gh_path(dir.path()))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()["merged_prs"],
+        2
+    );
 }
