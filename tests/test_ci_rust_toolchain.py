@@ -263,51 +263,111 @@ def test_self_hosted_rust_jobs_use_local_target_and_skip_cache(job):
     gate = spec["env"]["CI_SELF_HOSTED_RUN"]
     boolean = runs_on.removeprefix("${{ ").split(" && fromJSON(")[0]
     assert gate == "${{ (" + boolean + ") && '1' || '0' }}"
+    # No job-level default: the overrides must not depend on GITHUB_ENV vs job env precedence.
+    assert "CARGO_BUILD_JOBS" not in spec["env"] and "CARGO_TARGET_DIR" not in spec["env"]
     steps = spec["steps"]
     prep = next(s for s in steps if s.get("name") == "Self-hosted cargo build settings")
     assert prep["if"] == "env.CI_SELF_HOSTED_RUN == '1'"
-    for line in ('CARGO_BUILD_JOBS=$(nproc)', 'CARGO_TARGET_DIR=$root/$key', "$HOME/cargo-target/", "RUST_TEST_THREADS=8", "$GITHUB_ENV"):
+    assert "github.event_name == 'push'" in prep["env"]["CI_CARGO_PERSIST"]
+    assert "default_branch" in prep["env"]["CI_CARGO_PERSIST"]
+    for line in ('CARGO_BUILD_JOBS=$(nproc)', 'CARGO_TARGET_DIR=$target', "$HOME/cargo-target/$GITHUB_REPOSITORY/", "RUST_TEST_THREADS=8", "$GITHUB_ENV", "Cargo.lock"):
         assert line in prep["run"]
+    hosted = next(s for s in steps if s.get("name") == "Hosted cargo build settings")
+    assert hosted["if"] == "env.CI_SELF_HOSTED_RUN != '1'"
+    assert "CARGO_BUILD_JOBS=4" in hosted["run"]
     caches = [s for s in steps if str(s.get("uses", "")).startswith("actions/cache")]
     assert len(caches) == 1 and caches[0]["if"] == "env.CI_SELF_HOSTED_RUN != '1'"
     assert SELF_HOSTED_JOBS[job][1] in caches[0]["with"]["path"]
 
 
-def test_self_hosted_target_dir_is_keyed_by_manifest_and_home_and_capped(tmp_path):
+def _rust_prep_script():
     jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
-    script = next(s for s in jobs["rust"]["steps"]
-                  if s.get("name") == "Self-hosted cargo build settings")["run"]
+    return next(s for s in jobs["rust"]["steps"]
+                if s.get("name") == "Self-hosted cargo build settings")["run"]
+
+
+def test_self_hosted_target_dir_is_keyed_by_repo_manifest_and_home_and_capped(tmp_path):
+    script = _rust_prep_script()
     ws = tmp_path / "ws"
     (ws / "rust").mkdir(parents=True)
-    counter = iter(range(1000))
 
-    def run(runner, cap="40"):
+    def run(runner, cap="40", persist="1", repo="owner/repo", extra_env=None):
         home = tmp_path / "home" / runner
         home.mkdir(parents=True, exist_ok=True)
         out = tmp_path / f"env-{runner}"
         out.write_text("")
+        temp = tmp_path / "runner-temp"
+        temp.mkdir(exist_ok=True)
         subprocess.run(["bash", "-c", script], cwd=ws, check=True, env={
-            "PATH": "/usr/bin:/bin", "HOME": str(home), "RUNNER_NAME": f"wsl-{runner}-{next(counter)}",
-            "GITHUB_ENV": str(out), "CI_CARGO_TARGET_CAP_GB": cap})
+            "PATH": "/usr/bin:/bin", "HOME": str(home), "RUNNER_TEMP": str(temp),
+            "GITHUB_ENV": str(out), "GITHUB_REPOSITORY": repo,
+            "CI_CARGO_PERSIST": persist, "CI_CARGO_TARGET_CAP_GB": cap, **(extra_env or {})})
         return dict(line.split("=", 1) for line in out.read_text().splitlines())
 
     (ws / "rust/Cargo.toml").write_text("[profile.dev]\ndebug = 0\n")
     first = run("r1")
     assert first["CARGO_BUILD_JOBS"].isdigit() and int(first["CARGO_BUILD_JOBS"]) >= 1
     target = Path(first["CARGO_TARGET_DIR"])
-    assert target.parent == tmp_path / "home/r1/cargo-target/rust"
+    assert target.parent == tmp_path / "home/r1/cargo-target/owner/repo/rust"
     assert first["RUST_TEST_THREADS"] == "8"
     assert not str(target).startswith(str(ws))
     assert run("r2")["CARGO_TARGET_DIR"] != first["CARGO_TARGET_DIR"]
+    assert Path(run("r1", repo="other/repo")["CARGO_TARGET_DIR"]) != target
     target.mkdir()
     (target / "artifact").write_text("x")
     assert run("r1")["CARGO_TARGET_DIR"] == first["CARGO_TARGET_DIR"]
     assert (target / "artifact").exists()
+    # Cargo.lock is part of the key.
+    (ws / "rust/Cargo.lock").write_text("a")
+    locked = run("r1")["CARGO_TARGET_DIR"]
+    assert locked != first["CARGO_TARGET_DIR"] and not target.exists()
     (ws / "rust/Cargo.toml").write_text("[profile.dev]\ndebug = 2\n")
     changed = run("r1")
-    assert changed["CARGO_TARGET_DIR"] != first["CARGO_TARGET_DIR"]
-    assert not target.exists()
+    assert changed["CARGO_TARGET_DIR"] != locked
     Path(changed["CARGO_TARGET_DIR"]).mkdir()
     (Path(changed["CARGO_TARGET_DIR"]) / "big").write_bytes(b"x" * 4096)
     assert run("r1", cap="0")["CARGO_TARGET_DIR"] == changed["CARGO_TARGET_DIR"]
     assert not (Path(changed["CARGO_TARGET_DIR"]) / "big").exists()
+    # A non-numeric cap falls back to 40 GB instead of failing the step.
+    Path(changed["CARGO_TARGET_DIR"]).mkdir(exist_ok=True)
+    (Path(changed["CARGO_TARGET_DIR"]) / "keep").write_text("x")
+    assert run("r1", cap="abc")["CARGO_TARGET_DIR"] == changed["CARGO_TARGET_DIR"]
+    assert (Path(changed["CARGO_TARGET_DIR"]) / "keep").exists()
+
+
+def test_self_hosted_pull_request_builds_into_ephemeral_dir_outside_persistent_root(tmp_path):
+    script = _rust_prep_script()
+    ws = tmp_path / "ws"
+    (ws / "rust").mkdir(parents=True)
+    (ws / "rust/Cargo.toml").write_text("x")
+    home = tmp_path / "home"
+    home.mkdir()
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    targets = []
+    for _ in range(2):
+        out = tmp_path / "env"
+        out.write_text("")
+        subprocess.run(["bash", "-c", script], cwd=ws, check=True, env={
+            "PATH": "/usr/bin:/bin", "HOME": str(home), "RUNNER_TEMP": str(temp),
+            "GITHUB_ENV": str(out), "GITHUB_REPOSITORY": "o/r", "CI_CARGO_PERSIST": "0",
+            "CI_CARGO_TARGET_CAP_GB": "40"})
+        targets.append(dict(l.split("=", 1) for l in out.read_text().splitlines())["CARGO_TARGET_DIR"])
+    assert targets[0] != targets[1]
+    assert all(Path(t).parent == temp and not any(Path(t).iterdir()) for t in targets)
+    assert not (home / "cargo-target").exists()
+
+
+def test_rust_job_pg_jail_bin_follows_cargo_target_dir_with_and_without_it(tmp_path):
+    jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
+    line = next(l.strip() for s in jobs["rust"]["steps"] for l in s.get("run", "").splitlines()
+                if l.strip().startswith('PG_JAIL_BIN="'))
+    expr = line.split("PG_JAIL_BIN=", 1)[1].split(" cargo ", 1)[0]
+    base = {"PATH": "/usr/bin:/bin", "GITHUB_WORKSPACE": "/w"}
+
+    def resolve(extra):
+        return subprocess.run(["bash", "-c", f"printf %s {expr}"], env={**base, **extra},
+                              capture_output=True, text=True, check=True).stdout
+
+    assert resolve({}) == "/w/rust/target/debug/pg-jail"
+    assert resolve({"CARGO_TARGET_DIR": "/t/x"}) == "/t/x/debug/pg-jail"

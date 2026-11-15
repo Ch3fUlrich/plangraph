@@ -1,1 +1,1 @@
-Rust CI jobs on self-hosted Linux runners use all CPUs and a persistent, manifest-keyed, size-capped per-runner cargo target dir instead of 4 jobs and the actions/cache restore.
+Rust CI jobs on self-hosted Linux runners use all CPUs; pushes to the default branch keep a persistent, repository- and lockfile-keyed, size-capped cargo target dir, and all other runs build into an empty per-run dir instead of the actions/cache restore.
