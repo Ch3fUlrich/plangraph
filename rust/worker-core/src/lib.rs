@@ -55,6 +55,7 @@ pub mod pathjail;
 pub mod placement_rule_bridge;
 pub mod placement_rule_store;
 pub mod placement_rules;
+pub mod private_targets;
 pub mod probe;
 pub mod redact;
 mod redact_tokens;
