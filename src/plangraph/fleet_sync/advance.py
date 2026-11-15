@@ -218,13 +218,17 @@ def _advance(registry, sha, hosts, go, dry_run, record, log, run):
     return 0
 
 
+def _rust_mainff(*args, timeout=None):
+    """Compatibility transport; decisions and status reads are owned by Rust."""
+    manifest = Path(__file__).resolve().parents[3] / 'rust/Cargo.toml'
+    return subprocess.run(['cargo', 'run', '--quiet', '--locked', '--manifest-path',
+        str(manifest), '-p', 'pg-mainff', '--', *args],
+        capture_output=True, text=True, check=False, timeout=timeout)
+
+
 def main_ff(repo, keeper_state, *, fetch=True, keeper_unit='plangraph-keeper.service'):
     """Delegate the keeper-aware update guard to its Rust implementation."""
-    manifest = Path(__file__).resolve().parents[3] / 'rust/Cargo.toml'
-    command = ['cargo', 'run', '--quiet', '--locked', '--manifest-path', str(manifest),
-               '-p', 'pg-mainff', '--', 'main-ff', '--repo', str(repo),
-               '--keeper-state', str(keeper_state), '--keeper-unit', keeper_unit]
-    if not fetch:
-        command.append('--no-fetch')
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    args = ['main-ff', '--repo', str(repo), '--keeper-state', str(keeper_state),
+            '--keeper-unit', keeper_unit]
+    result = _rust_mainff(*args, *([] if fetch else ['--no-fetch']))
     return result.returncode, result.stdout.strip() or 'REFUSED main-ff runtime unavailable'

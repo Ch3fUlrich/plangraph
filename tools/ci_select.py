@@ -63,6 +63,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "changelog.d/FLEET-WINDOW-CATALOG.md",
     "changelog.d/PLACEMENT-RULES-AUDIT.md",
     "changelog.d/SPAWNER-RL12-B1.md",
+    "deploy/systemd/plangraph-main-ff.*",
     "deploy/systemd/plangraph-agents-view.service",
     "deploy/systemd/plangraph-agents-view.timer",
     "docs/setup.md",

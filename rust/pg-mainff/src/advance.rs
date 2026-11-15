@@ -195,3 +195,10 @@ pub fn main_ff(
     }
     result
 }
+
+/// Optional status read; linked worktrees own separate Git directories.
+pub fn status(run: &impl Runner, repo: &Path) -> Option<String> {
+    fs::read_to_string(status_path(run, repo).ok()?)
+        .ok()
+        .map(|text| text.trim().to_owned())
+}
