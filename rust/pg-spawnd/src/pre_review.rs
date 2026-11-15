@@ -27,6 +27,28 @@ const CLASSES: [(&str, &[&str]); 4] = [
     ("Verify other recent HIGH/MED findings do not recur", &[]),
 ];
 
+/// Description of a HIGH/MED/P1/P2 finding line, or None. Accepts `HIGH: x`,
+/// `FINDING: HIGH path - x`, `1. **MED** x`; path prefixes are not classified.
+pub(crate) fn finding_description(line: &str) -> Option<&str> {
+    fn lead(s: &str) -> &str {
+        s.trim_start_matches(|c: char| c.is_whitespace() || "#-*[(".contains(c))
+    }
+    let mut rest = lead(line);
+    let digits = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+    if digits.len() < rest.len() {
+        rest = lead(digits.strip_prefix(['.', ')'])?);
+    }
+    rest = lead(rest.strip_prefix("FINDING:").unwrap_or(rest));
+    let end = rest
+        .find(|c: char| !c.is_alphanumeric())
+        .unwrap_or(rest.len());
+    if !matches!(&rest[..end], "HIGH" | "MED" | "P1" | "P2") {
+        return None;
+    }
+    let tail = &rest[end..];
+    Some(tail.split_once(" - ").map_or(tail, |(_, d)| d))
+}
+
 fn finding_counts(directory: &Path) -> Result<[usize; 4], ToolError> {
     let mut counts = [0; 4];
     let entries = match fs::read_dir(directory) {
@@ -62,13 +84,10 @@ fn finding_counts(directory: &Path) -> Result<[usize; 4], ToolError> {
             continue;
         }
         for line in text.lines() {
-            let finding =
-                line.trim_start_matches(|c: char| c.is_whitespace() || "#-*[(".contains(c));
-            let severity = finding.split(|c: char| !c.is_alphanumeric()).next();
-            if !matches!(severity, Some("HIGH" | "MED" | "P1" | "P2")) {
+            let Some(description) = finding_description(line) else {
                 continue;
-            }
-            let lower = line.to_lowercase();
+            };
+            let lower = description.to_lowercase();
             let mut found = false;
             for (i, (_, keywords)) in CLASSES[..3].iter().enumerate() {
                 if keywords.iter().any(|k| lower.contains(k)) {

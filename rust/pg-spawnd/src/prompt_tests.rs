@@ -290,3 +290,21 @@ fn self_check_rejects_mismatched_or_exposed_prompt_transport() {
         assert_eq!(carrier.prompt.as_deref(), Some("writer task"));
     }
 }
+
+#[test]
+fn finding_lines_in_review_seat_formats_are_counted_by_description() {
+    use crate::pre_review::finding_description as d;
+    assert_eq!(d("HIGH: missing test"), Some(": missing test"));
+    assert_eq!(d("  - **MED** docs wrong"), Some("** docs wrong"));
+    assert_eq!(d("1. **HIGH** lost data"), Some("** lost data"));
+    assert_eq!(d("FINDING: MED rust/a.rs:1 - docs"), Some("docs"));
+    assert_eq!(d("FINDING: HIGH tests/x.py - lost"), Some("lost"));
+    for line in [
+        "FINDING: LOW a - b",
+        "No HIGH findings",
+        "1 HIGH",
+        "MEDIUM x",
+    ] {
+        assert_eq!(d(line), None, "{line}");
+    }
+}
