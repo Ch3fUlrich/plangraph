@@ -89,6 +89,26 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 
 ## Waiting and handoff
 
+When SSH exits 255, keep the existing wait deadline and retry the read-only
+status probe at the waiter's normal cadence. Report the unreachable host; never
+interpret a transport failure as a completed writer or replay a writer launch.
+Other exit codes retain their existing failure handling. Do not increase the
+deadline to conceal a failed connection.
+
+If SSH cannot carry a brief, hand the brief file to the named host session by
+message over Remote Control: include its contents (or an already accessible
+attachment), destination path, base SHA, branch, gates and return contract.
+A path on the orchestrator alone is insufficient. The host session writes the
+file locally, acknowledges the branch/session identity and starts it once.
+Read the result from the pushed branch on GitHub: fetch that exact branch and
+verify the returned SHA and artifacts locally. Do not wait for SSH to recover
+to read a result already pushed. The orchestrator owns this handoff; writers
+retain their brief's push restrictions. If no authorized session can push,
+report that blocker instead of claiming a branch result exists.
+
+Host-local Tailscale monitoring and its deployment/peer-block test are described
+in [host-link.md](../../docs/host-link.md).
+
 The orchestrator waits with one background shell command that exits; nothing
 waits inside a subagent. The handoff card carries: phase branch and head, PR,
 folded branches, the running Codex session (host, herdr name, worktree, status
