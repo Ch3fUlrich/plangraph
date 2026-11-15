@@ -1,5 +1,7 @@
 //! Native runs delegated to Python keep the same owner for result and cancel.
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 use common::{ChildGuard, McpClient, TempDir};
 use serde_json::{json, Value};
@@ -29,7 +31,7 @@ impl Fixture {
         fs::write(&adapter, format!("#!/bin/sh\nprintf '%s %s\\n' \"$3\" \"$4\" >> '{}/calls'\nif [ \"$3\" = cancel ]; then printf '%s' '{}'; else printf '%s' '{}'; fi\n", state.path().display(), cancelled, response)).unwrap();
         fs::set_permissions(&adapter, fs::Permissions::from_mode(0o700)).unwrap();
         let socket = state.path().join("socket");
-        let child = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        let child = Command::new(binary::spawnd())
             .args(["serve", "--no-scope", "--socket"])
             .arg(&socket)
             .arg("--state")

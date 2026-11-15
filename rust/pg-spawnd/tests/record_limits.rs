@@ -1,5 +1,7 @@
 //! Hostile record files are rejected by result/status and skipped by ps.
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 mod common;
 
 use common::TempDir;
@@ -30,7 +32,7 @@ fn hostile_records_are_invalid_and_skipped() {
         .unwrap();
     let socket = tmp.path().join("socket");
     let guard = common::ChildGuard::spawn(
-        env!("CARGO_BIN_EXE_pg-spawnd"),
+        binary::spawnd(),
         &[
             std::ffi::OsStr::new("serve"),
             std::ffi::OsStr::new("--socket"),
