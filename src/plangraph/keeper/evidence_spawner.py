@@ -28,6 +28,44 @@ def _passing_review(text):
                         for line in lines[verdicts[-1][0] + 1:]))
 
 
+def _quota_refusal(text):
+    """Read only provider-shaped quota evidence; keeper never imports runtime."""
+    text = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', text).replace('\r', '\n')
+    marker = r'RESOURCE_EXHAUSTED(?: \(code \d{3}\):|:|$)|HTTP 429\b|(?:individual )?quota (?:reached|exceeded|exhausted|refusal)|usage limit (?:reached|exceeded)|too many requests|rate limit|quota policy filtered \d+ account|All \S+ accounts reached configured quota'
+    if re.search(r'(?im)^\s*(?:error:\s*)?(?:' + marker + ')', text):
+        return True
+    if re.search(r'(?im)^\s*error:.*(?:quota (?:reached|exceeded|exhausted|refusal)|exhausted their quota|rate limit|usage limit|too many requests)', text):
+        return True
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict):
+            response = event.get('autoos_provider_response') or (event.get('error') if event.get('type') == 'error' else None)
+            if isinstance(response, dict) and response.get('status') == 429:
+                return True
+    return False
+
+
+def _one_serving_attempt(attempts, model):
+    """D-5924: quota-refused legs do not consume another review on the head."""
+    if not isinstance(attempts, list) or not attempts:
+        return False
+    if len(attempts) == 1:
+        return True  # preserve the legacy single-attempt record contract
+    real = [a for a in attempts if isinstance(a, dict) and a.get('status') != 'skipped']
+    if (len(real) < 2 or any(not isinstance(a, dict) for a in attempts)
+            or real[-1].get('status') != 'completed'
+            or real[-1].get('served_model') != model):
+        return False
+    for attempt in real[:-1]:
+        stdout, stderr = (attempt.get(k) or '' for k in ('stdout_tail', 'stderr_tail'))
+        if attempt.get('status') not in ('failed', 'limited') or not _quota_refusal(stderr + '\n' + stdout):
+            return False
+    return True
+
+
 class SpawnerRecordAdapter:
     def __init__(self, directory, *, uid=None):
         self.directory = Path(directory) if directory else None
@@ -59,19 +97,27 @@ class SpawnerRecordAdapter:
                 raise ValueError("invalid cited run id")
             hosts = [p.name for p in self.directory.iterdir()
                      if (p / run_id).exists()]
-            if len(hosts) != 1:
+            records = [(host, self.record(host, run_id)) for host in hosts]
+            records = [(host, record) for host, record in records
+                       if record.get("role") == "review"
+                       and not record.get("origin_receipt")]
+            if hosts and not records:
+                continue  # implementation runs and receipts are not witnesses
+            if len(records) != 1:
                 raise ValueError(f"{run_id}: missing or ambiguous record")
-            record = self.record(hosts[0], run_id)
-            if (record.get("run_id") != run_id or record.get("host") != hosts[0]
+            host, record = records[0]
+            if (record.get("run_id") != run_id or record.get("host") != host
                     or record.get("item_key") != item["key"]):
                 raise ValueError(f"{run_id}: record identity mismatch")
-            if record.get("role") != "review":
-                continue  # implementation runs are not review witnesses
             model = record.get("served_model")
             family = model_family(model) if isinstance(model, str) else None
             completion = record.get("completion")
             attempts = record.get("attempts")
             text = record.get("stdout_tail")
+            if isinstance(attempts, list) and len(attempts) > 1:
+                final = next((a for a in reversed(attempts) if isinstance(a, dict)
+                              and a.get('status') != 'skipped'), {})
+                text = final.get('stdout_tail')
             finish = record.get("finish_reason") or (
                 completion.get("finish_reason") if isinstance(completion, dict) else None)
             finishes = [part["finish_reason"] for part in (record, completion)
@@ -80,11 +126,13 @@ class SpawnerRecordAdapter:
                 k in part and part[k] is not False for k in ("pin", "pinned", "spawn_pin"))
                 for part in (record, record.get("plan"), record.get("chosen_leg")))
             cli = record.get("witness_kind") == "cli_reported"
+            serving = next((a for a in reversed(attempts or []) if isinstance(a, dict)
+                            and a.get('status') != 'skipped'), {}) if isinstance(attempts, list) else {}
             if (cli and (not allow_cli_reported or record.get("head_sha") != (completion or {}).get("head_sha")
                          or record.get("verdict") != "pass" or record.get("test_gaming") is not False
-                         or not isinstance(attempts, list) or len(attempts) != 1
-                         or attempts[0].get("witness_kind") != "cli_reported"
-                         or attempts[0].get("served_model") != model)):
+                         or not _one_serving_attempt(attempts, model)
+                         or serving.get("witness_kind") != "cli_reported"
+                         or serving.get("served_model") != model)):
                 raise ValueError(f"{run_id}: CLI seat is not permitted or complete")
             if (not family or model == "unwitnessed" or pinned or record.get("override_reason")
                     or isinstance(record.get("plan"), dict) and record["plan"].get("p_source") == "override"
@@ -94,7 +142,7 @@ class SpawnerRecordAdapter:
                     or completion.get("head_sha") not in ([head] if isinstance(head, str) else head)
                     or finish not in ("stop", "end_turn")
                     or any(value not in ("stop", "end_turn") for value in finishes)
-                    or not isinstance(attempts, list) or len(attempts) != 1
+                    or not _one_serving_attempt(attempts, model)
                     or not _passing_review(text)
                     or record.get("served_family", family) != family):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")

@@ -206,7 +206,7 @@ class MCPSpawnerServer:
         if name == 'plangraph_agent_ps':
             return ps_reply(await asyncio.to_thread(remote_ps.list_runs, self.service.ps()['runs']))
         if name == 'plangraph_agent_result' or (name == 'plangraph_agent_status' and 'run_id' in arguments):
-            return self.service.result(arguments['run_id'])
+            return await self.service.refresh_result(arguments['run_id'])
         if name == 'plangraph_agent_cancel' and 'run_id' in arguments:
             return await self.service.cancel(arguments['run_id'])
         if name == "plangraph_agent_spawn":

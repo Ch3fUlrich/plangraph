@@ -930,22 +930,6 @@ def spawn_service(*args, **kwargs):
                         self._save(record, retry=True)
                     except Exception:
                         logging.getLogger(__name__).exception('completion retry failed')
-        async def wait(self, run_id, timeout=None):
-            if timeout is not None and timeout < 0:
-                raise ValueError('timeout must be nonnegative')
-            deadline = None if timeout is None else time.monotonic() + timeout
-            while True:
-                record = self.result(run_id)
-                if record.get('ended') is not None and record['status'] != 'running':
-                    return record
-                from .exit_outcome import orphaned
-                gone = orphaned(record, time.time())
-                if gone is not None:
-                    self._save(gone)
-                    return gone
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise TimeoutError('run wait timed out: ' + run_id)
-                await asyncio.sleep(.02)
         def _route(self, card, role='implement', writer_families=(), review_of=None, **options):
             from . import leg_state
             original = self.leg_reader

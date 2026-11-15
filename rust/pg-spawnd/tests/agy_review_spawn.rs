@@ -22,10 +22,26 @@ fn executable(path: &Path, text: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
 }
 fn payload(reply: &Value) -> Value {
-    serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap()
+    serde_json::from_str(
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{reply}")),
+    )
+    .unwrap()
 }
 #[test]
 fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
+    run_review(false, false);
+}
+#[test]
+fn quota_retry_between_agy_models_keeps_stamped_cli_provenance() {
+    run_review(true, false);
+}
+#[test]
+fn quota_retry_from_other_transport_prepares_sonnet_cli_review() {
+    run_review(true, true);
+}
+fn run_review(retry: bool, sonnet: bool) {
     let state = TempDir::new();
     let repo = state.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
@@ -45,7 +61,28 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
     );
     let head = git(&repo, &["rev-parse", "HEAD"]);
     let leg = json!({"id":"agy-gemini-4-hydrogen-high", "model":"gemini-4-hydrogen-high", "harness":"agy", "family":"gemini"});
+    let first = if sonnet {
+        json!({"id":"free", "model":"free", "harness":"free", "family":"deepseek"})
+    } else {
+        leg.clone()
+    };
+    let leg = if sonnet {
+        json!({"id":"sonnet", "model":"claude-sonnet-5-5-high", "harness":"claude", "family":"anthropic"})
+    } else if retry {
+        json!({"id":"argon", "model":"gemini-4-argon-medium", "harness":"agy", "family":"gemini"})
+    } else {
+        leg
+    };
     let frame = json!({"event":"result", "result":{"status":"SUCCESS", "response":"No findings.\nVERDICT: PASS\nTEST_GAMING: no\n"}});
+    let frame = if sonnet {
+        format!(
+            "{}\n{}",
+            json!({"type":"system", "subtype":"init", "model":"claude-sonnet-5-5-high"}),
+            json!({"type":"result", "is_error":false, "result":"No findings.\nVERDICT: PASS\nTEST_GAMING: no\n"})
+        )
+    } else {
+        frame.to_string()
+    };
     let program = state.path().join("reviewer");
     executable(
         &program,
@@ -56,15 +93,21 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
         &route,
         &format!(
             "#!/bin/sh\nprintf '%s' '{}'\n",
-            json!({"first_leg":leg, "legs":[leg]})
+            json!({"first_leg":first, "legs":if retry { vec![first, leg.clone()] } else { vec![leg.clone()] }})
         ),
     );
     let launch = state.path().join("launch");
     let spec = json!({"argv":[program, "--input-format", "stream-json"], "cwd":repo, "env":{}, "stdin":format!("{}\n", json!({"event":"user", "message":{"role":"user", "content":"review"}})), "prompt":"review"});
-    executable(
-        &launch,
-        &format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{spec}'\n"),
-    );
+    let bad = json!({"argv":["/bin/sh", "-c", "echo 'RESOURCE_EXHAUSTED (code 429): Individual quota reached' >&2; exit 1"],
+        "cwd":repo, "env":{}, "stdin":"review", "prompt":"review"});
+    let quote = |v: &Value| format!("'{}'", v.to_string().replace('\'', "'\\''"));
+    let launch_text = if retry {
+        format!("#!/bin/sh\nrequest=$(cat)\ncase \"$request\" in *{}*) printf '%s' {};; *) printf '%s' {};; esac\n",
+            leg["model"].as_str().unwrap(), quote(&spec), quote(&bad))
+    } else {
+        format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' {}\n", quote(&spec))
+    };
+    executable(&launch, &launch_text);
     let socket = state.path().join("socket");
     let child = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
         .args(["serve", "--no-scope", "--socket"])
@@ -82,20 +125,30 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
     client
         .stream
         .get_mut()
-        .set_read_timeout(Some(std::time::Duration::from_secs(15)))
+        .set_read_timeout(Some(std::time::Duration::from_secs(45)))
         .unwrap();
     client.initialize();
-    let request = json!({"name":"plangraph_agent_spawn", "arguments":{
-        "role":"review", "leg":"agy-cli", "writer_families":["openai"], "prompt":"review",
-        "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "cwd":repo, "diff_ref":{"repo":repo, "base":"HEAD", "head":"HEAD"}}, "wait_seconds":5
+    let mut request = json!({"name":"plangraph_agent_spawn", "arguments":{
+        "role":"review", "writer_families":["openai"], "prompt":"review",
+        "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "cwd":repo, "diff_ref":{"repo":repo, "base":"HEAD", "head":"HEAD"}}, "wait_seconds":20
     }});
-    let missing_stamp = client.request("tools/call", request.clone());
-    assert!(
-        missing_stamp["error"]["message"]
-            .as_str()
-            .is_some_and(|s| s.contains("fast-checks stamp")),
-        "{missing_stamp}"
-    );
+    if sonnet {
+        request["arguments"]["card"]
+            .as_object_mut()
+            .unwrap()
+            .remove("diff_ref");
+        request["arguments"]["card"]["head_sha"] = json!(head);
+    }
+    if !retry {
+        request["arguments"]["leg"] = json!("agy-cli");
+        let missing_stamp = client.request("tools/call", request.clone());
+        assert!(
+            missing_stamp["error"]["message"]
+                .as_str()
+                .is_some_and(|s| s.contains("fast-checks stamp")),
+            "{missing_stamp}"
+        );
+    }
     let stamps = repo.join(".git/fast-checks");
     std::fs::create_dir(&stamps).unwrap();
     std::fs::write(stamps.join(&head), "green").unwrap();
@@ -106,5 +159,55 @@ fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
     assert_eq!(record["item_key"], "demo:AGY");
     assert_eq!(record["witness_kind"], "cli_reported");
     assert_eq!(record["verdict"], "pass");
-    assert_eq!(record["served_model"], "gemini-4-hydrogen-high");
+    assert_eq!(record["served_model"], leg["model"]);
+    let attempts = record["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), if retry { 2 } else { 1 });
+    assert_eq!(attempts.last().unwrap()["witness_kind"], "cli_reported");
+    let prompt = std::fs::read_to_string(
+        Path::new(record["seat_dir"].as_str().unwrap())
+            .parent()
+            .unwrap()
+            .join("prompt.txt"),
+    )
+    .unwrap();
+    assert!(prompt.contains("Read-only repository review of HEAD"));
+    if sonnet {
+        assert!(!prompt.contains("INLINE_REVIEW_DIFF"));
+    }
+    let record_file = state.path().join("finished.json");
+    std::fs::write(&record_file, record.to_string()).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let checked = Command::new("python3")
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .arg("-c")
+        .arg(
+            r#"
+import json, sys
+from pathlib import Path
+from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
+record = json.loads(Path(sys.argv[1]).read_text())
+root = Path(sys.argv[2]) / 'mirror'
+(root / record['host'] / record['run_id']).mkdir(parents=True)
+adapter = SpawnerRecordAdapter(root)
+adapter.record = lambda *_: record
+item = dict(key='demo:AGY', run_ids=json.dumps([record['run_id']]))
+assert len(adapter.review_seats(item, record['head_sha'], '', allow_cli_reported=True)) == 1
+try:
+    adapter.review_seats(item, record['head_sha'], '', allow_cli_reported=False)
+except ValueError:
+    pass
+else:
+    raise AssertionError('low-trust seat admitted without rule 3.26')
+"#,
+        )
+        .arg(record_file)
+        .arg(state.path())
+        .output()
+        .unwrap();
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
 }

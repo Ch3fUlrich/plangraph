@@ -23,36 +23,49 @@ pub(super) fn monitor(
     mut record: RunRecord,
     cancel: Arc<AtomicBool>,
 ) {
-    let mut permit = None;
+    let mut permit = None; // One run keeps its admission slot across review legs.
+    while let Some(next) = attempt(rt.clone(), spec, &mut record, cancel.clone(), &mut permit) {
+        spec = next;
+    }
+}
+fn attempt(
+    rt: Arc<Runtime>,
+    mut spec: RunSpec,
+    record: &mut RunRecord,
+    cancel: Arc<AtomicBool>,
+    permit: &mut Option<Permit>,
+) -> Option<RunSpec> {
     let mut grouped: Option<Grouped> = None;
     let mut capture = None;
     let cancelled = || cancel.load(Ordering::SeqCst) || record_dir_cancelled(&rt, &spec.run_id);
     let result = catch_unwind(AssertUnwindSafe(|| {
-        // Admission can block; mirror CLI markers into the same flag it observes.
-        let admitting = Arc::new(AtomicBool::new(true));
-        let (active, flag, runtime, id) = (
-            admitting.clone(),
-            cancel.clone(),
-            rt.clone(),
-            spec.run_id.clone(),
-        );
-        let watcher = thread::spawn(move || {
-            while active.load(Ordering::SeqCst) {
-                if record_dir_cancelled(&runtime, &id) {
-                    flag.store(true, Ordering::SeqCst);
+        if permit.is_none() {
+            // Admission can block; mirror CLI markers into the same flag it observes.
+            let admitting = Arc::new(AtomicBool::new(true));
+            let (active, flag, runtime, id) = (
+                admitting.clone(),
+                cancel.clone(),
+                rt.clone(),
+                spec.run_id.clone(),
+            );
+            let watcher = thread::spawn(move || {
+                while active.load(Ordering::SeqCst) {
+                    if record_dir_cancelled(&runtime, &id) {
+                        flag.store(true, Ordering::SeqCst);
+                    }
+                    thread::sleep(Duration::from_millis(10));
                 }
-                thread::sleep(Duration::from_millis(10));
+            });
+            let admission = catch_unwind(AssertUnwindSafe(|| {
+                rt.admission.acquire(&spec.run_id, &cancel)
+            }));
+            admitting.store(false, Ordering::SeqCst);
+            let _ = watcher.join();
+            let admission = admission.unwrap_or_else(|p| std::panic::resume_unwind(p));
+            match admission {
+                Admit::Cancelled => return (1, true, StopOutcome::Empty),
+                Admit::Granted(p) => *permit = Some(p),
             }
-        });
-        let admission = catch_unwind(AssertUnwindSafe(|| {
-            rt.admission.acquire(&spec.run_id, &cancel)
-        }));
-        admitting.store(false, Ordering::SeqCst);
-        let _ = watcher.join();
-        let admission = admission.unwrap_or_else(|p| std::panic::resume_unwind(p));
-        match admission {
-            Admit::Cancelled => return (1, true, StopOutcome::Empty),
-            Admit::Granted(p) => permit = Some(p),
         }
         if cancelled() {
             return (1, true, StopOutcome::Empty);
@@ -72,7 +85,7 @@ pub(super) fn monitor(
         ) {
             Ok(g) => Some(g),
             Err(e) => {
-                launch_error(&mut record, e);
+                launch_error(record, e);
                 return (1, false, StopOutcome::Empty);
             }
         };
@@ -93,7 +106,13 @@ pub(super) fn monitor(
             "queued_at",
             record.get("started").cloned().unwrap_or(Value::Null),
         );
-        record.set("started", json!(finalize::now()));
+        if record
+            .get("attempts")
+            .and_then(Value::as_array)
+            .is_none_or(|a| a.len() <= 1)
+        {
+            record.set("started", json!(finalize::now()));
+        }
         record.set("pid", json!(identity.pid));
         record.set("pid_start", json!(identity.start_time));
         record.set("job_object", json!(cfg!(windows)));
@@ -107,7 +126,7 @@ pub(super) fn monitor(
         record.set("live_log", json!(log));
         record.set("last_activity_ts", Value::Null);
         let _ = record.transition(Status::Running, finalize::now());
-        finalize::save(&record);
+        finalize::save(record);
         let c = Arc::new(Capture::new(CaptureCfg {
             live_log: Some(log),
             live_cfg: Default::default(),
@@ -135,19 +154,25 @@ pub(super) fn monitor(
         let mut last = Instant::now();
         let mut seq = 0;
         let (exit, was_cancelled) = loop {
+            if cancelled() {
+                break (None, true);
+            }
+            if record.get("role").and_then(Value::as_str) == Some("review") {
+                if let Some(reason) = c.review_quota_reason() {
+                    record.set("reason", json!(reason));
+                    break (None, false);
+                }
+            }
             match g.child.try_wait() {
                 Ok(Some(s)) => break (Some(s), false),
                 Err(_) => break (None, false),
                 _ => {}
             }
-            if cancelled() {
-                break (None, true);
-            }
             if last.elapsed() >= rt.cfg.save_every {
                 let next = c.snapshot().seq;
                 if next != seq {
-                    finalize::output(&mut record, &c, false);
-                    if finalize::save(&record) {
+                    finalize::output(record, &c, false);
+                    if finalize::save(record) {
                         seq = next;
                     }
                 }
@@ -175,7 +200,19 @@ pub(super) fn monitor(
             }
         }
         c.flush_live();
-        (exit.map(exit_code).unwrap_or(1), was_cancelled, stop)
+        (
+            if record
+                .get("reason")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.starts_with("review_quota:"))
+            {
+                7
+            } else {
+                exit.map(exit_code).unwrap_or(1)
+            },
+            was_cancelled,
+            stop,
+        )
     }));
     let (code, cancelled, stop) = result.unwrap_or_else(|_| {
         let _ = record.push_event(json!({"event":"monitor_failed", "error":"panic"}));
@@ -187,8 +224,11 @@ pub(super) fn monitor(
         (1, false, stop)
     });
     let held = matches!(stop, StopOutcome::Survivors(_));
-    finalize::finish(
-        &mut record,
+    // Cancellation can arrive while stopping the group or draining readers.
+    let cancelled =
+        cancelled || cancel.load(Ordering::SeqCst) || record_dir_cancelled(&rt, &spec.run_id);
+    let next = finalize::finish(
+        record,
         &mut spec.finish,
         code,
         cancelled,
@@ -210,12 +250,12 @@ pub(super) fn monitor(
             }
         }
     }
-    drop(permit);
     #[cfg(windows)]
     if let Some(g) = &grouped {
         g.group.terminate();
     }
     drop(grouped);
+    next
 }
 fn record_dir_cancelled(rt: &Runtime, id: &str) -> bool {
     rt.cfg

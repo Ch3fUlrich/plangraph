@@ -18,6 +18,24 @@ _VERDICTS = ("pass", "fail", "invalid", None)
 _TOP_KEYS = frozenset({"run_id", "phase", "rc", "writer", "seats", "item_key"})
 _WRITER_KEYS = frozenset({"model", "family", "source"})
 _SEAT_KEYS = frozenset({"model", "verdict", "run_id"})
+_UTC_DATE_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]+)?(?:Z|\+00:00))?\Z")
+
+
+def _operator_authority(row):
+    """The decisions log grants authority through comma/plus-separated BY tokens."""
+    return "operator" in {token.strip().lower() for token in re.split(r"[,+]", row.get("by", ""))}
+
+
+def _decision_date(row):
+    """Logs without a DATE column must state a unique Date in the decision cell."""
+    values = re.findall(r"(?:^|[;\s])Date: +([^;\s]+)", row.get("decision", ""))
+    markers = re.findall(r"(?:^|[;\s])Date:(?=\s|$)", row.get("decision", ""))
+    dates = [value for value in [row.get("date"), *values] if value]
+    if len(markers) != len(values) or len(dates) != 1 or not _UTC_DATE_RE.fullmatch(dates[0]):
+        return None
+    return dates[0]
 
 
 def _dump(value) -> str:
@@ -118,7 +136,7 @@ class RunsMixin:
             if not row:
                 raise ValueError("missing or ambiguous waiver row")
             check = "operator_authority"
-            if row.get("class") != "OPERATOR":
+            if not _operator_authority(row):
                 raise ValueError("OPERATOR required")
             check = "waiver_class_and_verification"
             if (not re.match(r"^Waiver:\s*merged-without-witnesses(?=$|[\s;,.])", row.get("decision", ""))
@@ -133,13 +151,27 @@ class RunsMixin:
                 tokens.extend(scope.strip().split(" "))
             if item["key"] not in tokens:
                 raise Refused("evidence_unverified", "operator_seat_waiver_scope_mismatch")
+            if self._card_requires_non_anthropic_seats(item):
+                raise Refused("coverage", "insufficient_non_anthropic_seat_families: need 2")
             git = self._adapter("git")
             check = "historical_cutoff"
-            cutoff = as_epoch(decisions.seat_waiver_cutoff())
+            cutoffs = re.findall(r"(?:^|[;\s])Cutoff:(?=\s|$)", row.get("decision", ""))
+            if cutoffs:
+                values = re.findall(r"(?:^|[;\s])Cutoff: +([^;\s]+)", row["decision"])
+                if len(cutoffs) != 1 or len(values) != 1 or not _UTC_DATE_RE.fullmatch(values[0]):
+                    raise ValueError("invalid row cutoff")
+                cutoff = as_epoch(values[0])
+                row_date = as_epoch(_decision_date(row))
+                if cutoff is None or row_date is None:
+                    raise ValueError("invalid row cutoff or date")
+                if cutoff > row_date:
+                    raise Refused("evidence_unverified", "operator_seat_waiver_cutoff_after_row")
+            else:
+                cutoff = as_epoch(decisions.seat_waiver_cutoff())
             if cutoff is None:
                 raise ValueError("invalid historical cutoff")
             for proof in prs:
-                go_date = as_epoch(decisions.fields(proof["decision_id"]).get("date"))
+                go_date = as_epoch(_decision_date(decisions.fields(proof["decision_id"])))
                 merge = git.merge_commit_of(git.repo_path(item["project"]), proof["head"],
                                              git.repo_ref(item["project"]))
                 proc = git._run(git.repo_path(item["project"]),
@@ -219,7 +251,8 @@ class RunsMixin:
         if not proofs or head not in proofs:
             raise Refused("evidence_unverified", "merged_pr_missing")
         if not self._merged_go_scope_matches(decision_id, item, now, require_key=False):
-            raise Refused("evidence_unverified", "merged_pr_go_scope_mismatch")
+            raise Refused("evidence_unverified",
+                          f"merged_pr_go_scope_mismatch: {item['key']} in {decision_id}")
         proofs[head]["decision_id"] = decision_id
         for did in sorted(self._ctx(item, now).decisions.decisions()):
             if all("decision_id" in p for p in proofs.values()):

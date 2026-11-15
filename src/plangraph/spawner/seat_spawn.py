@@ -35,22 +35,29 @@ def admit(service, options, *, card=None, preview=False):
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
     local, remote_first = overflow.placement_policy(registry, config)
-    if preview and not remote_first:
+    native = (card or {}).get('run_kind') == 'native-codex'
+    if preview and not remote_first and not native:
         return None
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
     repo = Path(options.get('cwd') or (card or {}).get('cwd') or
                 ((card or {}).get('diff_ref') or {}).get('repo') or
+                (card or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     from .host_ready import local_disk_refusal
     disk = local_disk_refusal(repo, service)
     if not remote_first and not disk and not overflow.memory_refusal(memory, role_mb, floor):
+        if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
         return None
     public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = remote_first and options.get('benchmark') is not None
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
     rows = overflow.ready_records(config, role)
+    if native:
+        for row in rows.values():
+            if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
+                row.setdefault('refusal', 'disk_low: need 5 GB free to start')
     if remote_first:
         rows = {name: row for name, row in rows.items()
                 if name != local and overflow.host_config(registry, name).get('id') != local}
@@ -98,7 +105,8 @@ def admit(service, options, *, card=None, preview=False):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             result, refusal = None, overflow.failure_reason(exc)
         if result is not None:
-            record = dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True)
+            from .remote_ps import native_receipt
+            record = native_receipt(dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True))
             record.setdefault('status', 'unknown')
             break
         rows[name]['refusal'] = refusal
@@ -153,6 +161,9 @@ class SeatSpawnMixin:
             bound = inspect.signature(self._spawn).bind(*args, **kwargs)
             options = dict(bound.arguments)
             card = options.get('card')
+            if (card or {}).get('run_kind') == 'native-codex':
+                from .overflow import native_repo
+                native_repo(card)
             from plangraph.retired_models import check_retired
             check_retired(options)
             check_retired(card)
@@ -167,6 +178,9 @@ class SeatSpawnMixin:
             admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
             if admitted is not None:
                 return admitted
+            if (card or {}).get('run_kind') == 'native-codex':
+                from .overflow import native_spawn
+                return await native_spawn(self, card, options)
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold

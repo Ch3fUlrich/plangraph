@@ -11,11 +11,18 @@ from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
+from .remote_ps import native_receipt
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
 from .item_key import annotate_item
 from .base_fresh import admit_base
+def remote_native_running(record):
+    """True for a running native Codex run placed on another host; only these need a remote refresh."""
+    return (record.get('run_kind') == 'native-codex' and bool(record.get('overflow_remote'))
+            and record.get('status') == 'running')
+
+
 class SpawnService(SeatSpawnMixin):
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.runner = runner or SpawnerRunner()
@@ -34,12 +41,22 @@ class SpawnService(SeatSpawnMixin):
     def result(self, run_id, **read_retry):
         """Read one run record; retry options forward to read_text_retry."""
         try:
-            return json.loads(read_text_retry(self._path(run_id), **read_retry))
+            record = json.loads(read_text_retry(self._path(run_id), **read_retry))
+            return record
         except FileNotFoundError:
             raise ValueError('unknown run id') from None
 
+    async def refresh_result(self, run_id):
+        """Refresh remote evidence off the event loop; result() stays a local read."""
+        record = self.result(run_id)
+        if remote_native_running(record):
+            from .remote_ps import native_result
+            record = await asyncio.to_thread(native_result, record)
+            self._save(record)
+        return record
+
     def _save(self, record):
-        self._sync_seat(record)
+        native_receipt(record); self._sync_seat(record)
         if not self._path(record['run_id']).exists(): annotate_tree(record)
         from .private_io import atomic_write_private
         from .runner import redact
@@ -110,6 +127,31 @@ class SpawnService(SeatSpawnMixin):
         publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
+
+    async def wait(self, run_id, timeout=None):
+        if timeout is not None and timeout < 0:
+            raise ValueError('timeout must be nonnegative')
+        deadline = None if timeout is None else time.monotonic() + timeout
+        next_refresh = 0
+        while True:
+            record = self.result(run_id)
+            if remote_native_running(record) and time.monotonic() >= next_refresh:
+                remaining = None if deadline is None else max(0, deadline - time.monotonic())
+                try:
+                    record = await asyncio.wait_for(self.refresh_result(run_id), remaining)
+                except TimeoutError:
+                    raise TimeoutError('run wait timed out: ' + run_id) from None
+                next_refresh = time.monotonic() + 1
+            if record.get('ended') is not None and record['status'] != 'running':
+                return record
+            from .exit_outcome import orphaned
+            gone = orphaned(record, time.time())
+            if gone is not None:
+                self._save(gone)
+                return gone
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError('run wait timed out: ' + run_id)
+            await asyncio.sleep(.02)
 
     def ps(self):
         from .stall_watchdog import read_runs
