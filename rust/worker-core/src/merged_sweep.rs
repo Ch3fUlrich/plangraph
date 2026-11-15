@@ -151,7 +151,6 @@ fn run_using(
             let branch = current
                 .branch
                 .as_deref()
-                .and_then(|b| b.strip_prefix("refs/heads/"))
                 .ok_or_else(|| io::Error::other("detached: protected"))?;
             let (protection, prs) = authority(options, branch)?;
             let facts =
@@ -176,7 +175,7 @@ fn run_using(
                 remove(options.repo, current)?;
                 if options.delete_remote && merged_pr.is_some() {
                     // Lease guards a remote branch that advanced after the PR merged.
-                    let remote_ref = format!("refs/heads/{branch}");
+                    let remote_ref = branch.to_string();
                     let lease = format!("--force-with-lease={remote_ref}:{}", tree.head);
                     git(
                         options.repo,

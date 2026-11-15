@@ -184,7 +184,7 @@ _REFS = {}
 _REFS_TTL = 10.0
 
 
-def _refs(git, repo):
+def _refs(git, repo, fresh=False):
     """``(branch names, remote names)`` of *repo*, reused for ``_REFS_TTL`` s.
 
     One listing serves every row of a ``ready``.  ``None`` = unknown: git
@@ -193,7 +193,7 @@ def _refs(git, repo):
     now = time.monotonic()
     with _REFS_LOCK:
         hit = _REFS.get(repo)
-        if hit is not None and now - hit[0] < _REFS_TTL:
+        if not fresh and hit is not None and now - hit[0] < _REFS_TTL:
             return hit[1]
     out = _ok(git, repo, ["for-each-ref", f"--count={_REF_COUNT}",
                           "--format=%(refname:short)", "refs/heads", "refs/remotes"])
@@ -209,7 +209,7 @@ def _refs(git, repo):
     return snapshot
 
 
-def open_lanes(git, project, key):
+def open_lanes(git, project, key, fresh=False):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -220,7 +220,7 @@ def open_lanes(git, project, key):
     _, bare = _split(key)
     if repo is None or not bare:
         return None
-    snapshot = _refs(git, repo)
+    snapshot = _refs(git, repo, fresh)
     if snapshot is None:
         return None
     names, remotes = snapshot

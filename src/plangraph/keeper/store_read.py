@@ -178,7 +178,7 @@ class ReadMixin:
         if rows:
             info["jev_shadow"] = [jev_report.row_view(r) for r in rows]
             info["jev_agreement"] = jev_report.agreement_report(rows)["overall"]
-        info.update(self._run_derived(key, item), **self._task_context(item, index))
+        info.update(self._run_derived(key, item), **self._task_context(item, index, fresh_lanes=True))
         return info
 
     def _brief(self, key):

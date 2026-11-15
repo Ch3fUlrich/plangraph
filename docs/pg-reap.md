@@ -27,7 +27,7 @@ Git HEAD/index mtime. A missing index is permitted; missing HEAD fails closed.
 Each candidate refreshes the inventory and reads pinned paths, active run records,
 process cwds from `/proc`, user service WorkingDirectory (loaded and installed
 units), GitHub PR state via `gh`, and keeper claims via a reader. Set
-`PG_SWEEP_CLAIMS_READER` or `--claims-reader` to an executable which performs a
+`PG_SWEEP_CLAIMS_READER` or `--claims-reader` to a trusted shell command which performs a
 fresh authoritative keeper read and prints exactly
 `{"paths":["/absolute/claimed/tree"],"branches":["refs/heads/topic"]}`. It must exit
 nonzero on unavailable/incomplete authority. Branches may also be short names.
@@ -61,3 +61,9 @@ binaries. Unavailable authorities produce protected rows; configure and inspect 
 dry run before enabling. Repository validation does not install timers or clean
 live host trees. Keep build/start scheduling quiescent during host maintenance;
 the separate spawner admission gate owns concurrent start prevention.
+
+The reader's local metadata binding uses keeper `show.run_ids` and the real local
+spawner records, not an assumed extra keeper response field. Its `--state DIR`
+can select another local state root. A completed writer's paths remain claimed
+while its keeper item is in review. Unresolved active claims refuse the reader.
+Keeper `show` bypasses the ref-list cache for fresh open-lane reads.

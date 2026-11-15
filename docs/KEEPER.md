@@ -627,3 +627,18 @@ record bound to the merged head, with consistent attempt provenance. Auth/secret
 cards cannot use these low-trust seats; their existing two-seat gate remains.
 
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
+
+`PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims` prints exactly `{"paths":[...],"branches":[...]}` for active
+claimed/in_review items across every project, using a fresh snapshot and each
+item's open lanes. Claim metadata paths are included when present. It requires
+an unscoped router token and refuses unavailable or truncated lane inventories,
+malformed metadata, filtered snapshots, or a snapshot changed during collection;
+there is no offline fallback. Hosts can set
+`PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"` directly; see [pg-reap](pg-reap.md).
+
+The sweep reader uses the real `show.run_ids` association written by `record_run`
+to read local `runs/<id>/record.json` checkout/cwd/run_worktree metadata, including
+completed writer runs whose item is still in review. `sweep-claims --state DIR`
+overrides the local state directory; otherwise `PG_SWEEP_STATE` from the sweep is used before the HOME default. Optional direct claim metadata is also
+accepted. An active claim with neither a resolved local path nor open lanes is
+incomplete and refuses cleanup. Unreadable existing local records also refuse.
