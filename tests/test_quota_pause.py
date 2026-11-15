@@ -200,9 +200,11 @@ def test_claude_judge_admission_before_probe(tmp_path, monkeypatch):
     store.leg_status.assert_called_once_with('claude-test')
     (tmp_path / 'quota-pause').unlink()
     assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', False)) is None
-    assert store.leg_status.call_count == 2
+    assert store.leg_status.call_count == 3  # booked limit before and after the review probe
+    probe.assert_awaited_once_with(runner, leg, store=store, role='review')
     assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
-    probe.assert_awaited_once_with(runner, leg, store=store)
+    probe.assert_awaited_with(runner, leg, store=store, role='implement')
+    assert probe.await_count == 2
 
 
 @pytest.mark.parametrize('dry', [False, True])
