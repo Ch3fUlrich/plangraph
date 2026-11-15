@@ -37,6 +37,11 @@ for HIGH checks. For stacks, each PR still displays its diff against the batch
 base; the batch cap counts each layer against its parent head once (`batch_lines`
 in JSON), preserving per-PR stack contributions.
 
+PR label writes use the REST issue-label endpoint through `gh api`, avoiding
+`gh pr edit` and its deprecated Projects (classic) GraphQL fields. The merge
+batch helper reports a label as added only when the returned label list contains
+its name; missing labels or malformed responses leave `labeled` false and warn.
+
 `tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
 batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions
 also appear as deviations). Record every included part with `review --name NAME

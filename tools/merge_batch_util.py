@@ -275,12 +275,19 @@ def repo_info(repo=None):
 
 def add_label(repo, number, label):
     """Label a PR through the REST API (gh 2.45's `pr edit` dies on Projects (classic)), creating
-    the label once when the repo lacks it; False when it cannot be added."""
+    the label once when the repo lacks it; False unless the returned list confirms it."""
     for attempt in (1, 2):
         done = gh("api", "--method", "POST", f"repos/{repo}/issues/{number}/labels", "-f", f"labels[]={label}",
                   ok=None)
         if done.returncode == 0:
-            return True
+            try:
+                labels = json.loads(done.stdout)
+            except ValueError:
+                return False
+            if not isinstance(labels, list) or not all(
+                    isinstance(entry, dict) and isinstance(entry.get("name"), str) for entry in labels):
+                return False
+            return any(entry["name"] == label for entry in labels)
         if attempt == 1:
             gh("label", "create", label, "--repo", repo, "--color", "d93f0b",
                "--description", "PR needs an update before it can join a merge batch", ok=None)
