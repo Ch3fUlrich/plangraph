@@ -1,3 +1,4 @@
 - Inbox question parks no longer raise a false unknown-activity alarm for `observe`; worker activity names are drift-checked, and new attempt histories carry patch-gated execution identity without changing legacy payloads.
 - Complete the known control-activity documentation and split oversized worker activity/workflow sources into bounded files without changing module namespaces.
 - Preserve the merge-lock caller regression across the worker source split and retain main's isolated Git fixture helper.
+- Bound live-test workflow-start retries to the Temporal namespace-cache readiness race, preserving all other errors and the existing outer timeout.
