@@ -62,7 +62,8 @@ with tempfile.TemporaryDirectory() as tmp:
                     terminal_reason(record)
                     rows.append(dict(mode=mode, valid=reference is ref, error=str(exc),
                                      reason=record['reason']))
-    service = SpawnService(state=pathlib.Path(tmp) / 'state')
+    service = SpawnService(state=pathlib.Path(tmp) / 'state',
+        leg_reader=lambda *a, **k: {'state': 'available', 'evidence': None})
     service.runner.default_cwd = tmp
     for reference in (ref, None):
         card = dict(estimate_tokens=100, **({'diff_ref': reference} if reference else {}))
