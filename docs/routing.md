@@ -143,3 +143,12 @@ The shipped provider config and the pending benchmark inventory use the same `om
 
 D-5966 reviews prefer agy Hydrogen high, agy Argon medium, DeepSeek flash and Beam
 free legs, then Sonnet high. Each agy model has an independent quota reset.
+
+Review writer aliases (`codex`, `cx-gpt-6.1-sol`, `gpt`) share the registered
+writer-family resolver used by spawn admission and review seats. The preferred
+Gemini/free review prefix remains first; eligible OpenAI and DeepSeek legs remain
+in the fallback list before final Sonnet. GPT writers may use `omniroute-deepseek-flash` and
+`opencode-go-deepseek-v4-flash`; DeepSeek writers exclude both. Claude writers
+may use the `cx-gpt-6-luna` Codex seat. Unknown names fail with accepted family names
+and aliases within native refusal limits; registered leg/model ids remain accepted.
+Verdict delivery uses the same resolver to forward canonical writer families.

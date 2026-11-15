@@ -50,6 +50,38 @@ impl Fixture {
     }
 }
 #[test]
+fn unknown_writer_names_survive_the_real_route_adapter() {
+    let state = TempDir::new();
+    let socket = state.path().join("socket");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        .args(["serve", "--no-scope", "--socket"])
+        .arg(&socket)
+        .arg("--state")
+        .arg(state.path())
+        .env_remove("PG_SPAWND_ADAPTER")
+        .env("PG_SPAWND_PYTHON", "python3")
+        .env("PYTHONPATH", root.join("src"))
+        .spawn()
+        .unwrap();
+    let _guard = ChildGuard { child };
+    let mut client = McpClient::connect(&socket);
+    client.initialize();
+    let reply = client.request(
+        "tools/call",
+        json!({"name":"plangraph_agent_route", "arguments":{
+            "card":{"estimate_tokens":1000}, "role":"review", "writer_families":["author"]
+        }}),
+    );
+    assert_eq!(reply["error"]["code"], -32000, "{reply}");
+    let message = reply["error"]["message"].as_str().unwrap();
+    for name in ["accepted names:", "codex", "gpt", "deepseek", "anthropic"] {
+        assert!(message.contains(name), "{message}");
+    }
+    assert!(message.chars().count() <= 300);
+}
+
+#[test]
 fn printed_object_is_unchanged() {
     let printed = r#"{"b":1,"a":2,"f":1e-07}"#;
     for (verb, code) in [("route", 0), ("probe", 0), ("probe", 1)] {

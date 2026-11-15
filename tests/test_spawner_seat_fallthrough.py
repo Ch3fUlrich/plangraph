@@ -135,7 +135,7 @@ def replay(request, tmp_path, monkeypatch, recorded_plan):
         if seat:
             plan = replace(plan, seat_coverage=(dict(leg=plan.legs[0].id, seat_group='seats-fixture'),))
         return asyncio.run(service._spawn(card=card,
-            role=role, wait_seconds=None, no_fallthrough=no_fallthrough, _plan=plan, dry_run=dry_run))
+            role=role, writer_families=['openai'] if role == 'review' else [], wait_seconds=None, no_fallthrough=no_fallthrough, _plan=plan, dry_run=dry_run))
 
     return NS(run=run, calls=calls, budgets=budgets, run_ids=run_ids, active=active,
               plan=recorded_plan, service=service, saves=saves)
@@ -293,7 +293,7 @@ def launch_leg_case(tmp_path):
     seat._path = lambda run_id: tmp_path / 'record.json'
     seat._save = lambda record: seat._path(record['run_id']).write_text(json.dumps(record))
     record = dict(run_id='run-test', role='review', status='running', started=100,
-                  attempts=[], events=[], writer_family='original')
+                  attempts=[], events=[], writer_family='original', given_writer_families=['openai'])
 
     async def spawn(**options):
         job = jobs[len(calls)]

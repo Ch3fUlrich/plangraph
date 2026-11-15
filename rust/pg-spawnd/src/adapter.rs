@@ -94,7 +94,8 @@ impl Adapter<'_> {
         let line = pg_worker_core::redact::redact(
             String::from_utf8_lossy(&stderr)
                 .lines()
-                .next()
+                // Refusal persistence can emit this notification warning first.
+                .find(|line| !line.is_empty() && !line.starts_with("completion delivery skipped:"))
                 .unwrap_or(""),
         )
         .chars()

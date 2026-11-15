@@ -30,7 +30,7 @@ def request_data(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, 'build_child_env', lambda *a, **kw: dict(base, **(a[0] or {})))
     return dict(run_id='run-' + 'a' * 32, job_id='external-job', role='review',
                 dry_run=False, leg={'id': 'qodercli-qwen3.8-flash'}, prompt='do work',
-                card={}, cwd=str(tmp_path), state=str(tmp_path / 'state'))
+                writer_families=['openai'], card={}, cwd=str(tmp_path), state=str(tmp_path / 'state'))
 
 
 def invoke(req):
@@ -397,3 +397,49 @@ def test_refusal_limit(request_data, monkeypatch):
     monkeypatch.setattr(spec, 'host_skip_reason_async', unavailable)
     code, out, err = invoke(request_data)
     assert code == 2 and out == '' and len(err) == 301 and err.count('\n') == 1
+
+
+@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.1-sol', 'gpt'])
+def test_review_gateway_envelope_has_real_author(request_data, monkeypatch, writer):
+    from plangraph.spawner import runner
+    captured = []
+    original = runner.build_child_env
+    def capture(extra_env, *, headers):
+        captured.append(headers)
+        return original(extra_env, headers=headers)
+    monkeypatch.setattr(runner, 'build_child_env', capture)
+    request_data['writer_families'] = [writer]
+    request_data['leg'] = {'id': 'omniroute-deepseek-flash'}
+    code, out, err = invoke(request_data)
+    assert code == 0, (out, err)
+    assert captured[0]['X-OmniRoute-Author-Model'] == 'gpt'
+    assert captured[0]['X-OmniRoute-Exclude-Family'] == 'gpt'
+    assert captured[0]['X-OmniRoute-Task-Role'] == 'review'
+
+
+@pytest.mark.parametrize('writers', [[], ['author'], ['unknown-writer'], ['unknown-' * 100]])
+def test_launch_refuses_unresolved_writer(request_data, writers):
+    request_data['writer_families'] = writers
+    code, out, err = invoke(request_data)
+    assert code == 2, (out, err)
+    assert err.startswith('writer_family:')
+    assert len(err) <= 301
+    if writers:
+        assert 'accepted names:' in err
+        assert all(name in err for name in ('codex', 'gpt', 'deepseek', 'anthropic'))
+
+
+def test_launch_accepts_registered_beam_reviewer(request_data):
+    request_data['writer_families'] = ['codex']
+    request_data['leg'] = {'id': 'opencode-go-beam-free'}
+    code, out, err = invoke(request_data)
+    assert code == 0, (out, err)
+    assert 'opencode-go/beam-free' in json.loads(out)['argv']
+
+
+def test_launch_refuses_same_family_deepseek(request_data):
+    request_data['writer_families'] = ['deepseek']
+    request_data['leg'] = {'id': 'omniroute-deepseek-flash'}
+    code, out, err = invoke(request_data)
+    assert code == 2, (out, err)
+    assert 'review seat is a writer family' in err

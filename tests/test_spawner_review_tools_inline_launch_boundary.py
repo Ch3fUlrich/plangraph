@@ -24,7 +24,7 @@ def launch_leg_case(tmp_path):
     seat._path = lambda run_id: tmp_path / 'record.json'
     seat._save = lambda record: seat._path(record['run_id']).write_text(json.dumps(record))
     record = dict(run_id='run-test', role='review', status='running', started=100,
-                  attempts=[], events=[], writer_family='original')
+                  attempts=[], events=[], writer_family='original', given_writer_families=['gpt'])
 
     async def spawn(**options):
         job = jobs[len(calls)]
@@ -166,3 +166,25 @@ def test_base_launch_preserves_shield_cancellation(launch_leg_case, cancel):
             await asyncio.gather(task, launch, return_exceptions=True)
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.1-sol', 'gpt'])
+def test_review_launch_sends_resolved_author_family(launch_leg_case, writer):
+    import asyncio
+    seat, record, chosen, jobs, calls = launch_leg_case
+    record['given_writer_families'] = [writer]
+    asyncio.run(seat._launch_leg(record, chosen, prompt_record=None))
+    for call in calls:
+        assert call['headers']['X-OmniRoute-Author-Model'] == 'gpt'
+        assert call['headers']['X-OmniRoute-Exclude-Family'] == 'gpt'
+        assert call['headers']['X-OmniRoute-Task-Role'] == 'review'
+
+
+def test_review_launch_refuses_placeholder_author(launch_leg_case):
+    import asyncio
+    from plangraph.routing_errors import SpawnRefused
+    seat, record, chosen, jobs, calls = launch_leg_case
+    record['given_writer_families'] = ['author']
+    with pytest.raises(SpawnRefused, match='unknown writer family.*accepted names:'):
+        asyncio.run(seat._launch_leg(record, chosen, prompt_record=None))
+    assert calls == []

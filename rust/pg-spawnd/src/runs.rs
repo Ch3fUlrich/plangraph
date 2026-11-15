@@ -68,6 +68,8 @@ impl Runs {
             state,
             &json!({
                 "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
+                "writer_families":args.get("writer_families").cloned().unwrap_or(json!([])),
+                "review_of":args.get("review_of"),
                 "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
             }),
         )?;

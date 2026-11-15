@@ -56,8 +56,13 @@ def _validate(req):
     for key, check in checks.items():
         if key not in req or not check(req[key]):
             raise InvalidRequest(key)
+    if 'writer_families' in req and (not isinstance(req['writer_families'], list)
+            or not all(isinstance(w, str) for w in req['writer_families'])):
+        raise InvalidRequest('writer_families')
+    if req.get('review_of') is not None and not isinstance(req['review_of'], str):
+        raise InvalidRequest('review_of')
     for key in req:
-        if key not in checks:
+        if key not in checks and key not in ('writer_families', 'review_of'):
             raise InvalidRequest(key)
 
 
@@ -101,6 +106,20 @@ def build(request: dict) -> dict:
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     service = SpawnService(state=request['state'])
+    headers = None
+    if request['role'] == 'review':
+        from plangraph.planner.seats import seat_family
+        from plangraph.review.family import FamilyError, writer_headers, writer_key
+        writers = list(request.get('writer_families') or [])
+        if request.get('review_of'):
+            source = service.result(request['review_of'])
+            writers.extend(source.get('given_writer_families') or [source.get('writer_family')])
+        try:
+            headers = writer_headers(writers)
+            if seat_family(leg.family) in {writer_key(w) for w in writers}:
+                raise FamilyError('review seat is a writer family')
+        except FamilyError as exc:
+            raise LaunchRefused('writer_family', str(exc)) from None
     service.runner.default_cwd = request['cwd']
     service.runner._child_envs = _LaunchOwned()
     service.runner._ocdata_dirs = _LaunchOwned()
@@ -127,7 +146,7 @@ def build(request: dict) -> dict:
         try:
             job = asyncio.run(service.runner.spawn(prompt=prompt, model_or_combo=leg.model,
                 role=request['role'], dry_run=True, client=leg.harness, chosen=leg, extra_env=writer_env,
-                prepare_launch=True))  # REMOVE-AT-R10: Rust owns redaction and recording.
+                prepare_launch=True, headers=headers))  # REMOVE-AT-R10: Rust owns redaction and recording.
         except (SpawnRefused, ValueError) as exc:
             raise LaunchRefused('refused', str(exc)) from None
         for event in job.events:

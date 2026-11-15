@@ -327,7 +327,7 @@ from plangraph.spawner.service import SpawnService
 from plangraph.spawner.mcp import MCPSpawnerServer, ParameterRefused, TOOLS_METADATA
 state = str(Path(sys.argv[1]).resolve())
 request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=True,
-    leg=dict(id='claude-sonnet-5-5-high'), prompt='review', card=dict(estimate_tokens=1000), cwd=str(Path.cwd()), state=state)
+    leg=dict(id='claude-sonnet-5-5-high'), prompt='review', writer_families=['openai'], card=dict(estimate_tokens=1000), cwd=str(Path.cwd()), state=state)
 argv = build(request)['argv']
 assert argv[0] == 'claude', argv
 assert argv[argv.index('--model')+1] == 'claude-sonnet-5-5', argv

@@ -19,7 +19,7 @@ from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # n
 from .legs import DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .review_order import review_key, catalog_tiers
-from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts  # noqa: F401
+from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts, seat_family  # noqa: F401
 
 __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
            "route_card", "next_after_failure", "WINDOW_TOKENS", "USABLE_FRACTION",
@@ -362,7 +362,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "excluded_family"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
             reason = "inline_only_needs_diff"
-        elif native_review and leg.id not in REVIEW_ORDER:
+        elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) not in ("openai", "deepseek"):
             reason = "review_route_excluded"
         else:
             try:
@@ -430,7 +430,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     if native_review:
-        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id))
+        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER[:-1]
+                     else len(REVIEW_ORDER) if leg.id == REVIEW_ORDER[-1] else len(REVIEW_ORDER) - 1)
         source = "operator-order"
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     seats, coverage, open_parts = [], (), []

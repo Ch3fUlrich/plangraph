@@ -41,7 +41,8 @@ fn missing_seat_events(role: &str, dry: bool, capture_refused: bool) {
             finish: None,
         })
         .unwrap();
-    let args = json!({"prompt":"p","card":{"item_key":"invalid"},"dry_run":dry});
+    let args = json!({"prompt":"p","card":{"item_key":"invalid"},"dry_run":dry,
+        "writer_families":["openai"],"review_of":"run-writer"});
     let expected = json!({"event":"seat_item_missing","level":"warning"});
     let existing = json!({"event":"existing"});
     let result = runs.spawn_using(
@@ -50,7 +51,9 @@ fn missing_seat_events(role: &str, dry: bool, capture_refused: bool) {
         "fixture",
         json!(role),
         json!({"first_leg":{"family":"f"}}),
-        |_, _| {
+        |_, request| {
+            assert_eq!(request["writer_families"], json!(["openai"]));
+            assert_eq!(request["review_of"], "run-writer");
             Ok(crate::launch::LaunchSpec {
                 argv: vec!["/bin/true".into()],
                 cwd: dir.clone(),

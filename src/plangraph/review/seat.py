@@ -98,7 +98,8 @@ def _run_part(leg: family.Leg, i: int, text: str, multi: bool, spec: SeatSpec,
     out = Path(spec.out_root) / name
     try:
         if leg.kind == "gateway":
-            result = calls["gateway"](leg.model, text, title=spec.title)
+            result = calls["gateway"](leg.model, text, title=spec.title,
+                                      writer_family=family.writer_key(spec.writer_family))
         elif leg.kind == "qoder":
             result = calls["qoder"](text, model=leg.model)
         elif leg.kind == "opencode":

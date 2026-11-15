@@ -227,3 +227,14 @@ def test_declared_entry_is_kept():
     mine = {'modelID': 'cx/gpt-6.1-sol-high', 'limit': {'context': 1, 'output': 1}}
     models = _render('omniroute/cx-gpt-6.1-sol-high', {'cx-gpt-6.1-sol-high': mine})
     assert models['cx-gpt-6.1-sol-high'] == mine
+
+
+@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.1-sol', 'gpt'])
+def test_codex_seat_refused_for_writer_named_by_review_of(tmp_path, monkeypatch, writer):
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(svc, 'result', lambda *a, **k: {'writer_family': writer})
+    with pytest.raises(SpawnRefused, match='excluded writer family'):
+        asyncio.run(svc.spawn(card={'estimate_tokens': 20000}, prompt='Review public diff',
+                              role='review', review_of='run-' + '0' * 32,
+                              leg='cx-gpt-6-luna-medium', dry_run=True,
+                              override_reason='cross-family regression'))

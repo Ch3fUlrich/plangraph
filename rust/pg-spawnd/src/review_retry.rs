@@ -60,13 +60,9 @@ fn next(
     else {
         return Ok(None);
     };
-    let writers = args.get("writer_families").and_then(Value::as_array);
     for leg in &legs.unwrap()[index + 1..] {
-        if writers.is_some_and(|writers| {
-            writers
-                .iter()
-                .any(|writer| family(writer) == family(&leg["family"]))
-        }) || record
+        // The routed plan and launch admission share the Python writer resolver.
+        if record
             .get("attempts")
             .and_then(Value::as_array)
             .is_some_and(|attempts| attempts.iter().any(|a| a["leg"]["id"] == leg["id"]))
@@ -94,17 +90,6 @@ fn next(
     }
     Ok(None)
 }
-fn family(value: &Value) -> String {
-    let low = value.as_str().unwrap_or("").trim().to_ascii_lowercase();
-    match low.as_str() {
-        "gpt" | "codex" => "openai".into(),
-        "claude" => "anthropic".into(),
-        "mimo" => "xiaomi".into(),
-        "qwen" => "alibaba".into(),
-        "gemini" => "google".into(),
-        _ => low,
-    }
-}
 type Prepared = (String, crate::launch::LaunchSpec, Option<String>);
 fn prepare(
     record: &RunRecord,
@@ -129,6 +114,8 @@ fn prepare(
         state,
         &json!({
             "run_id":run_id,"job_id":job_id,"role":"review","dry_run":false,"leg":leg,
+            "writer_families":args.get("writer_families").cloned().unwrap_or(json!([])),
+            "review_of":args.get("review_of"),
             "prompt":args["prompt"],"card":args["card"],"cwd":cwd,"state":state.to_string_lossy()
         }),
         Duration::from_secs(30),
