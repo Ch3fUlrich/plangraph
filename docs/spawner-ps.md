@@ -8,7 +8,7 @@ supplies `{"hosts": [{"name": "display-label", "target": "ssh-alias"}]}`.
 Keep this file private and outside the repository. Names are public display
 labels; targets are SSH destinations and are redacted from diagnostics.
 Each POSIX host needs `python3` and plangraph available to its SSH shell.
-Windows entries use `win_src`, for example `C:/Users/mauls/Documents/Code/plangraph/src`;
+Windows entries use `win_src`, for example `C:/source space/plangraph/src`;
 the command normalizes path separators for cmd.exe and runs
 `python -m plangraph.spawner.remote_ps` with that PYTHONPATH.
 Queries run concurrently with a three-second subprocess timeout per attempt and

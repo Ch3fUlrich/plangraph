@@ -73,10 +73,10 @@ def test_ws_build_exact_windows_ssh_command(monkeypatch):
     def ssh(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'ws-build',
-                        'if not exist "C:\\Users\\mauls\\Documents\\Code\\plangraph\\src\\" exit /b 44 & '
-                        'set "PYTHONPATH=C:\\Users\\mauls\\Documents\\Code\\plangraph\\src"&& '
+                        'if not exist "C:\\source space\\plangraph\\src\\" exit /b 44 & '
+                        'set "PYTHONPATH=C:\\source space\\plangraph\\src"&& '
                         'python -m plangraph.spawner.remote_ps']
         return original([sys.executable, '-c', 'print(\'{"runs": []}\')'], **kwargs)
     monkeypatch.setattr(subprocess, 'Popen', ssh)
     assert json.loads(remote_ps.query_host(dict(target='ws-build',
-        win_src='C:/Users/mauls/Documents/Code/plangraph/src'), 2)) == {'runs': []}
+        win_src='C:/source space/plangraph/src'), 2)) == {'runs': []}
