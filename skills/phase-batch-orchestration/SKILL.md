@@ -62,8 +62,22 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 
 ## Codex
 
-- Check the host first (`plangraph:CODEX-HOST-READINESS`): login, trust and
-  update prompts answered, a commit works.
+- Before each Codex package starts, run on the selected host:
+  `plangraph codex-host-readiness <worktree> workspace-write` (build/install from
+  `rust/plangraph-cli`). Pass the exact sandbox mode planned for that session.
+  Require exit 0 and `READY`; otherwise stop admission and resolve each printed
+  point before launching. Never change sandbox mode just to pass this check.
+  This Linux check uses no model tokens: version/login status, config and hooks
+  metadata RPCs, sandbox startup, a commit in a disposable linked worktree on
+  the selected filesystem, and at least 4 GiB MemAvailable. It never edits
+  Codex settings or credentials. Folder trust must already be persisted; enabled
+  hooks must be trusted/managed. Startup update checks must be disabled with
+  updates centrally managed (see [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference)).
+  Unsupported Codex config/hooks RPCs fail admission; install a compatible CLI.
+  A sandbox failure points to bwrap/RTM_NEWADDR restrictions; a scratch commit
+  failure points to read-only Git metadata or local Git/hooks setup. The probe
+  uses disposable Git metadata and does not run the target repository's hooks;
+  repository-specific gates still run in the writer session.
 - Start: `herdr workspace create --cwd <worktree> --label <name>`, then
   `herdr agent start <name> --kind codex --pane <pane> -- -m gpt-6.1-sol -c model_reasoning_effort="high" -c approval_policy="on-request" --sandbox workspace-write`,
   then `herdr agent prompt <name> "<read PACKAGE-x.md and carry it out>"`.
