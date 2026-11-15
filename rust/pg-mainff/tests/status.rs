@@ -64,7 +64,13 @@ fn status_reader_uses_each_worktrees_git_dir() {
     fs::write(&path, "HELD fixture\n").unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_pg-mainff"))
         .args(["status", linked.to_str().unwrap()])
-        .env("GIT_DIR", f.repo.join(".git"))
+        .env(
+            "GIT_DIR",
+            advance::status_path(&System, &f.repo)
+                .unwrap()
+                .parent()
+                .unwrap(),
+        )
         .output()
         .unwrap();
     assert!(result.status.success());
