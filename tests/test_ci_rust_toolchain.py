@@ -246,3 +246,68 @@ def test_shared_installer_refuses_unpinned_channels(tmp_path, channel):
         cwd=tmp_path, env={"PATH": "/usr/bin:/bin", "GITHUB_OUTPUT": str(output)})
     assert result.returncode != 0
     assert not output.exists()
+
+
+SELF_HOSTED_JOBS = {
+    "rust": ("rust/Cargo.toml", "rust/target"),
+    "rust-worker": ("rust/worker/Cargo.toml", "rust/worker/target"),
+    "rust-spike": ("rust/spikes/temporal-spike/Cargo.toml", "rust/spikes/temporal-spike/target"),
+}
+
+
+@pytest.mark.parametrize("job", SELF_HOSTED_JOBS)
+def test_self_hosted_rust_jobs_use_local_target_and_skip_cache(job):
+    jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
+    spec = jobs[job]
+    runs_on = spec["runs-on"]
+    gate = spec["env"]["CI_SELF_HOSTED_RUN"]
+    boolean = runs_on.removeprefix("${{ ").split(" && fromJSON(")[0]
+    assert gate == "${{ (" + boolean + ") && '1' || '0' }}"
+    steps = spec["steps"]
+    prep = next(s for s in steps if s.get("name") == "Self-hosted cargo build settings")
+    assert prep["if"] == "env.CI_SELF_HOSTED_RUN == '1'"
+    for line in ('CARGO_BUILD_JOBS=$(nproc)', 'CARGO_TARGET_DIR=$root/$key', "$HOME/cargo-target/", "RUST_TEST_THREADS=8", "$GITHUB_ENV"):
+        assert line in prep["run"]
+    caches = [s for s in steps if str(s.get("uses", "")).startswith("actions/cache")]
+    assert len(caches) == 1 and caches[0]["if"] == "env.CI_SELF_HOSTED_RUN != '1'"
+    assert SELF_HOSTED_JOBS[job][1] in caches[0]["with"]["path"]
+
+
+def test_self_hosted_target_dir_is_keyed_by_manifest_and_home_and_capped(tmp_path):
+    jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
+    script = next(s for s in jobs["rust"]["steps"]
+                  if s.get("name") == "Self-hosted cargo build settings")["run"]
+    ws = tmp_path / "ws"
+    (ws / "rust").mkdir(parents=True)
+    counter = iter(range(1000))
+
+    def run(runner, cap="40"):
+        home = tmp_path / "home" / runner
+        home.mkdir(parents=True, exist_ok=True)
+        out = tmp_path / f"env-{runner}"
+        out.write_text("")
+        subprocess.run(["bash", "-c", script], cwd=ws, check=True, env={
+            "PATH": "/usr/bin:/bin", "HOME": str(home), "RUNNER_NAME": f"wsl-{runner}-{next(counter)}",
+            "GITHUB_ENV": str(out), "CI_CARGO_TARGET_CAP_GB": cap})
+        return dict(line.split("=", 1) for line in out.read_text().splitlines())
+
+    (ws / "rust/Cargo.toml").write_text("[profile.dev]\ndebug = 0\n")
+    first = run("r1")
+    assert first["CARGO_BUILD_JOBS"].isdigit() and int(first["CARGO_BUILD_JOBS"]) >= 1
+    target = Path(first["CARGO_TARGET_DIR"])
+    assert target.parent == tmp_path / "home/r1/cargo-target/rust"
+    assert first["RUST_TEST_THREADS"] == "8"
+    assert not str(target).startswith(str(ws))
+    assert run("r2")["CARGO_TARGET_DIR"] != first["CARGO_TARGET_DIR"]
+    target.mkdir()
+    (target / "artifact").write_text("x")
+    assert run("r1")["CARGO_TARGET_DIR"] == first["CARGO_TARGET_DIR"]
+    assert (target / "artifact").exists()
+    (ws / "rust/Cargo.toml").write_text("[profile.dev]\ndebug = 2\n")
+    changed = run("r1")
+    assert changed["CARGO_TARGET_DIR"] != first["CARGO_TARGET_DIR"]
+    assert not target.exists()
+    Path(changed["CARGO_TARGET_DIR"]).mkdir()
+    (Path(changed["CARGO_TARGET_DIR"]) / "big").write_bytes(b"x" * 4096)
+    assert run("r1", cap="0")["CARGO_TARGET_DIR"] == changed["CARGO_TARGET_DIR"]
+    assert not (Path(changed["CARGO_TARGET_DIR"]) / "big").exists()

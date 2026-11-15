@@ -336,13 +336,31 @@ jobs:
         working-directory: rust
     env:
       CARGO_BUILD_JOBS: "4"
+      CI_SELF_HOSTED_RUN: ${{ (vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && '1' || '0' }}
+      CI_CARGO_TARGET_CAP_GB: ${{ vars.CI_CARGO_TARGET_CAP_GB || '40' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
           targets: x86_64-pc-windows-gnu
+      - name: Self-hosted cargo build settings
+        if: env.CI_SELF_HOSTED_RUN == '1'
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          # Persistent per-OS-user target dir outside the workspace (runners are single-use, $HOME is stable per slot); the key hashes the manifests so a profile change never reuses old artifacts.
+          root="$HOME/cargo-target/rust"
+          key=$(cat rust/Cargo.toml | sha256sum | cut -c1-16)
+          mkdir -p "$root"
+          if [ "$(du -sk "$root" | cut -f1)" -gt $((CI_CARGO_TARGET_CAP_GB * 1024 * 1024)) ]; then rm -rf "$root"; mkdir -p "$root"; fi
+          find "$root" -mindepth 1 -maxdepth 1 ! -name "$key" -exec rm -rf {} +
+          echo "CARGO_BUILD_JOBS=$(nproc)" >> "$GITHUB_ENV"
+          # Test threads stay capped: one thread per CPU on a large runner makes the pg-spawnd launch tests flake.
+          echo "RUST_TEST_THREADS=8" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$root/$key" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
+        if: env.CI_SELF_HOSTED_RUN != '1'
         with:
           path: |
             ~/.cargo/registry
@@ -359,9 +377,8 @@ jobs:
       - name: Build pg-jail helper
         run: cargo build -p pg-jail
       - name: cargo test
-        env:
-          PG_JAIL_BIN: ${{ github.workspace }}/rust/target/debug/pg-jail
-        run: cargo test
+        run: |
+          PG_JAIL_BIN="${CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}/debug/pg-jail" cargo test
 
   rust-windows:
     needs: select
@@ -394,6 +411,8 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/rust/worker/target
+      CI_SELF_HOSTED_RUN: ${{ (vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && '1' || '0' }}
+      CI_CARGO_TARGET_CAP_GB: ${{ vars.CI_CARGO_TARGET_CAP_GB || '40' }}
     defaults:
       run:
         working-directory: rust/worker
@@ -404,7 +423,23 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt, clippy
+      - name: Self-hosted cargo build settings
+        if: env.CI_SELF_HOSTED_RUN == '1'
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          # Persistent per-OS-user target dir outside the workspace (runners are single-use, $HOME is stable per slot); the key hashes the manifests so a profile change never reuses old artifacts.
+          root="$HOME/cargo-target/rust-worker"
+          key=$(cat rust/worker/Cargo.toml rust/worker-core/Cargo.toml rust/pg-spawnd/Cargo.toml rust/Cargo.toml | sha256sum | cut -c1-16)
+          mkdir -p "$root"
+          if [ "$(du -sk "$root" | cut -f1)" -gt $((CI_CARGO_TARGET_CAP_GB * 1024 * 1024)) ]; then rm -rf "$root"; mkdir -p "$root"; fi
+          find "$root" -mindepth 1 -maxdepth 1 ! -name "$key" -exec rm -rf {} +
+          echo "CARGO_BUILD_JOBS=$(nproc)" >> "$GITHUB_ENV"
+          # Test threads stay capped: one thread per CPU on a large runner makes the pg-spawnd launch tests flake.
+          echo "RUST_TEST_THREADS=8" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$root/$key" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
+        if: env.CI_SELF_HOSTED_RUN != '1'
         with:
           path: |
             ~/.cargo/registry
@@ -421,21 +456,41 @@ jobs:
           # Unit tests run attempts without the jail helper; the jail is covered by the rust job.
           PG_JAIL: "off"
           PG_TEST_ALLOW_UNJAILED: "1"
-          # Inside the cached rust/worker/target: the guard's nested cargo checks stay warm between runs.
-          PG_ADMISSION_GUARD_TARGET_DIR: ${{ github.workspace }}/rust/worker/target/admission-guard
-        run: cargo run --manifest-path ../Cargo.toml -p pg-spawnd --bin ci-temporal -- cargo test
+        run: |
+          # Inside the cached target dir: the guard's nested cargo checks stay warm between runs.
+          export PG_ADMISSION_GUARD_TARGET_DIR="$CARGO_TARGET_DIR/admission-guard"
+          cargo run --manifest-path ../Cargo.toml -p pg-spawnd --bin ci-temporal -- cargo test
 
   rust-spike:
     needs: select
     if: needs.select.outputs.rust-spike == 'true'
     runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
     timeout-minutes: 30
+    env:
+      CI_SELF_HOSTED_RUN: ${{ (vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && '1' || '0' }}
+      CI_CARGO_TARGET_CAP_GB: ${{ vars.CI_CARGO_TARGET_CAP_GB || '40' }}
     steps:
       - uses: actions/checkout@v4
       - name: Install protobuf compiler
         run: (command -v protoc >/dev/null && test -f /usr/include/google/protobuf/field_mask.proto) || (sudo apt-get -o DPkg::Lock::Timeout=600 update && sudo apt-get -o DPkg::Lock::Timeout=600 install -y protobuf-compiler libprotobuf-dev)
       - uses: ./.github/actions/setup-rust
+      - name: Self-hosted cargo build settings
+        if: env.CI_SELF_HOSTED_RUN == '1'
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          # Persistent per-OS-user target dir outside the workspace (runners are single-use, $HOME is stable per slot); the key hashes the manifests so a profile change never reuses old artifacts.
+          root="$HOME/cargo-target/rust-spike"
+          key=$(cat rust/spikes/temporal-spike/Cargo.toml | sha256sum | cut -c1-16)
+          mkdir -p "$root"
+          if [ "$(du -sk "$root" | cut -f1)" -gt $((CI_CARGO_TARGET_CAP_GB * 1024 * 1024)) ]; then rm -rf "$root"; mkdir -p "$root"; fi
+          find "$root" -mindepth 1 -maxdepth 1 ! -name "$key" -exec rm -rf {} +
+          echo "CARGO_BUILD_JOBS=$(nproc)" >> "$GITHUB_ENV"
+          # Test threads stay capped: one thread per CPU on a large runner makes the pg-spawnd launch tests flake.
+          echo "RUST_TEST_THREADS=8" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$root/$key" >> "$GITHUB_ENV"
       - uses: actions/cache@v4
+        if: env.CI_SELF_HOSTED_RUN != '1'
         with:
           path: |
             ~/.cargo/registry
