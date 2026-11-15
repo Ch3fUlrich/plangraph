@@ -141,7 +141,7 @@ def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_pat
     from plangraph.spawner.cli import main
     base = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.1-sol')
     legs = (replace(base, roles=(role,)), replace(base, id='free-review',
-            model='test/free-review', family='gemini', tier='free', roles=(role,)))
+            model='opencode-go/free-review', family='gemini', tier='free', roles=(role,)))
     monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', legs)
     monkeypatch.setitem(plan_spawn.__kwdefaults__, 'legs', legs)
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [

@@ -335,3 +335,14 @@ def test_real_models_probe(tmp_path):
         finally:
             shutil.rmtree(job)
     assert not job.exists()
+
+
+@pytest.mark.parametrize('model', ['console-meta/muse-spark-1.3-contributor',
+                                   'console-deepseek/deepseek-flash'])
+def test_review_console_refused_before_launch(tmp_path, monkeypatch, model):
+    from plangraph.spawner.opencode_isolation import review_credential_reason
+    def unexpected(*args):
+        pytest.fail('console review must not install credentials')
+    monkeypatch.setattr('plangraph.spawner.opencode_isolation.install_go_credential', unexpected)
+    assert review_credential_reason(model, str(tmp_path), {}) == \
+        'not_served_on_host: review_provider_unreachable'

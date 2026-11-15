@@ -28,7 +28,7 @@ def rows(legs):
 
 @pytest.mark.parametrize("as_list", [False, True])
 def test_missing_ranked_last_in_tier(as_list, monkeypatch):
-    reviewers = tuple(replace(WRITERS[0], id=f"review-{i}", model=f"test/review-{i}",
+    reviewers = tuple(replace(WRITERS[0], id=f"review-{i}", model=f"opencode-go/review-{i}",
                               family=family, roles=("review",), tier="subscription")
                       for i, family in enumerate(("gpt", "claude", "gemini")))
     monkeypatch.setattr("plangraph.planner.legs.DEFAULT_LEGS", reviewers)
@@ -54,7 +54,7 @@ def test_missing_ranked_last_in_tier(as_list, monkeypatch):
 
 @pytest.mark.parametrize('as_list', [False, True])
 def test_equal_score_review_siblings_preserve_input_order(as_list, monkeypatch):
-    reviewers = tuple(replace(WRITERS[0], id=f'review-{i}', model=f'test/review-{i}',
+    reviewers = tuple(replace(WRITERS[0], id=f'review-{i}', model=f'opencode-go/review-{i}',
                               family='claude', roles=('review',), tier='subscription')
                       for i in range(2))
     monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', reviewers)

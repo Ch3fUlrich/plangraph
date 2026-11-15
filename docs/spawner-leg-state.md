@@ -113,3 +113,8 @@ Explicit agy resets survive the generic six-hour evidence TTL, up to the existin
 The native Sonnet-high fallback reads and books the declared agy:claude-sonnet-5-5
 seat key, including structured CLI limits and provider reset timestamps. Route
 JSON carries the planning reader/clock snapshot rather than rereading global state.
+
+Review liveness probes launch with role `review` and its normal isolation, and
+require a successful verdict instead of a commit. Review freshness and concurrent
+probe sharing are separate from writer probes. A live `model_unavailable` booking
+from a real run survives subsequent probe passes until its booked reset expires.

@@ -144,3 +144,7 @@ The shipped provider config and the pending benchmark inventory use the same `om
 Reviews (rule 3.50, D-6028) start on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so
 the card needs a diff_ref), then the D-5966 order: agy Hydrogen high, agy Argon medium, DeepSeek
 flash and Beam free legs, then Sonnet high. Each agy model has an independent quota reset.
+
+Review admission excludes providers unreachable in the isolated child data store.
+Console providers are refused with `review_provider_unreachable` in route output
+and at launch; Go and the MiMo/OmniRoute gateway overlays retain their routes.

@@ -100,6 +100,10 @@ class RoutePolicy:
                 return "off_family"
         if not self.allows(leg.harness, role):
             return "paused_harness"
+        from plangraph.routing_support.opencode_render import review_provider_reason
+        if role == "review" and leg.harness == "opencode":
+            if reason := review_provider_reason(leg.model):
+                return reason
         from .legs import NO_VERDICT_SEATS
         if role == "review" and leg.model in NO_VERDICT_SEATS:
             return "no_verdict_seat"

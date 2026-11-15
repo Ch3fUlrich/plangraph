@@ -397,3 +397,93 @@ def test_echoed_tool_output_is_not_a_harness_limit():
         assert harness_limit_line(1, '', text) is None
     assert harness_limit_line(0, '', 'error: usage limit reached') is None
     assert harness_limit_line(1, '', 'error: usage limit reached') == 'error: usage limit reached'
+
+
+def test_console_probe_uses_review_isolation(tmp_path, monkeypatch):
+    from plangraph.spawner import leg_probe
+    seen = []
+
+    async def spawn(**kwargs):
+        seen.append(kwargs)
+        if kwargs['role'] == 'implement':
+            root = kwargs['cwd']
+            from pathlib import Path
+            Path(root, 'ok.txt').write_text('ok')
+            subprocess.run(['git', '-C', root, 'add', 'ok.txt'], check=True)
+            subprocess.run(['git', '-C', root, 'commit', '-qm', 'probe'], check=True)
+        return SimpleNamespace(job_id='probe', exit_code=1, stderr='provider.no-route', stdout='')
+
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda _: 'opencode')
+    async def cancel(job_id):
+        return None
+
+    runner = SimpleNamespace(spawn=spawn, cancel=cancel)
+    leg = SimpleNamespace(model='console-meta/muse-spark-1.3-contributor',
+                          harness='opencode', roles=('review',))
+    result = asyncio.run(leg_probe.probe(runner, leg, store=LegStateStore(tmp_path / 'legs')))
+    assert result['ok'] is False
+    assert seen[0]['role'] == 'review'
+
+
+def test_post_probe_model_unavailable_survives_pass(tmp_path):
+    store = LegStateStore(tmp_path / 'legs')
+    model = 'console-meta/muse-spark-1.3-contributor'
+    store.record_probe_pass(model, 'leg-probe', now=100)
+    store.record_harness_limit(model, 'model_unavailable: provider.no-route',
+                               'spawner:harness', now=101, down_s=60)
+    before = store.leg_status(model, now=102)
+    store.record_probe_pass(model, 'leg-probe', now=103)
+    assert store.leg_status(model, now=104) == before
+
+
+def test_review_probe_freshness_is_separate(tmp_path):
+    store = LegStateStore(tmp_path / 'legs')
+    store.record_probe_pass('mimo/model', 'leg-probe', now=100)
+    assert store.last_probe_ts('mimo/model', role='review') is None
+    store.record_probe_pass('mimo/model', 'leg-probe:review', now=101)
+    assert store.last_probe_ts('mimo/model') == 100
+    assert store.last_probe_ts('mimo/model', role='review') == 101
+
+
+@pytest.mark.parametrize('exit_code,stdout,stderr,ok', [
+    (0, 'VERDICT: ACCEPT', '', True),
+    (0, 'no answer', '', False),
+    (1, 'VERDICT: ACCEPT', '', False),
+    (0, 'VERDICT: ACCEPT', 'Error: model unavailable: provider.no-route', False),
+])
+def test_review_probe_requires_served_verdict(tmp_path, monkeypatch, exit_code, stdout, stderr, ok):
+    from plangraph.spawner import leg_probe
+    from pathlib import Path
+    async def spawn(**kwargs):
+        assert kwargs['role'] == 'review'
+        assert not Path(kwargs['cwd'], 'ok.txt').exists()
+        return SimpleNamespace(job_id='probe', exit_code=exit_code, stdout=stdout, stderr=stderr)
+    async def cancel(job_id):
+        return None
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda _: 'opencode')
+    store = LegStateStore(tmp_path / 'legs')
+    leg = SimpleNamespace(model='mimo/mimo-v2.6-pro', harness='opencode', roles=('implement', 'review'))
+    result = asyncio.run(leg_probe.probe(SimpleNamespace(spawn=spawn, cancel=cancel),
+                                        leg, role='review', store=store))
+    assert result['ok'] is ok
+    assert (store.last_probe_ts(leg.model, role='review') is not None) is ok
+
+
+def test_review_before_launch_probes_the_gated_role(tmp_path, monkeypatch):
+    from plangraph.spawner import leg_probe
+    store = LegStateStore(tmp_path / 'legs')
+    store.record_probe_pass('mimo/model', 'leg-probe')
+    calls = []
+    async def probe(runner, leg, *, store, role):
+        calls.append(role)
+        store.record_probe_pass(leg.model, 'leg-probe:review')
+        return dict(ok=True, reason='')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    leg = SimpleNamespace(model='mimo/model', harness='opencode', roles=('implement', 'review'))
+    runner = SimpleNamespace(leg_reader=store)
+    async def run():
+        assert await leg_probe.before_launch(runner, leg, 'review', False) is None
+        assert await leg_probe.before_launch(runner, leg, 'review', False) is None
+    asyncio.run(run())
+    assert calls == ['review']

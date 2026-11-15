@@ -137,6 +137,9 @@ def install_go_credential(job_dir, source=None):
 
 def review_credential_reason(model, job_dir, child_env, reason=None):
     """Install only Go auth for an isolated review; fail closed if absent."""
+    from plangraph.routing_support.opencode_render import review_provider_reason
+    if refusal := review_provider_reason(model):
+        return 'not_served_on_host: ' + refusal
     child_env['XDG_DATA_HOME'] = job_dir
     if model.startswith('opencode-go/') and not install_go_credential(job_dir):
         return GO_ABSENT_REASON

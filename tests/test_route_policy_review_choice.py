@@ -43,3 +43,15 @@ def test_glm_never_a_review_option():
                        writer_families=('gpt',), policy=policy, catalog_rows=())
     assert 'glm' not in {leg.family for leg in route.legs}
     assert {s['leg']: s['reason'] for s in route.skipped}['opencode-big-pickle'] == 'off_family'
+
+
+def test_review_route_excludes_isolated_console_providers():
+    from plangraph.planner.legs import REVIEW_FALLBACK_LEGS
+    from plangraph.planner.route_policy import RoutePolicy
+    console = tuple(leg for leg in (*DEFAULT_LEGS, *REVIEW_FALLBACK_LEGS)
+                    if leg.model.startswith(('console-meta/', 'console-deepseek/')))
+    assert len(console) == 2
+    plan = plan_spawn({'estimate_tokens': 1000}, legs=console, role='review',
+                      writer_families=('openai',), policy=RoutePolicy(), catalog_rows=())
+    assert not plan.legs
+    assert all(row['reason'] == 'review_provider_unreachable' for row in plan.skipped)

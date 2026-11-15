@@ -42,3 +42,8 @@ Plain-shell CLI runs resolve a missing deployment endpoint from
 The witness and child configuration share the same resolver; private call-log
 credentials stay in the parent. Existing explicit child URLs and config-only
 root-placeholder precedence remain unchanged.
+
+Review routing and isolated launch admit the Go provider, built-in OpenCode
+models, and the MiMo/OmniRoute gateway overlays. Providers depending on other
+account-store credentials, including console providers, are refused as
+`review_provider_unreachable`; review isolation is unchanged.

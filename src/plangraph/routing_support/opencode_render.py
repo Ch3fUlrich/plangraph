@@ -22,6 +22,14 @@ REFUSAL_TOO_LARGE = "config_too_large: OPENCODE_CONFIG_CONTENT"
 GATEWAY_KEY_NAME = "AUTOOS_OMNIROUTE_KEY"
 
 
+def review_provider_reason(model):
+    """Providers available with isolated review data and the gateway overlay."""
+    provider = model.partition('/')[0]
+    if provider not in ('opencode-go', 'opencode', 'mimo', 'omniroute'):
+        return 'review_provider_unreachable'
+    return None
+
+
 def _is_nt() -> bool:
     return os.name == "nt"
 

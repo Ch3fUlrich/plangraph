@@ -70,7 +70,8 @@ def test_commit_probe_and_timeout(monkeypatch, success):
         assert plan.skipped[0]['reason'] == 'down'
 
 
-def test_ttl_and_writer_only(monkeypatch):
+@pytest.mark.parametrize('role', ['implement', 'review'])
+def test_ttl_and_writer_only(monkeypatch, role):
     from plangraph.spawner import leg_probe
     leg = SimpleNamespace(model='agy/model', harness='agy')
     calls = []
@@ -79,13 +80,13 @@ def test_ttl_and_writer_only(monkeypatch):
         return dict(ok=False, reason='timeout', seconds=0)
     monkeypatch.setattr(leg_probe, 'probe', fake)
     async def run():
-        assert await leg_probe.before_launch(None, leg, 'implement', False) is None
+        assert await leg_probe.before_launch(None, leg, role, False) is None
         monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
-        assert await leg_probe.before_launch(None, leg, 'review', False) is None
-        assert await leg_probe.before_launch(None, leg, 'implement', True) is None
-        assert await leg_probe.before_launch(None, leg, 'implement', False) == 'down: timeout'
-        leg_probe.leg_state.record_probe_pass('agy/model', 'leg-probe')
-        assert await leg_probe.before_launch(None, leg, 'implement', False) is None
+        assert await leg_probe.before_launch(None, leg, 'orchestrate', False) is None
+        assert await leg_probe.before_launch(None, leg, role, True) is None
+        assert await leg_probe.before_launch(None, leg, role, False) == 'down: timeout'
+        leg_probe.leg_state.record_probe_pass('agy/model', 'leg-probe:review' if role == 'review' else 'leg-probe')
+        assert await leg_probe.before_launch(None, leg, role, False) is None
     asyncio.run(run())
     assert len(calls) == 1
 
@@ -237,6 +238,7 @@ def test_probe_serving_uses_current_attempt(failed_probe):
     log.write_text('writing')
     os.utime(log, (1000, 1000))
     assert leg_probe._leg_serving(runner, leg)
+    assert not leg_probe._leg_serving(runner, leg, role='review')
 
 
 @pytest.mark.parametrize('serving', [False, True])

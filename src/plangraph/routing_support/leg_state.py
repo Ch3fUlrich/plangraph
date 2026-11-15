@@ -197,14 +197,16 @@ class LegStateStore:
                         None if serving else now + down_s, now, caller,
                         'probe_failed_leg_serving' if serving else 'liveness-probe'))
 
-    def last_probe_ts(self, leg):
+    def last_probe_ts(self, leg, role=None):
         """Successful probe evidence only: a failed probe is not fresh evidence."""
         leg = quota_key(leg)
         if not self.path.exists():
             return None
         try:
             with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
-                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source='provider-probe'", (leg,)).fetchone()[0]
+                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source='provider-probe'"
+                                  " AND caller " + ("= ?" if role == 'review' else "!= ?"),
+                                  (leg, 'leg-probe:review')).fetchone()[0]
         except sqlite3.Error:
             return None
 
@@ -255,6 +257,15 @@ class LegStateStore:
                     "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
                     (*keys, account, combo, now))
                 rows = list(rows)
+                # A real run's unavailable booking survives synthetic probe passes.
+                blocked = next((r for r in rows if r['source'] == 'harness-stderr'
+                                and r['body_excerpt'].startswith('model_unavailable:')
+                                and r['reset_at'] is not None
+                                and now < min(r['reset_at'], r['ts'] + ttl)), None)
+                if blocked is not None:
+                    evidence = {k: blocked[k] for k in ('status', 'body_excerpt', 'reset_at', 'ts', 'caller')}
+                    evidence['event_id'] = blocked['id']
+                    return {'state': 'limited', 'evidence': evidence}
                 # Serving evidence supersedes older probe failures, NEVER provider limits.
                 serving = next((i for i, r in enumerate(rows) if r['source'] == 'probe_failed_leg_serving'), len(rows))
                 rows = iter(r for i, r in enumerate(rows) if r['source'] != 'probe_failed_leg_serving'
@@ -335,8 +346,8 @@ def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, 
     return _default_store().record_probe_fail(leg, reason, caller, now, down_s, account, combo, serving=serving, stderr_excerpt=stderr_excerpt)
 
 
-def last_probe_ts(leg):
-    return _default_store().last_probe_ts(leg)
+def last_probe_ts(leg, role=None):
+    return _default_store().last_probe_ts(leg, role=role)
 
 
 def last_probe_outcome(leg):

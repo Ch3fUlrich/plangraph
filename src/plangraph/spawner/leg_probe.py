@@ -63,10 +63,12 @@ def _run_logs(runner):
     return snapshots
 
 
-def _leg_serving(runner, leg, previous=None):
+def _leg_serving(runner, leg, previous=None, *, role=None):
     """Observe size growth across the probe; touching an old log is not growth."""
     now = time.time()
     for path, (record, log) in _run_logs(runner).items():
+        if role is not None and record.get('role', 'implement') != role:
+            continue
         try:
             current = record.get('chosen_leg') or record.get('leg')
             if not current:
@@ -192,12 +194,16 @@ async def _await_completion(runner, job, deadline):
         await asyncio.sleep(0.02)
 
 
-async def probe(runner, leg, *, timeout_s=None, store=None):
-    """One real commit task in a disposable repo; infra failures book no leg state.
+async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
+    """Probe the launch role in a disposable repo; infra failures book no leg state.
 
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
     repo"; the caller's repo is never auto-reset.
     """
+    roles = getattr(leg, 'roles', ('implement',))
+    role = role or ('implement' if 'implement' in roles else 'review' if 'review' in roles else 'orchestrate')
+    prompt = ('Reply with VERDICT: ACCEPT to confirm this review request is served. Do nothing else.'
+              if role == 'review' else PROMPT)
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True, parameter='timeout_s')
     state = store if store is not None else leg_state
     start = time.monotonic()
@@ -241,7 +247,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             async def launch():
                 from .probe_cleanup import OWNED
                 OWNED.set(owned_ids)
-                return await runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model,
+                return await runner.spawn(prompt=prompt, role=role, model_or_combo=leg.model,
                                          client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
                                          watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
                                                        max_s=timeout + 60, interval=1))
@@ -266,7 +272,12 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                 ok, reason, infra = False, 'probe infra: git', True
             else:
                 ok = changed and 'ok.txt' in files
-                reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
+                if role == 'review':
+                    from plangraph.review.verdict import parse_verdict
+                    from .env_redact import unavailable_reason
+                    ok = (job.exit_code == 0 and parse_verdict(job.stdout) == 'pass'
+                          and unavailable_reason(1, job.stdout, job.stderr) is None)
+                reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no verdict' if role == 'review' else 'no commit'
         # Tripwire (D-3465): the writer must never touch the caller's repo.
         caller_after = await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
@@ -283,10 +294,10 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             env = dict(os.environ)
             env.update(getattr(runner, '_child_envs', {}).get(getattr(diagnostic, 'job_id', None), {}))
             excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
-            serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
+            serving = await asyncio.to_thread(_leg_serving, runner, leg, previous, role=role)
         if not infra:
             if ok:
-                state.record_probe_pass(key(leg), caller='leg-probe')
+                state.record_probe_pass(key(leg), caller='leg-probe:review' if role == 'review' else 'leg-probe')
             else:
                 state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving, stderr_excerpt=excerpt)
         reason += ': ' + excerpt if excerpt and not leaked else ''
@@ -317,7 +328,7 @@ async def before_launch(runner, leg, role, dry_run):
     if dry_run:
         return None
     ttl = seconds('PLANGRAPH_LEG_PROBE_TTL_S', 1800)
-    if ttl and role in ('implement', 'fix'):
+    if ttl and role in ('implement', 'fix', 'review'):
         seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, positive=True)
     state = _store_for(runner)
     adapter = state if getattr(state, 'enabled', False) else None
@@ -347,15 +358,17 @@ async def before_launch(runner, leg, role, dry_run):
         return booked
     skip = admission()
     snapshot_error = (skip or '').startswith('leg_state_snapshot_error:')
-    if not snapshot_error and (not ttl or role not in ('implement', 'fix')):
+    if not snapshot_error and (not ttl or role not in ('implement', 'fix', 'review')):
         return skip
-    ts = None if snapshot_error else state.last_probe_ts(key(leg))
+    ts = None if snapshot_error else (state.last_probe_ts(key(leg), role='review')
+                                        if role == 'review' else state.last_probe_ts(key(leg)))
     if ts is not None and time.time() - ts < ttl:
         return skip  # Only ordinary admission may reuse pre-failure probe evidence.
-    pending = _INFLIGHT.get(key(leg))  # Share concurrent probes, failures included.
+    flight_key = (key(leg), role)
+    pending = _INFLIGHT.get(flight_key)  # Share concurrent probes, failures included.
     if pending is None:
-        pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
-        pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
+        pending = _INFLIGHT[flight_key] = asyncio.ensure_future(probe(runner, leg, store=state, role=role))
+        pending.add_done_callback(lambda _: _INFLIGHT.pop(flight_key, None))
     result = await asyncio.shield(pending)
     reason = result.get('reason')
     if not reason or reason.strip().lower() == 'unknown':
