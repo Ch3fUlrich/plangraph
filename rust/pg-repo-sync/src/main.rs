@@ -1,6 +1,6 @@
 mod drift;
-mod refresh;
 mod hooks;
+mod refresh;
 use drift::text;
 use std::{
     env, fs,
