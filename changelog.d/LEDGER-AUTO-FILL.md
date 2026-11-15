@@ -7,3 +7,4 @@ or native JSON usage without counting cached input twice.
 
 First self-contained slice under rule 3.4: batch landing rows and their fixture
 remain open, as does instrumentation of legacy writer wrappers.
+This slice does not close plangraph:LEDGER-AUTO-FILL; the land row is tracked separately.

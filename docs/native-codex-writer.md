@@ -70,4 +70,5 @@ Missing item identity is unknown. `review_rounds` counts canonical reviews obser
 by the wrapper, excluding probes with no review; HIGH/MED held are zero on ACCEPT
 and unknown otherwise. These are wrapper measurements, not inferred counts of the
 writer's internal self-review rounds. Native launch failures before the Rust wrapper
-starts have no ledger row. Batch landing statistics and legacy wrappers remain open.
+starts have no ledger row. Batch landing statistics and legacy wrappers remain open: this slice does not
+close plangraph:LEDGER-AUTO-FILL, whose land-row part needs its own keeper item.
