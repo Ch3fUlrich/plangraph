@@ -139,6 +139,24 @@ fn unreadable_loaded_state_holds_instead_of_assuming_stopped() {
     assert_eq!(f.head(), f.loaded);
 }
 #[test]
+fn no_keeper_state_allows_move() {
+    for state in [None, Some(i32::MAX as u32 - 1)] {
+        let f = Fixture::new();
+        let target = f.target("src/plangraph/keeper/daemon.py", "VALUE = 2\n");
+        match state {
+            None => fs::remove_file(&f.state).unwrap(),
+            Some(pid) => fs::write(
+                &f.state,
+                serde_json::json!({"pid": pid, "loaded_sha": f.loaded}).to_string(),
+            )
+            .unwrap(),
+        }
+        let (code, line) = f.run();
+        assert_eq!(code, 0, "{state:?}: {line}");
+        assert_eq!(f.head(), target);
+    }
+}
+#[test]
 fn detached_and_dirty_are_refused() {
     let f = Fixture::new();
     f.target("src/plangraph/spawner/unused.py", "VALUE = 2\n");
