@@ -1,0 +1,1 @@
+Reject malformed historical seat-waiver Cutoff markers instead of falling back to rule 3.37. Align decision-close waiver documentation with BY authority, row dates and cutoffs, and credential-lane refusals; cover missing GO dates and ambiguous date sources.

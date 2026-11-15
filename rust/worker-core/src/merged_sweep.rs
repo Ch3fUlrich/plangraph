@@ -15,7 +15,10 @@ use std::{
 #[derive(Clone, Copy)]
 pub struct Options<'a> {
     pub repo: &'a Path,
-    pub root: &'a Path,
+    pub roots: &'a [PathBuf],
+    pub remote_targets: &'a [String],
+    pub targets: &'a [String],
+    pub idle_minutes: u64,
     pub pins: &'a Path,
     pub state: &'a Path,
     pub claims_reader: Option<&'a Path>,
@@ -52,8 +55,12 @@ pub fn restore_row(repo: &Path, tree: &Worktree, pr: Option<u64>) -> String {
 /// No --force, and branch deletion compares the recorded SHA atomically.
 pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
     if git(Path::new(&tree.path), &["rev-parse", "HEAD"])?.trim() != tree.head
-        || git(Path::new(&tree.path), &["symbolic-ref", "HEAD"])?.trim()
-            != tree.branch.as_deref().unwrap_or("")
+        || git(
+            Path::new(&tree.path),
+            &["rev-parse", "--symbolic-full-name", "HEAD"],
+        )?
+        .trim()
+            != tree.branch.as_deref().unwrap_or("HEAD")
         || !git(
             Path::new(&tree.path),
             &[
@@ -97,21 +104,45 @@ fn run_using(
     options: &Options<'_>,
     mut authority: impl FnMut(&Options<'_>, &str) -> io::Result<(Protection, Vec<sweep_facts::Pull>)>,
 ) -> io::Result<String> {
+    if options.repo.as_os_str().is_empty()
+        || options.state.as_os_str().is_empty()
+        || options.roots.iter().any(|root| root.as_os_str().is_empty())
+    {
+        return Err(io::Error::other("empty sweep path"));
+    }
     let repo = options.repo.canonicalize()?;
+    record_io::ensure_private_dir(options.state)?;
+    let state = options.state.canonicalize()?;
     let options = &Options {
         repo: &repo,
+        state: &state,
         ..*options
     };
-    record_io::ensure_private_dir(options.state)?;
     let _lock = crate::lockfile::try_lock(&options.state.join("merged-sweep.lock"))
         .map_err(io::Error::other)?
         .ok_or_else(|| io::Error::other("another sweep is running"))?;
     // A successful refresh is mandatory even in dry run: stale refs cannot grant removal.
     git(options.repo, &["fetch", "--prune", "origin"])?;
-    let root = options.root.canonicalize()?;
-    let trees = inventory(options.repo)?;
     let mut report = String::new();
+    let mut roots = Vec::new();
+    for root in options.roots {
+        match root.canonicalize() {
+            Ok(root) => roots.push(root),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => report.push_str(&format!(
+                "protected root {}: root not found\n",
+                root.display()
+            )),
+            Err(error) => return Err(error),
+        }
+    }
+    for name in ["runs", "worktrees"] {
+        if options.state.join(name).exists() {
+            roots.push(options.state.join(name).canonicalize()?);
+        }
+    }
+    let trees = inventory(options.repo)?;
     let mut restore = None;
+    let mut blocked = std::collections::BTreeSet::new();
     if options.apply {
         let dir = options.state.join("sweep");
         record_io::ensure_private_dir(&dir)?;
@@ -126,12 +157,12 @@ fn run_using(
     }
     for tree in &trees {
         let path = Path::new(&tree.path);
-        if !path.starts_with(&root) || path == root || tree.is_main {
+        if !roots.iter().any(|r| path.starts_with(r) && path != r) || tree.is_main {
             continue;
         }
         if !path
             .canonicalize()
-            .is_ok_and(|p| p.starts_with(&root) && p != root)
+            .is_ok_and(|p| roots.iter().any(|r| p.starts_with(r) && &p != r))
         {
             report.push_str(&format!(
                 "protected {}: outside canonical root or unavailable\n",
@@ -148,20 +179,33 @@ fn run_using(
             else {
                 return Err(io::Error::other("worktree changed"));
             };
-            let branch = current
-                .branch
-                .as_deref()
-                .and_then(|b| b.strip_prefix("refs/heads/"))
-                .ok_or_else(|| io::Error::other("detached: protected"))?;
+            if !options.targets.is_empty()
+                && !options.targets.iter().any(|target| {
+                    target
+                        == &format!(
+                            "{}:{}:{}",
+                            current.path,
+                            current.branch.as_deref().unwrap_or("-"),
+                            current.head
+                        )
+                })
+            {
+                return Err(io::Error::other("outside exact targets"));
+            }
+            sweep_facts::terminal_run(options.state, path)?;
+            let branch = current.branch.as_deref().unwrap_or(&current.head);
             let (protection, prs) = authority(options, branch)?;
             let facts =
                 sweep_facts::facts(options.repo, current, &protection, &prs, SystemTime::now())?;
-            if !eligible(current, &facts, &fresh) {
-                report.push_str(&format!(
-                    "protected {}: {:?}\n",
-                    tree.path,
-                    classify(current, &facts, &fresh)
-                ));
+            let classification = pg_reap::classify_with_clean_age(
+                current,
+                &facts,
+                &fresh,
+                sweep_facts::idle_minutes(current, SystemTime::now())? >= options.idle_minutes,
+            );
+            if !facts.clean || !matches!(classification, Classification::Eligible { .. }) {
+                blocked.insert(current.branch.clone().unwrap_or_default());
+                report.push_str(&format!("protected {}: {:?}\n", tree.path, classification));
                 return Ok(());
             }
             let merged_pr = prs
@@ -174,9 +218,14 @@ fn run_using(
                 )?;
                 file.sync_all()?;
                 remove(options.repo, current)?;
-                if options.delete_remote && merged_pr.is_some() {
+                if options.delete_remote
+                    && options.remote_targets.is_empty()
+                    && merged_pr.is_some()
+                    && current.branch.is_some()
+                {
                     // Lease guards a remote branch that advanced after the PR merged.
-                    let remote_ref = format!("refs/heads/{branch}");
+                    let remote_ref = branch.to_string();
+                    remote_restore(options.repo, &remote_ref, &tree.head, file)?;
                     let lease = format!("--force-with-lease={remote_ref}:{}", tree.head);
                     git(
                         options.repo,
@@ -196,8 +245,131 @@ fn run_using(
             Ok(())
         })();
         if let Err(error) = result {
+            blocked.insert(tree.branch.clone().unwrap_or_default());
             report.push_str(&format!("protected {}: {error}\n", tree.path));
         }
     }
+    for target in options.remote_targets {
+        let result = (|| -> io::Result<()> {
+            let (branch, sha) = target
+                .rsplit_once(':')
+                .ok_or_else(|| io::Error::other("invalid remote target"))?;
+            let reference = format!("refs/heads/{branch}");
+            if branch == "main"
+                || branch == "master"
+                || blocked.contains(&reference)
+                || sha.len() != 40
+                || !sha.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err(io::Error::other("protected remote target"));
+            }
+            git(options.repo, &["check-ref-format", &reference])?;
+            if branch
+                .split('/')
+                .any(|b| b == "plangraph-md-sync" || b.starts_with("live-"))
+            {
+                return Err(io::Error::other("protected branch name"));
+            }
+            let (protection, prs) = authority(options, &reference)?;
+            if protection
+                .claims
+                .branches
+                .iter()
+                .any(|b| b == branch || b == &reference)
+                || prs.iter().any(|p| p.state == "OPEN")
+                || git(
+                    options.repo,
+                    &[
+                        "rev-list",
+                        "--count",
+                        sha,
+                        "--not",
+                        "refs/remotes/origin/main",
+                    ],
+                )?
+                .trim()
+                    != "0"
+            {
+                return Err(io::Error::other(
+                    "remote claim, open PR or unmerged commits",
+                ));
+            }
+            for tree in inventory(options.repo)?
+                .iter()
+                .filter(|t| t.branch.as_deref() == Some(&reference))
+            {
+                let facts =
+                    sweep_facts::facts(options.repo, tree, &protection, &prs, SystemTime::now())?;
+                sweep_facts::terminal_run(options.state, Path::new(&tree.path))?;
+                if tree.head != sha
+                    || !facts.clean
+                    || !matches!(
+                        pg_reap::classify_with_clean_age(
+                            tree,
+                            &facts,
+                            &inventory(options.repo)?,
+                            sweep_facts::idle_minutes(tree, SystemTime::now())?
+                                >= options.idle_minutes
+                        ),
+                        Classification::Eligible { .. }
+                    )
+                {
+                    return Err(io::Error::other("local branch worktree protected"));
+                }
+            }
+            // Explicit landed targets allow batch-closed PRs; containment and lease remain mandatory.
+            if let Some(file) = &mut restore {
+                remote_restore(options.repo, &reference, sha, file)?;
+                // Only delete a local ref without a checkout, with the same SHA lease.
+                if !inventory(options.repo)?
+                    .iter()
+                    .any(|t| t.branch.as_deref() == Some(&reference))
+                {
+                    let refs = git(
+                        options.repo,
+                        &["for-each-ref", "--format=%(refname)", &reference],
+                    )?;
+                    if refs.lines().any(|r| r == reference) {
+                        git(options.repo, &["update-ref", "-d", &reference, sha])?;
+                    }
+                }
+                git(
+                    options.repo,
+                    &[
+                        "push",
+                        &format!("--force-with-lease={reference}:{sha}"),
+                        "origin",
+                        &format!(":{reference}"),
+                    ],
+                )?;
+            }
+            report.push_str(&format!(
+                "{} remote {branch}\n",
+                if options.apply {
+                    "removed"
+                } else {
+                    "would-remove"
+                }
+            ));
+            Ok(())
+        })();
+        if let Err(error) = result {
+            report.push_str(&format!("protected remote {target}: {error}\n"));
+        }
+    }
     Ok(report)
+}
+
+fn remote_restore(repo: &Path, reference: &str, sha: &str, file: &mut fs::File) -> io::Result<()> {
+    if crate::disk_hygiene::Guards::protected_name(Path::new(reference)) {
+        return Err(io::Error::other("protected remote branch name"));
+    }
+    let tree = Worktree {
+        path: "-".into(),
+        branch: Some(reference.into()),
+        head: sha.into(),
+        ..Worktree::default()
+    };
+    file.write_all(restore_row(repo, &tree, None).as_bytes())?;
+    file.sync_all()
 }

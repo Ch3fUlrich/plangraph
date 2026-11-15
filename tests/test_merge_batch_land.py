@@ -371,3 +371,46 @@ def test_go_req_refuses_remote_head_movement(env):
     env.git("update-ref", "refs/heads/batch/g1", st["base_head"], cwd=env.origin)
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 1 and "saved pushed head" in result.stderr and result.stdout == ""
+
+
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_land_sweep_targets_only_landed_parts_and_failure_is_nonfatal(env, exit_code):
+    approval = pushed(env)
+    saved = json.loads(env.state_file("l1").read_text())
+    detached = env.tmp / "detached-part"
+    env.git("worktree", "add", "--detach", str(detached), saved["prs"]["1"]["head"])
+    part_branch = env.tmp / "part-branch"
+    env.git("worktree", "add", str(part_branch), saved["prs"]["3"]["ref"])
+    unrelated = Path(saved["worktree"]).parent / "unrelated"
+    env.git("worktree", "add", "--detach", str(unrelated), "main")
+    env.push_commit(2, {"b.txt": "moved\n"})
+    log = env.tmp / "sweep.json"
+    sweep = env.stubs / "pg-worktree-sweep"
+    sweep.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
+                     f"Path({str(log)!r}).write_text(json.dumps(sys.argv[1:]))\nsys.exit({exit_code})\n")
+    sweep.chmod(0o755)
+    result = land(env, approval)
+    assert result.returncode == 0
+    assert ("cleanup sweep failed" in result.stderr) == bool(exit_code)
+    args = json.loads(log.read_text())
+    assert "--apply" in args and "--delete-remote" in args
+    assert args[args.index("--target") + 1] == (
+        f"{saved['worktree']}:refs/heads/{saved['branch']}:{saved['head']}")
+    targets = [args[i + 1] for i, arg in enumerate(args) if arg == "--target"]
+    assert targets == [f"{saved['worktree']}:refs/heads/{saved['branch']}:{saved['head']}",
+                       f"{detached}:-:{saved['prs']['1']['head']}",
+                       f"{part_branch}:refs/heads/{saved['prs']['3']['ref']}:{saved['prs']['3']['head']}"]
+    assert all(str(unrelated) not in target for target in targets)
+    assert unrelated.exists()
+    remote = [args[i + 1] for i, arg in enumerate(args) if arg == "--remote-target"]
+    assert remote == [f"{saved['prs'][str(n)]['ref']}:{saved['prs'][str(n)]['head']}" for n in (1, 3)]
+
+
+def test_land_cleanup_metadata_failure_is_nonfatal(env):
+    approval = pushed(env, prs=(1, 2))
+    saved = json.loads(env.state_file("l1").read_text())
+    del saved["prs"]["1"]["ref"]
+    env.state_file("l1").write_text(json.dumps(saved))
+    result = land(env, approval)
+    assert result.returncode == 0 and "cleanup failed:" in result.stderr
+    assert result.stdout.count("MERGED") == 2
