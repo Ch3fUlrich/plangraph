@@ -181,3 +181,40 @@ Pending reads are capped at 1 MiB plus one overflow-detection byte; oversized
 files follow the same preserve-and-skip path without an unbounded allocation.
 Portable unit coverage checks the exact cap and overflow; delivery coverage also
 pins preservation while unrelated queued routing continues.
+
+## Host idle capacity (HOST-IDLE-CAPACITY-ALARM, first slice)
+
+The optional `host_idle_capacity` block consumes the same JSON object as
+`host-idle-capacity SNAPSHOT.json`. The standalone command prints one sorted,
+deduplicated `IDLE <host> slots=<n> ready=<m>` line per eligible host. The watchdog
+queues these messages immediately through its existing routing/push delivery.
+Alarm identity is per host, so count changes print current observations without
+repeated pings until an observed recovery.
+Omission preserves legacy snapshots; malformed present input fails snapshot
+validation rather than reporting healthy capacity.
+
+```json
+{"hosts":[{"host":"fixture-host",
+  "caps":{"max_runs":8,"max_writers":4,"max_seats":4,"max_sessions":2,"mem_floor_mb":3000},
+  "table":{"version":1,"active":[],"queued":[]},"rss_mb":{},
+  "mem_available_mb":26000,"writer_mb":2048,
+  "disk_free_bytes":20000000000,"cpus":32,"load1":3.0}],
+ "ready_items":[{"key":"demo:A","ready":true,"blocked":false,"claimed":false}]}
+```
+
+Collectors supply complete current slot tables, per-slot RSS in MiB, available
+RAM in MiB, the minimum disk free bytes across admission filesystems, CPU count
+and one-minute load. Missing RSS reserves the entire slot promise. Writer slots
+are bounded by writer/run caps and RAM above the configured floor after honoring
+unmaterialized reservations. The existing disk alarm floor must be met; a host
+with load at or above its CPU count emits nothing. Zero writer reservation,
+invalid identifiers, table versions and load samples are rejected. The ready
+count includes distinct keeper keys only when ready, unblocked and unclaimed.
+This is an observation of physical resource capacity; it neither grants a slot
+nor bypasses the admission queue. Callers must still perform normal admission.
+
+This slice performs no network or live keeper reads. The host and keeper
+collectors must supply a coherent, fresh snapshot on each invocation; the checker
+has no freshness inference. Live collection and the resume-digest, orchestrator
+heartbeat and scheduler integrations remain open; these entry points are absent
+from this checkout. They should consume this check rather than reimplement it.

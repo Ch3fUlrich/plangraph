@@ -259,7 +259,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Account/combo scope comes from the card and is never a wildcard.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, REVIEW_FALLBACK_LEGS
+    from .legs import REVIEW_ORDER, REVIEW_FALLBACK_LEGS, REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_SONNET
     if native_review:
         legs = (*legs, *REVIEW_FALLBACK_LEGS)
     check_route_targets(card, legs)
@@ -334,6 +334,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
     def _leg_status(leg_obj):
+        # Sonnet's bare model is also the native Claude subscription identity.
+        if leg_obj.harness == "agy" and leg_obj.model == REVIEW_SONNET:
+            return reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and not unavailable(st) and "/" not in leg_obj.model:
             alt = reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
@@ -342,11 +345,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         return st
 
     states = {l.id: _leg_status(l) for l in candidates}
-    quota_states = {"agy:" + model: (states[leg_id] if leg_id in states else
+    quota_states = {"agy:" + model: (states[leg_id] if leg_id in states and leg_id != REVIEW_SONNET else
         reader("agy:" + model, now=now, account=card.get("account"), combo=card.get("combo")))
-        for model, leg_id in (("gemini-4-hydrogen", REVIEW_ORDER[0]),
-                             ("gemini-4-argon", REVIEW_ORDER[1]),
-                             ("claude-sonnet-5-5", REVIEW_ORDER[-1]))}
+        for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
+                             ("gemini-4-argon", REVIEW_ARGON),
+                             ("claude-sonnet-5-5", REVIEW_SONNET))}
     limited = {key for key, state in states.items() if unavailable(state)}
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
@@ -356,6 +359,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidate_details = []
     for leg in candidates:
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
+            reason = 'auth_refused'
         if reason:
             pass
         elif leg.family in excluded:

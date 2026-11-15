@@ -87,3 +87,49 @@ fn equal_and_inverted_cli_windows() {
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn report_prints_one_witness_collapse_alert_without_breaking_json() {
+    let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    let until = timestamp("1970-01-03T00:00:00Z").unwrap();
+    for index in 0..18 {
+        let id = format!("run-{index:032x}");
+        let path = dir.join("runs").join(&id);
+        std::fs::create_dir_all(&path).unwrap();
+        let record = serde_json::json!({"run_id":id, "status":"completed",
+            "ended":until - if index < 10 { 32400 } else { 10800 },
+            "chosen_leg":{"id":"mimo-fixture"},
+            "served_model":if index < 9 {"mimo/mimo-v2.6-pro"} else {"unwitnessed"},
+            "witness_kind":if index < 9 {"response-side-gateway-call-log"} else {""}});
+        std::fs::write(path.join("record.json"), record.to_string()).unwrap();
+    }
+    let args: Vec<String> = [
+        "report",
+        "--state",
+        dir.to_str().unwrap(),
+        "--since",
+        "1970-01-02T12:00:00Z",
+        "--until",
+        "1970-01-03T00:00:00Z",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let mut text = Vec::new();
+    execute(args.clone(), &mut text).unwrap();
+    assert_eq!(
+        String::from_utf8(text)
+            .unwrap()
+            .lines()
+            .filter(|line| line.starts_with("ALERT "))
+            .count(),
+        1
+    );
+    let mut args = args;
+    args.push("--json".into());
+    let mut text = Vec::new();
+    execute(args, &mut text).unwrap();
+    let report: Value = serde_json::from_slice(&text).unwrap();
+    assert_eq!(report["witness_alerts"].as_array().unwrap().len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}

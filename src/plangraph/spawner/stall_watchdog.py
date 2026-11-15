@@ -251,7 +251,10 @@ def deliver_event(state, event, *, now=None, interval=None, budget=None):
             return
         budget[0] -= 1
     atomic_write_private(Path(state) / 'watchdog/outbox' / (key + '.json'), payload)
-    atomic_write_private(stamp, json.dumps(dict(event, sent=now, count=count + 1)))
+    alert = dict(event, sent=now, count=count + 1)
+    if event.get('rule') == 'run-silent':
+        alert['kind'] = 'stall'
+    atomic_write_private(stamp, json.dumps(alert))
 
 def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""

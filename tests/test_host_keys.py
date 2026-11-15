@@ -183,7 +183,7 @@ class _PartiallyBrokenBase:
     def __getitem__(self, key):
         if key == 'BROKEN':
             raise RuntimeError('broken getitem')
-        return {'PATH': '/bin', 'HOME': '/home/x'}[key]
+        return {'PATH': '/bin', 'HOME': '/synthetic-home/x'}[key]
 
 
 class _ExplodingBase(_PartiallyBrokenBase):
@@ -320,7 +320,7 @@ def test_redaction_env_keeps_every_name_when_base_copy_raises(fake_autoos):
     # one by one (only the item whose read raises is skipped) and BOTH fake
     # keys are in the result.
     env = redaction_env(_PartiallyBrokenBase())
-    assert env == {'PATH': '/bin', 'HOME': '/home/x',
+    assert env == {'PATH': '/bin', 'HOME': '/synthetic-home/x',
                    GATEWAY_KEY_ENV: GATEWAY_FAKE, ZEN_KEY_ENV: ZEN_FAKE}
     # Nothing enumerable at all: the resolvable keys are still carried.
     assert redaction_env(_ExplodingBase()) == {

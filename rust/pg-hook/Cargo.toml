@@ -14,3 +14,7 @@ tempfile = "3"
 [[bin]]
 name = "commit-msg"
 path = "src/commit_msg.rs"
+
+[[bin]]
+name = "checkpoint-size"
+path = "src/checkpoint_size.rs"
