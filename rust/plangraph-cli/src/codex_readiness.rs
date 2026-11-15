@@ -59,7 +59,6 @@ struct Host {
     mode: String,
 }
 fn output(command: &mut Command) -> Result<String, String> {
-    clean_git_env(command);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -98,7 +97,9 @@ impl Host {
     }
     fn sandbox_command(&self, cwd: &Path, program: &str, args: &[&str]) -> Command {
         let mut cmd = if self.mode == "danger-full-access" {
-            Command::new(program)
+            let mut cmd = Command::new(program);
+            clean_git_env(&mut cmd);
+            cmd
         } else {
             let mut cmd = self.codex();
             cmd.args(["sandbox"]).args([
@@ -127,14 +128,14 @@ impl Host {
             .map_err(|e| e.to_string())?;
         let source = scratch.path().join("source");
         let work = scratch.path().join("work");
-        output(Command::new("git").args(["init", "--quiet"]).arg(&source))?;
-        let mut git = Command::new("git");
-        git.current_dir(&source)
+        output(git().args(["init", "--quiet"]).arg(&source))?;
+        let mut base = git();
+        base.current_dir(&source)
             .args(["commit", "--allow-empty", "-m", "readiness baseline"]);
-        identity(&mut git);
-        output(&mut git)?;
+        identity(&mut base);
+        output(&mut base)?;
         output(
-            Command::new("git")
+            git()
                 .current_dir(&source)
                 .args(["worktree", "add", "--detach"])
                 .arg(&work),
@@ -156,7 +157,7 @@ impl Host {
         identity(&mut cmd);
         output(&mut cmd)?;
         let count = output(
-            Command::new("git")
+            git()
                 .current_dir(&work)
                 .args(["rev-list", "--count", "HEAD"]),
         )?;
@@ -180,7 +181,7 @@ impl Host {
         let mut lines =
             BufReader::new(child.stdout.take().ok_or("app-server stdout unavailable")?).lines();
         let repo = self.repo.clone();
-        let trust_root = output(Command::new("git").current_dir(&repo).args([
+        let trust_root = output(git().current_dir(&repo).args([
             "rev-parse",
             "--path-format=absolute",
             "--git-common-dir",
@@ -231,14 +232,16 @@ impl Host {
         result
     }
 }
+fn git() -> Command {
+    let mut cmd = Command::new("git");
+    clean_git_env(&mut cmd);
+    cmd
+}
 fn clean_git_env(cmd: &mut Command) {
-    for key in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_COMMON_DIR",
-    ] {
-        cmd.env_remove(key);
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("GIT_") {
+            cmd.env_remove(key);
+        }
     }
 }
 fn identity(cmd: &mut Command) {
