@@ -194,7 +194,7 @@ fn generated_writer_checklist_is_answered_and_forwarded_to_reviewer() {
     assert!(prefix.contains("Review blocks missing answers"));
     assert!(prefix.contains("regression tests"));
     assert!(prefix.contains("documentation"));
-    assert!(!prefix.contains("cross-language"));
+    assert!(prefix.contains("cross-language"));
     assert!(prefix.ends_with("item body"));
     assert_eq!(writer.stdin, writer.prompt);
     let answers = prefix
@@ -229,6 +229,37 @@ fn generated_writer_checklist_is_answered_and_forwarded_to_reviewer() {
         event["message"]["content"],
         *reviewer.prompt.as_ref().unwrap()
     );
+    // A verdict landing between writer launch and review must not change the ids.
+    std::fs::write(
+        dir.path().join("late.txt"),
+        "FINDING: HIGH x - lost data
+FINDING: HIGH y - lost data
+VERDICT: REQUEST_CHANGES
+",
+    )
+    .unwrap();
+    assert!(prepare_launch(
+        args.as_object().unwrap(),
+        &json!({}),
+        &mut launch("r"),
+        false
+    )
+    .is_ok());
+    args["card"]["writer_status"] = json!(answers.lines().skip(1).collect::<Vec<_>>().join(
+        "
+"
+    ));
+    let err = prepare_launch(
+        args.as_object().unwrap(),
+        &json!({}),
+        &mut launch("r"),
+        false,
+    )
+    .err()
+    .unwrap()
+    .into_error_data();
+    assert!(err.message.contains("Verify every done criterion"));
+    args["card"]["writer_status"] = json!(answers);
     args["card"]["done_criteria"] = json!("Different criteria");
     assert!(prepare_launch(
         args.as_object().unwrap(),
@@ -240,7 +271,7 @@ fn generated_writer_checklist_is_answered_and_forwarded_to_reviewer() {
 }
 
 #[test]
-fn checklist_uses_top_three_classes_and_refuses_unreadable_history() {
+fn checklist_lists_all_classes_by_count_and_refuses_unreadable_history() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("findings.md"), "VERDICT: REQUEST_CHANGES\nHIGH: missing tests\nMED: docs wrong\nMED: contract mismatch\nHIGH: lost data\nHIGH: lost data again\n").unwrap();
     std::fs::write(
@@ -256,11 +287,10 @@ fn checklist_uses_top_three_classes_and_refuses_unreadable_history() {
         text.lines()
             .filter(|l| l.starts_with("SELF-CHECK "))
             .count(),
-        4
+        5
     );
     assert!(text.find("other recent").unwrap() < text.find("regression tests").unwrap());
-    assert!(text.contains("documentation"));
-    assert!(!text.contains("cross-language"));
+    assert!(text.contains("documentation") && text.contains("cross-language"));
     let args =
         json!({"card":{"done_criteria":"done", "review_dir":dir.path().join("findings.md")}});
     assert!(prepare_launch(

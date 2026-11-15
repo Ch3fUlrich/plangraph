@@ -118,13 +118,14 @@ fn checklist(card: &serde_json::Value, cwd: &Path) -> Result<Vec<(String, String
         None => cwd.join("reviews"),
     };
     let counts = finding_counts(&directory)?;
-    let mut ranked: Vec<_> = (0..CLASSES.len()).filter(|i| counts[*i] > 0).collect();
+    // Every class is always listed so ids never depend on live history; counts only order them.
+    let mut ranked: Vec<_> = (0..CLASSES.len()).collect();
     ranked.sort_by_key(|i| (std::cmp::Reverse(counts[*i]), *i));
     let mut lines = vec![format!(
         "Verify every done criterion: {}",
         serde_json::json!(criteria)
     )];
-    lines.extend(ranked.into_iter().take(3).map(|i| CLASSES[i].0.to_owned()));
+    lines.extend(ranked.into_iter().map(|i| CLASSES[i].0.to_owned()));
     Ok(lines
         .into_iter()
         .map(|line| {
@@ -149,7 +150,7 @@ pub(crate) fn prepare(args: &Args, launch: &mut LaunchSpec) -> Result<(), ToolEr
         let status = card["writer_status"]
             .as_str()
             .ok_or_else(|| parameter("writer self-check answers required before review"))?;
-        for (id, _) in &entries {
+        for (id, text) in &entries {
             let key = format!("SELF-CHECK {id}:");
             let answers: Vec<_> = status
                 .lines()
@@ -157,7 +158,7 @@ pub(crate) fn prepare(args: &Args, launch: &mut LaunchSpec) -> Result<(), ToolEr
                 .collect();
             if answers.len() != 1 || answers[0].trim().is_empty() {
                 return Err(parameter(format!(
-                    "missing, blank or duplicate writer self-check answer: {id}"
+                    "missing, blank or duplicate writer self-check answer: {id} ({text})"
                 )));
             }
         }
