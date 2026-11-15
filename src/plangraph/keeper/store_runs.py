@@ -190,7 +190,7 @@ class RunsMixin:
                     raise Refused("evidence_unverified", "operator_seat_waiver_merge_at_or_after_cutoff")
                 if go_date is None or go_date >= cutoff:
                     raise Refused("evidence_unverified", "operator_seat_waiver_go_date_ineligible")
-            return {"class": "merged-without-witnesses", "decision_id": waiver_id}
+            return {"class": "merged-without-witnesses", "decision_id": waiver_id, "scope": tokens}
         except Refused:
             raise
         except Exception:
@@ -299,7 +299,7 @@ class RunsMixin:
                 continue
             row_dated = self._go_row_dated(decisions, did)
             held = proofs[other_head].get("decision_id")
-            if held is None or (row_dated and did > held):
+            if held is None or (row_dated and int(did[2:]) > int(held[2:])):
                 proofs[other_head]["decision_id"] = did
                 dated[other_head] = row_dated
 

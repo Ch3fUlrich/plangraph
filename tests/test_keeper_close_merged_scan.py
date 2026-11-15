@@ -239,7 +239,7 @@ def test_client_timeout_after_a_committed_close_reads_back_and_exits_zero(capsys
     session = FakeSession("done")
     assert cmd_close_merged(close_args(), session) == 0
     captured = capsys.readouterr()
-    assert "done" in captured.out and "close committed" in captured.err
+    assert "done" in captured.out and "closed by this request or a concurrent one" in captured.err
     assert session.calls[0] == ("POST", "close_merged", SLOW_TIMEOUT) and SLOW_TIMEOUT >= 120
 
 
@@ -265,10 +265,47 @@ def test_a_go_row_edited_between_the_phases_refuses(unseated_w, monkeypatch):
 
     def edited_write():
         world.decision_path.write_text(world.decision_path.read_text().replace(
-            "2026-11-12", "2026-11-14"))
+            "Waives-seats: demo:H", "Waives-seats: demo:H demo:Z"))
         return original()
 
     monkeypatch.setattr(world.store, "_write", edited_write)
-    with pytest.raises(Refused):
+    with pytest.raises(Refused, match="merged_seat_waiver_changed"):
         world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
     assert world.store._item("demo:H")["state"] == "in_review"
+
+
+def test_a_later_go_row_replaces_across_digit_widths(unseated_w, monkeypatch):
+    world = unseated_w
+    heads = [HEAD, "f" * 40]
+    # D-999 holds the second head; D-1000 is the later row and must replace it.
+    rows = [go_row("D-5504", HEAD), go_row("D-999", "f" * 40, date="2026-11-11"),
+            go_row("D-1000", "f" * 40, date="2026-11-12")]
+    scan_world(world, monkeypatch, rows, heads)
+    world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    prs = world.store._evidence("demo:H")[-1]["ref"]["prs"]
+    assert {p["head"]: p["decision_id"] for p in prs}["f" * 40] == "D-1000"
+
+
+def test_overlapping_snapshots_on_two_threads_do_not_share_text(tmp_path):
+    import threading
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    path = tmp_path / "DECISIONS.md"
+    path.write_text("| D-1 | demo | first | ROUTER | 2026-11-12 |\n")
+    adapter = DecisionsAdapter(path)
+    entered, proceed, seen = threading.Event(), threading.Event(), {}
+
+    def first():
+        with adapter.snapshot():
+            seen["a1"] = adapter._document(_strict=True)
+            entered.set()
+            proceed.wait(5)
+
+    worker = threading.Thread(target=first)
+    worker.start()
+    entered.wait(5)
+    path.write_text("| D-1 | demo | second | ROUTER | 2026-11-12 |\n")
+    with adapter.snapshot():
+        seen["b"] = adapter._document(_strict=True)
+    proceed.set()
+    worker.join()
+    assert "first" in seen["a1"] and "second" in seen["b"]
