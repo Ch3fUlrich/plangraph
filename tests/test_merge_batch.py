@@ -279,6 +279,7 @@ def test_skip_conflicts_labels_and_continues(env):
     st = json.loads(env.state_file("s1").read_text())
     assert [m["pr"] for m in st["merged"]] == [1, 3] and st["status"] == "built"
     assert (st["skipped"][0]["pr"], st["skipped"][0]["files"]) == (2, ["shared.txt"])
+    assert st["skipped"][0]["labeled"] is True
     assert env.git("status", "--porcelain", cwd=wt) == ""
     assert not Path(env.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=wt)).exists()
     label = ["api", "--method", "POST", "repos/owner/proj/issues/2/labels", "-f", "labels[]=needs-update"]

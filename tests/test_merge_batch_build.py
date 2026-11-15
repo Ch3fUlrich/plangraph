@@ -32,6 +32,24 @@ def env(tmp_path):
     yield from env_fixture(tmp_path)
 
 
+@pytest.mark.parametrize("response", [
+    "[]", '[{"name": "batch-ready"}]', "{}", "null", '"needs-update"',
+    '[null, {"name": "needs-update"}]', '[{"name": "needs-update"}, {}]', "not JSON",
+])
+def test_skip_conflicts_checks_returned_label_list(env, response):
+    conflicting(env)
+    env.state["labels"].append("needs-update")
+    env.state["label_response"] = response
+    env.save()
+    res = env.run("build", "--name", "label-response", "--prs", "1,2,3", "--skip-conflicts")
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "could not add the needs-update label to PR #2" in res.stderr
+    state = json.loads(env.state_file("label-response").read_text())
+    assert state["skipped"][0]["labeled"] is False
+    assert len(env.calls("api")) == 1 and not env.calls("label", "create")
+    assert not env.calls("pr", "edit")
+
+
 def wt_of(env, name):
     return env.tmp / "repo-worktrees" / f"batch-{name}"
 
