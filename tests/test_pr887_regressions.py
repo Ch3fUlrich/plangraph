@@ -44,6 +44,13 @@ def test_workstation_runners_require_opt_in_and_trusted_pr_with_hosted_fallback(
     assert actual == expected
 
 
+def test_rust_windows_run_steps_use_bash():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())
+    job = workflow['jobs']['rust-windows']
+    assert job['defaults']['run']['shell'] == 'bash'
+    assert all('shell' not in step for step in job['steps'])
+
+
 def test_workflows_and_tests_keep_runner_labels_in_repository_variables():
     workflows = list((ROOT / '.github/workflows').glob('*.y*ml'))
     generic = {'self-hosted', 'linux', 'windows', 'x64'}
