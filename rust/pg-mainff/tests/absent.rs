@@ -216,3 +216,17 @@ fn existing_keeper_runtime_data_holds() {
         assert_eq!(f.head(), f.loaded);
     }
 }
+#[test]
+fn absent_state_releases_the_keeper_import_hold() {
+    let f = Fixture::new();
+    let target = f.target("src/plangraph/keeper/daemon.py", "VALUE = 2\n");
+    fs::remove_file(&f.state).unwrap();
+    let host = Host {
+        case: "not-found",
+        process: 0,
+        scopes: Cell::new(0),
+    };
+    let (code, line) = host.check(&f);
+    assert_eq!(code, 0, "{line}");
+    assert_eq!(f.head(), target);
+}
