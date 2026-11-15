@@ -239,6 +239,13 @@ or home path — not in a diff, not in a commit message. Keep
 public split public, and it fails on exactly those leaks. CI runs on GitHub-hosted runners
 only.
 
+Fast checks must run `python3 tools/preflight.py --base origin/main --head HEAD --fast`
+on the exact committed head. Public rules from `manifest.toml` and `scrub_ci.toml`,
+credential shapes and the configured private words run together. The legacy
+`tools/preflight_private_scrub.py --base origin/main --head HEAD --words FILE`
+entry point also runs all these rules. Hook, CI and fast checks share
+`scrub_check.scan_content`; committed checks exclude inherited line occurrences.
+
 Install the pre-push scrub gate (scans the files changed in the pushed commits with
 `tools/split/scrub_check.py`, refuses on any hit, prints only `file:line: rule`):
 

@@ -21,7 +21,6 @@ import os
 import json
 import tempfile
 import shutil
-import difflib
 import re
 import subprocess
 import sys
@@ -126,37 +125,12 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
         old = git("show", f"{baseline}:{rel}")
         if old.returncode == 0:
             baseline_data.append(old.stdout)
-    skip = sc._allowed(rel, cfg)
-    if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:
-        pending = sc.pending_value_shas(rel, "private-word", [rel], cfg)
-        if pending:
-            hits.append(sc.Hit(rel, 0, "private-word", pending[0]))
-    if entry.startswith("120000 "):  # a link target is a path leak, never allow-listable
-        hits.append(sc.Hit(rel, 0, "symlink"))
-        return
     r = git("show", f"{local_sha}:{rel}")
-    if r.returncode != 0:
-        return  # deleted, or a submodule gitlink
-    data = r.stdout
-    if b"\x00" in data[:8192]:
-        return  # binary files are not scanned, same as scrub_check
-    lines = data.decode("utf-8", "replace").splitlines()
-    added = set(range(len(lines)))
-    # Compare final trees, not commit patches: merge resolutions must be scanned
-    # too. Matching blocks preserve duplicate-line counts, unlike a set of text.
-    for old in baseline_data:
-        matcher = difflib.SequenceMatcher(
-            None, old.decode("utf-8", "replace").splitlines(), lines, autojunk=False)
-        for block in matcher.get_matching_blocks():
-            added.difference_update(range(block.b, block.b + block.size))
-    for n, line in enumerate(lines, 1):
-        if n - 1 not in added:
-            continue
-        for rule, vals in sorted(sc.scan_line_values(line, cfg, find_shapes).items()):
-            if rule in skip:
-                continue
-            if sc.pending_value_shas(rel, rule, vals, cfg):
-                hits.append(sc.Hit(rel, n, rule))
+    # Gitlinks can name unavailable objects; their paths still need scanning.
+    data = r.stdout if r.returncode == 0 else b""
+    found, _ = sc.scan_content(rel, data, cfg, find_shapes,
+                               symlink=entry.startswith("120000 "), baselines=baseline_data)
+    hits.extend(found)
 
 
 def file_size_gate():
