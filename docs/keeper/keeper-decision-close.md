@@ -170,25 +170,34 @@ HTTP `/v1/close_merged` accepts boolean `from_open` and `apply` for this path.
 
 Historical missing-witness closes remain disabled unless explicitly requested:
 `pg close-merged KEY GO-D-ID --waive-seats OPERATOR-D-ID`. The authority must
-be a unique indexed decision row with named `CLASS` and `DATE` table columns,
-class exactly `OPERATOR`, a DECISION cell beginning
-`Waiver: merged-without-witnesses; Waives-seats: KEY KEY ...`.
-The space-separated list binds whole tokens only; keys mentioned outside that
-list, prefixes, suffixes and comma-separated keys do not grant authority.
-Router-class rows, missing ids, duplicate rows and other waiver names refuse.
-Every merged PR still needs its head-bound GO; both its merge commit timestamp
-and the GO row's `DATE` must precede the cutoff at midnight UTC. The decisions
-adapter reads the sole ISO date in table row `| 3.37 | ... |` from the configured
-decisions document (the origin version in production); only an absent rule uses
-2026-11-13. Duplicate rules, missing/ambiguous dates and invalid dates refuse.
+be a unique indexed decision row using the decisions-log header
+`id | project | decision | by | why / evidence`. The `by` cell must contain the
+case-insensitive token `operator`, separated from other tokens by commas or plus
+signs. The decision cell must begin `Waiver: merged-without-witnesses` and contain
+`Waives-seats: KEY KEY ...`. The space-separated list binds whole tokens only;
+keys mentioned outside that list, prefixes, suffixes and comma-separated keys do
+not grant authority. Rows without operator authority, missing ids, duplicate rows
+and other waiver names refuse.
+Every merged PR still needs its head-bound GO. Dates come from a `date` column
+or a unique `Date:` field in the decision cell; missing or ambiguous dates refuse.
+Both the merge commit timestamp and GO date must precede the cutoff.
+An optional per-row `Cutoff:` in the waiver decision cell replaces rule 3.37's
+cutoff for the listed keys only. It accepts an ISO UTC date or datetime (`Z` or
+`+00:00`), must occur once, and cannot be later than the waiver row's own date.
+Malformed cutoffs refuse `operator_seat_waiver_invalid_or_ineligible: historical_cutoff`;
+a cutoff later than the row date refuses `operator_seat_waiver_cutoff_after_row`.
+Without `Cutoff:`, the decisions adapter reads the sole ISO date in table row
+`| 3.37 | ... |` from the configured decisions document (the origin version in
+production); only an absent rule uses 2026-11-13 UTC. Duplicate rules,
+missing/ambiguous dates and invalid dates refuse.
 Missing merge dates refuse `operator_seat_waiver_merge_date_missing`; merges on
 or after the cutoff refuse `operator_seat_waiver_merge_at_or_after_cutoff`.
 An ineligible GO date refuses `operator_seat_waiver_go_date_ineligible`.
 A key outside the list refuses `operator_seat_waiver_scope_mismatch`; a GO for
 another merge head refuses `go_row_head_mismatch`.
 Authority, scope, dates and PR proofs are checked again under the close lock.
-Rule 3.37 / D-5865 overrides the two-family rule, including the auth/secrets
-requirement for two non-Anthropic families, for the listed keys only.
+Credential lanes (cards tagged `auth` or `secrets`) always refuse a seat waiver;
+they retain the requirement for two non-Anthropic families.
 The item evidence records the waiver class, operator decision id, PR proofs,
 `review_tier`, `risk_tags` and `seat_rule_waived_by` (that operator decision id);
 no family verdict is invented. HTTP uses optional `waive_seats: "D-NNNN"`.

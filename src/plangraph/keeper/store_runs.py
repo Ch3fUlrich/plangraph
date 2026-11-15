@@ -162,7 +162,7 @@ class RunsMixin:
                 raise Refused("coverage", "insufficient_non_anthropic_seat_families: need 2")
             git = self._adapter("git")
             check = "historical_cutoff"
-            cutoffs = re.findall(r"(?:^|[;\s])Cutoff:(?=\s|$)", row.get("decision", ""))
+            cutoffs = re.findall(r"(?:^|[;\s])Cutoff:", row.get("decision", ""))
             if cutoffs:
                 values = re.findall(r"(?:^|[;\s])Cutoff: +([^;\s]+)", row["decision"])
                 if len(cutoffs) != 1 or len(values) != 1 or not _UTC_DATE_RE.fullmatch(values[0]):
