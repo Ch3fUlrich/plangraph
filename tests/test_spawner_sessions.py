@@ -9,6 +9,7 @@ import pytest
 from plangraph.routing_errors import ParameterRefused
 from sessions_support import UUID1, UUID2, PROMPT, DETACHED, FakeRun, make, go
 from sessions_support import site  # noqa: F401
+from test_spawner_base_fresh import repository, git, advance  # noqa: F401
 
 
 def test_argv_windows_bg_and_wt(site, monkeypatch):
@@ -264,3 +265,72 @@ def test_legacy_record_without_state_is_read(site):
     assert res["ok"] is True
     rec = json.loads((sessions / "alpha.json").read_text())
     assert rec["state"] == "running"  # the new record carries the state field
+
+
+@pytest.mark.real_base_fresh
+@pytest.mark.parametrize('via_mcp', [False, True])
+@pytest.mark.parametrize('base', ['fresh', 'stale', 'waived', 'fabricated', 'judge', 'offline'])
+def test_session_launch_base_admission(site, repository, monkeypatch, via_mcp, base):
+    import asyncio
+    from types import SimpleNamespace
+    from plangraph.spawner.base_fresh import base_fresh
+    from plangraph.spawner.session_tools import dispatch_session_tool
+    from sessions_support import BASE
+
+    origin, repo = repository
+    old = git(repo, 'rev-parse', 'HEAD')
+    monkeypatch.delenv('PLANGRAPH_BASE_DECISIONS_FILE', raising=False)
+    if base != 'fresh':
+        advance(origin, repo)
+    expected = base_fresh(repo)
+    if base in ('waived', 'judge', 'offline'):
+        # Real, separately fetched authority; a local operator row cannot
+        # substitute for the committed judge row or an unavailable origin.
+        authority_origin, authority = site.tmp_path / 'decisions.git', site.tmp_path / 'authority'
+        git(site.tmp_path, 'init', '--bare', '-b', 'main', str(authority_origin))
+        git(site.tmp_path, 'clone', str(authority_origin), str(authority))
+        path = authority / 'decisions.md'
+        source = 'judge' if base == 'judge' else 'operator'
+        row = f'| D-123 | date | Source: {source} Waives: spawn-base:{old} Origin: {expected["origin_sha"]} |\n'
+        path.write_text(row)
+        git(authority, 'add', 'decisions.md')
+        git(authority, 'commit', '-m', 'scoped waiver')
+        git(authority, 'push', 'origin', 'HEAD:main')
+        path.write_text(row.replace('Source: judge', 'Source: operator'))
+        monkeypatch.setenv('PLANGRAPH_BASE_DECISIONS_FILE', str(path))
+        if base == 'offline':
+            git(authority, 'remote', 'set-url', 'origin', str(site.tmp_path / 'missing'))
+    run = FakeRun(stdout='session ' + UUID1)
+    sessions = make(site, run)
+    # Admission must precede argv/cwd launch preparation, counter reservation
+    # and prompt creation. A refused attempt may only leave its audit line.
+    prepared = []
+    build = sessions._build_argv
+    monkeypatch.setattr(sessions, '_build_argv', lambda *a: prepared.append(True) or build(*a))
+    args = dict(BASE, name='alpha', cwd=str(repo), mcp_config=str(site.mcp))
+    if base in ('waived', 'fabricated', 'judge', 'offline'):
+        args['base_decision'] = 'D-123'
+
+    def launch():
+        if via_mcp:
+            return asyncio.run(dispatch_session_tool(SimpleNamespace(_sessions=lambda: sessions),
+                               'plangraph_session_launch', args))
+        return sessions.launch(**args)
+
+    if base in ('fresh', 'waived'):
+        assert launch()['session_id'] == UUID1
+        assert len(run.launch_calls()) == 1 and prepared == [True]
+        record = json.loads((site.state / 'sessions' / 'alpha.json').read_text())
+        assert record['base_sha'] == expected['origin_sha']
+        assert record['checked_base_sha'] == old
+        if base == 'waived':
+            assert record['base_decision'] == record['card']['base_decision'] == 'D-123'
+    else:
+        with pytest.raises(ParameterRefused) as refused:
+            launch()
+        assert str(refused.value) == expected['reason'] == 'base_stale: behind=2'
+        assert run.calls == [] and prepared == []
+        assert sorted(p.name for p in (site.state / 'sessions').iterdir()) == ['audit.log']
+        audit = json.loads((site.state / 'sessions' / 'audit.log').read_text())
+        assert audit['reason'] == expected['reason'] and audit['ok'] is False
+    assert git(repo, 'worktree', 'list', '--porcelain').count('worktree ') == 1

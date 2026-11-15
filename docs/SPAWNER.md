@@ -303,6 +303,13 @@ process cwd and child PWD use that path. With the flag off, cwd is unchanged;
 dry runs create nothing. Admission fetches origin's default branch and refuses stale workers, continuations and seats (`base_stale`); a card `base_decision` needs scoped operator proof from the configured decision authority to waive known lag; cleanup removes only unadmitted attempts created by this run and never continuations; detached CLI waits for admission (180-second timeout: `base_admission_timeout`, exit 1); no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
 
+Session `launch` uses the same fetched-base admission before preparing launch
+arguments, reserving its counter or writing its prompt. A stale checkout refuses
+with the spawn `base_stale` reason and leaves only the session refusal audit.
+The Python session API and `plangraph_session_launch` accept `base_decision`;
+waivers use the same fetched operator row scoped to checkout and origin SHAs as
+spawns. Successful session records retain the admission SHAs and waiver decision.
+
 OpenCode gateway runs carry a per-job session tag for every role, including Sol
 writers and effort variants. After exit (successful or failed), the parent reads
 the response-side gateway call log independently of review tool permissions. Only
