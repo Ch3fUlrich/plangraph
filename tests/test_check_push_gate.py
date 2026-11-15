@@ -30,7 +30,7 @@ def repo(tmp_path, monkeypatch):
     git(r, "config", "user.name", "fixture")
     git(r, "config", "user.email", "fixture@example.invalid")
     for rel in ("tools/hooks/pre-push", "tools/split/scrub_check.py",
-                "tools/check_file_size.py"):
+                "tools/check_file_size.py", "tools/ci_commit_gate.py"):
         dest = r / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / rel, dest)
@@ -42,7 +42,7 @@ def repo(tmp_path, monkeypatch):
 
 def commit(r):
     git(r, "add", "-A")
-    git(r, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture")
+    git(r, "-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture\n\nPlan-Item: plangraph:TEST\nWriter: codex/test")
 
 
 def run(*args):

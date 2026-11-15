@@ -11,3 +11,10 @@ logs/
 .venv-pg/
 .venv/
 .devstack/
+
+# Built Git hook
+/tools/hooks/commit-msg
+/tools/hooks/.commit-msg-gate
+
+# Writer handoffs belong outside the checkout, at every depth.
+STATUS-*.txt

@@ -264,8 +264,8 @@ def test_disabled_and_fallback_routes():
                     assert any(s['leg'] == leg.id and 'D-4196' in s['reason'] for s in plan.skipped)
                 else:
                     assert not any(s['leg'] == leg.id for s in plan.skipped)
-    assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[0].legs]
-    assert 'omniroute-gemini-3.8-flash' not in [l.id for l in plans[1].legs]
+    assert 'omniroute-gemini-4-argon-high' not in [l.id for l in plans[0].legs]
+    assert 'omniroute-gemini-4-argon-high' not in [l.id for l in plans[1].legs]
 
 
 def test_source_path_uri_characters(tmp_path):

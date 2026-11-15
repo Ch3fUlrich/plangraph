@@ -3,9 +3,15 @@
 The alternative `close_on_decision(p, key, decision_ref="D-5024", epoch=E)`
 needs no batch file. The router or the **current claimant** may call it; a
 non-router must supply the current claim epoch (a delegate alone is not enough).
-The item must be `claimed` or `in_review`, and either have tier `none` or kind
-`decision` (D-5053); claimants never close `operator_task` (router or operator answer only). This does not bypass review for ordinary
-`standard`/`high` work. The `batch_ref` form is a router-only fallback until LIVE-PROBE shows auto-close live (D-5053).
+The item must be `claimed` or `in_review`, have tier `none`, and declare exactly
+`evidence_kinds: [decision]`, regardless of item kind. A stored `standard`/`high`
+decision-only item closes only through review; claimants still cannot close
+`operator_task` (router or operator answer only). New decision-only declarations
+require the router and tier `none`. Stored reviewed definitions remain readable
+and accept edits that do not explicitly set tier/evidence, including automatic
+standard-to-high rename escalation; none-tier renames retain tier `none`.
+Mixed `[decision, commit]` evidence does not permit a decision-row close.
+The `batch_ref` form remains a router-only fallback.
 
 Proof rules (D-5053): fetch and immutable proof outside the write transaction; only keeper item/epoch rechecked inside:
 
@@ -20,9 +26,8 @@ Proof rules (D-5053): fetch and immutable proof outside the write transaction; o
   case-sensitive whole token `CLOSE project:ID` for this item. For example,
   `CLOSE demo:AB` cannot close `demo:A`. Local edits and other branches do not count;
   the legacy `Closes:` syntax is not this form's proof.
-* The row's SHA-256 (UTF-8 bytes, without its line ending) binds to that fetched commit (D-5053), even if origin/main later moves; no in-lock Git re-read. Authorization, epoch, unlocked state and eligible kind/tier
-  are rechecked under the lock. If `commit` is a required evidence kind, the
-  existing merged-commit evidence check also runs under the lock.
+* The row's SHA-256 (UTF-8 bytes, without its line ending) binds to that fetched commit (D-5053), even if origin/main later moves; no in-lock Git re-read. Authorization, epoch, unlocked state and eligible evidence/tier
+  are rechecked under the lock. Mixed evidence is refused even when its commit proof passes.
 
 Success sets `state=done`, records the caller as `reviewer`, and appends the
 locking `closed_on_decision` event with `decision_ref`, `decision_ids` and
@@ -102,6 +107,41 @@ second call on DONE, refuse `bad_state`; all other roles refuse `forbidden`.
 This is not a batch op and changes no `verdict`, `claim`, `evidence`, or `close`
 rule. The Python MCP schema table lives in `mcp_tools.py` so the stdio
 transport stays below its 400-line limit without unrelated formatting churn.
+
+### Stored decision-only definitions and import compatibility
+
+Interactive creates and edits that set `review_tier` or `evidence_kinds` refuse
+`[decision]` evidence with a `standard` or `high` review tier. Router imports
+preserve these existing definitions and return a warning counting the affected
+items; export and replay retain their tier, evidence and state. Unrelated edits
+may preserve the stored combination. Setting either field validates the resulting
+pair, including a same-value declaration, and checks again under the write lock.
+
+The repository producers were audited as follows:
+
+- `examples/plans/orchard.yaml` (O-1, O-2, O-4, GOAL) and
+  `examples/plans/lighthouse.yaml` (L-1, L-2) are historical import examples.
+  `tools/split/build_examples.py` imports them to produce `examples/snapshot.json`
+  and `examples/rendered/demo.html`. Preserve those inputs and generated contents.
+- `tests/fixtures/import_mini/atlas.yaml` (R1, R2, IR1) and `borealis.yaml`
+  (A4, A5) deliberately exercise legacy import and round trip; retain them.
+  `importer.load_dir` supplies default tiers when absent and `export_yaml` writes
+  stored definitions; neither should silently change evidence or tier.
+- `tests/fixtures/mini_snapshot.json` (atlas:GOAL), `page_snapshot.json`
+  (atlas:IMP4/GOAL, borealis:WP4/GOAL), and
+  `tests/fixtures/ui/make_synthetic.py` / `synthetic_snapshot.json` are stored
+  display fixtures, including historical reviewed decision-only definitions;
+  keep their data rather than make rendering fixtures obey new-create policy.
+- `tests/keeper_util.py:defn` preserves caller-supplied evidence and default tiers.
+  `tests/test_ready_owner.py:srv` uses it to create a *new* decision-only question:
+  its missing `review_tier: none` was a fixture mistake and is now explicit.
+  Deliberate invalid declarations in keeper tier/decision tests remain refusals.
+- `examples/batch/demo-batch.yaml` creates O-5 interactively: its missing tier was
+  a new-create example mistake; it now declares `review_tier: none`.
+  `build_examples.py` also emits this batch without changing its declarations.
+- `tools/decisions_import.py` and `tools/md_sync_plan.py` already declare tier
+  `none` with decision-only evidence; `tools/md_sync_dclose.py` repairs the pair
+  together. They need no compatibility exception or data change.
 
 Omit `families` (CLI: omit `--family`) to recover review seats from the
 keeper-owned `spawner_records_dir` mirror. Run ids come from the item's `run_ids`

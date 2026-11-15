@@ -14,7 +14,7 @@ import pytest
 @pytest.mark.parametrize('explicit', [False, True])
 def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, explicit):
     from plangraph.spawner.runner import SpawnerRunner
-    first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.1-sol')
+    first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.1-sol', disabled=None)
     second = replace(first, id='second', model='opencode-go/gemini-4-argon')
     binary = tmp_path / 'opencode'
     binary.write_text('#!/bin/sh\ncase "$*" in *cx-gpt*) echo "Error: Model unavailable: x $MY_GATEWAY_TOKEN" >&2; exit 1;; esac\necho success\n')
@@ -112,7 +112,7 @@ def test_agy_does_not_receive_overlay(tmp_path, monkeypatch):
     (tmp_path / 'providers.json').write_text('{"providers":{"fixture":{}}}')
     async def run():
         runner = SpawnerRunner(default_cwd=str(tmp_path))
-        job = await runner.spawn('x', 'gemini-3.8-flash', client='agy')
+        job = await runner.spawn('x', 'gemini-4-argon-high', client='agy')
         await runner._tasks[job.job_id]
         return job
     job = asyncio.run(run())

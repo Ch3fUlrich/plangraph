@@ -212,9 +212,12 @@ def test_completion_dispositions_reach_notify(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(argv, 0, json.dumps(exchange([])))
         calls.append(json.loads(kwargs['input']))
     monkeypatch.setattr(subprocess, 'run', run)
-    event = dict(rule='run-silent', run_id='fixture', kind='completion', episode=100)
+    from plangraph.spawner import stall_watchdog as watchdog
+    event = dict(rule='run-silent', run_id='fixture', episode=100, stalled_at=160, noticed_at=161)
     for change in ({}, {'cancelled': True}, {'episode': 200}):
-        deliver_event(tmp_path, dict(event, **change))
+        monkeypatch.setattr(watchdog, 'probe_run', lambda *a, **kw: dict(event, **change))
+        watchdog.tick([{'run_id': 'fixture'}], [], lambda _: None, state=tmp_path,
+                      deliver=lambda finding: deliver_event(tmp_path, finding))
         poll(['fixture'], 'notify', tmp_path)
     assert len(calls) == len({e['event_id'] for e in calls}) == 3
 

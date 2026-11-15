@@ -1,6 +1,7 @@
 # Reviewer
 
 Role: independently reviews a lane against its brief before it gates.
+Build briefs with `src/plangraph/review/review_brief.md`; fill every context field.
 
 R-orch-13: Plan, spec, decision, or bucket-table-big diff (lines incl. tests): pin cross-family review before execute/merge, then Sonnet. (why: same family shares blind spots; source: inbox 00:31Z)
 R-orch-14: Select available review seats per D-2488/D-2654; record writer, reviewer, verdict and provider skip text.

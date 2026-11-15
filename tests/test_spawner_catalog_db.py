@@ -44,13 +44,13 @@ def test_schema_initialization_and_idempotency(tmp_path: Path) -> None:
         # First init and seed
         db.init_and_seed()
         models_first = db.list_models()
-        assert len(models_first) == 27
+        assert len(models_first) == 26
         assert len({m["master_rank"] for m in models_first if m.get("master_rank")}) == 22
 
         # Second init and seed (must not raise UNIQUE constraint violations)
         db.init_and_seed()
         models_second = db.list_models()
-        assert len(models_second) == 27
+        assert len(models_second) == 26
 
         # Verify key tables exist with rows
         tables = [
@@ -72,7 +72,7 @@ def test_schema_initialization_and_idempotency(tmp_path: Path) -> None:
 def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> None:
     """Verify all 22 models are present with exact AA v4.3.2 matrix figures."""
     models = memory_db.list_models()
-    assert len(models) == 27
+    assert len(models) == 26
     assert len({m["master_rank"] for m in models if m.get("master_rank")}) == 22
 
     # 1. mimo/mimo-v2.6-flash: 54.0 overall verified, 29.0 direct, 75.4 cyberbench, 0.04 USD cost
@@ -168,7 +168,7 @@ def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
     }
 
     all_models = memory_db.list_models()
-    assert len(all_models) == 27
+    assert len(all_models) == 26
 
     # Check non-decreasing tier rung sequence
     rungs = [TIER_RUNG[m["tier"]] for m in all_models]
@@ -191,7 +191,7 @@ def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
         assert pm["model_id"] in (
             "deepseek/deepseek-v4-flash-max",
             "gemini/gemini-4-argon-high",
-            "omniroute/gemini-3.8-flash",
+            "omniroute/gemini-4-argon-high",
         )
 
 
@@ -256,8 +256,8 @@ def test_sonnet_medium_in_l2_worker_and_reviewer_routes() -> None:
     try:
         l2_worker_legs = db.get_route_legs("l2-worker", active_only=True)
         assert len(l2_worker_legs) >= 3
-        assert l2_worker_legs[2]["position"] == 3
-        assert l2_worker_legs[2]["model_id"] == "agy/claude-sonnet-5-5-medium"
+        assert l2_worker_legs[1]["position"] == 2
+        assert l2_worker_legs[1]["model_id"] == "agy/claude-sonnet-5-5-medium"
 
         l2_reviewer_legs = db.get_route_legs("l2-reviewer", active_only=True)
         assert len(l2_reviewer_legs) >= 2
@@ -319,7 +319,7 @@ def test_export_json_and_combos_roundtrip(memory_db: CatalogDB, tmp_path: Path) 
     # Export catalog tables
     exported_data = memory_db.export_json(export_file)
     assert export_file.is_file()
-    assert len(exported_data["models"]) == 27
+    assert len(exported_data["models"]) == 26
     assert len(exported_data["benchmarks"]) == 25
     assert len(exported_data["routes"]) == 4
 
@@ -330,7 +330,7 @@ def test_export_json_and_combos_roundtrip(memory_db: CatalogDB, tmp_path: Path) 
     assert imported_count > 0
 
     reloaded_models = fresh_db.list_models()
-    assert len(reloaded_models) == 27
+    assert len(reloaded_models) == 26
     assert len({m["master_rank"] for m in reloaded_models if m.get("master_rank")}) == 22
 
     # Export OmniRoute combos

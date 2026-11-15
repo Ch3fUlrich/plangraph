@@ -75,6 +75,7 @@ fn writer_none_launch_missing_root_stays_confined() {
 }
 
 struct Fixture {
+    _repo_guard: crate::test_repo_guard::RepoGuard,
     _dir: tempfile::TempDir,
     repo: RepoEntry,
     ws: Workspace,
@@ -82,6 +83,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        let repo_guard = crate::test_repo_guard::RepoGuard::real();
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("repo");
         let trees = dir.path().join("trees");
@@ -122,6 +124,7 @@ impl Fixture {
         };
         let tree = crate::workspace_launch::create_writer(&repo, &ws, "writer").unwrap();
         Self {
+            _repo_guard: repo_guard,
             _dir: dir,
             repo,
             ws,

@@ -1,0 +1,1 @@
+Restore the full scanner edge grid and optimize pg-worker-core explicitly; empty pytest shards succeed without widening selection, and remove whole-run cancellation while retaining PR maxfail limits and cargo test coverage.

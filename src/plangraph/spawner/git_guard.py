@@ -24,6 +24,40 @@ import uuid
 from plangraph.routing_errors import SpawnRefused
 from .prompt_input import checkout_env
 
+CODE_TREE = Path(__file__).resolve().parents[3]
+
+
+def read_code_identity(repo=CODE_TREE):
+    """One bounded Git read while loading the spawner, before async dispatch."""
+    try:
+        # Installed packages must not inherit an enclosing project's identity.
+        if not (Path(repo) / '.git').exists():
+            raise ValueError('code path is not a checkout root')
+        result = subprocess.run(
+            ['git', '-C', str(repo), 'rev-parse', 'HEAD', '--abbrev-ref', 'HEAD'],
+            check=True, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=1, env=checkout_env())
+        sha, branch = result.stdout.strip().splitlines()
+        if not re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', sha):
+            raise ValueError('invalid code tree SHA')
+        return {'tree_sha': sha, 'tree_branch': 'detached' if branch == 'HEAD' else branch}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return {'tree_sha': None, 'tree_branch': None}
+
+
+# Pin provenance to code load, not a potentially newer checkout at record time.
+CODE_IDENTITY = read_code_identity()
+
+
+def annotate_tree(record):
+    """Copy cached process provenance; persistence never starts a subprocess."""
+    for key, value in CODE_IDENTITY.items():
+        record.setdefault(key, value)
+    if record['tree_sha'] is None:
+        warning = 'spawner code checkout identity unavailable at process startup'
+        if warning not in record.setdefault('warnings', []):
+            record['warnings'].append(warning)
+
 
 class RunWorktreeDependencyNotMerged(SpawnRefused):
     """A declared finished dependency is absent from the fetched main history."""
@@ -179,10 +213,11 @@ def create(root, repo, lane_branch, continuation=False, *, finished_dependencies
             r'(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})', sha) for sha in finished_dependencies):
         raise RunWorktreeDependencyNotMerged('run_worktree_dependency_not_merged')
     # Network latency must not monopolize the host's creation/reaper lock.
-    git('fetch', '--no-write-fetch-head', 'origin', '+refs/heads/main:refs/remotes/origin/main',
-        failure='run_worktree_fetch_failed')
-    main = git('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}',
-               failure='run_worktree_base_unavailable').stdout.strip()
+    if continuation:
+        git('rev-parse', '--verify', 'refs/heads/' + lane_branch + '^{commit}',
+            failure='run_worktree_branch_missing')
+    from .base_fresh import fresh_worktree_base
+    main = fresh_worktree_base(repo, base='refs/heads/' + lane_branch if continuation else 'origin/main')
     with run_worktree_lock(root):
         if not continuation and not git('show-ref', '--verify', '--quiet', 'refs/heads/' + lane_branch,
                                         check=False).returncode:
@@ -226,10 +261,22 @@ async def prepare_worktree(service, record, card, enabled, *, continuation=False
     previous = record.get('run_worktree')
     branch = previous['branch'] if previous else card.get('lane_branch') or 'lane/' + record['run_id']
     continuation = continuation or bool(previous) or bool(card.get('continuation'))
-    metadata = await asyncio.to_thread(create, root, repo, branch, continuation,
-                                      finished_dependencies=card.get('finished_dependencies', ()))
+    creation = asyncio.create_task(asyncio.to_thread(create, root, repo, branch, continuation,
+                                      finished_dependencies=card.get('finished_dependencies', ())))
+    cancelled = False
+    try:
+        metadata = await asyncio.shield(creation)
+    except asyncio.CancelledError:
+        cancelled = True
+        metadata = await creation  # A running Git thread cannot be cancelled.
+    metadata.update(created_by_run_id=record['run_id'], continuation=continuation)
     record.update(run_worktree=metadata, cwd=metadata['path'])
     record.setdefault('worktree_attempts', []).append(metadata)
+    if cancelled:
+        from .base_fresh import _remove_refused_worktree
+        await asyncio.to_thread(_remove_refused_worktree, service, record, remove_branch=True)
+        service._save(record)
+        raise asyncio.CancelledError
     service._save(record)
     return dict(cwd=metadata['path'])
 

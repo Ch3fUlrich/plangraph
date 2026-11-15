@@ -208,22 +208,11 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "context_window": 128000,
         "combos": ["l2-worker", "l3-driver"],
     },
-    {
-        "id": "agy/gemini-3.8-flash-tiered-high",
-        "family": "gemini",
-        "aa_intelligence": 41.0,
-        "verified_tok_per_s": 158.0,
-        "cost_per_task_usd": 1.24,
-        "pool_burn_weight": 1.0,
-        "tier": "free",
-        "available": 1,
-        "context_window": 1048576,
-        "combos": ["l1-orchestrator", "l2-worker"],
-    },
 ]
 
 # Registered seats are the authoritative offline routing surface. Legacy rows
 # remain visible for diagnostics but must not become new offline spawn routes.
+from plangraph.retired_models import visible_model
 from plangraph.planner.legs import DEFAULT_LEGS
 
 # OVH removed by operator, muse-spark-1.3-free gone D-1714, D-2655 G3.
@@ -378,7 +367,7 @@ def detect_model_family(model_id: str) -> str:
 
 def catalog_row_admitted(row: Mapping[str, Any]) -> bool:
     """Fail closed: both catalog admission signals must be explicit."""
-    return (row.get('id') not in OPERATOR_REMOVED_MODELS
+    return (visible_model(row) and row.get('id') not in OPERATOR_REMOVED_MODELS
             and row.get('available') == 1 and row.get('active') is True)
 
 
@@ -578,7 +567,7 @@ def is_model_available(model: Mapping[str, Any], leg_state_reader=None, *, accou
     while cxa/gpt-6-astra-max and cxa/gpt-6-sol-* are rejected.
     """
     enabled = getattr(leg_state_reader, 'enabled', False)
-    if not model_admitted(model, enabled=enabled):
+    if not visible_model(model) or not model_admitted(model, enabled=enabled):
         return False
     reader = leg_state_reader or leg_status
     if enabled:
@@ -771,13 +760,13 @@ def get_catalog_models(db: Any = None, *, active_only: bool = False,
                 if models:
                     _catalog_failures.pop(key, None)
                     return [_normalize_catalog_row(m) for m in models
-                            if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+                            if visible_model(m) and (not active_only or catalog_row_admitted(_normalize_catalog_row(m)))]
             if hasattr(target_db, "get_models"):
                 models = target_db.get_models()
                 if models:
                     _catalog_failures.pop(key, None)
                     return [_normalize_catalog_row(m) for m in models
-                            if not active_only or catalog_row_admitted(_normalize_catalog_row(m))]
+                            if visible_model(m) and (not active_only or catalog_row_admitted(_normalize_catalog_row(m)))]
     except Exception as exc:
         import logging
         if not failure:

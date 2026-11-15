@@ -183,8 +183,34 @@ fn tools_list_matches_embedded_fixture() {
     let mut client = McpClient::connect(&socket);
     client.initialize();
     let response = client.request("tools/list", serde_json::json!({}));
-    let fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture");
-    assert_eq!(response["result"]["tools"], fixture);
+    let mut fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture");
+    let mut listed = response["result"]["tools"].clone();
+    for (catalogue, native) in [(&mut listed, true), (&mut fixture, false)] {
+        for tool in catalogue.as_array_mut().expect("tool array") {
+            if matches!(
+                tool["name"].as_str(),
+                Some("plangraph_agent_route" | "plangraph_agent_spawn")
+            ) {
+                let selector = tool["inputSchema"]["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("leg");
+                if native {
+                    let selector = selector.expect("native selector advertised on the wire");
+                    assert_eq!(selector["type"], "string");
+                    assert_eq!(
+                        selector["enum"],
+                        serde_json::json!(["agy-cli", "claude-cli"])
+                    );
+                    assert!(selector["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains("role=review"));
+                }
+            }
+        }
+    }
+    assert_eq!(listed, fixture);
     assert_eq!(
         response["result"]["tools"].as_array().expect("array").len(),
         15
@@ -347,4 +373,25 @@ fn idle_handshake_times_out_and_server_accepts_again() {
     assert_eq!(idle.read(&mut [0]).unwrap(), 0);
     let mut next = McpClient::connect(&socket);
     assert!(next.initialize()["result"].is_object());
+}
+
+#[test]
+fn parallel_stale_sockets_are_independent() {
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        for _ in 0..2 {
+            scope.spawn(|| {
+                let tmp = TempDir::new();
+                let socket = tmp.path().join("spawnd.sock");
+                drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+                barrier.wait();
+                let _guard = spawn_serve(&socket);
+                let mut client = McpClient::connect(&socket);
+                assert_eq!(
+                    client.initialize()["result"]["serverInfo"]["name"],
+                    "pg-spawnd"
+                );
+            });
+        }
+    });
 }

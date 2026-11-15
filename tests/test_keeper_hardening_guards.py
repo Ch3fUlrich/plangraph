@@ -34,7 +34,7 @@ STORE_LAYER = "store layer, next task"
 # =============================================================== finding 5
 
 def test_guarded_update_refuses_state_changed_under_it(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     epoch = to_claimed(w, key)
     w.store.add_evidence(w.p("l1main"), key, epoch, "decision", {"id": "D-1"})
     conn2 = kdb.open_db(w.path)
@@ -59,7 +59,7 @@ def test_guarded_update_refuses_state_changed_under_it(w):
 
 
 def test_two_stores_cannot_double_submit(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     epoch = to_claimed(w, key)
     w.store.add_evidence(w.p("l1main"), key, epoch, "decision", {"id": "D-1"})
     conn2 = kdb.open_db(w.path)
@@ -92,7 +92,7 @@ def test_two_stores_cannot_double_submit(w):
 
 
 def test_release_then_reclaim_stales_the_old_epoch(w):
-    (key,) = seed(w, [("A", [])], evidence_kinds=("decision",))
+    (key,) = seed(w, [("A", [])], evidence_kinds=("any",))
     epoch1 = to_claimed(w, key)
     w.store.add_evidence(w.p("l1main"), key, epoch1, "decision", {"id": "D-1"})
     w.store.release(w.p("l1main"), key, epoch1)

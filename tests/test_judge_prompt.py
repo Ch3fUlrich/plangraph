@@ -83,7 +83,7 @@ def test_judge_seat_mode():
 ])
 def test_capability_line_per_seat_mode(mode, capability):
     prompt = build_judge_prompt("F1", "diff", {}, {}, tool_mode=mode)
-    assert prompt.splitlines()[1] == capability
+    assert prompt.split("# Review judge\n", 1)[1].splitlines()[0] == capability
 
 
 def test_token_probe_documentation_agrees():

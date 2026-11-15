@@ -30,20 +30,20 @@ impl Fixture {
             let tree = git(&remote, &["mktree"]).unwrap();
             assert!(tree.status.success());
             let tree = std::str::from_utf8(&tree.stdout).unwrap().trim();
-            let mut args = vec![
-                "-c",
-                "user.name=Fixture",
-                "-c",
-                "user.email=fixture@example.invalid",
-                "commit-tree",
-                tree,
-                "-m",
-                "test",
-            ];
+            let mut args = vec!["commit-tree", tree, "-m", "test"];
             if let Some(parent) = parent {
                 args.extend(["-p", parent]);
             }
-            let output = git(&remote, &args).unwrap();
+            // Identity environment variables outrank user.* config. Pin both roles
+            // after shared isolation, independently of the publish helper's filtering.
+            let output = crate::git_test_support::command(dir.path())
+                .env("GIT_AUTHOR_NAME", "Fixture")
+                .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+                .env("GIT_COMMITTER_NAME", "Fixture")
+                .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
+                .args(&args)
+                .output()
+                .unwrap();
             assert!(output.status.success());
             String::from_utf8(output.stdout).unwrap().trim().to_owned()
         };
@@ -281,9 +281,14 @@ fn corrupt_interior_line_reports_number() {
 #[test]
 fn fixture_has_explicit_isolated_ident() {
     let f = Fixture::new();
-    let out = git(&f.remote(), &["show", "-s", "--format=%an <%ae>", &f.head]).unwrap();
-    assert!(out.status.success());
-    assert_eq!(out.stdout, b"Fixture <fixture@example.invalid>\n");
+    for commit in [&f.old, &f.head] {
+        let out = git(&f.remote(), &["show", "-s", "--format=%an <%ae>", commit]).unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"Fixture <fixture@example.invalid>\n");
+        let out = git(&f.remote(), &["show", "-s", "--format=%cn <%ce>", commit]).unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"Fixture <fixture@example.invalid>\n");
+    }
 }
 #[test]
 #[cfg(unix)]
