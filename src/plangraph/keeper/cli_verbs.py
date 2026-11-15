@@ -227,12 +227,29 @@ def cmd_ready(args, session):
         return _emit(session, session.local_items(),
                      lambda items: fmt.ready_text(items, args.project, n,
                                                   owner=owner, agent=agent))
+    if getattr(args, "needs_reconcile", False):
+        try:
+            result = session.call("GET", "ready", {"project": args.project, "n": n,
+                "owner": owner, "mine": 1 if mine else None,
+                "agent": 1 if agent else None})
+            return _emit(session, {"needs_reconcile": result["needs_reconcile"]},
+                         lambda r: fmt.ready_text([], server_items=True,
+                             needs_reconcile=r["needs_reconcile"]))
+        except RefusedCli as exc:
+            return _refuse(exc)
+        except Unreachable as exc:
+            print(f"keeper unreachable: {exc}", file=sys.stderr)
+            return EXIT_UNREACHABLE
     return read(session, "ready", {"project": args.project, "n": n,
                                    "all": 1 if args.all else None,
                                    "owner": owner, "mine": 1 if mine else None,
                                    "agent": 1 if agent else None},
                 lambda r: fmt.ready_text(r["items"], unblocks=r.get("unblocks"),
-                                         server_items=True), local)
+                                         server_items=True,
+                                         needs_reconcile=r.get("needs_reconcile"),
+                                         in_progress=r.get("in_progress"),
+                                         unknown=r.get("unknown"),
+                                         warnings=r.get("warnings")), local)
 
 
 def cmd_show(args, session):

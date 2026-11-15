@@ -246,8 +246,10 @@ def test_ready_flags_merged_items_and_sorts_them_last(w, repo):
     text = w.store.ready(w.p("reader"), project="demo")
     lines = text.splitlines()
     assert lines[0].startswith("demo:B |")
-    assert lines[1].startswith("demo:A |") and "STALE: already merged" in lines[1]
-    assert len(lines) == 2   # one line per item, no footer
+    assert lines[1] == "" and lines[2] == "Needs reconcile:"
+    assert lines[3].startswith("  demo:A |") and "STALE: already merged" in lines[3]
+    assert "NEEDS_RECONCILE: already merged" in lines[3]
+    assert len(lines) == 4   # only the startable item has a top-level key line
 
 
 def test_ready_flags_untouched_items_and_superseded_premises(w, decisions):

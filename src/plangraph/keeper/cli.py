@@ -73,6 +73,8 @@ def _add_reads(sub):
     ready = _p(sub, "ready", help="items ready to work now")
     ready.add_argument("--project")
     ready.add_argument("--all", action="store_true")
+    ready.add_argument("--needs-reconcile", action="store_true",
+                       help="only dropped items and their reconciliation reasons")
     ready.add_argument("-n", type=int, default=10)
     ready.add_argument("--brief", action="store_true",
                        help="one compact line per item (the default; beats --json)")

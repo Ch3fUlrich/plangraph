@@ -74,6 +74,25 @@ def test_cli_full_lifecycle(live, capsys):
     assert out_json(capsys)["state"] == "done"
 
 
+@pytest.mark.parametrize("json_mode", [False, True])
+def test_cli_ready_needs_reconcile_only_with_reasons(live, capsys, monkeypatch, json_mode):
+    _, world, tokens, _, _ = live
+    clean, dropped, pending = [dict(defn(k), key=f"demo:{k}", context={})
+                                for k in ("CLEAN", "DROPPED", "PENDING")]
+    dropped.update(ready_status="needs_reconcile", reason="already merged via PR #71")
+    pending.update(ready_status="in_progress", prs=[72])
+    monkeypatch.setattr(world.store, "_ready_groups", lambda **kw: {
+        "items": [clean], "needs_reconcile": [dropped], "in_progress": [pending],
+        "unknown": [], "warnings": []})
+    flags = ["--json"] if json_mode else []
+    assert run(tokens["reader"], "ready", "--needs-reconcile", *flags) == 0
+    output = capsys.readouterr().out
+    assert "demo:DROPPED" in output and dropped["reason"] in output
+    assert "demo:CLEAN" not in output and "demo:PENDING" not in output
+    if json_mode:
+        assert json.loads(output) == {"needs_reconcile": [dropped]}
+
+
 def test_cli_refusal_exits_2(live, capsys):
     _, w, tokens, _, _ = live
     code = run(tokens["reader"], "claim", "demo:A")
