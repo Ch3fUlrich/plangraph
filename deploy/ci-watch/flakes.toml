@@ -1,0 +1,3 @@
+[flakes]
+"tests/test_w4_regressions.py::test_watchdog_timed_out_leg_records_its_attempt_row" = "plangraph:FLAKE-W4-WATCHDOG-TIMEOUT-ATTEMPT-ROW"
+"seat_pool::tests::cache_reset_fixture_does_not_invoke_commit_signing" = "plangraph:FLAKE-WORKER-CORE-PROCESS-ENV-GIT-CONFIG-RACE"

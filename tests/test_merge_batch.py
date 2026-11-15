@@ -158,6 +158,8 @@ def test_plan_refuses_without_the_gate_file_even_with_high_paths(env, tmp_path):
     copy.mkdir()
     for path in (ROOT / "tools").glob("merge_batch*.py"):
         shutil.copy(path, copy)
+    shutil.copy(ROOT / "tools/preflight.py", copy)
+    shutil.copytree(ROOT / "src/plangraph", tmp_path / "src/plangraph", ignore=shutil.ignore_patterns("__pycache__"))
     env.branch_pr(1, {"docs/a.md": "a\n"})
     ok = env.run("plan", "--prs", "1", "--high-path", "docs/*")
     assert ok.returncode == 0 and "HIGH via docs/a.md" in ok.stdout
@@ -279,6 +281,7 @@ def test_skip_conflicts_labels_and_continues(env):
     st = json.loads(env.state_file("s1").read_text())
     assert [m["pr"] for m in st["merged"]] == [1, 3] and st["status"] == "built"
     assert (st["skipped"][0]["pr"], st["skipped"][0]["files"]) == (2, ["shared.txt"])
+    assert st["skipped"][0]["labeled"] is True
     assert env.git("status", "--porcelain", cwd=wt) == ""
     assert not Path(env.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=wt)).exists()
     label = ["api", "--method", "POST", "repos/owner/proj/issues/2/labels", "-f", "labels[]=needs-update"]

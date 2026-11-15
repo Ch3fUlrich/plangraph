@@ -32,8 +32,11 @@ import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import scrub_check as sc  # noqa: E402
-from scrub_check import glob_re  # noqa: E402,F401  (re-exported)
+if __package__:
+    from . import scrub_check as sc
+else:
+    import scrub_check as sc
+glob_re = sc.glob_re  # re-exported
 
 DEFAULT_MANIFEST = Path(__file__).resolve().with_name("manifest.toml")
 DEFAULT_LEAKS_CONFIG = Path(__file__).resolve().with_name("gitleaks.toml")
@@ -65,26 +68,19 @@ def scan_committed(root, cfg, base, head):
             continue
         rel = os.fsdecode(path)
         mode, kind, oid = meta.split()
-        skip = sc._allowed(rel, cfg)
-        if any(word.search(rel) for word in cfg['_words']) and 'private-word' not in skip:
-            pending = sc.pending_value_shas(rel, 'private-word', [rel], cfg)
-            if pending:
-                hits.append(sc.Hit(rel, 0, 'private-word', pending[0]))
-        if mode == b'120000':
-            hits.append(sc.Hit(rel, 0, 'symlink'))
-            continue
         if kind != b'blob':
+            found, _ = sc.scan_content(rel, b'', cfg, find_shapes)
+            hits.extend(found)
             continue
         data = git('cat-file', 'blob', oid.decode('ascii'))
-        if b'\0' in data[:8192]:
-            skipped.append(rel)
-            continue
-        for number, line in enumerate(data.decode('utf-8', 'replace').splitlines(), 1):
-            for rule, values in sorted(sc.scan_line_values(line, cfg, find_shapes).items()):
-                if rule not in skip:
-                    pending = sc.pending_value_shas(rel, rule, values, cfg)
-                    if pending:
-                        hits.append(sc.Hit(rel, number, rule, pending[0]))
+        old = git('ls-tree', '-z', tree, '--', rel)
+        old_meta = old.split(b'\t', 1)[0].split() if old else []
+        baselines = ([git('cat-file', 'blob', old_meta[2].decode('ascii'))]
+                     if old_meta and old_meta[1] == b'blob' else [])
+        found, binary = sc.scan_content(rel, data, cfg, find_shapes,
+                                        symlink=mode == b'120000', baselines=baselines)
+        hits.extend(found)
+        skipped.extend(binary)
     return hits, skipped
 
 

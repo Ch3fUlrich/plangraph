@@ -10,8 +10,23 @@ Cargo. pg-spawnd CLI integration tests reuse Cargo's executable unless
 `CARGO_TARGET_DIR` (or `CARGO_BUILD_TARGET_DIR`) points outside the checkout. For
 that shared case they build into `<shared target>/cli-tests/<checkout path hash>`,
 so another checkout cannot replace their CLI and extra output stays under the shared cap.
+Preflight pins Cargo to `PLANGRAPH_CARGO_TARGET_DIR` (default
+`~/.cache/plangraph/cargo-target`), disables incremental builds and holds the
+shared cleanup lease. It checks the host cache cap before and after each Cargo
+command; never override this with a private target. See [disk limits and
+cleanup](docs/operations/spawner-disk-admission.md).
+
+Rust packages outside the `rust/` workspace (including `rust/worker`) run through
+their owning `Cargo.toml` with `--manifest-path`, including excluded packages
+without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
+
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
 affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+`tools/merge_batch.py push` also waits without an overall deadline and forwards
+git and hook output to stderr while the hook enforces its per-step bounds.
+The shared subprocess runner kills the process group on a caller-supplied
+timeout or interruption, including nested worker sessions on Linux, then reaps
+git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
@@ -26,8 +41,9 @@ Preflight clears every name reported by
 `git rev-parse --local-env-vars`, all `GIT_CONFIG*` variables, `GIT_PREFIX`, `GIT_NAMESPACE`,
 `GIT_CEILING_DIRECTORIES` and `GIT_DISCOVERY_ACROSS_FILESYSTEM`
 before starting the selector. The selector repeats this before pytest, and the
-pytest session clears inherited bindings and disables global/system Git config
-before collection and test fixtures.
+pytest conftest clears inherited bindings and disables global/system Git config
+before initial nested conftests load, then repeats the guard at session start and
+before test fixtures.
 Discovery failures refuse to launch tests. The hook's own Git and policy calls
 retain the caller's context; temporary test repositories keep their own hooks.
 Rust source changes always select `tests/test_spawner_import_guard.py` in affected
@@ -41,6 +57,11 @@ lines are also included in `LINES` and the batch cap. Both rename paths count
 for HIGH checks. For stacks, each PR still displays its diff against the batch
 base; the batch cap counts each layer against its parent head once (`batch_lines`
 in JSON), preserving per-PR stack contributions.
+
+PR label writes use the REST issue-label endpoint through `gh api`, avoiding
+`gh pr edit` and its deprecated Projects (classic) GraphQL fields. The merge
+batch helper reports a label as added only when the returned label list contains
+its name; missing labels or malformed responses leave `labeled` false and warn.
 
 `tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
 batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions
@@ -57,6 +78,11 @@ non-green or missing CI, and workflow edits whose touching commits lack a
 stand in for the batch's PLAN key.
 
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
+
+The feeder's `deploy/feeder/house-rules.md` and policy are repository inputs to
+Rust tests. The feeder service is also a Rust contract-test input. Changes to
+these inputs select the Rust CI job through
+`tools/ci_select.py` so template and default-policy checks cannot be skipped.
 
 ## Setup and tests
 
@@ -94,7 +120,7 @@ the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
 Rust review record assertions run on every platform; keeper-backed assertions run only on Unix because the keeper imports POSIX `fcntl`.
-Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py` and `src/plangraph/planner/routing.py` select Rust CI through `RUST_INPUTS`.
+Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well.
 
 CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 `RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
@@ -236,6 +262,7 @@ A merged commit whose trailers fail the CI commit gate is never rewritten. A rou
 the list from the base commit, so the row has to merge to `main` before the pull request that holds the commit can pass.
 A row for a test-removal failure is added only after the branch asserts the removed behaviour again; the comment line
 above the row names the decision, the pull request and that test.
+Each row is one comment line (`# D-<id>: #<pr> <reason>`) followed by the full 40-hex sha on its own line.
 
 ## No secrets in the history
 
@@ -244,6 +271,13 @@ or home path — not in a diff, not in a commit message. Keep
 `python -m pytest -q tests/test_split_make_public.py` green: it is the guard that keeps the
 public split public, and it fails on exactly those leaks. CI runs on GitHub-hosted runners
 only.
+
+Fast checks must run `python3 tools/preflight.py --base origin/main --head HEAD --fast`
+on the exact committed head. Public rules from `manifest.toml` and `scrub_ci.toml`,
+credential shapes and the configured private words run together. The legacy
+`tools/preflight_private_scrub.py --base origin/main --head HEAD --words FILE`
+entry point also runs all these rules. Hook, CI and fast checks share
+`scrub_check.scan_content`; committed checks exclude inherited line occurrences.
 
 Install the pre-push scrub gate (scans the files changed in the pushed commits with
 `tools/split/scrub_check.py`, refuses on any hit, prints only `file:line: rule`):
@@ -456,3 +490,45 @@ Fixed brief rules and output contracts precede `=== ITEM CONTEXT`; item-specific
 content follows it so different items reuse the same prompt cache prefix.
 
 Append-only ledger paths are declared once using `merge=union` in the root `.gitattributes` (currently the historical `CHANGELOG.md` ledger, retained for historical merges and releases; current PRs still need fragments). `tools/merge_batch.py build` reads these defaults from the fetched base and persists them for continue/recovery; `--union GLOB` adds extra paths. Union can preserve both old and reworded entries, so review its warnings. Do not apply union to reference docs: edit substantive documentation in place, and put checkpoint/status records in `docs/checkpoints/<ITEM>.md` without updating a central list. See the [append audit](docs/checkpoints/LE-APPEND-ONLY-DOCS-CONFLICT.md).
+
+The pre-push gate prints its hook checkout HEAD. A hook checkout missing commits
+older than one day from `origin/main` refuses pushes and
+prints a `pg-repo-sync --repo PATH` repair command. Sync discovers effective
+`core.hooksPath` targets and symlinked hooks outside its normal roots; keep the
+shared hook checkout on a clean main branch. Old cached upstream tips are
+fetched before checking freshness; a failed refresh refuses the push. Changes to
+gates on topic branches take effect in the shared hook checkout after merge and sync.
+
+The new-code policy gate also scans test sources for portability hazards. Rust
+`read_to_string` results must normalize CRLF before splitting on LF literals;
+`.lines()` is already CRLF aware. The guard follows local bindings and aliases,
+not cross-function data flow or macro expansions. Test sources must use temporary
+or synthetic paths instead of literal `/home/<user>` paths, including fixtures.
+Run it alone with `cargo run --manifest-path rust/Cargo.toml -p pg-policy --
+--test-sources .`; `python3 tools/check_new_code_lang.py` runs it in fast checks
+and CI. No allowlist is provided.
+
+## Fast local CI (D-6054)
+
+Run `cargo run --manifest-path rust/Cargo.toml -p plangraph-cli -- fast-checks`
+from a checkout. Use `--base <revision>` to override `origin/main`, or
+`--plan --files <paths...>` to inspect fixture selection without executing checks.
+The command delegates job selection to `tools/ci_select.py`, includes committed,
+tracked local and untracked changes, and prints CI job booleans before its steps.
+It runs the four always-required tree guards, commit and whitespace gates,
+affected Python tests with the existing full-suite refusal, and fmt/clippy/tests
+for touched Rust crates and local reverse dependencies in their own workspaces.
+The Rust test environment guard runs even when Python files were untouched,
+checking that Rust-launched Python snippets have no pytest dependencies. Changed Rust
+inputs with CRLF fail early with a normalization diagnostic. Worker tests use
+the existing CI Temporal wrapper and require the Temporal CLI and protobuf tools.
+Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
+Each step and the total report wall seconds; exceeding 300 seconds emits a
+warning and returns failure after checks, without interrupting or weakening them.
+This is the cheap local projection of CI; hosted browser, Postgres and Windows
+runners remain CI responsibilities. A typical build host timing measurement is still
+required before claiming that host's five-minute done criterion.
+
+D-6054: OpenCode catalog integration tests use the shipped provider configuration
+and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
+so changes to catalog identities or rendering select the Rust CI suite.

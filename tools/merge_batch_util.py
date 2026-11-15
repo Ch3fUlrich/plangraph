@@ -5,8 +5,11 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+from preflight import run_test_process
 
 REMOTE = "origin"
 BATCH_READY = "batch-ready"  # the label that marks a PR ready to join a batch, draft or not
@@ -29,10 +32,12 @@ def first_line(text):
     return lines[0] if lines else "no output"
 
 
-def run(argv, cwd=None, ok=(0,), timeout=600):
-    """Run argv; a return code outside ``ok`` raises (``ok=None`` accepts any), so does a hang."""
+def run(argv, cwd=None, ok=(0,), timeout=600, progress=False):
+    """Run argv; a return code outside ``ok`` raises (``ok=None`` accepts any), as does a timeout."""
     try:
-        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, errors="replace", timeout=timeout)
+        proc = run_test_process(argv, cwd=cwd, stdout=sys.stderr if progress else subprocess.PIPE,
+                                stderr=None if progress else subprocess.PIPE,
+                                text=True, errors="replace", timeout=timeout)
     except OSError as exc:
         raise MergeBatchError(f"cannot run {argv[0]}: {exc.strerror or exc}") from None
     except subprocess.TimeoutExpired:
@@ -44,6 +49,10 @@ def run(argv, cwd=None, ok=(0,), timeout=600):
 
 
 def git(*args, cwd=None, ok=(0,)):
+    if args and args[0] == "push":
+        # The hook owns per-step deadlines, including multiple Rust commands.
+        # Forward git/hook output to stderr so long checks show progress.
+        return run(["git", *args], cwd=cwd, ok=ok, timeout=None, progress=True)
     return run(["git", *args], cwd=cwd, ok=ok)
 
 
@@ -275,12 +284,19 @@ def repo_info(repo=None):
 
 def add_label(repo, number, label):
     """Label a PR through the REST API (gh 2.45's `pr edit` dies on Projects (classic)), creating
-    the label once when the repo lacks it; False when it cannot be added."""
+    the label once when the repo lacks it; False unless the returned list confirms it."""
     for attempt in (1, 2):
         done = gh("api", "--method", "POST", f"repos/{repo}/issues/{number}/labels", "-f", f"labels[]={label}",
                   ok=None)
         if done.returncode == 0:
-            return True
+            try:
+                labels = json.loads(done.stdout)
+            except ValueError:
+                return False
+            if not isinstance(labels, list) or not all(
+                    isinstance(entry, dict) and isinstance(entry.get("name"), str) for entry in labels):
+                return False
+            return any(entry["name"] == label for entry in labels)
         if attempt == 1:
             gh("label", "create", label, "--repo", repo, "--color", "d93f0b",
                "--description", "PR needs an update before it can join a merge batch", ok=None)

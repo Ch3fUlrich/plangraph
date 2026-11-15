@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for ready writer work every two minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=1s
+Unit=pg-feeder.service
+
+[Install]
+WantedBy=timers.target

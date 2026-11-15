@@ -17,10 +17,11 @@ pub fn git(repo: &Path, args: &[&str]) -> Command {
             cmd.env_remove(key);
         }
     }
-    cmd.arg("-C")
-        .arg(repo)
-        .args(["-c", "core.hooksPath=/dev/null"])
-        .args(args)
+    cmd.arg("-C").arg(repo);
+    if args.first() != Some(&"config") {
+        cmd.args(["-c", "core.hooksPath=/dev/null"]);
+    }
+    cmd.args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
@@ -146,6 +147,20 @@ pub fn live_paths() -> Result<Vec<std::path::PathBuf>, ()> {
         ])?;
         for unit in units.lines().filter_map(|s| s.split_whitespace().next()) {
             let dir = query(&["show", "--property=WorkingDirectory", "--value", unit])?;
+            // A service may execute code from a checkout while using / as cwd;
+            // its unit file can also be a symlink into a separate checkout.
+            let executable = query(&["show", "--property=ExecStart", "--value", unit])?;
+            let fragment = query(&["show", "--property=FragmentPath", "--value", unit])?;
+            for path in executable
+                .split("path=")
+                .skip(1)
+                .filter_map(|s| s.split(" ;").next())
+                .chain(std::iter::once(fragment.trim()))
+                .map(str::trim)
+                .filter(|s| s.starts_with('/'))
+            {
+                paths.push(std::fs::canonicalize(path).map_err(|_| ())?);
+            }
             let optional = dir.trim().starts_with(['!', '-']);
             let dir = dir.trim().trim_start_matches(['!', '-']);
             if dir.is_empty() {
