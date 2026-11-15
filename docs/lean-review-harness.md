@@ -61,3 +61,26 @@ constructing argv; D-5903 enables Hydrogen high for implement and medium for rea
 
 Native agy reviews use plan mode for both Hydrogen and Argon. Sonnet high uses
 Claude model claude-sonnet-5-5 with --effort high and restricted review tools.
+
+Rust `pg-spawnd` cards carrying a nonempty `done_criteria` now receive a
+pre-review self-check prefix. It includes the complete criteria and the top
+three finding classes from the last 30 days of `.txt`/`.md` verdict files in
+`card.review_dir` (relative to the launch checkout, default `reviews`). The scan
+is nonrecursive, uses file modification times, ignores symlinks and files over
+1 MiB, and requires a `VERDICT: ` line. HIGH/MED/P1/P2 finding lines are counted
+by test/coverage, documentation, contract/cross-language, and other keywords;
+ties use that order. Missing history contributes no finding classes.
+
+The writer copies each generated id into its status note as
+`SELF-CHECK <id>: <evidence>`. The review request must carry the same criteria,
+history directory and that note in `card.writer_status`. Before launching the
+reviewer, Rust refuses missing, blank, duplicate or stale criterion answers and
+includes the checklist and answers in the reviewer prompt. An answer is evidence
+for the reviewer to verify, not an automatic claim that a criterion is met.
+The directory should remain stable between writer and review; a changed top
+class can require an additional answer. Dry runs perform the same validation.
+
+This first slice covers standard Rust-spawner launches and their review quota
+fallbacks. Cards without criteria retain their behavior. Native-Codex lifecycle
+briefs, the Python spawner and the shared Python brief renderer still need this
+integration; they do not enforce this gate yet.

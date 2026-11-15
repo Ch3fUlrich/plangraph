@@ -20,6 +20,7 @@ mod leg_ref;
 mod native_writer;
 mod native_writer_host;
 mod placement;
+mod pre_review;
 mod prompt;
 mod prompt_git;
 mod pyjson;

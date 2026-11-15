@@ -137,3 +137,143 @@ fn shared_preparation_keeps_inline_only_reference_validation() {
     assert_eq!(carrier.prompt.as_deref(), Some("review"));
     assert_eq!(carrier.stdin.as_deref(), Some("review"));
 }
+
+#[test]
+fn writer_status_without_self_check_answers_blocks_review() {
+    let mut carrier = launch("review");
+    let args = json!({"role":"review", "card":{
+        "done_criteria":"Missing answers block review", "writer_status":"Tests passed"
+    }});
+    assert!(prepare_launch(args.as_object().unwrap(), &json!({}), &mut carrier, false).is_err());
+}
+
+#[test]
+fn generated_writer_checklist_is_answered_and_forwarded_to_reviewer() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("recent.txt"),
+        "HIGH: missing regression test\nMED: docs disagree with code\nVERDICT: REQUEST_CHANGES\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("summary.txt"),
+        "VERDICT: ACCEPT\nNo HIGH/MED contract findings.\n",
+    )
+    .unwrap();
+    let old = dir.path().join("old.txt");
+    std::fs::write(
+        &old,
+        "HIGH: Python Rust contract mismatch\nVERDICT: REQUEST_CHANGES\n",
+    )
+    .unwrap();
+    std::fs::File::open(&old)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 86400),
+        ))
+        .unwrap();
+    let mut writer = launch("item body");
+    let mut args =
+        json!({"card":{"done_criteria":"Review blocks missing answers", "review_dir":dir.path()}});
+    assert!(prepare_launch(args.as_object().unwrap(), &json!({}), &mut writer, false).is_ok());
+    let prefix = writer.prompt.as_ref().unwrap();
+    assert!(prefix.starts_with("Pre-review self-check"));
+    assert!(prefix.contains("Review blocks missing answers"));
+    assert!(prefix.contains("regression tests"));
+    assert!(prefix.contains("documentation"));
+    assert!(!prefix.contains("cross-language"));
+    assert!(prefix.ends_with("item body"));
+    assert_eq!(writer.stdin, writer.prompt);
+    let answers = prefix
+        .lines()
+        .filter(|l| l.starts_with("SELF-CHECK "))
+        .map(|l| format!("{}: verified with evidence", l.split_once(':').unwrap().0))
+        .collect::<Vec<_>>()
+        .join("\n");
+    args["role"] = json!("review");
+    for status in [
+        String::new(),
+        answers.replacen("verified with evidence", " ", 1),
+        format!("{answers}\n{}", answers.lines().next().unwrap()),
+    ] {
+        args["card"]["writer_status"] = json!(status);
+        assert!(prepare_launch(
+            args.as_object().unwrap(),
+            &json!({}),
+            &mut launch("review"),
+            false
+        )
+        .is_err());
+    }
+    args["card"]["writer_status"] = json!(answers);
+    let mut reviewer = launch("review");
+    // Claude's JSON prompt transport must receive the same answers.
+    reviewer.stdin = Some(json!({"event":"user", "message":{"content":"review"}}).to_string());
+    assert!(prepare_launch(args.as_object().unwrap(), &json!({}), &mut reviewer, false).is_ok());
+    assert!(reviewer.prompt.as_ref().unwrap().contains(&answers));
+    let event: Value = serde_json::from_str(reviewer.stdin.as_ref().unwrap()).unwrap();
+    assert_eq!(
+        event["message"]["content"],
+        *reviewer.prompt.as_ref().unwrap()
+    );
+    args["card"]["done_criteria"] = json!("Different criteria");
+    assert!(prepare_launch(
+        args.as_object().unwrap(),
+        &json!({}),
+        &mut launch("review"),
+        false
+    )
+    .is_err());
+}
+
+#[test]
+fn checklist_uses_top_three_classes_and_refuses_unreadable_history() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("findings.md"), "VERDICT: REQUEST_CHANGES\nHIGH: missing tests\nMED: docs wrong\nMED: contract mismatch\nHIGH: lost data\nHIGH: lost data again\n").unwrap();
+    std::fs::write(
+        dir.path().join("not-a-verdict.txt"),
+        "HIGH: docs\nHIGH: docs\nHIGH: docs\n",
+    )
+    .unwrap();
+    let mut carrier = launch("writer");
+    let args = json!({"card":{"done_criteria":"done", "review_dir":dir.path()}});
+    assert!(prepare_launch(args.as_object().unwrap(), &json!({}), &mut carrier, false).is_ok());
+    let text = carrier.prompt.unwrap();
+    assert_eq!(
+        text.lines()
+            .filter(|l| l.starts_with("SELF-CHECK "))
+            .count(),
+        4
+    );
+    assert!(text.find("other recent").unwrap() < text.find("regression tests").unwrap());
+    assert!(text.contains("documentation"));
+    assert!(!text.contains("cross-language"));
+    let args =
+        json!({"card":{"done_criteria":"done", "review_dir":dir.path().join("findings.md")}});
+    assert!(prepare_launch(
+        args.as_object().unwrap(),
+        &json!({}),
+        &mut launch("writer"),
+        false
+    )
+    .is_err());
+}
+
+#[test]
+fn self_check_rejects_mismatched_or_exposed_prompt_transport() {
+    let args = json!({"card":{"done_criteria":"done"}});
+    for variant in 0..3 {
+        let mut carrier = launch("writer task");
+        match variant {
+            0 => carrier.argv.push("writer task".into()),
+            1 => {
+                carrier.env.insert("TASK".into(), "writer task".into());
+            }
+            _ => carrier.stdin = Some("different task".into()),
+        }
+        assert!(
+            prepare_launch(args.as_object().unwrap(), &json!({}), &mut carrier, false).is_err()
+        );
+        assert_eq!(carrier.prompt.as_deref(), Some("writer task"));
+    }
+}
