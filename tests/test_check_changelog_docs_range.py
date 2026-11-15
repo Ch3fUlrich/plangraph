@@ -418,3 +418,24 @@ def test_merge_inherits_release_lines_but_cannot_discard_them(test_repo, resolut
     assert result.returncode == (0 if passes else 1), result.stdout
     if not passes:
         assert "outside a release" in result.stdout
+
+
+@pytest.mark.parametrize("ending,valid", [
+    ("\n\nCo-Authored-By: Claude <claude" "@" "example.invalid>\nClaude-Session: session_test\n", True),
+    ("\n\nProse follows the skip.\n\nWriter: codex\n", False),
+])
+def test_split_attribution_trailer_block(test_repo, ending, valid):
+    repo, base = test_repo
+    head = commit_raw(
+        repo, {"src/app.py": "fixed = True\n"},
+        "fix typo\n\nExplain the correction.\n\n"
+        "Plan-Item: plangraph:LE-CLAUDE-ATTRIBUTION-SPLITS-TRAILERS\n"
+        "Hand-Edit: typo correction\nChangelog: skip (typo correction)" + ending,
+    )
+    res = run_check(repo, base)
+    assert res.returncode == (0 if valid else 1), res.stdout
+    if valid:
+        assert f"changelog: skip used by {head[:8]} (typo correction)" in res.stdout
+    else:
+        assert "skip used by" not in res.stdout
+        assert head[:8] in res.stdout

@@ -21,7 +21,8 @@ SESSION_TOOLS = [
          'name': {'type': 'string', 'description': 'the role; the session gets <role>-NNNN'}, 'cwd': {'type': 'string'}, 'model': {'type': 'string'},
          'effort': {'type': 'string'}, 'prompt': {'type': 'string'}, 'prompt_file': {'type': 'string'},
          'mcp_config': {'type': 'string'}, 'handoff': {'type': 'string'}, 'parent': {'type': 'string'},
-         'permission_mode': {'type': 'string'}, 'dry_run': {'type': 'boolean'}},
+         'permission_mode': {'type': 'string'}, 'dry_run': {'type': 'boolean'},
+         'base_decision': {'type': 'string', 'description': 'Scoped operator decision waiving a stale base, as for spawns'}},
          'required': ['name', 'cwd', 'model', 'effort', 'mcp_config', 'permission_mode']}},
     {'name': 'plangraph_session_stop', 'description': 'Stop a Claude Code session by name or id',
      'inputSchema': {'type': 'object', 'properties': {
@@ -103,6 +104,7 @@ async def dispatch_session_tool(server, name, arguments):
             permission_mode=args.get('permission_mode'), prompt=args.get('prompt'),
             prompt_file=args.get('prompt_file'), handoff=args.get('handoff'),
             parent=args.get('parent'),
+            base_decision=args.get('base_decision'),
             dry_run=args['dry_run'] if 'dry_run' in args else False)
     if name == 'plangraph_session_stop':
         return await asyncio.to_thread(sessions.stop, name=args.get('name'),

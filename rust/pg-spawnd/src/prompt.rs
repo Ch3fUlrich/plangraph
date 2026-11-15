@@ -84,6 +84,44 @@ pub(crate) fn configured_mode(role: &str) -> &'static str {
         role,
     )
 }
+/// Every attempt selects its review transport before interpreting diff_ref.
+/// CLI reviews read a stamped checkout; inline reviews use registry-rooted SHAs.
+pub(crate) fn prepare_launch(
+    args: &crate::placement::Args,
+    leg: &Value,
+    launch: &mut LaunchSpec,
+    dry: bool,
+) -> Result<Option<String>, crate::errors::ToolError> {
+    let role = args
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("implement");
+    if role != "review" {
+        return Ok(None);
+    }
+    if crate::cli_review::eligible(leg) {
+        return if dry {
+            Ok(None)
+        } else {
+            crate::cli_review::prepare(args, launch, leg)
+        };
+    }
+    let review_args = serde_json::json!(args);
+    let mode = configured_mode(role);
+    let repos = repos();
+    if mode == "shadow" && leg["review_mode"] != "inline_only" {
+        let mut shadow = launch.clone();
+        let would_inline = prepare_review(&review_args, leg, &mut shadow, &repos, true).is_ok()
+            && shadow.prompt != launch.prompt;
+        eprintln!(
+            "inline_review_diff would_inline={}",
+            usize::from(would_inline)
+        );
+    }
+    prepare_review(&review_args, leg, launch, &repos, mode == "on")
+        .map_err(|e| crate::errors::ToolError::Internal(e.to_string()))?;
+    Ok(None)
+}
 fn windows_guard(launch: &LaunchSpec, prompt: &str) -> Result<(), InlineDiffError> {
     if launch.argv.is_empty() {
         return Err(InlineDiffError::UnsafeCarrier);

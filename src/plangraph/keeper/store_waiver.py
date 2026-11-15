@@ -172,7 +172,8 @@ class WaiverMixin:
             decisions = self._ctx(item, now).decisions
             text = " ".join(decisions.text(p["decision_id"]) for p in prs) if prs else decisions.text(decision_id)
             heads = [p["head"] for p in prs] if prs else [head]
-            witnessed = self._adapter("spawner_records").review_seats(item, heads, text)
+            witnessed = self._adapter("spawner_records").review_seats(
+                item, heads, text, allow_cli_reported=not self._card_requires_non_anthropic_seats(item))
             for bound in heads:
                 group = [s for s in witnessed if s["head"] == bound]
                 families = list(dict.fromkeys(model_family(s["model"]) for s in group))

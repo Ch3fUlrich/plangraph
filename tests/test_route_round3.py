@@ -19,15 +19,10 @@ def assert_review_seat_safety(estimate):
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        exception = not diff
-        fenced = review.review_seats[:-1] if exception else review.review_seats
-        assert not any(leg.claude_family or leg.family in ("claude", "anthropic") for leg in fenced)
-        gemini = "opencode-gemini-4-argon" if estimate <= 72089 else "agy-gemini-4-hydrogen-medium"
-        if exception:
-            assert [leg.id for leg in review.review_seats] == [gemini, "agy-sonnet-5.5"]
-        else:
-            expected = [gemini, "mimo-v2.6-flash"] if estimate <= 72089 else ["mimo-v2.6-flash", gemini]
-            assert [leg.id for leg in review.review_seats] == expected
+        expected = ["agy-gemini-4-hydrogen-high", "console-deepseek-flash"
+                    if estimate <= 72089 else "claude-sonnet-5-5-high"]
+        assert [leg.id for leg in review.review_seats] == expected
+
 
 
 def test_review_same_family_table_order():

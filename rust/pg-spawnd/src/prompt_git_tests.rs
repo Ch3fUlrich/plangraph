@@ -151,7 +151,7 @@ fn check_redaction_before_persist(root: &Path, launch: &mut crate::launch::Launc
 fn assert_review_before_store(source: &str) {
     let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
     let review = compact
-        .find("crate::prompt::prepare_review(&review_args,&leg,&mutlaunch")
+        .find("crate::prompt::prepare_launch(args,&leg,&mutlaunch")
         .expect("run path must prepare the final review prompt");
     let store = compact
         .find("store_prompt(state,")

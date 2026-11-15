@@ -1,4 +1,4 @@
-//! Git entry point. Trailer policy lives exclusively in ci_commit_gate.py.
+//! Git entry point. Trailer block parsing and value policy live in ci_commit_gate.py.
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, ExitCode, Stdio};
@@ -159,17 +159,58 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         return Err("cannot clean commit message".into());
     }
     let mut gate = Command::new("python3")
+        // This bridge exposes the installed reader without maintaining another
+        // paragraph parser. All placement checks and diagnostics stay in Rust.
+        .arg("-c")
+        .arg(concat!(
+            "import json, runpy, sys; ",
+            "gate = runpy.run_path(sys.argv[1]); message = sys.stdin.read(); ",
+            "print(json.dumps([gate['_trailer_block_lines'](message), ",
+            "gate['message_violations'](message)]))"
+        ))
         .arg(gate)
-        .arg("commit-message")
-        .arg("-")
         .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .spawn()?;
     gate.stdin
         .take()
         .ok_or("missing gate stdin")?
         .write_all(&cleaned.stdout)?;
-    let status = gate.wait()?;
-    Ok(status.code().unwrap_or(1))
+    let output = gate.wait_with_output()?;
+    if !output.status.success() {
+        return Err("cannot read commit trailer policy".into());
+    }
+    let (block, mut violations): (Vec<String>, Vec<String>) =
+        serde_json::from_slice(&output.stdout)?;
+    let message = std::str::from_utf8(&cleaned.stdout)?;
+    let mut remaining = message
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    for (index, line) in message.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if remaining > block.len() {
+            if let Some((key, _)) = line.trim_start().split_once(':') {
+                if ["Plan-Item", "Writer", "Hand-Edit", "Changelog", "Gate-Edit"]
+                    .iter()
+                    .any(|known| key.trim_end().eq_ignore_ascii_case(known))
+                {
+                    violations.push(format!(
+                        "line {}: {} outside trailing trailer block",
+                        index + 1,
+                        key.trim_end()
+                    ));
+                }
+            }
+        }
+        remaining -= 1;
+    }
+    for violation in &violations {
+        eprintln!("commit-msg: {violation}");
+    }
+    Ok(i32::from(!violations.is_empty()))
 }
 
 fn main() -> ExitCode {

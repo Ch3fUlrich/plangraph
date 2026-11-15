@@ -57,7 +57,8 @@ def test_ci_rust_installers_read_shared_pin():
         if path.suffix in {".yml", ".yaml"}:
             installers[path.name] = assert_workflow_uses_pin(yaml.safe_load(path.read_text()))
     assert installers["tests.yml"] == {
-        "pytest", "pytest-postgres", "rust", "rust-windows", "rust-worker", "rust-spike",
+        "new-code-lang", "pytest", "pytest-postgres", "rust", "rust-windows",
+        "rust-worker", "rust-spike",
     }
     for path in sorted((ROOT / ".github/actions").rglob("*")):
         if path.name not in {"action.yml", "action.yaml"}:

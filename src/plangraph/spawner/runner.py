@@ -238,13 +238,13 @@ class SpawnerRunner:
         gateway: bool = True,
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
-        client: str | None = None, reasoning_cap=False,
+        client: str | None = None, reasoning_cap=False, chosen=None,
         watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
         from .target import resolve_target   # leg ids and admitted combos resolve before providers render
-        model_or_combo, leg = resolve_target(model_or_combo)
+        model_or_combo, leg = resolve_target(model_or_combo, **({'chosen': chosen} if chosen is not None else {}))
         if leg is not None:
             if client is not None and client != leg.harness:
                 from plangraph.routing_errors import SpawnRefused

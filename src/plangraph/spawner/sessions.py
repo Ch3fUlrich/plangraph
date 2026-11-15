@@ -19,6 +19,7 @@ must already be trusted in Claude Code.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import shutil
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from plangraph.routing_errors import ParameterRefused
 from plangraph.routing_support.private_io import atomic_write_private, append_private
@@ -137,14 +139,15 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
     # ---- actions -------------------------------------------------------
 
     def launch(self, *, name, cwd, model, effort, permission_mode, mcp_config,
-               prompt=None, prompt_file=None, handoff=None, parent=None, dry_run=False):
+               prompt=None, prompt_file=None, handoff=None, parent=None, dry_run=False,
+               base_decision=None):
         with self._name_lock(self._lock_key(name)), self._counter_flock():
             return self._action("launch", name, lambda: self._launch_inner(
                 name, cwd, model, effort, permission_mode, mcp_config,
-                prompt, prompt_file, handoff, parent, dry_run), dry=dry_run is True)
+                prompt, prompt_file, handoff, parent, dry_run, base_decision), dry=dry_run is True)
 
     def _launch_inner(self, name, cwd, model, effort, permission_mode, mcp_config,
-                      prompt, prompt_file, handoff, parent, dry_run):
+                      prompt, prompt_file, handoff, parent, dry_run, base_decision):
         if not isinstance(dry_run, bool):
             raise _refuse("dry_run must be a real boolean")
         if parent is not None and (not isinstance(parent, str) or not parent):
@@ -154,6 +157,13 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         cfg = self._load_config()
         name = self._check_name(self._launch_name(cfg, name))
         cwd_path = self._check_cwd(cwd, cfg)
+        from .base_fresh import admit_base
+        admission = {"cwd": str(cwd_path)}
+        # MCP invokes launch in a worker thread. Refusals use the session audit
+        # wrapper instead of writing a spawn record; admission/waivers stay shared.
+        if not asyncio.run(admit_base(SimpleNamespace(_save=lambda record: None),
+                                      admission, {"base_decision": base_decision})):
+            raise _refuse(admission['reason'])
         model = self._check_choice(model, cfg.get("models"), "model")
         effort = self._check_choice(effort, cfg.get("efforts"), "effort")
         mode = self._check_choice(permission_mode, cfg.get("permission_modes"), "permission_mode")
@@ -191,7 +201,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         self._reserve_counter(cfg, name)  # before the prompt file and the start
         prompt_path = self._sessions / f"{name}.prompt.txt"
         atomic_write_private(prompt_path, text)  # before the session starts (R-19)
-        rec = {"name": name, "cwd": str(cwd_path), "model": model, "effort": effort,
+        rec = {**admission, "name": name, "cwd": str(cwd_path), "model": model, "effort": effort,
                "mcp": str(mcp_path), "prompt_file": str(prompt_path),
                "handoff": str(handoff_path) if handoff_path else None,
                "parent": parent, "children": [], "ts": None,
