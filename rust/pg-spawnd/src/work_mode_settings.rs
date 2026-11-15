@@ -46,7 +46,7 @@ pub(crate) fn settings(
     let effective = crate::work_mode_config::configured_mode(&repo).map_err(parameter)?;
     let mut result = json!({"work_mode":mode,"effective_work_mode":effective});
     if effective == WorkMode::Auto {
-        let route_args = json!({"card":{"repo":repo,"estimate_tokens":0},"role":"implement"});
+        let route_args = json!({"card":{"repo":repo,"estimate_tokens":1},"role":"implement"});
         match crate::placement::route(state, route_args.as_object().unwrap()) {
             Ok(text) => {
                 let route: Value = serde_json::from_str(&text)

@@ -82,7 +82,7 @@ fn work_mode_settings_round_trip_refuses_invalid_and_resolves_auto() {
             assert_eq!(row["work_mode_reason"], "auto: no writer legs served");
             let argv = std::fs::read_to_string(f.state.path().join("argv")).unwrap();
             assert!(argv.contains("--writer-snapshot"));
-            assert!(argv.contains(r#""estimate_tokens":0"#));
+            assert!(argv.contains(r#""estimate_tokens":1"#));
         }
     }
     let before = std::fs::read(&path).unwrap();
