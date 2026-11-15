@@ -19,7 +19,7 @@ The config defaults to `~/.config/plangraph/ci-runners.toml`; see `docs/operatio
 5. Per user: a writable `~/hostedtoolcache` with a `Python` symlink to the seed, Playwright chromium (needs playwright in the requirements file), the `~/.cache/temporal-cli` symlink to the runner cache, and `~/run-one.sh`.
 6. Once: `playwright install-deps chromium`.
 
-`run-one.sh` exports the tool-cache variables, installs rustup when missing, reads and deletes `~/jit`, runs one job with `run.sh --jitconfig`, and cleans `_work`. It never sets `CARGO_TARGET_DIR`: the workflow owns it.
+`run-one.sh` exports the tool-cache variables, installs rustup when missing, reads and deletes `~/jit`, runs one job with `run.sh --jitconfig`, and cleans `_work`. The single-job JIT token is passed as `run.sh --jitconfig` (GitHub's only interface), so it is visible in the runner process arguments to users of the shared host until the job ends. `temporal_test_address` must be `host:port`, apt package names must match `[a-z0-9][a-z0-9+.-]*`, and version segments may not be dot-only. It never sets `CARGO_TARGET_DIR`: the workflow owns it.
 
 A checksum or size mismatch refuses: a download is kept only when it matches the pin, and a cached file with another sha256 stops the plan.
 

@@ -286,7 +286,7 @@ pub fn execute(step: &Step) -> Result<(), String> {
             if status.success() {
                 Ok(())
             } else {
-                Err(format!("{program} {} exited {status}", args.join(" ")))
+                Err(format!("{program} exited {status}"))
             }
         }
         Step::WriteFile {
