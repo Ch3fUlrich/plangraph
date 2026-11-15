@@ -185,3 +185,8 @@ It uses the committed Python AST to follow literal imports, including lazy and
 relative imports and literal `import_module`/`__import__` calls; no checkout code
 is executed to discover the dependency closure. Cargo and the repository's pinned
 Rust toolchain must be installed for the Python compatibility command.
+
+Absent or stale loaded state now requires conclusive absence from both unit scopes
+and the process probe. A live keeper, unreadable unit, or failed process query holds
+updates; the guard rechecks state immediately before a fast-forward. Existing
+catalog SQL, route-policy data, and provider configuration are watched too.
