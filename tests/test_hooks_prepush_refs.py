@@ -310,3 +310,130 @@ def test_pushed_branch_refresh_affected_base(repo, monkeypatch, case):
     elif case in ('divergent-remote', 'unknown-main'):
         assert 'upstream-one.txt' in paths and 'upstream-two.txt' in paths
     assert hook['base_commit'](remote, head) == remote
+    selector = runpy.run_path(str(HOOK.parents[1] / 'affected_tests.py'))
+    batch = selector['pushed_parts_files'](r, remote, head)
+    if narrowed:
+        assert batch == (paths, 1)
+    else:
+        assert batch is None
+
+
+@pytest.mark.parametrize('case', ['resolution', 'unpushed', 'rewritten', 'normal',
+                                  'shared', 'evil', 'clean', 'deleted-remote', 'fetch-failed'])
+@pytest.mark.parametrize('new_branch', [False, True])
+def test_pushed_parts_selection(repo, tmp_path, monkeypatch, case, new_branch):
+    """Real published heads and production selector, including unsafe fallbacks."""
+    import json
+    import os
+    from pathlib import Path
+    import runpy
+    import sys
+    r, _ = repo
+    for name in ('left', 'right', 'shared', 'normal', 'evil'):
+        commit_file(r, f'tests/test_{name}.py', 'VALUE = 0\n')
+    base = git(r, 'rev-parse', 'HEAD').strip()
+    origin = tmp_path / 'origin.git'
+    git(r, 'init', '--bare', str(origin))
+    git(r, 'remote', 'add', 'origin', str(origin))
+    git(r, 'push', '-q', 'origin', 'main')
+    git(r, 'checkout', '-qb', 'left', base)
+    commit_file(r, 'tests/test_left.py', 'VALUE = 1\n')
+    if case in ('resolution', 'shared'):
+        commit_file(r, 'tests/test_shared.py', 'VALUE = 1\n')
+    git(r, 'push', '-q', 'origin', 'left')
+    git(r, 'checkout', '-qb', 'right', base)
+    commit_file(r, 'tests/test_right.py', 'VALUE = 1\n')
+    if case in ('resolution', 'shared'):
+        commit_file(r, 'tests/test_shared.py',
+                    'VALUE = 2\n' if case == 'resolution' else 'VALUE = 1\n')
+    if case != 'unpushed':
+        git(r, 'push', '-q', 'origin', 'right')
+    if case == 'rewritten':
+        commit_file(r, 'tests/test_right.py', 'VALUE = 3\n')
+        git(r, 'reset', '--soft', base)
+        git(r, 'commit', '-qm', 'rewritten right')
+    if case == 'deleted-remote':
+        git(r, 'push', '-q', 'origin', ':right')
+    git(r, 'checkout', '-qb', 'batch', base)
+    git(r, 'merge', '--no-ff', 'left', '-m', 'merge left')
+    if case == 'resolution':
+        result = subprocess.run(['git', 'merge', '--no-ff', 'right', '-m', 'merge right'],
+                                cwd=r, capture_output=True)
+        assert result.returncode == 1
+        commit_file(r, 'tests/test_shared.py', 'VALUE = 42\n')
+    elif case == 'evil':
+        git(r, 'merge', '--no-ff', '--no-commit', 'right')
+        commit_file(r, 'tests/test_evil.py', 'VALUE = 42\n')
+    else:
+        git(r, 'merge', '--no-ff', 'right', '-m', 'merge right')
+    if case == 'normal':
+        commit_file(r, 'tests/test_normal.py', 'VALUE = 1\n')
+    head = git(r, 'rev-parse', 'HEAD').strip()
+    monkeypatch.chdir(r)
+    hook = runpy.run_path(str(HOOK))
+    # The hook refreshes origin before supplying its exact range to preflight.
+    if case == 'fetch-failed':
+        git(r, 'remote', 'set-url', 'origin', str(tmp_path / 'missing.git'))
+    fetched = hook['refresh_origin']()
+    assert fetched == (case != 'fetch-failed')
+    remote_sha = ZERO if new_branch else base
+    affected_base = hook['affected_base_commit'](remote_sha, head)
+    batch_base = (hook['base_commit'](remote_sha, head) if new_branch else
+                  hook['pushed_base_commit'](remote_sha, head))
+    assert batch_base == base
+    env = dict(os.environ, PLANGRAPH_PUSH_RANGE=f'{batch_base}:{head}')
+    if not fetched:
+        env['PLANGRAPH_PUSH_RANGE'] = ''
+    result = subprocess.run(
+        [sys.executable, str(Path(HOOK).parents[1] / 'affected_tests.py'),
+         '--root', str(r), '--base', affected_base, '--head', head, '--files-only', '--local'],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, check=True)
+    # Production preflight merges the streams and parses JSON on line zero for
+    # timeout diagnostics; the mode log must follow that machine-readable plan.
+    plan = json.loads(result.stdout.splitlines()[0])
+    fallback = case in ('unpushed', 'rewritten', 'deleted-remote', 'fetch-failed')
+    expected = (['tests/test_left.py', 'tests/test_right.py'] if fallback else
+                [f"tests/test_{ {'resolution': 'shared', 'shared': 'shared'}.get(case, case)}.py"])
+    if fallback and new_branch:
+        expected = ['tests/test_right.py']  # Today's nearest-remote-base selection.
+    if case == 'clean':
+        expected = []
+    assert plan['tests'] == expected
+    assert f"mode={'normal' if fallback else 'pushed-parts'}" in result.stdout
+    assert f'parts={0 if fallback else 2}' in result.stdout
+    assert f'selected_tests={len(expected)}' in result.stdout
+
+
+def test_incremental_batch_preserves_published_part_overlap(repo, tmp_path, monkeypatch):
+    import json
+    import os
+    import runpy
+    import sys
+    r, _ = repo
+    base = commit_file(r, 'tests/test_shared.py', 'LEFT = 0\n\n\nRIGHT = 0\n')
+    origin = tmp_path / 'origin.git'
+    git(r, 'init', '--bare', str(origin))
+    git(r, 'remote', 'add', 'origin', str(origin))
+    git(r, 'push', '-q', 'origin', 'main')
+    git(r, 'checkout', '-qb', 'left', base)
+    commit_file(r, 'tests/test_shared.py', 'LEFT = 1\n\n\nRIGHT = 0\n')
+    git(r, 'push', '-q', 'origin', 'left')
+    git(r, 'checkout', '-qb', 'right', base)
+    commit_file(r, 'tests/test_shared.py', 'LEFT = 0\n\n\nRIGHT = 1\n')
+    git(r, 'push', '-q', 'origin', 'right')
+    git(r, 'checkout', '-qb', 'batch', base)
+    git(r, 'merge', '--no-ff', 'left', '-m', 'merge left')
+    remote = git(r, 'rev-parse', 'HEAD').strip()
+    git(r, 'push', '-q', 'origin', 'batch')
+    git(r, 'merge', '--no-ff', 'right', '-m', 'merge right')
+    head = git(r, 'rev-parse', 'HEAD').strip()
+    monkeypatch.chdir(r)
+    hook = runpy.run_path(str(HOOK))
+    assert hook['refresh_origin']()
+    result = subprocess.run(
+        [sys.executable, str(HOOK.parents[1] / 'affected_tests.py'), '--root', str(r),
+         '--base', hook['affected_base_commit'](remote, head), '--head', head,
+         '--files-only', '--local'], env=dict(os.environ, PLANGRAPH_PUSH_RANGE=f'{remote}:{head}'),
+        capture_output=True, text=True, check=True)
+    assert json.loads(result.stdout)['tests'] == ['tests/test_shared.py']
+    assert 'mode=normal' in result.stderr

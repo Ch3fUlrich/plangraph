@@ -207,3 +207,41 @@ def test_selector_git_discovery_failure_never_launches_tests(tmp_path, monkeypat
     monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed',
                                    'tests/test_fixture.py', '--run'])
     assert module.main(root=tmp_path) == 1
+
+
+@pytest.mark.parametrize("filename", ["docker.sock", "anchor.sock", "silent.sock"])
+def test_short_socket_dir_ignores_long_tmpdir(tmp_path, monkeypatch, request, filename):
+    import socket
+    import tempfile
+    long_root = tmp_path / ("long-user-" * 12)
+    long_root.mkdir()
+    monkeypatch.setenv("TMPDIR", str(long_root))
+    monkeypatch.setattr(tempfile, "tempdir", str(long_root))
+    directory = request.getfixturevalue("short_socket_dir")
+    address = directory / filename
+    assert directory.parent == Path("/tmp")
+    assert len(os.fsencode(address)) < 100
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(str(address))
+        server.listen()
+        with socket.socket(socket.AF_UNIX) as client:
+            client.connect(str(address))
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+def test_unix_socket_guard_rejects_tmp_path(tmp_path, encoded):
+    import socket
+    address = tmp_path / "bad.sock"
+    with socket.socket(socket.AF_UNIX) as server:
+        with pytest.raises(AssertionError, match="use short_socket_dir"):
+            server.bind(os.fsencode(address) if encoded else str(address))
+
+
+@pytest.mark.parametrize("encoded", [False, True])
+def test_unix_socket_guard_rejects_long_paths(encoded):
+    import socket
+    address = "/tmp/" + "é" * 48
+    assert len(address) < 100 <= len(os.fsencode(address))
+    with socket.socket(socket.AF_UNIX) as server:
+        with pytest.raises(AssertionError, match="use short_socket_dir"):
+            server.bind(os.fsencode(address) if encoded else address)

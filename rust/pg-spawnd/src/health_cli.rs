@@ -67,6 +67,11 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
             result["totals"]["launches"], result["totals"]["unusable_run_hours"]
         )
         .map_err(|e| e.to_string())?;
+        for alert in result["witness_alerts"].as_array().into_iter().flatten() {
+            if let Some(line) = alert.as_str() {
+                writeln!(out, "{line}").map_err(|e| e.to_string())?;
+            }
+        }
     }
     Ok(())
 }

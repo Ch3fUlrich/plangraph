@@ -1,6 +1,8 @@
 //! Hermetic `pg-spawnd serve` integration tests (Unix sockets, no network).
 
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 #[cfg(unix)]
 mod common;
 
@@ -55,7 +57,7 @@ fn state_is_required_and_never_created() {
 }
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_pg-spawnd")
+    binary::spawnd()
 }
 
 fn spawn_serve(socket: &Path) -> ChildGuard {
@@ -293,9 +295,7 @@ fn unknown_tool_is_protocol_error_naming_no_internals() {
 fn stale_socket_is_replaced() {
     let tmp = TempDir::new();
     let socket = tmp.path().join("spawnd.sock");
-    {
-        let _stale = std::os::unix::net::UnixListener::bind(&socket).expect("bind stale");
-    }
+    drop(common::bind_stale_socket(&socket));
     assert!(socket.exists(), "stale socket file left behind");
     let _guard = spawn_serve(&socket);
     let mut client = McpClient::connect(&socket);
@@ -383,7 +383,7 @@ fn parallel_stale_sockets_are_independent() {
             scope.spawn(|| {
                 let tmp = TempDir::new();
                 let socket = tmp.path().join("spawnd.sock");
-                drop(std::os::unix::net::UnixListener::bind(&socket).unwrap());
+                drop(common::bind_stale_socket(&socket));
                 barrier.wait();
                 let _guard = spawn_serve(&socket);
                 let mut client = McpClient::connect(&socket);

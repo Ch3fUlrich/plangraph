@@ -1,0 +1,13 @@
+[Unit]
+Description=plangraph mechanical native writer feeder
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Detached supervisors and writers must outlive this timer tick.
+KillMode=process
+WorkingDirectory=%h/code/plangraph
+EnvironmentFile=-%h/.config/plangraph/plangraph.env
+ExecStart=%h/.local/bin/plangraph feed --once --facts %h/.config/plangraph/feeder-facts.json
+TimeoutStartSec=110
+UMask=0077
