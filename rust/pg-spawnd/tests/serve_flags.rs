@@ -1,4 +1,6 @@
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 use std::process::Command;
 
 #[test]
@@ -14,7 +16,7 @@ fn invalid_flags_exit_two_with_one_line() {
         vec!["--placement", "on"],
         vec!["--placement", "bogus"],
     ] {
-        let out = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        let out = Command::new(binary::spawnd())
             .arg("serve")
             .args(&args)
             .env_remove("PLANGRAPH_HOST")
@@ -26,7 +28,7 @@ fn invalid_flags_exit_two_with_one_line() {
         assert_eq!(String::from_utf8(out.stderr).unwrap().lines().count(), 1);
     }
     for (key, value) in [("PLANGRAPH_HOST", "Bad"), ("PLANGRAPH_PLACEMENT", "on")] {
-        let out = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        let out = Command::new(binary::spawnd())
             .arg("serve")
             .env_remove("PLANGRAPH_HOST")
             .env_remove("PLANGRAPH_PLACEMENT")

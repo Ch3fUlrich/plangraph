@@ -1,4 +1,6 @@
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 #[path = "common/mod.rs"]
 mod common;
 use common::{ChildGuard, McpClient, TempDir};
@@ -30,7 +32,7 @@ impl Fixture {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let socket = state.path().join("socket");
-        let child = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        let child = std::process::Command::new(binary::spawnd())
             .args(["serve", "--no-scope", "--socket"])
             .arg(&socket)
             .arg("--state")
