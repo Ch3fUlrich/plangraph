@@ -154,7 +154,8 @@ Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
 Record-derived verdicts and backfill allow an operator-ordered override only when
 `override_reason` starts with `D-<n> operator` and that exact id appears once in
-`router/decisions-index.tsv` under `PG_DATA_DIR` (default: sibling `plangraph-data`).
+`router/decisions-index.tsv` in the data repository named by `PG_DATA_DIR`.
+Unset or empty `PG_DATA_DIR` refuses with `PG_DATA_DIR_UNSET`; no path is guessed.
 The TSV's first two columns are decision id and source (`OPERATOR`, case insensitive);
 headers and extra columns are allowed. Missing or unreadable authority refuses the
 exception. Explicit pin flags still refuse, and the served model must be witnessed

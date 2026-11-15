@@ -51,9 +51,28 @@ impl Seat {
     }
 
     fn verdict(&self, head: &str, accepted: bool, diagnostic: &str) {
-        let out = Command::new("python3")
+        self.verdict_with_data_dir(
+            head,
+            accepted,
+            diagnostic,
+            Some(self.tmp.path().as_os_str()),
+        );
+    }
+
+    fn verdict_with_data_dir(
+        &self,
+        head: &str,
+        accepted: bool,
+        diagnostic: &str,
+        data_dir: Option<&std::ffi::OsStr>,
+    ) {
+        let mut command = Command::new("python3");
+        command.env_remove("PG_DATA_DIR");
+        if let Some(path) = data_dir {
+            command.env("PG_DATA_DIR", path);
+        }
+        let out = command
             .current_dir(&self.root)
-            .env("PG_DATA_DIR", self.tmp.path())
             .env("PYTHONPATH", self.root.join("src"))
             .args(["tools/seat_verdict.py", "--key", "demo:A", "--seat-dir"])
             .arg(&self.run)
@@ -172,5 +191,13 @@ fn missing_malformed_and_duplicate_authority_fail_closed() {
             None => fs::remove_file(path).unwrap(),
         }
         seat.verdict(HEAD, false, "pinned seat");
+    }
+}
+
+#[test]
+fn operator_order_requires_explicit_data_dir() {
+    let seat = Seat::new(ORDER, "", "claude-haiku-5-5");
+    for data_dir in [None, Some(std::ffi::OsStr::new(""))] {
+        seat.verdict_with_data_dir(HEAD, false, "PG_DATA_DIR_UNSET", data_dir);
     }
 }

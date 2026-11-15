@@ -77,9 +77,10 @@ def _operator_order(reason):
     match = re.match(r"^(D-[0-9]+) operator\b", reason) if isinstance(reason, str) else None
     if not match:
         return False
-    # Same private-data checkout convention as tools/check_import.py.
-    data = Path(os.environ.get("PG_DATA_DIR") or
-                Path(__file__).resolve().parents[2] / "plangraph-data")
+    data_dir = os.environ.get("PG_DATA_DIR")
+    if not data_dir:
+        raise ValueError("PG_DATA_DIR_UNSET: operator decision authority requires PG_DATA_DIR")
+    data = Path(data_dir)
     try:
         rows = [line.split("\t") for line in
                 (data / "router/decisions-index.tsv").read_text("utf-8").splitlines()]
