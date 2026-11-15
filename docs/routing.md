@@ -1,5 +1,9 @@
 # Implement route defaults (D-5206)
 
+Gateway snapshot HTTP 401/403 exclusions appear as `auth_refused` in candidate
+and skipped-leg details, carrying gateway URL, principal, and HTTP status as
+evidence. They do not claim gateway unreachability.
+
 The declared writer order uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
 effort `xhigh`), then `agy-gemini-4-hydrogen-high` (agy harness, D-5903). Hydrogen is enabled,
 with an unwitnessed seat because AGY emits no served-model telemetry. Quota, cooldown, or a

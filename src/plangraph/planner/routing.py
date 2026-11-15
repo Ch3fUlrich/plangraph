@@ -356,6 +356,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidate_details = []
     for leg in candidates:
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
+            reason = 'auth_refused'
         if reason:
             pass
         elif leg.family in excluded:

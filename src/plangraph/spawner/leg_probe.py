@@ -346,6 +346,8 @@ async def before_launch(runner, leg, role, dry_run):
     if booked := limit():
         return booked
     skip = admission()
+    if (skip or '').startswith('auth_refused:'):
+        return skip
     snapshot_error = (skip or '').startswith('leg_state_snapshot_error:')
     if not snapshot_error and (not ttl or role not in ('implement', 'fix')):
         return skip
