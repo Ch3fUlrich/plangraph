@@ -1,5 +1,7 @@
 //! End-to-end Python admission -> Rust worker -> native CLI, without a model seat.
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -104,7 +106,7 @@ print(json.dumps({'type':'turn.completed'}))
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
         .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-        .env("NATIVE_BINARY", env!("CARGO_BIN_EXE_pg-spawnd"))
+        .env("NATIVE_BINARY", binary::spawnd())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base)
         .args(["-c", r#"
 import asyncio, json, os, pathlib

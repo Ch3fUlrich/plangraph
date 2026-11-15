@@ -1,0 +1,1 @@
+- Review route follows rule 3.50 (D-6028): mimo-v2.6-pro first, mimo-v2.6-flash second, then the D-5966 order (Hydrogen high, Argon medium, DeepSeek flash, Beam free, Sonnet high). Fallback legs and agy quota states are named, not indexed by position.

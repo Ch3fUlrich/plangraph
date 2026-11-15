@@ -53,6 +53,15 @@ def git_out(*args):
     return r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
 
 
+def refresh_origin():
+    """Only fresh, pruned branch refs may vouch for previously tested parts."""
+    try:
+        return git("fetch", "--quiet", "--prune", "origin",
+                   "+refs/heads/*:refs/remotes/origin/*").returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def affected_base_commit(remote_sha, local_sha):
     """Exclude merged upstream changes only when doing so preserves the pushed base."""
     base = pushed_base_commit(remote_sha, local_sha)
@@ -346,14 +355,20 @@ def push_main():
     root = Path(git_out("rev-parse", "--show-toplevel"))
     preflight = root / "tools/preflight.py"
     if os.environ.get("PREFLIGHT_SKIP") != "1" and preflight.is_file():
+        # Prune deleted heads too: stale tracking refs cannot vouch for parts.
+        fetched = refresh_origin()
         for _, local_sha, _, remote_sha in refs:
+            batch_base = (base_commit(remote_sha, local_sha) if is_zero(remote_sha)
+                          else pushed_base_commit(remote_sha, local_sha))
+            env = dict(os.environ, PLANGRAPH_PUSH_RANGE=(
+                f"{batch_base}:{local_sha}" if fetched else ""))
             command = [PYTHON, str(preflight),
                        "--base", affected_base_commit(remote_sha, local_sha),
                        "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             # Per-check deadlines govern, including the possible INFRA retry.
-            result = subprocess.run(command)
+            result = subprocess.run(command, env=env)
             if result.returncode:
                 return result.returncode
     elif os.environ.get("PREFLIGHT_SKIP") == "1":

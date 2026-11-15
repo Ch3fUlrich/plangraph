@@ -3,6 +3,8 @@
 
 #![cfg(windows)]
 
+#[path = "common/binary.rs"]
+mod binary;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::windows::io::AsRawHandle;
@@ -34,7 +36,7 @@ extern "system" {
 }
 
 fn bin() -> &'static str {
-    env!("CARGO_BIN_EXE_pg-spawnd")
+    binary::spawnd()
 }
 
 fn user_name() -> String {
