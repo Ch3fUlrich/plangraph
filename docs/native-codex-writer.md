@@ -37,3 +37,12 @@ ID. A failed SSH cancel leaves the last known run status intact with a query err
 The Rust MCP bridge delegates native launch, result refresh and cancellation to
 the same Python owner. Remote receipts refresh before returning a result; cancel
 reaches the Python supervisor locally or the target host over SSH.
+
+## Health check
+
+After a spawner move, each target must answer `pg-spawnd health --json` with exit 0;
+`pg-spawnd` has no `--version` verb (advertised verbs: `probe`, `serve`, `shim`, `health`, `agents-view`).
+Route listings never show `native-codex`: it is a card `run_kind` that spawn sends past routing
+(`src/plangraph/spawner/cli.py`); native dry runs are refused (`src/plangraph/spawner/overflow.py`).
+Check routing with a review dry run from a fresh `python3 -m plangraph.spawner.cli` process.
+Make the first native-codex run after a move a small canary; check its run record for the exit code and review path before real writers use the spawner.
