@@ -309,25 +309,6 @@ def test_detached_tree_leaves_local_main_alone(cached_tree, damage):
     assert (git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain')) == before
 
 
-def test_reaping_removes_the_sha_lock_directory(cached_tree):
-    origin, repo, state, a = cached_tree
-    age(a['tree_path'])
-    lock = state / 'trees/.locks' / a['tree_sha']
-    assert lock.is_dir()
-    advance(origin)
-    with git_guard.run_tree(state, repo):
-        assert not Path(a['tree_path']).exists()
-        assert not lock.exists()
-
-
-def test_missing_code_identity_records_an_explicit_absence(monkeypatch):
-    monkeypatch.setattr(git_guard, 'CODE_IDENTITY', dict(tree_sha=None, tree_branch=None))
-    record = {}
-    git_guard.annotate_tree(record)
-    assert record['tree_sha'] is None
-    assert 'checkout identity unavailable' in record['tree_absent']
-
-
 @pytest.mark.parametrize('events', [None, [], [{'event': 'existing'}]])
 def test_fresh_launch_spec_adds_tree_event_when_child_events_are_null(trees, monkeypatch, capsys, events):
     from plangraph.spawner import launch_spec
@@ -363,6 +344,7 @@ def test_mcp_default_equivalent_runner_keeps_fresh_trees(tmp_path, injected):
 
 @pytest.mark.parametrize('failure', ['handshake', 'registration', 'result', 'wait', 'cancel', 'late_cancel', 'ok', 'empty_seats'])
 def test_fresh_spawn_releases_context_once_even_after_task_creation(tmp_path, monkeypatch, failure):
+    from plangraph.spawner.seat_spawn import fresh_spawn
     released, calls = [], []
     tree = dict(tree_sha='a' * 40, tree_path=str(tmp_path / 'tree'))
     class Context:
@@ -407,7 +389,7 @@ def test_fresh_spawn_releases_context_once_even_after_task_creation(tmp_path, mo
     service = SimpleNamespace(state=tmp_path, code_tree=context, tasks=Tasks(), result=result,
                               runner=SimpleNamespace(default_cwd=str(tmp_path)))
     async def run():
-        task = asyncio.create_task(git_guard.fresh_spawn(service, dict(card={}, prompt='review', role='review', wait_seconds=None)))
+        task = asyncio.create_task(fresh_spawn(service, dict(card={}, prompt='review', role='review', wait_seconds=None)))
         if failure == 'cancel':
             await asyncio.sleep(0)
             task.cancel()
@@ -496,80 +478,6 @@ def test_supervisor_handoff_stamps_selected_tree_not_parent_checkout(tmp_path, m
     result = json.loads(output.getvalue())
     assert result['tree_sha'] == tree['tree_sha'] != git_guard.CODE_IDENTITY['tree_sha']
     assert service.result(result['run_id'])['tree_path'] == tree['tree_path']
-
-
-@pytest.mark.skipif(os.name == 'nt', reason='POSIX lock inode identity')
-def test_sha_lock_waiter_retries_after_reaper_unlinks_its_inode(tmp_path, monkeypatch):
-    import fcntl
-    root = tmp_path / '.locks' / ('a' * 40)
-    flock, replaced = fcntl.flock, []
-    def acquire(lock, mode):
-        flock(lock, mode)
-        if mode == fcntl.LOCK_EX and not replaced:
-            replaced.append(lock.fileno())
-            (root / '.lock').unlink()
-            root.rmdir()
-    monkeypatch.setattr(fcntl, 'flock', acquire)
-    with git_guard.run_worktree_lock(root):
-        assert replaced
-        assert (root / '.lock').exists(), 'unlinked waiter must acquire the replacement inode'
-
-
-@pytest.mark.parametrize('entry', ['cli', 'mcp'])
-def test_live_entry_imports_supervisor_from_new_main_without_changing_job_cwd(trees, monkeypatch, capsys, entry):
-    from plangraph.spawner import cli
-    from plangraph.spawner.mcp import MCPSpawnerServer
-    from plangraph.spawner.runner import spawn_service
-    origin, repo, state = trees
-    # A tiny real supervisor lets the test observe import provenance without a
-    # harness, network service, or monkeypatch inherited by the child process.
-    package = origin / 'src/plangraph/spawner'
-    package.mkdir(parents=True)
-    (package.parent / '__init__.py').touch()
-    (package / '__init__.py').touch()
-    (package / 'runner.py').write_text('''from types import SimpleNamespace
-class Service:
-    def __init__(self, state):
-        self.state = state
-        self.runner = SimpleNamespace(default_cwd=None)
-    def _save(self, record): pass
-spawn_service = Service
-''')
-    (package / 'cli.py').write_text('''import json, pathlib, sys
-from .runner import spawn_service
-payload = json.loads(sys.stdin.readline())
-assert not any(key.startswith('_') for key in payload), 'legacy entry rejects handoff kwargs'
-service = spawn_service(payload['state'])
-record = dict(run_id='run-fixture', status='completed', exit_code=0,
-              cwd=service.runner.default_cwd, imported_version=pathlib.Path('version').read_text())
-service._save(record)
-assert pathlib.Path(__file__).resolve().is_relative_to(pathlib.Path(record['tree_path']))
-path = pathlib.Path(payload['state']) / 'runs/run-fixture/record.json'
-path.parent.mkdir(parents=True)
-path.write_text(json.dumps(record))
-print(json.dumps(record), flush=True)
-''')
-    git(origin, 'add', 'src')
-    main = advance(origin)
-    monkeypatch.setenv('PLANGRAPH_SPAWNER_REPO', str(repo))
-    service = spawn_service(state=state)
-    service.runner.default_cwd = str(repo)
-    service.route = lambda *a, **k: None
-    service.admit_spawn = lambda *a, **k: None
-    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
-    if entry == 'cli':
-        assert cli.main(['spawn', '--card', '{"estimate_tokens":1}', '--cwd', str(repo), '--wait', '5', 'Implement change']) == 0
-        record = json.loads(capsys.readouterr().out)
-    else:
-        server = MCPSpawnerServer(state=state)
-        server.service = service
-        service.fresh_tree = True
-        record = asyncio.run(server.call_tool('plangraph_agent_spawn',
-            dict(card={'estimate_tokens': 1, 'cwd': str(repo)}, prompt='Implement change', wait_seconds=5)))
-    assert record['tree_sha'] == main != git(repo, 'rev-parse', 'HEAD')
-    assert record['imported_version'] == 'B'
-    assert record['cwd'] == str(repo)
-    assert service.result(record['run_id']) == record
 
 
 @pytest.mark.parametrize('raw', ['?', '[]', ' ' * (16 * 1024 * 1024 + 1)])

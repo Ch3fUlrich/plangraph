@@ -90,7 +90,7 @@ impl LaunchAdapter {
     }
     pub(crate) fn request(
         &self,
-        _state: &Path,
+        state: &Path,
         request: &Value,
         timeout: Duration,
     ) -> Result<LaunchSpec, ToolError> {
@@ -101,7 +101,9 @@ impl LaunchAdapter {
             Command::new(program)
         } else {
             let mut cmd = Command::new(&self.1);
-            cmd.args(["-m", "plangraph.spawner.launch_spec"]);
+            cmd.args(["-m", "plangraph.spawner.cli", "--state"])
+                .arg(state)
+                .arg("launch-spec");
             cmd
         };
         cmd.stdin(Stdio::piped())

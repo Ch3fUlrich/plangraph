@@ -15,6 +15,108 @@ from pathlib import Path
 
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
 
+def live_runner(runner):
+    """Default-equivalent runners use fresh code; injected transports stay local."""
+    from .runner import SpawnerRunner
+    from .proc_kill import oom_process_factory
+    return type(runner) is SpawnerRunner and runner.process_factory is oom_process_factory
+
+
+async def fresh_spawn(service, options):
+    """Run freshly imported code in a child; one owner releases its tree lease."""
+    import asyncio
+    import json
+    import sys
+    from plangraph.routing_support import background_process_options
+    state = service.state.resolve()
+    context = service.code_tree(state)
+    acquiring = asyncio.create_task(asyncio.to_thread(context.__enter__))
+    tree, child, task = None, None, None
+    released = False
+    def release():
+        nonlocal released
+        if tree is not None and not released:
+            released = True
+            context.__exit__(None, None, None)
+    try:
+        try:
+            tree = await asyncio.shield(acquiring)
+        except asyncio.CancelledError:
+            tree = await acquiring  # A running Git thread cannot be cancelled.
+            raise
+        env = dict(os.environ, PYTHONPATH=str(Path(tree['tree_path']) / 'src'),
+                   PYTHONDONTWRITEBYTECODE='1')
+        # The selected main may predate the handoff contract. Install metadata
+        # before running its entry point, rather than passing it unknown kwargs.
+        bootstrap = '''import io, json, runpy, sys
+from plangraph.spawner import runner
+payload = json.loads(sys.stdin.readline())
+tree = payload.pop('_tree')
+admitted = payload.pop('_admitted', False)
+cwd = payload.pop('_cwd')
+factory = runner.spawn_service
+def service_with_tree(*args, **kwargs):
+    service = factory(*args, **kwargs)
+    service.fresh_tree = False
+    service._parent_admitted = admitted
+    service.runner.default_cwd = cwd
+    save = service._save
+    def save_tree(record):
+        for key, value in tree.items(): record.setdefault(key, value)
+        return save(record)
+    service._save = save_tree
+    return service
+runner.spawn_service = service_with_tree
+sys.stdin = io.StringIO(json.dumps(payload) + '\\n')
+sys.argv = ['plangraph.spawner.cli', '--supervise']
+runpy.run_module('plangraph.spawner.cli', run_name='__main__')
+'''
+        child = await asyncio.create_subprocess_exec(sys.executable, '-c', bootstrap,
+            cwd=tree['tree_path'], env=env,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            limit=4 * 1024 * 1024, **background_process_options(new_session=True, platform=os.name))
+        payload = {k: v for k, v in options.items() if k != 'wait_seconds'}
+        payload.update(state=str(state), _tree=tree, _admitted=True,
+                       _cwd=getattr(service.runner, 'default_cwd', os.getcwd()))
+        child.stdin.write((json.dumps(payload) + '\n').encode())
+        await child.stdin.drain()
+        child.stdin.close()
+        from .base_fresh import ADMISSION_TIMEOUT, spawn_runs
+        line = await asyncio.wait_for(child.stdout.readline(), ADMISSION_TIMEOUT + 5)
+        if not line:
+            raise RuntimeError('run_tree_worker_failed')
+        result = json.loads(line)
+        async def finish():
+            try:
+                await child.wait()
+            finally:
+                release()
+        task = asyncio.create_task(finish())
+        task.add_done_callback(lambda done: release())  # Also if cancelled before its first step.
+        for record in spawn_runs(result):
+            if 'run_id' in record:
+                service.tasks[record['run_id']] = task
+        wait = options.get('wait_seconds', 0)
+        if wait is None:
+            await asyncio.shield(task)
+        elif wait > 0:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), wait)
+            except asyncio.TimeoutError:
+                pass
+        return service.result(result['run_id']) if 'run_id' in result else result
+    except BaseException:
+        try:
+            if child is not None and child.returncode is None:
+                child.kill()
+                await child.wait()
+        finally:
+            if task is not None:
+                await asyncio.gather(task, return_exceptions=True)
+            release()
+        raise
+
+
 def resources(service):
     from .overflow import available_memory_mb
     return 0, available_memory_mb()
@@ -184,7 +286,6 @@ class SeatSpawnMixin:
                 from .overflow import native_spawn
                 return await native_spawn(self, card, options)
             if getattr(self, 'fresh_tree', False) and not options.get('dry_run'):
-                from .git_guard import fresh_spawn
                 return await fresh_spawn(self, options)
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief

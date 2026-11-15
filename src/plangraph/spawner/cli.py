@@ -14,7 +14,7 @@ from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
 from .base_fresh import admitted_spawn, spawn_runs, spawn_exit_code
-from .git_guard import live_runner
+from .seat_spawn import live_runner
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""

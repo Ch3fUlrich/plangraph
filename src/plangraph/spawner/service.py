@@ -59,7 +59,10 @@ class SpawnService(SeatSpawnMixin):
 
     def _save(self, record):
         native_receipt(record); self._sync_seat(record)
-        if not self._path(record['run_id']).exists(): annotate_tree(record)
+        if not self._path(record['run_id']).exists():
+            annotate_tree(record)
+            if record.get('tree_sha') is None:
+                record.setdefault('tree_absent', 'spawner code checkout identity unavailable at process startup')
         from .private_io import atomic_write_private
         from .runner import redact
         from .seat_artifact import publish

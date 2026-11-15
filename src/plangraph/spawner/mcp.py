@@ -170,7 +170,7 @@ class MCPSpawnerServer:
         self._session_sleep = session_sleep
         self.service = spawn_service(self.runner, state=state)
         # An explicitly supplied default-equivalent runner is still a live path.
-        from .git_guard import live_runner
+        from .seat_spawn import live_runner
         self.service.fresh_tree = live_runner(self.runner)
 
     def _sessions(self):
