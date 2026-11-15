@@ -303,6 +303,13 @@ process cwd and child PWD use that path. With the flag off, cwd is unchanged;
 dry runs create nothing. Admission fetches origin's default branch and refuses stale workers, continuations and seats (`base_stale`); a card `base_decision` needs scoped operator proof from the configured decision authority to waive known lag; cleanup removes only unadmitted attempts created by this run and never continuations; detached CLI waits for admission (180-second timeout: `base_admission_timeout`, exit 1); no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
 
+Session `launch` uses the same fetched-base admission before preparing launch
+arguments, reserving its counter or writing its prompt. A stale checkout refuses
+with the spawn `base_stale` reason and leaves only the session refusal audit.
+The Python session API and `plangraph_session_launch` accept `base_decision`;
+waivers use the same fetched operator row scoped to checkout and origin SHAs as
+spawns. Successful session records retain the admission SHAs and waiver decision.
+
 OpenCode gateway runs carry a per-job session tag for every role, including Sol
 writers and effort variants. After exit (successful or failed), the parent reads
 the response-side gateway call log independently of review tool permissions. Only
@@ -704,6 +711,11 @@ for benchmark foreign keys and never appears in the model list.
 Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md).
 
 Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
+
+Every emitted context pack includes this rule within its size cap: new code is Rust with Rust tests; no new Python or shell file; an allowlist line needs an operator D-id. The planner brief template carries the same rule (D-5912).
+
+D-5966 review route: gemini-4-hydrogen-high, gemini-4-argon-medium, free console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-5-high. No mimo review legs. CLI quota responses use leg-state keys agy:<model> without effort, including native Sonnet; each model resets independently. Route JSON exposes all three agy_quota_states with reset_at evidence. Rust review kinds `agy-cli` and `claude-cli` select admitted review legs; Python MCP rejects these native kinds. Hydrogen and Argon use agy plan mode with preallowed read tools; commands stay unapproved.
+Sonnet uses Claude restricted review tools and high effort. CLI reviews use the checkout rather than inline-diff rollout, requiring a clean worktree and an exact HEAD fast-checks stamp. Rust binds head_sha and records verdict/findings with cli_reported provenance: agy reports the CLI-selected model, not provider telemetry; Claude must report a single Sonnet model. Repository HEAD and tracked cleanliness are rechecked at completion. Failed/quota streams never count. When tests share a Cargo target across worktrees, verify that `CARGO_BIN_EXE_pg-spawnd` belongs to the intended revision: a stale main executable can reject branch-only CLI kinds or misinterpret checkout diff_ref. A controlled main/branch comparison reproduced stale executable and unit-test inventory reuse. Clear affected package artifacts in a private diagnostic target; preserve configured host shared caches. The Unix keeper integration uses production modules with stdlib setup; its direct Python inputs in `tools/ci_select.py` select Rust CI. Record/provenance assertions also run on Windows. Initial launch and quota fallthrough share Rust review preparation: select transport before interpreting diff_ref. CLI checkout refs avoid the inline SHA validator; inline-only legs retain strict validation. Each native CLI retry requires the same stamped HEAD. Keeper counts the final serving attempt after quota refusals, preserving cli_reported trust for Sonnet. Native CLI reviews use card.cwd or legacy diff_ref.repo, then the daemon checkout if neither is supplied. Symbolic diff heads resolve there and must equal its stamped HEAD.
 
 Seat-pool cleanup tests create their initial commit with Git plumbing in an
 isolated fixture environment, without signing, hooks, index updates or automatic

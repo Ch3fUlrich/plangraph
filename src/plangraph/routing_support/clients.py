@@ -318,7 +318,8 @@ def build_standalone_fallback_command(
     check_retired(model)
     cname = client_name.lower()
     if cname == "agy":
-        plan = role == "review" and (model or "").lower().removeprefix("agy/").startswith("gemini-4-hydrogen-")
+        plan = role == "review" and ((model or "").lower().removeprefix("agy/").startswith("gemini-4-hydrogen-")
+                                     or (model or "").lower().removeprefix("agy/") == "gemini-4-argon-medium")
         cmd = ["agy", *(["--mode", "plan"] if plan else ["--dangerously-skip-permissions"])]
         if model:
             cmd.extend(["--model", model])
@@ -333,6 +334,9 @@ def build_standalone_fallback_command(
         return ["codex", "exec", *(["--model", model] if model else []), "-"]
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
         cmd = [cname, "-p", *([] if cname == "claude" else [""]), *(["--model", model] if model else [])]
+        if cname == "claude" and model == "claude-sonnet-5-5-high":
+            cmd[cmd.index("--model") + 1] = "claude-sonnet-5-5"
+            cmd.extend(["--effort", "high"])
         return cmd + (["--output-format", "stream-json", "--verbose", *claude_access_args(role, tool_mode)] if cname == "claude" else [])
     # Legacy callers may pass a gateway name. Explicit harnesses are validated
     # by build_command, while this offline helper retains its OpenCode default.

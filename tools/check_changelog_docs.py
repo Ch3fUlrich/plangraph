@@ -16,6 +16,11 @@ import re
 import subprocess
 import sys
 
+if __package__:
+    from .ci_commit_gate import _trailer_block_lines
+else:
+    from ci_commit_gate import _trailer_block_lines
+
 BASE_ENV = "CHANGELOG_BASE"
 TODAY_ENV = "CHANGELOG_DOCS_TODAY"
 SKIP_TRAILER_RE = re.compile(
@@ -156,10 +161,10 @@ def read_docs_map(root: str, rev: str) -> str | None:
 
 def commit_skips(root: str, sha: str) -> tuple[list[str], int]:
     """(non-empty skip reasons, empty-skip count) from the commit's trailer block only."""
-    out = git_checked(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
+    out = git_checked(root, "log", "-1", "--format=%B", sha)
     reasons: list[str] = []
     empty = 0
-    for line in out.splitlines():
+    for line in _trailer_block_lines(out):
         m = SKIP_TRAILER_RE.match(line)
         if not m:
             continue
@@ -302,7 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         for sha in git_checked(root, "rev-list", f"{merge_base}..{head_sha}").split():
             if not changelog_edited(root, sha):
                 continue
-            trailers = git_checked(root, "log", "-1", "--format=%(trailers:only,unfold)", sha)
+            message = git_checked(root, "log", "-1", "--format=%B", sha)
+            trailers = "\n".join(_trailer_block_lines(message))
             if not re.search(r"^Release:[ \t]*\S.*$", trailers, re.IGNORECASE | re.MULTILINE):
                 problems.append(f"commit {sha[:8]} edits CHANGELOG.md outside a release; "
                                 "write changelog.d/<ITEM>.md or use a nonempty Release: trailer")

@@ -185,8 +185,34 @@ fn tools_list_matches_embedded_fixture() {
     let mut client = McpClient::connect(&socket);
     client.initialize();
     let response = client.request("tools/list", serde_json::json!({}));
-    let fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture");
-    assert_eq!(response["result"]["tools"], fixture);
+    let mut fixture: serde_json::Value = serde_json::from_str(FIXTURE).expect("fixture");
+    let mut listed = response["result"]["tools"].clone();
+    for (catalogue, native) in [(&mut listed, true), (&mut fixture, false)] {
+        for tool in catalogue.as_array_mut().expect("tool array") {
+            if matches!(
+                tool["name"].as_str(),
+                Some("plangraph_agent_route" | "plangraph_agent_spawn")
+            ) {
+                let selector = tool["inputSchema"]["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("leg");
+                if native {
+                    let selector = selector.expect("native selector advertised on the wire");
+                    assert_eq!(selector["type"], "string");
+                    assert_eq!(
+                        selector["enum"],
+                        serde_json::json!(["agy-cli", "claude-cli"])
+                    );
+                    assert!(selector["description"]
+                        .as_str()
+                        .unwrap()
+                        .contains("role=review"));
+                }
+            }
+        }
+    }
+    assert_eq!(listed, fixture);
     assert_eq!(
         response["result"]["tools"].as_array().expect("array").len(),
         15

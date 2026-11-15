@@ -15,7 +15,7 @@ pub(crate) struct LaunchAdapter(Option<std::ffi::OsString>, std::ffi::OsString);
 #[cfg(all(test, unix))]
 #[path = "launch_tests.rs"]
 mod tests;
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub(crate) struct LaunchSpec {
     pub argv: Vec<String>,
     pub cwd: PathBuf,

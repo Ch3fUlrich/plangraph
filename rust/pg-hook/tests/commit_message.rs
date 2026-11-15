@@ -235,3 +235,30 @@ fn automatic_comments_without_scissors_match_the_final_message() {
         assert_eq!(output.status.success(), valid, "{output:?}");
     }
 }
+
+#[test]
+fn attribution_paragraphs_and_misplaced_known_trailers() {
+    let dir = repo();
+    let message = "fix typo\n\nExplain the correction.\n\nPlan-Item: plangraph:TEST\nHand-Edit: typo correction\nChangelog: skip (typo correction)\n\nCo-Authored-By: Claude <claude@example.invalid>\nClaude-Session: session_test";
+    let output = git(dir.path(), &["commit", "--allow-empty", "-m", message]);
+    assert!(output.status.success(), "{output:?}");
+    for key in ["Plan-Item", "Writer", "Hand-Edit", "Changelog", "Gate-Edit"] {
+        let value = match key {
+            "Changelog" => "skip (typo correction)",
+            "Gate-Edit" => "D-1234",
+            _ => "codex",
+        };
+        for separator in ["\n", "\n\n"] {
+            let message =
+                format!("subject\n\n{key}: {value}{separator}Prose follows.\n\nWriter: codex");
+            let output = git(dir.path(), &["commit", "--allow-empty", "-m", &message]);
+            assert!(!output.status.success(), "{message}: {output:?}");
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(stderr.contains(&format!("line 3: {key}")), "{stderr}");
+            assert!(
+                stderr.contains("outside trailing trailer block"),
+                "{stderr}"
+            );
+        }
+    }
+}
