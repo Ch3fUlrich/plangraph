@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
-import stat
 import time
 import urllib.parse
 import urllib.request
 
 from plangraph.routing_support.opencode_overlay import _strip_jsonc
-from plangraph.routing_support.opencode_render import (
+from plangraph.routing_support.opencode_render import (  # management token loader: one implementation
+    TOKEN_ENV, TOKEN_FILE_ENV, _owner_only, load_token,
     _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
 )
 from .gateway_models import (  # compatibility re-exports for callers
@@ -27,8 +26,6 @@ from .gateway_models import (  # compatibility re-exports for callers
 )
 
 SESSION_HEADER = 'x-omniroute-session-id'
-TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
-TOKEN_FILE_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN_FILE'
 URL_ENVS = ('OMNIROUTE_BASE_URL', 'PLANGRAPH_GATEWAY_URL')
 WITNESS_KIND = 'response-side-gateway-call-log'
 
@@ -121,40 +118,6 @@ def _mimo_endpoints(env):
             if isinstance(options, dict) and 'baseURL' in options:
                 endpoints.append(options['baseURL'])
     return seen, endpoints
-
-
-def _owner_only(info, windows=None):
-    """Regular file readable by its owner only."""
-    # Windows mode bits cannot verify owner-only access; silently refuse key files there.
-    if windows is None:
-        windows = os.name == 'nt'
-    return stat.S_ISREG(info.st_mode) and not windows and stat.S_IMODE(info.st_mode) == 0o600
-
-
-def load_token(secrets=None):
-    """Load management credentials only in the parent; never expose failure details."""
-    secrets = os.environ if secrets is None else secrets
-    token = secrets.get(TOKEN_ENV)
-    if token:
-        return token
-    raw = secrets.get(TOKEN_FILE_ENV)
-    if raw:
-        path = Path(raw).expanduser()
-    elif secrets.get('HOME'):
-        path = Path(secrets['HOME']) / '.config' / 'plangraph' / 'omniroute-mgmt.key'
-    else:
-        path = Path('~/.config/plangraph/omniroute-mgmt.key').expanduser()
-    try:
-        with path.open() as stream:
-            info = os.fstat(stream.fileno())
-            if not _owner_only(info):
-                raise OSError
-            token = stream.read().strip()
-        if token:
-            return token
-    except (OSError, UnicodeError):
-        pass
-    raise LookupError('no ' + TOKEN_ENV)
 
 
 def gateway_leg(model, env=None, *, mimo_endpoints=None):
