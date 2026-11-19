@@ -4,6 +4,9 @@ Hermetic: every case points AUTOOS_ROOT at a tmp_path fake root whose
 ``tools/`` helpers are stubs returning fake strings. Nothing here reads
 ``configuration/api-keys.yml`` or any real key.
 """
+import logging
+import os
+
 import pytest
 
 from plangraph.routing_support import host_keys
@@ -38,6 +41,7 @@ def _fake_root(tmp_path):
 
 @pytest.fixture
 def fake_autoos(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path / 'fake-home'))
     monkeypatch.setenv('AUTOOS_ROOT', str(_fake_root(tmp_path)))
     return tmp_path / 'fake-autoos'
 
@@ -69,6 +73,7 @@ def test_no_gateway_key_when_not_needed(fake_autoos):
 
 
 def test_missing_root_leaves_env_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setenv('HOME', str(tmp_path / 'fake-home'))
     monkeypatch.setenv('AUTOOS_ROOT', str(tmp_path / 'absent-root'))
     env = {}
     add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=True)
@@ -342,3 +347,205 @@ def test_read_keys_returning_any_mapping_resolves_zen(fake_autoos):
     add_host_keys(env, 'opencode/glm-5.3-flash-free', needs_gateway=False)
     assert env == {ZEN_KEY_ENV: ZEN_FAKE}
     assert redaction_env({})[ZEN_KEY_ENV] == ZEN_FAKE
+
+
+# --- plangraph:GATEWAY-CLIENT-KEY-PLANGRAPH-FILE-S1: per-host client key file ---
+
+CLIENT_KEY_SENTINEL = 'fake-client-key-CCC333'
+
+
+def _write_client_key(home, content, *, file_mode=0o600, dir_mode=0o700):
+    key_dir = home / '.config' / 'plangraph'
+    key_dir.mkdir(parents=True, exist_ok=True)
+    key_path = key_dir / 'omniroute-client.key'
+    if isinstance(content, bytes):
+        key_path.write_bytes(content)
+    else:
+        key_path.write_text(content, encoding='utf-8')
+    key_path.chmod(file_mode)
+    key_dir.chmod(dir_mode)
+    return key_dir, key_path
+
+
+def test_client_key_file_0600_is_returned_and_wins_over_autoos(tmp_path, monkeypatch, fake_autoos, caplog):
+    home = tmp_path / 'home-0600'
+    monkeypatch.setenv('HOME', str(home))
+    _write_client_key(home, f'  {CLIENT_KEY_SENTINEL} \n')
+
+    with caplog.at_level(logging.WARNING):
+        assert host_keys._gateway_key({}) == CLIENT_KEY_SENTINEL
+        env = {}
+        add_host_keys(env, 'mimo/mimo-v2.6-pro', needs_gateway=True)
+        assert env == {GATEWAY_KEY_ENV: CLIENT_KEY_SENTINEL}
+        assert redaction_env({'PATH': '/bin'})[GATEWAY_KEY_ENV] == CLIENT_KEY_SENTINEL
+
+    assert not caplog.records
+    assert CLIENT_KEY_SENTINEL not in caplog.text
+
+
+def test_client_key_stricter_0400_file_0500_dir_is_returned(tmp_path, monkeypatch):
+    home = tmp_path / 'home-strict'
+    monkeypatch.setenv('HOME', str(home))
+    key_dir, key_path = _write_client_key(home, CLIENT_KEY_SENTINEL + '\n', file_mode=0o400, dir_mode=0o500)
+    try:
+        assert host_keys._gateway_key({}) == CLIENT_KEY_SENTINEL
+    finally:
+        key_dir.chmod(0o700)
+        key_path.chmod(0o600)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX file modes')
+@pytest.mark.parametrize('file_mode', [0o644, 0o640, 0o604, 0o660, 0o601])
+def test_client_key_group_or_other_accessible_file_refused_with_warning(
+    tmp_path, monkeypatch, fake_autoos, caplog, capsys, file_mode
+):
+    home = tmp_path / f'home-mode-{file_mode:04o}'
+    monkeypatch.setenv('HOME', str(home))
+    _, key_path = _write_client_key(home, CLIENT_KEY_SENTINEL + '\n', file_mode=file_mode)
+
+    with caplog.at_level(logging.WARNING):
+        assert host_keys._gateway_key({}) is None
+        env = {}
+        add_host_keys(env, 'mimo/mimo-v2.6-pro', needs_gateway=True)
+        assert env == {}
+
+    assert len(caplog.records) == 2
+    for rec in caplog.records:
+        assert str(key_path) in rec.message
+        assert f'{file_mode:04o}' in rec.message
+        assert CLIENT_KEY_SENTINEL not in rec.message
+    captured = capsys.readouterr()
+    assert CLIENT_KEY_SENTINEL not in captured.out + captured.err
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX file modes')
+def test_client_key_0755_dir_refused_with_warning(tmp_path, monkeypatch, fake_autoos, caplog, capsys):
+    home = tmp_path / 'home-dir-0755'
+    monkeypatch.setenv('HOME', str(home))
+    key_dir, _ = _write_client_key(home, CLIENT_KEY_SENTINEL + '\n', file_mode=0o600, dir_mode=0o755)
+
+    with caplog.at_level(logging.WARNING):
+        assert host_keys._gateway_key({}) is None
+        env = {}
+        add_host_keys(env, 'mimo/mimo-v2.6-pro', needs_gateway=True)
+        assert env == {}
+
+    assert len(caplog.records) == 2
+    for rec in caplog.records:
+        assert str(key_dir) in rec.message
+        assert '0755' in rec.message
+        assert CLIENT_KEY_SENTINEL not in rec.message
+    captured = capsys.readouterr()
+    assert CLIENT_KEY_SENTINEL not in captured.out + captured.err
+
+
+def test_client_key_symlink_refused_with_warning(tmp_path, monkeypatch, fake_autoos, caplog, capsys):
+    home = tmp_path / 'home-symlink'
+    monkeypatch.setenv('HOME', str(home))
+    target = tmp_path / 'real-target.key'
+    target.write_text(CLIENT_KEY_SENTINEL + '\n', encoding='utf-8')
+    target.chmod(0o600)
+    key_dir = home / '.config' / 'plangraph'
+    key_dir.mkdir(parents=True)
+    key_dir.chmod(0o700)
+    key_path = key_dir / 'omniroute-client.key'
+    key_path.symlink_to(target)
+
+    with caplog.at_level(logging.WARNING):
+        assert host_keys._gateway_key({}) is None
+        env = {}
+        add_host_keys(env, 'mimo/mimo-v2.6-pro', needs_gateway=True)
+        assert env == {}
+
+    assert len(caplog.records) == 2
+    for rec in caplog.records:
+        assert str(key_path) in rec.message
+        assert 'mode=' in rec.message
+        assert CLIENT_KEY_SENTINEL not in rec.message
+    captured = capsys.readouterr()
+    assert CLIENT_KEY_SENTINEL not in captured.out + captured.err
+
+
+@pytest.mark.skipif(os.name == 'nt' or not hasattr(os, 'geteuid'), reason='POSIX euid')
+def test_client_key_wrong_owner_refused_with_warning(tmp_path, monkeypatch, fake_autoos, caplog, capsys):
+    home = tmp_path / 'home-owner'
+    monkeypatch.setenv('HOME', str(home))
+    _, key_path = _write_client_key(home, CLIENT_KEY_SENTINEL + '\n')
+    monkeypatch.setattr(os, 'geteuid', lambda: os.getuid() + 1)
+
+    with caplog.at_level(logging.WARNING):
+        assert host_keys._gateway_key({}) is None
+
+    assert len(caplog.records) == 1
+    assert str(key_path) in caplog.records[0].message
+    assert '0600' in caplog.records[0].message
+    assert CLIENT_KEY_SENTINEL not in caplog.text
+    captured = capsys.readouterr()
+    assert CLIENT_KEY_SENTINEL not in captured.out + captured.err
+
+
+def test_client_key_absent_falls_back_to_autoos(tmp_path, monkeypatch, fake_autoos, caplog):
+    home = tmp_path / 'home-absent'
+    (home / '.config' / 'plangraph').mkdir(parents=True)
+    (home / '.config' / 'plangraph').chmod(0o755)
+    monkeypatch.setenv('HOME', str(home))
+
+    with caplog.at_level(logging.WARNING):
+        assert host_keys._gateway_key({}) == GATEWAY_FAKE
+        env = {}
+        add_host_keys(env, 'mimo/mimo-v2.6-pro', needs_gateway=True)
+        assert env == {GATEWAY_KEY_ENV: GATEWAY_FAKE}
+    assert not caplog.records
+
+
+@pytest.mark.parametrize('content', ['', '   \n\t  '])
+def test_client_key_empty_file_means_no_key_without_fallback(tmp_path, monkeypatch, fake_autoos, content):
+    home = tmp_path / 'home-empty'
+    monkeypatch.setenv('HOME', str(home))
+    _write_client_key(home, content)
+
+    assert host_keys._gateway_key({}) is None
+    env = {}
+    add_host_keys(env, 'mimo/mimo-v2.6-pro', needs_gateway=True)
+    assert env == {}
+
+
+@pytest.mark.parametrize('content', [
+    CLIENT_KEY_SENTINEL + '\nsecond-line\n',
+    (CLIENT_KEY_SENTINEL + '-').encode('utf-8') + b'\xff',
+    (CLIENT_KEY_SENTINEL + '-' + 'x' * 9000).encode('utf-8'),
+])
+def test_client_key_invalid_content_never_leaks_value(tmp_path, monkeypatch, fake_autoos, caplog, capsys, content):
+    home = tmp_path / 'home-invalid'
+    monkeypatch.setenv('HOME', str(home))
+    _, key_path = _write_client_key(home, content)
+
+    with caplog.at_level(logging.WARNING):
+        assert host_keys._gateway_key({}) is None
+
+    assert len(caplog.records) == 1
+    assert str(key_path) in caplog.records[0].message
+    assert '0600' in caplog.records[0].message
+    assert CLIENT_KEY_SENTINEL not in caplog.text
+    captured = capsys.readouterr()
+    assert CLIENT_KEY_SENTINEL not in captured.out + captured.err
+
+
+def test_client_key_callers_use_real_reader(tmp_path, monkeypatch):
+    from plangraph.routing_support import omniroute_state, quota_snapshots
+
+    home = tmp_path / 'home-callers'
+    monkeypatch.setenv('HOME', str(home))
+    _write_client_key(home, CLIENT_KEY_SENTINEL + '\n')
+
+    seen_auth = []
+
+    def fake_fetch(url, headers, timeout):
+        seen_auth.append(headers.get('Authorization'))
+        return 200, b'{"connections": [{"provider": "p", "isActive": true}], "data": []}'
+
+    env = {'OMNIROUTE_BASE_URL': 'https://gw.example/v1'}
+    state = omniroute_state.from_env(env, fetch=fake_fetch)
+    assert state.provider_state('p').available is True
+    assert quota_snapshots.fetch_snapshot_rows(env, fetch=fake_fetch) == []
+    assert seen_auth == ['Bearer ' + CLIENT_KEY_SENTINEL, 'Bearer ' + CLIENT_KEY_SENTINEL]
