@@ -424,11 +424,11 @@ mod tests {
         let mut s = complete_state(&cfg, 1);
         assert_eq!(plan(&cfg, &s).unwrap(), vec![]);
 
-        s.users[0].home = Some(PathBuf::from("/home/runner1"));
+        s.users[0].home = Some(PathBuf::from("/var/lib/runner1"));
         let err = plan(&cfg, &s).unwrap_err();
         assert!(
             err.starts_with("refuse:")
-                && err.contains("/home/runner1")
+                && err.contains("/var/lib/runner1")
                 && err.contains("/srv/ci-runners/runner1"),
             "err={err}"
         );

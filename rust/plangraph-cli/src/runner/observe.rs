@@ -203,8 +203,8 @@ mod tests {
     #[test]
     fn parses_passwd_home_and_observes_non_default_home_base() {
         assert_eq!(
-            parse_passwd_home("runner1:x:1001:1001:CI Runner:/srv/runners/runner1:/bin/bash\n"),
-            Some(PathBuf::from("/srv/runners/runner1"))
+            parse_passwd_home("runner1:x:1001:1001:CI Runner:/srv/ci/u1:/bin/bash\n"),
+            Some(PathBuf::from("/srv/ci/u1"))
         );
         assert_eq!(parse_passwd_home("runner1:x:1001:1001:::/bin/bash\n"), None);
         assert_eq!(parse_passwd_home("malformed"), None);
