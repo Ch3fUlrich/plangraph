@@ -332,7 +332,20 @@ def test_sweep_role_allows_sweep_claims_and_refuses_writes_and_other_roles(live,
     sweep_tf = tmp_path / "sweep.token"
     sweep_tf.write_text(sweep_tok, encoding="utf-8")
     os.chmod(sweep_tf, 0o600)
-    scoped_sweep_tok = auth.add_principal(w.conn, "sweep-scoped", "sweep", ["demo"])
+
+    # Scoped sweep tokens cannot be minted via add_principal or CLI admin.
+    with pytest.raises(Refused) as exc:
+        auth.add_principal(w.conn, "sweep-scoped", "sweep", ["demo"])
+    assert exc.value.code == "validation"
+    assert cli.main(["admin", "add-principal", "sweep-scoped", "--role", "sweep", "--projects", "demo"]) == 2
+    capsys.readouterr()
+
+    # Defense in depth: even if a legacy/tampered DB row has scoped sweep projects, runtime checks refuse it.
+    scoped_sweep_tok = "scoped-sweep-fixture-token"
+    w.conn.execute(
+        "INSERT INTO principals(name,role,projects,family,token_sha256,active) VALUES(?,?,?,?,?,1)",
+        ("sweep-scoped", "sweep", json.dumps(["demo"]), None, auth.hash_token(scoped_sweep_tok)),
+    )
     scoped_tf = tmp_path / "sweep-scoped.token"
     scoped_tf.write_text(scoped_sweep_tok, encoding="utf-8")
     os.chmod(scoped_tf, 0o600)
@@ -443,3 +456,70 @@ def test_sweep_role_allows_sweep_claims_and_refuses_writes_and_other_roles(live,
         with pytest.raises(Refused) as exc:
             fn()
         assert exc.value.code == "forbidden"
+    denied_actions = {
+        row["action"]
+        for row in w.conn.execute(
+            "SELECT action FROM audit_log WHERE actor=? AND ok=0 AND code='forbidden'",
+            ("sweep-host",),
+        ).fetchall()
+    }
+    assert {"claim", "close_on_decision", "create_items", "edit_definition", "ready", "messages"} <= denied_actions
+
+
+def test_sweep_transport_and_store_refusal_layers(live, monkeypatch):
+    import urllib.error
+    import urllib.request
+    from plangraph.keeper import api_routes, auth
+    from plangraph.keeper.errors import Refused
+
+    server, w, _, _, _ = live
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    sweep_tok = auth.add_principal(w.conn, "sweep-layer", "sweep", [])
+    sweep_p = auth.authenticate(w.conn, sweep_tok)
+
+    def http(method, path, body=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(base_url + path, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {sweep_tok}")
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    # Transport layer (api_routes.run_gate) refuses directly and before body validation or non-Store routes.
+    for verb in ("claim", "hosts", "messages"):
+        with pytest.raises(Refused) as exc:
+            api_routes.run_gate(sweep_p, verb)
+        assert exc.value.code == "forbidden"
+
+    # Empty body on POST /v1/claim would return 400 validation if it reached _write; run_gate refuses 403 first.
+    status, payload = http("POST", "/v1/claim", {})
+    assert status == 403 and payload["error"] == "forbidden"
+    assert w.conn.execute(
+        "SELECT count(*) FROM audit_log WHERE actor='sweep-layer' AND action='claim'"
+    ).fetchone()[0] == 0
+
+    # GET /v1/hosts bypasses Store._run, so run_gate is the layer that refuses it.
+    status, payload = http("GET", "/v1/hosts")
+    assert status == 403 and payload["error"] == "forbidden"
+
+    # When transport gate is bypassed, Store._run refuses and records the audited denial.
+    monkeypatch.setattr(api_routes, "run_gate", lambda principal, name: None)
+    status, payload = http("POST", "/v1/claim", {"key": "demo:B"})
+    assert status == 403 and payload["error"] == "forbidden"
+    row = w.conn.execute(
+        "SELECT ok, code FROM audit_log WHERE actor='sweep-layer' AND action='claim'"
+    ).fetchone()
+    assert row is not None and row["ok"] == 0 and row["code"] == "forbidden"
+
+    # Direct store.messages() refusal also flows through Store._run and is audited.
+    with pytest.raises(Refused) as exc:
+        w.store.messages(sweep_p)
+    assert exc.value.code == "forbidden"
+    msg_row = w.conn.execute(
+        "SELECT ok, code FROM audit_log WHERE actor='sweep-layer' AND action='messages'"
+    ).fetchone()
+    assert msg_row is not None and msg_row["ok"] == 0 and msg_row["code"] == "forbidden"

@@ -76,15 +76,15 @@ def check_sweep(principal, action):
 
 
 def run_gate(principal, name):
-    """A run token is refused (403) before any body parsing outside its verbs."""
+    """Refuse host, sweep, phase-worker, and run tokens outside their verbs (403)."""
     from .store_host_samples import HostPrincipal
     if isinstance(principal, HostPrincipal):
         if name != 'ingest_host_sample':
             raise Refused('forbidden', 'host token is ingest-only')
         return
+    check_sweep(principal, name)
     from .worker_policy import check
     check(principal, name, transport=True)
-    check_sweep(principal, name)
     if getattr(principal, "token_id", None) is not None and name not in RUN_VERBS:
         raise Refused("forbidden", "a run token may not call this verb")
 

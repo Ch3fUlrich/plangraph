@@ -50,10 +50,108 @@ def _cmd_prune_backups(args) -> int:
     return 0 if res.ok else 1
 
 
+def _write_new_private(target, text: str) -> None:
+    """Atomically create *target* with mode 0600 if it does not already exist."""
+    import tempfile
+    from pathlib import Path
+
+    path = Path(target)
+    if os.path.lexists(path):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix="." + path.name + ".", suffix=".tmp")
+    try:
+        try:
+            os.write(fd, text.encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def install_sweep_config(*, example, config_dir, state_dir, token_file, env_file,
+                         pins_file, repo_root=None) -> None:
+    """Create disk-hygiene.env and pins.json from example when token_file is a regular file."""
+    from pathlib import Path
+
+    token_path = Path(token_file)
+    if token_path.is_symlink() or not token_path.is_file():
+        raise ValueError("sweep token file must be a regular file, not a symlink")
+    example_path = Path(example)
+    if not example_path.is_file():
+        raise ValueError(f"missing {example_path}")
+    cfg_dir = Path(config_dir)
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    home = Path(os.path.abspath(os.environ["HOME"]))
+    root = Path(repo_root).resolve() if repo_root else example_path.resolve().parents[2]
+    env_path = Path(env_file)
+    if not os.path.lexists(env_path):
+        default_repo = home / "code/plangraph"
+        if (default_repo / ".venv/bin/python3").is_file():
+            reader_src = str(default_repo / "src")
+            reader_py = str(default_repo / ".venv/bin/python3")
+        elif (root / ".venv/bin/python3").is_file():
+            reader_src = str(root / "src")
+            reader_py = str(root / ".venv/bin/python3")
+        else:
+            reader_src = str(root / "src")
+            reader_py = sys.executable
+        pg_url = os.environ.get("PG_URL", "").strip()
+        if not pg_url:
+            pg_env = cfg_dir / "plangraph.env"
+            if pg_env.is_file() and not pg_env.is_symlink():
+                for line in pg_env.read_text(encoding="utf-8").splitlines():
+                    s = line.strip()
+                    if not s or s.startswith("#") or "=" not in s:
+                        continue
+                    k, v = s.split("=", 1)
+                    if k.strip() == "PG_URL":
+                        pg_url = v.strip().strip("\"'")
+                        break
+        text = example_path.read_text(encoding="utf-8")
+        text = text.replace(
+            "PYTHONPATH=/home/USER/code/plangraph/src /home/USER/code/plangraph/.venv/bin/python3",
+            f"PYTHONPATH={reader_src} {reader_py}",
+        )
+        text = text.replace("/home/USER/.config/plangraph/pins.json", str(pins_file))
+        text = text.replace("/home/USER/.config/plangraph/sweep.token", str(token_file))
+        text = text.replace("/home/USER/.local/state/plangraph", str(state_dir))
+        text = text.replace("/home/USER", str(home))
+        if pg_url:
+            text = text.replace("PG_URL=https://KEEPER_HOST", f"PG_URL={pg_url}")
+        _write_new_private(env_path, text)
+    _write_new_private(pins_file, "[]\n")
+
+
+def _cmd_install_sweep(args) -> int:
+    try:
+        install_sweep_config(
+            example=args.example,
+            config_dir=args.config_dir,
+            state_dir=args.state_dir,
+            token_file=args.token_file,
+            env_file=args.env_file,
+            pins_file=args.pins_file,
+            repo_root=args.repo_root,
+        )
+    except (OSError, ValueError) as exc:
+        print(f"worktree-sweep: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def dispatch(args) -> int:
     command = args.admin_command
     if command == "prune-backups":     # before _config(): no keeper config needed
         return _cmd_prune_backups(args)
+    if command == "install-sweep":     # before _config(): bootstrap runs without keeper config
+        return _cmd_install_sweep(args)
     cfg = _config(args)
     if cfg is None:
         return 2

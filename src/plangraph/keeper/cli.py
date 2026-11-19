@@ -281,6 +281,17 @@ def _add_admin(sub):
     prune.add_argument("--apply", action="store_true",
                        help="actually delete (absent = dry run)")
 
+    sweep_cfg = commands.add_parser(
+        "install-sweep",
+        help="create disk-hygiene.env and pins.json from example when sweep.token exists")
+    sweep_cfg.add_argument("--example", required=True)
+    sweep_cfg.add_argument("--config-dir", required=True)
+    sweep_cfg.add_argument("--state-dir", required=True)
+    sweep_cfg.add_argument("--token-file", required=True)
+    sweep_cfg.add_argument("--env-file", required=True)
+    sweep_cfg.add_argument("--pins-file", required=True)
+    sweep_cfg.add_argument("--repo-root", default=None)
+
 
 def build_parser():
     parser = argparse.ArgumentParser(prog="pg", description="Keeper client.")

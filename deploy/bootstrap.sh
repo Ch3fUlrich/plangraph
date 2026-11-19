@@ -289,73 +289,12 @@ install_worktree_sweep() {
     return 0
   fi
   [[ -f "$example" ]] || { echo "worktree-sweep: missing $example" >&2; return 1; }
-  mkdir -p "$config_dir"
-  "$PYTHON_CMD" -c '
-import os, pathlib, sys, tempfile
-
-script_dir, example_path, config_dir_s, state_dir_s, token_s, env_s, pins_s = sys.argv[1:]
-home = pathlib.Path(os.path.abspath(os.environ["HOME"]))
-repo_root = pathlib.Path(script_dir).parent.resolve()
-config_dir = pathlib.Path(config_dir_s)
-env_file = pathlib.Path(env_s)
-pins_file = pathlib.Path(pins_s)
-
-def write_new(target: pathlib.Path, text: str) -> None:
-    if os.path.lexists(target):
-        return
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix="." + target.name + ".", suffix=".tmp")
-    try:
-        try:
-            os.write(fd, text.encode("utf-8"))
-        finally:
-            os.close(fd)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, target)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-if not os.path.lexists(env_file):
-    default_repo = home / "code/plangraph"
-    if (default_repo / ".venv/bin/python3").is_file():
-        reader_src = str(default_repo / "src")
-        reader_py = str(default_repo / ".venv/bin/python3")
-    elif (repo_root / ".venv/bin/python3").is_file():
-        reader_src = str(repo_root / "src")
-        reader_py = str(repo_root / ".venv/bin/python3")
-    else:
-        reader_src = str(repo_root / "src")
-        reader_py = sys.executable
-    pg_url = os.environ.get("PG_URL", "").strip()
-    if not pg_url:
-        pg_env = config_dir / "plangraph.env"
-        if pg_env.is_file() and not pg_env.is_symlink():
-            for line in pg_env.read_text(encoding="utf-8").splitlines():
-                s = line.strip()
-                if not s or s.startswith("#") or "=" not in s:
-                    continue
-                k, v = s.split("=", 1)
-                if k.strip() == "PG_URL":
-                    pg_url = v.strip().strip("\"\x27")
-                    break
-    text = pathlib.Path(example_path).read_text(encoding="utf-8")
-    text = text.replace(
-        "PYTHONPATH=/home/USER/code/plangraph/src /home/USER/code/plangraph/.venv/bin/python3",
-        f"PYTHONPATH={reader_src} {reader_py}",
-    )
-    text = text.replace("/home/USER/.config/plangraph/pins.json", pins_s)
-    text = text.replace("/home/USER/.config/plangraph/sweep.token", token_s)
-    text = text.replace("/home/USER/.local/state/plangraph", state_dir_s)
-    text = text.replace("/home/USER", str(home))
-    if pg_url:
-        text = text.replace("PG_URL=https://KEEPER_HOST", f"PG_URL={pg_url}")
-    write_new(env_file, text)
-
-write_new(pins_file, "[]\n")
-' "$SCRIPT_DIR" "$example" "$config_dir" "$state_dir" "$token_file" "$env_file" "$pins_file"
+  local repo_root
+  repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+  PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$repo_root/src" "$PYTHON_CMD" -m plangraph.keeper.cli admin install-sweep \
+    --example "$example" --config-dir "$config_dir" --state-dir "$state_dir" \
+    --token-file "$token_file" --env-file "$env_file" --pins-file "$pins_file" \
+    --repo-root "$repo_root"
 }
 install_worktree_sweep
 
