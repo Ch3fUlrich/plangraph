@@ -30,6 +30,7 @@ EXIT_OK = 0
 EXIT_REFUSED = 2
 EXIT_UNREACHABLE = 3
 TIMEOUT = 15.0
+SLOW_TIMEOUT = 120.0  # close_merged reads git and the decisions log before it commits
 NOTICE = "READ-ONLY fallback (keeper unreachable)"
 
 
@@ -107,7 +108,7 @@ class Session:
         return self._token
 
     # ---------------------------------------------------------------- HTTP
-    def call(self, method, verb, params=None, body=None):
+    def call(self, method, verb, params=None, body=None, timeout=None):
         query = dict(params or {})
         query.setdefault("fmt", "json")
         query = {k: v for k, v in query.items() if v is not None}
@@ -118,7 +119,7 @@ class Session:
         if data is not None:
             request.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT) as resp:
+            with urllib.request.urlopen(request, timeout=timeout or TIMEOUT) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             code, msg = _parse_error(exc.read(), exc.code)

@@ -1,0 +1,1 @@
+- **LE-KEEPER-CLOSE-MERGED-D6295-GO-DATE-INELIGIBLE-UNEXPLAINED:** A regression test pins that a single-head key whose GO row carries `Date: 2026-11-15T19:54:23Z` in the decision cell passes the D-6295 cutoff `2026-11-15T19:54:53Z`; the live refusal does not reproduce from the log rows, the keeper code at origin/main or the real git history of the 11 keys.
