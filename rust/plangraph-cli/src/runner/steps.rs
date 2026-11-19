@@ -97,7 +97,13 @@ pub fn steps_for(cfg: &Config, action: &Action) -> Vec<Step> {
                 cmd_env("apt-get", install, &env, None),
             ]
         }
-        Action::CreateUser(u) => vec![cmd("useradd", &["-m", "-s", "/bin/bash", u])],
+        Action::CreateUser(u) => vec![
+            Step::Mkdir(cfg.home_base.clone()),
+            cmd(
+                "useradd",
+                &["-m", "-d", &s(&cfg.home(u)), "-s", "/bin/bash", u],
+            ),
+        ],
         Action::EnableLinger(u) => vec![cmd("loginctl", &["enable-linger", u])],
         Action::InstallSudoers { content } => {
             let staged = state.join("ci-apt.new");
@@ -554,5 +560,28 @@ mod tests {
         }
         assert!(err.is_some(), "chown to missing user must fail");
         assert!(!runner_dir.join(".plangraph-version").exists());
+    }
+    #[test]
+    fn create_user_passes_configured_home_for_non_default_home_base() {
+        let mut cfg = sample();
+        cfg.home_base = PathBuf::from("/srv/ci-runners");
+        let steps = steps_for(&cfg, &Action::CreateUser("runner1".into()));
+        assert_eq!(steps[0], Step::Mkdir(PathBuf::from("/srv/ci-runners")));
+        assert_eq!(
+            steps[1],
+            Step::Cmd {
+                program: "useradd".into(),
+                args: vec![
+                    "-m".into(),
+                    "-d".into(),
+                    "/srv/ci-runners/runner1".into(),
+                    "-s".into(),
+                    "/bin/bash".into(),
+                    "runner1".into(),
+                ],
+                env: vec![],
+                cwd: None,
+            }
+        );
     }
 }

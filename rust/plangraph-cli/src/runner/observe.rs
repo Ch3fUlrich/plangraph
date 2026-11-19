@@ -23,6 +23,7 @@ pub fn observe(cfg: &Config, count: u32, root: &Path) -> Result<State, String> {
         .collect();
     for u in &mut st.users {
         u.exists = user_exists(&u.name);
+        u.home = u.exists.then(|| passwd_home(&u.name)).flatten();
     }
     Ok(st)
 }
@@ -32,6 +33,28 @@ fn user_exists(name: &str) -> bool {
         .args(["-u", name])
         .output()
         .is_ok_and(|o| o.status.success())
+}
+
+/// Extract the home directory (field 6, 0-indexed 5) from a `getent passwd` line.
+pub(crate) fn parse_passwd_home(entry: &str) -> Option<PathBuf> {
+    let dir = entry
+        .lines()
+        .next()?
+        .trim_end_matches('\r')
+        .split(':')
+        .nth(5)?;
+    (!dir.is_empty()).then(|| PathBuf::from(dir))
+}
+
+pub(crate) fn passwd_home(name: &str) -> Option<PathBuf> {
+    let out = std::process::Command::new("getent")
+        .args(["passwd", name])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    parse_passwd_home(&String::from_utf8_lossy(&out.stdout))
 }
 
 fn dpkg_installed(pkg: &str) -> bool {
@@ -85,6 +108,7 @@ pub fn observe_fs(cfg: &Config, count: u32, root: &Path) -> Result<State, String
         let ms = at(root, &home.join(".cache/ms-playwright"));
         st.users.push(UserState {
             exists: false,
+            home: None,
             lingering: at(root, &Path::new("/var/lib/systemd/linger").join(&name)).exists(),
             runner_version: read(root, &home.join("runner/.plangraph-version")),
             hosted_cache: std::fs::read_link(at(root, &home.join("hostedtoolcache/Python")))
@@ -174,5 +198,24 @@ mod tests {
             .as_deref()
             .is_some_and(|c| c.ends_with("hostedtoolcache/Python")));
         assert!(!st.proc_hidepid);
+    }
+
+    #[test]
+    fn parses_passwd_home_and_observes_non_default_home_base() {
+        assert_eq!(
+            parse_passwd_home("runner1:x:1001:1001:CI Runner:/srv/runners/runner1:/bin/bash\n"),
+            Some(PathBuf::from("/srv/runners/runner1"))
+        );
+        assert_eq!(parse_passwd_home("runner1:x:1001:1001:::/bin/bash\n"), None);
+        assert_eq!(parse_passwd_home("malformed"), None);
+
+        let mut cfg = sample();
+        cfg.home_base = PathBuf::from("/srv/runners");
+        let d = tempfile::tempdir().unwrap();
+        let run_one = d.path().join("srv/runners/runner1/run-one.sh");
+        std::fs::create_dir_all(run_one.parent().unwrap()).unwrap();
+        std::fs::write(&run_one, "ok").unwrap();
+        let st = observe_fs(&cfg, 1, d.path()).unwrap();
+        assert_eq!(st.users[0].run_one.as_deref(), Some("ok"));
     }
 }

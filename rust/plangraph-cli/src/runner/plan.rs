@@ -19,6 +19,7 @@ pub fn cache_file(name: &str) -> PathBuf {
 pub struct UserState {
     pub name: String,
     pub exists: bool,
+    pub home: Option<PathBuf>,
     pub lingering: bool,
     pub runner_version: Option<String>,
     pub hosted_cache: bool,
@@ -145,6 +146,19 @@ pub fn plan(cfg: &Config, state: &State) -> Result<Vec<Action>, String> {
         out.push(Action::AptInstall(state.apt_missing.clone()));
     }
     for u in &state.users {
+        let expected_home = cfg.home(&u.name);
+        if u.exists && u.home.as_deref() != Some(expected_home.as_path()) {
+            let actual = u
+                .home
+                .as_ref()
+                .map_or_else(|| "<unknown>".into(), |p| p.display().to_string());
+            return Err(format!(
+                "refuse: user {} has passwd home {}, config expects {}; remove the user or update home_base",
+                u.name,
+                actual,
+                expected_home.display()
+            ));
+        }
         if !u.exists {
             out.push(Action::CreateUser(u.name.clone()));
         }
@@ -232,6 +246,7 @@ pub(crate) fn complete_state(cfg: &Config, count: u32) -> State {
         users: names
             .into_iter()
             .map(|name| UserState {
+                home: Some(cfg.home(&name)),
                 name,
                 exists: true,
                 lingering: true,
@@ -401,5 +416,24 @@ mod tests {
         };
         let d = a.describe();
         assert!(d.contains("h.example/p/x.tgz") && !d.contains("token"));
+    }
+    #[test]
+    fn mismatched_passwd_home_is_refused_for_non_default_home_base() {
+        let mut cfg = sample();
+        cfg.home_base = PathBuf::from("/srv/ci-runners");
+        let mut s = complete_state(&cfg, 1);
+        assert_eq!(plan(&cfg, &s).unwrap(), vec![]);
+
+        s.users[0].home = Some(PathBuf::from("/home/runner1"));
+        let err = plan(&cfg, &s).unwrap_err();
+        assert!(
+            err.starts_with("refuse:")
+                && err.contains("/home/runner1")
+                && err.contains("/srv/ci-runners/runner1"),
+            "err={err}"
+        );
+
+        s.users[0].home = None;
+        assert!(plan(&cfg, &s).unwrap_err().starts_with("refuse:"));
     }
 }

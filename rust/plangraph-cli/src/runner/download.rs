@@ -42,7 +42,7 @@ fn ureq_err(e: ureq::Error) -> String {
         ureq::Error::RequireHttpsOnly(u) => {
             format!("configured for https only: {}", super::redact_url(&u))
         }
-        other => other.to_string(),
+        _ => "request failed".into(),
     }
 }
 
@@ -147,5 +147,18 @@ mod tests {
         for secret in ["alice", "pwsecret", "sig=", "signedval", "?"] {
             assert!(!err.contains(secret), "leaked {secret} in {err}");
         }
+    }
+
+    #[test]
+    fn ureq_err_redacts_other_variants_to_generic_message() {
+        let secret_err = ureq::Error::Io(std::io::Error::other(
+            "https://alice:pwsecret@example.com/a/b.tgz?sig=signedval",
+        ));
+        let msg = ureq_err(secret_err);
+        assert_eq!(msg, "request failed");
+        for secret in ["alice", "pwsecret", "sig=", "signedval", "example.com", "?"] {
+            assert!(!msg.contains(secret), "leaked {secret} in {msg}");
+        }
+        assert_eq!(ureq_err(ureq::Error::StatusCode(404)), "request failed");
     }
 }

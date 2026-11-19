@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Facts {
     pub user: String,
+    pub home_matches: bool,
     pub python_imports: bool,
     pub chrome_present: bool,
     /// None: binary not fetched yet (setup-temporal downloads it in the first run).
@@ -46,6 +47,7 @@ pub fn evaluate(f: &Facts) -> Vec<Check> {
         },
     };
     vec![
+        mk("passwd home matches configured home_base", f.home_matches),
         mk(
             "scrubbed-env python imports ctypes and yaml",
             f.python_imports,
@@ -116,6 +118,7 @@ fn as_user_ok(user: &str, argv: &[String]) -> bool {
 
 pub fn probe(cfg: &Config, user: &str) -> Facts {
     let home = cfg.home(user);
+    let home_matches = super::observe::passwd_home(user).as_deref() == Some(home.as_path());
     let python = cfg.seed_python().to_string_lossy().into_owned();
     let scrubbed = |rest: Vec<String>| {
         let mut v = vec![
@@ -130,6 +133,7 @@ pub fn probe(cfg: &Config, user: &str) -> Facts {
     let temporal: PathBuf = home.join(".cache/temporal-cli/temporal");
     Facts {
         user: user.into(),
+        home_matches,
         python_imports: as_user_ok(
             user,
             &scrubbed(vec![python, "-c".into(), "import ctypes, yaml".into()]),
@@ -156,6 +160,7 @@ mod tests {
     fn good() -> Facts {
         Facts {
             user: "runner1".into(),
+            home_matches: true,
             python_imports: true,
             chrome_present: true,
             temporal_version_ok: Some(true),
@@ -166,7 +171,7 @@ mod tests {
     fn all_good_passes() {
         let c = evaluate(&good());
         assert!(!failed(&c));
-        assert!(render(&c).ends_with("4 checks, 0 failed\n"));
+        assert!(render(&c).ends_with("5 checks, 0 failed\n"));
     }
     #[test]
     fn each_broken_fact_fails_that_check() {
@@ -179,7 +184,15 @@ mod tests {
         let r = render(&c);
         assert_eq!(r.matches("FAIL").count(), 3);
         assert!(r.contains("FAIL runner1 playwright chrome file exists"));
-        assert!(r.ends_with("4 checks, 3 failed\n"));
+        assert!(r.ends_with("5 checks, 3 failed\n"));
+    }
+    #[test]
+    fn mismatched_passwd_home_fails_check() {
+        let mut f = good();
+        f.home_matches = false;
+        let c = evaluate(&f);
+        assert!(failed(&c));
+        assert!(render(&c).contains("FAIL runner1 passwd home matches configured home_base"));
     }
     #[test]
     fn missing_temporal_binary_warns_but_a_failing_one_fails() {
