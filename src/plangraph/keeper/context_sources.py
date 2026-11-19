@@ -33,7 +33,6 @@ COMMIT_LIMIT = 5
 _LANE_LIMIT = 5
 _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
-_MERGE_SCAN = 500
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 _PR_RE = re.compile(r"#(\d+)")
 _DID_RE = re.compile(r"(?<![\w-])[Dd]-0*(\d{1,6})(?!\d)")
@@ -314,15 +313,16 @@ def _merge_of(git, repo, ref, sha):
                               "--end-of-options", f"{sha}..{ref}"])
     if not ancestry:
         return None
-    out = _ok(git, repo, ["rev-list", "--first-parent",
-                          "--merges", f"--max-count={_MERGE_SCAN}",
+    # The whole chain between *sha* and *ref* is listed: containing merges form
+    # a prefix of it, so its last member is the introducing merge however far
+    # behind *ref* the commit sits. One listing costs the same as the ancestry walk.
+    out = _ok(git, repo, ["rev-list", "--first-parent", "--merges",
                           "--end-of-options", f"{sha}..{ref}"])
-    found = (out or "").split()
+    if out is None:
+        return None
     ancestors = set(ancestry.split())
-    found = [commit for commit in found if commit in ancestors]
-    # Containing merges form a prefix of the first-parent merge chain. An
-    # older unrelated merge proves the introducing merge is in the window.
-    if not found or len(found) >= _MERGE_SCAN or not valid_commit_ref(found[-1]):
+    found = [commit for commit in out.split() if commit in ancestors]
+    if not found or not valid_commit_ref(found[-1]):
         return None
     subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                "--end-of-options", found[-1]]) or "").strip()

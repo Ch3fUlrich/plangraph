@@ -29,6 +29,8 @@ by a non-space) do not act as boundaries.
 
 from __future__ import annotations
 
+import contextlib
+import threading
 import os
 import re
 import subprocess
@@ -185,11 +187,49 @@ class DecisionsAdapter:
     def __init__(self, path: str | Path | None, *, from_origin: bool = False) -> None:
         self._path = Path(path) if path else None
         self._from_origin = from_origin
+        self._local = threading.local()
+
+    @contextlib.contextmanager
+    def snapshot(self):
+        """Serve every read inside the block from one read and parse of the document.
+
+        The snapshot belongs to the calling thread: a nested block shares the
+        thread's outer snapshot, a block entered after the outer one closed
+        reads the document again, and another thread's blocks never share it.
+        """
+        local = self._local
+        if getattr(local, "depth", 0) == 0:
+            local.snapshot = {}
+        local.depth = getattr(local, "depth", 0) + 1
+        try:
+            yield self
+        finally:
+            local.depth -= 1
+            if local.depth == 0:
+                local.snapshot = None
 
     def _rows_strict(self) -> dict[str, list[str]]:
         return self._rows(_strict=True)
 
     def _document(self, *, _strict=False):
+        snap = getattr(self._local, "snapshot", None)
+        if snap is not None and "text" in snap:
+            return snap["text"]
+        if snap is None:
+            return self._read_document(_strict=_strict)
+        # Inside a snapshot every read is strict, so the cached text can serve a
+        # strict caller; a best-effort caller falls back to the lenient read
+        # without caching it.
+        try:
+            text = self._read_document(_strict=True)
+        except Exception:  # noqa: BLE001
+            if _strict:
+                raise
+            return self._read_document(_strict=False)
+        snap["text"] = text
+        return text
+
+    def _read_document(self, *, _strict=False):
         if self._path is None:
             return ""
         if self._from_origin:
@@ -241,11 +281,16 @@ class DecisionsAdapter:
     def _rows(self, *, _strict=False) -> dict[str, list[str]]:
         """Normalised prose rows; origin failures raise, local reads can be best effort."""
         text = self._document(_strict=_strict)
+        snap = getattr(self._local, "snapshot", None)
+        if snap is not None and "rows" in snap and snap["rows"][0] is text:
+            return snap["rows"][1]
         rows: dict[str, list[str]] = {}
         for line in _prose_lines(text):
             match = DECISION_LINE_RE.match(line)
             if match:
                 rows.setdefault(f"D-{int(match.group(1))}", []).append(line)
+        if snap is not None:
+            snap["rows"] = (text, rows)
         return rows
 
     def decisions(self) -> set[str]:
