@@ -162,29 +162,39 @@ def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_pat
 
 def test_old_limit_evidence_reprobes(store):
     store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
-    assert store.leg_status('test/leg', now=100 + 21599)['state'] == 'limited'
     assert ls.EVIDENCE_TTL_S == 6 * 60 * 60
     assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S - 1)['state'] == 'limited'
-    assert store.leg_status('test/leg', now=100 + 21600)['state'] == 'reprobe'
-    # Also exercise a legacy row whose recorded reset exceeds the new cap.
+    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S)['state'] == 'limited'
+    assert store.leg_status('test/leg', now=100 + 86400 - 1)['state'] == 'limited'
+    assert store.leg_status('test/leg', now=100 + 86400)['state'] == 'ok'
+    # Also exercise a 7-day reset_at exceeding the 24 h flat down_s cap.
     with store._connect() as db:
         before = db.execute('SELECT reset_at FROM leg_events').fetchone()[0]
         db.execute('UPDATE leg_events SET reset_at=?', (100 + 7 * 86400,))
         assert db.execute('SELECT reset_at FROM leg_events').fetchone()[0] > before
-    state = store.leg_status('test/leg', now=100 + 21600)
-    assert state['state'] == 'reprobe'
+    state = store.leg_status('test/leg', now=100 + 25 * 3600)
+    assert state['state'] == 'limited'
     assert state['evidence']['reset_at'] == 100 + 7 * 86400
+    # Reset-less limit evidence still expires to reprobe.
+    store.record_provider_response('test/noreset', 429, 'quota', {}, 'test', now=100)
+    assert store.leg_status('test/noreset', now=100 + 21600)['state'] == 'reprobe'
 
 
-@pytest.mark.parametrize('source,status', [('provider-probe', 200), ('provider-response', 429),
-                                         ('harness-stderr', 429), ('liveness-probe', 503),
-                                         ('unrecognized', 500)])
-def test_old_evidence_is_classified_before_reprobe(store, source, status):
+@pytest.mark.parametrize('source,status,expected_with_reset', [
+    ('provider-probe', 200, 'ok'),
+    ('provider-response', 429, 'limited'),
+    ('harness-stderr', 429, 'limited'),
+    ('liveness-probe', 503, 'reprobe'),
+    ('unrecognized', 500, 'reprobe'),
+])
+def test_old_evidence_is_classified_before_reprobe(store, source, status, expected_with_reset):
     store.record_provider_response('test/source', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
     with store._connect() as db:
         db.execute('UPDATE leg_events SET source=?, status=?', (source, status))
-    state = store.leg_status('test/source', now=21700)['state']
-    assert state == ('ok' if status == 200 else 'reprobe')
+    assert store.leg_status('test/source', now=21700)['state'] == expected_with_reset
+    with store._connect() as db:
+        db.execute('UPDATE leg_events SET reset_at=NULL')
+    assert store.leg_status('test/source', now=21700)['state'] == ('ok' if status == 200 else 'reprobe')
 
 
 @pytest.mark.parametrize('state,expected', [('ok', True), ('reprobe', True), ('limited', False),
@@ -216,7 +226,8 @@ def test_probe_failures_do_not_extend_hidden_limit_evidence(store):
     store.record_provider_response('test/leg', 429, 'quota', {'Retry-After': '86400'}, 'test', now=100)
     store.record_probe_fail('test/leg', 'timeout', 'probe', now=200, down_s=ls.RESET_CAP_S)
     assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S - 1)['state'] == 'limited'
-    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S)['state'] == 'reprobe'
+    assert store.leg_status('test/leg', now=100 + ls.EVIDENCE_TTL_S)['state'] == 'limited'
+    assert store.leg_status('test/leg', now=100 + 86400)['state'] == 'reprobe'
     store.record_probe_fail('test/down', 'timeout', 'probe', now=100, down_s=ls.RESET_CAP_S)
     store.record_probe_fail('test/down', 'timeout', 'probe', now=101, down_s=ls.RESET_CAP_S)
     assert store.leg_status('test/down', now=101 + ls.EVIDENCE_TTL_S - 1)['state'] == 'down'
@@ -305,18 +316,20 @@ def test_reset_formats(store, headers, body, reset):
     ("(reset after 500ms)", 0.5),
     ("reset after 0s", None),
     ("resets in 2 minutes", 120),
-    ("(reset after 4d 2h)", ls.RESET_CAP_S),
+    ("(reset after 4d 2h)", 4 * 86400 + 2 * 3600),
 ])
 def test_reset_after_formats(store, body, delta):
-    """D-3685: OmniRoute's "reset after" books like "resets in"; an elapsed
-    cooldown ("reset after 0s") books nothing at all and a far-future reset is
-    capped at now + 24 h."""
+    """D-3685/D-6082: OmniRoute's "reset after" books like "resets in"; an elapsed
+    cooldown ("reset after 0s") books nothing at all and a far-future provider
+    reset is stored and honoured uncapped."""
     store.record_provider_response("cx/zz-model", 429, body, {}, "gateway", now=100)
     state = store.leg_status("cx/zz-model", now=101)
     if delta is None:
         assert state["state"] == "ok"  # no reset-less limit row was written
     else:
         assert state["evidence"]["reset_at"] == 100 + delta
+        assert store.leg_status("cx/zz-model", now=100 + delta / 2)["state"] == "limited"
+        assert store.leg_status("cx/zz-model", now=100 + delta)["state"] == "ok"
 
 
 @pytest.mark.parametrize("text, seconds", [
@@ -394,3 +407,54 @@ def test_runner_response_not_agent_claim(store):
     runner.provider_response("test", "cx/sol", 200, "success", {}, store=store,
                              source='gateway_adapter', adapter_token=runner._adapter_tokens['test'])
     assert store.leg_status("cx/sol")["state"] == "ok"
+
+
+def test_provider_resets_are_uncapped_while_flat_down_s_stays_capped(store, monkeypatch):
+    """D-6082/D-6143: parsed agy and opencode-go resets are booked and honoured in full;
+    flat fallback down_s stays capped at 24 h."""
+    now = 1_795_000_000.0
+    store.record_harness_limit(
+        "agy/gemini-4-hydrogen-high",
+        "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 135h6m15s",
+        "spawner:harness",
+        now=now,
+        down_s=1800,
+    )
+    h_state = store.leg_status("agy/gemini-4-hydrogen-high", now=now + 1)
+    assert h_state["evidence"]["reset_at"] == now + 486375
+    assert store.leg_status("agy/gemini-4-hydrogen-high", now=now + 25 * 3600)["state"] == "limited"
+    assert store.leg_status("agy/gemini-4-hydrogen-high", now=now + 486374)["state"] == "limited"
+    assert store.leg_status("agy/gemini-4-hydrogen-high", now=now + 486375)["state"] == "ok"
+
+    store.record_provider_response(
+        "agy/claude-sonnet-5-5-high",
+        429,
+        "Individual quota reached. Resets in 97h31m40s",
+        {},
+        "gateway",
+        now=now,
+    )
+    assert store.leg_status("agy/claude-sonnet-5-5-high", now=now + 25 * 3600)["state"] == "limited"
+    assert store.leg_status("agy/claude-sonnet-5-5-high", now=now + 97 * 3600 + 31 * 60 + 40)["state"] == "ok"
+
+    store.record_harness_limit(
+        "opencode-go/beam-free",
+        "HTTP 429: usage_limit (reset after 176616000ms)",
+        "spawner:harness",
+        now=now,
+        down_s=1800,
+    )
+    go_state = store.leg_status("opencode-go/beam-free", now=now + 1)
+    assert go_state["evidence"]["reset_at"] == now + 176616
+    assert store.leg_status("opencode-go/beam-free", now=now + 7 * 3600)["state"] == "limited"
+    assert store.leg_status("opencode-go/beam-free", now=now + 25 * 3600)["state"] == "limited"
+    assert store.leg_status("opencode-go/beam-free", now=now + 176616)["state"] == "ok"
+    # A later probe failure never hides an uncapped provider limit after 6 h.
+    store.record_probe_fail("opencode-go/beam-free", "timeout", "leg-probe", now=now + 60, down_s=60)
+    assert store.leg_status("opencode-go/beam-free", now=now + 7 * 3600)["state"] == "limited"
+
+    store.record_harness_limit("opencode-go/flat", "error: quota threshold", "spawner:harness", now=now, down_s=172800)
+    assert store.leg_status("opencode-go/flat", now=now + 1)["evidence"]["reset_at"] == now + ls.RESET_CAP_S
+    monkeypatch.setenv("PLANGRAPH_LEG_DOWN_S", "172800")
+    store.record_probe_fail("opencode-go/flat-probe", "timeout", "leg-probe", now=now)
+    assert store.leg_status("opencode-go/flat-probe", now=now + 1)["evidence"]["reset_at"] == now + ls.RESET_CAP_S

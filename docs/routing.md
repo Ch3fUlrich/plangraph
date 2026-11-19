@@ -154,3 +154,7 @@ shipped provider config. The Rust `opencode_catalog` integration tests check ena
 default, explicit and review fallback OpenCode legs against the launch renderer and
 `host_skip_reason` on a fixture host. Named exclusions cover external catalogs and
 the existing Grok declaration gap; an unknown model fails with its leg name.
+
+D-6082 / D-6143: `measured_down` extends its run-record scan window to cover the
+oldest active uncapped provider reset in `leg_state`, so legs with multi-day
+provider resets remain suppressed past 24 hours until their `reset_at` elapses.

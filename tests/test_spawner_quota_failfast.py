@@ -41,9 +41,11 @@ def test_prose_mentioning_a_quota_is_not_a_refusal():
 def test_leg_is_down_until_the_stated_reset_and_route_skips_it(tmp_path, text, seconds):
     store = LegStateStore(tmp_path / 'legs.sqlite')
     store.record_harness_limit('omniroute/gpt-6.1-sol', text, 'spawner:harness', now=1000.0, down_s=1800)
-    want = 1000.0 + (1800 if seconds is None else min(seconds, RESET_CAP_S))
+    want = 1000.0 + (1800 if seconds is None else seconds)
     status = store.leg_status('omniroute/gpt-6.1-sol', now=1001.0)
     assert status['state'] == 'limited' and status['evidence']['reset_at'] == want
+    if seconds is not None and seconds > RESET_CAP_S:
+        assert store.leg_status('omniroute/gpt-6.1-sol', now=1000.0 + RESET_CAP_S + 3600)['state'] == 'limited'
     assert store.leg_status('omniroute/gpt-6.1-sol', now=want + 1)['state'] != 'limited'
     from plangraph.planner.routing import plan_spawn
     card = {'estimate_tokens': 1000}
@@ -315,7 +317,7 @@ def _booked(tmp_path, harness, model, text):
 
 @pytest.mark.parametrize('harness,model,key,text,seconds', [
     ('agy', 'claude-opus-5-5-high', 'agy/claude-opus-5-5-high', AGY, 21 * 3600 + 2 * 60 + 13),
-    ('opencode', 'omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6.1-sol', THRESHOLD, RESET_CAP_S)])
+    ('opencode', 'omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6.1-sol', THRESHOLD, 141 * 3600 + 52 * 60)])
 def test_printed_refusal_books_leg_until_stated_reset_and_falls_through(tmp_path, harness, model, key, text, seconds):
     reason, store, before = _booked(tmp_path, harness, model, text)
     assert reason.startswith('harness_limit:')

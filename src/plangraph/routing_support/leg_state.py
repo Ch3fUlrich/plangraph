@@ -16,9 +16,9 @@ from email.utils import parsedate_to_datetime
 
 REPROBE_MINUTES = 10
 
-#: D-3685: cap booked resets at 24 h; readers expire evidence after six hours.
+#: D-3685/D-6082: cap flat fallback down_s at 24 h; provider-stated resets are uncapped.
 RESET_CAP_S = 86400
-#: Failure evidence expires independently of its booked provider reset.
+#: Failure evidence (non-provider-reset) expires after six hours.
 EVIDENCE_TTL_S = 6 * 60 * 60
 
 #: Probe/harness evidence is leg-level; provider responses keep exact-tuple scope
@@ -46,9 +46,9 @@ def quota_key(leg):
 def _down_seconds(down_s):
     """Validated PLANGRAPH_LEG_DOWN_S, capped at RESET_CAP_S; never raises.
 
-    An invalid value falls back to 1800. The 24 h cap holds on every booking
-    path (D-3685): an explicit down_s or a large PLANGRAPH_LEG_DOWN_S never
-    parks a leg for days.
+    An invalid value falls back to 1800. The 24 h cap holds on flat fallback
+    down_s bookings (D-3685, D-6082): an explicit down_s or a large
+    PLANGRAPH_LEG_DOWN_S never parks a leg for days when no reset was parsed.
     """
     if down_s is not None:
         return min(down_s, RESET_CAP_S)
@@ -146,7 +146,7 @@ def _reset(headers, body, now):
         if total is not None:
             # "reset after 0s": the cooldown already elapsed, nothing to book.
             reset = now + total if total > 0 else None
-    return None if reset is None else min(reset, now + RESET_CAP_S)
+    return reset if reset is not None and math.isfinite(reset) else None
 
 
 class LegStateStore:
@@ -271,8 +271,6 @@ class LegStateStore:
                     return {"state": "ok", "evidence": None}
                 evidence = {k: row[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                 evidence["event_id"] = row["id"]
-                if now >= row['ts'] + ttl:
-                    return {'state': 'reprobe', 'evidence': evidence}
                 if row['source'] == 'liveness-probe':
                     # Two consecutive failures book down; serving evidence breaks the streak.
                     streak = 1
@@ -285,21 +283,41 @@ class LegStateStore:
                         else:
                             behind = older
                             break
-                    # Probe failures never hide an older provider limit with a future reset (D-3685).
+                    # Probe failures never hide an older provider limit with a future reset (D-3685, D-6082).
                     if (behind is not None and behind['source'] in ('harness-stderr', 'provider-response')
-                            and behind['reset_at'] is not None and now < min(behind['reset_at'], behind['ts'] + ttl)):
+                            and behind['reset_at'] is not None and now < behind['reset_at']):
                         evidence = {k: behind[k] for k in ("status", "body_excerpt", "reset_at", "ts", "caller")}
                         evidence["event_id"] = behind["id"]
                         return {"state": "limited", "evidence": evidence}
+                    if now >= row['ts'] + ttl:
+                        return {'state': 'reprobe', 'evidence': evidence}
                     reset = row["reset_at"]
                     down = streak >= 2 and reset is not None and now < reset
                     return {'state': 'down' if down else 'reprobe', 'evidence': evidence}
+                if row['source'] not in ('harness-stderr', 'provider-response') and now >= row['ts'] + ttl:
+                    return {'state': 'reprobe', 'evidence': evidence}
                 reset = row["reset_at"]
                 state = (("limited" if now < reset else "ok") if reset is not None
                          else ("limited" if now < row["ts"] + REPROBE_MINUTES * 60 else "reprobe"))
                 return {"state": state, "evidence": evidence}
         except (sqlite3.Error, OSError):
             return {"state": "ok", "evidence": None}
+
+    def active_limit_window(self, now=None):
+        """Age of the oldest active provider limit so run-record scans reach uncapped resets."""
+        now = time.time() if now is None else now
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return 0
+        try:
+            with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
+                oldest = db.execute(
+                    "SELECT min(ts) FROM leg_events WHERE source IN ('harness-stderr', 'provider-response') "
+                    "AND reset_at>? AND ts<=?",
+                    (now, now),
+                ).fetchone()[0]
+        except (sqlite3.Error, OSError):
+            return 0
+        return 0 if oldest is None else max(0.0, now - oldest)
 
     def last_probe_outcome(self, leg):
         """Newest probe attempt as a reusable single-flight outcome, else None."""
