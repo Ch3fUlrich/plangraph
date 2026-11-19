@@ -13,6 +13,7 @@ import io
 from types import SimpleNamespace
 
 import pytest
+from fake_pid import FAKE_PID
 
 from plangraph.spawner import git_guard
 from plangraph.routing_errors import SpawnRefused
@@ -426,7 +427,7 @@ def test_handshake_timeout_kills_the_supervisor_group(tmp_path, monkeypatch):
     class Context:
         def __enter__(self): return tree
         def __exit__(self, *args): pass
-    child = SimpleNamespace(pid=4242, stdin=SimpleNamespace(write=lambda data: None, close=lambda: None),
+    child = SimpleNamespace(pid=FAKE_PID, stdin=SimpleNamespace(write=lambda data: None, close=lambda: None),
         stdout=SimpleNamespace(readline=lambda: time.sleep(.3) or b'', close=lambda: None),
         poll=lambda: None, kill=lambda: killed.append(True), wait=lambda: 0)
     monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **k: child)
@@ -436,7 +437,7 @@ def test_handshake_timeout_kills_the_supervisor_group(tmp_path, monkeypatch):
                               runner=SimpleNamespace(default_cwd=None))
     with pytest.raises(asyncio.TimeoutError):
         asyncio.run(fresh_spawn(service, dict(card={}, prompt='review', role='review'), admission_passed=True))
-    assert groups == [4242] and not killed
+    assert groups == [FAKE_PID] and not killed
 
 
 def test_empty_seats_cli_envelope_keeps_main_json_and_exit_code(tmp_path, monkeypatch, capsys):
