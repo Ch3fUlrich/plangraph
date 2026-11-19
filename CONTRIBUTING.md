@@ -99,7 +99,9 @@ these inputs select the Rust CI job through
 ## Setup and tests
 
 New devstack keeper configs require `PLANGRAPH_DECISIONS_REPO` naming a decisions
-checkout; existing valid configs are reused when it is unset. Explicit setup
+checkout; existing valid configs are reused when it is unset. Process waits in
+devstack and orchestrator scripts use `plangraph wait-pid` (exact PID or PID file,
+never `pgrep -f` pattern scans). Explicit setup
 adds missing `repos.decisions` at `origin/main` privately and preserves all existing values.
 See the [keeper install config](docs/RUNBOOK.md#1-init-and-config).
 
