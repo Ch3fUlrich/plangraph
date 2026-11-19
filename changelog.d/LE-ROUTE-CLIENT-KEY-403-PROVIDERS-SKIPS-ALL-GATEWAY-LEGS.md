@@ -1,1 +1,1 @@
-Read OmniRoute `/api/providers` state using the management credential via `gateway_witness.load_token` instead of the client key, returning `no_key` when absent.
+The OmniRoute provider-state snapshot authenticates with the management login loaded by gateway_witness.load_token, never with the client login; without a management login the snapshot reads as unreachable.
