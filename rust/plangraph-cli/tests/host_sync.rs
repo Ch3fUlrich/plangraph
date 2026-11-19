@@ -59,7 +59,7 @@ fn links_missing_handoff_check_from_data_checkout_and_second_run_is_noop() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     let bin = home.join(".local/bin");
-    let data = home.join("code/plangraph-data");
+    let data = root.path().join("private-data");
     for tool in ["handoff-check", "resume-digest", "fleet-name"] {
         make_exec(&data.join("router/bin").join(tool));
     }
@@ -67,7 +67,13 @@ fn links_missing_handoff_check_from_data_checkout_and_second_run_is_noop() {
     make_exec(&bin.join("resume-digest"));
     make_exec(&bin.join("fleet-name"));
 
-    let out = run_bin(env!("CARGO_BIN_EXE_host-sync"), &home, &bin, &[], &[]);
+    let out = run_bin(
+        env!("CARGO_BIN_EXE_host-sync"),
+        &home,
+        &bin,
+        &[("PG_DATA_DIR", &data)],
+        &[],
+    );
     assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
     let text = stdout(&out);
     assert!(text.contains("LINKED handoff-check:"), "{text}");
@@ -87,7 +93,13 @@ fn links_missing_handoff_check_from_data_checkout_and_second_run_is_noop() {
         .is_symlink());
 
     // Second run on the now-complete PATH is a no-op.
-    let second = run_bin(env!("CARGO_BIN_EXE_host-sync"), &home, &bin, &[], &[]);
+    let second = run_bin(
+        env!("CARGO_BIN_EXE_host-sync"),
+        &home,
+        &bin,
+        &[("PG_DATA_DIR", &data)],
+        &[],
+    );
     assert_eq!(second.status.code(), Some(0));
     let second_text = stdout(&second);
     for tool in ["handoff-check", "resume-digest", "fleet-name"] {
@@ -147,7 +159,7 @@ fn prints_named_fail_for_missing_or_non_executable_source_tool() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     let bin = home.join(".local/bin");
-    let data = home.join("code/plangraph-data");
+    let data = root.path().join("private-data");
     make_exec(&data.join("router/bin/handoff-check"));
     make_exec(&data.join("router/bin/resume-digest"));
     // fleet-name is missing, and make resume-digest non-executable on unix.
@@ -161,7 +173,13 @@ fn prints_named_fail_for_missing_or_non_executable_source_tool() {
         .unwrap();
     }
 
-    let out = run_bin(env!("CARGO_BIN_EXE_host-sync"), &home, &bin, &[], &[]);
+    let out = run_bin(
+        env!("CARGO_BIN_EXE_host-sync"),
+        &home,
+        &bin,
+        &[("PG_DATA_DIR", &data)],
+        &[],
+    );
     assert_eq!(out.status.code(), Some(1));
     let text = stdout(&out);
     assert!(text.contains("LINKED handoff-check:"), "{text}");
@@ -178,7 +196,7 @@ fn replaces_dangling_symlink_but_refuses_regular_non_executable_file() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     let bin = home.join(".local/bin");
-    let data = home.join("code/plangraph-data");
+    let data = root.path().join("private-data");
     fs::create_dir_all(&bin).unwrap();
     for tool in ["handoff-check", "resume-digest", "fleet-name"] {
         make_exec(&data.join("router/bin").join(tool));
@@ -191,7 +209,13 @@ fn replaces_dangling_symlink_but_refuses_regular_non_executable_file() {
     fs::write(bin.join("resume-digest"), "not-executable").unwrap();
     fs::set_permissions(bin.join("resume-digest"), fs::Permissions::from_mode(0o644)).unwrap();
 
-    let out = run_bin(env!("CARGO_BIN_EXE_host-sync"), &home, &bin, &[], &[]);
+    let out = run_bin(
+        env!("CARGO_BIN_EXE_host-sync"),
+        &home,
+        &bin,
+        &[("PG_DATA_DIR", &data)],
+        &[],
+    );
     assert_eq!(out.status.code(), Some(1));
     let text = stdout(&out);
     assert!(text.contains("LINKED handoff-check:"), "{text}");
@@ -212,7 +236,7 @@ fn fails_without_writing_when_target_bin_dir_is_not_on_path() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");
     let other_on_path = root.path().join("other-bin");
-    let data = home.join("code/plangraph-data");
+    let data = root.path().join("private-data");
     fs::create_dir_all(&other_on_path).unwrap();
     for tool in ["handoff-check", "resume-digest", "fleet-name"] {
         make_exec(&data.join("router/bin").join(tool));
@@ -222,7 +246,7 @@ fn fails_without_writing_when_target_bin_dir_is_not_on_path() {
         env!("CARGO_BIN_EXE_host-sync"),
         &home,
         &other_on_path,
-        &[],
+        &[("PG_DATA_DIR", &data)],
         &[],
     );
     assert_eq!(out.status.code(), Some(1));

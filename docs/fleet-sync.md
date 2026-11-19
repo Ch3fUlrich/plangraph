@@ -161,8 +161,8 @@ and performs no filesystem writes.
 
 When any tool is missing from `PATH`, `host-sync` resolves the target bin
 directory (`--bin-dir` or `$HOME/.local/bin`) and checks that it appears on
-`PATH`, locates the local `plangraph-data` checkout (`--data-dir`, `PG_DATA_DIR`,
-`hosts.json` `repos.plangraph-data.root`, or `$HOME/code/plangraph-data`), and
+`PATH`, locates the private data checkout (`--data-dir`, `PG_DATA_DIR`, or the
+`hosts.json` repo entry), and
 atomically symlinks `<checkout>/router/bin/<tool>` into the target bin directory
 (replacing broken symlinks, never overwriting existing non-symlink files).
 It re-verifies resolution on `PATH` and prints `LINKED <tool>: ...` on success

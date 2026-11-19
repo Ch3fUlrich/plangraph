@@ -231,20 +231,14 @@ fn resolve_data_dir(options: &Options, env: &Env) -> Result<PathBuf, String> {
     if let Some(dir) = &env.pg_data_dir {
         return require_checkout_dir(dir, "PG_DATA_DIR");
     }
-    if let Some(dir) = data_dir_from_hosts_json(
+    if let Some((repo_id, dir)) = data_dir_from_hosts_json(
         env.home.as_deref(),
         env.xdg_config_home.as_deref(),
         env.host_name.as_deref(),
     ) {
-        return require_checkout_dir(&dir, "hosts.json repos.plangraph-data.root");
+        return require_checkout_dir(&dir, &format!("hosts.json repos.{repo_id}.root"));
     }
-    if let Some(home) = &env.home {
-        let candidate = home.join("code/plangraph-data");
-        if candidate.is_dir() {
-            return Ok(candidate);
-        }
-    }
-    Err("plangraph-data checkout not found".to_string())
+    Err("private data checkout not found".to_string())
 }
 
 fn require_checkout_dir(dir: &Path, source: &str) -> Result<PathBuf, String> {
@@ -252,7 +246,7 @@ fn require_checkout_dir(dir: &Path, source: &str) -> Result<PathBuf, String> {
         Ok(dir.to_path_buf())
     } else {
         Err(format!(
-            "plangraph-data checkout ({source}) not found at {}",
+            "private data checkout ({source}) not found at {}",
             dir.display()
         ))
     }
@@ -262,7 +256,7 @@ fn data_dir_from_hosts_json(
     home: Option<&Path>,
     xdg_config_home: Option<&Path>,
     host_name: Option<&str>,
-) -> Option<PathBuf> {
+) -> Option<(String, PathBuf)> {
     let config_root = xdg_config_home
         .map(Path::to_path_buf)
         .or_else(|| home.map(|h| h.join(".config")))?;
@@ -288,12 +282,25 @@ fn data_dir_from_hosts_json(
             });
         id_match || alias_match
     })?;
-    host.get("repos")?
-        .get("plangraph-data")?
-        .get("root")?
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .map(PathBuf::from)
+    let repos = host.get("repos")?.as_object()?;
+    let candidates: Vec<(String, PathBuf)> = repos
+        .iter()
+        .filter(|(repo_id, _)| repo_id.as_str() != "plangraph")
+        .filter_map(|(repo_id, entry)| {
+            let root = entry.get("root")?.as_str().filter(|s| !s.is_empty())?;
+            Some((repo_id.clone(), PathBuf::from(root)))
+        })
+        .collect();
+    if let Some(found) = candidates
+        .iter()
+        .find(|(_, root)| root.join("router/bin").is_dir())
+    {
+        return Some(found.clone());
+    }
+    if candidates.len() == 1 {
+        return candidates.into_iter().next();
+    }
+    None
 }
 
 pub fn resolve_on_path(tool: &str, path_env: Option<&OsStr>) -> Option<PathBuf> {
@@ -424,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn host_registry_resolves_plangraph_data_root_case_insensitively() {
+    fn host_registry_resolves_data_checkout_root_case_insensitively() {
         let root = tempfile::tempdir().unwrap();
         let config_dir = root.path().join("xdg/plangraph");
         fs::create_dir_all(&config_dir).unwrap();
@@ -432,6 +439,10 @@ mod tests {
         make_exec(&data.join("router/bin/handoff-check"));
         make_exec(&data.join("router/bin/resume-digest"));
         make_exec(&data.join("router/bin/fleet-name"));
+        let code_root = root.path().join("code-repo");
+        let decisions_root = root.path().join("decisions-repo");
+        fs::create_dir_all(&code_root).unwrap();
+        fs::create_dir_all(&decisions_root).unwrap();
         fs::write(
             config_dir.join("hosts.json"),
             serde_json::json!({
@@ -441,7 +452,9 @@ mod tests {
                     "id": "workstation",
                     "aliases": ["workst"],
                     "repos": {
-                        "plangraph-data": {"root": data}
+                        "decisions": {"root": decisions_root},
+                        "plangraph": {"root": code_root},
+                        "private-data": {"root": data}
                     }
                 }]
             })
@@ -457,8 +470,8 @@ mod tests {
             host_name: Some("WORKST".into()),
         };
         assert_eq!(
-            data_dir_from_hosts_json(Some(root.path()), Some(&root.path().join("xdg")), None,),
-            Some(data.clone())
+            data_dir_from_hosts_json(Some(root.path()), Some(&root.path().join("xdg")), None),
+            Some(("private-data".to_string(), data.clone()))
         );
         let (code, lines) = sync(&Options::default(), &env);
         assert_eq!(code, 0, "{lines:?}");
