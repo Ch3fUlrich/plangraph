@@ -351,7 +351,7 @@ def test_read_keys_returning_any_mapping_resolves_zen(fake_autoos):
 
 # --- plangraph:GATEWAY-CLIENT-KEY-PLANGRAPH-FILE-S1: per-host client key file ---
 
-CLIENT_KEY_SENTINEL = 'sk-plangraph-client-sentinel-777'
+CLIENT_KEY_SENTINEL = 'fake-client-key-CCC333'
 
 
 def _write_client_key(home, content, *, file_mode=0o600, dir_mode=0o700):
