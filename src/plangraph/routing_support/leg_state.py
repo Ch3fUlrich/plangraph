@@ -192,17 +192,19 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
-    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
+    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt='', book_down=False):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
         leg = quota_key(leg)
         now = time.time() if now is None else now
         down_s = None if serving else _down_seconds(down_s)  # capped at RESET_CAP_S
+        source = ('probe_failed_leg_serving' if serving
+                  else 'review-liveness-probe' if (book_down or caller == 'review-probe')
+                  else 'liveness-probe')
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
                        (leg, account, combo, 503, _redact(reason) + (': ' + _redact(stderr_excerpt, 400) if stderr_excerpt else ''), down_s,
-                        None if serving else now + down_s, now, caller,
-                        'probe_failed_leg_serving' if serving else 'liveness-probe'))
+                        None if serving else now + down_s, now, caller, source))
 
     def last_probe_ts(self, leg):
         """Successful probe evidence only: a failed probe is not fresh evidence."""
@@ -222,7 +224,7 @@ class LegStateStore:
             return None
         try:
             with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
-                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','provider-probe','probe_failed_leg_serving')", (leg,)).fetchone()[0]
+                return db.execute("SELECT max(ts) FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','review-liveness-probe','provider-probe','probe_failed_leg_serving')", (leg,)).fetchone()[0]
         except sqlite3.Error:
             return None
 
@@ -265,7 +267,7 @@ class LegStateStore:
                 # Serving evidence supersedes older probe failures, NEVER provider limits.
                 serving = next((i for i, r in enumerate(rows) if r['source'] == 'probe_failed_leg_serving'), len(rows))
                 rows = iter(r for i, r in enumerate(rows) if r['source'] != 'probe_failed_leg_serving'
-                            and (r['source'] != 'liveness-probe' or i < serving))
+                            and (r['source'] not in ('liveness-probe', 'review-liveness-probe') or i < serving))
                 row = next(rows, None)
                 if row is None or row["status"] == 200:
                     return {"state": "ok", "evidence": None}
@@ -273,12 +275,12 @@ class LegStateStore:
                 evidence["event_id"] = row["id"]
                 if now >= row['ts'] + ttl:
                     return {'state': 'reprobe', 'evidence': evidence}
-                if row['source'] == 'liveness-probe':
-                    # Two consecutive failures book down; serving evidence breaks the streak.
-                    streak = 1
+                if row['source'] in ('liveness-probe', 'review-liveness-probe'):
+                    # Two consecutive writer probe failures (or one scheduled review probe failure) book down; serving breaks the streak.
+                    streak = 2 if row['source'] == 'review-liveness-probe' else 1
                     behind = None
                     for older in rows:
-                        if older['source'] == 'liveness-probe' and older['status'] == 503:
+                        if older['source'] in ('liveness-probe', 'review-liveness-probe') and older['status'] == 503:
                             # A live predecessor must exist when this failure books
                             # the streak; its later expiry cannot unbook that down window.
                             streak += int(row['ts'] < min(older['ts'] + ttl, older['reset_at'] or older['ts']))
@@ -309,7 +311,7 @@ class LegStateStore:
         try:
             with sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True) as db:
                 db.row_factory = sqlite3.Row
-                row = db.execute("SELECT source, body_excerpt, ts FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','provider-probe','probe_failed_leg_serving') ORDER BY ts DESC,id DESC LIMIT 1", (leg,)).fetchone()
+                row = db.execute("SELECT source, body_excerpt, ts FROM leg_events WHERE leg_key=? AND source IN ('liveness-probe','review-liveness-probe','provider-probe','probe_failed_leg_serving') ORDER BY ts DESC,id DESC LIMIT 1", (leg,)).fetchone()
         except sqlite3.Error:
             return None
         if row is None:
@@ -431,6 +433,10 @@ class LegAdapter:
                 state = 'stale'
             else:
                 state = 'ok' if provider.available else 'unavailable'
+        if state == 'ok':
+            stored = self.store.leg_status(leg, **kwargs)
+            if stored.get('state') in ('limited', 'down', 'expired'):
+                return dict(stored, reason=stored.get('reason') or stored['state'])
         # Legacy planner understands limited/down only; preserve explicit reason.
         return dict(state='ok' if state == 'ok' else 'limited',
                     reason=state, evidence=dict(self._auth_error) if self._auth_error else None)

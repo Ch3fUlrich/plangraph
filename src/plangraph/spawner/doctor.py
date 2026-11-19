@@ -268,7 +268,9 @@ async def _diagnose(probe, checks):
             return 'skip', 'enable with --probe'
         if role not in plans:
             raise ValueError('no routed legs to probe')
-        result = await probe_many(service.runner, legs=plans[role])
+        import inspect
+        kwargs = {'role': role} if role == 'review' and 'role' in inspect.signature(probe_many).parameters else {}
+        result = await probe_many(service.runner, legs=plans[role], **kwargs)
         rows = result['probes']
         outcomes = {row['id']: row for row in rows}
         detail = '; '.join(leg + ': ' + ('answered' if outcomes.get(leg, {}).get('ok')

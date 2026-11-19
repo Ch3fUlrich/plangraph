@@ -128,3 +128,5 @@ Its agy Sonnet quota snapshot reads the agy key independently of the native leg.
 Explicit-leg admission and provider-stop booking/fallback use the same
 harness-aware quota key as dispatch. The helper lives in routing support;
 `leg_probe.key` remains its compatibility alias.
+
+Scheduled review probes (`--all-reviewers`, `caller='review-probe'`, source `review-liveness-probe`) probe every active leg in `REVIEW_ORDER` with a tiny `OK` prompt under `role='review'`; one failed review probe immediately books the leg `down` for `PLANGRAPH_LEG_DOWN_S` in the shared SQLite store, and `LegAdapter.leg_status` honors stored `limited`/`down`/`expired` bookings even when the gateway snapshot is healthy so failed legs are not offered by the route until a passing probe restores them. `pg-spawnd check-manage-key` checks key presence (`len > 0` without reading key bytes) and records one `missing_manage_key` alert under `state/alerts/manage-key.json` at probe time.

@@ -1,0 +1,12 @@
+[Unit]
+Description=Scheduled liveness probe for every routed review leg
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+Environment=PYTHONPATH=%h/code/plangraph/src
+EnvironmentFile=-%h/.config/plangraph/watchdog.env
+NoNewPrivileges=yes
+ExecStartPre=-%h/.local/bin/pg-spawnd check-manage-key
+ExecStart=/usr/bin/python3 -m plangraph.spawner.cli probe --all-reviewers --json
+TimeoutStartSec=15min

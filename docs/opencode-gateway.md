@@ -50,3 +50,8 @@ provider-state reader in `omniroute_state`, and the quota-utilization reader in
 `PLANGRAPH_GATEWAY_LOG_TOKEN_FILE`, then `plangraph/omniroute-mgmt.key` under
 HOME/.config; the file must be a regular owner-only (0600) file. The gateway
 client key is never sent to a management endpoint.
+
+Shipped MiMo model cards in `configuration/opencode/providers.json` and the
+fallback `_mimo_template()` in `opencode_render` carry a `body.reasoning.max_tokens`
+cap strictly below their output limit (`32768` on the 65536 template, `65536`
+on the 131072 shipped/runtime cards).

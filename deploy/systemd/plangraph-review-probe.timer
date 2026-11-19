@@ -1,0 +1,12 @@
+[Unit]
+Description=Probe routed review legs every 15 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+RandomizedDelaySec=30s
+Persistent=true
+Unit=plangraph-review-probe.service
+
+[Install]
+WantedBy=timers.target

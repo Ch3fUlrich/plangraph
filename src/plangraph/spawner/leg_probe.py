@@ -16,6 +16,7 @@ from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
+REVIEW_PROMPT = 'Reply with the single word OK. Do nothing else.'
 
 #: The probe repo and its child commit ignore the operator's global/system git
 #: config (M11): a host commit.gpgsign=true or global core.hooksPath must never
@@ -185,14 +186,22 @@ async def _await_completion(runner, job, deadline):
         await asyncio.sleep(0.02)
 
 
-async def probe(runner, leg, *, timeout_s=None, store=None):
-    """One real commit task in a disposable repo; infra failures book no leg state.
+def _is_review_probe(leg, role=None):
+    if role is not None:
+        return role == 'review'
+    roles = getattr(leg, 'roles', ())
+    return 'review' in roles and 'implement' not in roles and 'fix' not in roles
+
+
+async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
+    """One real commit task (or tiny OK prompt for reviews) in a disposable dir; infra failures book no leg state.
 
     D-3465: a moved caller HEAD reports ``ok=False``, "probe leaked into caller
     repo"; the caller's repo is never auto-reset.
     """
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout_s, positive=True, parameter='timeout_s')
     state = store if store is not None else leg_state
+    review_mode = _is_review_probe(leg, role)
     start = time.monotonic()
     # Missing executables describe this host, not the remote leg. Check each
     # harness independently, before creating a repo or attempting any leg.
@@ -213,31 +222,35 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
                                        stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
 
     try:
-        caller_before = await asyncio.to_thread(caller_heads)
+        caller_before = {} if review_mode else await asyncio.to_thread(caller_heads)
         ok = reason = None
         infra = False
-        try:
-            hooks = Path(root) / 'probe-hooks'
-            hooks.mkdir()
-            await asyncio.to_thread(git, 'init')
-            await asyncio.to_thread(git, 'config', 'user.name', 'Plangraph probe')
-            await asyncio.to_thread(git, 'config', 'user.email', 'probe@plangraph.invalid')
-            # Repo-local, not only on this commit: the writer's own commit must
-            # also survive a hostile global gpgsign/hooksPath (M11).
-            await asyncio.to_thread(git, 'config', 'commit.gpgsign', 'false')
-            await asyncio.to_thread(git, 'config', 'core.hooksPath', str(hooks))
-            await asyncio.to_thread(git, 'commit', '--allow-empty', '-m', 'initial')
-            before = await asyncio.to_thread(git, 'rev-parse', 'HEAD')
-        except (OSError, subprocess.CalledProcessError):
-            ok, reason, infra = False, 'probe infra: git', True
+        if not review_mode:
+            try:
+                hooks = Path(root) / 'probe-hooks'
+                hooks.mkdir()
+                await asyncio.to_thread(git, 'init')
+                await asyncio.to_thread(git, 'config', 'user.name', 'Plangraph probe')
+                await asyncio.to_thread(git, 'config', 'user.email', 'probe@plangraph.invalid')
+                # Repo-local, not only on this commit: the writer's own commit must
+                # also survive a hostile global gpgsign/hooksPath (M11).
+                await asyncio.to_thread(git, 'config', 'commit.gpgsign', 'false')
+                await asyncio.to_thread(git, 'config', 'core.hooksPath', str(hooks))
+                await asyncio.to_thread(git, 'commit', '--allow-empty', '-m', 'initial')
+                before = await asyncio.to_thread(git, 'rev-parse', 'HEAD')
+            except (OSError, subprocess.CalledProcessError):
+                ok, reason, infra = False, 'probe infra: git', True
         if ok is None:
             async def launch():
                 from .probe_cleanup import OWNED
                 OWNED.set(owned_ids)
-                return await runner.spawn(prompt=PROMPT, role='implement', model_or_combo=leg.model,
-                                         client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
-                                         watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
-                                                       max_s=timeout + 60, interval=1))
+                return await runner.spawn(
+                    prompt=REVIEW_PROMPT if review_mode else PROMPT,
+                    role='review' if review_mode else 'implement',
+                    model_or_combo=leg.model,
+                    client=leg.harness, cwd=root, extra_env=CHILD_ISOLATION,
+                    watchdog=dict(stall_s=timeout + 60, first_edit_s=timeout + 60,
+                                  max_s=timeout + 60, interval=1))
             spawn_task = asyncio.ensure_future(launch())
             try:
                 job = await asyncio.wait_for(asyncio.shield(spawn_task), max(deadline - time.monotonic(), 0))
@@ -252,16 +265,29 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             except asyncio.TimeoutError:
                 ok, reason = False, 'timeout'
         if ok is None:
-            try:
-                changed = before != await asyncio.to_thread(git, 'rev-parse', 'HEAD')
-                files = (await asyncio.to_thread(git, 'ls-tree', '--name-only', 'HEAD')).splitlines()
-            except (OSError, subprocess.CalledProcessError):
-                ok, reason, infra = False, 'probe infra: git', True
+            if review_mode:
+                exhausted = any(e.get('event') == 'opencode_reasoning_exhausted'
+                                for e in (getattr(job, 'events', None) or ()))
+                answered = bool((getattr(job, 'stdout', None) or '').strip())
+                ok = (getattr(job, 'status', None) == 'completed'
+                      and not getattr(job, 'exit_code', 0)
+                      and answered and not exhausted)
+                reason = ('' if ok else
+                          'reasoning_output_limit' if exhausted else
+                          f'exit {job.exit_code}' if getattr(job, 'exit_code', None) else
+                          'empty output' if not answered else
+                          str(getattr(job, 'status', 'failed')))
             else:
-                ok = changed and 'ok.txt' in files
-                reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
+                try:
+                    changed = before != await asyncio.to_thread(git, 'rev-parse', 'HEAD')
+                    files = (await asyncio.to_thread(git, 'ls-tree', '--name-only', 'HEAD')).splitlines()
+                except (OSError, subprocess.CalledProcessError):
+                    ok, reason, infra = False, 'probe infra: git', True
+                else:
+                    ok = changed and 'ok.txt' in files
+                    reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
         # Tripwire (D-3465): the writer must never touch the caller's repo.
-        caller_after = await asyncio.to_thread(caller_heads)
+        caller_after = {} if review_mode else await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
         if leaked:
             # Report the leak; NEVER auto-reset the caller's repo here.
@@ -278,10 +304,11 @@ async def probe(runner, leg, *, timeout_s=None, store=None):
             excerpt = ' '.join(leg_state._redact(redact_output(redact_env_values(stderr, env)), limit=None)[-400:].splitlines())
             serving = await asyncio.to_thread(_leg_serving, runner, leg, previous)
         if not infra:
+            caller = 'review-probe' if review_mode else 'leg-probe'
             if ok:
-                state.record_probe_pass(key(leg), caller='leg-probe')
+                state.record_probe_pass(key(leg), caller=caller)
             else:
-                state.record_probe_fail(key(leg), reason, caller='leg-probe', serving=serving, stderr_excerpt=excerpt)
+                state.record_probe_fail(key(leg), reason, caller=caller, serving=serving, stderr_excerpt=excerpt)
         reason += ': ' + excerpt if excerpt and not leaked else ''
         result = dict(ok=ok, reason=reason, infra=infra, seconds=time.monotonic() - start, stderr_excerpt=excerpt)
         if serving:
@@ -363,20 +390,66 @@ async def before_launch(runner, leg, role, dry_run):
         adapter._at = None  # Re-read after an ordinary probe.
     return (limit() or admission(probe_ok=result['ok'])) if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
-async def probe_many(runner, legs=(), all_writers=False, timeout=None):
+def routed_review_legs():
+    """Active review legs offered by the review route in REVIEW_ORDER."""
+    from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_FALLBACK_LEGS, REVIEW_ORDER, leg_active
+    default_ids = {leg.id for leg in DEFAULT_LEGS}
+    if any(leg_id in default_ids for leg_id in REVIEW_ORDER):
+        pool = {leg.id: leg for leg in (*DEFAULT_LEGS, *REVIEW_FALLBACK_LEGS)}
+        return [pool[leg_id] for leg_id in REVIEW_ORDER if leg_id in pool and leg_active(pool[leg_id])]
+    return [leg for leg in DEFAULT_LEGS if leg_active(leg) and 'review' in leg.roles]
+
+
+def _check_manage_key(runner):
+    binary = shutil.which('pg-spawnd')
+    if binary is None:
+        return None
+    root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
+            or getattr(runner, 'state_root', None))
+    cmd = [binary, 'check-manage-key', '--json']
+    if root is not None:
+        cmd.extend(['--state', str(root)])
+    try:
+        proc = subprocess.run(cmd, check=False, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        if proc.returncode == 0:
+            data = json.loads(proc.stdout)
+            if data.get('emitted'):
+                logging.getLogger(__name__).warning(
+                    'missing_manage_key: key file missing at %s', data.get('key_path', ''))
+            return data
+    except (OSError, subprocess.SubprocessError, ValueError):
+        pass
+    return None
+
+
+async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_reviewers=False, role=None):
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
     SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
-    if not (ids or all_writers):
+    if not (ids or all_writers or all_reviewers):
         raise ParameterRefused('select --leg ID or --all-writers')
     unknown = ids - {leg.id for leg in SPAWNABLE_LEGS}
     if unknown:
         raise ParameterRefused('unknown legs: ' + ', '.join(sorted(unknown)))
     timeout = seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, timeout, positive=True, parameter='--timeout')
-    # --all-writers means the routed writers; an explicit leg is probed only by name.
-    selected = [leg for leg in SPAWNABLE_LEGS if leg_active(leg) and
-                (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and
-                                   any(role in leg.roles for role in ('implement', 'fix'))))]
+    # --all-writers means the routed writers; --all-reviewers means the routed reviewers.
+    selected = []
+    seen = set()
+    def add(leg):
+        if leg.id not in seen:
+            seen.add(leg.id)
+            selected.append(leg)
+    for leg in SPAWNABLE_LEGS:
+        if leg_active(leg) and (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and
+                                                  any(r in leg.roles for r in ('implement', 'fix')))):
+            add(leg)
+    if all_reviewers:
+        for leg in routed_review_legs():
+            add(leg)
+    manage_key = await asyncio.to_thread(_check_manage_key, runner) if (all_reviewers or role == 'review') else None
+    probe_role = 'review' if (all_reviewers and not all_writers) or role == 'review' else role
+    probe_kwargs = {'role': probe_role} if probe_role is not None else {}
     results = []
     state = _store_for(runner)
     state = state.store if getattr(state, 'enabled', False) else state
@@ -391,5 +464,8 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None):
                                 skipped='limited',
                                 reset_at=(status.get('evidence') or {}).get('reset_at')))
             continue
-        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state)))
-    return dict(ok=all(row['ok'] for row in results), probes=results)
+        results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)))
+    reply = dict(ok=all(row['ok'] for row in results), probes=results)
+    if manage_key is not None:
+        reply['manage_key_alert'] = manage_key
+    return reply
