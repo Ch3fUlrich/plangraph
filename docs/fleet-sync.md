@@ -151,6 +151,24 @@ Windows registry `env.Path` is accepted case-insensitively. A present but unusab
 registry reports `host_path: fail`; an unmatched identity is named explicitly.
 Doctor restores the inherited PATH after its checks, including on exceptions.
 
+## Fleet tools PATH verification (`host-sync`)
+
+`host-sync [--data-dir PATH] [--bin-dir PATH]` (also `plangraph host-sync` and
+`python3 -m plangraph.fleet_sync host-sync`) verifies that `handoff-check`,
+`resume-digest`, and `fleet-name` resolve as executable files on `PATH`.
+When every tool already resolves on `PATH`, `host-sync` prints `OK <tool>: ...`
+and performs no filesystem writes.
+
+When any tool is missing from `PATH`, `host-sync` resolves the target bin
+directory (`--bin-dir` or `$HOME/.local/bin`) and checks that it appears on
+`PATH`, locates the local `plangraph-data` checkout (`--data-dir`, `PG_DATA_DIR`,
+`hosts.json` `repos.plangraph-data.root`, or `$HOME/code/plangraph-data`), and
+atomically symlinks `<checkout>/router/bin/<tool>` into the target bin directory
+(replacing broken symlinks, never overwriting existing non-symlink files).
+It re-verifies resolution on `PATH` and prints `LINKED <tool>: ...` on success
+or a named `FAIL <tool>: ...` line (exiting `1`) when the tool cannot be linked
+or still does not resolve on `PATH`.
+
 ## Keeper lazy-import review disposition
 
 The admin import LOW does not apply: `src/plangraph/keeper/cli.py:308`
