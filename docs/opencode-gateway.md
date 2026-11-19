@@ -22,7 +22,11 @@ over generic generated values; only an explicit per-run gateway override
 displaces them. A generated URL alone is not evidence of such an override.
 
 Both gateway providers receive the same validated URL through the renderer's
-shared provider loop. A path-less origin gains `/v1`; a configured path is
+shared provider loop, including both `settings.baseURL` and any existing
+`options.baseURL` (and under a singular `provider` block if present), and
+receive `AUTOOS_OMNIROUTE_KEY` in `env` when routed through the configured
+gateway so a root config's direct MiMo endpoint or direct key never bypasses
+gateway call-log witnessing. A path-less origin gains `/v1`; a configured path is
 preserved, including a gateway's MiMo path. This does not require
 `PLANGRAPH_REVIEW_URL`, and setting that review-only variable does not override
 the configured per-run gateway. The tool-less review API still requires its
