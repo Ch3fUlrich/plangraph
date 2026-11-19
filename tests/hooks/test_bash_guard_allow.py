@@ -32,13 +32,15 @@ ALLOWED = [
     ("claude_p_short", 'claude -p "x"', None),
     ("claude_print_short", 'claude --print "x"', None),
     ("claude_bg_resume_uuid", "claude --bg --resume 12345678-1234-1234-1234-123456789abc", None),
+    ("claude_bg_resume_hex", "claude --bg --resume 77b56beb", None),
+    ("claude_bg_resume_equals_uuid", "claude --bg --resume=12345678-1234-1234-1234-123456789abc", None),
+    ("claude_bg_short_r_uuid", "claude --bg -r 12345678-1234-1234-1234-123456789abc", None),
+    ("claude_background_resume_uuid", "claude --background --resume 12345678-1234-1234-1234-123456789abc", None),
     ("claude_resume_uuid", "claude --resume 12345678-1234-1234-1234-123456789abc", None),
     ("claude_resume_bare", "claude --resume", None),
     ("claude_agents", "claude agents", None),
     ("claude_agents_json", "claude agents --json", None),
     ("claude_stop_id", "claude stop 77b56beb", None),
-    ("claude_bg_with_env_marker", 'env PLANGRAPH_FLEET_LAUNCH=1 claude --bg -n x-0001 "prompt"', None),
-    ("claude_bg_with_leading_marker", 'PLANGRAPH_FLEET_LAUNCH=1 claude --bg --remote-control -n x-0001 "prompt"', None),
     ("claude_interactive_substitution", 'claude "$(id)"', None),
     ("single_quoted_multiline_body", SINGLE_QUOTED_BODY, None),
     ("single_quoted_multiline_echo", "echo 'a\n`b`\nc'; ls", None),
@@ -65,14 +67,17 @@ def test_allowed(guard, name, cmd, needle):
 
 
 def test_allowed_with_fleet_launch_env_marker(guard, monkeypatch):
+    # PLANGRAPH_FLEET_LAUNCH=1 in the environment must not bypass D-158.
     cmd = 'claude --bg -n x-0001 "prompt"'
     monkeypatch.setenv("PLANGRAPH_FLEET_LAUNCH", "1")
-    assert guard.check(cmd) is None
+    reason = guard.check(cmd)
+    assert reason is not None
+    assert "D-158" in reason
     env = {**os.environ, "PLANGRAPH_FLEET_LAUNCH": "1"}
     r = subprocess.run([sys.executable, "-I", str(HOOK)], input=payload(cmd).encode("utf-8"),
                        capture_output=True, env=env, timeout=60)
-    assert r.returncode == 0, r.stderr
-    assert r.stderr == b""
+    assert r.returncode == 2, r.stderr
+    assert b"D-158" in r.stderr
 
 
 def test_fleet_launch_marker_still_denies_live_substitution(guard, monkeypatch):

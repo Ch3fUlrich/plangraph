@@ -556,12 +556,13 @@ so changes to catalog identities or rendering select the Rust CI suite.
 The PreToolUse Bash guard (`tools/hooks/bash_guard.py` / `bash_guard_rules.py`)
 denies:
 - Unquoted heredocs carrying unescaped backticks or `$(...)`.
-- `claude --bg` or `claude -p`/`--print` commands with live double-quoted or
-  unquoted command substitutions.
-- Live `claude --bg` launches outside the fleet launcher (rule D-158), so session
-  names come from the launcher counter. `claude -p`/`--print`, `claude --bg --resume <id>`,
-  `claude --resume`, `claude agents`, `claude stop <id>`, and calls with
-  `PLANGRAPH_FLEET_LAUNCH=1` (in the hook environment or as a leading shell /
-  `env PLANGRAPH_FLEET_LAUNCH=1` assignment) stay allowed.
+- `claude --bg`/`--background` or `claude -p`/`--print` commands with live
+  double-quoted or unquoted command substitutions.
+- Non-resume `claude --bg` / `--background` launches unconditionally (rule D-158;
+  including `--bg=0` / `--background=0`, fail closed), so session names come from
+  the fleet launcher counter (`Sessions` launches `claude` via Python subprocess,
+  never through the Bash tool). `claude -p`/`--print`, `claude --bg --resume
+  <uuid|hex>` / `-r <uuid|hex>` without `-n`/`--name`, `claude --resume`,
+  `claude agents`, and `claude stop <id>` stay allowed.
 - Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
   (see `docs/TESTING.md`).

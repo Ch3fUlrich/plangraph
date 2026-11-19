@@ -1,9 +1,10 @@
 ## LE-SESSION-NAME-COUNTER-NOT-ALLOCATED
 
-- **bash_guard (D-158):** Deny manual `claude --bg` session launches outside the
-  fleet launcher while keeping `claude -p`/`--print`, `claude --bg --resume <id>`,
-  `claude --resume`, `claude agents`, `claude stop <id>`, and calls marked with
-  `PLANGRAPH_FLEET_LAUNCH=1` allowed; preserve all quoting and command-substitution
-  denials.
-- **spawner sessions:** Set `PLANGRAPH_FLEET_LAUNCH=1` when `Sessions` launches or
-  relaunches `claude --bg` (and report it in `dry_run` `env_keys`).
+- **bash_guard (D-158):** Unconditionally deny non-resume `claude --bg` /
+  `--background` session launches in the Bash tool (including `--bg=0` /
+  `--background=0` fail closed; `Sessions` launches `claude` via Python
+  subprocess, never through Bash). Require a UUID or hex session id for
+  `--resume` / `-r` and deny `--resume` combined with `-n`/`--name`, while
+  keeping `claude -p`/`--print`, `claude --bg --resume <uuid|hex>`,
+  `claude --resume`, `claude agents`, and `claude stop <id>` allowed; preserve
+  all quoting and command-substitution denials.

@@ -197,7 +197,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
             # D-2918: a refusing dry run is still dry; a passing one writes
             # nothing either - planned argv, cwd and env keys only.
             return {"argv": self._shown(bg_argv, prompt_arg), "cwd": str(cwd_path),
-                    "env_keys": sorted(k for k in ("FLEET_SESSION_NAME", "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "PLANGRAPH_FLEET_LAUNCH"))}
+                    "env_keys": sorted(k for k in ("FLEET_SESSION_NAME", "CLAUDE_CODE_AUTO_COMPACT_WINDOW"))}
         self._reserve_counter(cfg, name)  # before the prompt file and the start
         prompt_path = self._sessions / f"{name}.prompt.txt"
         atomic_write_private(prompt_path, text)  # before the session starts (R-19)

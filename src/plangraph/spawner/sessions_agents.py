@@ -100,8 +100,7 @@ class _AgentsMixin:
         cap = cfg.get("ctx_cap_tokens") or 300000
         compact = cfg.get("compact_window") or "400000"
         env = {**without_prompt_env(os.environ), "FLEET_SESSION_NAME": name,
-               "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact),
-               "PLANGRAPH_FLEET_LAUNCH": "1"}
+               "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact)}
         return bg_argv, env
 
     def _launch_run_kw(self, env):
