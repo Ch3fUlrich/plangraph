@@ -132,7 +132,7 @@ the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
 Rust review record assertions run on every platform; keeper-backed assertions run only on Unix because the keeper imports POSIX `fcntl`.
-Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well. `rust/plangraph-cli/src/runner/config.rs` tests parse `docs/operations/ci-runners.example.toml`, which is a `RUST_INPUTS` entry too.
+Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/measured_down.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well. `rust/plangraph-cli/src/runner/config.rs` tests parse `docs/operations/ci-runners.example.toml`, which is a `RUST_INPUTS` entry too.
 
 CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 `RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
