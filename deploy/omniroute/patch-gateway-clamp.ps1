@@ -76,7 +76,7 @@ if (Test-Path $McpBundle) {
 
 # --- 2. Gateway Next build (what the live gateway loads) --------------------
 # Remove the supportsThinking gate from the clamp, name-agnostic.
-$gatePattern = 'let ([A-Za-z0-9_$]+)=\(0,[A-Za-z0-9_$]+\.getResolvedModelCapabilities\)\([A-Za-z0-9_$]+\);if\(!0!==\1\.supportsThinking\)return null;'
+$gatePattern = '\blet ([A-Za-z0-9_$]+)=\(0,[A-Za-z0-9_$]+\.getResolvedModelCapabilities\)\([A-Za-z0-9_$]+\);if\(!0!==\1\.supportsThinking\)return null;'
 $gatewayFiles = Get-ChildItem $NextRoot -Recurse -Filter *.js -File -ErrorAction SilentlyContinue |
     Select-String -Pattern $gatePattern -CaseSensitive -List
 $gatewayFiles = @($gatewayFiles)

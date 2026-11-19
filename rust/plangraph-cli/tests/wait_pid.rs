@@ -9,6 +9,16 @@ fn cli(args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_fixture() {
+    if std::env::var_os("PG_WAIT_PID_FIXTURE").is_none() {
+        return;
+    }
+    let mut buf = [0u8; 1];
+    let _ = std::io::Read::read(&mut std::io::stdin(), &mut buf);
+}
+
 #[cfg(unix)]
 #[test]
 fn loop_waiting_on_pattern_in_own_argv_exits_when_target_ends() {
@@ -213,7 +223,74 @@ fn invalid_arguments_and_help_return_expected_codes() {
         &["wait-pid", "--pid", "0"][..],
         &["wait-pid", "--pid", "1", "--pid-file", "x.pid"][..],
         &["wait-pid", "--pid", "1", "--check", "--timeout", "1"][..],
+        &["wait-pid", "--pid", "1", "--timeout", "1e300"][..],
+        &["wait-pid", "--pid", "1", "--timeout", "inf"][..],
+        &["wait-pid", "--pid", "1", "--timeout", "604801"][..],
     ] {
-        assert_eq!(cli(bad).status.code(), Some(2), "{bad:?}");
+        let out = cli(bad);
+        assert_eq!(out.status.code(), Some(2), "{bad:?}");
+        assert!(!out.stderr.is_empty(), "{bad:?}");
     }
+}
+
+#[test]
+fn corrupt_pid_file_exits_2_with_message() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("corrupt.pid");
+    for bad in ["not-a-pid\n", "0\n", ""] {
+        fs::write(&pid_file, bad).unwrap();
+        for extra in [&["--check"][..], &["--timeout", "1"][..]] {
+            let mut args = vec!["wait-pid", "--pid-file", pid_file.to_str().unwrap()];
+            args.extend_from_slice(extra);
+            let out = cli(&args);
+            assert_eq!(out.status.code(), Some(2), "{bad:?} {extra:?}");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert!(
+                stderr.contains("invalid pid file"),
+                "expected invalid pid file message, got: {stderr}"
+            );
+        }
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_expect_matches_process_image_name_and_rejects_mismatch() {
+    use std::io::Write;
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "windows_fixture", "--nocapture"])
+        .env("PG_WAIT_PID_FIXTURE", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid_str = child.id().to_string();
+    let matched = cli(&[
+        "wait-pid", "--pid", &pid_str, "--expect", "wait_pid", "--check",
+    ]);
+    let mismatched = cli(&[
+        "wait-pid",
+        "--pid",
+        &pid_str,
+        "--expect",
+        "unrelated-target-marker",
+        "--check",
+    ]);
+    let wait_mismatch = cli(&[
+        "wait-pid",
+        "--pid",
+        &pid_str,
+        "--expect",
+        "unrelated-target-marker",
+        "--timeout",
+        "1",
+    ]);
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(b"x");
+    }
+    let _ = child.wait();
+    assert_eq!(matched.status.code(), Some(0));
+    assert_eq!(mismatched.status.code(), Some(1));
+    assert_eq!(wait_mismatch.status.code(), Some(0));
 }

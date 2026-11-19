@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 const USAGE: &str = "usage: plangraph wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] [--poll-ms MS]";
 const DEFAULT_POLL: Duration = Duration::from_millis(50);
+const MAX_TIMEOUT_SECS: f64 = 7.0 * 24.0 * 60.0 * 60.0;
 
 #[derive(Debug, PartialEq)]
 pub enum Target {
@@ -67,9 +68,11 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
                 let secs = raw
                     .parse::<f64>()
                     .ok()
-                    .filter(|s| s.is_finite() && *s >= 0.0)
+                    .filter(|s| s.is_finite() && *s >= 0.0 && *s <= MAX_TIMEOUT_SECS)
                     .ok_or_else(|| format!("invalid --timeout: {raw}"))?;
-                timeout = Some(Duration::from_secs_f64(secs));
+                let dur = Duration::try_from_secs_f64(secs)
+                    .map_err(|_| format!("invalid --timeout: {raw}"))?;
+                timeout = Some(dur);
                 i += 2;
             }
             "--poll-ms" => {
@@ -101,7 +104,21 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
 
 fn read_pid_file(path: &Path) -> io::Result<Option<u32>> {
     match fs::read_to_string(path) {
-        Ok(text) => Ok(text.trim().parse::<u32>().ok().filter(|&n| n > 0)),
+        Ok(text) => text
+            .trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|&n| n > 0)
+            .map(Some)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "invalid pid file {}: expected positive integer PID",
+                        path.display()
+                    ),
+                )
+            }),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(err),
     }
@@ -164,9 +181,48 @@ pub fn is_pid_alive(pid: u32, expect: Option<&str>) -> io::Result<bool> {
 }
 
 #[cfg(windows)]
-pub fn is_pid_alive(pid: u32, _expect: Option<&str>) -> io::Result<bool> {
+fn process_image_name(
+    handle: windows_sys::Win32::Foundation::HANDLE,
+) -> io::Result<Option<String>> {
+    use windows_sys::Win32::Foundation::{ERROR_GEN_FAILURE, ERROR_INSUFFICIENT_BUFFER};
+    use windows_sys::Win32::System::Threading::{QueryFullProcessImageNameW, PROCESS_NAME_WIN32};
+
+    let mut cap: usize = 512;
+    loop {
+        let mut buf = vec![0u16; cap];
+        let mut len = cap as u32;
+        // SAFETY: `handle` is an open handle with PROCESS_QUERY_LIMITED_INFORMATION;
+        // `buf` holds `len` u16 elements and `len` is updated with characters written.
+        let ok = unsafe {
+            QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len)
+        };
+        if ok != 0 {
+            return Ok(Some(String::from_utf16_lossy(&buf[..len as usize])));
+        }
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() == Some(ERROR_INSUFFICIENT_BUFFER as i32) && cap < 32768 {
+            cap *= 2;
+            continue;
+        }
+        if err.raw_os_error() == Some(ERROR_GEN_FAILURE as i32) {
+            return Ok(None);
+        }
+        return Err(err);
+    }
+}
+
+#[cfg(windows)]
+fn image_name_matches(image_name: &str, expect: &str) -> bool {
+    image_name
+        .to_ascii_lowercase()
+        .contains(&expect.to_ascii_lowercase())
+}
+
+#[cfg(windows)]
+pub fn is_pid_alive(pid: u32, expect: Option<&str>) -> io::Result<bool> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_INVALID_PARAMETER, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0,
+        ERROR_INVALID_PARAMETER, HANDLE, STILL_ACTIVE, WAIT_OBJECT_0,
     };
     use windows_sys::Win32::System::Threading::{
         GetExitCodeProcess, OpenProcess, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -175,27 +231,37 @@ pub fn is_pid_alive(pid: u32, _expect: Option<&str>) -> io::Result<bool> {
     if pid == 0 || pid == std::process::id() {
         return Ok(false);
     }
-    // SAFETY: handle is checked for null and closed before returning.
-    let handle: HANDLE =
+    // SAFETY: handle is checked for null and wrapped in OwnedHandle before returning.
+    let raw: HANDLE =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) };
-    if handle.is_null() {
+    if raw.is_null() {
         let err = io::Error::last_os_error();
         if err.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
             return Ok(false);
         }
         return Err(err);
     }
-    let wait = unsafe { WaitForSingleObject(handle, 0) };
-    let mut code: u32 = 0;
-    let ok = unsafe { GetExitCodeProcess(handle, &mut code) };
-    unsafe { CloseHandle(handle) };
+    // SAFETY: `raw` is a valid non-null handle owned by this call.
+    let handle = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let wait = unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) };
     if wait == WAIT_OBJECT_0 {
         return Ok(false);
     }
+    let mut code: u32 = 0;
+    let ok = unsafe { GetExitCodeProcess(handle.as_raw_handle(), &mut code) };
     if ok == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(code as i32 == STILL_ACTIVE)
+    if code as i32 != STILL_ACTIVE {
+        return Ok(false);
+    }
+    match expect {
+        Some(substr) => match process_image_name(handle.as_raw_handle())? {
+            Some(image) => Ok(image_name_matches(&image, substr)),
+            None => Ok(false),
+        },
+        None => Ok(true),
+    }
 }
 
 fn resolve_pid(target: &Target) -> io::Result<Option<u32>> {
@@ -205,7 +271,7 @@ fn resolve_pid(target: &Target) -> io::Result<Option<u32>> {
     }
 }
 
-/// Return `true` if the resolved exact PID is alive (and matches `expect` on Unix).
+/// Return `true` if the resolved exact PID is alive (and matches `expect` on cmdline/image).
 pub fn check_target(target: &Target, expect: Option<&str>) -> io::Result<bool> {
     match resolve_pid(target)? {
         Some(pid) => is_pid_alive(pid, expect),
@@ -313,14 +379,35 @@ mod tests {
     }
 
     #[test]
+    fn parse_args_rejects_overflow_and_invalid_timeouts() {
+        for bad in ["1e300", "1e20", "inf", "-inf", "NaN", "604801"] {
+            let err = parse_args(&["--pid".into(), "1".into(), "--timeout".into(), bad.into()])
+                .unwrap_err();
+            assert!(err.contains("invalid --timeout"), "{bad}: {err}");
+        }
+        let max = parse_args(&[
+            "--pid".into(),
+            "1".into(),
+            "--timeout".into(),
+            "604800".into(),
+        ])
+        .unwrap();
+        assert_eq!(max.timeout, Some(Duration::from_secs(604_800)));
+        let zero =
+            parse_args(&["--pid".into(), "1".into(), "--timeout".into(), "0".into()]).unwrap();
+        assert_eq!(zero.timeout, Some(Duration::ZERO));
+    }
+
+    #[test]
     fn read_pid_file_handles_missing_invalid_and_valid_files() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("worker.pid");
         assert_eq!(read_pid_file(&path).unwrap(), None);
-        fs::write(&path, "not-a-pid\n").unwrap();
-        assert_eq!(read_pid_file(&path).unwrap(), None);
-        fs::write(&path, "0\n").unwrap();
-        assert_eq!(read_pid_file(&path).unwrap(), None);
+        for bad in ["not-a-pid\n", "0\n", "", "-5\n"] {
+            fs::write(&path, bad).unwrap();
+            let err = read_pid_file(&path).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{bad:?}");
+        }
         fs::write(&path, "4242\n").unwrap();
         assert_eq!(read_pid_file(&path).unwrap(), Some(4242));
     }
@@ -331,5 +418,19 @@ mod tests {
         assert!(is_zombie_stat("123 (bash -c) Z 1 123 123 0 -1 0"));
         assert!(is_zombie_stat("123 (a)b) X 1 123"));
         assert!(!is_zombie_stat("123 (codex) S 1 123"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_expect_checks_process_image_name() {
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        // SAFETY: pseudo-handle to the current process does not require closing.
+        let image = process_image_name(unsafe { GetCurrentProcess() })
+            .unwrap()
+            .expect("current process should report an image name");
+        assert!(image_name_matches(&image, ".exe"));
+        assert!(image_name_matches(&image, ".EXE"));
+        assert!(!image_name_matches(&image, "unrelated-target-marker"));
+        assert!(!is_pid_alive(std::process::id(), Some(".exe")).unwrap());
     }
 }

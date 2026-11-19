@@ -222,6 +222,11 @@ its timeout stops waiting, not the writer. Process waits use `plangraph wait-pid
 (exact `--pid` or `--pid-file`, never a process-table cmdline scan), and
 `host_ready` probes non-unit sessions with `plangraph wait-pid --check --pid-file`
 for `.pid` targets or exact `pgrep -x --` otherwise.
+Migration note: `overflow-hosts.json` `session_unit` entries that previously
+relied on `pgrep -f` command-line substrings (for example interpreter flags or
+script arguments) no longer match under `pgrep -x --`; update them to a systemd
+unit name (`.service`/`.scope`/etc.), a `.pid` file path, or the exact process
+name (`comm`).
 `--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
 Review/seat routes record each failed, limited or not-served attempt with its reason
 and try the next leg in the same run, failing only after route exhaustion. Ordinary
