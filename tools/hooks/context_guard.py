@@ -61,14 +61,32 @@ REEMIT_DELTA = 10000
 # Sentinel for a tail line that is not the assistant+usage record we want.
 _SKIP = object()
 
-_ENV_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*\Z")
-_PYTHON_BIN = re.compile(r"python(?:\d+(?:\.\d+)?)?(?:\.exe)?\Z", re.IGNORECASE)
 _PY_SAFE_FLAGS = frozenset({"-B", "-E", "-I", "-O", "-OO", "-S", "-s", "-u"})
 _SHELL_PUNCT = frozenset("();<>|&")
+_READY_REASONS = ("cap", "router", "operator", "planned")
 
 
-def _cmd_basename(token: str) -> str:
-    return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+def _allowed_guard_paths() -> set[str]:
+    """Resolved paths accepted for the guard script in retry commands."""
+    targets = {os.path.realpath(__file__)}
+    try:
+        installed = Path.home() / ".local" / "share" / "plangraph" / "hooks" / "context_guard.py"
+        targets.add(os.path.realpath(installed))
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return targets
+
+
+def _is_allowed_python(token: str) -> bool:
+    """True only for plain python/python3, /usr/bin/python3, or resolved sys.executable."""
+    if token in ("python3", "python", "/usr/bin/python3"):
+        return True
+    if not sys.executable:
+        return False
+    try:
+        return token in (sys.executable, os.path.realpath(sys.executable))
+    except (OSError, ValueError):
+        return token == sys.executable
 
 
 def _is_guard_cmd(payload: dict) -> bool:
@@ -93,15 +111,25 @@ def _is_guard_cmd(payload: dict) -> bool:
     if not tokens or any(tok and set(tok) <= _SHELL_PUNCT for tok in tokens):
         return False
     idx = 0
-    while idx < len(tokens) and _ENV_ASSIGN.match(tokens[idx]):
-        idx += 1
-    if idx >= len(tokens):
-        return False
-    if _PYTHON_BIN.match(_cmd_basename(tokens[idx])):
+    if _is_allowed_python(tokens[idx]):
         idx += 1
         while idx < len(tokens) and tokens[idx] in _PY_SAFE_FLAGS:
             idx += 1
-    if idx >= len(tokens) or _cmd_basename(tokens[idx]) != "context_guard.py":
+    if idx >= len(tokens):
+        return False
+    script_tok = tokens[idx]
+    if not script_tok:
+        return False
+    try:
+        if os.path.isabs(script_tok):
+            resolved = os.path.realpath(script_tok)
+        else:
+            cwd = payload.get("cwd")
+            base = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+            resolved = os.path.realpath(os.path.join(base, script_tok))
+    except (OSError, ValueError):
+        return False
+    if resolved not in _allowed_guard_paths():
         return False
     rest = tokens[idx + 1:]
     if rest == ["status"]:
@@ -110,10 +138,10 @@ def _is_guard_cmd(payload: dict) -> bool:
         return False
     args = rest[1:]
     if len(args) == 1:
-        return bool(args[0]) and not args[0].startswith("--")
+        return bool(args[0]) and not args[0].startswith("-")
     if len(args) == 3:
-        return (bool(args[0]) and not args[0].startswith("--")
-                and args[1] == "--reason" and bool(args[2]) and not args[2].startswith("--"))
+        return (bool(args[0]) and not args[0].startswith("-")
+                and args[1] == "--reason" and args[2] in _READY_REASONS)
     return False
 
 
@@ -308,10 +336,10 @@ def run_hook() -> int:
         payload = json.loads(read_stdin_text())
         if not isinstance(payload, dict):
             return 0
-        if isinstance(payload.get("agent_id"), str) and payload["agent_id"]:
-            return 0
         if payload.get("hook_event_name") == "PreToolUse":
             return _run_pre_tool_use(payload)
+        if isinstance(payload.get("agent_id"), str) and payload["agent_id"]:
+            return 0
         transcript_path = payload.get("transcript_path")
         session_id = payload.get("session_id")
         cwd = payload.get("cwd")
@@ -391,7 +419,7 @@ def cmd_ready(args) -> int:
     if len(args) not in (1, 3) or (len(args) == 3 and args[1] != "--reason"):
         print("context_guard: ready needs <handoff-path>", file=sys.stderr)
         return 2
-    if reason not in ("cap", "router", "operator", "planned"):
+    if reason not in _READY_REASONS:
         print("context_guard: invalid ready reason: %s" % reason, file=sys.stderr)
         return 2
     session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")

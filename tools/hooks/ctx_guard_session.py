@@ -3,7 +3,7 @@
 Runs context_guard.py's PreToolUse and PostToolUse hooks in-process. When
 <state>/claude-hooks/ctx-guard-session/<session_id>.json exists, its "handoff"
 and "hard" integers replace AUTOOS_CTX_HANDOFF / AUTOOS_CTX_HARD for that one
-session, and {"off": true} skips the guard. Every other session runs the guard
+session, and `{"off": true}` skips PostToolUse threshold guidance (PreToolUse ready-lock denial remains active). Every other session runs the guard
 unchanged. <state> is $XDG_STATE_HOME, else ~/.local/state (hook_common.state_home, as the guard).
 The AUTOOS_CTX_* names and the guard's autoos/ctx-guard state dir are kept on purpose: the live fleet guard and its
 per-session override files depend on them, so renaming them belongs to the cutover item G13.

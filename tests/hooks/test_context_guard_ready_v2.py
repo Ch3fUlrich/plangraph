@@ -268,17 +268,44 @@ def test_pretooluse_allows_other_session_ready_marker(ready):
 def test_pretooluse_allows_ready_and_status_retry_only(ready):
     handoff, _, _, env, _, run = ready
     assert run("ready", str(handoff)).returncode == 0
+    installed = Path(env["HOME"]) / ".local" / "share" / "plangraph" / "hooks" / "context_guard.py"
+    evil_dir = handoff.parent / "evil"
+    evil_dir.mkdir()
+    (evil_dir / "context_guard.py").write_text("print('pwned')\n", encoding="utf-8")
+    evil_py = evil_dir / "python3"
+    try:
+        evil_py.symlink_to(sys.executable)
+    except OSError:
+        evil_py.write_text("", encoding="utf-8")
     allowed = (
         f"python3 {SCRIPT} ready {handoff}",
+        f"python {SCRIPT} ready {handoff} --reason router",
         f'python3 "{SCRIPT}" ready "{handoff}" --reason cap',
-        f"CLAUDE_CODE_SESSION_ID={SID} python3 {SCRIPT} status",
+        f"{sys.executable} {SCRIPT} status",
+        f"python3 {installed} status",
+        f"python3 {installed} ready {handoff} --reason operator",
         f"{SCRIPT} status",
     )
+    if Path("/usr/bin/python3").exists():
+        allowed = allowed + (f"/usr/bin/python3 {SCRIPT} status",)
     for command in allowed:
         proc = run_script(SCRIPT, _pretooluse_payload(tool_name="Bash", tool_input={"command": command}),
                           env=env, cwd=handoff.parent)
         assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", ""), command
     denied = (
+        "python3 /tmp/evil/context_guard.py status",
+        f"python3 {evil_dir / 'context_guard.py'} status",
+        "PATH=/tmp/evil python3 context_guard.py status",
+        "LD_PRELOAD=x python3 context_guard.py ready y",
+        f"CLAUDE_CODE_SESSION_ID={SID} python3 {SCRIPT} status",
+        "python3 context_guard.py status",
+        f"{evil_py} {SCRIPT} status",
+        "/tmp/evil/python3 " + f"{SCRIPT} status",
+        f"python3.99 {SCRIPT} status",
+        f"python3 {SCRIPT} ready -x",
+        f"python3 {SCRIPT} ready {handoff} --reason bogus",
+        f"python3 {SCRIPT} ready {handoff} --reason -x",
+        f"python3 {SCRIPT} status extra",
         f"python3 {SCRIPT} status && git push",
         f"python3 {SCRIPT} ready {handoff}; rm -rf /",
         f"python3 {SCRIPT} ready $(id)",
@@ -295,6 +322,31 @@ def test_pretooluse_allows_ready_and_status_retry_only(ready):
         assert (proc.returncode, proc.stderr) == (0, ""), command
         out = json.loads(proc.stdout)["hookSpecificOutput"]
         assert out["permissionDecision"] == "deny", command
+    proc = run_script(
+        SCRIPT,
+        {**_pretooluse_payload(tool_name="Bash", tool_input={"command": "python3 context_guard.py status"}),
+         "cwd": str(evil_dir)},
+        env=env,
+        cwd=HOOKS,
+    )
+    assert (proc.returncode, proc.stderr) == (0, "")
+    assert json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_pretooluse_denies_subagent_when_ready_marker_exists(ready):
+    handoff, _, _, env, _, run = ready
+    subagent_payload = {**_pretooluse_payload(tool_name="Bash", tool_input={"command": "git status"}),
+                        "agent_id": "subagent-1"}
+    proc = run_script(SCRIPT, subagent_payload, env=env, cwd=handoff.parent)
+    assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+    assert run("ready", str(handoff)).returncode == 0
+    for hook in (SCRIPT, HOOKS / "ctx_guard_session.py"):
+        proc = run_script(hook, subagent_payload, env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stderr) == (0, "")
+        out = json.loads(proc.stdout)["hookSpecificOutput"]
+        assert out["hookEventName"] == "PreToolUse"
+        assert out["permissionDecision"] == "deny"
+        assert str(handoff) in out["permissionDecisionReason"]
 
 
 def test_pretooluse_corrupt_or_non_v2_marker_fails_open(ready):

@@ -419,13 +419,36 @@ Ready requires a sibling `<stem>.card.md` validated by PATH's `handoff-check`
 (or executable `AUTOOS_HANDOFF_CHECK`), records v2 hashes, and best-effort kicks
 the watchdog unless `AUTOOS_READY_KICK=0`. Once `<state_dir>/<session_id>.ready.json`
 exists as a v2 marker for the calling `session_id`, `context_guard.py` (and
-`ctx_guard_session.py`) registered on `PreToolUse` (matcher for all tools)
-denies further tool calls with `hookSpecificOutput` (`permissionDecision: "deny"`,
-exit 0) naming the ready timestamp and handoff path, except a single Bash
-invocation of `context_guard.py ready|status` so a refused `ready` can be
-retried; missing, foreign-session, and corrupt markers allow (fail open). Tests
+`ctx_guard_session.py`) registered on `PreToolUse` (matcher for all tools, `"*"`)
+denies further tool calls—including subagent calls carrying `agent_id`—with
+`hookSpecificOutput` (`permissionDecision: "deny"`, exit 0) naming the ready
+timestamp and handoff path. Only a single Bash invocation with no env-assignment
+prefixes, plain `python3`/`python` (or `/usr/bin/python3` / resolved `sys.executable`),
+a script path resolving via `realpath` to the guard itself or
+`$HOME/.local/share/plangraph/hooks/context_guard.py`, and the exact shape
+`ready <path> [--reason <cap|router|operator|planned>]` or `status` is exempted so
+a refused `ready` can be retried; missing, foreign-session, and corrupt markers allow
+(fail open). In `ctx_guard_session.py`, `{"off": true}` (and attended leases) only
+skip `PostToolUse` threshold guidance and do not disable `PreToolUse` denial. Tests
 isolate state and mock the kick.
-The installer copies both modules; retain its guarded missing-file registration.
+`tools/hooks/install_hooks.sh` only copies `*.py` files and registers nothing in
+Claude Code settings (`setup/manifest.toml` defers hook merging); register the
+guarded missing-file wrapper on both `PreToolUse` (with an all-tools matcher) and
+`PostToolUse` (using either `context_guard.py` or `ctx_guard_session.py`, not both):
+
+```json
+"PreToolUse": [
+  {
+    "matcher": "*",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "sh -c 'test -f \"$1\" || exit 1; exec python3 \"$1\"' _ $HOME/.local/share/plangraph/hooks/context_guard.py"
+      }
+    ]
+  }
+]
+```
 `AUTOOS_CTX_*` and `autoos/ctx-guard` stay compatible; plangraph keeps calm,
 path-free guidance and its safer parsing/subagent handling rather than push advice.
 The scan cursor lives in sibling state directory `autoos/ctx-guard-scan`; rewrites
