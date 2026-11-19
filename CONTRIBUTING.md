@@ -417,7 +417,14 @@ The Python `tools/hooks/context_guard.py` carries the AutoOS compaction scan in
 `context_compaction.py` and `ready <handoff-path> [--reason cap|router|operator|planned]`.
 Ready requires a sibling `<stem>.card.md` validated by PATH's `handoff-check`
 (or executable `AUTOOS_HANDOFF_CHECK`), records v2 hashes, and best-effort kicks
-the watchdog unless `AUTOOS_READY_KICK=0`. Tests isolate state and mock the kick.
+the watchdog unless `AUTOOS_READY_KICK=0`. Once `<state_dir>/<session_id>.ready.json`
+exists as a v2 marker for the calling `session_id`, `context_guard.py` (and
+`ctx_guard_session.py`) registered on `PreToolUse` (matcher for all tools)
+denies further tool calls with `hookSpecificOutput` (`permissionDecision: "deny"`,
+exit 0) naming the ready timestamp and handoff path, except a single Bash
+invocation of `context_guard.py ready|status` so a refused `ready` can be
+retried; missing, foreign-session, and corrupt markers allow (fail open). Tests
+isolate state and mock the kick.
 The installer copies both modules; retain its guarded missing-file registration.
 `AUTOOS_CTX_*` and `autoos/ctx-guard` stay compatible; plangraph keeps calm,
 path-free guidance and its safer parsing/subagent handling rather than push advice.

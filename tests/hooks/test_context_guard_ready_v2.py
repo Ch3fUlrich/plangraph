@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from unittest.mock import patch
 
 import pytest
@@ -210,3 +211,128 @@ def test_ready_kick_and_checker_resolution(ready, outcome, capsys):
     if outcome in ("failed", "missing", "timeout"):
         err = capsys.readouterr().err
         assert len(err.splitlines()) == 1 and "timer" in err
+
+
+def _pretooluse_payload(session_id=SID, tool_name="Bash", tool_input=None):
+    return {
+        "hook_event_name": "PreToolUse",
+        "session_id": session_id,
+        "tool_name": tool_name,
+        "tool_input": tool_input if tool_input is not None else {"command": "git status"},
+    }
+
+
+def test_pretooluse_denies_when_ready_marker_exists(ready):
+    handoff, _, _, env, marker, run = ready
+    assert run("ready", str(handoff)).returncode == 0
+    ts_str = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(json.loads(marker.read_text())["ts"]))
+    expected = (f"context_guard: ready was sent at {ts_str} (handoff {handoff}); "
+                "your successor owns the role. End your turn now with one final line; no further tool calls.")
+    for payload in (
+        _pretooluse_payload(tool_name="Bash", tool_input={"command": "git merge main"}),
+        _pretooluse_payload(tool_name="Edit", tool_input={"file_path": "/tmp/a"}),
+        _pretooluse_payload(tool_name="SendMessage", tool_input={"to": "parent"}),
+    ):
+        proc = run_script(SCRIPT, payload, env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stderr) == (0, "")
+        out = json.loads(proc.stdout)["hookSpecificOutput"]
+        assert out == {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": expected,
+        }
+
+
+def test_pretooluse_allows_without_ready_marker(ready):
+    handoff, _, _, env, marker, _ = ready
+    assert not marker.exists()
+    for tool_name, tool_input in (("Bash", {"command": "git status"}), ("Edit", {"file_path": "a"})):
+        proc = run_script(SCRIPT, _pretooluse_payload(tool_name=tool_name, tool_input=tool_input),
+                          env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+
+
+def test_pretooluse_allows_other_session_ready_marker(ready):
+    handoff, _, _, env, marker, run = ready
+    assert run("ready", str(handoff)).returncode == 0
+    proc = run_script(SCRIPT, _pretooluse_payload(session_id="other-session-id"),
+                      env=env, cwd=handoff.parent)
+    assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+    other_payload = json.loads(marker.read_text())
+    other_payload["session_id"] = "other-session-id"
+    marker.write_text(json.dumps(other_payload))
+    proc = run_script(SCRIPT, _pretooluse_payload(session_id=SID), env=env, cwd=handoff.parent)
+    assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+
+
+def test_pretooluse_allows_ready_and_status_retry_only(ready):
+    handoff, _, _, env, _, run = ready
+    assert run("ready", str(handoff)).returncode == 0
+    allowed = (
+        f"python3 {SCRIPT} ready {handoff}",
+        f'python3 "{SCRIPT}" ready "{handoff}" --reason cap',
+        f"CLAUDE_CODE_SESSION_ID={SID} python3 {SCRIPT} status",
+        f"{SCRIPT} status",
+    )
+    for command in allowed:
+        proc = run_script(SCRIPT, _pretooluse_payload(tool_name="Bash", tool_input={"command": command}),
+                          env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", ""), command
+    denied = (
+        f"python3 {SCRIPT} status && git push",
+        f"python3 {SCRIPT} ready {handoff}; rm -rf /",
+        f"python3 {SCRIPT} ready $(id)",
+        f"python3 {SCRIPT} ready `id`",
+        f"python3 {SCRIPT} status > /tmp/out",
+        'python3 -c "import os"',
+        f"python3 {SCRIPT}",
+        f'python3 {SCRIPT} ready "/unclosed',
+        "git status",
+    )
+    for command in denied:
+        proc = run_script(SCRIPT, _pretooluse_payload(tool_name="Bash", tool_input={"command": command}),
+                          env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stderr) == (0, ""), command
+        out = json.loads(proc.stdout)["hookSpecificOutput"]
+        assert out["permissionDecision"] == "deny", command
+
+
+def test_pretooluse_corrupt_or_non_v2_marker_fails_open(ready):
+    handoff, _, _, env, marker, _ = ready
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    for raw in (
+        b"{not json",
+        b"\xff\xfe\x00",
+        b"[1, 2]",
+        b"{}",
+        json.dumps({"v": 1, "session_id": SID, "handoff": str(handoff), "ts": 1.0}).encode(),
+        b"x" * (1024 * 1024 + 10),
+    ):
+        marker.write_bytes(raw)
+        proc = run_script(SCRIPT, _pretooluse_payload(), env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+    marker.unlink()
+    marker.mkdir()
+    proc = run_script(SCRIPT, _pretooluse_payload(), env=env, cwd=handoff.parent)
+    assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+    marker.rmdir()
+    marker.write_text(json.dumps({"v": 2, "session_id": SID, "handoff": 123, "ts": 1e30}))
+    proc = run_script(SCRIPT, _pretooluse_payload(), env=env, cwd=handoff.parent)
+    assert (proc.returncode, proc.stderr) == (0, "")
+    out = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "ready was sent at unknown (handoff unknown)" in out["permissionDecisionReason"]
+
+
+def test_pretooluse_ctx_guard_session_denies_even_when_off(ready):
+    handoff, _, _, env, _, run = ready
+    assert run("ready", str(handoff)).returncode == 0
+    override = Path(env["XDG_STATE_HOME"]) / "claude-hooks" / "ctx-guard-session" / f"{SID}.json"
+    override.parent.mkdir(parents=True, exist_ok=True)
+    override.write_text(json.dumps({"off": True}), encoding="utf-8")
+    proc = run_script(HOOKS / "ctx_guard_session.py", _pretooluse_payload(), env=env, cwd=handoff.parent)
+    assert (proc.returncode, proc.stderr) == (0, "")
+    out = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    assert out["permissionDecision"] == "deny"
+    assert str(handoff) in out["permissionDecisionReason"]

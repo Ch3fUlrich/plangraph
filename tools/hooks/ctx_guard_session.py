@@ -1,6 +1,6 @@
 """Per-session thresholds for the AutoOS context guard (operator, 2026-10-30).
 
-Runs context_guard.py's PostToolUse hook in-process. When
+Runs context_guard.py's PreToolUse and PostToolUse hooks in-process. When
 <state>/claude-hooks/ctx-guard-session/<session_id>.json exists, its "handoff"
 and "hard" integers replace AUTOOS_CTX_HANDOFF / AUTOOS_CTX_HARD for that one
 session, and {"off": true} skips the guard. Every other session runs the guard
@@ -254,32 +254,35 @@ def main() -> int:
     except ValueError:  # over the cap: not a payload this hook handles
         return 0
     try:
-        cwd = json.loads(text).get("cwd")
+        payload = json.loads(text)
     except Exception:
-        cwd = None
-    os.environ.update(settings_thresholds(cwd))
-    doc = session_override(text)
-    if doc and doc.get("off") is True:
-        return 0
-    if session_attended(text, doc):
-        return 0
-    if doc:
-        # Launch-time, session-local private destination, alongside handoff/hard.
-        path = doc.get("handoff_path")
-        if HANDOFF_PATH_ENV and isinstance(path, str) and path and "\x00" not in path:
-            try:
-                os.environ[HANDOFF_PATH_ENV] = path
-            except (UnicodeEncodeError, ValueError):
-                pass  # An unusable destination must not suppress the guard.
-        thresholds = {key: doc[key] for key in ("handoff", "hard")
-                      if isinstance(doc.get(key), int) and not isinstance(doc[key], bool)}
-        if (any(val <= 0 for val in thresholds.values()) or
-                ("handoff" in thresholds and "hard" in thresholds and
-                 thresholds["hard"] <= thresholds["handoff"])):
-            thresholds = {}
-        for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
-            if key in thresholds:
-                os.environ[var] = str(thresholds[key])
+        payload = None
+    is_pre = isinstance(payload, dict) and payload.get("hook_event_name") == "PreToolUse"
+    if not is_pre:
+        cwd = payload.get("cwd") if isinstance(payload, dict) else None
+        os.environ.update(settings_thresholds(cwd))
+        doc = session_override(text)
+        if doc and doc.get("off") is True:
+            return 0
+        if session_attended(text, doc):
+            return 0
+        if doc:
+            # Launch-time, session-local private destination, alongside handoff/hard.
+            path = doc.get("handoff_path")
+            if HANDOFF_PATH_ENV and isinstance(path, str) and path and "\x00" not in path:
+                try:
+                    os.environ[HANDOFF_PATH_ENV] = path
+                except (UnicodeEncodeError, ValueError):
+                    pass  # An unusable destination must not suppress the guard.
+            thresholds = {key: doc[key] for key in ("handoff", "hard")
+                          if isinstance(doc.get(key), int) and not isinstance(doc[key], bool)}
+            if (any(val <= 0 for val in thresholds.values()) or
+                    ("handoff" in thresholds and "hard" in thresholds and
+                     thresholds["hard"] <= thresholds["handoff"])):
+                thresholds = {}
+            for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
+                if key in thresholds:
+                    os.environ[var] = str(thresholds[key])
     try:
         spec = importlib.util.spec_from_file_location("context_guard", GUARD)
         guard = importlib.util.module_from_spec(spec)
@@ -289,6 +292,8 @@ def main() -> int:
               "this hook; context guard is off", file=sys.stderr)
         return 0
     sys.stdin = io.StringIO(text)
+    if is_pre:
+        return guard.main([])
     buf, real = io.StringIO(), sys.stdout
     sys.stdout = buf
     try:

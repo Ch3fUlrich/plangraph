@@ -1,4 +1,4 @@
-"""context_guard: a Claude Code PostToolUse hook that flags context-window cap.
+"""context_guard: a Claude Code PreToolUse/PostToolUse hook for ready lock and context-window cap.
 
 Reads hook JSON from stdin and sums input tokens plus both cache buckets in
 the last usable assistant usage record in a bounded tail; non-numeric records
@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -57,6 +60,103 @@ REEMIT_DELTA = 10000
 
 # Sentinel for a tail line that is not the assistant+usage record we want.
 _SKIP = object()
+
+_ENV_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=.*\Z")
+_PYTHON_BIN = re.compile(r"python(?:\d+(?:\.\d+)?)?(?:\.exe)?\Z", re.IGNORECASE)
+_PY_SAFE_FLAGS = frozenset({"-B", "-E", "-I", "-O", "-OO", "-S", "-s", "-u"})
+_SHELL_PUNCT = frozenset("();<>|&")
+
+
+def _cmd_basename(token: str) -> str:
+    return token.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+
+
+def _is_guard_cmd(payload: dict) -> bool:
+    """True only for a single Bash invocation of `context_guard.py ready|status`."""
+    if payload.get("tool_name") != "Bash":
+        return False
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return False
+    if any(bad in command for bad in ("`", "$(", "${", "\n", "\r")):
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if not tokens or any(tok and set(tok) <= _SHELL_PUNCT for tok in tokens):
+        return False
+    idx = 0
+    while idx < len(tokens) and _ENV_ASSIGN.match(tokens[idx]):
+        idx += 1
+    if idx >= len(tokens):
+        return False
+    if _PYTHON_BIN.match(_cmd_basename(tokens[idx])):
+        idx += 1
+        while idx < len(tokens) and tokens[idx] in _PY_SAFE_FLAGS:
+            idx += 1
+    if idx >= len(tokens) or _cmd_basename(tokens[idx]) != "context_guard.py":
+        return False
+    rest = tokens[idx + 1:]
+    if rest == ["status"]:
+        return True
+    if not rest or rest[0] != "ready":
+        return False
+    args = rest[1:]
+    if len(args) == 1:
+        return bool(args[0]) and not args[0].startswith("--")
+    if len(args) == 3:
+        return (bool(args[0]) and not args[0].startswith("--")
+                and args[1] == "--reason" and bool(args[2]) and not args[2].startswith("--"))
+    return False
+
+
+def _format_ready_ts(ts) -> str:
+    """Format the ready marker timestamp as UTC ISO-8601 when numeric, else safe text."""
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and math.isfinite(ts):
+        try:
+            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+        except (OverflowError, OSError, ValueError):
+            pass
+    if isinstance(ts, str) and ts.strip():
+        return ts.replace("\r", " ").replace("\n", " ")
+    return "unknown"
+
+
+def _run_pre_tool_use(payload: dict) -> int:
+    """Deny tool calls once this session's v2 ready marker exists, except ready|status retries."""
+    session_id = payload.get("session_id")
+    if not safe_id(session_id):
+        return 0
+    if _is_guard_cmd(payload):
+        return 0
+    marker_path = state_dir() / ("%s.ready.json" % session_id)
+    try:
+        raw = read_text_capped(marker_path)
+        marker = json.loads(raw)
+    except (OSError, ValueError):
+        return 0
+    if not isinstance(marker, dict):
+        return 0
+    if marker.get("v") != 2 or marker.get("session_id") != session_id:
+        return 0
+    handoff = marker.get("handoff")
+    handoff_str = (handoff.replace("\r", " ").replace("\n", " ")
+                   if isinstance(handoff, str) and handoff else "unknown")
+    reason = ("context_guard: ready was sent at %s (handoff %s); your successor owns the role. "
+              "End your turn now with one final line; no further tool calls."
+              % (_format_ready_ts(marker.get("ts")), handoff_str))
+    out = {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                  "permissionDecision": "deny",
+                                  "permissionDecisionReason": reason}}
+    print(json.dumps(out))
+    return 0
 
 
 # A session id becomes a file name: checked by hook_common.safe_id (shared).
@@ -202,7 +302,7 @@ def emit_line(level: str, ctx: int, threshold: int) -> str:
 
 
 def run_hook() -> int:
-    """Fail-silent PostToolUse; print before persisting so failed writes re-announce."""
+    """Fail-silent PreToolUse/PostToolUse; print before persisting so failed writes re-announce."""
     scanned = None
     try:
         payload = json.loads(read_stdin_text())
@@ -210,6 +310,8 @@ def run_hook() -> int:
             return 0
         if isinstance(payload.get("agent_id"), str) and payload["agent_id"]:
             return 0
+        if payload.get("hook_event_name") == "PreToolUse":
+            return _run_pre_tool_use(payload)
         transcript_path = payload.get("transcript_path")
         session_id = payload.get("session_id")
         cwd = payload.get("cwd")
