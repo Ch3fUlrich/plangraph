@@ -76,7 +76,7 @@ def test_invalid_endpoint_refused_before_key_read(monkeypatch, reader, endpoint)
 
     env = {'OMNIROUTE_BASE_URL': endpoint}
     monkeypatch.setattr(omniroute_state, 'load_token', forbidden)
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', forbidden)
+    monkeypatch.setattr(quota_snapshots, 'load_token', forbidden)
     if reader == 'state':
         state = omniroute_state.from_env(env, fetch=forbidden)
         with pytest.raises(omniroute_state.OmniRouteUnreachable, match='^no_endpoint$'):
@@ -110,7 +110,7 @@ def test_management_redirect_never_forwards_key(monkeypatch, reader, status):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     env = {'OMNIROUTE_BASE_URL': f'http://localhost:{server.server_port}/v1'}
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda _: 'fixture-key')
+    monkeypatch.setattr(quota_snapshots, 'load_token', lambda _: 'fixture-key')
     try:
         if reader == 'state':
             state = omniroute_state.from_env(env, key_resolver=lambda _: 'fixture-key')

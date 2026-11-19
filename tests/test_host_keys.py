@@ -544,8 +544,46 @@ def test_client_key_callers_use_real_reader(tmp_path, monkeypatch):
         seen_auth.append(headers.get('Authorization'))
         return 200, b'{"connections": [{"provider": "p", "isActive": true}], "data": []}'
 
+    assert host_keys._gateway_key({}) == CLIENT_KEY_SENTINEL
+    child_env = {}
+    add_host_keys(child_env, 'mimo/mimo-v2.6-pro', needs_gateway=True)
+    assert child_env == {GATEWAY_KEY_ENV: CLIENT_KEY_SENTINEL}
+    assert redaction_env({'PATH': '/bin'})[GATEWAY_KEY_ENV] == CLIENT_KEY_SENTINEL
+
+    env = {'OMNIROUTE_BASE_URL': 'https://gw.example/v1'}
+    state = omniroute_state.from_env(env, fetch=fake_fetch)
+    with pytest.raises(omniroute_state.OmniRouteUnreachable, match='^no_key$'):
+        state.provider_state('p')
+    with pytest.raises(LookupError, match='^gateway not configured$'):
+        quota_snapshots.fetch_snapshot_rows(env, fetch=fake_fetch)
+    assert seen_auth == []
+
+
+def test_management_key_callers_use_real_load_token(tmp_path, monkeypatch):
+    from plangraph.routing_support import omniroute_state, quota_snapshots
+
+    home = tmp_path / 'home-mgmt-callers'
+    monkeypatch.setenv('HOME', str(home))
+    _write_client_key(home, CLIENT_KEY_SENTINEL + '\n')
+    mgmt_token = 'fake-mgmt-token-DDD444'
+    mgmt_path = home / '.config' / 'plangraph' / 'omniroute-mgmt.key'
+    mgmt_path.write_text(mgmt_token + '\n', encoding='utf-8')
+    mgmt_path.chmod(0o600)
+
+    seen_auth = []
+
+    def fake_fetch(url, headers, timeout):
+        seen_auth.append(headers.get('Authorization'))
+        return 200, b'{"connections": [{"provider": "p", "isActive": true}], "data": []}'
+
     env = {'OMNIROUTE_BASE_URL': 'https://gw.example/v1'}
     state = omniroute_state.from_env(env, fetch=fake_fetch)
     assert state.provider_state('p').available is True
     assert quota_snapshots.fetch_snapshot_rows(env, fetch=fake_fetch) == []
-    assert seen_auth == ['Bearer ' + CLIENT_KEY_SENTINEL, 'Bearer ' + CLIENT_KEY_SENTINEL]
+    assert seen_auth == ['Bearer ' + mgmt_token, 'Bearer ' + mgmt_token]
+    assert all(CLIENT_KEY_SENTINEL not in (auth or '') for auth in seen_auth)
+
+    child_env = {}
+    add_host_keys(child_env, 'mimo/mimo-v2.6-pro', needs_gateway=True)
+    assert child_env == {GATEWAY_KEY_ENV: CLIENT_KEY_SENTINEL}
+    assert redaction_env({'PATH': '/bin'})[GATEWAY_KEY_ENV] == CLIENT_KEY_SENTINEL
