@@ -103,4 +103,8 @@ cache creation - from the transcript under `~/.claude/projects/`, reading only t
 
 On Windows every `claude` invocation - the launch, `claude stop` and the `claude agents` poll -
 must run the real `claude.exe` found via `which`; `.cmd`/`.bat` shims are
-refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`.
+refused because cmd.exe would parse the prompt. Sessions start with `claude --bg`
+and set `PLANGRAPH_FLEET_LAUNCH=1` in the launch environment (rule D-158:
+`tools/hooks/bash_guard.py` denies manual `claude --bg` launches without that
+marker or `--resume <id>`, while keeping `claude -p`/`--print`, `claude --resume`,
+`claude agents` and `claude stop` allowed).

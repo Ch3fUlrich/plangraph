@@ -12,7 +12,7 @@ that expansion entirely, which is the fix this guard enforces.
 
 Reads one PreToolUse hook JSON object from stdin (``{"tool_name": "Bash",
 "tool_input": {"command": "..."}, ...}``, the shape Claude Code sends) and
-denies (stderr message, exit 2) exactly three shapes:
+denies (stderr message, exit 2) four shapes:
 
 1. An unquoted heredoc whose body contains a literal backtick or ``$(`` -
    the incident shape above.
@@ -22,10 +22,16 @@ denies (stderr message, exit 2) exactly three shapes:
    one-shot `claude` call whose prompt string is built by the CALLING shell,
    not by claude, which expands the substitution before claude ever sees the
    text. Single quotes and a backslash make the text literal and are allowed.
-3. Shape 1 or 2 nested any number of layers down inside a command string
-   passed to a `bash`/`sh`/`zsh`/`dash`/... `-c` invocation or to `eval` - a
-   `shell -c` string is parsed and expanded exactly like an outer command, so
-   the same two hazards apply at every nesting level.
+3. A live `claude --bg` background-session launch outside the fleet launcher
+   (rule D-158: only routing/spawner launches sessions so names come from the
+   fleet counter). One-shot `claude -p`/`--print`, `claude --bg --resume <id>` /
+   `claude --resume`, `claude agents`, `claude stop <id>`, and calls marked
+   with ``PLANGRAPH_FLEET_LAUNCH=1`` (in the hook environment or as a leading
+   shell / ``env PLANGRAPH_FLEET_LAUNCH=1`` assignment) stay allowed.
+4. Any of the denied shapes nested inside a command string passed to a
+   `bash`/`sh`/`zsh`/`dash`/... `-c` invocation or to `eval` - a `shell -c`
+   string is parsed and expanded like an outer command, so the same rules
+   apply at every nesting level.
 
 "Anywhere" is literal: the rules check every simple command, whether it sits
 at the top level, in a ``( )`` subshell, a ``{ }`` group, behind `if`/`then`/

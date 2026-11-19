@@ -16,6 +16,7 @@ after one is tried as the command word. The guard fails closed: a command
 that cannot be scanned, is over 1 MiB, or nests ``-c``/``eval`` strings past
 three levels is denied.
 """
+import os
 import re
 
 from bash_guard_rules2 import lead, scan
@@ -25,6 +26,7 @@ MAX_COMMAND_BYTES = 1024 * 1024  # 1 MiB
 _MAX_C_DEPTH = 3  # `shell -c` / `eval` strings nested inside each other
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
+_FLEET_LAUNCH_ENV = "PLANGRAPH_FLEET_LAUNCH"
 _CLAUDE_BG_OR_PRINT_FLAGS = ("--bg", "-p", "--print")
 # getopt(3)-style short-flag metadata: a cluster letter listed here takes
 # an option-argument and so swallows the rest of the cluster. `-m` is the
@@ -48,6 +50,10 @@ _CLAUDE_MSG = (
     "containing a backtick or $(...) command substitution; the CALLING "
     "shell expands that before claude ever sees the prompt. Use single "
     "quotes, or pass the prompt from a file, instead.")
+_CLAUDE_BG_LAUNCHER_MSG = (
+    "bash-guard: DENIED - sessions are launched only by the fleet launcher "
+    "(spawner session_launch / fleet-launch), which allocates the name counter; "
+    "send the launch request to routing (D-158).")
 _DEPTH_MSG = (
     "bash-guard: DENIED - shell -c / eval strings nested more than %d levels "
     "deep; the guard cannot scan that far and fails closed. Flatten the "
@@ -132,6 +138,60 @@ def _suffix(pos, extra):
     return flags, live
 
 
+def _has_bg_flag(words):
+    """True if any word carries the claude --bg flag (bare or --bg=...)."""
+    return any(_extract_flag_hit(w.text) == "--bg" for w in words)
+
+
+def _has_resume_arg(words):
+    """True if words include `--resume <id>` or `--resume=<id>` with a non-flag id."""
+    for idx, word in enumerate(words):
+        text = word.text
+        if text == "--resume":
+            if idx + 1 < len(words):
+                nxt = words[idx + 1].text
+                if nxt and not nxt.startswith("-"):
+                    return True
+        elif text.startswith("--resume="):
+            val = text.partition("=")[2]
+            if val and not val.startswith("-"):
+                return True
+    return False
+
+
+def _fleet_launch_active(pos, assign_end, cmd_idx, inherited):
+    """True when PLANGRAPH_FLEET_LAUNCH=1 is active for pos[cmd_idx].
+
+    Recognises PLANGRAPH_FLEET_LAUNCH=1 in the hook environment, as a leading
+    shell assignment (pos[lead(pos):assign_end]), or as an `env` assignment
+    preceding pos[cmd_idx].
+    """
+    active = inherited
+    in_env = False
+    k = lead(pos)
+    while k < cmd_idx:
+        text = pos[k].text
+        if k < assign_end or in_env:
+            if text == _FLEET_LAUNCH_ENV + "=1":
+                active = True
+            elif text.startswith(_FLEET_LAUNCH_ENV + "="):
+                active = False
+        if k >= assign_end:
+            base = _basename(text)
+            if base == "env":
+                in_env = True
+            elif in_env and (text in ("-i", "--ignore-environment")
+                             or text == f"--unset={_FLEET_LAUNCH_ENV}"):
+                active = False
+            elif in_env and text in ("-u", "--unset") and k + 1 < cmd_idx and pos[k + 1].text == _FLEET_LAUNCH_ENV:
+                active = False
+                k += 1
+            elif base in _WRAPPERS and base != "env":
+                in_env = False
+        k += 1
+    return active
+
+
 # ─── shell -c scanner ─────────────────────────────────────────────────
 
 def _shell_strings(words, k):
@@ -170,7 +230,7 @@ def _shell_strings(words, k):
 
 # ─── per-command rules ────────────────────────────────────────────────
 
-def _check_simple(cmd, depth, placement_required):
+def _check_simple(cmd, depth, placement_required, fleet_launch):
     pos = [w for w in cmd if not w.redir]
     i = lead(pos)
     while i < len(pos) and _ENV_ASSIGN_RE.match(pos[i].text):
@@ -186,21 +246,26 @@ def _check_simple(cmd, depth, placement_required):
     for j in (range(i, len(pos)) if wrapped else (i,)):
         word = pos[j]
         name = _basename(word.text)
-        if name == "claude" or (word.live and "claude" in word.text
-                                and not _ENV_ASSIGN_RE.match(word.text)):
+        if name in ("claude", "claude.exe") or (
+                word.live and "claude" in word.text and not _ENV_ASSIGN_RE.match(word.text)):
             if sfx is None:
                 sfx = _suffix(pos, max([w.live for w in cmd if w.redir], default=0))
             flag, live = sfx[0][j + 1], sfx[1][j + 1]
             if flag and live:
                 return _CLAUDE_MSG % (flag, "a double-quoted" if live & 1 else "an unquoted")
+            if _has_bg_flag(pos[j + 1:]) and not _has_resume_arg(pos[j + 1:]):
+                if not _fleet_launch_active(pos, i, j, fleet_launch):
+                    return _CLAUDE_BG_LAUNCHER_MSG
         elif name in _SHELLS:
+            child_fleet = _fleet_launch_active(pos, i, j, fleet_launch)
             for string in _shell_strings(pos, j + 1):
-                reason = check_command(string, depth + 1, placement_required)
+                reason = check_command(string, depth + 1, placement_required, fleet_launch=child_fleet)
                 if reason:
                     return reason
         elif name == "eval" and not evaled:
             evaled = True
-            reason = check_command(" ".join(w.text for w in pos[j + 1:]), depth + 1, placement_required)
+            child_fleet = _fleet_launch_active(pos, i, j, fleet_launch)
+            reason = check_command(" ".join(w.text for w in pos[j + 1:]), depth + 1, placement_required, fleet_launch=child_fleet)
             if reason:
                 return reason
     return None
@@ -208,7 +273,7 @@ def _check_simple(cmd, depth, placement_required):
 
 # ─── deny-rule entry point ──────────────────────────────────────────────
 
-def check_command(command, depth=0, placement_required=None):
+def check_command(command, depth=0, placement_required=None, fleet_launch=None):
     """The deny message for `command`, or None to allow. Never raises: a
     command that cannot be scanned is denied (fail closed)."""
     if depth > _MAX_C_DEPTH:
@@ -218,12 +283,14 @@ def check_command(command, depth=0, placement_required=None):
     try:
         if placement_required is None:
             placement_required = tests_required()
+        if fleet_launch is None:
+            fleet_launch = os.environ.get(_FLEET_LAUNCH_ENV) == "1"
         commands, heredocs = scan(command)
         for delim, quoted, body in heredocs:
             if not quoted and _has_unescaped_heredoc_injection(body):
                 return _HEREDOC_MSG % (delim, delim)
         for cmd in commands:
-            reason = _check_simple(cmd, depth, placement_required)
+            reason = _check_simple(cmd, depth, placement_required, fleet_launch)
             if reason:
                 return reason
     except Exception as exc:  # ParseError, RecursionError, MemoryError, a bug: all fail closed

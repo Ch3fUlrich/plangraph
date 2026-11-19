@@ -3,7 +3,11 @@
 Run in process (``check`` returns None) and through the real hook subprocess
 (exit 0, empty stderr), so a false block shows in both.
 """
-from bash_guard_support import cases, guard, run_bash  # noqa: F401 (guard is a fixture)
+import os
+import subprocess
+import sys
+
+from bash_guard_support import HOOK, cases, guard, payload, run_bash  # noqa: F401 (guard is a fixture)
 
 PR_BODY = (
     "gh pr create --title t --body \"$(cat <<'EOF'\n"
@@ -25,6 +29,16 @@ ALLOWED = [
     ("claude_p_escaped_backticks", 'claude -p "run \\`id\\` and \\$(id)"', None),
     ("claude_p_single_quoted", "claude -p 'has `id` and $(id)'", None),
     ("claude_p_plain", 'claude -p "plain text"', None),
+    ("claude_p_short", 'claude -p "x"', None),
+    ("claude_print_short", 'claude --print "x"', None),
+    ("claude_bg_resume_uuid", "claude --bg --resume 12345678-1234-1234-1234-123456789abc", None),
+    ("claude_resume_uuid", "claude --resume 12345678-1234-1234-1234-123456789abc", None),
+    ("claude_resume_bare", "claude --resume", None),
+    ("claude_agents", "claude agents", None),
+    ("claude_agents_json", "claude agents --json", None),
+    ("claude_stop_id", "claude stop 77b56beb", None),
+    ("claude_bg_with_env_marker", 'env PLANGRAPH_FLEET_LAUNCH=1 claude --bg -n x-0001 "prompt"', None),
+    ("claude_bg_with_leading_marker", 'PLANGRAPH_FLEET_LAUNCH=1 claude --bg --remote-control -n x-0001 "prompt"', None),
     ("claude_interactive_substitution", 'claude "$(id)"', None),
     ("single_quoted_multiline_body", SINGLE_QUOTED_BODY, None),
     ("single_quoted_multiline_echo", "echo 'a\n`b`\nc'; ls", None),
@@ -48,3 +62,21 @@ def test_allowed(guard, name, cmd, needle):
     r = run_bash(cmd)
     assert r.returncode == 0, (name, r.stderr)
     assert r.stderr == b""
+
+
+def test_allowed_with_fleet_launch_env_marker(guard, monkeypatch):
+    cmd = 'claude --bg -n x-0001 "prompt"'
+    monkeypatch.setenv("PLANGRAPH_FLEET_LAUNCH", "1")
+    assert guard.check(cmd) is None
+    env = {**os.environ, "PLANGRAPH_FLEET_LAUNCH": "1"}
+    r = subprocess.run([sys.executable, "-I", str(HOOK)], input=payload(cmd).encode("utf-8"),
+                       capture_output=True, env=env, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert r.stderr == b""
+
+
+def test_fleet_launch_marker_still_denies_live_substitution(guard, monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_FLEET_LAUNCH", "1")
+    reason = guard.check('claude --bg "$(id)"')
+    assert reason is not None
+    assert "double-quoted" in reason

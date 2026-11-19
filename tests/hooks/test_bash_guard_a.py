@@ -113,16 +113,16 @@ CASES = [
 
     # ─── claude false-positive guards (ALLOW) ──────────────────────────
     ("claude_bg_plain_text_allows",
-     'claude --bg "plain text"',
+     'PLANGRAPH_FLEET_LAUNCH=1 claude --bg "plain text"',
      False, None),
     ("claude_bg_single_quoted_backtick_allows",
-     "claude --bg 'has a backtick `here`'",
+     "PLANGRAPH_FLEET_LAUNCH=1 claude --bg 'has a backtick `here`'",
      False, None),
     ("claude_bg_escaped_backtick_allows",
-     r'claude --bg "uses \`escaped\` backtick"',
+     r'PLANGRAPH_FLEET_LAUNCH=1 claude --bg "uses \`escaped\` backtick"',
      False, None),
     ("claude_bg_plain_dollar_var_allows",
-     'claude --bg "uses $HOME only"',
+     'PLANGRAPH_FLEET_LAUNCH=1 claude --bg "uses $HOME only"',
      False, None),
     ("claude_no_bg_or_print_flag_allows",
      'claude "no bg or print flag `here`"',
@@ -148,7 +148,7 @@ CASES = [
 
     # ─── combined ───────────────────────────────────────────────────
     ("heredoc_and_claude_both_clean_allows",
-     'cat <<EOF\nfine\nEOF\nclaude --bg "ok"\n',
+     'cat <<EOF\nfine\nEOF\nPLANGRAPH_FLEET_LAUNCH=1 claude --bg "ok"\n',
      False, None),
 
     # ─── round 2: wrappers (item 1) ───────────────────────────────────
@@ -156,7 +156,7 @@ CASES = [
      'sudo claude --bg "do $(whoami)"',
      True, "claude"),
     ("sudo_claude_bg_allows",
-     'sudo claude --bg "plain text"',
+     'sudo env PLANGRAPH_FLEET_LAUNCH=1 claude --bg "plain text"',
      False, None),
     ("sudo_u_root_claude_p_denied",
      'sudo -u root claude -p "run $(id)"',
@@ -180,7 +180,7 @@ CASES = [
      'nohup claude --bg "run $(id)"',
      True, "claude"),
     ("nohup_claude_bg_allows",
-     'nohup claude --bg "plain text"',
+     'nohup env PLANGRAPH_FLEET_LAUNCH=1 claude --bg "plain text"',
      False, None),
     ("time_claude_p_denied",
      'time claude -p "run $(id)"',
@@ -192,7 +192,7 @@ CASES = [
      'exec claude --bg "run $(id)"',
      True, "claude"),
     ("exec_claude_bg_allows",
-     'exec claude --bg "plain text"',
+     'exec env PLANGRAPH_FLEET_LAUNCH=1 claude --bg "plain text"',
      False, None),
     ("timeout_claude_p_denied",
      'timeout 5 claude -p "run $(id)"',

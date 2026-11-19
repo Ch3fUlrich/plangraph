@@ -660,6 +660,10 @@ admit or reject a new worktree. Clean main is fast-forwarded when behind; a main
 checkout already at origin/main needs no mutation and may retain local edits.
 Session launch (`src/plangraph/spawner/sessions.py`), routing `bin/fleet-launch`,
 and the external package-worktree script do not call this gate in this part.
+When launching or relaunching a background session (`claude --bg`), `Sessions`
+sets `PLANGRAPH_FLEET_LAUNCH=1` in the child environment so `tools/hooks/bash_guard.py`
+distinguishes fleet-launcher runs (which allocate session name counters) from
+manual agent `claude --bg` invocations (denied under rule D-158).
 
 Cancellation waits for an in-flight worktree creation thread before returning;
 new unlaunched attempts are removed, and normal Git branch deletion removes the

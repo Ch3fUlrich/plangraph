@@ -550,3 +550,18 @@ required before claiming that host's five-minute done criterion.
 D-6054: OpenCode catalog integration tests use the shipped provider configuration
 and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
 so changes to catalog identities or rendering select the Rust CI suite.
+
+## Bash guard rules (`tools/hooks/bash_guard.py`)
+
+The PreToolUse Bash guard (`tools/hooks/bash_guard.py` / `bash_guard_rules.py`)
+denies:
+- Unquoted heredocs carrying unescaped backticks or `$(...)`.
+- `claude --bg` or `claude -p`/`--print` commands with live double-quoted or
+  unquoted command substitutions.
+- Live `claude --bg` launches outside the fleet launcher (rule D-158), so session
+  names come from the launcher counter. `claude -p`/`--print`, `claude --bg --resume <id>`,
+  `claude --resume`, `claude agents`, `claude stop <id>`, and calls with
+  `PLANGRAPH_FLEET_LAUNCH=1` (in the hook environment or as a leading shell /
+  `env PLANGRAPH_FLEET_LAUNCH=1` assignment) stay allowed.
+- Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
+  (see `docs/TESTING.md`).

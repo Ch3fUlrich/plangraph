@@ -214,7 +214,45 @@ def test_denied(guard, name, cmd, needle):
     assert needle in reason, (needle, reason)
 
 
+D158_MSG = (
+    "bash-guard: DENIED - sessions are launched only by the fleet launcher "
+    "(spawner session_launch / fleet-launch), which allocates the name counter; "
+    "send the launch request to routing (D-158)."
+)
+
+CLAUDE_BG_LAUNCHER = [
+    ("bg_named_short", 'claude --bg -n x-0001 "prompt"', "D-158"),
+    ("bg_named_long", 'claude --bg --name x-0001 "prompt"', "D-158"),
+    ("remote_control_then_bg", 'claude --remote-control --bg -n x-0001 "prompt"', "D-158"),
+    ("incident_shape_plan_order_0572", 'claude --bg --remote-control -n plan-roadmap-0001 "prompt"', "D-158"),
+    ("bg_plain_prompt", 'claude --bg "plain text"', "D-158"),
+    ("bg_equals_flag", 'claude --bg=1 "prompt"', "D-158"),
+    ("bg_after_print_flag", 'claude -p "plain" --bg', "D-158"),
+    ("bg_quoted_cmd_and_flag", '\'claude\' "--bg" -n x-0001 "prompt"', "D-158"),
+    ("bg_escaped_cmd_and_quoted_flag", 'cl\\aude --\'bg\' "prompt"', "D-158"),
+    ("bg_ansi_c_cmd_and_flag", "$'claude' $'--bg' \"prompt\"", "D-158"),
+    ("bg_wrapped_sudo", 'sudo claude --bg "plain text"', "D-158"),
+    ("bg_wrapped_bash_c", 'bash -c \'claude --bg -n x-0001 "prompt"\'', "D-158"),
+    ("bg_wrapped_eval", 'eval \'claude --bg -n x-0001 "prompt"\'', "D-158"),
+    ("bg_resume_missing_id", "claude --bg --resume", "D-158"),
+    ("bg_resume_empty_equals", 'claude --bg --resume=""', "D-158"),
+    ("bg_resume_flag_as_id", "claude --bg --resume -n x-0001", "D-158"),
+    ("bg_marker_wrong_value", 'env PLANGRAPH_FLEET_LAUNCH=0 claude --bg "prompt"', "D-158"),
+    ("bg_marker_after_claude", 'claude --bg "PLANGRAPH_FLEET_LAUNCH=1"', "D-158"),
+    ("bg_marker_prior_command", 'echo PLANGRAPH_FLEET_LAUNCH=1; claude --bg "prompt"', "D-158"),
+    ("bg_marker_sudo_option_arg", 'sudo -u PLANGRAPH_FLEET_LAUNCH=1 claude --bg "prompt"', "D-158"),
+]
+
+
+@cases(CLAUDE_BG_LAUNCHER)
+def test_claude_bg_requires_fleet_launcher_denied(guard, name, cmd, needle):
+    reason = guard.check(cmd)
+    assert reason == D158_MSG, (name, reason)
+    assert needle in reason
+
+
 def test_tables_have_unique_ids():
-    rows = QUOTE_STATE + POSITIONS + WRAPPERS + SHELL_C + CLAUDE_FORMS + CLOSED
+    rows = (QUOTE_STATE + POSITIONS + WRAPPERS + SHELL_C + CLAUDE_FORMS
+            + CLOSED + CLAUDE_BG_LAUNCHER)
     names = [row[0] for row in rows]
     assert len(names) == len(set(names))
