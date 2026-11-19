@@ -404,23 +404,24 @@ def test_private_target_removed_on_failure(repo, monkeypatch):
 def test_private_target_removed_on_system_exit(repo, monkeypatch):
     monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
     _fake_sccache(repo, monkeypatch)
-    made = []
-    real = preflight.tempfile.mkdtemp
+    seen = []
 
-    def mk(**kwargs):
-        made.append(real(**kwargs))
-        return made[-1]
+    def run(command, cwd, env):
+        if command[0] == "cargo":
+            seen.append(env["CARGO_TARGET_DIR"])
+            assert Path(env["CARGO_TARGET_DIR"]).is_dir()
+            raise SystemExit(2)
+        return 0, ""
 
-    def boom(*a, **k):
-        raise SystemExit(2)
-
-    monkeypatch.setattr(preflight.tempfile, "mkdtemp", mk)
-    monkeypatch.setattr(preflight, "rust_commands", boom)
-    monkeypatch.setattr(preflight, "run", lambda *a: (0, ""))
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt", "--check"]])
+    monkeypatch.setattr(preflight, "cargo_lease", lambda: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(preflight, "running_disk_refusal", lambda root: None)
     monkeypatch.setenv("PLANGRAPH_PREFLIGHT_RUN_DIR", str(repo / "runs"))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(repo / "shared"))
     with pytest.raises(SystemExit):
-        preflight.main(["--bogus-flag"], repo)
-    assert all(not Path(p).exists() for p in made)
+        preflight.main(["--base", "HEAD", "--fast"], repo)
+    assert len(seen) == 1 and str(repo / "runs") in seen[0] and not Path(seen[0]).exists()
 
 
 def test_stale_private_targets_pruned(repo, monkeypatch):
@@ -485,6 +486,33 @@ def test_inherited_wrapper_kept_with_sccache(repo, monkeypatch):
     monkeypatch.setenv("RUSTC_WRAPPER", "/opt/wrap")
     _, seen = _rust_main(repo, monkeypatch)
     assert seen[0]["RUSTC_WRAPPER"] == "/opt/wrap"
+    assert seen[0].get("CARGO_TARGET_DIR") == str(repo / "shared")
+
+
+def test_inherited_sccache_wrapper_uses_private_target(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    tool = _fake_sccache(repo, monkeypatch)
+    monkeypatch.setenv("RUSTC_WRAPPER", str(tool))
+    _, seen = _rust_main(repo, monkeypatch)
+    assert str(repo / "runs") in seen[0]["CARGO_TARGET_DIR"]
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-1", "abc"])
+def test_invalid_min_free_gb_uses_shared_target(repo, monkeypatch, capsys, raw):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+    monkeypatch.setenv("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", raw)
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0].get("CARGO_TARGET_DIR") == str(repo / "shared")
+    assert "invalid PLANGRAPH_PREFLIGHT_MIN_FREE_GB" in capsys.readouterr().out
+
+
+def test_unknown_free_disk_message(repo, monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: None)
+    _fake_sccache(repo, monkeypatch)
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0].get("CARGO_TARGET_DIR") == str(repo / "shared")
+    assert "free disk unknown" in capsys.readouterr().out
 
 
 def test_inherited_wrapper_kept_without_sccache(repo, monkeypatch):

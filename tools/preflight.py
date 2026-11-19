@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import importlib.util
 import json
+import math
 import os
 import re
 import signal
@@ -260,7 +261,7 @@ def policy_baseline(root, fallback):
 
 
 # Per-run Rust target: no shared cargo lock between concurrent pushes.
-# The private target is used only with sccache (a fresh target without it is always cold
+# The private target is used only when the effective RUSTC_WRAPPER is sccache (a fresh target without it is always cold
 # and exceeds RUST_TIMEOUT); otherwise the shared target (PLANGRAPH_CARGO_TARGET_DIR) is kept.
 # PLANGRAPH_PREFLIGHT_MIN_FREE_GB (default 20): free GB needed for a private target.
 # PLANGRAPH_PREFLIGHT_RUN_DIR: parent of the private target (default: parent of the shared target).
@@ -304,26 +305,33 @@ def rust_target_env(env, cleanup):
     """
     out = dict(env)
     sccache = find_sccache(env)
-    if sccache:
-        if not env.get("RUSTC_WRAPPER"):
-            out["RUSTC_WRAPPER"] = sccache
-        out["SCCACHE_CACHE_SIZE"] = env.get("PLANGRAPH_SCCACHE_CACHE_SIZE") or env.get(
-            "SCCACHE_CACHE_SIZE") or SCCACHE_SIZE_DEFAULT
-    else:
+    if not sccache:
         print("rust: shared CARGO_TARGET_DIR (no sccache; a private target would be cold)", flush=True)
         return out
-    parent = Path(env.get("PLANGRAPH_PREFLIGHT_RUN_DIR") or shared_cargo_target().parent).expanduser()
+    wrapper = env.get("RUSTC_WRAPPER")
+    if not wrapper:
+        out["RUSTC_WRAPPER"] = wrapper = sccache
+    out["SCCACHE_CACHE_SIZE"] = env.get("PLANGRAPH_SCCACHE_CACHE_SIZE") or env.get(
+        "SCCACHE_CACHE_SIZE") or SCCACHE_SIZE_DEFAULT
+    if Path(wrapper).name != Path(sccache).name and Path(wrapper).name != "sccache":
+        print(f"rust: shared CARGO_TARGET_DIR (RUSTC_WRAPPER={wrapper} is not sccache)", flush=True)
+        return out
     raw = env.get("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", MIN_FREE_GB_DEFAULT)
     try:
         try:
             need = float(raw)
         except ValueError:
-            raise ValueError(f"invalid PLANGRAPH_PREFLIGHT_MIN_FREE_GB={raw!r}") from None
+            need = float("nan")
+        if not math.isfinite(need) or need < 0:
+            raise ValueError(f"invalid PLANGRAPH_PREFLIGHT_MIN_FREE_GB={raw!r}")
+        parent = Path(env.get("PLANGRAPH_PREFLIGHT_RUN_DIR") or shared_cargo_target().parent).expanduser()
         probe = parent
         while not probe.exists() and probe.parent != probe:
             probe = probe.parent
         free = disk_free_gb(probe)
-        if free < need:
+        if free is None:
+            print("rust: shared CARGO_TARGET_DIR (free disk unknown)", flush=True)
+        elif free < need:
             print(f"rust: shared CARGO_TARGET_DIR (free {free:.1f} GB < {need:g} GB)", flush=True)
         else:
             parent.mkdir(parents=True, exist_ok=True)
@@ -331,7 +339,7 @@ def rust_target_env(env, cleanup):
             private = tempfile.mkdtemp(prefix=PRIVATE_TARGET_PREFIX, dir=parent)
             cleanup.append(private)
             out["CARGO_TARGET_DIR"] = private
-    except (OSError, ValueError, TypeError) as exc:
+    except (OSError, ValueError, TypeError, RuntimeError) as exc:
         print(f"rust: shared CARGO_TARGET_DIR ({exc})", flush=True)
     return out
 
