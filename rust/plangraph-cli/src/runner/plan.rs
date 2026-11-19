@@ -381,7 +381,7 @@ mod tests {
     fn conflicting_tool_cache_link_is_refused_at_plan_time() {
         let cfg = sample();
         let mut s = complete_state(&cfg, 1);
-        s.users[0].link_conflict = Some("/var/lib/runner1/hostedtoolcache/Python".into());
+        s.users[0].link_conflict = Some("/var/lib/runner/hostedtoolcache/Python".into());
         let err = plan(&cfg, &s).unwrap_err();
         assert!(err.starts_with("refuse:") && err.contains("hostedtoolcache/Python"));
     }
