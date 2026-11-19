@@ -69,6 +69,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "setup/placement-rules.schema.toml",
     "src/plangraph/web/agents_schema.json",
     "src/plangraph/config/prompt_transport_v1.json",
+    # rust/plangraph-cli/src/runner/config.rs tests parse the example runner config.
+    "docs/operations/ci-runners.example.toml",
     "src/plangraph/spawner/**",
     "src/plangraph/keeper/__init__.py",
     "src/plangraph/keeper/auth.py",
