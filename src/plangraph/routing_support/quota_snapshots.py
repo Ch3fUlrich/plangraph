@@ -17,8 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .clients import effective_gateway_base_url
-from .opencode_render import gateway_management_base_url, valid_gateway_endpoint
-from .host_keys import _gateway_key
+from .opencode_render import gateway_management_base_url, load_token, valid_gateway_endpoint
 from .liveness import unavailable
 from .omniroute_state import _default_fetch
 
@@ -105,10 +104,10 @@ def fetch_snapshot_rows(env=None, *, fetch=None):
         raise LookupError('gateway not configured')
     base = gateway_management_base_url(endpoint)
     try:
-        key = _gateway_key(source)
+        key = load_token(source)
     except (Exception, SystemExit):
         key = None
-    if not base or not key:
+    if not base or not isinstance(key, str) or not key.strip():
         raise LookupError('gateway not configured')
     try:
         status, body = (fetch or _default_fetch)(base + URL_PATH, {'Authorization': 'Bearer ' + key}, 5.0)
