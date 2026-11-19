@@ -1,0 +1,1 @@
+- **LE-KEEPER-MERGED-SCAN-WINDOW-500-REFUSES-OLD-KEYS:** The merge that introduced a Plan-Item commit is found without a 500-merge window, so close-merged no longer refuses `merged_pr_missing` for old merged items.
