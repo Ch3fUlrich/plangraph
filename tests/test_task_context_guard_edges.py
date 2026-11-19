@@ -71,17 +71,15 @@ def test_merge_of_finds_the_oldest_containing_first_parent_merge(w, repo, merge_
                          else "batch (#903)", "pr": pr}
 
 
-def test_merge_of_ignores_older_unrelated_merges_in_the_scan_window(
-        w, repo, merge_history, monkeypatch):
+def test_merge_of_ignores_older_unrelated_merges(w, repo, merge_history):
     from plangraph.keeper import context_sources
-    monkeypatch.setattr(context_sources, "_MERGE_SCAN", 2)
     sha, expected, pr = merge_history["plain"]
     merge = context_sources._merge_of(w.store.ctx["git"], str(repo), "main", sha)
     assert merge == {"sha": expected, "subject": "plain (#899)", "pr": pr}
 
 
-@pytest.mark.parametrize("failure", ["ancestry", "first-parent", "full-window"])
-def test_merge_of_is_unknown_when_a_walk_fails_or_is_truncated(
+@pytest.mark.parametrize("failure", ["ancestry", "first-parent"])
+def test_merge_of_is_unknown_when_a_walk_fails(
         w, repo, merge_history, monkeypatch, failure):
     from plangraph.keeper import context_sources
     adapter = w.store.ctx["git"]
@@ -89,13 +87,11 @@ def test_merge_of_is_unknown_when_a_walk_fails_or_is_truncated(
 
     def run(repo_path, args, **kw):
         flag = "--ancestry-path" if failure == "ancestry" else "--first-parent"
-        if failure != "full-window" and args[0] == "rev-list" and flag in args:
+        if args[0] == "rev-list" and flag in args:
             return _Proc(128)
         return real(repo_path, args, **kw)
 
     monkeypatch.setattr(adapter, "_run", run)
-    if failure == "full-window":
-        monkeypatch.setattr(context_sources, "_MERGE_SCAN", 2)
     assert context_sources._merge_of(
         adapter, str(repo), "main", merge_history["part-895"][0]) is None
 
