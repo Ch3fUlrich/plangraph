@@ -132,7 +132,7 @@ the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
 Rust review record assertions run on every platform; keeper-backed assertions run only on Unix because the keeper imports POSIX `fcntl`.
-Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well.
+Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well. `rust/plangraph-cli/src/runner/config.rs` tests parse `docs/operations/ci-runners.example.toml`, which is a `RUST_INPUTS` entry too.
 
 CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 `RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
@@ -417,8 +417,42 @@ The Python `tools/hooks/context_guard.py` carries the AutoOS compaction scan in
 `context_compaction.py` and `ready <handoff-path> [--reason cap|router|operator|planned]`.
 Ready requires a sibling `<stem>.card.md` validated by PATH's `handoff-check`
 (or executable `AUTOOS_HANDOFF_CHECK`), records v2 hashes, and best-effort kicks
-the watchdog unless `AUTOOS_READY_KICK=0`. Tests isolate state and mock the kick.
-The installer copies both modules; retain its guarded missing-file registration.
+the watchdog unless `AUTOOS_READY_KICK=0`. Once `<state_dir>/<session_id>.ready.json`
+exists as a v2 marker for the calling `session_id`, `context_guard.py` (and
+`ctx_guard_session.py`) registered on `PreToolUse` (matcher for all tools, `"*"`)
+denies further tool calls—including subagent calls carrying `agent_id`—with
+`hookSpecificOutput` (`permissionDecision: "deny"`, exit 0) naming the ready
+timestamp and handoff path. Only a single Bash invocation with no env-assignment
+prefixes, plain `python3`/`python` (or `/usr/bin/python3` / resolved `sys.executable`),
+a script path resolving via `realpath` to the guard itself or
+`$HOME/.local/share/plangraph/hooks/context_guard.py`, and the exact shape
+`ready <path> [--reason <cap|router|operator|planned>]` or `status` is exempted so
+a refused `ready` can be retried; missing, foreign-session, and corrupt markers allow
+(fail open). When a v2 ready marker exists (for the session identified by a bounded
+JSON prefix parse or `CLAUDE_CODE_SESSION_ID`, or any v2 marker in `<state_dir>` if
+unidentified), oversized or unparsable stdin payloads fail closed with the same
+PreToolUse deny output unless the prefix names a non-`PreToolUse` event; known
+non-`PreToolUse` events keep failing open. In `ctx_guard_session.py`, `{"off": true}` (and attended leases) only
+skip `PostToolUse` threshold guidance and do not disable `PreToolUse` denial. Tests
+isolate state and mock the kick.
+`tools/hooks/install_hooks.sh` only copies `*.py` files and registers nothing in
+Claude Code settings (`setup/manifest.toml` defers hook merging); register the
+guarded missing-file wrapper on both `PreToolUse` (with an all-tools matcher) and
+`PostToolUse` (using either `context_guard.py` or `ctx_guard_session.py`, not both):
+
+```json
+"PreToolUse": [
+  {
+    "matcher": "*",
+    "hooks": [
+      {
+        "type": "command",
+        "command": "sh -c 'test -f \"$1\" || exit 1; exec python3 \"$1\"' _ $HOME/.local/share/plangraph/hooks/context_guard.py"
+      }
+    ]
+  }
+]
+```
 `AUTOOS_CTX_*` and `autoos/ctx-guard` stay compatible; plangraph keeps calm,
 path-free guidance and its safer parsing/subagent handling rather than push advice.
 The scan cursor lives in sibling state directory `autoos/ctx-guard-scan`; rewrites
@@ -550,3 +584,19 @@ required before claiming that host's five-minute done criterion.
 D-6054: OpenCode catalog integration tests use the shipped provider configuration
 and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
 so changes to catalog identities or rendering select the Rust CI suite.
+
+## Bash guard rules (`tools/hooks/bash_guard.py`)
+
+The PreToolUse Bash guard (`tools/hooks/bash_guard.py` / `bash_guard_rules.py`)
+denies:
+- Unquoted heredocs carrying unescaped backticks or `$(...)`.
+- `claude --bg`/`--background` or `claude -p`/`--print` commands with live
+  double-quoted or unquoted command substitutions.
+- Non-resume `claude --bg` / `--background` launches unconditionally (rule D-158;
+  including `--bg=0` / `--background=0`, fail closed), so session names come from
+  the fleet launcher counter (`Sessions` launches `claude` via Python subprocess,
+  never through the Bash tool). `claude -p`/`--print`, `claude --bg --resume
+  <uuid|hex>` / `-r <uuid|hex>` without `-n`/`--name`, `claude --resume`,
+  `claude agents`, and `claude stop <id>` stay allowed.
+- Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
+  (see `docs/TESTING.md`).

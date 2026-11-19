@@ -1,0 +1,19 @@
+# Example for `plangraph runner plan --os linux --count 2 --config ci-runners.toml`.
+# Every value below is a placeholder: pin real versions and checksums before use.
+user_prefix = "runner"        # users are runner1..runnerN
+home_base = "/home"
+temporal_test_address = "127.0.0.1:1"
+apt_packages = ["protobuf-compiler", "libprotobuf-dev", "git", "curl", "build-essential"]
+
+[actions_runner]
+version = "0.0.0"
+url = "https://example.invalid/actions-runner-linux-x64-0.0.0.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000001"
+
+[python_seed]
+version = "3.0.0"
+url = "https://example.invalid/python-3.0.0-linux-x64.tar.gz"
+size = 1000
+sha256 = "0000000000000000000000000000000000000000000000000000000000000002"
+requirements_file = "/path/to/requirements-ci.txt"
+tool_cache = "/opt/hostedtoolcache"

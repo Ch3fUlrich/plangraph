@@ -1,13 +1,19 @@
-"""Run-tree slice 1: local Git fixtures, no supervisor or record-schema changes."""
+"""Run-tree selection and launch provenance using local Git and fake children."""
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
+import time
 import threading
+import asyncio
+import io
+from types import SimpleNamespace
 
 import pytest
+from fake_pid import FAKE_PID
 
 from plangraph.spawner import git_guard
 from plangraph.routing_errors import SpawnRefused
@@ -341,3 +347,246 @@ def test_detached_tree_leaves_local_main_alone(cached_tree, damage):
         assert tree['tree_sha'] == expected
         assert (Path(tree['tree_path']) / 'version').read_text() == 'B'
     assert (git(repo, 'rev-parse', 'HEAD'), git(repo, 'status', '--porcelain')) == before
+
+
+@pytest.mark.parametrize('events', [None, [], [{'event': 'existing'}]])
+def test_fresh_launch_spec_adds_tree_event_when_child_events_are_null(tmp_path, monkeypatch, capsys, events):
+    from contextlib import nullcontext
+    from plangraph.spawner import launch_spec
+    import sys
+    tree = dict(tree_sha='a' * 40, tree_path=str(tmp_path / 'tree'))
+    monkeypatch.setattr(git_guard, 'run_tree', lambda state: nullcontext(tree))
+    request = dict(run_id='run-' + 'a' * 32, job_id='job-test', role='review',
+                   dry_run=False, leg={'id': 'fixture'}, prompt='review', card={},
+                   cwd=str(tmp_path), state=str(tmp_path))
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(request)))
+    seen = {}
+    def run(*a, **k):
+        seen.update(a[3])
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'events': events, 'argv': ['fake']}))
+    monkeypatch.setenv('PYTHONPATH', '/host/site')
+    monkeypatch.setattr(launch_spec, '_run_group', run)
+    assert launch_spec.fresh_main() == 0
+    assert seen['PYTHONPATH'] == os.pathsep.join([str(tmp_path / 'tree' / 'src'), '/host/site'])
+    assert json.loads(capsys.readouterr().out)['events'] == [*(events or []), dict(event='run_tree', **tree)]
+
+
+@pytest.mark.parametrize('failure', ['handshake', 'registration', 'result', 'wait', 'cancel', 'late_cancel', 'ok', 'empty_seats', 'seats', 'writers'])
+def test_fresh_spawn_releases_context_once_even_after_task_creation(tmp_path, monkeypatch, failure):
+    from plangraph.spawner.seat_spawn import fresh_spawn
+    released, calls, killed = [], [], []
+    tree = dict(tree_sha='a' * 40, tree_path=str(tmp_path / 'tree'))
+    class Context:
+        def __enter__(self): return tree
+        def __exit__(self, *args): released.append(True)
+    class Tasks(dict):
+        def __setitem__(self, key, value):
+            if failure == 'registration': raise RuntimeError('registration')
+            super().__setitem__(key, value)
+    row = {'seats': []} if failure == 'empty_seats' else dict(run_id='run-test', status='completed', **tree)
+    if failure in ('seats', 'writers'): row = {failure: [dict(row, status='running')]}
+    child = SimpleNamespace(returncode=None if failure == 'late_cancel' else 0,
+        stdin=SimpleNamespace(write=lambda data: calls.append(json.loads(data)), close=lambda: None),
+        stdout=io.BytesIO(b'' if failure == 'handshake' else json.dumps(row).encode()),
+        kill=lambda: killed.append(True), wait=lambda: 0)
+    def poll():
+        if failure == 'wait': raise RuntimeError('wait')
+        return child.returncode
+    child.poll = poll
+    from plangraph.spawner import cli
+    monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **k: child)
+    def result(run_id):
+        if failure == 'result': raise RuntimeError('result')
+        return dict(run_id=run_id, status='completed', **tree)
+    service = SimpleNamespace(state=tmp_path, code_tree=lambda state: Context(), tasks=Tasks(), result=result,
+                              runner=SimpleNamespace(default_cwd=str(tmp_path)))
+    async def run():
+        task = asyncio.create_task(fresh_spawn(service, dict(card={}, prompt='review', role='review', wait_seconds=None), admission_passed=True))
+        if failure == 'cancel':
+            await asyncio.sleep(0)
+            task.cancel()
+        if failure == 'late_cancel':
+            while not service.tasks: await asyncio.sleep(0)
+            task.cancel()
+        if failure in ('ok', 'empty_seats', 'seats', 'writers'):
+            assert await task == ({'seats': []} if failure == 'empty_seats' else {failure: [result('run-test')]} if failure in ('seats', 'writers') else result('run-test'))
+        else:
+            with pytest.raises((RuntimeError, ValueError, asyncio.CancelledError)): await task
+        await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+    asyncio.run(run())
+    assert released == [True]
+    assert not killed  # A cancelled caller must not kill an admitted supervisor.
+    if calls: assert calls[0]['_tree'] == tree
+
+
+def test_handshake_timeout_kills_the_supervisor_group(tmp_path, monkeypatch):
+    from plangraph.spawner import cli, base_fresh
+    from plangraph.spawner.seat_spawn import fresh_spawn
+    killed, groups = [], []
+    tree = dict(tree_sha='a' * 40, tree_path=str(tmp_path / 'tree'))
+    class Context:
+        def __enter__(self): return tree
+        def __exit__(self, *args): pass
+    child = SimpleNamespace(pid=FAKE_PID, stdin=SimpleNamespace(write=lambda data: None, close=lambda: None),
+        stdout=SimpleNamespace(readline=lambda: time.sleep(.3) or b'', close=lambda: None),
+        poll=lambda: None, kill=lambda: killed.append(True), wait=lambda: 0)
+    monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **k: child)
+    monkeypatch.setattr(os, 'killpg', lambda pid, sig: groups.append(pid))
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', -4.9)
+    service = SimpleNamespace(state=tmp_path, code_tree=lambda state: Context(), tasks={},
+                              runner=SimpleNamespace(default_cwd=None))
+    with pytest.raises(asyncio.TimeoutError):
+        asyncio.run(fresh_spawn(service, dict(card={}, prompt='review', role='review'), admission_passed=True))
+    assert groups == [FAKE_PID] and not killed
+
+
+def test_empty_seats_cli_envelope_keeps_main_json_and_exit_code(tmp_path, monkeypatch, capsys):
+    from plangraph.spawner import cli
+    class Out(io.StringIO):
+        def close(self): pass
+    service = SimpleNamespace(state=tmp_path, route=lambda *a, **k: None)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+    child = SimpleNamespace(stdin=Out(), stdout=io.StringIO('{"seats": []}\n'))
+    monkeypatch.setattr(cli, '_start_supervisor', lambda *a, **k: child)
+    assert cli.main(['spawn', '--card', '{"estimate_tokens":1}', 'Implement change']) == 1
+    assert json.loads(capsys.readouterr().out) == {'seats': []}
+
+
+@pytest.mark.parametrize('entry', ['spawn', 'seats', 'mcp', 'supervise'])
+@pytest.mark.parametrize('identity', [True, False])
+def test_all_python_entry_records_have_tree_sha_or_reason(tmp_path, monkeypatch, entry, identity):
+    from registry_route_util import _service
+    from plangraph.spawner import cli, mcp
+    from plangraph.planner import routing, legs
+    code = dict(tree_sha='a' * 40 if identity else None, tree_branch='detached' if identity else None)
+    monkeypatch.setattr(git_guard, 'CODE_IDENTITY', code)
+    service = _service(tmp_path, monkeypatch)
+    chosen = next(l for l in legs.DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
+    service._route = lambda *a, **k: routing.SpawnPlan((chosen,), (), 'test', (chosen,), ())
+    options = dict(card={'estimate_tokens': 100}, prompt='fixture', role='review',
+                   writer_families=['claude'], dry_run=True)
+    if entry == 'mcp':
+        server = mcp.MCPSpawnerServer(runner=service.runner, state=tmp_path)
+        server.service = service
+        result = asyncio.run(server.call_tool('plangraph_agent_spawn', options))
+    elif entry == 'supervise':
+        output = io.StringIO()
+        output.close = lambda: None
+        monkeypatch.setattr(cli, 'SpawnService', lambda **k: service)
+        monkeypatch.setattr(cli.sys, 'stdin', io.StringIO(json.dumps(dict(options, state=str(tmp_path)))))
+        monkeypatch.setattr(cli.sys, 'stdout', output)
+        assert cli.main(['--supervise']) == 0
+        result = json.loads(output.getvalue())
+    else: result = asyncio.run(service.spawn(**options, seats=entry == 'seats'))
+    assert (rows := result.get('seats', [result]))
+    for row in rows:
+        saved = service.result(row['run_id'])
+        assert saved['tree_sha'] == code['tree_sha']
+        assert saved.get('tree_absent') == (None if identity else 'spawner code checkout identity unavailable at process startup')
+    monkeypatch.setattr(git_guard, 'CODE_TREE', tmp_path)
+    monkeypatch.delenv('PLANGRAPH_SPAWNER_REPO', raising=False)
+    assert not cli.live_runner(mcp.SpawnerRunner())
+
+
+@pytest.mark.parametrize('entry', ['cli', 'cli-wait', 'mcp'])
+def test_live_spawn_survives_parent_exit_with_selected_tree_and_supervisor_evidence(trees, monkeypatch, entry, request):
+    import inspect, time
+    from plangraph.spawner import cli, proc_kill
+    origin, repo, state = trees
+    request.addfinalizer(lambda: (state / 'finish').touch())
+    package = origin / 'src/plangraph/spawner'
+    shutil.copytree(Path(git_guard.__file__).parents[1], package.parent)
+    (package / 'runner.py').write_text('''from pathlib import Path
+from types import SimpleNamespace
+from .private_io import atomic_write_private
+class Service:
+    def __init__(self, state): self.state, self.runner = Path(state), SimpleNamespace(default_cwd=None)
+    def _save(self, record):
+        from .git_guard import annotate_tree
+        annotate_tree(record)
+        if record.get('tree_sha') is None: record.setdefault('tree_absent', 'unavailable')
+        atomic_write_private(self.state / 'runs/run-fixture/record.json', __import__('json').dumps(record))
+spawn_service = Service
+''')
+    (package / 'cli.py').write_text('''import json, os, pathlib, sys, time
+from .runner import spawn_service as SpawnService
+from .env_redact import redact_output
+''' + inspect.getsource(cli._drain_chunks) + '''
+def main(argv):
+    payload = json.loads(sys.stdin.readline())
+    assert not any(key.startswith('_') for key in payload)
+    service = SpawnService(payload['state'])
+    assert service._parent_admitted
+    record = dict(run_id='run-fixture', status='running', base_admitted=True, tree_sha=None, tree_absent='forged',
+                  cwd=payload.get('cwd') or service.runner.default_cwd, version=pathlib.Path('version').read_text(), pythonpath=os.environ['PYTHONPATH'])
+    service._save(record)
+    assert pathlib.Path(__file__).resolve().is_relative_to(pathlib.Path(record['tree_path']))
+    print(json.dumps(record), flush=True)
+    sys.stdout.close()
+    sys.stderr.write('x' * (2 * 1024 * 1024) + '\\n' + os.environ['TEST_SERVICE_TOKEN'] + '\\n'); sys.stderr.flush()
+    while not (service.state / 'finish').exists(): time.sleep(.01)
+    service._save(dict(record, status='completed'))
+    return 0
+if __name__ == '__main__': raise SystemExit(main(sys.argv[1:]))
+''')
+    git(origin, 'add', 'src')
+    sha = advance(origin)
+    monkeypatch.setenv('PLANGRAPH_SPAWNER_REPO', str(repo))
+    monkeypatch.setenv('TEST_SERVICE_TOKEN', 'fixture-secret-do-not-log')
+    monkeypatch.setenv('PYTHONPATH', '/host-deps')
+    driver = '''import asyncio, json, sys
+from plangraph.spawner import cli
+from plangraph.spawner.seat_spawn import SeatSpawnMixin
+SeatSpawnMixin.admit_spawn = lambda *a, **k: None
+if sys.argv[1].startswith('cli'):
+    raise SystemExit(cli.main(['--state', sys.argv[2], 'spawn', '--wait', '0.02' if sys.argv[1] == 'cli-wait' else '0', '--card', '{"estimate_tokens":100}', '--cwd', sys.argv[3], '--role', 'review', '--writer-family', 'openai', '--leg', 'cx-gpt-6.1-sol-xhigh', '--override-reason', 'fixture', 'Review fixture']))
+from plangraph.spawner.mcp import MCPSpawnerServer
+from plangraph.spawner.runner import SpawnerRunner
+server = MCPSpawnerServer(SpawnerRunner(default_cwd=sys.argv[3]), state=sys.argv[2])
+print(json.dumps(asyncio.run(server.call_tool('plangraph_agent_spawn', dict(card={'estimate_tokens':100}, prompt='Review fixture', role='review', writer_families=['openai'])))))
+'''
+    result = subprocess.run([sys.executable, '-c', driver, entry, str(state), str(repo)],
+                            capture_output=True, text=True, timeout=30,
+                            env={**os.environ, 'PYTHONPATH': os.pathsep.join(
+                                filter(None, [str(Path(cli.__file__).parents[2]), os.environ.get('PYTHONPATH')]))})
+    assert result.returncode == 0, result.stderr
+    record = json.loads(result.stdout)
+    assert record['tree_sha'] == sha != git(repo, 'rev-parse', 'HEAD')
+    assert record['version'] == 'B' and record['cwd'] == str(repo)
+    assert record['pythonpath'].endswith(os.pathsep + '/host-deps')
+    log = Path(record['supervisor_stderr_path'])
+    pid = int(Path(str(log) + '.pid').read_text())
+    if sys.platform.startswith('linux'): assert record['supervisor_pid_start'] == proc_kill._stat(pid)[4]
+    (state / 'finish').touch()
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        saved = json.loads((state / 'runs/run-fixture/record.json').read_text())
+        if saved['status'] == 'completed' and '[autoos:redacted]' in log.read_text(): break
+        time.sleep(.02)
+    assert saved['status'] == 'completed' and '[autoos:redacted]' in log.read_text() and 'fixture-secret-do-not-log' not in log.read_text() and log.stat().st_size <= 1024 * 1024 and Path(str(log) + '.1').stat().st_size <= 1024 * 1024
+
+
+def test_fresh_spawn_refuses_handoff_without_parent_admission(tmp_path):
+    from plangraph.spawner.seat_spawn import fresh_spawn
+    service = SimpleNamespace(state=tmp_path, code_tree=lambda state: pytest.fail('tree acquired'), tasks={})
+    with pytest.raises(RuntimeError, match='fresh_spawn_requires_parent_admission'):
+        asyncio.run(fresh_spawn(service, dict(card={}, prompt='review', role='review')))
+
+
+def test_launch_spec_group_runner_kills_group_on_timeout(tmp_path):
+    from plangraph.spawner import launch_spec
+    with pytest.raises(subprocess.TimeoutExpired):
+        launch_spec._run_group([sys.executable, '-c', 'import time; time.sleep(30)'], '', str(tmp_path), dict(os.environ), timeout=.3)
+
+
+def test_fresh_launch_spec_reports_non_json_stdout(tmp_path, monkeypatch, capsys):
+    from contextlib import nullcontext
+    from plangraph.spawner import launch_spec
+    tree = dict(tree_sha='a' * 40, tree_path=str(tmp_path / 'tree'))
+    monkeypatch.setattr(git_guard, 'run_tree', lambda state: nullcontext(tree))
+    request = dict(run_id='run-' + 'a' * 32, job_id='job-test', role='review', dry_run=False,
+                   leg={'id': 'fixture'}, prompt='review', card={}, cwd=str(tmp_path), state=str(tmp_path))
+    monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps(request)))
+    monkeypatch.setattr(launch_spec, '_run_group', lambda *a: SimpleNamespace(returncode=0, stdout='noise\n{}'))
+    assert launch_spec.fresh_main() == 1
+    assert 'non-JSON stdout' in capsys.readouterr().err

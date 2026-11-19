@@ -32,8 +32,9 @@
 #
 # Entry points and their events (the other *.py files are modules they import):
 #   bash_guard.py      PreToolUse (Bash)
-#   context_guard.py   PostToolUse; ctx_guard_session.py is the same guard with
-#                      per-session thresholds - register one of the two, not both
+#   context_guard.py   PreToolUse (all tools) and PostToolUse; ctx_guard_session.py
+#                      is the same guard with per-session thresholds - register
+#                      one of the two, not both
 #   fleet_inject.py    PostToolUse and UserPromptSubmit
 #   fleet_report.py    Stop
 #   session_title.py   UserPromptSubmit

@@ -1,0 +1,1 @@
+Gateway client key resolution in host_keys._gateway_key reads ~/.config/plangraph/omniroute-client.key (0600 file in 0700 dir, owned by current user, non-symlink) first and falls back to AutoOS configuration/api-keys.yml only when absent.

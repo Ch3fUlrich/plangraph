@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import urllib.parse
 import urllib.request
 from ipaddress import ip_address
+from pathlib import Path
 from typing import Any
 
 from plangraph.mimo_policy import ACCEPTED_MIMO_IDS
@@ -225,3 +227,43 @@ def render_gateway_providers(
         return REFUSAL_TOO_LARGE
     env["OPENCODE_CONFIG_CONTENT"] = rendered
     return None
+
+
+# Management token for the gateway management API (call logs, provider state).
+# Parent-only: never handed to a child environment.
+TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
+TOKEN_FILE_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN_FILE'
+
+
+def _owner_only(info, windows=None):
+    """Regular file readable by its owner only."""
+    # Windows mode bits cannot verify owner-only access; silently refuse key files there.
+    if windows is None:
+        windows = os.name == 'nt'
+    return stat.S_ISREG(info.st_mode) and not windows and stat.S_IMODE(info.st_mode) == 0o600
+
+
+def load_token(secrets=None):
+    """Load management credentials only in the parent; never expose failure details."""
+    secrets = os.environ if secrets is None else secrets
+    token = secrets.get(TOKEN_ENV)
+    if token:
+        return token
+    raw = secrets.get(TOKEN_FILE_ENV)
+    if raw:
+        path = Path(raw).expanduser()
+    elif secrets.get('HOME'):
+        path = Path(secrets['HOME']) / '.config' / 'plangraph' / 'omniroute-mgmt.key'
+    else:
+        path = Path('~/.config/plangraph/omniroute-mgmt.key').expanduser()
+    try:
+        with path.open() as stream:
+            info = os.fstat(stream.fileno())
+            if not _owner_only(info):
+                raise OSError
+            token = stream.read().strip()
+        if token:
+            return token
+    except (OSError, UnicodeError):
+        pass
+    raise LookupError('no ' + TOKEN_ENV)
