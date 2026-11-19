@@ -42,3 +42,10 @@ Plain-shell CLI runs resolve a missing deployment endpoint from
 The witness and child configuration share the same resolver; private call-log
 credentials stay in the parent. Existing explicit child URLs and config-only
 root-placeholder precedence remain unchanged.
+
+The management token for the gateway management API (call logs and the
+provider-state snapshot behind leg routing) is read by `load_token` in this
+module: `PLANGRAPH_GATEWAY_LOG_TOKEN`, then the file named by
+`PLANGRAPH_GATEWAY_LOG_TOKEN_FILE`, then `plangraph/omniroute-mgmt.key` under
+HOME/.config; the file must be a regular owner-only (0600) file. The gateway
+client key is never sent to a management endpoint.
