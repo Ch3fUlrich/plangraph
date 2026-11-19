@@ -77,9 +77,29 @@ fn worker_and_temporal_helper_share_the_cached_target() {
         .next()
         .unwrap();
     let (configuration, steps) = job.split_once("    steps:\n").unwrap();
-    assert!(configuration.contains(
-        "    env:\n      CARGO_TARGET_DIR: ${{ github.workspace }}/rust/worker/target\n"
+    assert!(
+        !configuration.contains("CARGO_TARGET_DIR"),
+        "a job-level target dir would override the self-hosted one"
+    );
+    let step = |name: &str| -> &str {
+        steps
+            .split(&format!("      - name: {name}\n"))
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing step {name}"))
+            .split("\n      - ")
+            .next()
+            .unwrap()
+    };
+    let hosted = step("Hosted cargo build settings");
+    assert!(hosted.contains("env.CI_SELF_HOSTED_RUN != '1'"));
+    assert!(hosted.contains(
+        "echo \"CARGO_TARGET_DIR=$GITHUB_WORKSPACE/rust/worker/target\" >> \"$GITHUB_ENV\""
     ));
+    let self_hosted = step("Self-hosted cargo build settings");
+    assert!(self_hosted.contains("env.CI_SELF_HOSTED_RUN == '1'"));
+    assert!(self_hosted.contains("echo \"CARGO_TARGET_DIR=$target\" >> \"$GITHUB_ENV\""));
+    // Every later step (worker tests and the temporal helper) reads the one exported dir.
+    assert_eq!(steps.matches("CARGO_TARGET_DIR=").count(), 2);
     let cache = steps
         .split("uses: actions/cache@v4\n")
         .nth(1)
