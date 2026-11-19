@@ -70,11 +70,15 @@ fn run_inner(home: &Path, args: &[String]) -> Result<i32, String> {
         .filter(|c| (1..=64).contains(c))
         .ok_or("--count N (1..=64) is required")?;
     if verb == "check" {
-        let checks: Vec<_> = cfg
+        require_root().map_err(|_| "check must run as root inside the CI host")?;
+        let mut checks: Vec<_> = cfg
             .user_names(count)
             .iter()
             .flat_map(|u| check::evaluate(&check::probe(&cfg, u)))
             .collect();
+        checks.push(check::proc_hidepid_check(
+            &std::fs::read_to_string("/proc/mounts").unwrap_or_default(),
+        ));
         print!("{}", check::render(&checks));
         return Ok(i32::from(check::failed(&checks)));
     }

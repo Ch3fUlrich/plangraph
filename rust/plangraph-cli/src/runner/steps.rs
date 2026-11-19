@@ -32,6 +32,11 @@ pub enum Step {
         size: Option<u64>,
     },
     Remove(PathBuf),
+    /// Append `line` to the file unless an identical line is already there.
+    EnsureLine {
+        path: PathBuf,
+        line: String,
+    },
 }
 
 fn s(p: &Path) -> String {
@@ -120,6 +125,13 @@ pub fn steps_for(cfg: &Config, action: &Action) -> Vec<Step> {
                 Step::Remove(staged),
             ]
         }
+        Action::HidepidProc => vec![
+            Step::EnsureLine {
+                path: PathBuf::from("/etc/fstab"),
+                line: super::plan::FSTAB_LINE.into(),
+            },
+            cmd("mount", &["-o", "remount,hidepid=2", "/proc"]),
+        ],
         Action::Download {
             name,
             url,
@@ -138,6 +150,7 @@ pub fn steps_for(cfg: &Config, action: &Action) -> Vec<Step> {
             let dir = cfg.home(user).join("runner");
             let owner = format!("{user}:{user}");
             vec![
+                Step::Remove(dir.clone()),
                 Step::Mkdir(dir.clone()),
                 cmd("tar", &["-xzf", &s(&cache_file(DL_RUNNER)), "-C", &s(&dir)]),
                 Step::WriteFile {
@@ -304,6 +317,7 @@ pub fn execute(step: &Step) -> Result<(), String> {
             sha256,
             size,
         } => super::download::fetch(url, dest, sha256, *size),
+        Step::EnsureLine { path, line } => ensure_line(path, line),
         Step::Remove(p) => match std::fs::metadata(p) {
             Ok(m) if m.is_dir() => {
                 std::fs::remove_dir_all(p).map_err(|e| format!("rm {}: {e}", p.display()))
@@ -312,6 +326,26 @@ pub fn execute(step: &Step) -> Result<(), String> {
             Err(_) => Ok(()),
         },
     }
+}
+
+fn ensure_line(path: &Path, line: &str) -> Result<(), String> {
+    use std::io::Write;
+    let have = std::fs::read_to_string(path).unwrap_or_default();
+    if have.lines().any(|l| l.trim() == line) {
+        return Ok(());
+    }
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(|e| format!("open {}: {e}", path.display()))?;
+    let sep = if have.is_empty() || have.ends_with('\n') {
+        ""
+    } else {
+        "\n"
+    };
+    f.write_all(format!("{sep}{line}\n").as_bytes())
+        .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 fn write_file(path: &Path, content: &str, mode: u32) -> Result<(), String> {
@@ -467,5 +501,26 @@ mod tests {
             symlink(&f, &l).unwrap();
             assert!(symlink(dir.path(), &l).is_err());
         }
+    }
+    #[test]
+    fn ensure_line_appends_once() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("fstab");
+        std::fs::write(&f, "a b c").unwrap();
+        ensure_line(&f, "x y").unwrap();
+        ensure_line(&f, "x y").unwrap();
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), "a b c\nx y\n");
+    }
+    #[test]
+    fn hidepid_remounts_proc_and_persists_in_fstab() {
+        let steps = steps_for(&sample(), &Action::HidepidProc);
+        assert!(steps
+            .iter()
+            .any(|s| matches!(s, Step::EnsureLine { path, line }
+            if path == Path::new("/etc/fstab") && line.contains("hidepid=2"))));
+        assert!(steps
+            .iter()
+            .any(|s| matches!(s, Step::Cmd { program, args, .. }
+            if program == "mount" && args.contains(&"remount,hidepid=2".to_string()))));
     }
 }

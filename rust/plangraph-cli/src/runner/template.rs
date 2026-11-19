@@ -25,12 +25,17 @@ pub fn run_one(temporal_test_address: &str) -> String {
     RUN_ONE.replace("@TEMPORAL_TEST_ADDRESS@", temporal_test_address)
 }
 
+/// The one command a runner may run as root: the workflow's protobuf fallback
+/// install. sudoers matches the argument list exactly, so no other apt-get
+/// invocation (and no extra argument) is allowed.
+pub const SUDO_COMMAND: &str =
+    "/usr/bin/apt-get -o DPkg::Lock::Timeout=600 install -y protobuf-compiler libprotobuf-dev";
+
 pub fn sudoers(users: &[String]) -> String {
-    let mut out = String::from("# managed by plangraph runner install: apt only, nothing else\n");
+    let mut out =
+        String::from("# managed by plangraph runner install: one fixed apt-get command\n");
     for user in users {
-        out.push_str(&format!(
-            "{user} ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt\n"
-        ));
+        out.push_str(&format!("{user} ALL=(root) NOPASSWD: {SUDO_COMMAND}\n"));
     }
     out
 }
@@ -50,11 +55,23 @@ mod tests {
         assert!(!s.contains('@'));
     }
     #[test]
-    fn sudoers_grants_apt_only_per_user() {
+    fn sudoers_grants_one_fixed_command_per_user() {
         let s = sudoers(&["runner1".into(), "runner2".into()]);
-        assert!(s.contains("runner1 ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt\n"));
-        assert!(s.contains("runner2 ALL=(root) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt\n"));
+        for u in ["runner1", "runner2"] {
+            assert!(s.contains(&format!("{u} ALL=(root) NOPASSWD: {SUDO_COMMAND}\n")));
+        }
         assert_eq!(s.matches("NOPASSWD").count(), 2);
+        for line in s.lines().filter(|l| l.contains("NOPASSWD")) {
+            let cmd = line.split("NOPASSWD: ").nth(1).unwrap();
+            assert_eq!(cmd, SUDO_COMMAND);
+            // one command, no list, no wildcard, no shell metacharacter, no ALL
+            assert!(!cmd.contains([',', '*', '?', '[', '\\', ';', '|', '&', '$', '`']));
+            assert!(!cmd.split(' ').any(|w| w == "ALL" || w == "!"));
+            assert!(cmd.starts_with("/usr/bin/apt-get "));
+            // every argument is a fixed literal; the package names are the config defaults
+            assert!(cmd.ends_with(" install -y protobuf-compiler libprotobuf-dev"));
+        }
         assert!(!s.contains("ALL=(ALL)") && !s.contains("NOPASSWD: ALL"));
+        assert!(!s.contains("/usr/bin/apt,") && !s.contains("/usr/bin/apt\n"));
     }
 }

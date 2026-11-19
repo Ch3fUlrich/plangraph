@@ -41,12 +41,34 @@ fn dpkg_installed(pkg: &str) -> bool {
         .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("install ok installed"))
 }
 
+/// True when the /proc entry of a mounts table hides other users' processes.
+pub fn hidepid_active(mounts: &str) -> bool {
+    mounts.lines().any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() >= 4
+            && f[1] == "/proc"
+            && f[2] == "proc"
+            && f[3]
+                .split(',')
+                .any(|o| matches!(o, "hidepid=2" | "hidepid=invisible"))
+    })
+}
+
+/// Some(path) when `link` exists but is not the symlink to `target`.
+fn conflict(link: &Path, target: &Path) -> Option<String> {
+    if std::fs::symlink_metadata(link).is_err() {
+        return None;
+    }
+    (!std::fs::read_link(link).is_ok_and(|t| t == target)).then(|| link.display().to_string())
+}
+
 pub fn observe_fs(cfg: &Config, count: u32, root: &Path) -> Result<State, String> {
     let seed_dir = cfg.seed_dir();
     let mut st = State {
         sudoers: read(root, Path::new(SUDOERS_FILE)),
         seed_marker: read(root, &Path::new(STATE_DIR).join(SEED_MARKER)),
         playwright_deps: at(root, &Path::new(STATE_DIR).join(DEPS_MARKER)).exists(),
+        proc_hidepid: read(root, Path::new("/proc/mounts")).is_some_and(|m| hidepid_active(&m)),
         ..Default::default()
     };
     if let Some(req) = &cfg.python_seed.requirements_file {
@@ -73,6 +95,13 @@ pub fn observe_fs(cfg: &Config, count: u32, root: &Path) -> Result<State, String
             }),
             temporal_link: std::fs::read_link(at(root, &home.join(".cache/temporal-cli")))
                 .is_ok_and(|t| t == home.join("runner/.cache/temporal-cli")),
+            link_conflict: conflict(&at(root, &home.join("hostedtoolcache/Python")), &seed_dir)
+                .or_else(|| {
+                    conflict(
+                        &at(root, &home.join(".cache/temporal-cli")),
+                        &home.join("runner/.cache/temporal-cli"),
+                    )
+                }),
             run_one: read(root, &home.join("run-one.sh")),
             name,
         });
@@ -124,5 +153,26 @@ mod tests {
             st.cached[DL_RUNNER],
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn hidepid_is_read_from_the_proc_mount_and_conflicts_are_found() {
+        assert!(hidepid_active(
+            "proc /proc proc rw,nosuid,hidepid=2,gid=0 0 0\n"
+        ));
+        assert!(hidepid_active("proc /proc proc rw,hidepid=invisible 0 0\n"));
+        assert!(!hidepid_active("proc /proc proc rw,nosuid 0 0\n"));
+        assert!(!hidepid_active("proc /proc proc rw,hidepid=1 0 0\n"));
+        assert!(!hidepid_active("proc /other proc rw,hidepid=2 0 0\n"));
+        let cfg = sample();
+        let d = tempfile::tempdir().unwrap();
+        let cache = d.path().join("home/runner1/hostedtoolcache");
+        std::fs::create_dir_all(cache.join("Python")).unwrap();
+        let st = observe_fs(&cfg, 1, d.path()).unwrap();
+        assert!(st.users[0]
+            .link_conflict
+            .as_deref()
+            .is_some_and(|c| c.ends_with("hostedtoolcache/Python")));
+        assert!(!st.proc_hidepid);
     }
 }

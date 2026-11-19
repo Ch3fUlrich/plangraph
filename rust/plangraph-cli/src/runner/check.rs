@@ -56,6 +56,20 @@ pub fn evaluate(f: &Facts) -> Vec<Check> {
     ]
 }
 
+/// Host-level probe: other users must not see the runners' process arguments
+/// (the JIT token is passed on the run.sh command line).
+pub fn proc_hidepid_check(mounts: &str) -> Check {
+    Check {
+        user: "host".into(),
+        name: "/proc mounted with hidepid=2",
+        status: if super::observe::hidepid_active(mounts) {
+            Status::Pass
+        } else {
+            Status::Fail
+        },
+    }
+}
+
 pub fn failed(checks: &[Check]) -> bool {
     checks.iter().any(|c| c.status == Status::Fail)
 }
@@ -181,5 +195,12 @@ mod tests {
         let mut f = good();
         f.run_one = None;
         assert!(failed(&evaluate(&f)));
+    }
+    #[test]
+    fn hidepid_probe_fails_without_the_mount_option() {
+        assert!(failed(&[proc_hidepid_check("proc /proc proc rw 0 0\n")]));
+        assert!(!failed(&[proc_hidepid_check(
+            "proc /proc proc rw,hidepid=2 0 0\n"
+        )]));
     }
 }

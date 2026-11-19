@@ -23,6 +23,8 @@ pub struct UserState {
     pub hosted_cache: bool,
     pub playwright: bool,
     pub temporal_link: bool,
+    /// A path the plan would link already exists with another target.
+    pub link_conflict: Option<String>,
     pub run_one: Option<String>,
 }
 
@@ -34,6 +36,8 @@ pub struct State {
     pub seed_marker: Option<String>,
     pub requirements_sha: Option<String>,
     pub playwright_deps: bool,
+    /// /proc is mounted with hidepid=2 (or stricter).
+    pub proc_hidepid: bool,
     /// Download name -> sha256 of the file already in the cache dir.
     pub cached: BTreeMap<String, String>,
 }
@@ -46,6 +50,7 @@ pub enum Action {
     InstallSudoers {
         content: String,
     },
+    HidepidProc,
     Download {
         name: String,
         url: String,
@@ -82,7 +87,10 @@ impl Action {
             Action::EnableLinger(u) => format!("enable lingering for {u}"),
             Action::InstallSudoers { .. } => format!("install {SUDOERS_FILE} (visudo checked)"),
             Action::Download { name, url, .. } => {
-                format!("download {name} from {url}, verify sha256")
+                format!("download {name} from {}, verify sha256", redact_url(url))
+            }
+            Action::HidepidProc => {
+                format!("mount /proc with hidepid=2 ({FSTAB_LINE} in /etc/fstab)")
             }
             Action::UnpackRunner { user } => format!("unpack Actions runner for {user}"),
             Action::SeedPython { .. } => "seed Python tool cache (read-only, root-owned)".into(),
@@ -95,8 +103,25 @@ impl Action {
     }
 }
 
+pub const FSTAB_LINE: &str = "proc /proc proc defaults,hidepid=2 0 0";
+
+/// Host and path only: userinfo and query strings can carry credentials.
+pub fn redact_url(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let rest = rest.split(['?', '#']).next().unwrap_or("");
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = authority.rsplit('@').next().unwrap_or("");
+    format!("{host}/{path}")
+}
+
 pub fn seed_marker(cfg: &Config, requirements_sha: &str) -> String {
-    format!("{} {requirements_sha}\n", cfg.python_seed.sha256)
+    let ps = &cfg.python_seed;
+    format!(
+        "{} {requirements_sha} {} {}\n",
+        ps.sha256,
+        ps.version,
+        ps.tool_cache.display()
+    )
 }
 
 fn needs_download(
@@ -138,6 +163,14 @@ pub fn plan(cfg: &Config, state: &State) -> Result<Vec<Action>, String> {
     let sudoers = template::sudoers(&names);
     if state.sudoers.as_deref() != Some(sudoers.as_str()) {
         out.push(Action::InstallSudoers { content: sudoers });
+    }
+    if !state.proc_hidepid {
+        out.push(Action::HidepidProc);
+    }
+    if let Some(c) = state.users.iter().find_map(|u| u.link_conflict.as_ref()) {
+        return Err(format!(
+            "refuse: {c} exists with a different target; remove it or fix the config"
+        ));
     }
     let ar = &cfg.actions_runner;
     let stale_runner = |u: &UserState| u.runner_version.as_deref() != Some(ar.version.as_str());
@@ -202,6 +235,7 @@ pub(crate) fn complete_state(cfg: &Config, count: u32) -> State {
         seed_marker: Some(seed_marker(cfg, "reqsha")),
         requirements_sha: Some("reqsha".into()),
         playwright_deps: true,
+        proc_hidepid: true,
         cached: BTreeMap::new(),
         users: names
             .into_iter()
@@ -213,6 +247,7 @@ pub(crate) fn complete_state(cfg: &Config, count: u32) -> State {
                 hosted_cache: true,
                 playwright: true,
                 temporal_link: true,
+                link_conflict: None,
                 run_one: Some(run_one.clone()),
             })
             .collect(),
@@ -264,7 +299,7 @@ mod tests {
                 .count(),
             2
         );
-        assert_eq!(acts.len(), 1 + 4 + 1 + 1 + 2 + 2 + 8 + 1);
+        assert_eq!(acts.len(), 1 + 4 + 1 + 1 + 1 + 2 + 2 + 8 + 1);
         assert_eq!(plan(&cfg, &fresh_state(&cfg, 2)).unwrap(), acts);
     }
     #[test]
@@ -334,5 +369,45 @@ mod tests {
         assert!(matches!(acts.last(), Some(Action::SeedPython { .. })));
         s.requirements_sha = None;
         assert!(plan(&cfg, &s).unwrap_err().contains("unreadable"));
+    }
+    #[test]
+    fn hidepid_is_planned_only_when_missing() {
+        let cfg = sample();
+        let mut s = complete_state(&cfg, 1);
+        s.proc_hidepid = false;
+        assert_eq!(plan(&cfg, &s).unwrap(), vec![Action::HidepidProc]);
+    }
+    #[test]
+    fn conflicting_tool_cache_link_is_refused_at_plan_time() {
+        let cfg = sample();
+        let mut s = complete_state(&cfg, 1);
+        s.users[0].link_conflict = Some("/home/runner1/hostedtoolcache/Python".into());
+        let err = plan(&cfg, &s).unwrap_err();
+        assert!(err.starts_with("refuse:") && err.contains("hostedtoolcache/Python"));
+    }
+    #[test]
+    fn seed_marker_tracks_version_and_tool_cache() {
+        let a = sample();
+        let mut b = sample();
+        b.python_seed.tool_cache = "/elsewhere".into();
+        assert_ne!(seed_marker(&a, "r"), seed_marker(&b, "r"));
+        let mut c = sample();
+        c.python_seed.version.push('1');
+        assert_ne!(seed_marker(&a, "r"), seed_marker(&c, "r"));
+    }
+    #[test]
+    fn download_urls_print_host_and_path_only() {
+        assert_eq!(
+            redact_url("https://user:pw@example.com/a/b.tgz?sig=secret#f"),
+            "example.com/a/b.tgz"
+        );
+        let a = Action::Download {
+            name: "n".into(),
+            url: "https://h.example/p/x.tgz?token=abc".into(),
+            sha256: "s".into(),
+            size: None,
+        };
+        let d = a.describe();
+        assert!(d.contains("h.example/p/x.tgz") && !d.contains("token"));
     }
 }
