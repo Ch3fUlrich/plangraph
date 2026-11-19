@@ -1,31 +1,145 @@
-"""Hand child runs the host keys the AutoOS spawner gave us (D-2759).
+"""Hand child runs the host keys the spawner or AutoOS gave us (D-2759).
 
 The provider overlay only copies an env name through when the parent already
 holds its value (``opencode_overlay.overlay_env``), and the plangraph spawner's
 own environment never carries the file-managed keys -- so an opencode child
 (mimo runs, ``opencode/*-free`` models) fails with "Authentication required".
-These helpers resolve the keys from the AutoOS keys file at spawn time.
+These helpers resolve the gateway client key from
+``~/.config/plangraph/omniroute-client.key`` first (falling back to the AutoOS
+keys file only when absent) and the Zen key from the AutoOS keys file.
 
-Contract: every failure -- a missing file, a helper that raises or exits on
-import or at call time, a non-Mapping keys result, a non-str or blank key --
-means "no key" (None); KeyboardInterrupt still propagates. Nothing here logs,
-prints, or raises with a key value, so a lookup failure can never crash the
-supervisor or leave a key unredacted in the startup tail.
+Contract: every failure -- a missing file, an insecure or symlinked key file, a
+helper that raises or exits on import or at call time, a non-Mapping keys
+result, a non-str or blank key -- means "no key" (None); KeyboardInterrupt still
+propagates. Nothing here logs, prints, or raises with a key value, so a lookup
+failure can never crash the supervisor or leave a key unredacted in the startup
+tail.
 """
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
 import re
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 
 GATEWAY_KEY_ENV = "AUTOOS_OMNIROUTE_KEY"
 ZEN_KEY_ENV = "OPENCODE_API_KEY"
+_MAX_KEY_BYTES = 8192
 
 # "opencode/<id>-free", after stripping any "#variant" suffix: the only shape
 # that resolves to the free tier needing the Zen key.
 _ZEN_FREE_MODEL = re.compile(r"opencode/.+-free")
+
+
+def _client_key_path(env):
+    """Per-host plangraph gateway client key path under HOME, or None."""
+    source = os.environ if env is None else env
+    home = source.get("HOME") if "HOME" in source else os.environ.get("HOME")
+    if not home and os.name == "nt":
+        home = source.get("USERPROFILE") if "USERPROFILE" in source else os.environ.get("USERPROFILE")
+    if not isinstance(home, str) or not home.strip():
+        return None
+    return Path(home) / ".config" / "plangraph" / "omniroute-client.key"
+
+
+def _warn_refused(path, reason, mode=None):
+    """Emit one warning naming path and mode without ever logging a key value."""
+    logger = logging.getLogger(__name__)
+    if mode is None:
+        logger.warning("refusing gateway key path=%s reason=%s mode=unknown", path, reason)
+    else:
+        logger.warning("refusing gateway key path=%s reason=%s mode=%04o", path, reason, stat.S_IMODE(mode))
+
+
+def _check_owner_and_mode(path, st, *, dir_check=False):
+    """Verify current-user ownership and 0600/0700-or-stricter POSIX permissions."""
+    if os.name == "nt":
+        return True
+    if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+        _warn_refused(path, "owner", st.st_mode)
+        return False
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        _warn_refused(path, "dir_mode" if dir_check else "mode", st.st_mode)
+        return False
+    return True
+
+
+def _read_client_key_file(path):
+    """Read and validate the per-host key file; return ``(found, key_or_none)``."""
+    try:
+        file_st = os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False, None
+    except OSError as exc:
+        _warn_refused(path, type(exc).__name__)
+        return True, None
+    if stat.S_ISLNK(file_st.st_mode):
+        _warn_refused(path, "symlink", file_st.st_mode)
+        return True, None
+    if not stat.S_ISREG(file_st.st_mode):
+        _warn_refused(path, "not_regular", file_st.st_mode)
+        return True, None
+    if not _check_owner_and_mode(path, file_st, dir_check=False):
+        return True, None
+
+    parent = path.parent
+    try:
+        dir_st = os.lstat(parent)
+    except (FileNotFoundError, NotADirectoryError):
+        return False, None
+    except OSError as exc:
+        _warn_refused(parent, type(exc).__name__)
+        return True, None
+    if stat.S_ISLNK(dir_st.st_mode) or not stat.S_ISDIR(dir_st.st_mode):
+        _warn_refused(parent, "not_directory", dir_st.st_mode)
+        return True, None
+    if not _check_owner_and_mode(parent, dir_st, dir_check=True):
+        return True, None
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        return False, None
+    except OSError as exc:
+        _warn_refused(path, type(exc).__name__, file_st.st_mode)
+        return True, None
+    try:
+        stream = os.fdopen(fd, "rb")
+    except OSError as exc:
+        os.close(fd)
+        _warn_refused(path, type(exc).__name__, file_st.st_mode)
+        return True, None
+    try:
+        with stream:
+            opened_st = os.fstat(stream.fileno())
+            if not stat.S_ISREG(opened_st.st_mode):
+                _warn_refused(path, "not_regular", opened_st.st_mode)
+                return True, None
+            if not _check_owner_and_mode(path, opened_st, dir_check=False):
+                return True, None
+            raw = stream.read(_MAX_KEY_BYTES + 1)
+    except OSError as exc:
+        _warn_refused(path, type(exc).__name__, file_st.st_mode)
+        return True, None
+
+    if len(raw) > _MAX_KEY_BYTES:
+        _warn_refused(path, "too_large", opened_st.st_mode)
+        return True, None
+    try:
+        key = raw.decode("utf-8").strip()
+    except UnicodeError:
+        _warn_refused(path, "invalid_utf8", opened_st.st_mode)
+        return True, None
+    if not key:
+        return True, None
+    if "\n" in key or "\r" in key:
+        _warn_refused(path, "multiline", opened_st.st_mode)
+        return True, None
+    return True, key
 
 
 def _keys_path(env):
@@ -55,16 +169,22 @@ def _load_helper(root, name):
 
 
 def _gateway_key(env):
-    """AutoOS gateway client key from the keys file; None when unresolvable."""
+    """Gateway client key from ~/.config/plangraph/omniroute-client.key, else AutoOS."""
     try:
-        keys_path = _keys_path(env)
+        client_path = _client_key_path(env)
+        if client_path is not None:
+            found, key = _read_client_key_file(client_path)
+            if found:
+                return key
+        source = os.environ if env is None else env
+        keys_path = _keys_path(source)
         if not keys_path.is_file():
             return None
         helper = _load_helper(keys_path.parent.parent, "autoos_gateway_key")
         resolve = getattr(helper, "resolve_client_key", None)
         if not callable(resolve):
             return None
-        key = resolve(dict(env), keys_path)
+        key = resolve(dict(source), keys_path)
         return key if isinstance(key, str) and key.strip() else None
     except (Exception, SystemExit):  # ANY helper failure is "no key", never a crash
         return None

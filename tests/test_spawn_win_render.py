@@ -26,8 +26,9 @@ from plangraph.spawner.runner import SpawnerRunner, spawn_service
 from fake_pid import FAKE_PID
 
 @pytest.fixture(autouse=True)
-def clean_gateway_env(monkeypatch):
-    """Ensure tests start without ambient gateway endpoints or AutoOS root."""
+def clean_gateway_env(monkeypatch, tmp_path):
+    """Ensure tests start without ambient gateway endpoints, HOME key, or AutoOS root."""
+    monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
     for var in (
         "AUTOOS_ROOT",
         "OMNIROUTE_BASE_URL",
