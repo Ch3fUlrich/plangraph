@@ -62,7 +62,11 @@ this timer reports pressure and reclaims idle rebuildable state.
 Live deployment is separate from repository validation.
 
 The separate hourly `pg-worktree-sweep.timer` invokes `pg-worktree-sweep --apply`.
-Install its service and timer, the binary, and configure `PG_SWEEP_CLAIMS_READER`; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)
+Install its service and timer, the binary, mint a mode-0600 unscoped `sweep`
+token at `~/.config/plangraph/sweep.token`, run `deploy/bootstrap.sh` to create
+`~/.config/plangraph/disk-hygiene.env` (with `PG_SWEEP_CLAIMS_READER`, `PG_URL`,
+`PG_TOKEN_FILE`) and `~/.config/plangraph/pins.json` when the token file exists,
+and inspect a dry run before enabling; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)
 for live protection authority, restore records, and remote-deletion opt-in.
 
 ## pg-repo-sync

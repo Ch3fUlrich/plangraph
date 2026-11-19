@@ -15,7 +15,8 @@ from .errors import Refused
 
 __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
            "ROUTER_VERBS", "READ_CALLS", "ROLE_CHECKED_VERBS",
-           "WORKER_VERBS", "worker_write", "JEV_VERBS", "jev_write"]
+           "WORKER_VERBS", "worker_write", "JEV_VERBS", "jev_write",
+           "SWEEP_READ_VERBS", "check_sweep"]
 
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
@@ -60,6 +61,19 @@ READ_CALLS = {
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
 RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay"})
 
+#: Read-only verbs reachable by the ``sweep`` role (claims, runs, PR links).
+SWEEP_READ_VERBS = frozenset({"whoami", "snapshot", "show"})
+
+
+def check_sweep(principal, action):
+    """Enforce the read-only ``sweep`` role at transport and store boundaries."""
+    if getattr(principal, "role", None) != "sweep":
+        return
+    if action not in SWEEP_READ_VERBS:
+        raise Refused("forbidden", "sweep role may only read claims, runs, and PR links")
+    if action != "whoami" and list(getattr(principal, "projects", None) or []) != []:
+        raise Refused("forbidden", "sweep role requires unscoped projects")
+
 
 def run_gate(principal, name):
     """A run token is refused (403) before any body parsing outside its verbs."""
@@ -70,6 +84,7 @@ def run_gate(principal, name):
         return
     from .worker_policy import check
     check(principal, name, transport=True)
+    check_sweep(principal, name)
     if getattr(principal, "token_id", None) is not None and name not in RUN_VERBS:
         raise Refused("forbidden", "a run token may not call this verb")
 

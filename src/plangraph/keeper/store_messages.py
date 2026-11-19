@@ -220,6 +220,8 @@ class MessagesMixin:
     def messages(self, principal, **filters):
         """Read ordered rows using parameterized cursor and linkage filters."""
         self._check_principal(principal)
+        from .api_routes import check_sweep
+        check_sweep(principal, "messages")
         allowed = {"trace_id", "key", "run_id", "ts_min", "ts_max", "since", "msg_id"}
         if set(filters) - allowed:
             raise Refused("validation", "unknown message filter")
