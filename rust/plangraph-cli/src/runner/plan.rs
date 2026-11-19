@@ -1,5 +1,6 @@
 //! Pure planner: observed host state -> ordered idempotent actions.
 use super::config::Config;
+use super::redact_url;
 use super::template;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -104,15 +105,6 @@ impl Action {
 }
 
 pub const FSTAB_LINE: &str = "proc /proc proc defaults,hidepid=2 0 0";
-
-/// Host and path only: userinfo and query strings can carry credentials.
-pub fn redact_url(url: &str) -> String {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    let rest = rest.split(['?', '#']).next().unwrap_or("");
-    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
-    let host = authority.rsplit('@').next().unwrap_or("");
-    format!("{host}/{path}")
-}
 
 pub fn seed_marker(cfg: &Config, requirements_sha: &str) -> String {
     let ps = &cfg.python_seed;

@@ -134,14 +134,23 @@ impl Config {
         if !host_port(&self.temporal_test_address) {
             return Err("config: temporal_test_address must be host:port".into());
         }
-        if !self.home_base.is_absolute() || !self.python_seed.tool_cache.is_absolute() {
-            return Err("config: home_base and tool_cache must be absolute".into());
+        if !valid_base_dir(&self.home_base) || !valid_base_dir(&self.python_seed.tool_cache) {
+            return Err(
+                "config: home_base and tool_cache must be absolute paths with at least two components"
+                    .into(),
+            );
         }
         if self.count == Some(0) || self.count.is_some_and(|c| c > 64) {
             return Err("config: count must be 1..=64".into());
         }
         Ok(())
     }
+}
+
+fn valid_base_dir(p: &Path) -> bool {
+    p.is_absolute()
+        && p.components().count() >= 2
+        && !p.components().any(|c| c == std::path::Component::ParentDir)
 }
 
 fn apt_name(p: &str) -> bool {
@@ -211,5 +220,23 @@ mod tests {
         let v = sample().python_seed.version;
         let bad = ok.replacen(&format!("\"{v}\""), "\"..\"", 1);
         assert!(Config::parse(&bad).is_err());
+    }
+    #[test]
+    fn rejects_root_or_single_component_home_base_and_tool_cache() {
+        let ok = include_str!("../../../../docs/operations/ci-runners.example.toml");
+        for bad_path in ["/", "/.", "/..", "/a/..", "relative/dir"] {
+            let bad_tc = ok.replacen("\"/opt/hostedtoolcache\"", &format!("\"{bad_path}\""), 1);
+            assert!(
+                Config::parse(&bad_tc).unwrap_err().contains("tool_cache"),
+                "tool_cache={bad_path} should fail"
+            );
+            let bad_hb = ok.replacen("\"/home\"", &format!("\"{bad_path}\""), 1);
+            assert!(
+                Config::parse(&bad_hb).unwrap_err().contains("home_base"),
+                "home_base={bad_path} should fail"
+            );
+        }
+        let ok_two = ok.replacen("\"/opt/hostedtoolcache\"", "\"/cache\"", 1);
+        assert!(Config::parse(&ok_two).is_ok());
     }
 }

@@ -36,26 +36,37 @@ pub fn verify(path: &Path, sha256: &str, size: Option<u64>) -> Result<(), String
     Ok(())
 }
 
+fn ureq_err(e: ureq::Error) -> String {
+    match e {
+        ureq::Error::BadUri(_) => "bad uri".into(),
+        ureq::Error::RequireHttpsOnly(u) => {
+            format!("configured for https only: {}", super::redact_url(&u))
+        }
+        other => other.to_string(),
+    }
+}
+
 pub fn fetch(url: &str, dest: &Path, sha256: &str, size: Option<u64>) -> Result<(), String> {
     let tmp = dest.with_extension("part");
+    let shown = super::redact_url(url);
     let result = (|| {
         let mut resp = ureq::get(url)
             .call()
-            .map_err(|e| format!("download {url}: {e}"))?;
+            .map_err(|e| format!("download {shown}: {}", ureq_err(e)))?;
         let mut reader = resp.body_mut().with_config().limit(u64::MAX).reader();
         let mut out = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
         let mut buf = vec![0u8; 1 << 16];
         loop {
             let n = reader
                 .read(&mut buf)
-                .map_err(|e| format!("download {url}: {e}"))?;
+                .map_err(|e| format!("download {shown}: {e}"))?;
             if n == 0 {
                 break;
             }
             out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
         }
         out.flush().map_err(|e| e.to_string())?;
-        verify(&tmp, sha256, size).map_err(|e| format!("refuse {url}: {e}"))
+        verify(&tmp, sha256, size).map_err(|e| format!("refuse {shown}: {e}"))
     })();
     match result {
         Ok(()) => std::fs::rename(&tmp, dest).map_err(|e| e.to_string()),
@@ -69,6 +80,9 @@ pub fn fetch(url: &str, dest: &Path, sha256: &str, size: Option<u64>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader};
+    use std::net::TcpListener;
+
     #[test]
     fn verify_accepts_matching_and_refuses_size_or_sha_mismatch() {
         let d = tempfile::tempdir().unwrap();
@@ -80,5 +94,58 @@ mod tests {
         assert!(verify(&f, &"0".repeat(64), None)
             .unwrap_err()
             .contains("sha256"));
+    }
+
+    #[test]
+    fn failing_fetch_redacts_userinfo_and_query_from_error() {
+        let d = tempfile::tempdir().unwrap();
+        let dest = d.path().join("pkg.tar.gz");
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        let err = fetch(
+            &format!("https://alice:pwsecret@{addr}/a/b.tgz?sig=signedval&exp=999"),
+            &dest,
+            &"0".repeat(64),
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains(&format!("{addr}/a/b.tgz")), "err={err}");
+        for secret in ["alice", "pwsecret", "sig=", "signedval", "exp=", "?"] {
+            assert!(!err.contains(secret), "leaked {secret} in {err}");
+        }
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(&stream);
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap() > 0 {
+                if line == "\r\n" || line == "\n" {
+                    break;
+                }
+                line.clear();
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc")
+                .unwrap();
+        });
+        let err = fetch(
+            &format!("http://alice:pwsecret@{addr}/a/b.tgz?sig=signedval"),
+            &dest,
+            &"0".repeat(64),
+            None,
+        )
+        .unwrap_err();
+        handle.join().unwrap();
+        assert!(
+            err.starts_with(&format!("refuse {addr}/a/b.tgz:")),
+            "err={err}"
+        );
+        for secret in ["alice", "pwsecret", "sig=", "signedval", "?"] {
+            assert!(!err.contains(secret), "leaked {secret} in {err}");
+        }
     }
 }

@@ -46,6 +46,15 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
     }
 }
 
+/// Host and path only: userinfo and query strings can carry credentials.
+pub fn redact_url(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    let rest = rest.split(['?', '#']).next().unwrap_or("");
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let host = authority.rsplit('@').next().unwrap_or("");
+    format!("{host}/{path}")
+}
+
 fn run_inner(home: &Path, args: &[String]) -> Result<i32, String> {
     let (verb, rest) = args.split_first().ok_or(USAGE)?;
     let a = parse(rest).map_err(|e| format!("{e}\n{USAGE}"))?;

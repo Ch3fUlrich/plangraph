@@ -153,12 +153,12 @@ pub fn steps_for(cfg: &Config, action: &Action) -> Vec<Step> {
                 Step::Remove(dir.clone()),
                 Step::Mkdir(dir.clone()),
                 cmd("tar", &["-xzf", &s(&cache_file(DL_RUNNER)), "-C", &s(&dir)]),
+                chown(&owner, &[&dir], true),
                 Step::WriteFile {
                     path: dir.join(".plangraph-version"),
                     content: cfg.actions_runner.version.clone(),
                     mode: 0o644,
                 },
-                chown(&owner, &[&dir], true),
             ]
         }
         Action::SeedPython { marker } => seed_steps(cfg, marker),
@@ -522,5 +522,37 @@ mod tests {
             .iter()
             .any(|s| matches!(s, Step::Cmd { program, args, .. }
             if program == "mount" && args.contains(&"remount,hidepid=2".to_string()))));
+    }
+    #[test]
+    fn unpack_runner_writes_version_marker_last_so_failed_chown_leaves_no_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = sample();
+        cfg.home_base = dir.path().to_path_buf();
+        let user = "plangraph_missing_user";
+        let steps = steps_for(&cfg, &Action::UnpackRunner { user: user.into() });
+        let chown_pos = steps
+            .iter()
+            .position(|st| matches!(st, Step::Cmd { program, .. } if program == "chown"))
+            .unwrap();
+        let marker_pos = steps
+            .iter()
+            .position(|st| {
+                matches!(st, Step::WriteFile { path, .. } if path.ends_with(".plangraph-version"))
+            })
+            .unwrap();
+        assert!(chown_pos < marker_pos);
+        assert_eq!(marker_pos + 1, steps.len());
+
+        let runner_dir = cfg.home(user).join("runner");
+        execute(&Step::Mkdir(runner_dir.clone())).unwrap();
+        let mut err = None;
+        for step in &steps[chown_pos..] {
+            if let Err(e) = execute(step) {
+                err = Some(e);
+                break;
+            }
+        }
+        assert!(err.is_some(), "chown to missing user must fail");
+        assert!(!runner_dir.join(".plangraph-version").exists());
     }
 }
