@@ -75,7 +75,7 @@ def test_invalid_endpoint_refused_before_key_read(monkeypatch, reader, endpoint)
         pytest.fail('refused endpoint read key or fetched')
 
     env = {'OMNIROUTE_BASE_URL': endpoint}
-    monkeypatch.setattr(omniroute_state, '_gateway_key', forbidden)
+    monkeypatch.setattr(omniroute_state, 'load_token', forbidden)
     monkeypatch.setattr(quota_snapshots, '_gateway_key', forbidden)
     if reader == 'state':
         state = omniroute_state.from_env(env, fetch=forbidden)
