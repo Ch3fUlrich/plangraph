@@ -1,4 +1,4 @@
-"""context_guard: a Claude Code PostToolUse hook that flags context-window cap.
+"""context_guard: a Claude Code PreToolUse/PostToolUse hook for ready lock and context-window cap.
 
 Reads hook JSON from stdin and sums input tokens plus both cache buckets in
 the last usable assistant usage record in a bounded tail; non-numeric records
@@ -26,7 +26,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -57,6 +60,217 @@ REEMIT_DELTA = 10000
 
 # Sentinel for a tail line that is not the assistant+usage record we want.
 _SKIP = object()
+
+_PY_SAFE_FLAGS = frozenset({"-B", "-E", "-I", "-O", "-OO", "-S", "-s", "-u"})
+_SHELL_PUNCT = frozenset("();<>|&")
+_READY_REASONS = ("cap", "router", "operator", "planned")
+_PREFIX_KEYS = ("hook_event_name", "session_id")
+_PREFIX_MAX_FIELDS = 256
+
+
+def _allowed_guard_paths() -> set[str]:
+    """Resolved paths accepted for the guard script in retry commands."""
+    targets = {os.path.realpath(__file__)}
+    try:
+        installed = Path.home() / ".local" / "share" / "plangraph" / "hooks" / "context_guard.py"
+        targets.add(os.path.realpath(installed))
+    except (OSError, RuntimeError, ValueError):
+        pass
+    return targets
+
+
+def _is_allowed_python(token: str) -> bool:
+    """True only for plain python/python3, /usr/bin/python3, or resolved sys.executable."""
+    if token in ("python3", "python", "/usr/bin/python3"):
+        return True
+    if not sys.executable:
+        return False
+    try:
+        return token in (sys.executable, os.path.realpath(sys.executable))
+    except (OSError, ValueError):
+        return token == sys.executable
+
+
+def _is_guard_cmd(payload: dict) -> bool:
+    """True only for a single Bash invocation of `context_guard.py ready|status`."""
+    if payload.get("tool_name") != "Bash":
+        return False
+    tool_input = payload.get("tool_input")
+    if not isinstance(tool_input, dict):
+        return False
+    command = tool_input.get("command")
+    if not isinstance(command, str) or not command.strip():
+        return False
+    if any(bad in command for bad in ("`", "$(", "${", "\n", "\r")):
+        return False
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        tokens = list(lexer)
+    except ValueError:
+        return False
+    if not tokens or any(tok and set(tok) <= _SHELL_PUNCT for tok in tokens):
+        return False
+    idx = 0
+    if _is_allowed_python(tokens[idx]):
+        idx += 1
+        while idx < len(tokens) and tokens[idx] in _PY_SAFE_FLAGS:
+            idx += 1
+    if idx >= len(tokens):
+        return False
+    script_tok = tokens[idx]
+    if not script_tok:
+        return False
+    try:
+        if os.path.isabs(script_tok):
+            resolved = os.path.realpath(script_tok)
+        else:
+            cwd = payload.get("cwd")
+            base = cwd if isinstance(cwd, str) and cwd else os.getcwd()
+            resolved = os.path.realpath(os.path.join(base, script_tok))
+    except (OSError, ValueError):
+        return False
+    if resolved not in _allowed_guard_paths():
+        return False
+    rest = tokens[idx + 1:]
+    if rest == ["status"]:
+        return True
+    if not rest or rest[0] != "ready":
+        return False
+    args = rest[1:]
+    if len(args) == 1:
+        return bool(args[0]) and not args[0].startswith("-")
+    if len(args) == 3:
+        return (bool(args[0]) and not args[0].startswith("-")
+                and args[1] == "--reason" and args[2] in _READY_REASONS)
+    return False
+
+
+def _format_ready_ts(ts) -> str:
+    """Format the ready marker timestamp as UTC ISO-8601 when numeric, else safe text."""
+    if isinstance(ts, (int, float)) and not isinstance(ts, bool) and math.isfinite(ts):
+        try:
+            return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ts))
+        except (OverflowError, OSError, ValueError):
+            pass
+    if isinstance(ts, str) and ts.strip():
+        return ts.replace("\r", " ").replace("\n", " ")
+    return "unknown"
+
+
+def _parse_prefix_fields(text: str) -> dict[str, str]:
+    """Extract top-level string fields (`hook_event_name`, `session_id`) from a JSON prefix."""
+    fields: dict[str, str] = {}
+    n = len(text)
+    pos = 0
+    while pos < n and text[pos].isspace():
+        pos += 1
+    if pos >= n or text[pos] != "{":
+        return fields
+    pos += 1
+    decoder = json.JSONDecoder()
+    for index in range(_PREFIX_MAX_FIELDS):
+        while pos < n and text[pos].isspace():
+            pos += 1
+        if pos >= n or text[pos] == "}":
+            break
+        if index > 0:
+            if text[pos] != ",":
+                break
+            pos += 1
+            while pos < n and text[pos].isspace():
+                pos += 1
+        if pos >= n or text[pos] != '"':
+            break
+        try:
+            key, pos = decoder.raw_decode(text, pos)
+            while pos < n and text[pos].isspace():
+                pos += 1
+            if pos >= n or text[pos] != ":":
+                break
+            pos += 1
+            while pos < n and text[pos].isspace():
+                pos += 1
+            val, pos = decoder.raw_decode(text, pos)
+        except (ValueError, RecursionError):
+            break
+        if key in _PREFIX_KEYS and isinstance(val, str):
+            fields[key] = val
+            if len(fields) == len(_PREFIX_KEYS):
+                break
+    return fields
+
+
+def _read_v2_ready_marker(path: Path, expected_session_id: str | None = None) -> dict | None:
+    """Return a validated v2 ready marker dict, or None when missing, corrupt, or mismatched."""
+    try:
+        marker = json.loads(read_text_capped(path))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(marker, dict) or marker.get("v") != 2:
+        return None
+    sid = marker.get("session_id")
+    if not safe_id(sid) or path.name != ("%s.ready.json" % sid):
+        return None
+    if expected_session_id is not None and sid != expected_session_id:
+        return None
+    return marker
+
+
+def _resolve_ready_marker(session_id) -> dict | None:
+    """Resolve the v2 ready marker for `session_id`, CLAUDE_CODE_SESSION_ID, or any v2 marker in state_dir."""
+    if safe_id(session_id):
+        return _read_v2_ready_marker(state_dir() / ("%s.ready.json" % session_id), session_id)
+    env_sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if safe_id(env_sid):
+        return _read_v2_ready_marker(state_dir() / ("%s.ready.json" % env_sid), env_sid)
+    try:
+        paths = sorted(state_dir().glob("*.ready.json"))
+    except OSError:
+        return None
+    for path in paths:
+        marker = _read_v2_ready_marker(path)
+        if marker is not None:
+            return marker
+    return None
+
+
+def _emit_ready_deny(marker: dict) -> int:
+    """Emit the PreToolUse deny JSON for an active v2 ready marker."""
+    handoff = marker.get("handoff")
+    handoff_str = (handoff.replace("\r", " ").replace("\n", " ")
+                   if isinstance(handoff, str) and handoff else "unknown")
+    reason = ("context_guard: ready was sent at %s (handoff %s); your successor owns the role. "
+              "End your turn now with one final line; no further tool calls."
+              % (_format_ready_ts(marker.get("ts")), handoff_str))
+    out = {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                  "permissionDecision": "deny",
+                                  "permissionDecisionReason": reason}}
+    print(json.dumps(out))
+    return 0
+
+
+def deny_on_unusable_stdin(prefix: str) -> int:
+    """Fail closed when oversized or unparsable stdin may be a PreToolUse call and a ready marker exists."""
+    fields = _parse_prefix_fields(prefix)
+    event_name = fields.get("hook_event_name")
+    if event_name is not None and event_name != "PreToolUse":
+        return 0
+    marker = _resolve_ready_marker(fields.get("session_id"))
+    if marker is None:
+        return 0
+    return _emit_ready_deny(marker)
+
+
+def _run_pre_tool_use(payload: dict) -> int:
+    """Deny tool calls once this session's v2 ready marker exists, except ready|status retries."""
+    if _is_guard_cmd(payload):
+        return 0
+    marker = _resolve_ready_marker(payload.get("session_id"))
+    if marker is None:
+        return 0
+    return _emit_ready_deny(marker)
 
 
 # A session id becomes a file name: checked by hook_common.safe_id (shared).
@@ -202,12 +416,21 @@ def emit_line(level: str, ctx: int, threshold: int) -> str:
 
 
 def run_hook() -> int:
-    """Fail-silent PostToolUse; print before persisting so failed writes re-announce."""
+    """Fail-silent PostToolUse and ready-locked PreToolUse; print before persisting so failed writes re-announce."""
     scanned = None
     try:
-        payload = json.loads(read_stdin_text())
+        try:
+            text = read_stdin_text()
+        except ValueError as exc:
+            return deny_on_unusable_stdin(getattr(exc, "prefix", ""))
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            return deny_on_unusable_stdin(text)
         if not isinstance(payload, dict):
-            return 0
+            return deny_on_unusable_stdin(text)
+        if payload.get("hook_event_name") == "PreToolUse":
+            return _run_pre_tool_use(payload)
         if isinstance(payload.get("agent_id"), str) and payload["agent_id"]:
             return 0
         transcript_path = payload.get("transcript_path")
@@ -289,7 +512,7 @@ def cmd_ready(args) -> int:
     if len(args) not in (1, 3) or (len(args) == 3 and args[1] != "--reason"):
         print("context_guard: ready needs <handoff-path>", file=sys.stderr)
         return 2
-    if reason not in ("cap", "router", "operator", "planned"):
+    if reason not in _READY_REASONS:
         print("context_guard: invalid ready reason: %s" % reason, file=sys.stderr)
         return 2
     session_id = os.environ.get("CLAUDE_CODE_SESSION_ID")
