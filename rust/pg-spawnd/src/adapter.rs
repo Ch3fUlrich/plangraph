@@ -46,9 +46,8 @@ impl Adapter<'_> {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|_| ToolError::Internal("route adapter could not start".into()))?;
+        let mut child = pg_worker_core::stall::spawn_retrying(&mut cmd)
+            .map_err(|e| ToolError::Internal(format!("route adapter could not start: {e}")))?;
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let (send, receive) = std::sync::mpsc::channel();
