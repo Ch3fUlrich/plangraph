@@ -459,7 +459,10 @@ fn mimo_cards_and_launches_carry_reasoning_cap_below_output_limit() {
         let output = card["limit"]["output"].as_u64().unwrap();
         let reasoning = card["body"]["reasoning"]["max_tokens"].as_u64().unwrap();
         assert_eq!(output, 131072, "{key}");
-        assert!(reasoning > 0 && reasoning < output, "{key}: {reasoning} vs {output}");
+        assert!(
+            reasoning > 0 && reasoning < output,
+            "{key}: {reasoning} vs {output}"
+        );
     }
     let rendered = python(
         r#"
@@ -483,9 +486,12 @@ print(env["OPENCODE_CONFIG_CONTENT"])
         LAUNCH,
         json!({"model": FLASH, "resolved": FLASH, "role": "review", "config": config()}),
     );
-    let cfg: Value =
-        serde_json::from_str(launch["calls"][0]["OPENCODE_CONFIG_CONTENT"].as_str().unwrap())
-            .unwrap();
+    let cfg: Value = serde_json::from_str(
+        launch["calls"][0]["OPENCODE_CONFIG_CONTENT"]
+            .as_str()
+            .unwrap(),
+    )
+    .unwrap();
     let card = &cfg["providers"]["mimo"]["models"]["mimo-v2.6-flash"];
     let output = card["limit"]["output"].as_u64().unwrap();
     let reasoning = card["body"]["reasoning"]["max_tokens"].as_u64().unwrap();

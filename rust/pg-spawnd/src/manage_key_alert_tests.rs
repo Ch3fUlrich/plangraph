@@ -87,5 +87,8 @@ fn resolve_key_path_precedence_and_cli_execution() {
         &mut text_out,
     )
     .unwrap();
-    assert!(text_out.is_empty(), "second check must not duplicate text alert");
+    assert!(
+        text_out.is_empty(),
+        "second check must not duplicate text alert"
+    );
 }

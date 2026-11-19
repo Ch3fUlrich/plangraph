@@ -71,8 +71,7 @@ pub(crate) fn check(state: &Path, key_path: &Path) -> Result<Value, String> {
         "key_path": key_display,
         "count": 1
     });
-    atomic_write_private(&alert_path, payload.to_string().as_bytes())
-        .map_err(|e| e.to_string())?;
+    atomic_write_private(&alert_path, payload.to_string().as_bytes()).map_err(|e| e.to_string())?;
     Ok(json!({
         "status": "alert",
         "emitted": true,
