@@ -296,6 +296,10 @@ with that tag. The witness proves the model served for tagged gateway calls;
 it does not prove independence from the child or bind a response to its answer.
 The management log credential stays in the parent. The child-writable OpenCode
 store remains review-only request-side evidence.
+The provider-state snapshot behind leg routing (`routing_support/omniroute_state.py`)
+reads `/api/providers` with the same parent-only management token from
+`gateway_witness.load_token`, never with the gateway client key; without a management
+token the snapshot is unreachable (`no_key`) instead of refusing every gateway leg.
 Run `python -m pytest -q -s tests/test_gateway_witness.py -k route_table_witness_paths`
 to list default and explicit legs without a witness path, including disabled
 legs. The check uses synthetic rows, assumes gateway-backed MiMo, and also checks
