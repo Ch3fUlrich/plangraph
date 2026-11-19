@@ -162,16 +162,18 @@ fn lookup_rules_and_missing_program() {
     assert!(adapter.0.is_none());
     assert_eq!(adapter.1, dir.join("missing").into_os_string());
     let relative = LaunchAdapter::from_lookup(&|_| Some("relative".into()));
-    for adapter in [adapter, relative] {
-        assert_eq!(
-            adapter
-                .request(&dir, &json!({}), Duration::from_secs(1))
-                .err()
-                .unwrap()
-                .into_error_data()
-                .message,
-            "launch adapter could not start"
+    for (adapter, has_os_error) in [(adapter, true), (relative, false)] {
+        let message = adapter
+            .request(&dir, &json!({}), Duration::from_secs(1))
+            .err()
+            .unwrap()
+            .into_error_data()
+            .message;
+        assert!(
+            message.starts_with("launch adapter could not start"),
+            "{message}"
         );
+        assert_eq!(message.contains("os error"), has_os_error, "{message}");
     }
 }
 
