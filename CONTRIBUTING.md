@@ -428,7 +428,11 @@ a script path resolving via `realpath` to the guard itself or
 `$HOME/.local/share/plangraph/hooks/context_guard.py`, and the exact shape
 `ready <path> [--reason <cap|router|operator|planned>]` or `status` is exempted so
 a refused `ready` can be retried; missing, foreign-session, and corrupt markers allow
-(fail open). In `ctx_guard_session.py`, `{"off": true}` (and attended leases) only
+(fail open). When a v2 ready marker exists (for the session identified by a bounded
+JSON prefix parse or `CLAUDE_CODE_SESSION_ID`, or any v2 marker in `<state_dir>` if
+unidentified), oversized or unparsable stdin payloads fail closed with the same
+PreToolUse deny output unless the prefix names a non-`PreToolUse` event; known
+non-`PreToolUse` events keep failing open. In `ctx_guard_session.py`, `{"off": true}` (and attended leases) only
 skip `PostToolUse` threshold guidance and do not disable `PreToolUse` denial. Tests
 isolate state and mock the kick.
 `tools/hooks/install_hooks.sh` only copies `*.py` files and registers nothing in

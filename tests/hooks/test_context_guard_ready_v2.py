@@ -388,3 +388,64 @@ def test_pretooluse_ctx_guard_session_denies_even_when_off(ready):
     assert out["hookEventName"] == "PreToolUse"
     assert out["permissionDecision"] == "deny"
     assert str(handoff) in out["permissionDecisionReason"]
+
+
+def _assert_denied(proc, handoff):
+    assert (proc.returncode, proc.stderr) == (0, "")
+    out = json.loads(proc.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    assert out["permissionDecision"] == "deny"
+    assert str(handoff) in out["permissionDecisionReason"]
+
+
+def test_pretooluse_oversized_payload_with_marker_is_denied(ready):
+    handoff, _, _, env, _, run = ready
+    assert run("ready", str(handoff)).returncode == 0
+    big = "x" * (9 * 1024 * 1024)
+    env_no_sid = {k: v for k, v in env.items() if k != "CLAUDE_CODE_SESSION_ID"}
+    oversized_pre = ('{"hook_event_name": "PreToolUse", "session_id": "%s", '
+                     '"tool_name": "Bash", "tool_input": {"command": "%s"}}' % (SID, big))
+    oversized_tail = ('{"tool_name": "Bash", "tool_input": {"command": "%s"}, '
+                      '"hook_event_name": "PreToolUse", "session_id": "%s"}' % (big, SID))
+    for hook in (SCRIPT, HOOKS / "ctx_guard_session.py"):
+        _assert_denied(run_script(hook, oversized_pre, env=env, cwd=handoff.parent), handoff)
+        _assert_denied(run_script(hook, oversized_tail, env=env, cwd=handoff.parent), handoff)
+        _assert_denied(run_script(hook, oversized_tail, env=env_no_sid, cwd=handoff.parent), handoff)
+        other_pre = ('{"hook_event_name": "PreToolUse", "session_id": "other-session", '
+                     '"tool_input": {"command": "%s"}}' % big)
+        proc = run_script(hook, other_pre, env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+        post_big = ('{"hook_event_name": "PostToolUse", "session_id": "%s", '
+                    '"tool_response": "%s"}' % (SID, big))
+        proc = run_script(hook, post_big, env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+
+
+def test_pretooluse_oversized_payload_without_marker_is_allowed(ready):
+    handoff, _, _, env, marker, _ = ready
+    assert not marker.exists()
+    big = "x" * (9 * 1024 * 1024)
+    oversized_pre = ('{"hook_event_name": "PreToolUse", "session_id": "%s", '
+                     '"tool_name": "Bash", "tool_input": {"command": "%s"}}' % (SID, big))
+    for hook in (SCRIPT, HOOKS / "ctx_guard_session.py"):
+        proc = run_script(hook, oversized_pre, env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+
+
+def test_pretooluse_malformed_json_with_marker_is_denied(ready):
+    handoff, _, _, env, marker, run = ready
+    big = "x" * 100
+    for hook in (SCRIPT, HOOKS / "ctx_guard_session.py"):
+        proc = run_script(hook, "{not json", env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+    assert run("ready", str(handoff)).returncode == 0
+    assert marker.is_file()
+    env_no_sid = {k: v for k, v in env.items() if k != "CLAUDE_CODE_SESSION_ID"}
+    partial_pre = '{"hook_event_name": "PreToolUse", "session_id": "%s", "tool_input": "%s' % (SID, big)
+    partial_post = '{"hook_event_name": "PostToolUse", "session_id": "%s", "tool_response": "%s' % (SID, big)
+    for hook in (SCRIPT, HOOKS / "ctx_guard_session.py"):
+        for raw in ("{not json", "[1, 2]", partial_pre):
+            _assert_denied(run_script(hook, raw, env=env, cwd=handoff.parent), handoff)
+            _assert_denied(run_script(hook, raw, env=env_no_sid, cwd=handoff.parent), handoff)
+        proc = run_script(hook, partial_post, env=env, cwd=handoff.parent)
+        assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")

@@ -64,6 +64,8 @@ _SKIP = object()
 _PY_SAFE_FLAGS = frozenset({"-B", "-E", "-I", "-O", "-OO", "-S", "-s", "-u"})
 _SHELL_PUNCT = frozenset("();<>|&")
 _READY_REASONS = ("cap", "router", "operator", "planned")
+_PREFIX_KEYS = ("hook_event_name", "session_id")
+_PREFIX_MAX_FIELDS = 256
 
 
 def _allowed_guard_paths() -> set[str]:
@@ -157,23 +159,85 @@ def _format_ready_ts(ts) -> str:
     return "unknown"
 
 
-def _run_pre_tool_use(payload: dict) -> int:
-    """Deny tool calls once this session's v2 ready marker exists, except ready|status retries."""
-    session_id = payload.get("session_id")
-    if not safe_id(session_id):
-        return 0
-    if _is_guard_cmd(payload):
-        return 0
-    marker_path = state_dir() / ("%s.ready.json" % session_id)
+def _parse_prefix_fields(text: str) -> dict[str, str]:
+    """Extract top-level string fields (`hook_event_name`, `session_id`) from a JSON prefix."""
+    fields: dict[str, str] = {}
+    n = len(text)
+    pos = 0
+    while pos < n and text[pos].isspace():
+        pos += 1
+    if pos >= n or text[pos] != "{":
+        return fields
+    pos += 1
+    decoder = json.JSONDecoder()
+    for index in range(_PREFIX_MAX_FIELDS):
+        while pos < n and text[pos].isspace():
+            pos += 1
+        if pos >= n or text[pos] == "}":
+            break
+        if index > 0:
+            if text[pos] != ",":
+                break
+            pos += 1
+            while pos < n and text[pos].isspace():
+                pos += 1
+        if pos >= n or text[pos] != '"':
+            break
+        try:
+            key, pos = decoder.raw_decode(text, pos)
+            while pos < n and text[pos].isspace():
+                pos += 1
+            if pos >= n or text[pos] != ":":
+                break
+            pos += 1
+            while pos < n and text[pos].isspace():
+                pos += 1
+            val, pos = decoder.raw_decode(text, pos)
+        except (ValueError, RecursionError):
+            break
+        if key in _PREFIX_KEYS and isinstance(val, str):
+            fields[key] = val
+            if len(fields) == len(_PREFIX_KEYS):
+                break
+    return fields
+
+
+def _read_v2_ready_marker(path: Path, expected_session_id: str | None = None) -> dict | None:
+    """Return a validated v2 ready marker dict, or None when missing, corrupt, or mismatched."""
     try:
-        raw = read_text_capped(marker_path)
-        marker = json.loads(raw)
+        marker = json.loads(read_text_capped(path))
     except (OSError, ValueError):
-        return 0
-    if not isinstance(marker, dict):
-        return 0
-    if marker.get("v") != 2 or marker.get("session_id") != session_id:
-        return 0
+        return None
+    if not isinstance(marker, dict) or marker.get("v") != 2:
+        return None
+    sid = marker.get("session_id")
+    if not safe_id(sid) or path.name != ("%s.ready.json" % sid):
+        return None
+    if expected_session_id is not None and sid != expected_session_id:
+        return None
+    return marker
+
+
+def _resolve_ready_marker(session_id) -> dict | None:
+    """Resolve the v2 ready marker for `session_id`, CLAUDE_CODE_SESSION_ID, or any v2 marker in state_dir."""
+    if safe_id(session_id):
+        return _read_v2_ready_marker(state_dir() / ("%s.ready.json" % session_id), session_id)
+    env_sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if safe_id(env_sid):
+        return _read_v2_ready_marker(state_dir() / ("%s.ready.json" % env_sid), env_sid)
+    try:
+        paths = sorted(state_dir().glob("*.ready.json"))
+    except OSError:
+        return None
+    for path in paths:
+        marker = _read_v2_ready_marker(path)
+        if marker is not None:
+            return marker
+    return None
+
+
+def _emit_ready_deny(marker: dict) -> int:
+    """Emit the PreToolUse deny JSON for an active v2 ready marker."""
     handoff = marker.get("handoff")
     handoff_str = (handoff.replace("\r", " ").replace("\n", " ")
                    if isinstance(handoff, str) and handoff else "unknown")
@@ -185,6 +249,28 @@ def _run_pre_tool_use(payload: dict) -> int:
                                   "permissionDecisionReason": reason}}
     print(json.dumps(out))
     return 0
+
+
+def deny_on_unusable_stdin(prefix: str) -> int:
+    """Fail closed when oversized or unparsable stdin may be a PreToolUse call and a ready marker exists."""
+    fields = _parse_prefix_fields(prefix)
+    event_name = fields.get("hook_event_name")
+    if event_name is not None and event_name != "PreToolUse":
+        return 0
+    marker = _resolve_ready_marker(fields.get("session_id"))
+    if marker is None:
+        return 0
+    return _emit_ready_deny(marker)
+
+
+def _run_pre_tool_use(payload: dict) -> int:
+    """Deny tool calls once this session's v2 ready marker exists, except ready|status retries."""
+    if _is_guard_cmd(payload):
+        return 0
+    marker = _resolve_ready_marker(payload.get("session_id"))
+    if marker is None:
+        return 0
+    return _emit_ready_deny(marker)
 
 
 # A session id becomes a file name: checked by hook_common.safe_id (shared).
@@ -330,12 +416,19 @@ def emit_line(level: str, ctx: int, threshold: int) -> str:
 
 
 def run_hook() -> int:
-    """Fail-silent PreToolUse/PostToolUse; print before persisting so failed writes re-announce."""
+    """Fail-silent PostToolUse and ready-locked PreToolUse; print before persisting so failed writes re-announce."""
     scanned = None
     try:
-        payload = json.loads(read_stdin_text())
+        try:
+            text = read_stdin_text()
+        except ValueError as exc:
+            return deny_on_unusable_stdin(getattr(exc, "prefix", ""))
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            return deny_on_unusable_stdin(text)
         if not isinstance(payload, dict):
-            return 0
+            return deny_on_unusable_stdin(text)
         if payload.get("hook_event_name") == "PreToolUse":
             return _run_pre_tool_use(payload)
         if isinstance(payload.get("agent_id"), str) and payload["agent_id"]:

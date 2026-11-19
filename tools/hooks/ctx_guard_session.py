@@ -249,17 +249,22 @@ def main() -> int:
     if state_home is None:
         print("ctx_guard_session: hook_common.py missing next to this hook; context guard is off", file=sys.stderr)
         return 0
+    too_large = False
     try:
         text = read_stdin_text()
-    except ValueError:  # over the cap: not a payload this hook handles
-        return 0
-    try:
-        payload = json.loads(text)
-    except Exception:
-        payload = None
-    is_pre = isinstance(payload, dict) and payload.get("hook_event_name") == "PreToolUse"
-    if not is_pre:
-        cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    except ValueError as exc:
+        too_large = True
+        text = getattr(exc, "prefix", "")
+    payload = None
+    if not too_large:
+        try:
+            payload = json.loads(text)
+        except Exception:
+            payload = None
+    is_dict = isinstance(payload, dict)
+    is_pre = is_dict and payload.get("hook_event_name") == "PreToolUse"
+    if is_dict and not is_pre:
+        cwd = payload.get("cwd")
         os.environ.update(settings_thresholds(cwd))
         doc = session_override(text)
         if doc and doc.get("off") is True:
@@ -291,6 +296,8 @@ def main() -> int:
         print("ctx_guard_session: context_guard.py missing or broken next to "
               "this hook; context guard is off", file=sys.stderr)
         return 0
+    if too_large or not is_dict:
+        return guard.deny_on_unusable_stdin(text)
     sys.stdin = io.StringIO(text)
     if is_pre:
         return guard.main([])
