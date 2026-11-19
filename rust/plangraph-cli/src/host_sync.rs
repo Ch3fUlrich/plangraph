@@ -30,7 +30,9 @@ impl Env {
         let non_empty = |key: &str| std::env::var_os(key).filter(|v| !v.is_empty());
         Self {
             path: std::env::var_os("PATH"),
-            home: non_empty("HOME").map(PathBuf::from),
+            home: non_empty("HOME")
+                .or_else(|| non_empty("USERPROFILE"))
+                .map(PathBuf::from),
             xdg_config_home: non_empty("XDG_CONFIG_HOME").map(PathBuf::from),
             pg_data_dir: non_empty("PG_DATA_DIR").map(PathBuf::from),
             host_name: non_empty("PLANGRAPH_HOST_NAME").map(|v| v.to_string_lossy().into_owned()),
@@ -45,15 +47,16 @@ pub fn parse_args(args: &[OsString]) -> Result<Options, String> {
         let flag = arg
             .to_str()
             .ok_or_else(|| "host-sync: invalid UTF-8 argument".to_string())?;
+        let slot = match flag {
+            "--data-dir" => &mut options.data_dir,
+            "--bin-dir" => &mut options.bin_dir,
+            _ => return Err(format!("host-sync: unknown argument {flag}")),
+        };
         let value = iter
             .next()
             .filter(|v| !v.is_empty())
             .ok_or_else(|| format!("host-sync: {flag} requires a path"))?;
-        match flag {
-            "--data-dir" => options.data_dir = Some(PathBuf::from(value)),
-            "--bin-dir" => options.bin_dir = Some(PathBuf::from(value)),
-            _ => return Err(format!("host-sync: unknown argument {flag}")),
-        }
+        *slot = Some(PathBuf::from(value));
     }
     Ok(options)
 }
@@ -349,12 +352,22 @@ fn normalize_components(path: &Path) -> Vec<Component<'_>> {
 }
 
 fn best_effort_canonical(path: &Path) -> Option<PathBuf> {
-    if let Ok(canon) = fs::canonicalize(path) {
-        return Some(canon);
+    let abs = std::path::absolute(path).ok()?;
+    let mut missing = Vec::new();
+    let mut cur = abs.as_path();
+    loop {
+        if let Ok(canon) = fs::canonicalize(cur) {
+            return Some(
+                missing
+                    .into_iter()
+                    .rev()
+                    .fold(canon, |acc, part| acc.join(part)),
+            );
+        }
+        let name = cur.file_name()?;
+        missing.push(name);
+        cur = cur.parent()?;
     }
-    let parent = path.parent()?;
-    let name = path.file_name()?;
-    fs::canonicalize(parent).ok().map(|p| p.join(name))
 }
 
 #[cfg(test)]
@@ -386,6 +399,8 @@ mod tests {
         );
         assert!(parse_args(&[OsString::from("--data-dir")]).is_err());
         assert!(parse_args(&[OsString::from("--bogus"), OsString::from("x")]).is_err());
+        let unknown = parse_args(&[OsString::from("--bogus")]).unwrap_err();
+        assert!(unknown.contains("unknown argument --bogus"), "{unknown}");
     }
 
     #[test]
@@ -395,6 +410,17 @@ mod tests {
         let with_slash = OsString::from(format!("{}/", target.display()));
         assert!(dir_on_path(&target, Some(&with_slash)));
         assert!(!dir_on_path(&target, Some(OsStr::new("/usr/bin"))));
+        #[cfg(unix)]
+        {
+            let real_home = root.path().join("real-home");
+            let link_home = root.path().join("link-home");
+            fs::create_dir_all(&real_home).unwrap();
+            std::os::unix::fs::symlink(&real_home, &link_home).unwrap();
+            assert!(dir_on_path(
+                &link_home.join(".local/bin"),
+                Some(real_home.join(".local/bin").as_os_str()),
+            ));
+        }
     }
 
     #[test]
@@ -430,6 +456,10 @@ mod tests {
             pg_data_dir: None,
             host_name: Some("WORKST".into()),
         };
+        assert_eq!(
+            data_dir_from_hosts_json(Some(root.path()), Some(&root.path().join("xdg")), None,),
+            Some(data.clone())
+        );
         let (code, lines) = sync(&Options::default(), &env);
         assert_eq!(code, 0, "{lines:?}");
         assert!(lines.iter().all(|l| l.starts_with("LINKED ")), "{lines:?}");
