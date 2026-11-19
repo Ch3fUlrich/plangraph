@@ -665,6 +665,12 @@ admit or reject a new worktree. Clean main is fast-forwarded when behind; a main
 checkout already at origin/main needs no mutation and may retain local edits.
 Session launch (`src/plangraph/spawner/sessions.py`), routing `bin/fleet-launch`,
 and the external package-worktree script do not call this gate in this part.
+When launching or relaunching a background session (`claude --bg`), `Sessions`
+spawns `claude` directly via Python subprocess (never through the Bash tool),
+so `tools/hooks/bash_guard.py` denies every non-resume `claude --bg` /
+`--background` invocation in the Bash tool unconditionally under rule D-158
+(only `Sessions` allocates session name counters; `--resume <uuid|hex>` without
+`-n`/`--name` stays allowed).
 
 Cancellation waits for an in-flight worktree creation thread before returning;
 new unlaunched attempts are removed, and normal Git branch deletion removes the
