@@ -137,7 +137,13 @@ def load_token(secrets=None):
     token = secrets.get(TOKEN_ENV)
     if token:
         return token
-    path = Path(secrets.get(TOKEN_FILE_ENV) or '~/.config/plangraph/omniroute-mgmt.key').expanduser()
+    raw = secrets.get(TOKEN_FILE_ENV)
+    if raw:
+        path = Path(raw).expanduser()
+    elif secrets.get('HOME'):
+        path = Path(secrets['HOME']) / '.config' / 'plangraph' / 'omniroute-mgmt.key'
+    else:
+        path = Path('~/.config/plangraph/omniroute-mgmt.key').expanduser()
     try:
         with path.open() as stream:
             info = os.fstat(stream.fileno())

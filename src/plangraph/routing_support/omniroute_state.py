@@ -19,7 +19,7 @@ from .clients import effective_gateway_base_url
 from .opencode_render import (
     _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
 )
-from .host_keys import _gateway_key
+from plangraph.spawner import gateway_witness
 
 TTL_ENV_VAR = "PLANGRAPH_OMNIROUTE_STATE_TTL_S"
 
@@ -165,7 +165,7 @@ def from_env(env=None, *, key_resolver=None, **kwargs):
     key = None
     if base:
         try:
-            key = (key_resolver or _gateway_key)(source)
+            key = (key_resolver or gateway_witness.load_token)(source)
         except (Exception, SystemExit):
             pass
     kwargs.setdefault("ttl_s", source.get(TTL_ENV_VAR, 60))
