@@ -1,6 +1,6 @@
 //! The same synthetic credential table exercised by Python.
 
-use super::{redact, redact_source};
+use super::{redact, redact_source, redact_with_allowlist};
 
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
@@ -30,6 +30,9 @@ struct Row {
     rust_accepted_by: Option<String>,
     source: Option<Text>,
     output: Option<Text>,
+    #[serde(default)]
+    allow_shas: Vec<String>,
+    allow_output: Option<Text>,
 }
 
 #[test]
@@ -78,6 +81,75 @@ fn redact_shared_parity_table() {
         })
         .collect();
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn redact_allowlist_parity_table() {
+    let rows: Vec<Row> = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/redact_parity.json"
+    )))
+    .expect("shared parity table is valid JSON");
+    let mut checked = 0;
+    for row in rows {
+        if row.allow_shas.is_empty() {
+            continue;
+        }
+        let input = row
+            .input
+            .clone()
+            .unwrap_or_else(|| row.input_parts.concat());
+        let expected = row
+            .allow_output
+            .as_ref()
+            .map(Text::joined)
+            .expect("allow_shas row requires allow_output");
+        let allow: std::collections::BTreeSet<String> = row.allow_shas.into_iter().collect();
+        assert_eq!(redact_with_allowlist(&input, &allow), expected, "{input}");
+        checked += 1;
+    }
+    assert!(checked > 0);
+}
+
+#[test]
+fn allowlist_keeps_exact_word_boundary_shas_only() {
+    let sha = "a1b2c3d4e5f60123456789abcdef0123456789ab";
+    let other = "0123456789abcdef0123456789abcdef01234567";
+    let allow = std::collections::BTreeSet::from([sha.to_string()]);
+    assert_eq!(redact(&format!("HEAD: {sha}")), "HEAD: [REDACTED]");
+    assert_eq!(
+        redact_with_allowlist(&format!("HEAD: {sha}\nVERDICT: PASS"), &allow),
+        format!("HEAD: {sha}\nVERDICT: PASS")
+    );
+    assert_eq!(
+        redact_with_allowlist(&format!("HEAD: {}", sha.to_ascii_uppercase()), &allow),
+        format!("HEAD: {}", sha.to_ascii_uppercase())
+    );
+    assert_eq!(
+        redact_with_allowlist(&format!("https://x.test/org/repo/commit/{sha}"), &allow),
+        format!("https://x.test/org/repo/commit/{sha}")
+    );
+    assert_eq!(redact_with_allowlist(other, &allow), super::REDACTED);
+    assert_eq!(
+        redact_with_allowlist(&format!("123456abcdef{sha}fedcba654321"), &allow),
+        super::REDACTED
+    );
+    assert_eq!(
+        redact_with_allowlist(&format!("foo_{sha}"), &allow),
+        super::REDACTED
+    );
+    assert_eq!(
+        redact_with_allowlist(&format!("{sha}_bar"), &allow),
+        super::REDACTED
+    );
+    assert_eq!(
+        redact_with_allowlist(&format!("API_KEY={sha}"), &allow),
+        format!("API_KEY={}", super::REDACTED)
+    );
+    assert_eq!(
+        redact_with_allowlist(&format!("sk-{sha}"), &allow),
+        super::REDACTED
+    );
 }
 
 #[test]

@@ -82,12 +82,12 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     } else {
         leg
     };
-    let frame = json!({"event":"result", "result":{"status":"SUCCESS", "response":"No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n"}});
+    let frame = json!({"event":"result", "result":{"status":"SUCCESS", "response":format!("No findings in src/lib.rs:1.\nHEAD: {head}\nVERDICT: PASS\nTEST_GAMING: no\n")}});
     let frame = if sonnet {
         format!(
             "{}\n{}",
             json!({"type":"system", "subtype":"init", "model":"claude-sonnet-5-5-high"}),
-            json!({"type":"result", "is_error":false, "result":"No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n"})
+            json!({"type":"result", "is_error":false, "result":format!("No findings in src/lib.rs:1.\nHEAD: {head}\nVERDICT: PASS\nTEST_GAMING: no\n")})
         )
     } else {
         frame.to_string()
@@ -183,14 +183,20 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     let attempts = record["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), if retry { 2 } else { 1 });
     assert_eq!(attempts.last().unwrap()["witness_kind"], "cli_reported");
-    let prompt = std::fs::read_to_string(
-        Path::new(record["seat_dir"].as_str().unwrap())
-            .parent()
-            .unwrap()
-            .join("prompt.txt"),
-    )
-    .unwrap();
-    assert!(prompt.contains("Read-only repository review of HEAD"));
+    let run_dir = Path::new(record["seat_dir"].as_str().unwrap())
+        .parent()
+        .unwrap();
+    let prompt = std::fs::read_to_string(run_dir.join("prompt.txt")).unwrap();
+    assert!(prompt.contains(&format!("Read-only repository review of HEAD {head}")));
+    let live_log = std::fs::read_to_string(run_dir.join("live.log")).unwrap();
+    let review_txt = std::fs::read_to_string(run_dir.join("seat/review.txt")).unwrap();
+    for text in [
+        record["stdout_tail"].as_str().unwrap(),
+        live_log.as_str(),
+        review_txt.as_str(),
+    ] {
+        assert!(text.contains(&format!("HEAD: {head}")), "{text}");
+    }
     assert!(!prompt.contains("<!-- PLANGRAPH INLINE DIFF BEGIN -->"));
     if sonnet {
         assert!(!prompt.contains("INLINE_REVIEW_DIFF"));

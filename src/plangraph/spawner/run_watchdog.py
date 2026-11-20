@@ -227,7 +227,7 @@ async def collect(runner, job_id, proc):
     async def reader(stream, name):
         pending, tail = '', ''
         log = LiveLog(job)
-        output_lines = OutputLines(scrub)
+        output_lines = OutputLines(scrub, allow_shas=getattr(job, 'allow_shas', ()))
         decoder = codecs.getincrementaldecoder('utf-8')('replace')
         def consume(text):
             nonlocal pending, tail, stdout_at

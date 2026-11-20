@@ -1,0 +1,1 @@
+Support optional `paths` filtering on review `diff_ref` and automatically split oversized inline review diffs into top-level directory path-group seats, failing the review if any group requests changes or a single file exceeds the leg limit.

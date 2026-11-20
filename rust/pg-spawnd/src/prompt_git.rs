@@ -32,9 +32,11 @@ pub(crate) fn read_diff(
         &diff.base_sha,
         &diff.head_sha,
         "--",
-    ])
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null());
+    ]);
+    if let Some(paths) = &diff.paths {
+        cmd.args(paths);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -45,6 +47,60 @@ pub(crate) fn read_diff(
         cap,
         Duration::from_secs(10),
     )
+}
+
+pub(crate) fn list_changed_files(
+    repo: &RepoEntry,
+    diff: &DiffRef,
+) -> Result<Vec<String>, InlineDiffError> {
+    validate(diff)?;
+    for sha in [&diff.base_sha, &diff.head_sha] {
+        workspace_resolver::ensure_commit(repo, sha, Duration::from_secs(10))
+            .map_err(|_| InlineDiffError::Git)?;
+    }
+    let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
+    cmd.args([
+        "-c",
+        "core.hooksPath=",
+        "-c",
+        "core.fsmonitor=false",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--name-only",
+        "-z",
+        &diff.base_sha,
+        &diff.head_sha,
+        "--",
+    ]);
+    if let Some(paths) = &diff.paths {
+        cmd.args(paths);
+    }
+    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let bytes = collect_diff(
+        cmd.spawn().map_err(|_| InlineDiffError::Git)?,
+        16 * 1024 * 1024,
+        Duration::from_secs(10),
+    )
+    .map_err(|e| match e {
+        InlineDiffError::TooLarge => InlineDiffError::Git,
+        other => other,
+    })?;
+    bytes
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            std::str::from_utf8(s)
+                .map(str::to_owned)
+                .map_err(|_| InlineDiffError::Git)
+        })
+        .collect()
 }
 
 pub(crate) fn collect_diff(
@@ -183,6 +239,12 @@ pub(crate) fn validate(diff: &DiffRef) -> Result<(), InlineDiffError> {
             s.len() == 40
                 && s.bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+        && diff.paths.as_ref().is_none_or(|paths| {
+            !paths.is_empty()
+                && paths
+                    .iter()
+                    .all(|p| pg_worker_core::review_split::valid_diff_path(p))
         });
     if valid {
         Ok(())

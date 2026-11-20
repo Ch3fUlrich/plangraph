@@ -181,3 +181,8 @@ def test_writer_uses_registered_served_family(monkeypatch):
                      model='provider/gpt-custom-model', family='deepseek')
     monkeypatch.setattr(legs, 'spawnable_legs', lambda: (record,))
     assert writer_key(record.id) == writer_key(record.model) == 'deepseek'
+
+
+def test_codex_is_an_openai_family_name():
+    assert model_family('codex manual tweak') == 'openai'
+    assert model_family('gpt-5-codex') == 'openai'

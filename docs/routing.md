@@ -188,3 +188,15 @@ routes consult the implementation snapshot, so a strong review-only leg cannot
 select batch. This does not change route order or start orchestration.
 The config root comes from `card.repo`, `card.cwd`, `card.diff_ref.repo`, then
 the daemon working directory, in that order.
+
+## Review `diff_ref.paths` and `plangraph review`
+
+Review cards accept an optional non-empty `diff_ref.paths` list of repo-relative
+pathspecs (validated by `planner.seats._check_diff_ref` and `pg_worker_core::review_split::valid_diff_path`
+to reject empty paths, NUL bytes, leading `-`/`/`/`\`/`:`, drive prefixes, and `..`
+components). When an inline diff exceeds the leg limit, `pg-spawnd` and
+`plangraph review` split changed files by top-level directory into path-group seats
+over the same `base` and `head`, passing each group in `diff_ref.paths` and
+failing the review if any group returns `REQUEST_CHANGES` or a single file exceeds
+the leg cap.
+

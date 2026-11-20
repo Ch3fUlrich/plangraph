@@ -1,0 +1,1 @@
+Preserve exact word-boundary 40-hex commit SHAs allowlisted from `card.diff_ref` (`head`, `base`) and prompt commit objects in run `stdout_tail` and `live.log` while keeping other 40-hex and longer hex tokens masked.

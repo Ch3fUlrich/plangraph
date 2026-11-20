@@ -2,6 +2,7 @@
 //!
 //! Scrub before tail truncation so even multi-line secrets are withheld whole.
 
+use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 /// Placeholder that replaces each redacted secret.
@@ -53,8 +54,9 @@ fn patterns() -> &'static [regex::Regex] {
             &tokens,
             // 6. JWT-like: three base64url segments, header always starts "eyJ".
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
-            // 7. Long hex — a 40-char git sha is caught too; acceptable, and shas
-            // in history are decorative while leaked tokens are not.
+            // 7. Long hex. A 40-char string that resolves as a commit of the run's
+            // repo or equals the card's diff head/base is restored afterwards by
+            // the allowlist in run/scrub.rs; any other long hex stays masked.
             r"\b[0-9a-fA-F]{32,}\b",
             // 8. Long base64/url-safe blob: raw, not compiled — see [`redact`].
             r"[A-Za-z0-9+/_-]{40,}={0,2}",
@@ -68,15 +70,20 @@ fn patterns() -> &'static [regex::Regex] {
 
 /// Replace secret-shaped text, including credential-name assignments.
 pub fn redact(text: &str) -> String {
-    redact_inner(text, true)
+    redact_inner(text, true, &BTreeSet::new())
+}
+
+/// Replace secret-shaped text while preserving exact word-boundary 40-hex shas in `allow_shas`.
+pub fn redact_with_allowlist(text: &str, allow_shas: &BTreeSet<String>) -> String {
+    redact_inner(text, true, allow_shas)
 }
 
 /// Spawner-read source only: omit credential-name assignments, not token rules.
 pub fn redact_source(text: &str) -> String {
-    redact_inner(text, false)
+    redact_inner(text, false, &BTreeSet::new())
 }
 
-fn redact_inner(text: &str, assignments: bool) -> String {
+fn redact_inner(text: &str, assignments: bool, allow_shas: &BTreeSet<String>) -> String {
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
@@ -92,18 +99,29 @@ fn redact_inner(text: &str, assignments: bool) -> String {
     let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();
-    let out = rs[7].replace_all(&out, REDACTED).into_owned();
+    let out = if allow_shas.is_empty() {
+        rs[7].replace_all(&out, REDACTED).into_owned()
+    } else {
+        rs[7]
+            .replace_all(&out, |m: &regex::Captures| {
+                let t = m.get(0).unwrap().as_str();
+                if super::redact_tokens::is_allowlisted_sha(t, allow_shas) {
+                    t.to_string()
+                } else {
+                    REDACTED.to_string()
+                }
+            })
+            .into_owned()
+    };
     // 8. Long blobs must mix digits and letters; plain words and paths survive.
     rs[8]
         .replace_all(&out, |m: &regex::Captures| {
-            let t = m.get(0).unwrap().as_str();
-            let has_digit = t.chars().any(|c| c.is_ascii_digit());
-            let has_alpha = t.chars().any(|c| c.is_ascii_alphabetic());
-            if has_digit && has_alpha {
-                REDACTED.to_string()
-            } else {
-                t.to_string()
-            }
+            super::redact_tokens::redact_blob(
+                m.get(0).unwrap().as_str(),
+                &rs[8],
+                &rs[7],
+                allow_shas,
+            )
         })
         .into_owned()
 }
