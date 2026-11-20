@@ -1,0 +1,1 @@
+- pg-spawnd queues a durable, idempotent replan job when the round rule refuses with `no_progress` or `round_cap`: plan slices of about 1500 changed lines with all open findings verbatim, define them, close the PR unmerged, send one routing line (the engine is tested; the gh, keeper and routing command bindings follow).

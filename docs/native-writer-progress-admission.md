@@ -57,13 +57,20 @@ verdict has exactly 1–2 confirmed MED, every one has `clear_fix: true`, and
 there are no confirmed HIGH. No further writer is admitted after that round.
 Refusals persist a refused run with the reason and item, without consuming a round.
 
-Automatic replan is deferred to a follow-up: consume a durable stop event,
-select the strongest available planning leg, read the PR diff, item and every
-open finding, close the PR unmerged, and use keeper define to create slices of
-at most 800 changed lines excluding Cargo.lock and generated files. Preserve
-findings verbatim and report one routing line after all effects succeed;
-retry safely without duplicate jobs, PR closes, slice definitions or reports.
-Until then, the orchestrator performs that stop procedure from R-batch-04.
+A refusal with `no_progress` or `round_cap` that carries `card.pr` queues one durable replan job
+(`rust/pg-spawnd/src/round_replan.rs`, one file per item and PR under `replans/` in the spawner
+state; a repeated refusal finds the file and queues nothing; the refused run records
+`replan: queued`). The job runs four saved steps: the strongest available planning leg of
+the route groups the PR's changed files into slices of about 1500 changed lines (a target,
+rule 3.35; `Cargo.lock`, other lock files and generated files do not count; a plan that
+drops or repeats a file is refused); the slice items `<item>-S<n>` are defined through keeper
+define, each with every open finding verbatim; the PR is closed unmerged; one routing line
+`REPLAN <item> <reason> | PR <pr> closed unmerged | slices <keys>` is sent. Each step is
+saved before the next and skipped when saved, so a retry never repeats a definition, a close
+or the report; the report is marked before the send and un-marked only when the send failed,
+so it is sent at most once. The engine takes its legs, PR, keeper and routing through the
+`Ports` trait; the command bindings for gh, keeper define and routing are still to be wired,
+and until they are the orchestrator runs the stop procedure from R-batch-04 by hand.
 
 A spawner-owned `round_void: true` excludes failed rounds that never launched
 (no PID), or whose bounded Git fingerprint proves HEAD, tracked diff and

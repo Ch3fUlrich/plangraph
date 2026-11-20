@@ -1,0 +1,313 @@
+use super::*;
+use std::cell::RefCell;
+
+fn leg(name: &str, intelligence: u32, planning: bool, available: bool) -> Leg {
+    Leg {
+        name: name.into(),
+        intelligence,
+        planning,
+        available,
+    }
+}
+fn change(path: &str, lines: u64) -> FileChange {
+    FileChange {
+        path: path.into(),
+        lines,
+    }
+}
+
+#[derive(Default)]
+struct Fixture {
+    calls: RefCell<Vec<String>>,
+    fail_define_at: RefCell<Option<String>>,
+    fail_send: RefCell<bool>,
+}
+impl Fixture {
+    fn count(&self, prefix: &str) -> usize {
+        self.calls
+            .borrow()
+            .iter()
+            .filter(|c| c.starts_with(prefix))
+            .count()
+    }
+}
+impl Ports for Fixture {
+    fn legs(&self) -> Result<Vec<Leg>, ToolError> {
+        Ok(vec![
+            leg("weak", 30, true, true),
+            leg("strong-down", 90, true, false),
+            leg("strong", 70, true, true),
+            leg("not-planning", 99, false, true),
+        ])
+    }
+    fn pr_files(&self, _pr: &str) -> Result<Vec<FileChange>, ToolError> {
+        Ok(vec![
+            change("a/one.rs", 900),
+            change("a/two.rs", 800),
+            change("b/three.rs", 100),
+            change("Cargo.lock", 5000),
+            change("x/types.generated.rs", 4000),
+        ])
+    }
+    fn item_text(&self, _item: &str) -> Result<String, ToolError> {
+        Ok("Why: w\nHow: h".into())
+    }
+    fn open_findings(&self, _item: &str) -> Result<Vec<String>, ToolError> {
+        Ok(vec![
+            "HIGH a/one.rs:3 keep\nverbatim".into(),
+            "MED b/three.rs: two".into(),
+        ])
+    }
+    fn plan(&self, leg: &Leg, input: &PlanInput) -> Result<Vec<Vec<String>>, ToolError> {
+        self.calls.borrow_mut().push(format!(
+            "plan {} {} files={} findings={} target={} text={}",
+            leg.name,
+            input.item,
+            input.files.len(),
+            input.findings.len(),
+            input.target_lines,
+            input.item_text.len()
+        ));
+        Ok(input.proposal.to_vec())
+    }
+    fn define_slice(&self, slice: &Slice) -> Result<(), ToolError> {
+        if self.fail_define_at.borrow().as_deref() == Some(slice.key.as_str()) {
+            return Err(parameter("keeper_down: define refused"));
+        }
+        self.calls
+            .borrow_mut()
+            .push(format!("define {}", slice.key));
+        Ok(())
+    }
+    fn close_pr_unmerged(&self, pr: &str) -> Result<(), ToolError> {
+        self.calls.borrow_mut().push(format!("close {pr}"));
+        Ok(())
+    }
+    fn send_routing(&self, line: &str) -> Result<(), ToolError> {
+        if *self.fail_send.borrow() {
+            return Err(parameter("routing_down: send refused"));
+        }
+        self.calls.borrow_mut().push(format!("route {line}"));
+        Ok(())
+    }
+}
+
+/// A refusal of the real round admission after three rounds without a new best count.
+fn refused_run(state: &Path) -> Value {
+    let args = history(state, &[5, 5, 5]);
+    let error = match crate::round_progress::admit(state, &args) {
+        Ok(_) => panic!("expected the round rule to refuse"),
+        Err(e) => e,
+    };
+    crate::round_progress::record_refusal(state, "fixture", &args, error)
+        .ok()
+        .unwrap()
+}
+fn history(dir: &Path, counts: &[u64]) -> crate::placement::Args {
+    for (index, count) in counts.iter().enumerate() {
+        let id = format!("run-r{}", index + 1);
+        let source = dir.join(format!("verdict-{}.json", index + 1));
+        let findings: Vec<_> = (0..*count)
+            .map(|_| json!({"severity":"HIGH", "confirmed":true, "clear_fix":true, "text":"t"}))
+            .collect();
+        std::fs::write(
+            &source,
+            json!({"writer_run_id":id, "item_key":"p:I", "pr":"https://forge/p/1",
+            "verdict":"REQUEST_CHANGES", "findings":findings})
+            .to_string(),
+        )
+        .unwrap();
+        crate::runs::create(
+            dir,
+            &id,
+            "fixture",
+            json!({"role":"implement", "item_key":"p:I", "round_pr":"https://forge/p/1",
+            "writer_round":index+1, "round_verdict_file":source}),
+            pg_worker_core::run::record::Status::Completed,
+        )
+        .ok()
+        .unwrap();
+    }
+    json!({"card":{"item_key":"p:I", "pr":"https://forge/p/1",
+        "round_verdict_file":dir.join("next.json")}})
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+#[test]
+fn strongest_available_planning_leg_wins_and_none_is_refused() {
+    let legs = Fixture::default().legs().ok().unwrap();
+    assert_eq!(strongest_leg(&legs).unwrap().name, "strong");
+    assert!(strongest_leg(&[leg("a", 5, false, true), leg("b", 5, true, false)]).is_none());
+    // A tie goes to the lower name, so a replay picks the same leg.
+    let tie = [leg("zed", 50, true, true), leg("amy", 50, true, true)];
+    assert_eq!(strongest_leg(&tie).unwrap().name, "amy");
+}
+
+#[test]
+fn slices_target_the_line_budget_and_skip_lockfiles_and_generated_files() {
+    let files = counted(&Fixture::default().pr_files("1").ok().unwrap());
+    let paths: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["a/one.rs", "a/two.rs", "b/three.rs"]);
+    let groups = group_files(&files, SLICE_TARGET_LINES);
+    assert_eq!(
+        groups,
+        vec![vec!["a/one.rs"], vec!["a/two.rs", "b/three.rs"]]
+    );
+    let one = group_files(&[change("big.rs", 4000)], SLICE_TARGET_LINES);
+    assert_eq!(one, vec![vec!["big.rs"]]);
+}
+
+#[test]
+fn refusal_enqueues_one_job_and_a_replayed_trigger_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = refused_run(dir.path());
+    assert_eq!(first["reason"], "no_progress");
+    assert_eq!(first["replan"], "queued");
+    let again = refused_run(dir.path());
+    assert!(again.get("replan").is_none());
+    let jobs: Vec<_> = std::fs::read_dir(job_dir(dir.path())).unwrap().collect();
+    assert_eq!(jobs.len(), 1);
+    assert!(
+        !enqueue(dir.path(), "p:I", "https://forge/p/1", "no_progress")
+            .ok()
+            .unwrap()
+    );
+    assert!(
+        !enqueue(dir.path(), "p:I", "https://forge/p/1", "round_accepted")
+            .ok()
+            .unwrap()
+    );
+}
+
+#[test]
+fn job_closes_the_pr_once_defines_slices_with_findings_and_reports_once() {
+    let dir = tempfile::tempdir().unwrap();
+    refused_run(dir.path());
+    let ports = Fixture::default();
+    let done = run_pending(dir.path(), &ports);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].1, "done");
+    assert_eq!(
+        ports.count("plan strong p:I files=3 findings=2 target=1500"),
+        1
+    );
+    assert_eq!(ports.count("close https://forge/p/1"), 1);
+    assert_eq!(ports.count("define p:I-S"), 2);
+    assert_eq!(ports.count("route"), 1);
+    let routed = ports
+        .calls
+        .borrow()
+        .iter()
+        .find(|c| c.starts_with("route"))
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        routed,
+        "route REPLAN p:I no_progress | PR https://forge/p/1 closed unmerged | slices p:I-S1 p:I-S2"
+    );
+    let job = load(
+        &std::fs::read_dir(job_dir(dir.path()))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|x| x == "json"))
+            .unwrap(),
+    )
+    .ok()
+    .unwrap();
+    for slice in job["plan"]["slices"].as_array().unwrap() {
+        assert_eq!(slice["findings"][0], "HIGH a/one.rs:3 keep\nverbatim");
+        assert_eq!(slice["findings"][1], "MED b/three.rs: two");
+    }
+    // A replay of the whole run changes nothing.
+    let before = ports.calls.borrow().len();
+    refused_run(dir.path());
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.calls.borrow().len(), before);
+}
+
+#[test]
+fn a_failed_step_is_retried_without_repeating_the_finished_ones() {
+    let dir = tempfile::tempdir().unwrap();
+    refused_run(dir.path());
+    let ports = Fixture::default();
+    *ports.fail_define_at.borrow_mut() = Some("p:I-S2".into());
+    let first = run_pending(dir.path(), &ports);
+    assert!(first[0].1.contains("keeper_down"));
+    assert_eq!(
+        (
+            ports.count("define"),
+            ports.count("close"),
+            ports.count("route")
+        ),
+        (1, 0, 0)
+    );
+    *ports.fail_define_at.borrow_mut() = None;
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.count("define p:I-S1"), 1);
+    assert_eq!(ports.count("define p:I-S2"), 1);
+    assert_eq!(
+        (
+            ports.count("close"),
+            ports.count("route"),
+            ports.count("plan")
+        ),
+        (1, 1, 1)
+    );
+}
+
+#[test]
+fn a_failed_routing_send_is_retried_and_lands_once() {
+    let dir = tempfile::tempdir().unwrap();
+    refused_run(dir.path());
+    let ports = Fixture::default();
+    *ports.fail_send.borrow_mut() = true;
+    assert!(run_pending(dir.path(), &ports)[0]
+        .1
+        .contains("routing_down"));
+    assert_eq!((ports.count("close"), ports.count("route")), (1, 0));
+    *ports.fail_send.borrow_mut() = false;
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!((ports.count("close"), ports.count("route")), (1, 1));
+}
+
+#[test]
+fn a_plan_that_drops_a_file_is_refused_and_nothing_is_closed() {
+    struct Dropping(Fixture);
+    impl Ports for Dropping {
+        fn legs(&self) -> Result<Vec<Leg>, ToolError> {
+            self.0.legs()
+        }
+        fn pr_files(&self, pr: &str) -> Result<Vec<FileChange>, ToolError> {
+            self.0.pr_files(pr)
+        }
+        fn item_text(&self, i: &str) -> Result<String, ToolError> {
+            self.0.item_text(i)
+        }
+        fn open_findings(&self, i: &str) -> Result<Vec<String>, ToolError> {
+            self.0.open_findings(i)
+        }
+        fn plan(&self, _l: &Leg, _i: &PlanInput) -> Result<Vec<Vec<String>>, ToolError> {
+            Ok(vec![vec!["a/one.rs".into()]])
+        }
+        fn define_slice(&self, s: &Slice) -> Result<(), ToolError> {
+            self.0.define_slice(s)
+        }
+        fn close_pr_unmerged(&self, p: &str) -> Result<(), ToolError> {
+            self.0.close_pr_unmerged(p)
+        }
+        fn send_routing(&self, l: &str) -> Result<(), ToolError> {
+            self.0.send_routing(l)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    refused_run(dir.path());
+    let ports = Dropping(Fixture::default());
+    assert!(run_pending(dir.path(), &ports)[0]
+        .1
+        .contains("replan_plan_invalid"));
+    assert!(ports.0.calls.borrow().is_empty());
+}

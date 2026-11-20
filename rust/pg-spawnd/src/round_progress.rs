@@ -260,6 +260,14 @@ pub(crate) fn record_refusal(
     let mut base = json!({"role":"implement", "reason":reason,
         "refusal":"SpawnRefused", "error":error.message, "exit_code":2});
     crate::records::annotate_item(&mut base, &args["card"], &mut vec![]);
+    // A stop of the round rule starts the durable replan of the PR (round_replan).
+    if let (Some(item), Some(pr)) = (base["item_key"].as_str(), args["card"]["pr"].as_str()) {
+        match crate::round_replan::enqueue(state, item, pr, reason) {
+            Ok(true) => base["replan"] = json!("queued"),
+            Ok(false) => {}
+            Err(e) => base["replan_error"] = json!(e.into_error_data().message),
+        }
+    }
     crate::runs::create(
         state,
         &pg_worker_core::run::record::new_run_id(),
