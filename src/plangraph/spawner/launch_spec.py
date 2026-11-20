@@ -96,7 +96,8 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
-    from .target import admit_leg, codex_leg_effort, quota_paused
+    from plangraph.planner.route_policy import codex_leg_effort
+    from .target import admit_leg, quota_paused
     if quota_paused(request['state'], request['role'], leg):
         raise LaunchRefused('quota_pause', 'quota pause')
     from plangraph.routing_errors import SpawnRefused
@@ -110,16 +111,17 @@ def build(request: dict) -> dict:
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     service = SpawnService(state=request['state'])
+    reader = getattr(service, 'leg_reader', None)
     if leg.harness == 'agy':
         from plangraph.routing_support.liveness import require_available
         try:
-            require_available(leg, service.leg_reader, request['card'])
+            require_available(leg, reader, request['card'])
         except SpawnRefused as exc:
             raise LaunchRefused('leg_unavailable', str(exc)) from None
     from plangraph.routing_support.quota_snapshots import pool_of, skip_reason
-    if service.leg_reader is not None and pool_of(leg.model):
+    if reader is not None and pool_of(leg.model):
         card = request['card']
-        status = service.leg_reader.leg_status(leg.model, account=card.get('account'), combo=card.get('combo'))
+        status = reader.leg_status(leg.model, account=card.get('account'), combo=card.get('combo'))
         if reason := skip_reason(status):
             raise LaunchRefused('quota_snapshot', reason)
     headers = None

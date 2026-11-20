@@ -36,6 +36,9 @@ def test_json_effort_reaches_implement_route_and_saved_record(tmp_path, monkeypa
     leg = load_row(tmp_path, sol_row(id=model.split("/", 1)[1], model=model, effort=effort))
     assert leg.effort == effort
     card = {"estimate_tokens": 1000}
+    if effort in ("high", "xhigh", "max"):
+        card.update(effort=effort, effort_decision="D-6397")
+    effort = effort or "medium"
     reader = lambda *a, **kw: {"state": "available", "evidence": None}
     plan = plan_spawn(card, role="implement", legs=(leg,), policy=RoutePolicy(),
                       leg_reader=reader, catalog_rows=())

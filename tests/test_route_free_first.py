@@ -472,7 +472,7 @@ def test_d6310_route_orders_low_risk_and_families():
     imp = plan_spawn({'estimate_tokens': 40000}, role='implement')
     assert [(l.id, l.effort) for l in imp.legs[:6]] == [
         ('cx-gpt-6.2-sol-medium', 'medium'),
-        ('cx-gpt-6.2-astra', None),
+        ('cx-gpt-6.2-astra', 'medium'),
         ('agy-gemini-4-hydrogen-high', 'high'),
         ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
@@ -504,7 +504,7 @@ def test_d6310_route_orders_low_risk_and_families():
         ('opencode-go-glm-5.3-flash', None),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
-        ('cx-gpt-6-luna', None),
+        ('cx-gpt-6-luna', 'medium'),
         ('agy-gpt-oss-120b', None),
     ]
 
