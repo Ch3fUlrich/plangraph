@@ -52,6 +52,7 @@ positions after registered role filtering; it never grants roles or capabilities
 The implement table lists Sol xhigh, Hydrogen high and non-Claude-Code Sonnet high.
 Hydrogen high is enabled by D-5903; the real registry returns Sol xhigh, Hydrogen high
 and Sonnet high (subject to upstream eligibility).
+The active review legs the route can offer come from `planner.legs.routed_review_legs` (also used by the scheduled review probe).
 Review excludes writer families, requires diff <100k for Haiku, and needs opposing
 eligible cheaper verdicts for Ember. Spec amendment: MiMo and both DeepSeek review
 legs retain null registered effort, as does Haiku; requested medium/xhigh efforts

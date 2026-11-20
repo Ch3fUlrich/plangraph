@@ -12,8 +12,16 @@
       "env": ["AUTOOS_OMNIROUTE_KEY"],
       "settings": {"baseURL": "http://127.0.0.1:8080/v1"},
       "models": {
-        "mimo-v2.6-flash": {"modelID": "mimo/mimo-v2.6-flash"},
-        "mimo-v2.6-pro": {"modelID": "mimo/mimo-v2.6-pro"}
+        "mimo-v2.6-flash": {
+          "modelID": "mimo/mimo-v2.6-flash",
+          "limit": {"context": 1000000, "output": 131072},
+          "body": {"reasoning": {"max_tokens": 65536}}
+        },
+        "mimo-v2.6-pro": {
+          "modelID": "mimo/mimo-v2.6-pro",
+          "limit": {"context": 1000000, "output": 131072},
+          "body": {"reasoning": {"max_tokens": 65536}}
+        }
       }
     },
     "omniroute": {

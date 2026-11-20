@@ -105,6 +105,7 @@ def _mimo_template() -> dict[str, Any]:
                 "modelID": mid,
                 "name": f"Xiaomi MiMo v2.6 {'Pro' if 'pro' in mid else 'Flash'}",
                 "limit": {"context": 1000000, "output": 65536},
+                "body": {"reasoning": {"max_tokens": 32768}},
             }
             for mid in ACCEPTED_MIMO_IDS
         },

@@ -386,7 +386,7 @@ class SpawnerRunner:
                 from .opencode_answer import cap_reasoning
                 from plangraph.routing_errors import SpawnRefused
                 try:
-                    if not cap_reasoning(child_env, model_or_combo, refuse=True, thinking_off=role == 'review' and reasoning_cap):
+                    if not cap_reasoning(child_env, model_or_combo, refuse=True, thinking_off=role == 'review' and reasoning_cap, reasoning_cap_tokens=is_mimo_id(model_or_combo)):
                         render_reason = 'reasoning_output_limit: reasoning_already_disabled'
                 except SpawnRefused as exc:
                     render_reason = str(exc)

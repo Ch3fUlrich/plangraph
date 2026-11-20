@@ -49,7 +49,7 @@ def record_steps(job, stdout, stderr, env):
                                cap_available=cap_reasoning(dict(env), job.model_or_combo, thinking_off=True)))
 
 
-def cap_reasoning(env, model, *, refuse=False, thinking_off=False):
+def cap_reasoning(env, model, *, refuse=False, thinking_off=False, reasoning_cap_tokens=None):
     """Validate an existing MiMo entry, then cap this run; optionally retain the seat retry control.
 
     Boolean probes never mutate on refusal. Launches request named SpawnRefused
@@ -89,6 +89,20 @@ def cap_reasoning(env, model, *, refuse=False, thinking_off=False):
             raise SpawnRefused('reasoning_output_limit: invalid_catalog_output')
         if thinking_off and entry.get('body', {}).get('thinking') == {'type': 'disabled'}:
             return False
+        cap = (maximum // 2 if reasoning_cap_tokens is True else
+               min(reasoning_cap_tokens, maximum - 1) if type(reasoning_cap_tokens) is int and reasoning_cap_tokens > 0 and maximum > 1 else
+               None)
+        if cap is not None and not thinking_off and entry.get('body', {}).get('thinking') != {'type': 'disabled'}:
+            body = entry.setdefault('body', {})
+            reasoning = body.get('reasoning')
+            if reasoning is None:
+                body['reasoning'] = {'max_tokens': cap}
+            elif not isinstance(reasoning, dict):
+                raise SpawnRefused('reasoning_output_limit: malformed_reasoning')
+            else:
+                current = reasoning.get('max_tokens')
+                if type(current) is not int or current <= 0 or current >= maximum:
+                    reasoning['max_tokens'] = cap
         entry.setdefault('limit', {})['output'] = maximum
         if thinking_off:
             entry.setdefault('body', {})['thinking'] = {'type': 'disabled'}
