@@ -49,7 +49,7 @@ fn rust_directory_link_does_not_delete_external_target() {
 // Real concurrent writer processes, driven through the production Python guard.
 // The subprocess bridge is necessary until the spawner's Python file is ported.
 #[test]
-fn parallel_writers_are_stopped_at_shared_cap_and_idle_cache_is_reclaimed() {
+fn parallel_writers_are_stopped_at_emergency_floor_and_idle_cache_is_reclaimed() {
     let root = tempfile::tempdir().unwrap();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = std::process::Command::new("python3")
@@ -102,7 +102,10 @@ async def main():
         runner._cargo_leases[key] = h.cargo_lease()
         tasks.append(asyncio.create_task(h.collect_with_disk_guard(runner, key, proc)))
     try:
+        real_disk_free = h.disk_free_gb
+        h.disk_free_gb = lambda path: 1.99
         await asyncio.wait_for(asyncio.gather(*tasks), 15)
+        h.disk_free_gb = real_disk_free
         await asyncio.gather(*(proc.wait() for proc in processes))
         assert not runner._cargo_leases, runner._cargo_leases
         assert not any(j.survivors for j in runner.jobs.values())
@@ -148,7 +151,7 @@ asyncio.run(main())
         serde_json::json!(["failed", "failed", "failed"])
     );
     for reason in result["reasons"].as_array().unwrap() {
-        assert!(reason.as_str().unwrap().starts_with("cargo_target_cap:"));
+        assert!(reason.as_str().unwrap().starts_with("disk_low:"));
     }
     assert!(result["busy"]
         .as_str()
@@ -190,7 +193,7 @@ h.cargo_target_size_gb = lambda path: 0
 boundary = h.running_disk_refusal('.')
 def unreadable(path):
     raise PermissionError()
-h.cargo_target_size_gb = unreadable
+h.disk_free_gb = unreadable
 error = h.running_disk_refusal('.')
 print(json.dumps([low, boundary, error]))
 "#,
@@ -255,7 +258,7 @@ async def case(cancel):
         verified.append(True)
     run_watchdog.collect = collect
     r.reap = reap
-    h.running_disk_refusal = lambda cwd: 'cargo_target_cap: test'
+    h.running_disk_refusal = lambda cwd: 'disk_low: test'
     runner = r.SpawnerRunner()
     job = r.JobInfo('j', 'running', 'task', 'test', cwd='.')
     runner.jobs['j'] = job
@@ -382,4 +385,54 @@ print(json.dumps([exact, zero]))
     for reason in result.as_array().unwrap() {
         assert!(reason.as_str().unwrap().starts_with("cargo_target_cap:"));
     }
+}
+
+#[test]
+fn runtime_guard_leaves_over_cap_builds_running_when_disk_is_healthy() {
+    let result = disk_bridge(
+        r#"
+import json
+from plangraph.spawner import host_ready as h
+h.cargo_target_size_gb = lambda target: 100
+h.disk_free_gb = lambda path: 41
+print(json.dumps(h.running_disk_refusal('.')))
+"#,
+    );
+    assert!(result.is_null(), "{result}");
+}
+
+#[test]
+fn cap_cleanup_ignores_dead_records_and_ps_marks_dead_running_record_stale() {
+    let result = disk_bridge(
+        r#"
+import json, os, subprocess, sys
+from pathlib import Path
+from plangraph.spawner import host_ready as h
+from plangraph.spawner.service import SpawnService
+from types import SimpleNamespace
+
+root = Path(sys.argv[1])
+dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+dead.wait()
+records = [dict(status=status, pid=dead.pid, run_id=f'run-{index}') for index, status in enumerate(('timed_out', 'stalled', 'running'))]
+service = SpawnService(state=root / 'state')
+for record in records:
+    service._save(record)
+target = h.shared_cargo_target()
+target.mkdir()
+(target / 'artifact').write_bytes(b'x' * 4096)
+os.environ['PLANGRAPH_CARGO_TARGET_CAP_GB'] = '0.000001'
+h.disk_free_gb = lambda path: 41
+print(json.dumps(dict(runs=service.ps()['runs'], refusal=h.local_disk_refusal(root / 'checkout', service), reclaimed=not target.exists())))
+"#,
+    );
+    assert_eq!(result["reclaimed"], true);
+    assert!(result["refusal"].is_null(), "{result}");
+    let running = result["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["status"] == "running")
+        .unwrap();
+    assert_eq!(running["stale"], true);
 }

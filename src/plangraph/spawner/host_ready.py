@@ -1,5 +1,6 @@
 """Durable, bounded host readiness: python -m plangraph.spawner.host_ready."""
 import argparse
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
@@ -106,12 +107,14 @@ def _clean_single_cache(target, service, cap=None):
         return False
     if cap is not None and cargo_target_size_gb(target) < cap:
         return False
-    if any(cargo_run_busy(r) for r in service.ps()['runs']):
-        return False
     try:
         wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
         with _cargo_lease_for(target, exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
+            if any(cargo_run_busy(r) for r in service.ps()['runs']):
+                return False
             if target.exists():
+                if cap is not None and cargo_target_size_gb(target) < cap:
+                    return True  # A competing cleanup already made room.
                 shutil.rmtree(target)
                 return True
     except OSError:
@@ -210,6 +213,30 @@ def cargo_lease(exclusive=False, wait=0.0):
     return _cargo_lease_for(shared_cargo_target(), exclusive=exclusive, wait=wait)
 
 
+@contextmanager
+def capped_cargo_lease(worktree):
+    """Trim an over-cap idle target before leasing it for a standalone build."""
+    from types import SimpleNamespace
+    target = shared_cargo_target()
+    if not _safe_cache_dir(target, worktree):
+        raise ValueError('cargo_target_cap: unsafe cache directory')
+    floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
+    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+    if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
+        raise ValueError('invalid disk limits')
+    service = SimpleNamespace(ps=lambda: {'runs': []})
+    if cap > 0:
+        _clean_single_cache(target, service, cap=cap)
+    with cargo_lease():
+        free = min(disk_free_gb(path) for path in (target, worktree))
+        if free < floor:
+            raise ValueError(f'disk_low: free {free:.2f} GB, floor {floor:g} GB')
+        size = cargo_target_size_gb(target)
+        if size >= cap:
+            raise ValueError(f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB')
+        yield
+
+
 def cargo_run_busy(record):
     """A run keeps the shared cargo target busy only while one of its processes can still build.
 
@@ -261,8 +288,6 @@ def local_disk_refusal(worktree, service):
             raise ValueError('unsafe cache directory')
         size = cargo_target_size_gb(target)
         if size >= cap:
-            if any(cargo_run_busy(r) for r in service.ps()['runs']):
-                return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy'
             if not _clean_single_cache(target, service, cap=cap):
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
         # Hold legacy plan-order shared target under the same cap.
@@ -304,8 +329,8 @@ def local_disk_refusal(worktree, service):
 async def collect_with_disk_guard(runner, job_id, proc):
     """Sample live disk independently of output and the progress watchdog cadence.
 
-    Never delete a building cache. Over-cap runs are reaped; admission can reclaim
-    the cache only after every process lease has been released.
+    Emergency disk pressure can stop work. The cache cap is an admission limit,
+    not a reason to interrupt work that already holds a lease.
     """
     import asyncio
     from .run_watchdog import collect
@@ -353,7 +378,7 @@ async def collect_with_disk_guard(runner, job_id, proc):
 
 
 def running_disk_refusal(worktree):
-    """Rule 7.1: stop below 2 GiB; cap the shared cache throughout a run."""
+    """Rule 7.1: stop below 2 GiB, irrespective of cache size."""
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
@@ -364,12 +389,6 @@ def running_disk_refusal(worktree):
         free = min(disk_free_gb(path) for path in paths)
         if free < 2:
             return f'disk_low: free {free:.2f} GB, stop 2 GB'
-        cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
-        if not math.isfinite(cap) or cap < 0:
-            raise ValueError('invalid cache cap')
-        size = cargo_target_size_gb(target)
-        if size >= cap:
-            return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB'
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: runtime measurement or configuration unavailable'
     return None
