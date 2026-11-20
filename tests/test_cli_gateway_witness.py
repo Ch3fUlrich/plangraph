@@ -317,7 +317,7 @@ def test_xdg_config_does_not_require_home(isolated_config, monkeypatch):
     assert clients.effective_gateway_base_url() == endpoint
 
 
-def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path, monkeypatch):
+def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path, monkeypatch, admission_memory):
     """CLI review run for mimo-v2.6-pro overrides direct root options/env and records served_family=mimo."""
     from http.server import BaseHTTPRequestHandler, HTTPServer
     import os
@@ -327,6 +327,7 @@ def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path,
     from pathlib import Path
     from plangraph.spawner import cli as spawner_cli
 
+    admission_memory()
     origin = tmp_path / 'origin.git'
     subprocess.run(['git', 'init', '--bare', '-q', str(origin)], check=True)
     repo = tmp_path / 'repo'

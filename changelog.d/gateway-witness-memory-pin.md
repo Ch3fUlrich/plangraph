@@ -1,0 +1,1 @@
+Spawner tests pin the admission memory reading through the `admission_memory` fixture: the gateway-witness test no longer reads the host's MemAvailable, and a guard fails any spawner test that reaches the real reader.

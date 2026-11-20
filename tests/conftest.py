@@ -278,6 +278,7 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(state / 'config'))
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    monkeypatch.setenv('ROUTING_STATE_DIR', str(state / 'routing'))  # the host session counter, never the operator's
     monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(state / 'absent-catalog.db'))
     from plangraph.routing_support import catalog_db
     monkeypatch.setattr(catalog_db, 'DEFAULT_DB_PATH', state / 'absent-catalog.db')
@@ -414,8 +415,26 @@ def isolated_build_cache(tmp_path, monkeypatch):
     """Isolate disk and default RAM readings; admission tests override either seam."""
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path.with_name(tmp_path.name + '-cargo-target')))
     monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '0')
+    monkeypatch.setenv('PLANGRAPH_CARGO_CLEANUP_WAIT_S', '0')  # cleanup tests that wait for a lease set it
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '0')  # no real waiting for room in tests; wait tests set it
     from plangraph.spawner import seat_spawn, overflow
     default_memory, default_read = overflow.available_memory_mb, Path.read_text
+    def guarded_memory():
+        """The real admission reader only runs where a test fed it a fake /proc/meminfo."""
+        if overflow.os.name != 'nt' and overflow.Path is Path and Path.read_text is default_read:
+            raise AssertionError('spawner test reached the real host memory reader; pin it with the admission_memory fixture')
+        return default_memory()
+    monkeypatch.setattr(overflow, 'available_memory_mb', guarded_memory)
     def resources(service):
-        return 0, (64000 if overflow.available_memory_mb is default_memory and Path.read_text is default_read else overflow.available_memory_mb())
+        return 0, (64000 if overflow.available_memory_mb is guarded_memory and Path.read_text is default_read else overflow.available_memory_mb())
     monkeypatch.setattr(seat_spawn, 'resources', resources)
+
+@pytest.fixture
+def admission_memory(monkeypatch):
+    """Pin the MemAvailable reading that spawner admission sees; the fixture value decides, never the host."""
+    from plangraph.spawner import overflow, seat_spawn
+    def pin(megabytes=64000):
+        monkeypatch.setattr(overflow, 'available_memory_mb', lambda: megabytes)
+        monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, megabytes))
+        return megabytes
+    return pin
