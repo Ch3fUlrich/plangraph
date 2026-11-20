@@ -99,6 +99,11 @@ def pick_window_class(effective: int, floor: str | None = None) -> str:
     raise RouteError("estimate too big")
 
 
+def _is_low_risk(risk: str, tags: Sequence[str] | None) -> bool:
+    """The one low-risk predicate behind the low_risk_only leg gate."""
+    return risk == "low" and not tags
+
+
 def _review(tags: Sequence[str]) -> tuple[str, int]:
     return ("risky", 2) if tags else ("standard", 1)
 
@@ -120,7 +125,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
-    low_risk = card.get("risk", "normal") == "low" and not tags
+    low_risk = _is_low_risk(card.get("risk", "normal"), tags)
     bad = [t for t in tags if t not in RISK_TAGS]
     if bad:
         raise ValueError(f"unknown risk tags: {bad}")
@@ -368,7 +373,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
-    low_risk = ranking_risk == "low" and not card.get('risk_tags')
+    low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
     for leg in candidates:
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if native_implement and leg.id in CODEX_FALLBACK_WRITERS and not codex_out and not reason:

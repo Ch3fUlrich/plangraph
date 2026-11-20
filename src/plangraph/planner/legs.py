@@ -100,13 +100,13 @@ DEFAULT_LEGS = (
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.2-sol", "subscription", "opencode", "omniroute/cx-gpt-6.2-sol",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
+        "gpt", ("128k", "256k"), 500000, False, roles=("implement",),
         note="D-6310: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6.2-astra", "subscription", "opencode", "omniroute/cx-gpt-6.2-astra",
         "gpt", ("128k", "256k"), 272000, False, roles=("implement",),
         note="D-6310: operator implement leg (GPT-6.2 Astra via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
-        "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
+        "gpt", ("128k", "256k"), 475000, False, roles=("review",),
         tool_mode="inline-only"),
     *(Leg(f"agy-gemini-4-hydrogen-{effort}", "subscription", "agy",
           f"gemini-4-hydrogen-{effort}", "gemini", ("128k", "256k", "1m"), 900000, False,
@@ -231,10 +231,10 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.2-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.2-sol-{e}",
-          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
+          "gpt", ("128k", "256k"), 500000, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
-          "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
+          "gpt", ("128k", "256k"), 475000, False, roles=("review",),
           tool_mode="inline-only")
       for e in CX_EFFORTS),
 )
