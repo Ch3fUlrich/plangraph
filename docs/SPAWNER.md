@@ -227,8 +227,7 @@ relied on `pgrep -f` command-line substrings (for example interpreter flags or
 script arguments) no longer match under `pgrep -x --`; update them to a systemd
 unit name (`.service`/`.scope`/etc.), a `.pid` file path, or the exact process
 name (`comm`).
-A queued admission is rechecked for cancellation before placement, removed when
-a host accepts it, and finalized as failed if admission raises an exception.
+A queued admission is rechecked for cancellation before placement, removed when a host accepts it, and finalized as failed if admission raises an exception.
 
 `--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
 Review/seat routes record each failed, limited or not-served attempt with its reason
@@ -411,15 +410,10 @@ An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric
 row), or sequence of rows with `model_id`, ranks measured legs only inside their
 existing tier. Legs without rows go **last inside their tier**, retaining their
 relative operator order. `plan.gaps` (also in `to_dict()`) records each missing
-role-policy leg with its leg ID, model and reason. Reasons name each gap,
-including legs filtered by eligibility or provider state. With `benchmark=None`,
-all role-policy legs are gaps, `p_source` is `operator-order`, and reasons include
-`benchmark data absent` and `no benchmark p`. Strict routing (`--require-bench`)
-raises `BenchRequired` for a missing required row. The `agy-gpt-oss-120b` review
-leg is explicitly unmeasured until its exact medium-effort row is available.
-It can run with prior ranking in ordinary mode. Strict routing skips it with
-`benchmark_unmeasured` while routing among the measured legs. An exact row
-makes this leg eligible in strict mode.
+role-policy leg with its leg ID, model and reason. Reasons name each gap, including legs filtered by eligibility or provider state.
+With `benchmark=None`, all role-policy legs are gaps, `p_source` is `operator-order`, and reasons include `benchmark data absent` and `no benchmark p`.
+Strict routing (`--require-bench`) raises `BenchRequired` for a missing required row. The `agy-gpt-oss-120b` review leg is explicitly unmeasured until its exact medium-effort row is available.
+It can run with prior ranking in ordinary mode. Strict routing skips it with `benchmark_unmeasured` while routing among the measured legs; an exact row makes it eligible in strict mode.
 
 Operator safety rules and `route_card` tier order come first; U_core permutes measured inputs within a tier for every role, including implement (D-5092). Same-family review inputs keep table order; free inputs never move behind subscriptions. The generic resolver retains its utility/epsilon-band algorithm without a model-name or post-ranking tier pin.
 CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.
