@@ -54,8 +54,9 @@ fn patterns() -> &'static [regex::Regex] {
             &tokens,
             // 6. JWT-like: three base64url segments, header always starts "eyJ".
             r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
-            // 7. Long hex — a 40-char git sha is caught too; acceptable, and shas
-            // in history are decorative while leaked tokens are not.
+            // 7. Long hex. A 40-char string that resolves as a commit of the run's
+            // repo or equals the card's diff head/base is restored afterwards by
+            // the allowlist in run/scrub.rs; any other long hex stays masked.
             r"\b[0-9a-fA-F]{32,}\b",
             // 8. Long base64/url-safe blob: raw, not compiled — see [`redact`].
             r"[A-Za-z0-9+/_-]{40,}={0,2}",

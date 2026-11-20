@@ -60,7 +60,7 @@ fn init_repo_with_origin() -> (TempDir, PathBuf, PathBuf, String) {
 
     fs::write(work.join("README.md"), "seed\n").unwrap();
     git(&work, &["add", "README.md"]);
-    git(&work, &["commit", "-m", "seed\n\nWriter: google run-0"]);
+    git(&work, &["commit", "-m", "seed\n\nWriter: gemini run-0"]);
     git(&work, &["push", "-u", "origin", "main"]);
     let base_sha = git(&work, &["rev-parse", "HEAD"]);
     (tmp, work, bare, base_sha)
@@ -122,6 +122,9 @@ with LOG.open("a", encoding="utf-8") as fh:
 
 if verb == "route":
     max_tok = 400 if MODE in ("split_pass", "split_fail_second", "single_too_big") else 200000
+    if MODE == "null_leg":
+        print(json.dumps({{"first_leg": None, "legs": []}}))
+        sys.exit(0)
     print(json.dumps({{
         "first_leg": {{"id": "mimo-v2.6-pro", "family": "xiaomi", "harness": "opencode", "tool_mode": "inline-only", "max_request_tokens": max_tok}},
         "legs": [{{"id": "mimo-v2.6-pro", "family": "xiaomi", "harness": "opencode", "tool_mode": "inline-only", "max_request_tokens": max_tok}}],
@@ -142,6 +145,8 @@ if verb == "spawn":
         reply = f"Looks fine.\nHEAD: {{head_sha}}\nTEST-GAMING: yes\nVERDICT: PASS\n"
     elif MODE == "redacted_head":
         reply = "Looks fine.\nHEAD: [REDACTED]\nTEST-GAMING: no\nVERDICT: PASS\n"
+    elif MODE == "no_head":
+        reply = "Looks fine.\nTEST-GAMING: no\nVERDICT: PASS\n"
     elif MODE == "seats_envelope":
         reply = f"Looks fine.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
     elif MODE == "fenced_pass":
@@ -188,7 +193,7 @@ fn stale_head_is_refused() {
     git(&work, &["checkout", "-b", "feat"]);
     fs::write(work.join("src_a.rs"), "pub fn a() -> i32 { 1 }\n").unwrap();
     git(&work, &["add", "src_a.rs"]);
-    git(&work, &["commit", "-m", "feat\n\nWriter: google run-1"]);
+    git(&work, &["commit", "-m", "feat\n\nWriter: gemini run-1"]);
     let feat_head = git(&work, &["rev-parse", "HEAD"]);
 
     // Advance origin/main in a second clone so feat_head is behind origin/main.
@@ -204,7 +209,7 @@ fn stale_head_is_refused() {
     git(&other, &["config", "user.email", "other@example.com"]);
     fs::write(other.join("README.md"), "ahead\n").unwrap();
     git(&other, &["add", "README.md"]);
-    git(&other, &["commit", "-m", "advance\n\nWriter: openai run-2"]);
+    git(&other, &["commit", "-m", "advance\n\nWriter: gpt run-2"]);
     git(&other, &["push", "origin", "main"]);
 
     let state = tmp.path().join("state");
@@ -224,6 +229,7 @@ fn stale_head_is_refused() {
             state.to_str().unwrap(),
         ])
         .env("PLANGRAPH_SPAWNER_CMD", &mock)
+        .env("PYTHONPATH", repo_root().join("src"))
         .output()
         .unwrap();
 
@@ -301,6 +307,7 @@ fn writer_families_extracted_from_trailers_and_fallback() {
             "--no-fetch",
         ])
         .env("PLANGRAPH_SPAWNER_CMD", &mock)
+        .env("PYTHONPATH", repo_root().join("src"))
         .output()
         .unwrap();
 
@@ -362,7 +369,7 @@ fn oversize_diff_splits_across_seats_and_single_oversize_file_refuses() {
     fs::write(work.join("beta/b.rs"), format!("// {}\n", "b".repeat(260))).unwrap();
     fs::write(work.join("gamma/c.rs"), format!("// {}\n", "c".repeat(260))).unwrap();
     git(&work, &["add", "."]);
-    git(&work, &["commit", "-m", "split\n\nWriter: google run-1"]);
+    git(&work, &["commit", "-m", "split\n\nWriter: gemini run-1"]);
     let head_sha = git(&work, &["rev-parse", "HEAD"]);
 
     let state = tmp.path().join("state");
@@ -386,6 +393,7 @@ fn oversize_diff_splits_across_seats_and_single_oversize_file_refuses() {
             "--no-fetch",
         ])
         .env("PLANGRAPH_SPAWNER_CMD", &mock)
+        .env("PYTHONPATH", repo_root().join("src"))
         .output()
         .unwrap();
     assert_eq!(
@@ -438,6 +446,7 @@ fn oversize_diff_splits_across_seats_and_single_oversize_file_refuses() {
             "--no-fetch",
         ])
         .env("PLANGRAPH_SPAWNER_CMD", &mock_fail)
+        .env("PYTHONPATH", repo_root().join("src"))
         .output()
         .unwrap();
     assert_eq!(out_fail.status.code(), Some(1));
@@ -450,7 +459,7 @@ fn oversize_diff_splits_across_seats_and_single_oversize_file_refuses() {
     )
     .unwrap();
     git(&work, &["add", "alpha/huge.rs"]);
-    git(&work, &["commit", "-m", "huge\n\nWriter: google run-2"]);
+    git(&work, &["commit", "-m", "huge\n\nWriter: gemini run-2"]);
     let huge_head = git(&work, &["rev-parse", "HEAD"]);
     fs::write(&log, "").unwrap();
     let mock_huge = write_mock_spawner(tmp.path(), &state, &log, "single_too_big");
@@ -468,6 +477,7 @@ fn oversize_diff_splits_across_seats_and_single_oversize_file_refuses() {
             "--no-fetch",
         ])
         .env("PLANGRAPH_SPAWNER_CMD", &mock_huge)
+        .env("PYTHONPATH", repo_root().join("src"))
         .output()
         .unwrap();
     assert_eq!(out_huge.status.code(), Some(2));
@@ -488,7 +498,7 @@ fn test_gaming_yes_blocks_pass_even_with_verdict_pass() {
     git(&work, &["checkout", "-b", "feat"]);
     fs::write(work.join("f.rs"), "pub fn f() {}\n").unwrap();
     git(&work, &["add", "f.rs"]);
-    git(&work, &["commit", "-m", "f\n\nWriter: google run-1"]);
+    git(&work, &["commit", "-m", "f\n\nWriter: gemini run-1"]);
     let head_sha = git(&work, &["rev-parse", "HEAD"]);
 
     let state = tmp.path().join("state");
@@ -512,6 +522,7 @@ fn test_gaming_yes_blocks_pass_even_with_verdict_pass() {
             "--no-fetch",
         ])
         .env("PLANGRAPH_SPAWNER_CMD", &mock)
+        .env("PYTHONPATH", repo_root().join("src"))
         .output()
         .unwrap();
 
@@ -531,7 +542,7 @@ fn redacted_head_line_blocks_pass_and_seats_envelope_extracts_records() {
     git(&work, &["checkout", "-b", "feat"]);
     fs::write(work.join("f.rs"), "pub fn f() {}\n").unwrap();
     git(&work, &["add", "f.rs"]);
-    git(&work, &["commit", "-m", "f\n\nWriter: google run-1"]);
+    git(&work, &["commit", "-m", "f\n\nWriter: gemini run-1"]);
     let head_sha = git(&work, &["rev-parse", "HEAD"]);
 
     let state = tmp.path().join("state");
@@ -554,6 +565,7 @@ fn redacted_head_line_blocks_pass_and_seats_envelope_extracts_records() {
             "--no-fetch",
         ])
         .env("PLANGRAPH_SPAWNER_CMD", &mock_redacted)
+        .env("PYTHONPATH", repo_root().join("src"))
         .output()
         .unwrap();
     assert_eq!(out_redacted.status.code(), Some(1));
@@ -578,6 +590,7 @@ fn redacted_head_line_blocks_pass_and_seats_envelope_extracts_records() {
             "--no-fetch",
         ])
         .env("PLANGRAPH_SPAWNER_CMD", &mock_seats)
+        .env("PYTHONPATH", repo_root().join("src"))
         .output()
         .unwrap();
     assert_eq!(
@@ -589,4 +602,149 @@ fn redacted_head_line_blocks_pass_and_seats_envelope_extracts_records() {
     );
     let body = fs::read_to_string(&approval_seats).unwrap();
     assert!(body.contains(&format!("HEAD: {head_sha}\nVERDICT: PASS")));
+}
+
+fn review_with_mode(
+    mode: &str,
+    files: &[(&str, &[u8])],
+) -> (std::process::Output, PathBuf, PathBuf, TempDir) {
+    let (tmp, work, _bare, base_sha) = init_repo_with_origin();
+    git(&work, &["checkout", "-b", "feat"]);
+    for (name, body) in files {
+        fs::write(work.join(name), body).unwrap();
+        git(&work, &["add", name]);
+    }
+    git(&work, &["commit", "-m", "f\n\nWriter: gemini run-1"]);
+    let head_sha = git(&work, &["rev-parse", "HEAD"]);
+    let state = tmp.path().join("state");
+    let log = tmp.path().join("spawner.jsonl");
+    let approval = tmp.path().join("approval.txt");
+    let mock = write_mock_spawner(tmp.path(), &state, &log, mode);
+    let out = Command::new(plangraph_bin())
+        .args([
+            "review",
+            "--repo",
+            work.to_str().unwrap(),
+            "--base",
+            &base_sha,
+            "--head",
+            &head_sha,
+        ])
+        .args([
+            "--state",
+            state.to_str().unwrap(),
+            "--approval",
+            approval.to_str().unwrap(),
+            "--no-fetch",
+        ])
+        .env("PLANGRAPH_SPAWNER_CMD", &mock)
+        .env("PYTHONPATH", repo_root().join("src"))
+        .output()
+        .unwrap();
+    (out, approval, log, tmp)
+}
+
+#[test]
+fn reply_without_head_line_is_not_a_pass() {
+    let (out, approval, _log, _tmp) = review_with_mode("no_head", &[("f.rs", b"pub fn f() {}\n")]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "stdout={}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert!(!approval.exists());
+}
+
+#[test]
+fn route_without_legs_is_refused_before_any_seat() {
+    let (out, approval, log, _tmp) = review_with_mode("null_leg", &[("f.rs", b"pub fn f() {}\n")]);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no eligible review legs"),
+        "stderr={stderr}"
+    );
+    assert!(!approval.exists());
+    assert!(!fs::read_to_string(&log).unwrap().contains("\"spawn\""));
+}
+
+fn dry_run_review(
+    work: &Path,
+    tmp: &Path,
+    base: &str,
+    head: &str,
+) -> (std::process::Output, PathBuf) {
+    let state = tmp.join("state");
+    let log = tmp.join("spawner.jsonl");
+    let mock = write_mock_spawner(tmp, &state, &log, "split_pass");
+    let out = Command::new(plangraph_bin())
+        .args([
+            "review",
+            "--repo",
+            work.to_str().unwrap(),
+            "--base",
+            base,
+            "--head",
+            head,
+        ])
+        .args(["--state", state.to_str().unwrap(), "--no-fetch"])
+        .env("PLANGRAPH_SPAWNER_CMD", &mock)
+        .env("PYTHONPATH", repo_root().join("src"))
+        .output()
+        .unwrap();
+    (out, log)
+}
+
+#[test]
+fn rename_old_path_is_in_a_group_like_the_spawner_lists_it() {
+    let (tmp, work, _bare, _base) = init_repo_with_origin();
+    git(&work, &["checkout", "-b", "feat"]);
+    fs::create_dir_all(work.join("a")).unwrap();
+    fs::create_dir_all(work.join("b")).unwrap();
+    fs::create_dir_all(work.join("c")).unwrap();
+    fs::write(work.join("a/old.rs"), format!("// {}\n", "r".repeat(260))).unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-m", "old\n\nWriter: gemini run-1"]);
+    let base = git(&work, &["rev-parse", "HEAD"]);
+    git(&work, &["mv", "a/old.rs", "b/new.rs"]);
+    fs::write(work.join("c/x.rs"), format!("// {}\n", "x".repeat(260))).unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-m", "mv\n\nWriter: gemini run-2"]);
+    let head = git(&work, &["rev-parse", "HEAD"]);
+    let (out, log) = dry_run_review(&work, tmp.path(), &base, &head);
+    assert!(
+        out.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let logged = fs::read_to_string(&log).unwrap();
+    assert!(
+        logged.contains("a/old.rs") && logged.contains("b/new.rs"),
+        "{logged}"
+    );
+}
+
+#[test]
+fn binary_file_is_measured_as_the_inlined_base85_patch() {
+    let (tmp, work, _bare, base) = init_repo_with_origin();
+    git(&work, &["checkout", "-b", "feat"]);
+    let bytes: Vec<u8> = (0..2000u32)
+        .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+        .collect();
+    fs::write(work.join("blob.bin"), bytes).unwrap();
+    fs::write(work.join("small.rs"), "pub fn s() {}\n").unwrap();
+    git(&work, &["add", "-A"]);
+    git(&work, &["commit", "-m", "bin\n\nWriter: gemini run-1"]);
+    let head = git(&work, &["rev-parse", "HEAD"]);
+    let (out, log) = dry_run_review(&work, tmp.path(), &base, &head);
+    // A "Binary files differ" stub would fit the 1200-char limit; the base85 patch does not.
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stderr).contains("blob.bin"));
+    assert!(!fs::read_to_string(&log).unwrap().contains("\"spawn\""));
 }

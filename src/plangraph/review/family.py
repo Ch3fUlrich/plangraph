@@ -27,7 +27,7 @@ __all__ = [
 ]
 
 FAMILIES = (
-    (r"gpt|^o\d", "openai"), (r"mimo", "xiaomi"), (r"llama|muse", "meta"),
+    (r"gpt|codex|^o\d", "openai"), (r"mimo", "xiaomi"), (r"llama|muse", "meta"),
     (r"deepseek", "deepseek"), (r"qwen", "alibaba"), (r"gemini", "google"),
     (r"claude|sonnet|opus|haiku", "anthropic"),
     (r"glm|zhipu", "zhipu"),

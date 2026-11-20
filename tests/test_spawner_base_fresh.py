@@ -548,3 +548,16 @@ def test_split_waiver_never_overrides_worker_fetch_failure(tmp_path, monkeypatch
     monkeypatch.setattr(base_fresh, '_decision_waives', lambda *a: pytest.fail('fetch failure cannot be waived'))
     assert not asyncio.run(base_fresh.admit_base(SimpleNamespace(_save=lambda r: None),
         dict(role='implement', cwd=str(tmp_path)), {'base_decision': 'D-123'}, launch=True))
+
+
+def test_base_fresh_checks_the_named_ref_not_head(repository):
+    from plangraph.spawner.base_fresh import base_fresh
+    origin, repo = repository
+    old = advance(origin, repo)
+    assert base_fresh(repo)['ok'] is False
+    assert base_fresh(repo, ref=old)['reason'] == 'base_stale: behind=2'
+    git(repo, 'fetch', '-q', 'origin')
+    git(repo, 'merge', '--ff-only', 'origin/main')
+    current = git(repo, 'rev-parse', 'HEAD')
+    assert base_fresh(repo, ref=current, fetch=False)['ok'] is True
+    assert base_fresh(repo, ref=old, fetch=False)['ok'] is False

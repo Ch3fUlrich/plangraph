@@ -1,6 +1,7 @@
 //! `plangraph review` command: check freshness, read writer families, split oversize diffs,
 //! spawn review seats via the spawner route, parse verdicts/test-gaming, and write land approvals.
 use crate::atomic;
+use crate::base_fresh::python_command;
 use crate::review_git::{measure_diff_files, resolve_and_check_fresh, writer_families};
 use pg_worker_core::review_split::{
     extract_review_text_from_live_log, group_banner, parse_head_line_text, parse_test_gaming_text,
@@ -120,18 +121,8 @@ fn spawner_command(repo_root: &Path) -> Command {
             return cmd;
         }
     }
-    let mut cmd = Command::new("python3");
+    let mut cmd = python_command(Some(repo_root));
     cmd.args(["-m", "plangraph.spawner.cli"]);
-    let src_dir = repo_root.join("src");
-    if src_dir.join("plangraph").is_dir() {
-        let existing = std::env::var("PYTHONPATH").unwrap_or_default();
-        let joined = if existing.is_empty() {
-            src_dir.display().to_string()
-        } else {
-            format!("{}:{existing}", src_dir.display())
-        };
-        cmd.env("PYTHONPATH", joined);
-    }
     cmd
 }
 
@@ -339,8 +330,9 @@ fn evaluate_seat_record(
             test_gaming = TestGaming::Yes;
         }
     }
+    // The seat must echo the full head; a missing or redacted HEAD line is no evidence.
     let head_ok =
-        parse_head_line_text(&text).is_none_or(|seen| seen.eq_ignore_ascii_case(expected_head));
+        parse_head_line_text(&text).is_some_and(|seen| seen.eq_ignore_ascii_case(expected_head));
 
     let passed = status == "completed"
         && exit_code == 0
@@ -499,7 +491,13 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
     )?;
     let first_leg = route_json
         .get("first_leg")
-        .or_else(|| route_json.get("legs").and_then(|l| l.get(0)))
+        .filter(|v| !v.is_null())
+        .or_else(|| {
+            route_json
+                .get("legs")
+                .and_then(|l| l.get(0))
+                .filter(|v| !v.is_null())
+        })
         .cloned()
         .ok_or_else(|| "refused: spawner route returned no eligible review legs".to_owned())?;
 
