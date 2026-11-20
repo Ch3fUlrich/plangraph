@@ -546,17 +546,22 @@ def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkey
 def test_probe_budget_inside_a_spawn_is_below_the_admission_window(monkeypatch):
     from plangraph.spawner import base_fresh, leg_probe
     monkeypatch.delenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', raising=False)
-    assert leg_probe.admission_probe_timeout() == base_fresh.ADMISSION_TIMEOUT / 3
+    budget = leg_probe.ProbeBudget()
+    assert budget.timeout() == base_fresh.ADMISSION_TIMEOUT / 3
+    budget.spend(time.monotonic() - 70)  # one probe used 70 s of the spawn's 90 s
+    assert budget.timeout() == pytest.approx(base_fresh.ADMISSION_TIMEOUT / 2 - 70, abs=0.5)
+    budget.spend(time.monotonic() - 30)
+    assert budget.timeout() == 0
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '5')
-    assert leg_probe.admission_probe_timeout() == 5
+    assert leg_probe.ProbeBudget().timeout() == 5
 
 
-def test_hung_probe_fails_over_inside_the_admission_window(monkeypatch):
-    """A probe that never answers is a leg failure within ADMISSION_TIMEOUT, not a refused spawn."""
+def test_hung_probes_fail_over_leg_by_leg_inside_the_admission_window(monkeypatch):
+    """Serial hung probes share one budget: failover, then a refusal, never base_admission_timeout."""
     from plangraph.spawner import base_fresh, leg_probe
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
     monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '180')
-    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.5)  # probe budget 0.5 s
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.5)  # 0.5 s per probe, 0.75 s in all
     monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/true')
 
     class Runner:
@@ -564,7 +569,7 @@ def test_hung_probe_fails_over_inside_the_admission_window(monkeypatch):
             self._tasks, self.jobs, self.cancelled = {}, {}, []
 
         async def spawn(self, **kwargs):
-            job = SimpleNamespace(job_id='hung', status='running', exit_code=None)
+            job = SimpleNamespace(job_id='hung%d' % len(self.jobs), status='running', exit_code=None)
             self.jobs[job.job_id] = job
             self._tasks[job.job_id] = asyncio.ensure_future(asyncio.sleep(3600))  # the harness hangs
             return job
@@ -575,15 +580,17 @@ def test_hung_probe_fails_over_inside_the_admission_window(monkeypatch):
             self._tasks[job_id].cancel()
 
     runner = Runner()
+    legs = [SimpleNamespace(model='agy/model%d' % n, harness='agy') for n in range(3)]
 
     async def run():
-        started = time.monotonic()
-        skip = await asyncio.wait_for(
-            leg_probe.before_launch(runner, _leg(), 'implement', False),
-            base_fresh.ADMISSION_TIMEOUT)
-        return skip, time.monotonic() - started
+        started, budget, skips = time.monotonic(), leg_probe.ProbeBudget(), []
+        for leg in legs:  # what the runner does for each leg it tries
+            skips.append(await asyncio.wait_for(
+                leg_probe.before_launch(runner, leg, 'implement', False, budget),
+                base_fresh.ADMISSION_TIMEOUT))
+        return skips, time.monotonic() - started
 
-    skip, elapsed = asyncio.run(run())
-    assert skip == 'down: timeout'
+    skips, elapsed = asyncio.run(run())
+    assert skips == ['down: timeout', 'down: timeout', 'probe_budget_exhausted']
     assert elapsed < base_fresh.ADMISSION_TIMEOUT
-    assert runner.cancelled == ['hung']  # the hung harness is killed, not orphaned
+    assert runner.cancelled == ['hung0', 'hung1']  # hung harnesses are killed, not orphaned

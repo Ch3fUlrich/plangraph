@@ -327,18 +327,29 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
 
 _INFLIGHT = {}
 
-def admission_probe_timeout():
-    """Probe budget inside a spawn: a third of the admission window, never the whole of it.
+class ProbeBudget:
+    """Time the live probes of one spawn may use together, below the base admission window.
 
-    The pre-launch probe runs inside the spawn's base admission wait; with the default 180 s
-    probe timeout a live probe consumed all of ADMISSION_TIMEOUT and the spawn was refused
-    base_admission_timeout. A probe that exceeds this budget is killed, booked as a probe
-    failure, and the spawn fails over to the next leg inside the window.
+    The pre-launch probe runs inside the spawn's base admission wait (ADMISSION_TIMEOUT). One
+    probe gets at most a third of the window and all probes of a spawn at most half, so serial
+    hung probes fail over leg by leg and still leave time to prepare the worktree and launch.
+    A probe that exceeds its share is killed and booked as a probe failure.
     """
-    from .base_fresh import ADMISSION_TIMEOUT
-    return min(seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, positive=True), ADMISSION_TIMEOUT / 3)
+    def __init__(self, window=None):
+        from .base_fresh import ADMISSION_TIMEOUT
+        window = ADMISSION_TIMEOUT if window is None else window
+        self.each = window / 3
+        self.left = window / 2
 
-async def before_launch(runner, leg, role, dry_run):
+    def timeout(self):
+        """Seconds the next probe may run, or 0 when the spawn's probe budget is spent."""
+        return max(min(seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, positive=True), self.each, self.left), 0)
+
+    def spend(self, started):
+        self.left -= time.monotonic() - started
+
+
+async def before_launch(runner, leg, role, dry_run, budget=None):
     from .target import quota_paused
     from .env_redact import redact_output, redact_env_values
     root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
@@ -387,9 +398,13 @@ async def before_launch(runner, leg, role, dry_run):
         return skip  # Only ordinary admission may reuse pre-failure probe evidence.
     pending = _INFLIGHT.get(key(leg))  # Share concurrent probes, failures included.
     if pending is None:
-        pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(
-            probe(runner, leg, store=state, timeout_s=admission_probe_timeout()))
-        pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
+        budget = budget or ProbeBudget()
+        timeout = budget.timeout()
+        if timeout <= 0:
+            return 'probe_budget_exhausted'
+        started = time.monotonic()
+        pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state, timeout_s=timeout))
+        pending.add_done_callback(lambda _: (_INFLIGHT.pop(key(leg), None), budget.spend(started)))
     result = await asyncio.shield(pending)
     reason = result.get('reason')
     if not reason or reason.strip().lower() == 'unknown':

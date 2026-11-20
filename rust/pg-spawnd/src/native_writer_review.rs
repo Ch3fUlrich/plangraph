@@ -58,9 +58,15 @@ impl Host {
     }
     /// Review prompt for `head`: review skill, writer brief, diff range (the delta from the
     /// previous review's head when it is an ancestor) and the required closing lines.
-    fn review_prompt(&mut self, base: &str, head: &str, previous: Option<(&str, &str)>) -> String {
+    fn review_prompt(
+        &mut self,
+        base: &str,
+        head: &str,
+        previous: Option<(&str, &str)>,
+        families: &[String],
+    ) -> String {
         let skill = self.skill("review").unwrap_or_default();
-        let mut prompt = format!("{skill}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\n", self.brief);
+        let mut prompt = format!("{skill}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
         match previous {
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),
@@ -124,12 +130,13 @@ impl Host {
             head,
             &[super::WRITER_MODEL],
             &|| {
-                let mut python = pg_worker_core::writer_families::python_command(Some(&self.cwd));
+                let mut python =
+                    pg_worker_core::writer_families::python_command(self.python_src.as_deref());
                 python.env("PATH", &self.tool_path);
                 python
             },
         )?;
-        let prompt = self.review_prompt(base, head, prev);
+        let prompt = self.review_prompt(base, head, prev, &families);
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         let card = json!({"cwd":clone, "estimate_tokens":300000, "max_min":60, "stall_min":20,

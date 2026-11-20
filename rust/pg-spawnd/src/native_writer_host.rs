@@ -62,6 +62,10 @@ struct Host {
     reviews_started: usize,
     /// Spawner CLI argv prefix that starts review runs (`review_cli`).
     review_cli: Vec<String>,
+    /// Checkout of trusted plangraph sources for the family table; None uses the installed
+    /// package. Never the writer's worktree: the change under review must not pick the
+    /// families it is reviewed against.
+    python_src: Option<PathBuf>,
 }
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
@@ -458,6 +462,7 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
         reviews_started: 0,
         review_cli: review_cli()?,
+        python_src: None,
     };
     if let Some(target) = &host.push_ref {
         if !target.starts_with("refs/heads/") {

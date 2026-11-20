@@ -59,11 +59,14 @@ impl Driver for Fake {
     }
     fn head(&mut self) -> Result<String, String> {
         self.heads += 1;
+        // Every writer turn after the uncommitted ones commits: the head changes per turn.
         Ok(
             if self.uncommitted_turns > 0 && self.calls.len() <= self.uncommitted_turns {
                 "base".into()
-            } else {
+            } else if self.calls.len() <= self.uncommitted_turns + 1 {
                 "final-head".into()
+            } else {
+                format!("final-head-{}", self.calls.len())
             },
         )
     }
@@ -139,7 +142,7 @@ fn native_missing_final_review_resumes_same_session_and_records_host_head() {
     assert_eq!(driver.reviews[1].as_ref().unwrap()["run_id"], "run-review1");
     assert_eq!(record["host"], "other-host");
     assert_eq!(record["base_sha"], "base");
-    assert_eq!(record["final_head"], "final-head");
+    assert_eq!(record["final_head"], "final-head-2");
     assert_eq!(record["review_rounds"], 2);
     assert_eq!(record["round_counts"], json!([1]));
     assert_eq!(record["reviews"][0]["verdict"], "REQUEST_CHANGES");
@@ -585,6 +588,64 @@ fn a_turn_without_a_commit_resumes_on_the_items_and_runs_no_gate() {
     // No fast check ran on the base head, and the only review was on the committed head.
     assert!(driver.stamped.iter().all(|head| head != "base"));
     assert_eq!(driver.reviews.len(), 1);
+}
+#[test]
+fn a_fix_turn_without_a_commit_is_resumed_not_reviewed_again() {
+    // The first review requests changes; the fix turn commits nothing (HEAD unchanged).
+    struct Idle(Fake);
+    impl Driver for Idle {
+        fn prepare(&mut self) -> Result<String, String> {
+            self.0.prepare()
+        }
+        fn refresh_base(&mut self) -> Result<String, String> {
+            self.0.refresh_base()
+        }
+        fn disk_gb(&mut self) -> Result<u64, String> {
+            self.0.disk_gb()
+        }
+        fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
+            self.0.execute(session, prompt)
+        }
+        fn head(&mut self) -> Result<String, String> {
+            // The second fix attempt finally commits.
+            Ok(if self.0.calls.len() >= 4 {
+                "fixed-head"
+            } else {
+                "final-head"
+            }
+            .into())
+        }
+        fn fast_checks(&mut self, head: &str) -> Result<(), String> {
+            self.0.fast_checks(head)
+        }
+        fn stamped(&mut self, head: &str) -> bool {
+            self.0.stamped(head)
+        }
+        fn review(
+            &mut self,
+            head: &str,
+            previous: Option<&serde_json::Value>,
+        ) -> Result<serde_json::Value, String> {
+            self.0.review(head, previous)
+        }
+        fn gates(&mut self) -> Result<(), String> {
+            self.0.gates()
+        }
+        fn save(&mut self, record: &serde_json::Value) -> Result<(), String> {
+            self.0.save(record)
+        }
+    }
+    let mut driver = Idle(Fake {
+        verdicts: vec![("REQUEST_CHANGES", 2)],
+        ..fake()
+    });
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 0, "{record}");
+    // writer, review fix (no commit), two resumes on the items (the second commits).
+    assert_eq!(driver.0.calls.len(), 4);
+    assert!(driver.0.prompts[2].contains("No commit yet"));
+    // Two reviews only: the unchanged head was never reviewed twice.
+    assert_eq!(driver.0.reviews.len(), 2);
 }
 #[test]
 fn a_writer_that_never_commits_fails_without_running_a_gate() {

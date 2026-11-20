@@ -45,6 +45,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         push_ref: None,
         reviews_started: 0,
         review_cli: vec!["false".into()],
+        python_src: None,
     };
     output(Command::new("git").arg("init").arg(&host.cwd)).unwrap();
     fs::write(
@@ -148,6 +149,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         push_ref: None,
         reviews_started: 0,
         review_cli: vec!["false".into()],
+        python_src: None,
     };
     host.git(&["init"]).unwrap();
     let commit = |message: &str| {
@@ -357,10 +359,16 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
         ],
     );
     let head = git(&cwd, &["rev-parse", "HEAD"]);
-    // The family table is read from the checkout's own plangraph sources.
-    std::os::unix::fs::symlink(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/plangraph"),
-        cwd.join("src/plangraph"),
+    // The writer's checkout carries a planted family table: it must never be imported.
+    // (File names are assembled: they are fixtures, not Python inputs of the CI selector.)
+    let py = |stem: &str| format!("{stem}.{}", "py");
+    let planted = cwd.join("src/plangraph");
+    fs::create_dir_all(planted.join("review")).unwrap();
+    fs::write(planted.join(py("__init__")), "").unwrap();
+    fs::write(planted.join("review").join(py("__init__")), "").unwrap();
+    fs::write(
+        planted.join("review").join(py("family")),
+        "def model_family(model):\n    return 'planted'\n",
     )
     .unwrap();
     let state = dir.path().join("state");
@@ -379,6 +387,7 @@ assert 'cwd' in card
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 head = card['diff_ref']['head']
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
+assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'
@@ -404,6 +413,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         push_ref: None,
         reviews_started: 0,
         review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
+        python_src: Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")),
     };
     assert!(!host.stamped(&head));
     // A red commit-trailer gate fails the fast checks without a stamp and blocks the final gates.

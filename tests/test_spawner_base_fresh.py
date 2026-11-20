@@ -605,3 +605,16 @@ def test_origin_head_naming_a_present_remote_branch_stays_the_default(repository
     assert git(clone, 'symbolic-ref', 'refs/remotes/origin/HEAD') == 'refs/remotes/origin/trunk'
     result = base_fresh(clone)
     assert result['default_branch'] == 'trunk' and result['ok'] is True
+
+
+def test_same_checkout_review_reuses_the_resolved_default_branch(repository, tmp_path):
+    """A lane-checkout clone passes both admission checks: the cached one reuses main."""
+    from types import SimpleNamespace
+    from plangraph.spawner.base_fresh import admit_base
+    _, clone = lane_clone(repository, tmp_path)
+    head = git(clone, 'rev-parse', 'HEAD')
+    record = dict(role='review', cwd=str(clone))
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(clone)), _save=lambda r: None)
+    card = dict(diff_ref=dict(repo=str(clone), base='HEAD', head=head))
+    assert asyncio.run(admit_base(service, record, card, launch=True)) is True
+    assert record['base_sha'] == git(clone, 'rev-parse', 'origin/main')

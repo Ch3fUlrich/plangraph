@@ -251,14 +251,21 @@ pub fn identity_problem(name: &str, email: &str) -> Option<String> {
     placeholder.then(|| format!("git identity {name} <{email}> is a placeholder"))
 }
 impl Host {
+    /// The author and committer identities git resolves in this checkout, including any
+    /// `author.*`/`committer.*` config and GIT_AUTHOR_*/GIT_COMMITTER_* overrides.
     fn identity(&self) -> Result<(), String> {
-        let value = |key: &str| {
-            output(git().current_dir(&self.repo).args(["config", "--get", key])).unwrap_or_default()
-        };
-        match identity_problem(&value("user.name"), &value("user.email")) {
-            Some(problem) => Err(format!("{problem}; set user.name/user.email on this host")),
-            None => Ok(()),
+        for var in ["GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"] {
+            let mut cmd = Command::new("git");
+            cmd.current_dir(&self.repo).args(["var", var]);
+            // An unset identity is an error of git itself; report it as unusable.
+            let ident = output(&mut cmd).unwrap_or_default();
+            let (name, rest) = ident.split_once(" <").unwrap_or(("", ""));
+            let email = rest.split_once('>').map_or("", |(email, _)| email);
+            if let Some(problem) = identity_problem(name, email) {
+                return Err(format!("{problem}; set the {var} identity on this host"));
+            }
         }
+        Ok(())
     }
 }
 fn git() -> Command {

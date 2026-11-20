@@ -168,6 +168,22 @@ fn identity_point_reads_the_hosts_git_config() {
     assert!(host.check("identity").unwrap_err().contains("placeholder"));
     run(&["config", "user.email", &usable()]);
     assert_eq!(host.check("identity"), Ok(()));
+    // The effective identity counts: a placeholder author override beats a usable user.email.
+    run(&["config", "user.email", &usable()]);
+    run(&["config", "author.email", "x@example.invalid"]);
+    assert!(host
+        .check("identity")
+        .unwrap_err()
+        .contains("GIT_AUTHOR_IDENT"));
+    run(&["config", "--unset", "author.email"]);
+    run(&["config", "committer.email", "x@example.invalid"]);
+    assert!(host
+        .check("identity")
+        .unwrap_err()
+        .contains("GIT_COMMITTER_IDENT"));
+    run(&["config", "--unset", "committer.email"]);
+    assert_eq!(host.check("identity"), Ok(()));
+    run(&["config", "user.email", "x@example.invalid"]);
     // A read-only sandbox never commits, so its identity is not probed.
     run(&["config", "user.email", "x@example.invalid"]);
     host.mode = "read-only".into();

@@ -195,23 +195,30 @@ fn writer_attempt(
     record["resumes"] = json!(0);
     let mut fixes = 0;
     let mut idle = 0;
+    // HEAD when the last turn began: a turn that leaves it unchanged committed nothing.
+    let mut turn_start = record["base_sha"].as_str().unwrap_or_default().to_owned();
     loop {
         let head = driver.head().map_err(|e| (6, e))?;
         record["final_head"] = json!(head);
         driver.save(record).map_err(|e| (6, e))?;
-        // Nothing committed yet: the gates would only report an empty range. Send the writer
-        // back to its items instead of resuming it on a failure it did not cause.
-        if record["base_sha"] == head.as_str() {
+        // No new commit since the turn began: the gates would rerun on the same head, or only
+        // report an empty range. Send the writer back to its items instead of resuming it on
+        // a failure it did not cause, or spending a review round on the same commit.
+        if head == turn_start {
             idle += 1;
             if idle > NO_COMMIT_RESUMES || session.is_empty() {
                 return Err((
                     7,
-                    format!("no_commit: the writer ended its turn without a commit beyond {head}"),
+                    format!(
+                        "no_commit: the writer ended its turn without a new commit after {head}"
+                    ),
                 ));
             }
-            resume(driver, record, &session, &format!("No commit yet (HEAD is still the base {head}): continue with the items of your brief, implement them, commit your work and end your turn; keep this session."))?;
+            resume(driver, record, &session, &format!("No commit yet (HEAD is still {head}): continue with the items of your brief and the failures or findings above, commit your work and end your turn; keep this session."))?;
             continue;
         }
+        idle = 0;
+        turn_start = head.clone();
         if let Err(failure) = driver.fast_checks(&head) {
             record["fast_checks"] = json!({"head":head, "status":"failed", "output":failure});
             fixes += 1;

@@ -143,7 +143,9 @@ async def admit_base(service, record, card, *, launch=False):
     if await accepted(result) and diff is not None:
         diff_repo = diff.get('repo') or repo
         same_repo = os.path.normcase(os.path.realpath(diff_repo)) == os.path.normcase(os.path.realpath(repo))
-        reviewed = await asyncio.to_thread(_check, diff_repo, fetch=not same_repo, ref=diff.get('head', ''))
+        # The cached check reuses the worker check's refs, so it also reuses its resolved default branch.
+        reviewed = await asyncio.to_thread(_check, diff_repo, default=result.get('default_branch') if same_repo else None,
+                                           fetch=not same_repo, ref=diff.get('head', ''))
         if not await accepted(reviewed):
             result = reviewed
     if await accepted(result):
