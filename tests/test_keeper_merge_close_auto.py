@@ -309,3 +309,58 @@ def test_items_whose_commits_end_in_a_separate_coauthor_paragraph_close_from_a_m
     result = auto(env, require_seats=False, apply=False)
     assert sorted(c["key"] for c in result["would_close"]) == ["demo:B", "demo:C"]
     assert result["listed"] == []
+
+
+def test_an_empty_scan_list_still_bounds_a_hinted_repository(env):
+    set_states(env)
+    other = two_repos(env, scan=[])
+    head = other.land("w1", "Plan-Item: demo:C", 400)
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:C'", (f"Merge-Repo: data {head}",))
+    result = auto(env, require_seats=False)
+    assert result["repos"] == [] and result["closed"] == []
+    assert "merge_repo_not_scanned" in result["listed"][0]["reason"]
+
+
+def test_the_merge_commits_own_writer_trailer_counts_as_a_writer(env):
+    set_states(env)
+    head = env.repo.land("c", "Plan-Item: demo:C", 82)
+    git(env.repo.root, "commit", "--amend", "-q", "-m", "Merge pull request #82\n\nPlan-Item: demo:C\nWriter: gemini-test session_abc")
+    seat(env, "demo:C", head)
+    result = auto(env)
+    assert state(env, "demo:C")["state"] == "in_review"
+    assert "writer_seat_family" in result["listed"][0]["reason"]
+
+
+def test_a_warmed_scan_is_not_fetched_again_under_the_lock(env, monkeypatch):
+    from plangraph.keeper import context_sources
+
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 83)
+    calls = []
+    real = context_sources.work_index
+    monkeypatch.setattr(context_sources, "work_index",
+                        lambda git, project, *, fresh=False: calls.append(fresh) or real(git, project, fresh=fresh))
+    env.store.warm_merge_scan()
+    assert calls == [True]
+    result = auto(env, require_seats=False)
+    assert calls == [True, False] and [c["key"] for c in result["closed"]] == ["demo:C"]
+
+
+def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_closes(env, tmp_path, monkeypatch):
+    from door_util import Doors
+
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 84)
+    doors = Doors(env, tmp_path)
+    held = []
+    real = env.store.warm_merge_scan
+    monkeypatch.setattr(env.store, "warm_merge_scan",
+                        lambda: held.append(doors.server.lock._is_owned()) or real())
+    try:
+        status, body = doors.http("system", "POST", "/v1/close_merged_auto", {"require_seats": False})
+        assert status == 200 and [c["key"] for c in body["closed"]] == ["demo:C"]
+        assert held == [False]
+        assert doors.http("l1main", "POST", "/v1/close_merged_auto", {})[0] == 403
+        assert held == [False]  # a non-system caller never starts the fetch
+    finally:
+        doors.close()

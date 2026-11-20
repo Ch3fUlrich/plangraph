@@ -46,7 +46,7 @@ def valid_ref(ref: Any) -> bool:
     return bool(_REF_RE.fullmatch(ref))
 
 
-_TRAILER_LINE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*:[ \t]+\S")
+_TRAILER_LINE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*:[ \t]*\S")
 
 
 def trailer_lines(message: str) -> list[str]:
@@ -70,7 +70,7 @@ def trailer_lines(message: str) -> list[str]:
 def plan_items(message: str) -> list[str]:
     """The ``Plan-Item`` values among :func:`trailer_lines` of *message*."""
     return [line.partition(":")[2].strip() for line in trailer_lines(message)
-            if line.partition(":")[0].strip().lower() == "plan-item"]
+            if line[:1] not in " \t" and line.partition(":")[0].strip().lower() == "plan-item"]
 
 
 def parse_trailers(text: str) -> dict[str, str | list[str]]:

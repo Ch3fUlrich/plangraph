@@ -134,3 +134,11 @@ def test_the_real_shape_verifies_on_the_commit_and_on_the_merge_of_its_branch(tm
     assert verify(tmp_path, merge, "demo:A").ok
     assert verify(tmp_path, git(tmp_path, "rev-parse", f"{merge}^2"), "demo:A").ok
     assert not verify(tmp_path, merge, "demo:B").ok
+
+
+def test_git_trailer_shapes_are_read_as_git_reads_them():
+    from plangraph.keeper.evidence_git import plan_items
+
+    assert plan_items("subject\n\nPlan-Item:demo:C\n") == ["demo:C"]                # no space after the colon
+    assert plan_items("subject\n\nWriter: x\n  Plan-Item: demo:C\n") == []           # a continuation is no trailer
+    assert plan_items("subject\n\nPlan-Item: demo:A\n  continued value\n") == ["demo:A"]

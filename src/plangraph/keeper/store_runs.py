@@ -158,7 +158,25 @@ class RunsMixin:
                 values = {v for record in listed.stdout.split("\x1d") for v in plan_items(record)}
                 if names & values:
                     cited.setdefault(head, {}).setdefault(part, []).append(found[2])
+            if head in cited and not self._parts_cover_merge((git, repo), merge[0], names, list(cited[head])):
+                del cited[head]  # the batch brought more of the item than the cited parts: the head needs its own seat
         return cited
+
+    @staticmethod
+    def _parts_cover_merge(git_repo_args, merge, names, parts):
+        """True when every commit the merge introduced for the item lies at or under a cited part head."""
+        git, repo = git_repo_args
+        listed = git._run(repo, ["log", "--no-merges", "--format=%H%x1f%B%x1d", "--end-of-options",
+                                 f"{merge}^2", f"^{merge}^1"])
+        if listed.returncode != 0:
+            return False
+        for record in listed.stdout.split("\x1d"):
+            sha, _, body = record.strip("\n").partition("\x1f")
+            if sha and names & set(plan_items(body)) and not any(
+                    git._run(repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, part]).returncode == 0
+                    for part in parts):
+                return False
+        return True
 
     def _merged_open_prs(self, item, decision_id, head, now):
         try:

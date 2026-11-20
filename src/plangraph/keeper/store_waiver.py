@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 
 from . import auth, context_sources
 from .coverage import writer_families
@@ -286,10 +287,25 @@ class WaiverMixin:
             return set()
         return {head} if merged and merged["pr"] == pr else set()
 
+    def warm_merge_scan(self):
+        """Fetch and index every scanned repository; the API calls it outside its request lock.
+
+        The run that follows reads the warm answers (see :meth:`_warm`) instead of fetching under the lock.
+        """
+        git = self._adapter("git")
+        scan = getattr(git, "scan_projects", None)
+        for project in list(scan()) if callable(scan) else []:
+            if self._refresh_merged_default_ref(git, project):
+                context_sources.work_index(git, project, fresh=True)
+                self.__dict__.setdefault("_warmed", {})[project] = time.monotonic()
+
+    def _warm(self, project):
+        return time.monotonic() - self.__dict__.get("_warmed", {}).get(project, -1e9) < 60
+
     def _merged_work_commits(self, item):
         """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown."""
         git, project = self._adapter("git"), self._merge_project(item)
-        if not self._refresh_merged_default_ref(git, project):
+        if not self._warm(project) and not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
         if context_sources.open_lanes(git, project, item["key"]) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
@@ -393,7 +409,11 @@ class WaiverMixin:
         try:
             repo, ref = git.repo_path(project), git.repo_ref(project)
             for commit in context_sources.plan_item_commits(git, project, item["key"], fetch=False, limit=None) or ():
-                for trailer in git.writer_trailers(repo, commit["sha"], ref):
+                landed = [commit["sha"], (commit.get("merge") or {}).get("sha")]
+                # the commit's own range, its own trailers and the trailers of the merge that landed it
+                trailers = [*git.writer_trailers(repo, commit["sha"], ref),
+                            *(git.trailers(repo, sha) for sha in landed if sha)]
+                for trailer in trailers:
                     model = str(trailer.get("Writer") or "").split()[:1]
                     families.append(model_family(model[0]) if model else None)
         except Exception:  # noqa: BLE001 - an unreadable commit names no writer; the recorded ones still count
@@ -632,7 +652,7 @@ class WaiverMixin:
 
         def index_of(repo_project):
             if repo_project not in indexes:
-                index = context_sources.work_index(git, repo_project, fresh=True)
+                index = context_sources.work_index(git, repo_project, fresh=not self._warm(repo_project))
                 if index is not None and index.get("origin_stale"):
                     raise Refused("evidence_unverified", f"merge_index_stale: {repo_project}: {index.get('reason')}")
                 indexes[repo_project] = index
@@ -646,7 +666,7 @@ class WaiverMixin:
             try:
                 hinted, revision = self._merge_repository(item)
                 hinted = None if (hinted, revision) == (item["project"], None) else hinted
-                if hinted and repos and hinted not in repos:
+                if hinted and callable(scan) and hinted not in repos:
                     raise Refused("evidence_unverified", f"merge_repo_not_scanned: {hinted}")
                 found = [hinted] if hinted else [
                     p for p in self._scan_projects(item)
