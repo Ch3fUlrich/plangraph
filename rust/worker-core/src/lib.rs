@@ -66,6 +66,7 @@ pub mod private_targets;
 pub mod probe;
 pub mod redact;
 mod redact_tokens;
+pub mod remote_steps;
 mod shared_target;
 pub mod sweep_facts;
 mod sweep_runs;
