@@ -47,7 +47,7 @@ def test_failed_review_keeps_leg_not_banner(tmp_path, monkeypatch, stopped, stat
     if stopped:
         runner.provider_responses['sample'] = {'stop': True}
     monkeypatch.setattr(service, '_leg_prompt', lambda *a, **kw: 'review')
-    record = asyncio.run(service._spawn(card={'title': 'synthetic'}, role='review',
+    record = asyncio.run(service._spawn(card={'title': 'synthetic'}, role='review', writer_families=['openai'],
         wait_seconds=None, _plan=SpawnPlan((leg,), (), 'test', (), ())))
     assert record['chosen_leg'] is None
     assert record['status'] == record['attempts'][0]['status'] == status

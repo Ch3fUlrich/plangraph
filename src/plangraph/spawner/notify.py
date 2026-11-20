@@ -186,7 +186,8 @@ def _deliver_verdict(directory, record, keeper):
             if not isinstance(head, str) or len(head) != 40 or any(c not in '0123456789abcdefABCDEF' for c in head):
                 raise ValueError('missing or invalid record head_sha')
             family = seat.model_family(evidence.get('served_model'))
-            writers = record.get('given_writer_families') or []
+            from plangraph.review.family import writer_key
+            writers = sorted({writer_key(w) for w in record.get('given_writer_families') or []})
             if not family or not writers or family in writers or any(w not in seat.KNOWN_FAMILIES for w in writers):
                 outcome('skipped', 'unwitnessed family or invalid/overlapping writer families')
                 return

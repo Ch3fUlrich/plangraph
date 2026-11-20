@@ -15,6 +15,7 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
         "name":record["run_id"], "host":record["host"], "worktree":record["cwd"],
         "brief":brief, "effort":"medium", "try_count":0
     });
+    record["review_rounds"] = json!(0);
     let result = lifecycle(driver, &mut record, brief);
     let (mut exit, mut reason) = match result {
         Ok(code) => (code, None),
@@ -108,6 +109,7 @@ fn writer_attempt(
         record["resumes"] = json!(attempt);
         driver.save(record).map_err(|e| (6, e))?;
         if let Some(review) = driver.review(&head).map_err(|e| (4, e))? {
+            record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
             let accepts = review["verdict"] == "ACCEPT";
             let weak = review["status"] == "no_verdict";
             record["review"] = review;

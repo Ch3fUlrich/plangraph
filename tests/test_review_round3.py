@@ -55,7 +55,7 @@ def test_down_leg_not_rerun_when_no_replacement(tmp_path, monkeypatch):
     monkeypatch.setattr(seat.prompt, "assemble_all", two_parts)
     calls = []
 
-    def gw(model, text, title=None):
+    def gw(model, text, title=None, writer_family=None):
         calls.append(text)
         return _gw(429)
 

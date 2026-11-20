@@ -285,7 +285,7 @@ def review_leg(out: Path, diff: str) -> dict:
 
     seen = []
 
-    def gateway_call(model, prompt_text, title=None):
+    def gateway_call(model, prompt_text, title=None, writer_family=None):
         seen.append(model)
         if model.startswith("claude"):
             return gw("", status=429, finish=None, error="HTTP 429: rate limit")

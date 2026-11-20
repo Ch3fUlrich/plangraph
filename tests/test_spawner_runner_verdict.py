@@ -8,6 +8,35 @@ import pytest
 from plangraph.spawner.runner import JobInfo, SpawnerRunner
 
 
+@pytest.mark.parametrize('writer,model,canonical', [
+    ('codex', 'deepseek-v4.1-flash', 'openai'),
+    ('cx-gpt-6.1-sol', 'deepseek-v4.1-flash', 'openai'),
+    ('gpt', 'deepseek-v4.1-flash', 'openai'),
+    ('claude', 'deepseek-v4.1-flash', 'anthropic'),
+    ('codex', 'ovh/gpt-oss-120b', None),
+    ('author', 'deepseek-v4.1-flash', None),
+])
+def test_writer_family_alias_verdict_forwarding(tmp_path, monkeypatch, writer, model, canonical):
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'tools'))
+    import seat_verdict as seat
+    from plangraph.spawner import notify
+    record = dict(role='review', item_key='demo:A', given_writer_families=[writer])
+    monkeypatch.setattr(seat, 'evidence_from_record', lambda *a: (
+        dict(served_model=model, head_sha='d' * 40), 'VERDICT: ACCEPT'))
+    monkeypatch.setenv('PG_REVIEWER_TOKEN_DIR', str(tmp_path))
+    calls = []
+    monkeypatch.setattr(seat, 'main', lambda args: calls.append(args) or 0)
+    keeper = SimpleNamespace(url='unused', item=lambda key: dict(key=key, evidence=[
+        dict(kind='commit+ci', verified=True, ref=dict(commit='d' * 40))]))
+    notify.deliver_verdict(tmp_path, record, keeper)
+    assert len(calls) == int(canonical is not None)
+    if canonical:
+        assert calls[0][calls[0].index('--writer-family') + 1] == canonical
+    assert json.loads((tmp_path / 'verdict.json').read_text())['status'] == (
+        'delivered' if canonical else 'skipped')
+
+
 def test_verdict_has_no_completion_hook_marker(tmp_path, monkeypatch):
     from plangraph.spawner.runner import spawn_service
     service = spawn_service(state=tmp_path)

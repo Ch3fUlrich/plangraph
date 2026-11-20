@@ -386,7 +386,7 @@ def test_spare_writer_family_is_never_launched(service, monkeypatch):
 def test_stopped_seat_keeps_status_and_carries_provider_stop(service, coverage, seat):
     svc = service(False, skip=(GEMINI.model, LUNA.model))
     plan = routing.SpawnPlan((GEMINI, LUNA), (), 'test', (LUNA,), (), seat_coverage=coverage)
-    answer = asyncio.run(svc._spawn(card=CARD, role='review', wait_seconds=None, _plan=plan))
+    answer = asyncio.run(svc._spawn(card=CARD, role='review', writer_families=['mimo'], wait_seconds=None, _plan=plan))
     saved = json.loads(svc._path(answer['run_id']).read_text())
     for record in (answer, saved):
         nonseat, stopped = record['attempts']
@@ -418,7 +418,7 @@ def test_stopped_seat_is_failed_without_labeling_nonseat_legs(service, dispatch)
     svc.runner.spawn = failed_stop
     plan = routing.SpawnPlan((LUNA,), (), 'test', (LUNA,), (),
                             seat_coverage=(dict(leg=LUNA.id, seat_group='seats-fixture'),))
-    answer = asyncio.run(svc._spawn(card=CARD, role='review', wait_seconds=None, _plan=plan))
+    answer = asyncio.run(svc._spawn(card=CARD, role='review', writer_families=['mimo'], wait_seconds=None, _plan=plan))
     assert answer['status'] == 'failed' and answer['exit_code'] != 0
     assert answer['attempts'][0]['skip_reason'] == 'provider_stop'
 

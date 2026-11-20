@@ -119,7 +119,7 @@ def test_one_failed_part_retries_on_the_next_family_for_that_part_only(tmp_path)
             return qo("", "error", "rate limit", True)
         return qo(read("ok_pass.txt"))
 
-    def gateway_call(model, prompt_text, title=None):
+    def gateway_call(model, prompt_text, title=None, writer_family=None):
         gcalls.append(model)
         return gw(read("ok_pass.txt"))
 
@@ -145,7 +145,7 @@ def test_leg_down_on_part_one_is_skipped_for_later_parts(tmp_path):
         return qo("", "error", "rate limit", True)
 
     out = seat.run_seat(spec_for(tmp_path, "openai", diff=diff, files={}),
-                        gateway_call=lambda m, p, title=None: gw(read("ok_pass.txt")),
+                        gateway_call=lambda m, p, title=None, writer_family=None: gw(read("ok_pass.txt")),
                         qoder_run=qoder_run, opencode_run=lambda p, model=None: oc(""))
     assert len(qcalls) == 1                                # qwen is down after part 1
     assert [o.part for o in out if o.pass_allowed] == [0, 1]
@@ -270,7 +270,7 @@ def test_down_leg_is_recorded_per_attempt_and_not_retried_on_later_parts(tmp_pat
         return qo("", "error", "rate limit", True)
 
     spec = spec_for(tmp_path, "openai", diff=diff, files={})
-    out = seat.run_seat(spec, gateway_call=lambda m, p, title=None: gw(read("ok_pass.txt")),
+    out = seat.run_seat(spec, gateway_call=lambda m, p, title=None, writer_family=None: gw(read("ok_pass.txt")),
                         qoder_run=qoder_run, opencode_run=lambda p, model=None: oc(""))
     first, later = out[0], [o for o in out if o.part > 0]
     assert (first.leg, first.part, first.pass_allowed) == ("qwen", 0, False)

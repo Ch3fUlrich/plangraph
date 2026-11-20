@@ -56,8 +56,8 @@ mod tools;
 mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
-#[allow(dead_code)] // Setting consumed by later work-mode slices.
 mod work_mode_config;
+mod writer_ledger;
 
 use pg_worker_core::host_probe::probe;
 

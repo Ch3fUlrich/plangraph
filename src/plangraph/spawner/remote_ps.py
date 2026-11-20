@@ -22,7 +22,28 @@ FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
 
 
 class HostQueryError(ValueError):
-    """Only fixed public reasons cross the transport boundary."""
+    """Transport failure with a public SSH exit code; stderr stays private."""
+
+    def __init__(self, reason, *, code=None, stderr=''):
+        super().__init__(reason)
+        self.code, self.stderr = code, stderr
+
+
+def safe_diagnostic(text):
+    """Only structured transport metadata is public; stderr stays private."""
+    if isinstance(text, str) and re.fullmatch(
+            r'(?:HostQueryError \(SSH exit (?:[0-9]{1,3})\)|'
+            r'HostQueryError|TimeoutError|TimeoutExpired|FileNotFoundError|'
+            r'PermissionError|OSError|ValueError)', text):
+        return text
+    return 'host query failed'
+
+
+def safe_reason(exc):
+    """Keep the fixed reason contract, regardless of exception text."""
+    if isinstance(exc, HostQueryError):
+        return exit_reason(exc.code) or 'host query failed'
+    return 'host query failed'
 
 
 SRC_MISSING = 44
@@ -33,6 +54,7 @@ def source_check(host):
         src = host['win_src']
         if not isinstance(src, str) or not re.fullmatch(r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*', src):
             raise ValueError('invalid configuration')
+        src = src.replace('/', '\\')
         return f'if not exist "{src}\\" exit /b {SRC_MISSING}'
     return f'test -d {source_path(host["src"])} || exit {SRC_MISSING}'
 
@@ -49,7 +71,9 @@ def host_command(host, *, query=False):
     if 'win_src' in host:
         command = source_check(host)
         if query:
-            command += (f' & set "PYTHONPATH={host["win_src"]}"&& '
+            command = f'({command})'
+            src = host['win_src'].replace('/', '\\')
+            command += (f' & set "PYTHONPATH={src}"&& '
                         'python -m plangraph.spawner.remote_ps')
         return command
     command = source_check(host) if 'src' in host else ''
@@ -96,7 +120,7 @@ def query_host(host, timeout):
             code = process.wait(timeout=max(0, deadline - time.monotonic()))
             reason = exit_reason(code)
             if reason:
-                raise HostQueryError(reason)
+                raise HostQueryError(reason, code=code)
             return output.decode('utf-8', errors='replace')
         finally:
             if process.poll() is None:
@@ -144,8 +168,16 @@ def configured_hosts():
 def _fetch(host, transport):
     try:
         if host.get('invalid'):
-            raise ValueError()
-        data = json.loads(transport(host, TIMEOUT))
+            return [dict(host=host['name'], status='unknown', reason='host query failed')]
+        try:
+            payload = transport(host, TIMEOUT)
+        except Exception as exc:
+            error = type(exc).__name__
+            if isinstance(exc, HostQueryError) and type(exc.code) is int and 0 <= exc.code <= 255:
+                error += f' (SSH exit {exc.code})'
+            return [dict(host=host['name'], status='unknown', reason=safe_reason(exc),
+                         error=safe_diagnostic(error))]
+        data = json.loads(payload)
         rows = data['runs']
         if not isinstance(rows, list):
             raise ValueError()
@@ -163,11 +195,8 @@ def _fetch(host, transport):
                                0xD800 <= ord(c) <= 0xDFFF for c in row[k])
                            for k in FIELDS if k in row and isinstance(row[k], str))):
                 raise ValueError()
-            clean.append({k: row[k] for k in FIELDS if k in row})
+            clean.append(dict({k: row[k] for k in FIELDS if k in row}, host=host['name']))
         return clean
-    except HostQueryError as exc:
-        reason = str(exc) if str(exc) in ('host src missing', 'host unreachable') else 'host query failed'
-        return [dict(host=host['name'], status='unknown', reason=reason)]
     except Exception:
         return [dict(host=host['name'], status='unknown', reason='host query failed')]
 

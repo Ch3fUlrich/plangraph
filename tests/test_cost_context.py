@@ -106,7 +106,7 @@ def test_launch_maps_strict_prompt_bound_before_runner(sandbox, monkeypatch, too
     root, seat, _ = sandbox
     monkeypatch.setenv('PLANGRAPH_CONTEXT_STRICT', '1')
     leg = SimpleNamespace(id='synthetic', roles=('implement',), tool_mode=tool_mode,
-                          max_request_tokens=200, model='synthetic', harness='synthetic')
+                          max_request_tokens=200, model='synthetic', harness='synthetic', family='deepseek')
     monkeypatch.setattr(launch_spec, 'DEFAULT_LEGS', [leg])
     monkeypatch.setattr('plangraph.spawner.target.admit_leg', lambda leg: None)
     seat.state = root / 'state'
@@ -257,14 +257,14 @@ def test_launch_maps_real_oversized_diff_refusal(review_payload, monkeypatch):
     monkeypatch.setattr(inline_diff.subprocess, 'run', lambda *a, **k:
                         subprocess.CompletedProcess(a, 0, stdout='private diff' * 100, stderr=''))
     leg = SimpleNamespace(id='synthetic', roles=('review',), tool_mode='inline-only',
-                          max_request_tokens=200, model='synthetic', harness='synthetic')
+                          max_request_tokens=200, model='synthetic', harness='synthetic', family='deepseek')
     monkeypatch.setattr(launch_spec, 'DEFAULT_LEGS', [leg])
     monkeypatch.setattr('plangraph.spawner.target.admit_leg', lambda leg: None)
     seat.state = root / 'state'
     seat.runner.spawn = lambda **kw: pytest.fail('runner invoked')
     monkeypatch.setattr(launch_spec, 'SpawnService', lambda **kw: seat)
     monkeypatch.setattr(launch_spec, '_sweep', lambda *a: None)
-    request = dict(run_id='run-' + '0' * 32, job_id='synthetic', role='review',
+    request = dict(run_id='run-' + '0' * 32, job_id='synthetic', role='review', writer_families=['openai'],
                    dry_run=True, leg={'id': leg.id}, prompt='tiny', card=card,
                    cwd=str(root), state=str(seat.state))
     with pytest.raises(launch_spec.LaunchRefused) as exc:

@@ -79,6 +79,7 @@ pub mod stall;
 pub mod turn_budget;
 pub mod watch;
 pub mod work_mode;
+pub mod work_mode_auto;
 pub mod workspace;
 pub mod workspace_bundle;
 pub mod workspace_launch;

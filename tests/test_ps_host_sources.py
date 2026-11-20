@@ -238,7 +238,7 @@ def test_source_paths_are_literal(tmp_path, wsl):
 def test_windows_precedence_and_validation():
     host = dict(win_src='C:/source space', wsl_distro='Ubuntu')
     assert remote_ps.host_command(host) == remote_ps.source_check(host)
-    assert remote_ps.host_command(host, query=True).startswith(remote_ps.source_check(host))
+    assert remote_ps.host_command(host, query=True).startswith('(' + remote_ps.source_check(host) + ') & ')
     for path in ['C:/x&echo bad', 'C:/%PATH%', 'C:/x"', 'C:/x\n']:
         with pytest.raises(ValueError):
             remote_ps.host_command(dict(win_src=path), query=True)

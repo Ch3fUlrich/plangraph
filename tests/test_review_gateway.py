@@ -408,3 +408,17 @@ def test_evidence_keys_exact_and_extra(monkeypatch, tmp_path):
     doc = json.loads((tmp_path / "evidence.json").read_text())
     assert doc["k"] == "v" and doc["status"] == 200
     assert not (tmp_path / "error.json").exists()
+
+
+@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.1-sol', 'gpt'])
+def test_review_request_carries_resolved_author(monkeypatch, writer):
+    cap = {}
+    server = make_server(cap)
+    monkeypatch.setenv(KEY_ENV, KEY)
+    try:
+        g.call('deepseek-v4.1-flash', 'review', url=base_of(server), writer_family=writer)
+    finally:
+        server.shutdown(); server.server_close()
+    assert cap['headers']['x-omniroute-task-role'] == 'review'
+    assert cap['headers']['x-omniroute-author-model'] == 'gpt'
+    assert cap['headers']['x-omniroute-exclude-family'] == 'gpt'

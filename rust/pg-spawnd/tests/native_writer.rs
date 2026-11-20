@@ -200,7 +200,8 @@ if 'reject marker' in prompt:
     head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
     pathlib.Path('reviews', head[:8] + '-rejected.txt').write_text('VERDICT: REQUEST_CHANGES\n')
     sys.exit(1)
-print(json.dumps({'type':'turn.completed'}))
+print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1000,'output_tokens':234}}))
+print('tokens used\n1,234')
 "#).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     fs::create_dir_all(dir.join("supervisor-bin")).unwrap();
@@ -351,5 +352,22 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    let mut completed = 0;
+    for entry in fs::read_dir(dir.join("state/runs")).unwrap() {
+        let path = entry.unwrap().path().join("ledger.jsonl");
+        if !path.exists() {
+            continue;
+        }
+        let row: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        if row["exit_code"] == 0 {
+            completed += 1;
+            assert_eq!(row["tokens"], 2468); // Two CLI executions, each logs 1,234.
+            assert_eq!(row["changed_lines"], 1);
+            assert_eq!(row["review_rounds"], 1);
+            assert!(row["wall_minutes"].as_f64().unwrap() > 0.0);
+        }
+    }
+    assert_eq!(completed, 1);
     fs::remove_dir_all(dir).unwrap();
 }

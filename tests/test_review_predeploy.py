@@ -206,7 +206,7 @@ def never(*a, **k):
 
 @pytest.mark.parametrize("status", [429, 500, 503, 0])
 def test_gateway_failure_retries_next_family(tmp_path, status):
-    def gateway_call(model, prompt_text, title=None):
+    def gateway_call(model, prompt_text, title=None, writer_family=None):
         return gw("", finish=None, status=status, error="HTTP %d" % status)
 
     outcomes = seat.run_seat(
@@ -221,7 +221,7 @@ def test_gateway_failure_retries_next_family(tmp_path, status):
 def test_other_4xx_does_not_retry(tmp_path):
     outcomes = seat.run_seat(
         spec_for(tmp_path, "alibaba"),
-        gateway_call=lambda m, p, title=None: gw("", None, 401, "HTTP 401"),
+        gateway_call=lambda m, p, title=None, writer_family=None: gw("", None, 401, "HTTP 401"),
         qoder_run=never, opencode_run=never)
     assert len(outcomes) == 1 and outcomes[0].tried == ["openai"]
 
@@ -233,7 +233,7 @@ def test_timeout_exception_retries(tmp_path):
     # qwen is first for writer openai; anthropic answers well
     outcomes = seat.run_seat(
         spec_for(tmp_path, "openai"),
-        gateway_call=lambda m, p, title=None: gw(read("ok_pass.txt")),
+        gateway_call=lambda m, p, title=None, writer_family=None: gw(read("ok_pass.txt")),
         qoder_run=slow, opencode_run=never)
     assert [o.leg for o in outcomes] == ["qwen", "anthropic"]
     assert outcomes[0].error.startswith("TimeoutError")
@@ -243,7 +243,7 @@ def test_timeout_exception_retries(tmp_path):
 def test_qoder_stderr_rate_limit_marks_down(tmp_path):
     outcomes = seat.run_seat(
         spec_for(tmp_path, "openai"),
-        gateway_call=lambda m, p, title=None: gw(read("ok_pass.txt")),
+        gateway_call=lambda m, p, title=None, writer_family=None: gw(read("ok_pass.txt")),
         qoder_run=lambda p, model=None: qo("", "error", "rate limit", True),
         opencode_run=never)
     assert outcomes[-1].leg == "anthropic" and outcomes[-1].pass_allowed
@@ -259,7 +259,7 @@ def test_incomplete_reply_retries(tmp_path, finish):
 
     outcomes = seat.run_seat(
         spec_for(tmp_path, "openai"),
-        gateway_call=lambda m, p, title=None: gw(read("ok_pass.txt")),
+        gateway_call=lambda m, p, title=None, writer_family=None: gw(read("ok_pass.txt")),
         qoder_run=qoder_run, opencode_run=never)
     assert outcomes[0].pass_allowed is False
     assert outcomes[-1].leg == "anthropic" and outcomes[-1].pass_allowed
@@ -268,7 +268,7 @@ def test_incomplete_reply_retries(tmp_path, finish):
 def test_all_legs_fail_returns_every_attempt_without_raising(tmp_path):
     outcomes = seat.run_seat(
         spec_for(tmp_path, "openai"),
-        gateway_call=lambda m, p, title=None: gw("", None, 429, "HTTP 429"),
+        gateway_call=lambda m, p, title=None, writer_family=None: gw("", None, 429, "HTTP 429"),
         qoder_run=lambda p, model=None: qo("", "timeout", "t"),
         opencode_run=lambda p, model=None: oc("", "empty"))
     assert [o.leg for o in outcomes] == ["qwen", "anthropic", "opencode"]
@@ -280,7 +280,7 @@ def test_anthropic_429_completes_on_non_claude_leg(tmp_path):
     """No leg hard-requires Claude (D-1533)."""
     seen = []
 
-    def gateway_call(model, prompt_text, title=None):
+    def gateway_call(model, prompt_text, title=None, writer_family=None):
         seen.append(model)
         if model.startswith("claude"):
             return gw("", None, 429, "HTTP 429: rate limit")
@@ -300,7 +300,7 @@ def test_anthropic_429_completes_on_non_claude_leg(tmp_path):
 def test_need_two_retry_does_not_steal_other_seat(tmp_path):
     outcomes = seat.run_seat(
         spec_for(tmp_path, "xiaomi", need=2),
-        gateway_call=lambda m, p, title=None: (
+        gateway_call=lambda m, p, title=None, writer_family=None: (
             gw("", None, 429, "x") if m.startswith("ovh/") else gw(read("ok_pass.txt"))),
         qoder_run=lambda p, model=None: qo(read("ok_pass.txt")),
         opencode_run=lambda p, model=None: oc(read("ok_pass.txt")))

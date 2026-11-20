@@ -1,0 +1,1 @@
+- **SPAWNER-PS-ALL-HOSTS:** Add CLI `ps --all-hosts` using the MCP fan-out function; preserve fixed reasons with bounded exception class and SSH exit code metadata in unknown rows, normalize remote rows to configured host labels, and normalize Windows cmd.exe source paths and group the source guard so existing directories reach `python`.

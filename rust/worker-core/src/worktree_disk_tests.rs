@@ -333,7 +333,8 @@ async def case(hardened, role, reason):
     service = spawn_service(runner, state) if hardened else SpawnService(runner, state)
     service._continue_writer = no_continuation
     record = await service._spawn(card={'estimate_tokens': 100}, prompt='task',
-                                  role=role, _plan=plan, wait_seconds=None)
+                                  role=role, writer_families=['openai'] if role == 'review' else [],
+                                  _plan=plan, wait_seconds=None)
     job = JobInfo('direct', 'failed', 'task', chosen.model, role=role, exit_code=7)
     job.refusal = reason
     job.events = [dict(event='disk_run_stopped', reason=reason)]

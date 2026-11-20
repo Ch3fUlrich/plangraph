@@ -74,6 +74,7 @@ fn real_run_and_failure() {
             json!({
                 "run_id":r["run_id"], "job_id":r["job_id"], "role":r["role"],
                 "dry_run":false, "leg":r["plan"]["first_leg"],
+                "writer_families":[], "review_of":null,
                 "prompt":"verbatim\nprompt", "card":{"x":1},
                 "cwd":std::env::current_dir().unwrap().to_string_lossy(),
                 "state":f.state.path().to_string_lossy()

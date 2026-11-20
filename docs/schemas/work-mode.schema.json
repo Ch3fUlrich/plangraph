@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Plangraph work-mode setting",
-  "description": "D-5952 / rule 3.41. Repository override takes precedence over user configuration; absent files default to batch. Auto is stored for later selection logic.",
+  "description": "D-5952 / rule 3.41. Repository override takes precedence over user configuration; absent files default to batch. Auto resolves from served writer legs in pg-spawnd route output.",
   "type": "object",
   "additionalProperties": false,
   "required": ["work_mode"],

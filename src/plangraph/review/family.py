@@ -23,6 +23,7 @@ __all__ = [
     "families_for_risk",
     "check_cross_family",
     "writer_key",
+    "writer_headers",
 ]
 
 FAMILIES = (
@@ -138,10 +139,20 @@ def writer_key(writer_family: object) -> str:
     closed. An unresolvable writer cannot be excluded from the reviewers, and
     "any family allowed" would let a writer review its own work.
     """
-    key = _family_key(writer_family)
+    from plangraph.planner.legs import spawnable_legs
+    records = spawnable_legs()
+    name = _norm(writer_family)
+    # Codex is the native harness for the registered Sol writer.
+    lookup = "cx-gpt-6.1-sol" if name == "codex" else name
+    served = {_family_key(leg.family) for leg in records
+              if lookup in (_norm(leg.id), _norm(leg.model))}
+    key = served.pop() if len(served) == 1 else None if served else _family_key(lookup)
     if key not in {family for _, family in FAMILIES}:
         raise FamilyError(
-            f"unknown writer family {writer_family!r}: cannot guarantee a cross-family review")
+            f"unknown writer family {repr(writer_family)[:64]}; "
+            "accepted names: " + ", ".join(sorted(
+                {family for _, family in FAMILIES} | {"codex", "gpt", "claude", "gemini", "mimo", "qwen"}))
+            + "; registered leg/model ids also accepted")
     return key
 
 
@@ -213,3 +224,16 @@ def check_cross_family(writer_family: str, reviewer_model: str) -> str:
         raise FamilyError(
             f"family {family!r} is the writer family {writer_family!r}")
     return family
+
+
+def writer_headers(writer_families):
+    """Resolve writers once and use the gateway's served-family vocabulary."""
+    aliases = {"openai": "gpt", "anthropic": "claude", "google": "gemini",
+               "xiaomi": "mimo", "alibaba": "qwen", "meta": "muse", "zhipu": "glm"}
+    keys = sorted({writer_key(w) for w in writer_families})
+    if not keys:
+        raise FamilyError("review needs a resolvable writer family (writer_families or review_of)")
+    families = [aliases.get(key, key) for key in keys]
+    from plangraph.routing_support.clients import build_routing_envelope_headers
+    return build_routing_envelope_headers(role="review", author_model=families[0],
+                                          exclude_families=families)

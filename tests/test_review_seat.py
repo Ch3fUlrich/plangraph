@@ -91,8 +91,9 @@ def test_writer_openai_uses_qwen(tmp_path):
 
 def test_writer_alibaba_uses_openai(tmp_path):
     """Writer alibaba prefers the openai (gateway) leg."""
-    def fake_gateway(model, prompt, title=None):
+    def fake_gateway(model, prompt, title=None, writer_family=None):
         assert model == "ovh/gpt-oss-120b"
+        assert writer_family == "alibaba"
         return gw_result(read("ok_pass.txt"))
 
     def no_qoder(*a, **k):
@@ -107,7 +108,7 @@ def test_writer_alibaba_uses_openai(tmp_path):
 
 def test_need_two_anthropic_gives_two_families(tmp_path):
     """Writer anthropic with need=2 fans out to both legs."""
-    def fake_gateway(model, prompt, title=None):
+    def fake_gateway(model, prompt, title=None, writer_family=None):
         return gw_result(read("ok_pass.txt"))
 
     def fake_qoder(prompt, model=None):
@@ -130,7 +131,7 @@ def test_down_qwen_with_openai_raises(tmp_path):
 
 def test_missing_key_propagates(tmp_path):
     """Config errors are never collected as failed legs."""
-    def bad_gateway(model, prompt, title=None):
+    def bad_gateway(model, prompt, title=None, writer_family=None):
         raise gateway.MissingKey("missing review key: set X")
 
     with pytest.raises(gateway.MissingKey):
@@ -141,7 +142,7 @@ def test_missing_key_propagates(tmp_path):
 
 def test_failed_leg_collected(tmp_path):
     """A non-200 gateway reply collects with verdict None, no raise."""
-    def fake_gateway(model, prompt, title=None):
+    def fake_gateway(model, prompt, title=None, writer_family=None):
         return gw_result("", finish=None, status=500, error="HTTP 500: boom")
 
     outcomes = seat.run_seat(spec_for(tmp_path, "alibaba", down=ONLY_OPENAI),
@@ -157,7 +158,7 @@ def test_failed_leg_collected(tmp_path):
 
 def test_pass_compat_dry_run(tmp_path, capsys):
     """Passing seat dirs send ok True through the keeper tool."""
-    def fake_gateway(model, prompt, title=None):
+    def fake_gateway(model, prompt, title=None, writer_family=None):
         return gw_result(read("ok_pass.txt"))
 
     outcomes = seat.run_seat(spec_for(tmp_path, "alibaba"),
@@ -184,7 +185,7 @@ def test_bold_verdict_still_passes(tmp_path, capsys):
 
 def test_gaming_missing_refused(tmp_path, capsys):
     """A no without the hit count never passes; keeper exits 4."""
-    def fake_gateway(model, prompt, title=None):
+    def fake_gateway(model, prompt, title=None, writer_family=None):
         return gw_result(read("no_without_zero_hits.txt"))
 
     outcomes = seat.run_seat(spec_for(tmp_path, "alibaba", down=ONLY_OPENAI),
@@ -197,7 +198,7 @@ def test_gaming_missing_refused(tmp_path, capsys):
 
 def test_length_empty_not_zero(tmp_path, capsys):
     """Truncated empty replies never send as pass."""
-    def fake_gateway(model, prompt, title=None):
+    def fake_gateway(model, prompt, title=None, writer_family=None):
         return gw_result("", finish="length")
 
     outcomes = seat.run_seat(spec_for(tmp_path, "alibaba"),
@@ -210,7 +211,7 @@ def test_length_empty_not_zero(tmp_path, capsys):
 
 def test_truncated_empty_is_failed_seat(tmp_path):
     """A truncated_empty gateway result is a failed seat, never a verdict."""
-    def fake_gateway(model, prompt, title=None):
+    def fake_gateway(model, prompt, title=None, writer_family=None):
         return gw_result(read("ok_pass.txt"), finish="length",
                          truncated_empty=True)
 
@@ -244,7 +245,7 @@ def test_qoder_tool_call_never_passes(tmp_path, capsys):
 
 def test_fix_sent_ok_false(tmp_path, capsys):
     """Fix verdicts send with ok False and exit 0."""
-    def fake_gateway(model, prompt, title=None):
+    def fake_gateway(model, prompt, title=None, writer_family=None):
         return gw_result(read("fix_with_findings.txt"))
 
     outcomes = seat.run_seat(spec_for(tmp_path, "alibaba"),

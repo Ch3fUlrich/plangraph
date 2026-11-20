@@ -10,6 +10,18 @@ use std::{
     time::Duration,
 };
 
+const WRITER_MODEL: &str = "gpt-6.1-sol";
+const WRITER_EFFORT: &str = "medium";
+/// Model and effort flags for the codex invocation; the ledger row records the same constants.
+fn model_args() -> [String; 4] {
+    [
+        "-m".into(),
+        WRITER_MODEL.into(),
+        "-c".into(),
+        format!("model_reasoning_effort={WRITER_EFFORT}"),
+    ]
+}
+
 struct Host {
     repo: PathBuf,
     run_id: String,
@@ -37,6 +49,60 @@ impl Host {
     }
     fn git(&self, args: &[&str]) -> Result<String, String> {
         output(self.command("git").arg("-C").arg(&self.cwd).args(args))
+    }
+    fn ledger_row(&self, record: &Value) -> Result<Value, String> {
+        let directory = self
+            .record_path
+            .parent()
+            .ok_or("record directory missing")?;
+        let log = match fs::read_to_string(directory.join("native.log")) {
+            Ok(log) => log,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e.to_string()),
+        };
+        let item = record["item_key"].as_str();
+        let mut lines = Value::Null;
+        let mut done = item.map(|_| 0);
+        if let (Some(base), Some(head)) =
+            (record["base_sha"].as_str(), record["final_head"].as_str())
+        {
+            let stat = self.git(&["diff", "--numstat", base, head, "--"])?;
+            let mut total = 0u64;
+            for line in stat.lines() {
+                for count in line.split('\t').take(2) {
+                    if count != "-" {
+                        total = total
+                            .checked_add(count.parse::<u64>().map_err(|e| e.to_string())?)
+                            .ok_or("changed lines overflow")?;
+                    }
+                }
+            }
+            lines = json!(total);
+            if record["exit_code"] == 0 {
+                let trailers = self.git(&[
+                    "log",
+                    "--format=%(trailers:key=Plan-Item,valueonly)",
+                    &format!("{base}..{head}"),
+                    "--",
+                ])?;
+                done = item.map(|key| u64::from(trailers.lines().any(|line| line.trim() == key)));
+            }
+        }
+        let wall = record["ended"]
+            .as_f64()
+            .zip(record["started"].as_f64())
+            .filter(|(end, start)| end >= start)
+            .map(|(end, start)| (end - start) / 60.0);
+        let accepted = record["review"]["verdict"] == "ACCEPT";
+        Ok(
+            json!({"schema_version":1,"kind":"writer","run_id":record["run_id"],
+            "host":record["host"],"model":WRITER_MODEL,"effort":WRITER_EFFORT,
+            "started":record["started"],"ended":record["ended"],"exit_code":record["exit_code"],
+            "item_key":record["item_key"],"items_given":item.map(|_| 1),"items_done":done,
+            "changed_lines":lines,"wall_minutes":wall,"tokens":crate::writer_ledger::tokens(&log)?,
+            "review_rounds":record["review_rounds"],
+            "high_held":accepted.then_some(0),"med_held":accepted.then_some(0)}),
+        )
     }
     fn free(&self) -> Result<u64, String> {
         // State and repository may be on different filesystems. Probe the worktree's
@@ -140,12 +206,9 @@ impl Driver for Host {
                     .remove(0),
             )
             .env("CARGO_INCREMENTAL", "0")
+            .args(["--json"])
+            .args(model_args())
             .args([
-                "--json",
-                "-m",
-                "gpt-6.1-sol",
-                "-c",
-                "model_reasoning_effort=medium",
                 "-c",
                 "approval_policy=never",
                 "-c",
@@ -250,8 +313,24 @@ impl Driver for Host {
         let mut record = record.clone();
         record["cwd"] = json!(self.cwd);
         record["review_dir"] = json!(self.reviews);
+        let ledger = if record["ended"].is_number() {
+            self.ledger_row(&record).and_then(|row| {
+                crate::writer_ledger::append(
+                    self.record_path
+                        .parent()
+                        .ok_or("record directory missing")?,
+                    &row,
+                )
+            })
+        } else {
+            Ok(())
+        };
+        if let Err(error) = &ledger {
+            record["ledger_error"] = json!(error);
+        }
         atomic_write_private(&self.record_path, record.to_string().as_bytes())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        ledger
     }
 }
 pub(crate) fn find_review(
