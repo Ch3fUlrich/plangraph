@@ -1,0 +1,283 @@
+use pg_keeper_backup::pg::{count_tables, redact, Pg, ScratchState};
+use pg_keeper_backup::{ledger, names, restore_test, retention, run_dump};
+use std::cell::RefCell;
+use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+
+const NOW: u64 = 1_794_000_000; // 2026-11-06T21:20Z
+
+struct Fake {
+    seq: u64,
+    tables: usize,
+    scratch_seq: u64,
+    calls: RefCell<Vec<String>>,
+}
+
+impl Fake {
+    fn new(seq: u64) -> Self {
+        Self {
+            seq,
+            tables: 43,
+            scratch_seq: seq,
+            calls: RefCell::new(Vec::new()),
+        }
+    }
+    fn log(&self, what: &str) {
+        self.calls.borrow_mut().push(what.to_owned());
+    }
+}
+
+fn listing(tables: usize) -> String {
+    let mut text = String::from(";\n; Archive created at 2026-11-13\n");
+    for i in 0..tables {
+        text += &format!("{}; 1259 {} TABLE keeper t{i} keeper\n", 200 + i, 16000 + i);
+        text += &format!(
+            "{}; 0 {} TABLE DATA keeper t{i} keeper\n",
+            300 + i,
+            16000 + i
+        );
+    }
+    text += "9; 2615 1 SCHEMA - keeper keeper\n";
+    text
+}
+
+impl Pg for Fake {
+    fn max_seq(&self, _: &str) -> Result<u64, String> {
+        self.log("max_seq");
+        Ok(self.seq)
+    }
+    fn dump(&self, _: &str, out: &mut dyn Write) -> Result<(), String> {
+        self.log("dump");
+        out.write_all(b"PGDMP-fake").map_err(|e| e.to_string())
+    }
+    fn list(&self, _: &Path) -> Result<String, String> {
+        self.log("list");
+        Ok(listing(self.tables))
+    }
+    fn restore_scratch(&self, _: &Path, _: &str) -> Result<(), String> {
+        self.log("restore");
+        Ok(())
+    }
+    fn scratch_state(&self, _: &str, _: &str) -> Result<ScratchState, String> {
+        Ok(ScratchState {
+            tables: self.tables,
+            max_seq: self.scratch_seq,
+        })
+    }
+    fn drop_scratch(&self, _: &str) -> Result<(), String> {
+        self.log("drop");
+        Ok(())
+    }
+}
+
+fn mode(path: &Path) -> u32 {
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+#[test]
+fn stamp_is_utc_minute_resolution() {
+    assert_eq!(names::stamp(0), "19700101T0000Z");
+    assert_eq!(names::stamp(1_794_000_000), "20261106T2120Z");
+    assert_eq!(names::stamp(1_709_164_800 + 86_399), "20240229T2359Z");
+}
+
+#[test]
+fn dump_name_round_trips_and_rejects_other_names() {
+    let name = names::dump_name(19109, NOW);
+    assert_eq!(name, "keeper-schema-seq19109-20261106T2120Z.dump");
+    assert_eq!(names::parse(&name), Some((19109, "20261106T2120Z")));
+    for bad in [
+        "keeper-schema-ledger.txt",
+        "keeper-schema-seq-20261106T2120Z.dump",
+        "keeper-schema-seq1-2026.dump",
+        "keeper-schema-seq1x-20261106T2120Z.dump",
+        "keeper-schema-seq1-20261106T2120Z.dump.part",
+        "keeper.db",
+    ] {
+        assert_eq!(names::parse(bad), None, "{bad}");
+    }
+}
+
+#[test]
+fn a_dump_run_writes_a_0600_file_and_one_ledger_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = run_dump(&Fake::new(19200), dir.path(), "keeper", 14, NOW).unwrap();
+    let file = dir.path().join(&out.entry.file);
+    assert_eq!(std::fs::read(&file).unwrap(), b"PGDMP-fake");
+    assert_eq!(mode(&file), 0o600);
+    assert_eq!(mode(&dir.path().join(ledger::LEDGER_NAME)), 0o600);
+    let text = std::fs::read_to_string(dir.path().join(ledger::LEDGER_NAME)).unwrap();
+    assert_eq!(text.lines().count(), 1);
+    // sha256 of "PGDMP-fake"
+    let want = format!(
+        "20261106T2120Z seq=19200 size=10 sha256={} file=keeper-schema-seq19200-20261106T2120Z.dump",
+        out.entry.sha256
+    );
+    assert_eq!(text.trim(), want);
+    assert_eq!(out.entry.sha256.len(), 64);
+    let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(leftovers.len(), 2, "no .part file stays: {leftovers:?}");
+}
+
+#[test]
+fn retention_deletes_the_fifteenth_oldest_and_keeps_fourteen() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("notes.txt"), "keep me").unwrap();
+    let fake = Fake::new(19200);
+    let mut first = String::new();
+    for day in 0..15u64 {
+        let out = run_dump(&fake, dir.path(), "keeper", 14, NOW + day * 86_400).unwrap();
+        if day == 0 {
+            first = out.entry.file.clone();
+        }
+        assert_eq!(out.pruned.len(), usize::from(day == 14), "day {day}");
+        if day == 14 {
+            assert_eq!(out.pruned, vec![first.clone()]);
+        }
+    }
+    let mut dumps = 0;
+    for e in std::fs::read_dir(dir.path()).unwrap() {
+        let name = e.unwrap().file_name().into_string().unwrap();
+        dumps += usize::from(names::parse(&name).is_some());
+    }
+    assert_eq!(dumps, 14);
+    assert!(!dir.path().join(&first).exists());
+    assert!(dir.path().join("notes.txt").exists());
+    // the ledger keeps its history
+    let ledger = std::fs::read_to_string(dir.path().join(ledger::LEDGER_NAME)).unwrap();
+    assert_eq!(ledger.lines().count(), 15);
+}
+
+#[test]
+fn retention_plan_orders_by_stamp_then_seq_and_ignores_foreign_names() {
+    let names_in = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+    let all = names_in(&[
+        "keeper-schema-seq19109-20261113T1535Z.dump",
+        "keeper-schema-seq19300-20261115T0240Z.dump",
+        "keeper-schema-seq19200-20261114T0240Z.dump",
+        "other.dump",
+    ]);
+    assert_eq!(
+        retention::plan(&all, 2),
+        vec!["keeper-schema-seq19109-20261113T1535Z.dump"]
+    );
+    assert!(retention::plan(&all, 3).is_empty());
+    assert!(retention::plan(&all, 0).len() == 3);
+}
+
+#[test]
+fn a_failed_dump_leaves_no_file_and_no_ledger_line() {
+    struct Broken(Fake);
+    impl Pg for Broken {
+        fn max_seq(&self, s: &str) -> Result<u64, String> {
+            self.0.max_seq(s)
+        }
+        fn dump(&self, _: &str, out: &mut dyn Write) -> Result<(), String> {
+            out.write_all(b"half").unwrap();
+            Err("pg_dump failed".into())
+        }
+        fn list(&self, d: &Path) -> Result<String, String> {
+            self.0.list(d)
+        }
+        fn restore_scratch(&self, d: &Path, s: &str) -> Result<(), String> {
+            self.0.restore_scratch(d, s)
+        }
+        fn scratch_state(&self, s: &str, c: &str) -> Result<ScratchState, String> {
+            self.0.scratch_state(s, c)
+        }
+        fn drop_scratch(&self, s: &str) -> Result<(), String> {
+            self.0.drop_scratch(s)
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let err = run_dump(&Broken(Fake::new(19200)), dir.path(), "keeper", 14, NOW)
+        .err()
+        .unwrap();
+    assert_eq!(err, "pg_dump failed");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn restore_test_refuses_a_dump_older_than_seq_19096_before_touching_postgres() {
+    let fake = Fake::new(19096);
+    let old = Path::new("/nowhere/keeper-schema-seq19095-20261113T1535Z.dump");
+    let err = restore_test(&fake, old, "keeper", 43, names::MIN_SEQ)
+        .err()
+        .unwrap();
+    assert!(err.contains("older than 19096"), "{err}");
+    assert!(fake.calls.borrow().is_empty());
+}
+
+#[test]
+fn restore_test_passes_on_a_fresh_dump_and_drops_the_scratch() {
+    let fake = Fake::new(19096);
+    let name = "/x/keeper-schema-seq19096-20261113T1535Z.dump";
+    let report = restore_test(&fake, Path::new(name), "keeper", 43, names::MIN_SEQ).unwrap();
+    assert_eq!((report.seq, report.tables), (19096, 43));
+    assert_eq!(*fake.calls.borrow(), ["list", "restore", "drop"]);
+}
+
+#[test]
+fn restore_test_rejects_wrong_table_count_and_stale_content_and_still_drops() {
+    let name = Path::new("/x/keeper-schema-seq19200-20261113T1535Z.dump");
+    let mut few = Fake::new(19200);
+    few.tables = 42;
+    assert!(restore_test(&few, name, "keeper", 43, names::MIN_SEQ)
+        .unwrap_err()
+        .contains("42 tables"));
+    // a renamed old dump: the scratch content is older than the name says
+    let mut renamed = Fake::new(19200);
+    renamed.scratch_seq = 18000;
+    let err = restore_test(&renamed, name, "keeper", 43, names::MIN_SEQ).unwrap_err();
+    assert!(err.contains("below"), "{err}");
+    assert_eq!(
+        renamed.calls.borrow().last().map(String::as_str),
+        Some("drop")
+    );
+}
+
+#[test]
+fn restore_test_only_accepts_dump_names() {
+    let fake = Fake::new(19200);
+    assert!(restore_test(
+        &fake,
+        Path::new("/x/keeper.db"),
+        "keeper",
+        43,
+        names::MIN_SEQ
+    )
+    .is_err());
+    assert!(restore_test(&fake, Path::new("/x/a.dump"), "Keeper;", 43, names::MIN_SEQ).is_err());
+}
+
+#[test]
+fn table_count_ignores_data_and_other_schemas() {
+    let mut text = listing(43);
+    text += "1; 1259 5 TABLE public other keeper\n";
+    assert_eq!(count_tables(&text, "keeper"), 43);
+}
+
+#[test]
+fn the_password_never_appears_in_text_or_arguments() {
+    assert_eq!(
+        redact("auth failed for s3cret on host", &["s3cret".to_owned()]),
+        "auth failed for *** on host"
+    );
+    assert_eq!(redact("unchanged", &[String::new()]), "unchanged");
+    let args = pg_keeper_backup::docker::run_args(
+        "postgres:17",
+        Some(Path::new("/b")),
+        &["pg_dump", "-Fc"],
+    );
+    assert!(args.windows(2).any(|w| w == ["-e", "PGPASSWORD"]));
+    assert!(
+        args.iter()
+            .all(|a| !a.contains('=') || a.starts_with("/b:")),
+        "{args:?}"
+    );
+    assert!(args.contains(&"/b:/backup:ro".to_owned()));
+}
