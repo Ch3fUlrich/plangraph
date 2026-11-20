@@ -115,3 +115,14 @@ fn a_longer_remote_ref_does_not_hide_the_host_local_base() {
     let local_head = git_in(&host.repo, &["rev-parse", "refs/heads/lane/local"]);
     assert_eq!(host.prepare().unwrap(), local_head);
 }
+
+#[test]
+fn a_base_ref_ending_in_a_unicode_space_is_matched_byte_for_byte() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    let name = "refs/heads/lane/nbsp\u{a0}";
+    git_in(&host.repo, &["update-ref", name, "refs/heads/lane/local"]);
+    host.base_ref = name.into();
+    let local_head = git_in(&host.repo, &["rev-parse", "refs/heads/lane/local"]);
+    assert_eq!(host.prepare().unwrap(), local_head);
+}
