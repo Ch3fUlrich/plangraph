@@ -71,3 +71,4 @@ stay conservative; gitconfig guard failures are never voided. The card cannot
 set this marker. Use one writer per checkout; unrelated concurrent edits can
 prevent the unchanged proof, so review that diff rather than inventing a count.
 
+Progress tests use the shared isolated Rust Git fixture command; inherited hook repository variables cannot redirect fixture commits into the pushing checkout.

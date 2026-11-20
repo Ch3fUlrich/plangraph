@@ -16,6 +16,8 @@ equality rejects changes to capacity, flags, metadata, status, grammar or modes.
 The parsed authority is lazy-cached; callers get deep copies and tests can reset it.
 Claude's `forbidden_flags: ["--bg"]` is pinned data, not launch enforcement in S01.
 All launch builders, payload functions and error exports retain their behavior.
+Launch titles retain the full 32-hex UUID: `plangraph-job-<uuid>` is 46 ASCII
+bytes, matching the full-UUID gateway session tag and the metadata contract.
 
 ## Basis and merge-order gate
 Basis: `origin/main` d41bcd1211fa8a15761e0164aeb6b064c40f1c4a; re-read overlaps

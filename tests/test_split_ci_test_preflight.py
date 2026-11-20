@@ -100,3 +100,30 @@ def test_local_tests_use_main_while_policy_keeps_push_base(repo, monkeypatch):
     assert '--local' in tests and '--files-only' in tests
     assert all(env['FILESIZE_REQUIRE_BASE'] == 'origin/main' for cmd, _, env in calls
                if Path(cmd[1]).name == 'check_file_size.py')
+
+
+@pytest.mark.parametrize('own_workspace', [False, True])
+def test_worker_only_preflight_runs_own_manifest(repo, monkeypatch, own_workspace):
+    rust = repo / 'rust'
+    worker = rust / 'worker'
+    (worker / 'src').mkdir(parents=True)
+    (rust / 'Cargo.toml').write_text(
+        '[workspace]\nmembers = []\nexclude = ["worker"]\n')
+    (worker / 'Cargo.toml').write_text(
+        '[package]\nname = "pg-worker"\n' + ('[workspace]\n' if own_workspace else ''))
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '-qm', 'worker manifest'], cwd=repo, check=True)
+    (worker / 'src/lib.rs').write_text('// worker-only change\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                    'commit', '-qm', 'worker source'], cwd=repo, check=True)
+    monkeypatch.setattr(preflight.shutil, 'which', lambda *a, **kw: '/fake/cargo')
+    calls = fake_runner(monkeypatch)
+    assert preflight.main(['--base', 'HEAD~1', '--fast'], repo) == 0
+    cargo = [(cmd, cwd) for cmd, cwd, _ in calls if cmd[0] == 'cargo']
+    target = ['--manifest-path', str(worker / 'Cargo.toml')]
+    assert cargo == [(cmd, rust) for cmd in [
+        ['cargo', 'fmt', *target, '--check'],
+        ['cargo', 'clippy', *target, '--all-targets', '--', '-D', 'warnings'],
+        ['cargo', 'test', *target, '--lib', '--bins']]]

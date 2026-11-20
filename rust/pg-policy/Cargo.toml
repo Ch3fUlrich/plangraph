@@ -6,6 +6,9 @@ publish = false
 
 [dependencies]
 regex = "1"
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }
 
 [dev-dependencies]
+pg-worker-core = { path = "../worker-core", features = ["test-support"] }
 tempfile = "3"

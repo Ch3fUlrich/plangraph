@@ -251,7 +251,7 @@ fn failed_round_without_work_does_not_consume_round_or_add_zero_baseline() {
 fn work_fingerprint_detects_commits_tracked_and_untracked_changes() {
     let dir = tempfile::tempdir().unwrap();
     let git = |args: &[&str]| {
-        let output = std::process::Command::new("git")
+        let output = pg_worker_core::git_test_support::command(dir.path())
             .args(args)
             .envs([
                 ("GIT_AUTHOR_NAME", "Fixture"),

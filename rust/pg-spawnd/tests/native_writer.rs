@@ -1,10 +1,10 @@
 //! End-to-end Python admission -> Rust worker -> native CLI, without a model seat.
 #![cfg(unix)]
+#[path = "common/binary.rs"]
+mod binary;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(repo)
+    let out = pg_worker_core::git_test_support::command(repo)
         .args(args)
         .output()
         .unwrap();
@@ -15,6 +15,80 @@ fn git(repo: &Path, args: &[&str]) -> String {
     );
     String::from_utf8(out.stdout).unwrap().trim().into()
 }
+// Re-exec instead of changing process-global Git variables beside parallel tests.
+#[test]
+fn hook_git_environment_leaves_sentinel_unchanged() {
+    use pg_worker_core::git_test_support::command;
+    const GIT_ENTRY: &str = ".git";
+    let sentinel = tempfile::tempdir().unwrap();
+    for args in [
+        vec!["init", "-qb", "main"],
+        vec!["commit", "--allow-empty", "-qm", "sentinel"],
+    ] {
+        assert!(command(sentinel.path())
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    let snapshot = || {
+        let mut bytes = fs::read(sentinel.path().join(".git/config")).unwrap();
+        for args in [
+            vec!["rev-parse", "HEAD"],
+            vec!["worktree", "list", "--porcelain"],
+        ] {
+            let output = command(sentinel.path()).args(args).output().unwrap();
+            assert!(output.status.success());
+            bytes.extend(output.stdout);
+        }
+        bytes
+    };
+    let before = snapshot();
+    let fixture = tempfile::tempdir().unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "hook_git_environment_fixture_child",
+            "--nocapture",
+        ])
+        .env("PG_GIT_ISOLATION_FIXTURE", fixture.path())
+        .env("GIT_DIR", sentinel.path().join(GIT_ENTRY))
+        .env("GIT_WORK_TREE", sentinel.path())
+        .env("GIT_COMMON_DIR", sentinel.path().join(GIT_ENTRY))
+        .env("GIT_INDEX_FILE", sentinel.path().join(".git/index"))
+        .output()
+        .unwrap();
+    assert_eq!(
+        snapshot(),
+        before,
+        "fixture mutated sentinel config, HEAD or worktrees"
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert!(fixture.path().join(".git/config").is_file());
+}
+
+#[test]
+fn hook_git_environment_fixture_child() {
+    let Some(root) = std::env::var_os("PG_GIT_ISOLATION_FIXTURE") else {
+        return;
+    };
+    let root = Path::new(&root);
+    git(root, &["init", "-qb", "main"]);
+    git(root, &["config", "user.name", "fixture only"]);
+    git(root, &["config", "user.email", "fixture@example.invalid"]);
+    git(
+        root,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "-qm",
+            "fixture",
+        ],
+    );
+}
+
 #[test]
 fn native_writer_pushed_base_handshake_review_resume_and_record() {
     let dir = std::env::temp_dir().join(format!("native-writer-e2e-{}", std::process::id()));
@@ -61,7 +135,7 @@ if 'hold marker' in prompt:
 if 'resume' in sys.argv:
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
     head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
-    pathlib.Path('reviews', head[:8] + '-hydrogen.txt').write_text('VERDICT: ACCEPT\n')
+    pathlib.Path('reviews', head[:8] + '-hydrogen.txt').write_text('Reviewed writer.txt\nVERDICT: ACCEPT\n')
 else:
     pathlib.Path('writer.txt').write_text('written on selected host\n')
     subprocess.run(['git','add','writer.txt'], check=True)
@@ -70,9 +144,11 @@ else:
 "#).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = Command::new("python3").current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let mut command = Command::new("python3");
+    pg_worker_core::git_test_support::configure(&mut command, &dir);
+    let out = command.current_dir(&root).env("PYTHONPATH", root.join("src"))
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
-        .env("NATIVE_BINARY", env!("CARGO_BIN_EXE_pg-spawnd"))
+        .env("NATIVE_BINARY", binary::spawnd())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base)
         .args(["-c", r#"
 import asyncio, json, os, pathlib

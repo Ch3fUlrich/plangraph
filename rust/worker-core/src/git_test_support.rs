@@ -4,9 +4,16 @@ use std::{
     process::{Command, Stdio},
 };
 
+const GIT_ENTRY: &str = ".git";
+
 /// Discard all caller Git controls, including hook redirects and config injection.
 /// HOME and XDG paths belong to the fixture; neither host config nor hooks participate.
 pub fn configure(command: &mut Command, root: &Path) {
+    assert!(
+        common_dir(root)
+            .is_none_or(|dir| Some(dir) != common_dir(Path::new(env!("CARGO_MANIFEST_DIR")))),
+        "Git fixture must not operate on the source repository or its worktrees"
+    );
     let mut keys: Vec<_> = std::env::vars_os().map(|(key, _)| key).collect();
     keys.extend(command.get_envs().map(|(key, _)| key.to_owned()));
     for key in keys {
@@ -20,6 +27,10 @@ pub fn configure(command: &mut Command, root: &Path) {
     }
     let null = if cfg!(windows) { "NUL" } else { "/dev/null" };
     command
+        // Parallel tests may inject config after the environment scan, so
+        // suppress these entry points even when they were absent at configure.
+        .env_remove("GIT_CONFIG_COUNT")
+        .env_remove("GIT_CONFIG_PARAMETERS")
         .current_dir(root)
         .stdin(Stdio::null())
         .env("HOME", root)
@@ -37,6 +48,36 @@ pub fn configure(command: &mut Command, root: &Path) {
         .env("GIT_COMMITTER_EMAIL", "t@example.com");
 }
 
+// Read metadata directly: invoking Git here would itself inherit hook redirects.
+fn common_dir(root: &Path) -> Option<std::path::PathBuf> {
+    let root = root.canonicalize().ok()?;
+    for ancestor in root.ancestors() {
+        let entry = ancestor.join(GIT_ENTRY);
+        let metadata = if entry.is_dir() {
+            entry
+        } else if entry.is_file() {
+            ancestor.join(
+                std::fs::read_to_string(entry)
+                    .ok()?
+                    .strip_prefix("gitdir:")?
+                    .trim(),
+            )
+        } else {
+            continue;
+        };
+        let common = metadata.join("commondir");
+        return if common.is_file() {
+            metadata
+                .join(std::fs::read_to_string(common).ok()?.trim())
+                .canonicalize()
+                .ok()
+        } else {
+            metadata.canonicalize().ok()
+        };
+    }
+    None
+}
+
 pub fn command(root: &Path) -> Command {
     let mut command = Command::new("git");
     configure(&mut command, root);
@@ -46,6 +87,54 @@ pub fn command(root: &Path) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "Git fixture must not operate on the source repository")]
+    fn fixture_refuses_source_repository() {
+        command(Path::new(env!("CARGO_MANIFEST_DIR")));
+    }
+
+    #[test]
+    #[should_panic(expected = "Git fixture must not operate on the source repository")]
+    fn fixture_refuses_linked_source_repository() {
+        let root = tempfile::tempdir().unwrap();
+        let metadata = root.path().join("metadata");
+        std::fs::create_dir(&metadata).unwrap();
+        std::fs::write(root.path().join(GIT_ENTRY), "gitdir: metadata\n").unwrap();
+        let source = common_dir(Path::new(env!("CARGO_MANIFEST_DIR"))).unwrap();
+        std::fs::write(metadata.join("commondir"), source.to_str().unwrap()).unwrap();
+        command(root.path());
+    }
+
+    #[test]
+    fn late_parent_git_config_cannot_poison_configured_fixture() {
+        const CHILD: &str = "PG_LATE_GIT_CONFIG_FIXTURE";
+        if std::env::var_os(CHILD).is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "git_test_support::tests::late_parent_git_config_cannot_poison_configured_fixture", "--nocapture"])
+                .env(CHILD, "1")
+                .env_remove("GIT_CONFIG_COUNT")
+                .output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        let fixture = tempfile::tempdir().unwrap();
+        let mut git = command(fixture.path());
+        // Only this single-test child changes the process environment. Model
+        // an unrelated parallel test changing Git controls after configure.
+        std::env::set_var("GIT_CONFIG_COUNT", "bogus");
+        let output = git.args(["config", "--list"]).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn configure_removes_explicit_redirects_and_config_injection() {

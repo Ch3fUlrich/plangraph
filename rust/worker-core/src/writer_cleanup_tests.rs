@@ -62,7 +62,7 @@ impl Fixture {
     pub(crate) fn with_config(config: &[(&str, &str)]) -> Self {
         let dir = tempfile::Builder::new()
             .prefix("cleanup-")
-            .tempdir_in(std::env::current_dir().unwrap())
+            .tempdir()
             .unwrap();
         let root = dir.path().join("repo");
         let trees = dir.path().join("trees");
@@ -168,11 +168,32 @@ fn failed_24h_boundary() {
 fn durable_receipt_restart() {
     let f = Fixture::new();
     drop(record_result(&f.state, "run", &f.blob).unwrap());
-    let cwd = std::env::current_dir().unwrap();
-    let state = f.state.strip_prefix(cwd).unwrap();
-    assert!(state.is_relative());
-    assert!(janitor(&f.repo, state, 90000, true).unwrap()[0].eligible);
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "writer_cleanup::tests::relative_receipt_restart_child",
+            "--nocapture",
+        ])
+        .current_dir(f._dir.path())
+        .env(
+            "PG_CLEANUP_RESTART_REPO",
+            serde_json::to_string(&f.repo).unwrap(),
+        )
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
     assert!(!f.record.checkout.exists());
+}
+
+#[test]
+fn relative_receipt_restart_child() {
+    let Ok(repo) = std::env::var("PG_CLEANUP_RESTART_REPO") else {
+        return;
+    };
+    let repo: RepoEntry = serde_json::from_str(&repo).unwrap();
+    let state = Path::new("state");
+    assert!(state.is_relative());
+    assert!(janitor(&repo, state, 90000, true).unwrap()[0].eligible);
 }
 
 #[test]

@@ -73,7 +73,7 @@ def test_registry_and_compat_exports(transport_sandbox, monkeypatch):
     assert review_mode.load_prompt_transport_contract(json.dumps(contract)) == contract
     assert list(contract["reasons"]) == fixture["reason_ids"]
     assert contract["metadata"]["model_utf8_bytes"] == 256
-    assert contract["metadata"]["title_ascii_bytes"] == 22
+    assert contract["metadata"]["title_ascii_bytes"] == 46
     # Pin every D2 spelling without maintaining a second reason-name table.
     spellings = "|".join(contract["reasons"].values()).encode()
     assert hashlib.sha256(spellings).hexdigest() == REASONS_SHA256

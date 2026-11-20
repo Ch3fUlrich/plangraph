@@ -421,6 +421,10 @@ def test_seeded_silent_run_publishes_stall_episode(tmp_path, monkeypatch):
     assert len(alerts) == 1
     assert alerts[0]['kind'] == 'completion' and alerts[0]['rule'] == 'run-silent'
     assert alerts[0]['stalled_at'] == 160 and alerts[0]['noticed_at'] == 161
+    published = [json.loads(p.read_text()) for p in (tmp_path / 'watchdog/alerts').glob('*.json')]
+    assert len(published) == 1 and published[0]['kind'] == 'stall'
+    assert published[0]['stalled_at'] == 160 and published[0]['noticed_at'] == 161
     assert (tmp_path / 'watchdog/status.txt').read_text().strip()
     assert w.main(['tick']) == 0
     assert len(list((tmp_path / 'watchdog/outbox').glob('*.json'))) == 1
+    assert len(list((tmp_path / 'watchdog/alerts').glob('*.json'))) == 1

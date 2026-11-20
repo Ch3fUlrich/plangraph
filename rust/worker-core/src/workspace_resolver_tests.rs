@@ -19,8 +19,8 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let repo_guard = crate::test_repo_guard::RepoGuard::real();
         let temp = tempfile::tempdir().unwrap();
+        let repo_guard = crate::test_repo_guard::RepoGuard::real(temp.path());
         let root = temp.path();
         git(root, &["init", "--bare", "origin"]);
         git(root, &["init", "source"]);

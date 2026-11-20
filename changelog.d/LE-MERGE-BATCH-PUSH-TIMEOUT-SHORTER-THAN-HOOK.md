@@ -1,0 +1,1 @@
+Merge-batch push waits for the hook’s per-step deadlines and streams progress, so long Rust checks can complete before batch state and PR recording. Caller-supplied subprocess timeouts terminate hooks and their workers before reporting failure, including nested preflight sessions on Linux.

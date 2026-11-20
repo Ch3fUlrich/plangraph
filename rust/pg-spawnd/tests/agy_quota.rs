@@ -31,6 +31,8 @@ store.record_harness_limit('agy/gemini-4-argon-medium',
 argon = route()
 store.record_harness_limit('claude-sonnet-5-5-high',
     'Individual quota reached. Resets in 1h.', 'fixture')
+store.record_harness_limit('agy/claude-sonnet-5-5-high',
+    'Individual quota reached. Resets in 1h.', 'fixture')
 legacy = LegStateStore(store.path.with_name('legacy.sqlite'))
 with legacy._connect() as db:
     db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
@@ -113,5 +115,101 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
             "opencode-go/beam-free",
             "claude-sonnet-5-5-high"
         ]
+    );
+}
+
+#[test]
+fn native_sonnet_and_agy_quota_keys_are_independent() {
+    let state = tempfile::tempdir().unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("python3")
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .args([
+            "-c",
+            r#"
+import sys
+from dataclasses import replace
+from pathlib import Path
+from types import SimpleNamespace as NS
+from plangraph.routing_support.leg_state import LegStateStore, quota_key
+from plangraph.planner.routing import plan_spawn, SpawnPlan, SpawnRefused, next_leg_after_provider_stop
+from plangraph.routing_support.liveness import require_available
+from plangraph.spawner.exit_outcome import fallthrough_reason
+from plangraph.spawner.leg_probe import DispatchReader
+
+initial = plan_spawn(dict(estimate_tokens=1000), role='review', writer_families=['openai'],
+                     leg_reader=lambda *a, **kw: dict(state='ok', evidence=None), catalog_rows=[])
+native = next(leg for leg in initial.legs if leg.id == 'claude-sonnet-5-5-high')
+assert native.harness == 'claude' and native.tier == 'subscription'
+agy = 'agy/claude-sonnet-5-5-high'
+store = LegStateStore(Path(sys.argv[1]) / 'agy.sqlite')
+store.record_provider_response(agy, 429, 'Individual quota reached. Resets in 97h.', {}, 'fixture', now=100)
+assert store.leg_status(native.model, now=101)['state'] == 'ok'
+assert DispatchReader(store, None).leg_status(native.model, now=101)['state'] == 'ok'
+assert quota_key(native.model) == native.model
+for effort in ('low', 'medium', 'high', 'xhigh', 'max'):
+    assert quota_key('agy/claude-sonnet-5-5-' + effort) == 'agy:claude-sonnet-5-5'
+    assert store.leg_status('agy/claude-sonnet-5-5-' + effort, now=101)['state'] == 'limited'
+plan = plan_spawn(dict(estimate_tokens=1000), role='review', writer_families=['openai'],
+                  legs=(native,), leg_reader=DispatchReader(store, None), catalog_rows=[], now=101)
+assert plan.first_leg == native, plan.to_dict()
+assert plan.to_dict()['agy_quota_states']['agy:claude-sonnet-5-5']['state'] == 'limited'
+
+store = LegStateStore(Path(sys.argv[1]) / 'native.sqlite')
+job = NS(exit_code=1, stdout='', stderr='Error: 429 rate limit reached. Resets in 1h.')
+reason = fallthrough_reason(NS(leg_reader=store), native, job, {})
+assert reason.startswith('harness_limit:'), reason
+assert store.leg_status(native.model)['state'] == 'limited'
+assert store.leg_status(agy)['state'] == 'ok'
+assert store.leg_status('claude-opus-5-5-high')['state'] == 'ok'
+with store._connect() as db:
+    assert [row['leg_key'] for row in db.execute('SELECT leg_key FROM leg_events')] == [native.model]
+plan = plan_spawn(dict(estimate_tokens=1000), role='review', writer_families=['openai'],
+                  legs=(native,), leg_reader=store, catalog_rows=[])
+assert plan.to_dict()['agy_quota_states']['agy:claude-sonnet-5-5']['state'] == 'ok'
+assert not plan.legs
+assert any(row['leg'] == native.id and row['reason'] == 'limited' for row in plan.skipped)
+agy_leg = replace(native, id='agy-sonnet-fixture', harness='agy')
+plan = plan_spawn(dict(estimate_tokens=1000), role='review', writer_families=['openai'],
+                  legs=(native, agy_leg), leg_reader=DispatchReader(store, None), catalog_rows=[])
+assert plan.legs == (agy_leg,), plan.to_dict()
+require_available(agy_leg, store, {})
+try:
+    require_available(native, store, {})
+except SpawnRefused:
+    pass
+else:
+    raise AssertionError('native limit did not refuse native override')
+store = LegStateStore(Path(sys.argv[1]) / 'override.sqlite')
+store.record_harness_limit(agy, 'Error: 429 quota reached. Resets in 1h.', 'fixture')
+require_available(native, store, {})
+try:
+    require_available(agy_leg, store, {})
+except SpawnRefused:
+    pass
+else:
+    raise AssertionError('agy limit did not refuse agy override')
+store = LegStateStore(Path(sys.argv[1]) / 'provider.sqlite')
+plan = SpawnPlan((agy_leg, native), (), 'fixture', (), ())
+assert next_leg_after_provider_stop(plan, agy_leg.id, 429, 'quota reached',
+                                    {'Retry-After': '3600'}, 'fixture', store=store) == native
+assert store.leg_status(native.model)['state'] == 'ok'
+assert store.leg_status(agy)['state'] == 'limited'
+store = LegStateStore(Path(sys.argv[1]) / 'native-provider.sqlite')
+plan = SpawnPlan((native, agy_leg), (), 'fixture', (), ())
+assert next_leg_after_provider_stop(plan, native.id, 429, 'quota reached',
+                                    {'Retry-After': '3600'}, 'fixture', store=store) == agy_leg
+assert store.leg_status(native.model)['state'] == 'limited'
+assert store.leg_status(agy)['state'] == 'ok'
+"#,
+            state.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

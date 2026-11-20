@@ -1,5 +1,14 @@
 # Rust hook shadow harness (RUST-HOOKS slice 1)
 
+The crate also provides the independent `checkpoint-size BASE HEAD` packaging
+gate. Run `cargo run --manifest-path rust/Cargo.toml -p pg-hook --bin
+checkpoint-size -- BASE HEAD` from the checkout root. It reports committed PR
+diff bytes and file count and refuses at 100,000 bytes or above or over 25 files
+(exit 1; measurement errors exit 2). The phase-batch skill requires splitting
+oversized packages into stacked checkpoints before pushing or launching seats.
+See [budget, evidence and remaining experiment work](checkpoints/checkpoint-size.md).
+This command is separate from the shadow harness and does not install a hook.
+
 Run `pg-hook shadow ENTRY LOG_PATH PYTHON_HOOK_PATH` with the original payload on stdin.
 Python runs without added interpreter flags, preserving sibling imports, `PYTHONPATH`
 and user-site behavior. `PG_HOOK_PYTHON` can select an absolute interpreter path;
@@ -99,3 +108,5 @@ as CI and the changelog/docs checker. A `Plan-Item`, `Writer`, `Hand-Edit`,
 `Changelog`, or `Gate-Edit` key outside that block refuses the commit and names
 its line in the cleaned message. Value validation still runs, so misplaced keys
 cannot hide malformed attribution or skip reasons.
+
+Rust hook tests construct Git commands through `pg_worker_core::git_test_support` so pre-push repository redirects cannot affect fixture init, config or commits. Fixture commands refuse the source repository and its linked worktrees.

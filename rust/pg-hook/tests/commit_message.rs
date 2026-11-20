@@ -1,10 +1,9 @@
 #![cfg(unix)]
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn git(root: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .current_dir(root)
+    pg_worker_core::git_test_support::command(root)
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -124,8 +123,7 @@ fn editor_comments_do_not_hide_valid_trailers() {
             .success());
         std::fs::write(dir.path().join("staged.txt"), comment_char).unwrap();
         assert!(git(dir.path(), &["add", "staged.txt"]).status.success());
-        let output = Command::new("git")
-            .current_dir(dir.path())
+        let output = pg_worker_core::git_test_support::command(dir.path())
             .args([
                 "commit",
                 "--allow-empty",
@@ -218,8 +216,7 @@ fn automatic_comments_without_scissors_match_the_final_message() {
             false,
         ),
     ] {
-        let output = Command::new("git")
-            .current_dir(dir.path())
+        let output = pg_worker_core::git_test_support::command(dir.path())
             .args(["commit", "--allow-empty", "--edit", "-m", message])
             .env("GIT_EDITOR", "true")
             .env("GIT_CONFIG_NOSYSTEM", "1")

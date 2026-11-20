@@ -4,12 +4,7 @@ use std::{
     process::{Command, Output},
 };
 fn git(repo: &Path, args: &[&str]) -> String {
-    let mut cmd = Command::new("git");
-    for (key, _) in std::env::vars_os() {
-        if key.to_string_lossy().starts_with("GIT_") {
-            cmd.env_remove(key);
-        }
-    }
+    let mut cmd = pg_worker_core::git_test_support::command(repo);
     let out = cmd
         .current_dir(repo)
         .args([
@@ -23,6 +18,7 @@ fn git(repo: &Path, args: &[&str]) -> String {
             "commit.gpgsign=false",
         ])
         .args(args)
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00Z")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .output()
@@ -325,4 +321,173 @@ fn unreadable_unit_protection_fails_closed_with_nonzero_exit() {
         assert!(String::from_utf8(out.stdout).unwrap().contains("SKIP"));
         assert_eq!(git(&tmp.path().join("checkout"), &["rev-parse", "origin/main"]), before);
     }
+}
+
+#[test]
+fn external_hook_checkout_is_fast_forwarded_or_reported_when_dirty() {
+    for (dirty, scope) in [
+        (false, "absolute"),
+        (true, "absolute"),
+        (false, "relative"),
+        (false, "inherited"),
+    ] {
+        let tmp = fixture();
+        let hooks = tmp.path().join("checkout");
+        fs::create_dir_all(hooks.join("tools/hooks")).unwrap();
+        let caller = tmp.path().join("caller");
+        git(tmp.path(), &["clone", "-q", "source", "caller"]);
+        if scope == "inherited" {
+            fs::write(
+                tmp.path().join(".gitconfig"),
+                format!(
+                    "[core]\n hooksPath = {}\n",
+                    hooks.join("tools/hooks").display()
+                ),
+            )
+            .unwrap();
+        } else {
+            let target = if scope == "relative" {
+                "../checkout/tools/hooks".into()
+            } else {
+                hooks.join("tools/hooks").to_str().unwrap().to_owned()
+            };
+            git(&caller, &["config", "core.hooksPath", &target]);
+        }
+        let before = git(&hooks, &["rev-parse", "HEAD"]);
+        if dirty {
+            fs::write(hooks.join("file"), "dirty").unwrap();
+        }
+        let out = Command::new(env!("CARGO_BIN_EXE_pg-repo-sync"))
+            .current_dir(tmp.path())
+            .env("HOME", tmp.path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    tmp.path().join("bin").display(),
+                    std::env::var("PATH").unwrap()
+                ),
+            )
+            .args(["--repo", "caller"])
+            .output()
+            .unwrap();
+        let report = String::from_utf8(out.stdout).unwrap();
+        assert!(report.contains("HOOK"), "{report}");
+        if dirty {
+            assert_eq!(out.status.code(), Some(1), "{report}");
+            assert!(report.contains("reason=tracked-changes"), "{report}");
+            assert_eq!(git(&hooks, &["rev-parse", "HEAD"]), before);
+        } else {
+            assert!(out.status.success(), "{report}");
+            assert_eq!(
+                git(&hooks, &["rev-parse", "HEAD"]),
+                git(&tmp.path().join("source"), &["rev-parse", "HEAD"])
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_hook_checkout_is_discovered() {
+    let tmp = fixture();
+    let hooks = tmp.path().join("checkout");
+    fs::write(hooks.join("pre-push"), "fixture hook").unwrap();
+    git(tmp.path(), &["clone", "-q", "source", "caller"]);
+    let caller = tmp.path().join("caller");
+    let git_hooks = caller.join(".git/hooks");
+    std::os::unix::fs::symlink(hooks.join("pre-push"), git_hooks.join("pre-push")).unwrap();
+    let out = run(tmp.path(), &["--repo", "caller", "--repo", "checkout"]);
+    assert!(out.status.success(), "{:?}", out);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("HOOK"),
+        "{:?}",
+        out
+    );
+    assert_eq!(
+        git(&hooks, &["rev-parse", "HEAD"]),
+        git(&tmp.path().join("source"), &["rev-parse", "HEAD"])
+    );
+}
+
+#[test]
+fn pre_push_prints_hook_head_and_refuses_day_old_missing_commits() {
+    let tmp = fixture();
+    let hooks = tmp.path().join("checkout");
+    // Cached origin/main is stale too: the hook must refresh it before judging age.
+    let hook = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/hooks/pre-push");
+    // Exercise the installed Python entry point using this fixture as its checkout.
+    let script = "import runpy,sys; m=runpy.run_path(sys.argv[1]); m['push_main'].__globals__['TOOLS']=__import__('pathlib').Path(sys.argv[2])/'tools'; sys.exit(m['main']())";
+    let invoke = || {
+        Command::new("python3")
+            .args(["-c", script])
+            .arg(&hook)
+            .arg(&hooks)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let out = invoke();
+    let report = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(1), "{report}");
+    assert!(
+        report.contains(&git(&hooks, &["rev-parse", "--short", "HEAD"])),
+        "{report}"
+    );
+    assert!(
+        report.contains("stale hook checkout") && report.contains("origin/main"),
+        "{report}"
+    );
+    git(&hooks, &["remote", "set-url", "origin", "missing-origin"]);
+    let out = invoke();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot refresh hook checkout"));
+    git(&hooks, &["remote", "set-url", "origin", "../source"]);
+    git(&hooks, &["merge", "--ff-only", "origin/main"]);
+    let out = invoke();
+    assert!(out.status.success(), "{:?}", out);
+    assert!(String::from_utf8(out.stdout)
+        .unwrap()
+        .contains("hook checkout"));
+}
+
+#[cfg(unix)]
+#[test]
+fn external_live_unit_checkout_is_listed_and_protected() {
+    let tmp = fixture();
+    git(tmp.path(), &["clone", "-q", "source", "caller"]);
+    let hooks = tmp.path().join("checkout");
+    fs::write(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\ncase \"$*\" in *list-units*) echo 'keeper.service loaded active running Keeper';; *show*) echo '{}';; esac\n", hooks.display())).unwrap();
+    let before = git(&hooks, &["rev-parse", "HEAD"]);
+    let out = run(tmp.path(), &["--repo", "caller"]);
+    assert!(out.status.success(), "{:?}", out);
+    let report = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        report.contains("UNIT") && report.contains("live-unit"),
+        "{report}"
+    );
+    assert_eq!(git(&hooks, &["rev-parse", "HEAD"]), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn external_unit_executable_checkout_is_listed_and_protected() {
+    let tmp = fixture();
+    git(tmp.path(), &["clone", "-q", "source", "caller"]);
+    let hooks = tmp.path().join("checkout");
+    fs::write(hooks.join("daemon"), "fixture executable").unwrap();
+    fs::write(tmp.path().join("bin/systemctl"), format!("#!/bin/sh\ncase \"$*\" in *list-units*) echo 'keeper.service loaded active running Keeper';; *WorkingDirectory*) echo /;; *ExecStart*) echo '{{ path={}/daemon ; argv[]={}/daemon ; }}';; esac\n", hooks.display(), hooks.display())).unwrap();
+    let before = git(&hooks, &["rev-parse", "HEAD"]);
+    let out = run(tmp.path(), &["--repo", "caller"]);
+    assert!(out.status.success(), "{:?}", out);
+    let report = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        report.contains("UNIT") && report.contains("live-unit"),
+        "{report}"
+    );
+    assert_eq!(git(&hooks, &["rev-parse", "HEAD"]), before);
 }
