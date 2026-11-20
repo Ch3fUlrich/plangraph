@@ -21,6 +21,7 @@ mod native_writer;
 mod native_writer_host;
 mod native_writer_tool;
 mod placement;
+mod pre_review;
 mod prompt;
 mod prompt_git;
 mod pyjson;
