@@ -1,7 +1,7 @@
 //! One ledger line per dump: `<stamp> seq=<n> size=<bytes> sha256=<hex> verified=<yes|no|skipped> file=<name>`.
 
 use sha2::{Digest, Sha256};
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
@@ -67,12 +67,15 @@ impl<W: Write> Write for Hashing<W> {
     }
 }
 
-/// Append one line; the ledger is created with mode 0600.
+/// Append one line and make it durable (file and directory entry fsynced) before the
+/// caller publishes the archive it records; the ledger is created with mode 0600.
 pub fn append(dir: &Path, entry: &Entry) -> io::Result<()> {
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .mode(0o600)
         .open(dir.join(LEDGER_NAME))?;
-    writeln!(file, "{}", entry.line())
+    writeln!(file, "{}", entry.line())?;
+    file.sync_all()?;
+    File::open(dir)?.sync_all()
 }

@@ -147,6 +147,9 @@ fn publish(
             entry.file
         )
     })?;
+    fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(|e| format!("{}: {e}", dir.display()))?;
     Ok((entry, failure))
 }
 
