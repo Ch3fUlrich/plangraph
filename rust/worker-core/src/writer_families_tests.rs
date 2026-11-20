@@ -67,3 +67,39 @@ fn every_writer_family_of_the_range_comes_from_its_trailers() {
             .contains("unknown writer family of model no-such-model")
     );
 }
+
+#[test]
+fn a_merge_commits_writer_trailer_counts_next_to_ordinary_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    commit(repo, "base.txt", "base");
+    let base = git(repo, &["rev-parse", "HEAD"]);
+    git(repo, &["checkout", "-q", "-b", "side"]);
+    commit(repo, "side.txt", "side");
+    git(repo, &["checkout", "-q", "main"]);
+    commit(
+        repo,
+        "a.txt",
+        "a\n\nWriter: gpt-6.2-sol-medium run-0ad2ce51",
+    );
+    git(
+        repo,
+        &[
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "merge",
+            "-q",
+            "--no-ff",
+            "side",
+            "-m",
+            "merge side\n\nWriter: gemini-4-hydrogen-high run-6f00f4b3",
+        ],
+    );
+    let head = git(repo, &["rev-parse", "HEAD"]);
+    // The merge brings in its side commit (no trailer, unknown author) and carries a trailer itself.
+    let families = writer_families(repo, &base, &head, &[], &python).unwrap();
+    assert_eq!(families, ["google", "openai"]);
+}

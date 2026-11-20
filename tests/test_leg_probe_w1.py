@@ -643,3 +643,14 @@ def test_the_spawn_that_starts_a_probe_is_bounded_too(monkeypatch):
     skip, waited, left = asyncio.run(run())
     assert skip == 'probe_budget_exhausted'
     assert waited < 0.5 and left < 0.45  # 0.3 s probe + a short grace, charged to the budget
+
+
+def test_probe_budget_is_net_of_the_admission_time_already_spent(monkeypatch):
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.delenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', raising=False)
+    window = base_fresh.ADMISSION_TIMEOUT
+    assert leg_probe.ProbeBudget().left == window / 2
+    late = leg_probe.ProbeBudget(started=time.time() - (window - window / 6 - 10))  # 10 s left before the reserve
+    assert late.timeout() == pytest.approx(10, abs=0.5)
+    spent = leg_probe.ProbeBudget(started=time.time() - window)
+    assert spent.timeout() == 0

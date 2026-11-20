@@ -1016,7 +1016,7 @@ def spawn_service(*args, **kwargs):
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
                     from .leg_probe import ProbeBudget
-                    probe_budget = ProbeBudget()  # one probe budget for every leg this run tries
+                    probe_budget = ProbeBudget(started=record.get('started'))  # one budget for every leg, net of admission time spent
                     for _ in range(len(plan.legs) + 2):
                         if (watchdog := leg_limits(record, limits)) is None:
                             self._save(record); return

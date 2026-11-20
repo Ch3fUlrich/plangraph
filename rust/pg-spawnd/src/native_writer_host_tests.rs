@@ -362,12 +362,10 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     );
     let head = git(&cwd, &["rev-parse", "HEAD"]);
     // The review skill of the checkout (the working-tree copy: this fixture has no origin/main).
-    fs::create_dir_all(cwd.join("skills/review")).unwrap();
-    fs::write(
-        cwd.join("skills/review/SKILL.md"),
-        "REVIEW-SKILL-FIXTURE-LINE\n",
-    )
-    .unwrap();
+    // (Joined from parts: a fixture file, not a repository input of the CI selector.)
+    let skill_dir = cwd.join("skills").join("review");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "REVIEW-SKILL-FIXTURE-LINE\n").unwrap();
     // The writer's checkout carries a planted family table: it must never be imported.
     // (File names are assembled: they are fixtures, not Python inputs of the CI selector.)
     let py = |stem: &str| format!("{stem}.{}", "py");

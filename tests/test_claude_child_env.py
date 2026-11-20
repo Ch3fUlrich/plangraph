@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from dataclasses import replace
 
 import pytest
@@ -131,6 +132,9 @@ def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path):
     assert env is not None
     check_env(env)
     expected = {name for name in os.environ if policy_allows(name)} | {'PWD', 'XDG_DATA_HOME', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL'}
+    if sys.platform != 'win32':  # the runner pins the agent shell even when the parent has none
+        expected.add('CLAUDE_CODE_SHELL')
+        assert env['CLAUDE_CODE_SHELL'] == '/bin/bash'
     assert set(env) == expected, 'allowlisted names went missing: ' + ', '.join(sorted(expected - set(env)))
     home_ok, cfg_ok = env.get('HOME') == '/h', env.get('CLAUDE_CONFIG_DIR') == '/cfg'
     pwd_ok, xdg_ok = env.get('PWD') == str(tmp_path), env.get('XDG_DATA_HOME') == '/d'

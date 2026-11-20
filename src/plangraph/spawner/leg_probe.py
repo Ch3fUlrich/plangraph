@@ -335,11 +335,13 @@ class ProbeBudget:
     hung probes fail over leg by leg and still leave time to prepare the worktree and launch.
     A probe that exceeds its share is killed and booked as a probe failure.
     """
-    def __init__(self, window=None):
+    def __init__(self, window=None, started=None):
         from .base_fresh import ADMISSION_TIMEOUT
         window = ADMISSION_TIMEOUT if window is None else window
+        elapsed = max(time.time() - started, 0) if started else 0  # admission time already spent
         self.each = window / 3
-        self.left = window / 2
+        # Half the window in all, and always leaving a sixth for the worktree and the launch.
+        self.left = min(window / 2, window - window / 6 - elapsed)
         self.grace = min(5, self.each / 6)  # probe setup and cleanup around its own deadline
 
     def timeout(self):

@@ -114,13 +114,14 @@ fn is_non_family_hand_edit(value: &str) -> bool {
         || lower.starts_with("merge")
 }
 
-/// One non-merge commit's attribution strings, before they are mapped to families.
+/// One commit's attribution strings, before they are mapped to families.
 struct CommitText {
     sha: String,
     writers: Vec<String>,
     hand_edits: Vec<String>,
     fallback: Vec<String>,
     author: String,
+    merge: bool,
 }
 
 fn short(sha: &str) -> &str {
@@ -140,11 +141,9 @@ pub fn writer_families(
     python: &dyn Fn() -> Command,
 ) -> Result<Vec<String>, String> {
     let range = format!("{base_sha}..{head_sha}");
-    let format = "--format=%H%n%an%n%ae%n%(trailers:separator=%x0a)";
-    let mut raw = log_bytes(repo, &["log", "--no-merges", "-z", format, &range])?;
-    if raw.is_empty() {
-        raw = log_bytes(repo, &["log", "-z", format, &range])?;
-    }
+    // Merge commits are read too: their Writer trailers name who resolved the merge.
+    let format = "--format=%H%n%P%n%an%n%ae%n%(trailers:separator=%x0a)";
+    let raw = log_bytes(repo, &["log", "-z", format, &range])?;
     if raw.is_empty() {
         return Err(format!(
             "refused: no commits found in {}..{}",
@@ -156,8 +155,9 @@ pub fn writer_families(
     let mut commits = Vec::new();
     for chunk in raw.split(|&b| b == 0).filter(|c| !c.is_empty()) {
         let text = String::from_utf8_lossy(chunk);
-        let mut lines = text.splitn(4, '\n');
+        let mut lines = text.splitn(5, '\n');
         let sha = lines.next().unwrap_or("").trim().to_owned();
+        let merge = lines.next().unwrap_or("").split_whitespace().count() > 1;
         let name = lines.next().unwrap_or("").trim();
         let email = lines.next().unwrap_or("").trim();
         let mut commit = CommitText {
@@ -166,6 +166,7 @@ pub fn writer_families(
             hand_edits: Vec::new(),
             fallback: Vec::new(),
             author: format!("{name} {email}"),
+            merge,
         };
         for line in lines.next().unwrap_or("").lines() {
             let Some((key, val)) = line.trim().split_once(':') else {
@@ -200,6 +201,7 @@ pub fn writer_families(
     let table = resolve_families(&texts, python)?;
     let family_of = |text: &str| table.get(text).cloned().flatten();
 
+    let has_ordinary = commits.iter().any(|c| !c.merge);
     let mut families = BTreeSet::new();
     for model in leg_models {
         match family_of(model) {
@@ -233,7 +235,8 @@ pub fn writer_families(
                 fallback.push(h.clone());
             }
         }
-        if explicit {
+        // A merge's author is only evidence when the range holds nothing but merges.
+        if explicit || (c.merge && has_ordinary) {
             continue;
         }
         let found: Vec<String> = fallback.iter().filter_map(|t| family_of(t)).collect();
