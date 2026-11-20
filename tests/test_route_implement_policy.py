@@ -90,7 +90,7 @@ def test_implement_claude_aliases_use_canonical_family(monkeypatch, alias, sourc
     assert route_card(dict(CARD, role="implement"), legs=(candidate, fallback)).legs == (fallback,)
     plan = plan_spawn(CARD, role="implement", legs=(candidate, fallback), policy=RoutePolicy(), catalog_rows=None,
                       leg_reader=lambda *a, **kw: {"state": "available", "evidence": None})
-    assert plan.legs == (fallback,)
+    assert plan.legs == (dataclasses.replace(fallback, effort='medium'),)
     assert {skip["leg"]: skip["reason"] for skip in plan.skipped}[candidate.id] == "excluded_family"
 
 
@@ -118,7 +118,7 @@ def test_implement_renamed_operator_claude_fails_closed(tmp_path, monkeypatch, c
     plan = plan_spawn(CARD, role="implement", legs=(candidate, fallback), policy=RoutePolicy(),
                       catalog_rows=({"id": candidate.model, "available": 1, "active": True},),
                       leg_reader=lambda *a, **kw: {"state": "available", "evidence": None})
-    assert plan.legs == (fallback,)
+    assert plan.legs == (dataclasses.replace(fallback, effort='medium'),)
     assert {skip["leg"]: skip["reason"] for skip in plan.skipped}[candidate.id] == "excluded_family"
     # The operator must see both a partial-route skip and an exhausted-route error.
     from plangraph.planner import legs, routing
