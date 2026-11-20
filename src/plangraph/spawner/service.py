@@ -318,6 +318,9 @@ class SpawnService(SeatSpawnMixin):
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             require_available(chosen, self.leg_reader, card)
+            if role in ('implement', 'review'):
+                from .target import codex_leg_effort
+                chosen = codex_leg_effort(chosen, card)
             if role == 'implement' and role not in chosen.roles:
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
             if chosen.tier == 'paid':

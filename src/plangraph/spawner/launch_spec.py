@@ -96,14 +96,17 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
-    from .target import admit_leg, quota_paused
+    from .target import admit_leg, codex_leg_effort, quota_paused
     if quota_paused(request['state'], request['role'], leg):
         raise LaunchRefused('quota_pause', 'quota pause')
     from plangraph.routing_errors import SpawnRefused
     try:
         admit_leg(leg)
+        if request['role'] in ('implement', 'review'):
+            leg = codex_leg_effort(leg, request['card'])
     except SpawnRefused as exc:
-        raise LaunchRefused('leg_inactive', str(exc)) from None
+        reason = str(exc)
+        raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith('effort_') else 'leg_inactive', reason) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     service = SpawnService(state=request['state'])

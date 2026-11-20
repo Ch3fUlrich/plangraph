@@ -180,6 +180,10 @@ explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 While every Codex leg is unavailable (quota_until, down), `agy-claude-sonnet-5-5-high`
 is served directly behind the Codex legs; with any Codex leg available it is skipped as
 `codex_available` (rule 3.58, D-6366).
+GPT implement and review legs default to medium effort (D-6397); elevated
+effort requires matching `card.effort` and an operator `card.effort_decision`
+of the form `D-<number>`. Native Codex package sessions pass
+`model_reasoning_effort=medium` by default. Other families keep their own effort.
 Review routes follow rule 3.58 (D-6366, overriding the D-6310 and D-6357 review lists):
 `agy-gemini-4-argon-low` first (agy plan mode; `agy-gemini-4-argon-medium` follows as
 same-family fallback; review only, never an implement leg), then `mimo/mimo-v2.6-pro`,
@@ -220,4 +224,3 @@ components). When an inline diff exceeds the leg limit, `pg-spawnd` and
 over the same `base` and `head`, passing each group in `diff_ref.paths` and
 failing the review if any group returns `REQUEST_CHANGES` or a single file exceeds
 the leg cap.
-

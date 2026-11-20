@@ -465,6 +465,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                      else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
         source = "operator-order"
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
+    if role in ('implement', 'review'):
+        from plangraph.spawner.target import codex_leg_effort
+        ordered = [codex_leg_effort(leg, card) for leg in ordered]
     seats, coverage, open_parts = [], (), []
     if role == "review":
         high = ranking_risk in ("high", "critical") or bool(card.get('risk_tags'))

@@ -1,5 +1,6 @@
 """Resolve explicit spawn targets before admission or provider rendering."""
 from collections.abc import Mapping
+from dataclasses import replace
 import os
 from pathlib import Path
 import re
@@ -8,6 +9,35 @@ from plangraph.planner.legs import leg_active
 from plangraph.routing_errors import SpawnRefused
 
 QUOTA_EXEMPT_ROLES = frozenset({'basic-analysis'})
+
+
+def codex_leg_effort(leg, card):
+    """Apply the card's effort to a gateway GPT leg, or refuse unapproved escalation."""
+    from plangraph.planner.legs import CX_EFFORTS
+    if not leg.model.startswith('omniroute/cx-gpt-'):
+        return leg
+    suffix = leg.model.rsplit('-', 1)[-1]
+    pinned = suffix if suffix in CX_EFFORTS else None
+    requested = card.get('effort')
+    if requested is not None and requested not in CX_EFFORTS:
+        raise SpawnRefused('effort_invalid: card.effort is not a supported GPT effort')
+    effort = requested or pinned or leg.effort or 'medium'
+    elevated = ('high', 'xhigh', 'max')
+    if pinned in elevated or effort in elevated:
+        decision = card.get('effort_decision')
+        if (requested != effort or (pinned in elevated and pinned != requested)
+                or not isinstance(decision, str) or not re.fullmatch(r'D-[0-9]+', decision)):
+            raise SpawnRefused('effort_needs_decision: elevated GPT effort requires matching card.effort and card.effort_decision D-<n>')
+    return replace(leg, effort=effort)
+
+
+def launch_model(leg):
+    """Keep the route identity stable while sending the selected GPT variant."""
+    from plangraph.planner.legs import CX_EFFORTS
+    if not leg.model.startswith('omniroute/cx-gpt-') or leg.effort not in CX_EFFORTS:
+        return leg.model
+    base, _, suffix = leg.model.rpartition('-')
+    return f'{base if suffix in CX_EFFORTS else leg.model}-{leg.effort}'
 
 
 def quota_paused(state=None, role=None, leg=None):

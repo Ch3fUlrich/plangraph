@@ -1,0 +1,1 @@
+Default gateway GPT writers and reviewers to medium and refuse elevated GPT effort unless the card names the matching effort and its operator decision. Keep other families' effort and review order unchanged (plangraph:SPAWNER-DEFAULT-EFFORT-MEDIUM).
