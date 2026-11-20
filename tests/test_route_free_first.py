@@ -174,11 +174,11 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
         "opencode-deepseek-v4.1-flash-free",
         "opencode-go-deepseek-v4-flash",
         "opencode-go-glm-5.3-flash",
-        "agy-gemini-4-argon-low",
-        "agy-gemini-4-argon-medium",
         "agy-gemini-4-neon-medium",
         "claude-sonnet-5-5-high",
         "mimo-v2.6-flash",
+        "agy-gemini-4-argon-low",
+        "agy-gemini-4-argon-medium",
     )
     plan = plan_spawn(CARD, role="review", writer_families=("openai",),
                       leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
@@ -225,8 +225,8 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons[FREE[1]].startswith("disabled: D-6310")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
     assert [leg.id for leg in rev.legs] == [
-        "gpt-6.2-sol-medium", REVIEW_MIMO_PRO, "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium", REVIEW_NEON,
-        REVIEW_MIMO_FLASH, "cx-gpt-6-luna", "agy-gpt-oss-120b"]
+        "gpt-6.2-sol-medium", REVIEW_MIMO_PRO, REVIEW_NEON, REVIEW_MIMO_FLASH,
+        "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium", "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert reasons[FREE[0]] == "banned_family"
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
     assert reasons["opencode-go-glm-5.3-flash"] == "off_family"
@@ -494,11 +494,11 @@ def test_d6310_route_orders_low_risk_and_families():
         ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None),
-        ('agy-gemini-4-argon-low', 'low'),
-        ('agy-gemini-4-argon-medium', 'medium'),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
+        ('agy-gemini-4-argon-low', 'low'),
+        ('agy-gemini-4-argon-medium', 'medium'),
     ]
     rev_diff = plan_spawn(CARD, role='review', writer_families=('gemini',))
     assert [(l.id, l.effort) for l in rev_diff.legs] == [

@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from plangraph.planner.legs import (OWN_HARNESS, own_harness_legs, refuse_foreign_pin, resolve_harness,
+from plangraph.planner.legs import (OWN_HARNESS, harness_skips, own_harness_legs, refuse_foreign_pin, resolve_harness,
                                     spawnable_legs)
 from plangraph.routing_support.leg_state_flag import SpawnRefused
 
@@ -24,9 +24,19 @@ def test_installed_client_names_own_harness(leg_id, harness):
     assert choice.harness == harness and choice.fallback is None
 
 
-def test_gpt_opencode_leg_moves_to_codex_with_the_codex_model_name():
-    (leg,) = own_harness_legs((CATALOG["cx-gpt-6.2-sol-medium"],), ALL)
-    assert (leg.harness, leg.model, leg.harness_fallback) == ("codex", "gpt-6.2-sol-medium", None)
+def test_gpt_opencode_leg_moves_to_codex_keeping_its_registered_model():
+    from plangraph.model_admission import validate_model
+    legs = own_harness_legs([CATALOG[i] for i in ("cx-gpt-6.2-sol-medium", "cx-gpt-6.2-astra", "cx-gpt-6.2-sol")], ALL)
+    assert [(leg.harness, leg.harness_fallback) for leg in legs] == [("codex", None)] * 3
+    for leg in legs:   # launch admission still knows the model
+        assert validate_model(leg.model) == leg.model
+
+
+def test_codex_client_takes_plain_name_and_effort():
+    from plangraph.routing_support.clients import codex_model
+    assert codex_model("omniroute/cx-gpt-6.2-sol-medium") == ("gpt-6.2-sol", "medium")
+    assert codex_model("gpt-6.2-sol-medium") == ("gpt-6.2-sol", "medium")
+    assert codex_model("omniroute/cx-gpt-6.2-astra") == ("gpt-6.2-astra", None)
 
 
 def test_missing_client_keeps_the_opencode_leg_and_records_why():
@@ -37,9 +47,9 @@ def test_missing_client_keeps_the_opencode_leg_and_records_why():
 
 def test_agy_claude_leg_is_an_own_harness_no_fallback():
     """Operator 2026-11-20 21:08Z: Claude in agy counts as its own harness."""
-    for installed in (ALL, NONE):
-        (leg,) = own_harness_legs((CATALOG["agy-claude-sonnet-5-5-high"],), installed)
-        assert leg.harness == "agy" and leg.harness_fallback is None
+    (leg,) = own_harness_legs((CATALOG["agy-claude-sonnet-5-5-high"],), ALL)
+    assert leg.harness == "agy" and leg.harness_fallback is None
+    assert resolve_harness(CATALOG["agy-claude-sonnet-5-5-high"], ALL).fallback is None
 
 
 def test_families_without_own_client_stay_on_opencode():
@@ -121,3 +131,54 @@ def test_switch_off_keeps_registered_harness(tmp_path, monkeypatch):
     from plangraph.planner.legs import client_installed, service_probe
     assert service_probe(service) is client_installed
     assert resolve_harness(CATALOG["cx-gpt-6.2-sol-medium"], None).harness == "opencode"
+
+
+def test_native_legs_with_a_missing_client_fall_back_or_leave_the_route():
+    review = CATALOG["gpt-6.2-sol-medium"]
+    (leg,) = own_harness_legs((review,), NONE)   # gpt: the OpenCode leg of the same model
+    assert (leg.harness, leg.model, leg.harness_fallback, leg.tool_mode) == (
+        "opencode", "omniroute/cx-gpt-6.2-sol-medium", "client_missing", "inline-only")
+    for leg_id in ("agy-gemini-4-hydrogen-high", "agy-claude-sonnet-5-5-high", "claude-sonnet-5-5-high"):
+        assert own_harness_legs((CATALOG[leg_id],), NONE) == ()   # no OpenCode counterpart serves them
+    assert [row["leg"] for row in harness_skips((review, CATALOG["claude-sonnet-5-5-high"]), NONE)] == [
+        "claude-sonnet-5-5-high"]
+
+
+def test_probe_failure_across_the_three_families_through_the_route(tmp_path):
+    plan = routed(tmp_path, NONE)
+    assert (plan.legs[0].harness, plan.legs[0].harness_fallback) == ("opencode", "client_missing")
+    assert "agy-gemini-4-hydrogen-high" not in [leg.id for leg in plan.legs]
+    assert any(row["leg"] == "agy-gemini-4-hydrogen-high" and row["reason"] == "client_missing" for row in plan.skipped)
+    review = review_route(tmp_path, NONE)
+    assert review.legs[0].id == "gpt-6.2-sol-medium"
+    assert (review.legs[0].harness, review.legs[0].harness_fallback) == ("opencode", "client_missing")
+    ids = [leg.id for leg in review.legs]
+    assert "claude-sonnet-5-5-high" not in ids
+    assert any(row["leg"] == "claude-sonnet-5-5-high" and row["reason"] == "client_missing" for row in review.skipped)
+    gemini = routed_for_writer(tmp_path, NONE, "gpt")
+    assert all(leg.family != "gemini" or leg.harness == "agy" for leg in gemini.legs)
+
+
+def review_route(tmp_path, installed, writers=("claude",)):
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from plangraph.spawner.service import SpawnService
+    service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
+                           state=tmp_path / "state")
+    service.client_probe = installed
+    card = {"estimate_tokens": 1000, "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
+    return service.route(card, "review", writers)
+
+
+def routed_for_writer(tmp_path, installed, writer):
+    return review_route(tmp_path, installed, (writer,))
+
+
+def test_paused_codex_harness_removes_the_converted_leg(tmp_path, monkeypatch):
+    policy = tmp_path / "policy.json"
+    policy.write_text('{"paused_harnesses": {"codex": {"allowed_roles": []}}}')
+    monkeypatch.setenv("PLANGRAPH_ROUTE_POLICY", str(policy))
+    plan = routed(tmp_path, ALL)
+    assert all(leg.harness != "codex" for leg in plan.legs)
+    assert any(row["reason"] == "paused_harness" and row["leg"] == "cx-gpt-6.2-sol-medium" for row in plan.skipped)

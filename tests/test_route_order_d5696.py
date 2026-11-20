@@ -59,14 +59,14 @@ def test_standard_review_order_efforts_and_writer_fence(catalog):
         ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None),
-        ('agy-gemini-4-argon-low', 'low'),
-        ('agy-gemini-4-argon-medium', 'medium'),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
+        ('agy-gemini-4-argon-low', 'low'),
+        ('agy-gemini-4-argon-medium', 'medium'),
     ]
     assert ordered(result, 'review', writer_families=('claude',),
-                   diff_tokens=99999) == result[:7] + result[8:]
+                   diff_tokens=99999) == result[:5] + result[6:]
 
 
 @pytest.mark.parametrize('order_class', ['high', 'complex'])
@@ -74,8 +74,8 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
     from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
     assert OPERATOR_ROUTE_ORDERS['review'][order_class] == (
         'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-argon-low',
-        'agy-gemini-4-argon-medium', 'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash')
+        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-neon-medium',
+        'claude-sonnet-5-5-high', 'mimo-v2.6-flash', 'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium')
     result = ordered(catalog.values(), 'review', order_class=order_class,
                      writer_families=('gpt',), diff_tokens=1000)
     assert signature(result) == [
@@ -83,11 +83,11 @@ def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
         ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None),
-        ('agy-gemini-4-argon-low', 'low'),
-        ('agy-gemini-4-argon-medium', 'medium'),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
+        ('agy-gemini-4-argon-low', 'low'),
+        ('agy-gemini-4-argon-medium', 'medium'),
     ]
 
 
@@ -103,8 +103,8 @@ def test_planning_fable_high(catalog):
 def test_explicit_upstream_roles_keep_full_high_review_order(catalog, order_class, effort, hydrogen):
     """D-6366 review order applies across standard/high/complex classes."""
     ids = ('gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-           'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-argon-low',
-           'agy-gemini-4-argon-medium', 'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash')
+           'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-neon-medium',
+           'claude-sonnet-5-5-high', 'mimo-v2.6-flash', 'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium')
     admitted = [replace(catalog[id], roles=('review',)) for id in ids]
     result = ordered(admitted, 'review', order_class=order_class, writer_families=('gpt',))
     assert signature(result) == [
@@ -112,13 +112,13 @@ def test_explicit_upstream_roles_keep_full_high_review_order(catalog, order_clas
         ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None),
-        ('agy-gemini-4-argon-low', 'low'),
-        ('agy-gemini-4-argon-medium', 'medium'),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
+        ('agy-gemini-4-argon-low', 'low'),
+        ('agy-gemini-4-argon-medium', 'medium'),
     ]
-    assert ordered(admitted, 'review', order_class=order_class, writer_families=('claude',)) == tuple(admitted[:8] + admitted[9:])
+    assert ordered(admitted, 'review', order_class=order_class, writer_families=('claude',)) == tuple(admitted[:6] + admitted[7:])
 
 
 def test_payment_order_unmodified_registry_names_every_drop(catalog):

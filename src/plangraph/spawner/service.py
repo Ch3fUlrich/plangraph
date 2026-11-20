@@ -190,24 +190,19 @@ class SpawnService(SeatSpawnMixin):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
         from plangraph.planner.measured_down import measured_down
-        plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
-        from plangraph.planner.legs import leg_active
-        live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
-        from plangraph.planner.legs import own_harness_legs, service_probe
+        from plangraph.planner.legs import leg_active, service_probe
+        from .exit_outcome import no_verdict_legs
         records = []   # the cooldown pass reads the run records once; silent review legs come from the same reads
-        legs = own_harness_legs(witness_order(card, role, live(plan.legs), measured_down(self.state, on_record=records.append)), service_probe(self))
-        seats = own_harness_legs(live(plan.review_seats), service_probe(self))
+        down = measured_down(self.state, on_record=records.append)
         extra = {}
-        if role == 'review':   # a leg that never answers leaves the order (LE-REVIEW-LEG-PROBE-SCHEDULED)
-            from .exit_outcome import no_verdict_legs
-            silent = no_verdict_legs(records)
-            dropped = [leg.id for leg in legs if leg.id in silent]
-            if dropped:
-                extra['skipped'] = type(plan.skipped)((*plan.skipped, *({'leg': leg_id, 'reason': 'no_verdict_leg', 'evidence': {
-                    'kind': 'no_verdict_leg', 'runs': 3}} for leg_id in dropped)))
-                legs = tuple(leg for leg in legs if leg.id not in silent)
-                seats = tuple(leg for leg in seats if leg.id not in silent)
-        return replace(plan, legs=legs, review_seats=seats, **extra)
+        probe = service_probe(self)
+        if probe is not None:
+            extra['installed'] = probe
+        if role == 'review' and (silent := no_verdict_legs(records)):   # a leg that never answers leaves the order
+            extra['silent_legs'] = silent
+        plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench, **extra)
+        live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
+        return replace(plan, legs=witness_order(card, role, live(plan.legs), down), review_seats=live(plan.review_seats))
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)

@@ -255,7 +255,7 @@ class SpawnPlan:
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
-                catalog_rows=None) -> SpawnPlan:
+                catalog_rows=None, installed=None, silent_legs=frozenset()) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
     Measured inputs rank within cost tiers; implement writer priority is final.
     ``exclude_families`` excludes the specified family names from candidate legs.
@@ -266,12 +266,24 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
+    ``installed`` (client name -> bool) puts each leg into its own harness before policy, seats and
+    ordering run (rule 3.53); None keeps the registered harnesses.  ``silent_legs`` are review leg ids
+    that ended without a verdict three times in a row: skipped as ``no_verdict_leg``.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
     from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_SONNET
     if native_review:
         legs = review_route_pool(legs)
+    harness_skipped = []
+    if installed is not None:
+        from .legs import harness_skips, own_harness_legs
+        harness_skipped = list(harness_skips(legs, installed))
+        legs = own_harness_legs(legs, installed)
+    if role == "review" and silent_legs:
+        harness_skipped.extend({"leg": l.id, "reason": "no_verdict_leg", "evidence": {
+            "kind": "no_verdict_leg", "runs": 3}} for l in legs if l.id in silent_legs)
+        legs = tuple(l for l in legs if l.id not in silent_legs)
     check_route_targets(card, legs)
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -370,7 +382,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
                for l in legs if role in l.roles and not leg_active(l, now=now)]
-    skipped = []
+    skipped = list(harness_skipped)
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))

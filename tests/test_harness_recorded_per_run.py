@@ -126,3 +126,31 @@ def test_cli_harness_report_lists_failed_runs_by_harness(tmp_path, capsys):
     atomic_write_private(path, json.dumps(dict(record, started=time.time() - 120)))
     assert main(["--state", str(tmp_path / "state"), "harness-report"]) == 0
     assert json.loads(capsys.readouterr().out)["failed"] == {"codex": ["run-1a"]}
+
+
+def test_stamp_keeps_the_recorded_host_and_names_the_cooldown_host_otherwise(monkeypatch):
+    record = {"host": "placed-host"}
+    hr.stamp_harness(record, CATALOG["agy-claude-sonnet-5-5-high"])
+    assert record["host"] == "placed-host"
+    monkeypatch.setenv("PLANGRAPH_HOST", "cooldown-host")
+    bare = {}
+    hr.stamp_harness(bare, CATALOG["agy-claude-sonnet-5-5-high"])
+    assert bare["host"] == "cooldown-host"
+
+
+def test_route_after_silent_leg_recomputes_seats(tmp_path):
+    from pathlib import Path
+
+    from plangraph.spawner.private_io import atomic_write_private
+    service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
+                           state=tmp_path / "state")
+    for i in range(3):
+        record = review(f"{i}", time.time() - 10 + i, "gpt-6.2-sol-medium", "no_verdict")
+        record.update(run_id=f"run-{i}x", status="failed", started=time.time() - 20, host=hr._host_name())
+        path = service._path(record["run_id"])
+        path.parent.mkdir(parents=True)
+        atomic_write_private(path, json.dumps(record))
+    card = {"estimate_tokens": 1000, "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
+    plan = service.route(card, "review", ("claude",))
+    assert [leg.id for leg in plan.review_seats] == ["mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free"]
+    assert [row["leg"] for row in plan.seat_coverage] == [leg.id for leg in plan.review_seats]

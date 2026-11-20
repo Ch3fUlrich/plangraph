@@ -26,7 +26,7 @@ from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
 __all__ = ["OWN_HARNESS", "CLIENT_MISSING", "HarnessChoice", "client_installed", "resolve_harness",
-           "own_harness_legs", "refuse_foreign_pin", "own_harness_model", "own_harness_enabled", "service_probe",
+           "own_harness_legs", "harness_skips", "refuse_foreign_pin", "own_harness_enabled", "service_probe",
            "TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
            "load_legs", "with_measured", "EXPLICIT_LEGS", "EXPLICIT_WRITERS", "spawnable_legs",
            "CX_EFFORTS"]
@@ -179,10 +179,10 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# Rule 3.58 (OPERATOR D-6366, 2026-11-20; overrides the D-6310 and D-6357 review lists):
-# reviews run first on agy gemini-4-argon-low (argon-medium follows as same-family
-# fallback), then mimo-v2.6-pro, then the OpenCode DeepSeek legs, then glm-5.3-flash;
-# neon and Sonnet high follow as fallbacks.  The reviewer's family always differs from the writer's.
+# Rule 3.61 (OPERATOR D-6481, 2026-11-20; amends rule 3.58 / D-6366): reviews run first on
+# gpt-6.2-sol-medium in Codex, then mimo-v2.6-pro, the OpenCode DeepSeek legs and glm-5.3-flash;
+# neon, Sonnet high and mimo flash follow, agy argon low and medium come last.  The reviewer's
+# family always differs from the writer's.
 REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH = "mimo-v2.6-pro", "mimo-v2.6-flash"
 REVIEW_HYDROGEN, REVIEW_NEON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-neon-medium"
 REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"
@@ -192,8 +192,8 @@ REVIEW_SONNET = "claude-sonnet-5-5-high"
 #: with repository access; the OpenCode review child has no repository tools (D-4681).
 REVIEW_GPT = "gpt-6.2-sol-medium"
 REVIEW_ORDER = (REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK, "opencode-go-deepseek-v4-flash",
-                "opencode-go-glm-5.3-flash", REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_NEON, REVIEW_SONNET,
-                REVIEW_MIMO_FLASH)
+                "opencode-go-glm-5.3-flash", REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH,
+                REVIEW_ARGON_LOW, REVIEW_ARGON)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
     Leg(REVIEW_GPT, "subscription", "codex", "gpt-6.2-sol-medium", "gpt",
@@ -201,7 +201,7 @@ REVIEW_FALLBACK_LEGS = (
         note="D-6481 rule 3.61: native Codex review run with repository access; a gpt-written diff skips it"),
     Leg(REVIEW_ARGON_LOW, "subscription", "agy", "gemini-4-argon-low", "gemini",
         ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="low",
-        tool_mode="tools", note="D-6366 rule 3.58 (1): first review leg; retired for implement (D-6310)"),
+        tool_mode="tools", note="D-6366: review leg, last since rule 3.61 (D-6481); retired for implement (D-6310)"),
     Leg(REVIEW_ARGON, "subscription", "agy", "gemini-4-argon-medium", "gemini",
         ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium",
         tool_mode="tools", note="D-6366: same-family fallback after argon-low; retired for implement (D-6310)"),
@@ -453,8 +453,11 @@ MIN_REASON = 10
 
 @dataclass(frozen=True)
 class HarnessChoice:
-    harness: str
+    """The harness a leg runs in; ``leg`` is the leg to run (None: no usable harness on this host)."""
+
+    harness: str | None
     fallback: str | None = None
+    leg: Leg | None = None
 
 
 def own_harness_enabled() -> bool:
@@ -463,19 +466,6 @@ def own_harness_enabled() -> bool:
 
 def client_installed(name: str) -> bool:
     return shutil.which(name) is not None
-
-
-def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_installed) -> HarnessChoice:
-    """The harness a leg runs in: its family's own client when installed, else the leg's own
-    (OpenCode) harness with ``client_missing``.  ``installed=None`` switches own-harness routing off."""
-    harness = getattr(leg, "harness", None)
-    own = OWN_HARNESS.get(getattr(leg, "family", None))
-    # An inline-only leg is packaged for its OpenCode child; its model name is not the client's.
-    if installed is None or not own or harness in own or getattr(leg, "tool_mode", "tools") != "tools":
-        return HarnessChoice(harness)
-    if installed(own[0]):
-        return HarnessChoice(own[0])
-    return HarnessChoice(harness, CLIENT_MISSING)
 
 
 def service_probe(service) -> Callable[[str], bool] | None:
@@ -487,25 +477,45 @@ def service_probe(service) -> Callable[[str], bool] | None:
     return client_installed if own_harness_enabled() else None
 
 
-def own_harness_model(leg: Leg, harness: str) -> str:
-    """The model name the own client takes: OmniRoute's ``omniroute/cx-`` alias is the plain id."""
-    if harness == "codex":
-        name = leg.model.removeprefix("omniroute/")
-        return name.removeprefix("cx-")
-    return leg.model
+def _opencode_counterpart(leg: Leg) -> Leg | None:
+    """The registered OpenCode leg serving the same gpt model (its ``omniroute/cx-`` alias), review-packaged."""
+    if leg.family != "gpt":
+        return None
+    model = "omniroute/cx-" + leg.model.removeprefix("omniroute/").removeprefix("cx-")
+    if not any(known.model == model for known in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
+        return None
+    tool_mode = "inline-only" if "implement" not in leg.roles else leg.tool_mode
+    return dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode, harness_fallback=CLIENT_MISSING)
+
+
+def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_installed) -> HarnessChoice:
+    """The harness a leg runs in: its family's own client when installed; else the OpenCode leg of the
+    same model with ``client_missing``; else no usable leg.  ``installed=None`` switches the rule off."""
+    harness = getattr(leg, "harness", None)
+    own = OWN_HARNESS.get(getattr(leg, "family", None))
+    # An inline-only leg is packaged for its OpenCode child; its model name is not the client's.
+    if installed is None or not own or (getattr(leg, "tool_mode", "tools") != "tools" and harness not in own):
+        return HarnessChoice(harness, None, leg)
+    if harness in own:
+        if installed(harness):
+            return HarnessChoice(harness, None, leg)
+        fallback = _opencode_counterpart(leg)
+        return HarnessChoice("opencode", CLIENT_MISSING, fallback) if fallback else HarnessChoice(None, CLIENT_MISSING)
+    if installed(own[0]):
+        return HarnessChoice(own[0], None, dataclasses.replace(leg, harness=own[0]))
+    return HarnessChoice(harness, CLIENT_MISSING, dataclasses.replace(leg, harness_fallback=CLIENT_MISSING))
 
 
 def own_harness_legs(legs: Iterable[Leg], installed: Callable[[str], bool] | None = client_installed) -> tuple[Leg, ...]:
-    """Each leg moved into its own harness, or marked with the fallback reason."""
-    result = []
-    for leg in legs:
-        choice = resolve_harness(leg, installed)
-        if choice.harness != getattr(leg, "harness", None):
-            leg = dataclasses.replace(leg, harness=choice.harness, model=own_harness_model(leg, choice.harness))
-        if choice.fallback:
-            leg = dataclasses.replace(leg, harness_fallback=choice.fallback)
-        result.append(leg)
-    return tuple(result)
+    """Each leg moved into its own harness or onto its OpenCode fallback; legs with neither are left out."""
+    choices = (resolve_harness(leg, installed) for leg in legs)
+    return tuple(choice.leg for choice in choices if choice.leg is not None)
+
+
+def harness_skips(legs: Iterable[Leg], installed: Callable[[str], bool] | None = client_installed) -> tuple[dict, ...]:
+    """`route` skip rows of the legs :func:`own_harness_legs` leaves out."""
+    return tuple({"leg": leg.id, "reason": CLIENT_MISSING, "evidence": {
+        "kind": CLIENT_MISSING, "harness": leg.harness}} for leg in legs if resolve_harness(leg, installed).leg is None)
 
 
 def refuse_foreign_pin(leg: Leg, override_reason, installed: Callable[[str], bool] | None = client_installed) -> None:

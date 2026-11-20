@@ -487,7 +487,8 @@ def client_version(name: str) -> str:
 
 
 def _host_name() -> str:
-    return os.environ.get("PLANGRAPH_HOST_NAME") or socket.gethostname()
+    """The host identity the run records use (PLANGRAPH_HOST, as the cooldown lookup reads it)."""
+    return os.environ.get("PLANGRAPH_HOST") or os.environ.get("PLANGRAPH_HOST_NAME") or socket.gethostname()
 
 
 def harness_fields(harness: str, fallback: str | None, host: str | None = None) -> dict:
@@ -496,8 +497,9 @@ def harness_fields(harness: str, fallback: str | None, host: str | None = None) 
 
 
 def stamp_harness(record: dict, leg, host: str | None = None) -> None:
-    """Write the launched leg's harness fields onto ``record``."""
-    record.update(harness_fields(getattr(leg, "harness", None), getattr(leg, "harness_fallback", None), host))
+    """Write the launched leg's harness fields onto ``record``; a host the record already names stays."""
+    fields = harness_fields(getattr(leg, "harness", None), getattr(leg, "harness_fallback", None), host)
+    record.update({**fields, "host": record.get("host") or fields["host"]})
 
 
 def native_harness_fields(host: str | None = None) -> dict:
@@ -545,4 +547,3 @@ def no_verdict_legs(runs, limit: int = NO_VERDICT_LIMIT) -> set[str]:
         if leg_id and len(recent.setdefault(leg_id, [])) < limit:
             recent[leg_id].append(run.get("reason") == "no_verdict")
     return {leg_id for leg_id, outcomes in recent.items() if len(outcomes) == limit and all(outcomes)}
-
