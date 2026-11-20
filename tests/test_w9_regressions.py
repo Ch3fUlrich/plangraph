@@ -163,8 +163,14 @@ def test_mid_fallthrough_bench_refusal(tmp_path, monkeypatch):
         assert record['exit_code'] == 3
         assert record['evidence'] == [{'leg': plan.legs[1].id}]
         assert len([a for a in record['attempts'] if a['status'] != 'skipped']) == 1
+        routed = {leg.id for leg in plan.legs}
+        skipped = [a for a in record['attempts'] if a['status'] == 'skipped']
+        # Legs the plan itself skipped keep their routing reason; every routed leg that
+        # never launched ends with the termination reason.
         assert all(a['skip_reason'] == 'run_terminated_before_leg'
-                   for a in record['attempts'] if a['status'] == 'skipped')
+                   for a in skipped if isinstance(a['leg'], dict) and a['leg']['id'] in routed)
+        assert {a['leg'] for a in skipped if not isinstance(a['leg'], dict)} == {
+            s['leg'] for s in record['plan']['skipped']}
         assert record['attempts'][0]['skip_reason'] == 'provider_stop'
         assert record['ended'] is not None
         assert service.result(record['run_id']) == record
