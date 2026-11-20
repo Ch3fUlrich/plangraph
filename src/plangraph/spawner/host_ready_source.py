@@ -5,9 +5,9 @@ from .remote_ps import configured_hosts
 
 
 def check_sources(name, config, command, fail):
-    sources = [(config['ssh'], config['spawner_src'], True)]
+    sources = [(config.get('ssh'), config['spawner_src'], False if config.get('registry') else True)]
     ok = True
-    matched = False
+    matched = bool(config.get('local'))
     seen_hosts = []
     try:
         for host in configured_hosts():
@@ -17,7 +17,8 @@ def check_sources(name, config, command, fail):
             if host in seen_hosts:
                 continue
             seen_hosts.append(host)
-            if host.get('invalid') or 'win_src' in host or 'wsl_distro' in host:
+            if (host.get('invalid') or 'win_src' in host
+                    or host.get('wsl_distro') != config.get('wsl_distro')):
                 fail('src_config', 'unsupported_or_invalid')
                 ok = False
                 continue
@@ -35,11 +36,11 @@ def check_sources(name, config, command, fail):
         if key in seen:
             continue
         seen.append(key)
-        if not isinstance(source, str) or not source or not isinstance(target, str):
+        if not isinstance(source, str) or not source or (not config.get('local') and not isinstance(target, str)):
             fail('src_config', 'route_or_path_unknown')
             ok = False
             continue
-        if target != config['ssh']:
+        if target != config.get('ssh'):
             fail('src_config', f"ps target={target!r} and overflow ssh={config['ssh']!r} "
                  'must be the same string')
             ok = False

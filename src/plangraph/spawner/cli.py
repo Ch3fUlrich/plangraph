@@ -21,7 +21,8 @@ def _wait_runs(service, result, wait):
     deadline = time.monotonic() + max(0, wait)
     runs = spawn_runs(result)
     while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
-        time.sleep(min(.02, max(0, deadline - time.monotonic())))
+        interval = 2 if any(run.get('overflow_remote') for run in runs) else .02
+        time.sleep(min(interval, max(0, deadline - time.monotonic())))
         for run in runs:
             if run.get('status') == 'running': run.update(_read_result(service, run['run_id']))
 
@@ -110,7 +111,14 @@ def _read_result(service, run_id):
     from .service import remote_native_running
     record = service.result(run_id)
     from .exit_outcome import with_stale
-    return asyncio.run(service.refresh_result(run_id)) if remote_native_running(record) else with_stale(record)
+    if not remote_native_running(record):
+        return with_stale(record)
+    if record.get('role') == 'review' and record.get('run_kind') != 'native-codex':
+        from .remote_ps import native_result
+        updated = native_result(record)
+        service._save(updated)
+        return with_stale(updated)
+    return asyncio.run(service.refresh_result(run_id))
 
 
 def main(argv=None):

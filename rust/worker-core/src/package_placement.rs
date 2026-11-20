@@ -28,6 +28,7 @@ pub struct Policy {
     pub max_load_per_core: f64,
     pub host_limits: BTreeMap<String, (u64, u64)>,
     pub excluded_hosts: BTreeSet<String>,
+    pub fallback_hosts: BTreeSet<String>,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -38,6 +39,7 @@ impl Default for Policy {
             max_load_per_core: 1.0,
             host_limits: BTreeMap::new(),
             excluded_hosts: BTreeSet::new(),
+            fallback_hosts: BTreeSet::new(),
         }
     }
 }
@@ -49,10 +51,13 @@ impl Policy {
             .unwrap()
             .to_owned();
         for host in &registry.hosts {
+            if host.placement_fallback {
+                self.fallback_hosts.insert(host.id.clone());
+            }
             self.host_limits.insert(
                 host.id.clone(),
                 (
-                    self.floor_mb.max(host.caps.mem_floor_mb),
+                    host.caps.mem_floor_mb,
                     self.reservation_mb
                         .max(host.warmup.ramp_mb.get(&key).copied().unwrap_or(0)),
                 ),
@@ -118,50 +123,70 @@ pub fn refusal(candidate: &Candidate, policy: &Policy, now: u64) -> Option<Strin
     };
     Some(reason.into())
 }
-pub fn choose(hosts: &[Candidate], policy: &Policy, now: u64) -> Choice {
+/// Rank admitted hosts by the registry floor, placing explicit fallback hosts last.
+pub fn ranked<'a>(
+    hosts: &'a [Candidate],
+    policy: &Policy,
+    now: u64,
+) -> (Vec<&'a Candidate>, Vec<Refusal>) {
     let mut refusals = Vec::new();
-    let mut admitting = Vec::new();
-    for (index, host) in hosts.iter().enumerate() {
+    let mut admitted = Vec::new();
+    for host in hosts {
         if let Some(reason) = refusal(host, policy, now) {
             refusals.push(Refusal {
                 host: host.id.clone(),
                 reason,
             });
         } else {
-            admitting.push((index, host));
+            admitted.push(host);
         }
     }
-    admitting.sort_by(|(ai, a), (bi, b)| {
-        let (a, b) = (a.sample.as_ref().unwrap(), b.sample.as_ref().unwrap());
-        (a.cpu_load.unwrap() / a.cores as f64)
-            .total_cmp(&(b.cpu_load.unwrap() / b.cores as f64))
-            .then_with(|| {
-                a.swap_used_mb
-                    .unwrap_or(u64::MAX)
-                    .cmp(&b.swap_used_mb.unwrap_or(u64::MAX))
-            })
-            .then_with(|| a.runs.cmp(&b.runs))
-            .then_with(|| a.sessions.len().cmp(&b.sessions.len()))
-            .then_with(|| b.mem_avail_mb.cmp(&a.mem_avail_mb))
-            .then_with(|| ai.cmp(bi))
+    admitted.sort_by_key(|host| {
+        (
+            policy.fallback_hosts.contains(&host.id),
+            std::cmp::Reverse(headroom(host, policy)),
+        )
     });
-    match admitting.first() {
-        Some((_, host)) => {
-            let row = host.sample.as_ref().unwrap();
-            Choice {
-                host: Some(host.id.clone()),
-                reason: format!(
-                    "admitted: load/core={:.2}, available={} MB, swap={} MB, runs={}, sessions={}",
-                    row.cpu_load.unwrap() / row.cores as f64,
-                    row.mem_avail_mb.unwrap(),
-                    row.swap_used_mb
-                        .map_or_else(|| "unknown".into(), |m| m.to_string()),
-                    row.runs,
-                    row.sessions.len()
-                ),
-                refusals,
-            }
-        }
+    (admitted, refusals)
+}
+
+fn headroom(host: &Candidate, policy: &Policy) -> u64 {
+    let floor = policy
+        .host_limits
+        .get(&host.id)
+        .map_or(policy.floor_mb, |limits| limits.0);
+    host.sample
+        .as_ref()
+        .and_then(|sample| sample.mem_avail_mb)
+        .unwrap_or_default()
+        .saturating_sub(floor)
+}
+
+pub fn placement_reason(host: &Candidate, policy: &Policy) -> String {
+    let row = host
+        .sample
+        .as_ref()
+        .expect("admitted host has a capacity sample");
+    let fallback = if policy.fallback_hosts.contains(&host.id) {
+        "fallback, "
+    } else {
+        ""
+    };
+    format!(
+        "admitted: {fallback}{} MB above floor, load/core={:.2}",
+        headroom(host, policy),
+        row.cpu_load.unwrap() / row.cores as f64,
+    )
+}
+
+pub fn choose(hosts: &[Candidate], policy: &Policy, now: u64) -> Choice {
+    let (admitted, refusals) = ranked(hosts, policy, now);
+    match admitted.first() {
+        Some(host) => Choice {
+            host: Some(host.id.clone()),
+            reason: placement_reason(host, policy),
+            refusals,
+        },
         None => Choice {
             host: None,
             reason: "queue: no host admits".into(),

@@ -4,6 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.spawner import overflow as o
 from plangraph.spawner.service import SpawnService
 from test_spawner_overflow import healthy, inputs  # noqa: F401 shared fixture
@@ -100,7 +102,7 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, tmp_path):
     monkeypatch.setattr(service, 'ps', lambda: {'runs': [{'status': 'running'}] * 50})
     monkeypatch.setattr(o.cli, 'SpawnService', lambda **kw: service)
     reason = 'memory: free 5047 MB, floor 3000 MB, role 2048 MB'
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent.json'))
+    use_projected_overflow_config(monkeypatch, tmp_path / 'absent.json')
     class Output(io.StringIO):
         def close(self):
             pass
@@ -233,7 +235,7 @@ def test_disk_floor_admission(tmp_path, monkeypatch, free, refused):
     monkeypatch.setattr(h, 'disk_free_gb', lambda path: free)
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 99999))
     monkeypatch.setattr(o, 'registry_caps', lambda: {})
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent'))
+    use_projected_overflow_config(monkeypatch, tmp_path / 'absent')
     service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path / 'checkout')),
                               ps=lambda: {'runs': []})
     result = seat_spawn.admit(service, {})
@@ -391,7 +393,7 @@ def test_local_disk_uses_launch_cwd(tmp_path, monkeypatch, source):
     prompt.write_text('task')
     args = ['spawn', '--repo', str(root), '--card', str(card), '--prompt', str(prompt)]
     monkeypatch.setattr(o, 'registry_caps', lambda: {})
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(root / 'missing'))
+    use_projected_overflow_config(monkeypatch, root / 'missing')
     cwd = str(root / 'other-filesystem')
     o.Path(cwd).mkdir()
     o.subprocess.run(['git', 'init', '-q', cwd], check=True)

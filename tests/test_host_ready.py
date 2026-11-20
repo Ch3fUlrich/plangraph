@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.spawner import host_ready as h
 from plangraph.spawner import host_ready_source as source
 
@@ -77,7 +79,7 @@ def test_doctor_missing_keys(tmp_path, payload):
 def test_main_unknown_host(tmp_path, monkeypatch, capsys):
     config = tmp_path / 'config.json'
     config.write_text(json.dumps({'hosts': {'fiction': CONFIG}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     with pytest.raises(SystemExit) as exc:
         h.main(['--host', 'nosuch'])
     assert exc.value.code == 2
@@ -188,7 +190,7 @@ def test_config_error_before_probe(tmp_path, monkeypatch, capsys):
     del config['ssh']
     path = tmp_path / 'hosts.json'
     path.write_text(json.dumps({'hosts': {'fiction': config}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    use_projected_overflow_config(monkeypatch, path)
     monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
     def never_contact(*args, **kwargs):
         pytest.fail('host must not be contacted')
@@ -224,7 +226,7 @@ def test_deleted_spawner_with_invalid_ps_config(tmp_path, ps_config):
 def test_main_state_directory(tmp_path, monkeypatch, capsys, unwritable):
     config = tmp_path / 'config.json'
     config.write_text(json.dumps({'hosts': {'fiction': CONFIG, 'other': CONFIG}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
     state = tmp_path / '.local/state/plangraph/host-ready'
     original = h.check_host
@@ -257,7 +259,7 @@ def test_invalid_source_type(tmp_path, monkeypatch, src):
 def test_main_unexpected_host_errors(tmp_path, monkeypatch, capsys, error):
     path = tmp_path / 'hosts.json'
     path.write_text(json.dumps({'hosts': {'fiction': CONFIG, 'other': CONFIG}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    use_projected_overflow_config(monkeypatch, path)
     monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
     def broken(*args, **kwargs):
         raise error('secret-value')

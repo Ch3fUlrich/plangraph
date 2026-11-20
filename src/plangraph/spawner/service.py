@@ -19,7 +19,8 @@ from .item_key import annotate_item
 from .base_fresh import admit_base
 def remote_native_running(record):
     """True for a running native Codex run placed on another host; only these need a remote refresh."""
-    return (record.get('run_kind') == 'native-codex' and bool(record.get('overflow_remote'))
+    return ((record.get('run_kind') == 'native-codex' or record.get('role') == 'review')
+            and bool(record.get('overflow_remote'))
             and record.get('status') == 'running')
 
 

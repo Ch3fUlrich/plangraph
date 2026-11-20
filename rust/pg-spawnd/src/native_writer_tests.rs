@@ -242,7 +242,7 @@ with tempfile.TemporaryDirectory() as directory:
     config.write_text(json.dumps({'hosts':{'other':{'repo':'/repo','spawner_src':'/src','ssh':'fixture','env_file':'/env'}}}))
     receipt = dict(run_id='run-abc', run_kind='native-codex', host='other', status='running', overflow_remote=True)
     final = dict(receipt, status='completed', final_head='head', base_sha='base', exit_code=0, review={'verdict':'ACCEPT','text':'VERDICT: ACCEPT'})
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(final) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
+    with patch('plangraph.spawner.overflow.placement_config', return_value=json.loads(config.read_text())), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(final) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
         result = native_result(receipt)
     assert result['final_head'] == 'head' and result['review']['verdict'] == 'ACCEPT', result
     assert result['host'] == 'other' and result['exit_code'] == 0, result
@@ -278,7 +278,7 @@ with tempfile.TemporaryDirectory() as directory:
     config = pathlib.Path(directory)/'hosts.json'
     config.write_text(json.dumps({'hosts':{'other':{'repo':'/repo','spawner_src':'/src','ssh':'fixture','env_file':'/env'}}}))
     receipt = dict(run_id='run-abc', run_kind='native-codex', host='other', status='running', overflow_remote=True, started=time.time(), pid=os.getpid(), pid_start=99, supervisor_pid_start=88, supervisor_stderr_path='/remote/log')
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(receipt) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
+    with patch('plangraph.spawner.overflow.placement_config', return_value=json.loads(config.read_text())), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(receipt) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
         running = native_result(receipt)
     assert 'pid' not in running and 'pid_start' not in running and not any(k.startswith('supervisor_') for k in running), running
     persisted = dict(receipt)
@@ -293,13 +293,13 @@ with tempfile.TemporaryDirectory() as directory:
     runner = SimpleNamespace(jobs={}, kill_recorded=AsyncMock(side_effect=AssertionError('remote pid reached local killer')))
     saved = []
     service = SimpleNamespace(result=lambda *a, **kw: receipt, runner=runner, tasks={}, _save=saved.append)
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(cancelled) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=1)) as ssh:
+    with patch('plangraph.spawner.overflow.placement_config', return_value=json.loads(config.read_text())), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(cancelled) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=1)) as ssh:
         result = asyncio.run(cancel_recorded(service, receipt['run_id']))
         assert 'plangraph.spawner.cli cancel run-abc' in ssh.call_args.args[0][-1], ssh.call_args
         assert '. /env >/dev/null 2>&1' in ssh.call_args.args[0][-1], ssh.call_args
     runner.kill_recorded.assert_not_called()
     assert result['status'] == 'cancelled' and 'pid' not in result and saved[-1] == result, result
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', side_effect=TimeoutError):
+    with patch('plangraph.spawner.overflow.placement_config', return_value=json.loads(config.read_text())), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', side_effect=TimeoutError):
         result = asyncio.run(cancel_recorded(service, receipt['run_id']))
     assert result['status'] == 'running' and result['remote_query_error'] == 'host query failed', result
 "#]).output().unwrap();
@@ -687,5 +687,107 @@ fn round_stop_is_the_round_progress_rule_capped_at_max_rounds() {
     assert_eq!(
         high_med("HIGH a.rs:1 x\n- MED b.rs:2 y\nLOW c\nVERDICT: REQUEST_CHANGES\n"),
         2
+    );
+}
+
+#[test]
+fn registry_places_a_review_without_cwd_and_records_the_memory_reason() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .args(["-c", r#"
+from datetime import datetime, timezone
+import json, os, pathlib, tempfile
+from unittest.mock import patch
+from plangraph.spawner import overflow, seat_spawn, host_ready
+from plangraph.spawner.service import SpawnService
+
+with tempfile.TemporaryDirectory() as directory:
+    root = pathlib.Path(directory)
+    config = root / 'config' / 'plangraph'
+    config.mkdir(parents=True)
+    ready = root / '.local/state/plangraph/host-ready'
+    ready.mkdir(parents=True)
+    checkout = str(root / 'public')
+    hosts = []
+    for name, free, floor in [('local', 30000, 3000), ('worker', 19000, 12000), ('windows-hop', 15000, 4000)]:
+        hosts.append(dict(id=name, transport='local' if name == 'local' else 'ssh', os='linux',
+            placement_fallback=name == 'local', state_dir='/state', roles=['implement', 'review'],
+            repos={'plangraph': {'root': checkout if name == 'local' else '/repo/' + name}},
+            caps={'mem_floor_mb': floor}, warmup={'ramp_mb': {'implement': 1024, 'review': 512}}))
+        row = dict(host=name, mem_available_mb=free, live_runs=0, disk_free_gb=20,
+                   ok=True, checked_at=datetime.now(timezone.utc).isoformat())
+        (ready / (name + '.json')).write_text(json.dumps(row))
+    hosts[2]['wsl_distro'] = 'Ubuntu'
+    (config / 'hosts.json').write_text(json.dumps(dict(version=1, self='local',
+        hosts=hosts, public_repos=['plangraph'])))
+    (config / 'overflow-hosts.json').write_text(json.dumps({'hosts': {'unregistered': {}}}))
+    run = dict(run_id='run-review', role='review', status='running')
+    with patch.dict(os.environ, HOME=directory, XDG_CONFIG_HOME=str(config.parent),
+                    PLANGRAPH_HOST_NAME='local'), patch.object(seat_spawn, 'resources', return_value=(0, 30000)), (
+            patch.object(host_ready, 'local_disk_refusal', return_value=None)), (
+            patch.object(overflow, 'remote_spawn', return_value=run)) as spawn:
+        service = SpawnService(state=root / 'state')
+        card = {'diff_ref': {'repo': checkout, 'base': 'abc', 'head': 'def'}}
+        record = service.admit_spawn({'role': 'review', 'prompt': 'fixture'}, card=card)
+        host, route, sent, *_ = spawn.call_args.args
+        assert host == 'windows-hop' and route['wsl_distro'] == 'Ubuntu', spawn.call_args
+        assert sent == card and 'cwd' not in sent, sent
+        persisted = service.result(record['run_id'])
+        assert persisted['placement'] == dict(host=host, reason='11000 MB above memory floor', free_mb=15000), persisted
+"#])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn overflow_review_bundle_materializes_unpublished_commits_on_receiver() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = std::process::Command::new("python3")
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .args(["-c", r#"
+from pathlib import Path
+import subprocess, tempfile
+from plangraph.spawner.overflow import stage_review_diff
+from plangraph.spawner.prompt_input import checkout_env
+
+def git(repo, *args):
+    return subprocess.check_output(['git', '-C', str(repo),
+        '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+        '-c', 'commit.gpgsign=false', *args], text=True, env=checkout_env()).strip()
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    source, target = root / 'source', root / 'target'
+    git(root, 'init', '-q', '-b', 'main', str(source))
+    git(source, 'commit', '--allow-empty', '-qm', 'public base')
+    public = git(source, 'rev-parse', 'HEAD')
+    git(source, 'update-ref', 'refs/remotes/origin/main', public)
+    git(root, 'clone', '-q', '--no-local', str(source), str(target))
+    git(source, 'commit', '--allow-empty', '-qm', 'earlier unpushed review')
+    base = git(source, 'rev-parse', 'HEAD')
+    (source / 'change.txt').write_text('reviewed exactly')
+    git(source, 'add', 'change.txt')
+    git(source, 'commit', '-qm', 'unpushed head')
+    head = git(source, 'rev-parse', 'HEAD')
+    [bundle] = stage_review_diff({'repo': str(source), 'base': base, 'head': head}, root)
+    git(target, 'fetch', '--no-write-fetch-head', '--no-tags', '--', str(bundle), 'refs/review/head')
+    assert git(target, 'merge-base', base, head) == base
+    assert git(target, 'show', head + ':change.txt') == 'reviewed exactly'
+    assert git(target, 'rev-parse', 'HEAD') == public
+"#])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
 }

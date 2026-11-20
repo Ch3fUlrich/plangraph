@@ -5,6 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.spawner import overflow, seat_spawn
 
 REGISTRY = {'self': 'home-host', 'hosts': [
@@ -25,7 +27,7 @@ def config(tmp_path, monkeypatch, hosts=True):
     path = tmp_path / 'hosts.json'
     path.write_text(json.dumps({'public_repos': [str(tmp_path)],
                                 'hosts': {'build-host': {'ssh': 'build-host'}} if hosts else {}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    use_projected_overflow_config(monkeypatch, path)
 
 
 def test_local_limits_use_the_review_ramp_of_the_host():
@@ -67,7 +69,7 @@ def test_unplaceable_review_is_refused_not_queued_with_the_reason(host, monkeypa
 
 def test_absent_overflow_config_refuses_with_a_hint(host, monkeypatch):
     service, tmp_path = host
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent.json'))
+    use_projected_overflow_config(monkeypatch, tmp_path / 'absent.json')
     monkeypatch.setattr(seat_spawn, 'resources', lambda svc: (0, 3300))
     record = seat_spawn.admit(service, {'role': 'review'})
     assert record['status'] == 'refused' and 'genconfig write' in record['hint']

@@ -9,6 +9,8 @@ import threading
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.spawner import git_guard
 
 
@@ -227,7 +229,7 @@ def test_cli_overflow_forwards_worktree_flag(repository, tmp_path, monkeypatch, 
     monkeypatch.chdir(repo)
     config = tmp_path / 'overflow.json'
     config.write_text(json.dumps({'public_repos': [str(repo)], 'hosts': {'invented': {}}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 4000))
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(overflow, 'local_limits', lambda *a: (2048, 3000))

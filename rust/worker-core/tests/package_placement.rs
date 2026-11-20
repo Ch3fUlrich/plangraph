@@ -112,3 +112,40 @@ fn stricter_host_limits_and_readiness_exclusions_are_binding() {
         "host excluded by readiness preflight"
     );
 }
+
+#[test]
+fn registry_ranks_by_memory_above_floor_and_keeps_fallback_last() {
+    use pg_worker_core::hosts::{HostRegistry, Role};
+    let mut value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../docs/schemas/examples/hosts.example.json"
+    ))
+    .unwrap();
+    let template = value["hosts"][0].clone();
+    value["self"] = "primary-a".into();
+    value["public_repos"] = serde_json::json!(["plangraph"]);
+    value["hosts"] = ["primary-a", "primary-b", "fallback"]
+        .into_iter()
+        .map(|id| {
+            let mut host = template.clone();
+            host["id"] = id.into();
+            host["aliases"] = serde_json::json!([]);
+            host["placement_fallback"] = (id == "fallback").into();
+            host["caps"]["mem_floor_mb"] = if id == "primary-a" { 12000 } else { 4000 }.into();
+            host
+        })
+        .collect();
+    let registry = HostRegistry::from_json_str(&value.to_string()).unwrap();
+    let mut policy = Policy::default();
+    policy.apply_registry(&registry, Role::Implement);
+    let result = choose(
+        &[
+            host("fallback", 64000, 0.0),
+            host("primary-a", 22000, 0.1),
+            host("primary-b", 18000, 1.0),
+        ],
+        &policy,
+        100,
+    );
+    assert_eq!(result.host.as_deref(), Some("primary-b"));
+    assert!(result.reason.contains("14000 MB above floor"));
+}

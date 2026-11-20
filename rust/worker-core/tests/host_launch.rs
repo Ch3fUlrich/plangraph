@@ -4,6 +4,7 @@ use serde_json::json;
 fn unsafe_ssh_route_is_refused_before_launch() {
     let registry = pg_worker_core::hosts::HostRegistry {
         version: 1,
+        public_repos: Default::default(),
         self_host: "local".into(),
         hosts: vec![],
     };

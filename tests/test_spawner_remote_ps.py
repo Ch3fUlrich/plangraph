@@ -1,3 +1,4 @@
+import base64
 import json
 import sys
 import subprocess
@@ -62,7 +63,9 @@ def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
         command = f'test -d {quoted} || exit 44; PYTHONPATH={quoted} {command}'
     if distro is not None:
         host['wsl_distro'] = distro
-        command = f"wsl -d {distro} -- sh -c '{command}'"
+        encoded = base64.b64encode(command.encode()).decode()
+        launcher = f"import base64,os;os.execl('/bin/sh','sh','-c',base64.b64decode('{encoded}').decode())"
+        command = f'wsl.exe --distribution {distro} --exec python3 -c "{launcher}"'
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'private-target', command]

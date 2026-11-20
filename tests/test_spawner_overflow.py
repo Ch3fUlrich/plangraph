@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.spawner import overflow as o
 
 
@@ -79,7 +81,7 @@ def inputs(tmp_path, monkeypatch):
          'warmup': {'ramp_mb': {'implement': 2048}}}
         for name in ('local', 'ash', 'birch')]}))
     config = tmp_path / 'config.json'
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     card = tmp_path / 'card.json'
     card.write_text(json.dumps({'diff_ref': {'repo': str(tmp_path), 'base': 'abc', 'head': 'def'}}))
     prompt = tmp_path / 'prompt.txt'
@@ -278,7 +280,9 @@ def test_remote_rewrite_and_quoting(monkeypatch):
     assert card['diff_ref']['repo'] == '/local-invented'
     command = calls[-2][-1]
     assert "'a; nope'" in command and 'secret prompt' not in command
-    assert 'git fetch origin -- abc' in command
+    prepare = calls[-3][-1]
+    assert 'git fetch --no-write-fetch-head -q origin -- abc' in prepare
+    assert 'git cat-file -e' in prepare and 'plangraph.spawner.cli' not in prepare
 
 
 def test_record_host(tmp_path, monkeypatch):

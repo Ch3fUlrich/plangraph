@@ -255,7 +255,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                   mem_available_mb=None, disk_free_gb=None, checkout_sha=None,
                   main_sha=None, doctor_ok=None, keeper_ok=None,
                   spawner_session=None, live_runs=None, behind_main=None,
-                  src_ok=None)
+                  src_ok=None, trust_ok=None, tools_ok=None, tokens_ok=None)
     deadline = time.monotonic() + timeout
     reachability_failed = False
 
@@ -268,8 +268,11 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             fail(check, 'timeout')
             return None
         try:
-            reply = runner(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
-                            '--', config['ssh'], script], capture_output=True,
+            from .remote_ps import linux_command
+            argv = (['sh', '-c', script] if config.get('local') else
+                    ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                     '--', config['ssh'], linux_command(config, script)])
+            reply = runner(argv, capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=remaining)
             if reply.returncode and not (check == 'doctor' and reply.returncode == 1):
                 fail(check, 'command_failed')
@@ -291,16 +294,23 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
         return None
 
     try:
-        if not config['ssh']:
+        if not config.get('local') and not config['ssh']:
             fail('reachable', 'no_route')
             reachability_failed = True
         elif command('reachable', 'true') is not None:
             record['reachable'] = True
             record['src_ok'] = check_sources(name, config, command, fail)
+            if config.get('registry'):
+                record['tools_ok'] = command('tools', 'command -v git && command -v python3 && command -v codex') is not None
+                record['tokens_ok'] = command('tokens', 'codex login status') is not None
+                record['trust_ok'] = command(
+                    'trust', 'pg-host-readiness --project ' + shlex.quote(config['repo'])) is not None
             repo = shlex.quote(config['repo'])
             prefix = 'cd ' + shlex.quote(config['spawner_src']) + ' && '
             if config.get('env_file'):
                 prefix += 'set -a && . ' + shlex.quote(config['env_file']) + ' >/dev/null 2>&1 && '
+            if config.get('state_dir'):
+                prefix += 'PLANGRAPH_SPAWN_STATE=' + shlex.quote(config['state_dir']) + ' '
             prefix += 'PYTHONPATH=src python3 -m plangraph.spawner.'
             record['mem_available_mb'] = measure('memory', 'cat /proc/meminfo',
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
@@ -354,9 +364,10 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     '.automount', '.swap', '.slice', '.device')) else
                     'plangraph wait-pid --check --pid-file ' if session.endswith('.pid') else 'pgrep -x -- ')
                 record['spawner_session'] = command('session', probe + shlex.quote(session)) is not None
-            else:
+            elif not config.get('registry'):
                 fail('session', 'not_configured')
-            runs = measure('runs', prefix + 'cli ps', lambda s: json.loads(s)['runs'])
+            run_probe = 'remote_ps' if config.get('registry') else 'cli ps'
+            runs = measure('runs', prefix + run_probe, lambda s: json.loads(s)['runs'])
             if runs is not None:
                 record['live_runs'] = sum(r['status'] == 'running' for r in runs)
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
@@ -390,16 +401,28 @@ def main(argv=None):
     parser.add_argument('--host')
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
-    config = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS',
-                                Path.home() / '.config/plangraph/overflow-hosts.json'))
-    hosts = json.loads(config.read_text())['hosts']
+    from .overflow import host_config, placement_config, readiness_dir, registry_caps
+    registry = registry_caps()
+    hosts = placement_config(registry).get('hosts', {})
+    local = host_config(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry['self'])
+    if local:
+        if local['id'] in hosts:
+            hosts[local['id']]['local'] = True
+        elif local.get('os') == 'linux' and 'plangraph' in local.get('repos', {}):
+            repo = local['repos']['plangraph']['root']
+            hosts[local['id']] = dict(local=True, registry=True, repo=repo,
+                spawner_src=repo + '/src', floor_mb=local['caps']['mem_floor_mb'],
+                state_dir=local.get('state_dir'),
+                session_unit=local.get('env', {}).get('PG_SESSION_UNIT'))
+    if not hosts and not args.host:
+        parser.error('hosts.json has no readiness candidates')
     if args.host:
         if args.host not in hosts:
             parser.error('unknown host')
         hosts = {args.host: hosts[args.host]}
     if any(not re.fullmatch(r'[A-Za-z0-9_-]+', name) for name in hosts):
         parser.error('invalid host name')
-    state = Path.home() / '.local/state/plangraph/host-ready'
+    state = readiness_dir()
     try:
         state.mkdir(parents=True, exist_ok=True)
     except OSError:

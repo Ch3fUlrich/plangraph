@@ -1,5 +1,6 @@
 """Optional, bounded SSH fan-out for ps; transport diagnostics stay private."""
 from concurrent.futures import ThreadPoolExecutor
+import base64
 import json
 import os
 from pathlib import Path
@@ -65,6 +66,18 @@ def source_path(src):
     return shlex.quote(src)
 
 
+def linux_command(host, command):
+    """Pass a POSIX command in one cmd.exe-safe line through the WSL hop."""
+    distro = host.get('wsl_distro')
+    if distro is None:
+        return command
+    if not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*', distro):
+        raise ValueError('invalid WSL distribution')
+    payload = base64.b64encode(command.encode()).decode('ascii')
+    launcher = f"import base64,os;os.execl('/bin/sh','sh','-c',base64.b64decode('{payload}').decode())"
+    return f'wsl.exe --distribution {distro} --exec python3 -c "{launcher}"'
+
+
 def host_command(host, *, query=False):
     """Build the same source probe and shell wrapper for both callers."""
     module = 'python3 -m plangraph.spawner.remote_ps'
@@ -79,13 +92,7 @@ def host_command(host, *, query=False):
     command = source_check(host) if 'src' in host else ''
     if query:
         command += f'; PYTHONPATH={source_path(host["src"])} {module}' if command else module
-    if 'wsl_distro' in host:
-        distro = host['wsl_distro']
-        if not isinstance(distro, str) or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*', distro):
-            raise ValueError('invalid configuration')
-        command = f'wsl -d {distro} -- sh -c {shlex.quote(command)}'
-    return command
-
+    return linux_command(host, command)
 
 def exit_reason(code):
     return {0: None, SRC_MISSING: 'host src missing', 255: 'host unreachable'}.get(
@@ -221,7 +228,7 @@ def list_runs(local, *, transport=query_host):
 
 def native_receipt(record):
     """A target PID is evidence, never an origin-side process identity."""
-    if record.get('run_kind') == 'native-codex' and record.get('overflow_remote'):
+    if record.get('overflow_remote') and (record.get('run_kind') == 'native-codex' or record.get('role') == 'review'):
         record['origin_receipt'] = True
         identity = {key: record.pop(key) for key in list(record)
                     if key in ('pid', 'pid_start', 'job_id', 'job_name', 'escapees')
@@ -233,14 +240,12 @@ def native_receipt(record):
 
 def native_result(record, *, verb='result'):
     """Refresh a native overflow receipt with target-host terminal evidence."""
-    from .private_io import read_text_retry
     from plangraph.keeper.credential_guard import mask
     try:
         if verb not in ('result', 'cancel'):
             raise ValueError('unsupported native control verb')
-        config_path = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS',
-                          '~/.config/plangraph/overflow-hosts.json')).expanduser()
-        host = json.loads(read_text_retry(config_path))['hosts'][record['host']]
+        from .overflow import placement_config, registry_caps
+        host = placement_config(registry_caps())['hosts'][record['host']]
         run_id = record['run_id']
         if not re.fullmatch(r'run-[A-Za-z0-9]+', run_id):
             raise ValueError('invalid run id')
@@ -250,11 +255,13 @@ def native_result(record, *, verb='result'):
         if host.get('env_file'):
             command += 'set -a && . ' + shlex.quote(host['env_file']) + ' >/dev/null 2>&1 && set +a && '
         command += "printf '%s\\n' " + shlex.quote(begin) + ' && '
-        command += ('PYTHONPATH=' + shlex.quote(host['spawner_src']) +
-                    ' python3 -m plangraph.spawner.cli ' + verb + ' ' + shlex.quote(run_id))
+        argv = ['python3', '-m', 'plangraph.spawner.cli']
+        if host.get('state_dir'):
+            argv.extend(['--state', host['state_dir']])
+        command += 'PYTHONPATH=' + shlex.quote(host['spawner_src']) + ' ' + shlex.join([*argv, verb, run_id])
         command += "; printf '\\n%s\\n' " + shlex.quote(end)
         reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
-                                '--', host['ssh'], command], capture_output=True,
+                                '--', host['ssh'], linux_command(host, command)], capture_output=True,
                                text=True, encoding='utf-8', errors='replace', timeout=10)
         # A terminal nonzero exit is the writer's exit, with a valid JSON record.
         text, _ = mask(reply.stdout)
@@ -262,10 +269,11 @@ def native_result(record, *, verb='result'):
         if lines.count(begin) != 1 or lines.count(end) != 1 or lines.index(begin) >= lines.index(end):
             raise ValueError('receipt unbracketed')
         remote = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
-        if remote.get('run_id') != run_id or remote.get('run_kind') != 'native-codex':
+        if (remote.get('run_id') != run_id or remote.get('host') != record.get('host') or remote.get('run_kind') != record.get('run_kind')
+                or remote.get('role') != record.get('role')):
             raise ValueError('receipt mismatch')
         return native_receipt(dict(remote, host=record['host'], overflow_remote=True,
-                    overflow_reason=record.get('overflow_reason')))
+                    overflow_reason=record.get('overflow_reason'), placement=record.get('placement')))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return native_receipt(dict(record, remote_query_error='host query failed'))
 

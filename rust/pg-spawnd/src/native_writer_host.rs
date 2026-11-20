@@ -247,7 +247,10 @@ impl Driver for Host {
                 "-c",
                 "approval_policy=never",
                 "-c",
-                "sandbox_mode=\"danger-full-access\"",
+                &format!(
+                    "sandbox_mode=\"{}\"",
+                    pg_worker_core::host_readiness::WRITER_SANDBOX
+                ),
                 "-o",
             ])
             .arg(directory.join("native.last"))

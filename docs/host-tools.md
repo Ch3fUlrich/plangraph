@@ -173,3 +173,32 @@ record available under the placement command's state directory. Placement
 refuses missing, failed, future-dated, and older-than-120-second records and
 records for a different host or sandbox. Remote capacity samples come from the
 same state directory's `fleet/HOST.ndjson` history.
+
+### Three-host writer and review rollout
+
+Use `hosts.json` as the source for placement. Give each target its own host
+entry, current main checkout in `repos.plangraph.root`, role-specific
+reservations, and memory floor. List the repository IDs approved for SSH
+transport in the registry's `public_repos` field. A workstation WSL entry uses
+`os: linux`, the Windows SSH endpoint in `ssh_target`, and the distribution in
+`wsl_distro`. Its paths use the distribution's Linux filesystem. Set
+`placement_fallback: true` on the orchestration host to rank it after ready
+workers. Among ready worker hosts, placement uses free memory above each
+host's floor. The run record includes the selected host and placement reason.
+
+After merge, install the matching spawner and `pg-host-readiness` binaries on
+the three hosts and ensure noninteractive SSH can find them. Configure the
+registry on each host so `self` names that host. Regenerate the status and
+session projections with `python3 -m plangraph.fleet_sync genconfig write`,
+then restart the affected spawner units. Run
+`python3 -m plangraph.spawner.host_ready --json` on each placement origin.
+Confirm each host reports a trusted checkout, matching main SHA, working
+tools and login, and no failures. Refresh readiness before its ten-minute
+placement lifetime expires.
+
+Submit a writer and a review from a placement origin and verify both run types
+land on the remote Linux worker and on the workstation WSL. Record the run IDs
+and selected hosts, then attach a 24-hour sample showing work on all three
+hosts. Review requests send their exact base and head as a `diff_ref`.
+Unpublished commits in approved public repositories are transferred in a
+temporary Git bundle, so testing this path requires no push.

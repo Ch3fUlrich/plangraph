@@ -3,7 +3,7 @@
 //! no network, no reads of default config locations.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// How a worker reaches a host.
@@ -107,6 +107,10 @@ pub struct HostEntry {
     pub transport: Transport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ssh_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub placement_fallback: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     pub os: Os,
@@ -126,6 +130,8 @@ pub struct HostRegistry {
     #[serde(rename = "self")]
     pub self_host: String,
     pub hosts: Vec<HostEntry>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub public_repos: BTreeSet<String>,
 }
 
 /// One error variant per validation rule V1-V7, plus io/parse plumbing.
@@ -224,6 +230,16 @@ impl HostRegistry {
             )));
         }
         let me = self.resolve(&self.self_host).unwrap().id.as_str();
+        for repo in &self.public_repos {
+            if !self.hosts.iter().any(|host| host.repos.contains_key(repo)) {
+                return Err(HostsError::Namespace(v(
+                    "-",
+                    repo,
+                    "public_repos",
+                    "no such repo",
+                )));
+            }
+        }
         for h in &self.hosts {
             validate_host(h, h.id == me)?;
         }

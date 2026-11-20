@@ -150,7 +150,8 @@ fn commands() {
         command(&json!({"win_src":"C:/src"})).unwrap(),
         "if not exist \"C:/src\\\" exit /b 44"
     );
-    assert!(command(&json!({"src":"/src", "wsl_distro":"Ubuntu"}))
-        .unwrap()
-        .starts_with("wsl -d Ubuntu -- sh -c '"));
+    assert_eq!(
+        command(&json!({"src":"/src with space", "wsl_distro":"Ubuntu"})).unwrap(),
+        "wsl.exe --distribution Ubuntu --exec sh -c \"test -d '/src with space' || exit 44\""
+    );
 }

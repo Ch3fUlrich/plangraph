@@ -67,6 +67,15 @@ pub fn launch(registry: &HostRegistry, host: &Candidate, request: &Value) -> Lau
             Ok(cmd) => cmd,
             Err(_) => return Launch::Refused("invalid SSH route".into()),
         };
+        if let Some(distro) = registry
+            .resolve(&host.id)
+            .and_then(|host| host.wsl_distro.as_deref())
+        {
+            if !host_command::valid_wsl_distro(distro) {
+                return Launch::Refused("invalid WSL distribution".into());
+            }
+            cmd.args(["wsl.exe", "--distribution", distro, "--exec"]);
+        }
         cmd.arg("pg-spawnd");
         cmd
     };

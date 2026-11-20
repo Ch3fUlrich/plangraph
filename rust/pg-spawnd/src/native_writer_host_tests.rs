@@ -346,9 +346,12 @@ argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
 assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
-assert value('--writer-family') == 'openai' and 'cwd' in card
+assert value('--writer-family') == 'openai' and 'cwd' not in card
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 head = card['diff_ref']['head']
+repo = pathlib.Path(card['diff_ref']['repo'])
+assert repo != pathlib.Path.cwd()
+assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'

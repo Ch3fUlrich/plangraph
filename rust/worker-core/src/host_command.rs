@@ -40,6 +40,16 @@ pub fn ssh(destination: &str) -> io::Result<Command> {
     Ok(command)
 }
 
+/// A distribution name is passed through the Windows SSH default shell.
+pub fn valid_wsl_distro(name: &str) -> bool {
+    name.as_bytes()
+        .first()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric() || b"._".contains(byte))
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
 pub fn isolate_git(command: &mut Command) {
     for (key, _) in std::env::vars_os() {
         if key.to_string_lossy().starts_with("GIT_") {

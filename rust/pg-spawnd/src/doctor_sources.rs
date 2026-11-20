@@ -58,13 +58,14 @@ fn command(h: &Value) -> Option<String> {
         .unwrap_or_else(|| quote(src));
     let probe = format!("test -d {path} || exit 44");
     if let Some(distro) = h.get("wsl_distro") {
-        if !matches(r"\A[A-Za-z0-9_.][A-Za-z0-9_.-]*\z", distro) {
+        if !pg_worker_core::host_command::valid_wsl_distro(distro.as_str()?)
+            || src.starts_with("~/")
+        {
             return None;
         }
         Some(format!(
-            "wsl -d {} -- sh -c {}",
-            distro.as_str()?,
-            quote(&probe)
+            "wsl.exe --distribution {} --exec sh -c \"{probe}\"",
+            distro.as_str()?
         ))
     } else {
         Some(probe)
