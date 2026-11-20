@@ -34,6 +34,10 @@ FILE_MAX = 1024 * 1024
 class TooLarge(ValueError):
     """The input is longer than its cap."""
 
+    def __init__(self, message: str, prefix: str = "") -> None:
+        super().__init__(message)
+        self.prefix = prefix
+
 
 def read_stdin_text(limit: int = STDIN_MAX) -> str:
     """Stdin as text, reading at most `limit` + 1 bytes; raises TooLarge past `limit`."""
@@ -43,7 +47,8 @@ def read_stdin_text(limit: int = STDIN_MAX) -> str:
     else:
         data = sys.stdin.read(limit + 1).encode("utf-8", errors="replace")
     if len(data) > limit:
-        raise TooLarge("stdin is larger than %d bytes" % limit)
+        raise TooLarge("stdin is larger than %d bytes" % limit,
+                       data[:limit].decode("utf-8", "replace"))
     return data.decode("utf-8", errors="replace")
 
 

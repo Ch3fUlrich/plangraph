@@ -1,0 +1,1 @@
+- pg-spawnd starts its launch and route adapters through `pg_worker_core::stall::spawn_retrying`, so a "Text file busy" (ETXTBSY) exec of a just-written adapter script is retried instead of failing the run; the start error now carries the io error text ("launch adapter could not start: ...").

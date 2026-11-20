@@ -68,6 +68,12 @@ def filter_within(selected_tests, within):
 DOC_SUFFIXES = {".md", ".rst", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico"}
 SMOKE_LIMIT = 12
 SMOKE_TEST = "tests/test_affected_tests.py"
+LOCAL_POLICY_TESTS = {
+    "tests/test_spawner_utf8.py",
+    "tests/test_check_file_size.py",
+    "tests/test_check_new_code_lang.py",
+    "tests/test_check_changelog_docs.py",
+}
 
 
 def smoke_tests(texts, path):
@@ -253,7 +259,9 @@ def select_tests(root, changed, within=None, *, files_only=False, local=False,
         if files_only:
             return {"tests": [], "reason": "graph unreadable: " + str(exc), "error": True}
         return {"tests": filter_within(["tests"], within), "reason": "graph unreadable: " + str(exc)}
-    selected = set()
+    # Repository-wide checks have no import edge from many files they govern.
+    # Keep them outside affected-file selection, including docs-only local runs.
+    selected = LOCAL_POLICY_TESTS.intersection(texts) if local else set()
     asset_cache = {}
     base_reverse = None
     for raw in changed:

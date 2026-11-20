@@ -81,6 +81,12 @@ Sonnet high. This temporary policy overrides the historical per-card review coun
 
 In every mode:
 
+- Every writer commit that fixes or implements keeper items carries one `Plan-Item`
+  trailer per fixed item key, including subitems of a larger item (R-batch-14).
+  A parent trailer or legacy `Closes:` token is insufficient.
+- Before plan-order sends DONE, run `pg close-merged KEY GO-D-ID --from-open`
+  without `--apply` for each item it would report DONE (R-batch-15). Report
+  WOULD-CLOSE or the exact refusal reason; a refusal leaves the item open.
 - Ready PRs combine into one batch PR; [R-batch-09](cards/batch.md) lists rule 3.39's exact exception tokens and conditions.
 - Fast checks pass on the exact head before any review.
 - Writer worktrees start at the fetched default head (R-lead-07); reviews use the exact proposed head.

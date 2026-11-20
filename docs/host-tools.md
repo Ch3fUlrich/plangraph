@@ -61,8 +61,8 @@ stopping at 2 GiB free. The spawner owns admission and runtime stopping;
 this timer reports pressure and reclaims idle rebuildable state.
 Live deployment is separate from repository validation.
 
-The same timer also invokes `pg-worktree-sweep --daily --apply`. Install that
-binary and configure `PG_SWEEP_CLAIMS_READER`; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)
+The separate hourly `pg-worktree-sweep.timer` invokes `pg-worktree-sweep --apply`.
+Install its service and timer, the binary, and configure `PG_SWEEP_CLAIMS_READER`; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)
 for live protection authority, restore records, and remote-deletion opt-in.
 
 ## pg-repo-sync

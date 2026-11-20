@@ -62,6 +62,9 @@ fn run() -> i32 {
         println!("environment checked {} keys", effective.len());
         return 0;
     }
+    if args.first().is_some_and(|arg| arg == "runner") {
+        return plangraph_cli::runner::run(&home, &args[1..]);
+    }
     if args.first().is_some_and(|arg| arg == "ci-watch") {
         return match plangraph_cli::ci_watch::run(&home, &effective, &args[1..]) {
             Ok(()) => 0,
@@ -82,7 +85,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | feed --once [--dry-run] | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | runner plan|install|check | feed --once [--dry-run] | --version"
             );
             return 2;
         }

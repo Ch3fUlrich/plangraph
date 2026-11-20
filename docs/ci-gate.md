@@ -6,6 +6,8 @@ The three Temporal CLI consumers share a SHA-pinned cache action keyed by OS, ar
 
 The `select` job (`tools/ci_select.py`) maps changed paths to suites: `scrub`, `pytest`, `pytest-postgres`, `rust`, `rust-worker`, `rust-spike`. Unknown paths, or a change under `.github/`, `requirements-ci.txt`, or `tools/ci_select.py`, run every suite; a docs-only change runs `scrub` only.
 
+On self-hosted Linux runners (`CI_SELF_HOSTED=1` with `CI_LINUX_RUNNER_LABELS`, same condition as `runs-on`), the `rust`, `rust-worker` and `rust-spike` jobs set `CARGO_BUILD_JOBS` to the runner CPU count, build into a `CARGO_TARGET_DIR` and skip the `actions/cache` restore and save. Only a `push` to the default branch uses the persistent dir `$HOME/cargo-target/<repository>/<job>/<hash of the job's Cargo.lock and Cargo.toml files>` (keyed by the slot's OS user, since runners are single-use and the runner name changes every job); every other run, including same-repo pull requests, builds into an empty per-run dir under `RUNNER_TEMP`, so a pull request cannot plant artifacts that later main builds execute. The job's `CARGO_BUILD_JOBS` and `CARGO_TARGET_DIR` come only from `$GITHUB_ENV` steps (self-hosted or hosted), never from job-level `env`. The fork exclusion in the gate is expression-only and a fork pull request runs the workflow from its own merge commit, so it relies on the repository setting "Require approval for all outside collaborators' workflow runs" being on. `RUST_TEST_THREADS` is set to 8 there to avoid launch-test flakes on many-CPU runners. Directories of older hashes are deleted first, then the job's directory is deleted when it exceeds `vars.CI_CARGO_TARGET_CAP_GB` (default 40 GB; a non-numeric value counts as 40). `PG_JAIL_BIN` and the admission-guard target follow `CARGO_TARGET_DIR`. Hosted runners keep `CARGO_BUILD_JOBS=4` and the cache unchanged.
+
 The `ci-gate` job fails if any selected suite failed, was skipped, or was cancelled.
 
 A non-doc change satisfies the changelog check with a new or edited direct-child `changelog.d/<ITEM-KEY>.md` fragment that adds an entry line against the merge-base (excluding README.md). Ordinary PRs must not edit `CHANGELOG.md`, even for docs-only changes or with a skip trailer. `tools/changelog_fold.py` folds fragments in a release commit recognized by a nonempty `Release: <version or description>` trailer in its final trailer paragraph. CI and the Rust writer gate check each commit, including merge-resolution edits.
@@ -25,3 +27,13 @@ A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a
 - The ci-gate step wiring is checked by tools/gate_wiring_check.py, which the merger runs before merging (it compares the ci-gate job and triggers with the base and demands a Gate-Edit trailer, in the trailer block, on every commit that touches the workflow file; it cannot verify the id).
 - Hand-Edit commits are capped at 50 changed lines (interim ceiling, operator 2026-10-25), may not touch the auth/door surface and are listed in the gate log.
 - For a Writer-trailer commit the gate checks the trailer text, not that a writer really ran.
+
+`ci_commit_gate.py check --base BASE --head HEAD --item-text PART.txt` warns
+for each keeper key named in a UTF-8 part/PR description but absent from writer
+commit `Plan-Item` trailers in BASE..HEAD. In GitHub CI the PR title and body
+come from `GITHUB_EVENT_PATH`; local callers supply `--item-text`. Coverage is
+advisory: missing keys print warnings, while unreadable text or Git failures
+fail the check. The policy runs in Rust (`pg-policy --plan-item-trailers BASE HEAD`)
+and requires Cargo. Use a trailer per fixed key, including subitems of a parent;
+legacy `Closes:` tokens and merge-only trailers do not count. Named references
+that the PR does not fix can also warn and should be checked by the reviewer.

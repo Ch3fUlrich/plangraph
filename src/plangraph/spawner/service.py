@@ -3,7 +3,7 @@ from __future__ import annotations
 from .env_redact import first_reason, harness_limit_line, redact, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import failure_reason, fallthrough_reason, refusal_record, release_attempts, terminal_reason
-from .git_guard import annotate_tree, prepare_worktree, selected_checkout, writer_launch
+from .git_guard import annotate_tree, prepare_worktree, selected_checkout, writer_launch, run_tree
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
 from dataclasses import asdict, replace
@@ -24,7 +24,9 @@ def remote_native_running(record):
 
 
 class SpawnService(SeatSpawnMixin):
+    code_tree = staticmethod(run_tree)
     def __init__(self, runner=None, state=None, leg_reader=None):
+        self.fresh_tree = False  # Public CLI/MCP opt in; child supervisors never recurse.
         self.runner = runner or SpawnerRunner()
         self.state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE',
             Path(os.environ.get('XDG_STATE_HOME', Path.home() / '.local/state')) / 'plangraph'))
@@ -57,7 +59,10 @@ class SpawnService(SeatSpawnMixin):
 
     def _save(self, record):
         native_receipt(record); self._sync_seat(record)
-        if not self._path(record['run_id']).exists(): annotate_tree(record)
+        if not self._path(record['run_id']).exists():
+            annotate_tree(record)
+            if record.get('tree_sha') is None:
+                record.setdefault('tree_absent', 'spawner code checkout identity unavailable at process startup')
         from .private_io import atomic_write_private
         from .runner import redact
         from .seat_artifact import publish

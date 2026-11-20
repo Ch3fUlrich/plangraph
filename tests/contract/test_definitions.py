@@ -118,8 +118,8 @@ def test_set_priority_is_router_only_and_integer_only(kp):
     plan = make_plan(kp)
     for who in ("lead", "worker1", "reader", "reviewer1"):
         err(kp.post("set_priority", who, {"key": plan.key, "n": 3}), 403, "forbidden")
-    assert ok(kp.post("set_priority", "router", {"key": plan.key, "n": -4}), "Priority")["priority"] == -4
-    assert show(kp, plan.key)["priority"] == -4
+    assert ok(kp.post("set_priority", "router", {"key": plan.key, "n": 0}), "Priority")["priority"] == 0
+    assert show(kp, plan.key)["priority"] == 0
 
 
 def test_set_kind_turns_an_open_lane_into_an_operator_item(kp):

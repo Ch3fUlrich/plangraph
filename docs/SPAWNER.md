@@ -53,7 +53,7 @@ Source spans must start and end on line boundaries; invalid spans (even empty on
 Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
 only on child output via Python's `redact_output`, and as part of Rust's `redact`.
 Python never runs these broad rules on prompts or record structures: SHAs and hashes
-must stay readable there, including run IDs, card hashes and prompt SHA-256 fields. Run records add immutable process-load `tree_sha` and `tree_branch` (or `detached`) captured once by a bounded Git read when the spawner code loads, independent of the job cwd and later checkout moves; record persistence performs no Git I/O; old records may omit them. A code path without its own `.git` marker records null identity and a warning, including installed packages within an enclosing project checkout. See [checkout auditing](fleet-sync.md#production-checkout-guard-and-audit).
+must stay readable there, including run IDs, card hashes and prompt SHA-256 fields. Run records add immutable process-load `tree_sha` and `tree_branch` (or `detached`) captured once by a bounded Git read when the spawner code loads, independent of the job cwd and later checkout moves; record persistence performs no Git I/O; old records may omit them. A code path without its own `.git` marker records null identity, a `tree_absent` reason and a warning, including installed packages within an enclosing project checkout. See [checkout auditing](fleet-sync.md#production-checkout-guard-and-audit).
 Stored stdout/stderr tails have already passed the output scrubber at collection.
 A tail therefore masks commit SHAs and long slash paths: take SHAs from git or the run record, never from a tail.
 
@@ -241,8 +241,8 @@ or records with survivors, trees with held creation locks or context leases, dir
 modified within seven days, and dirty trees. A missing/invalid `tree_sha` on a
 nonterminal or survivor record, or corrupt/unreadable records, disables reaping
 for that call. Only older, clean, unpinned trees with available locks and leases
-are removed. Windows selection does no reaping. Supervisor integration and
-run-record stamping are outside this primitive's slice.
+are removed. Windows selection does no reaping.
+With a checkout or `PLANGRAPH_SPAWNER_REPO`, live Python CLI/MCP launches import a supervisor from the selected tree and stamp its SHA before persistence. Installed packages, custom transports, dry runs and direct supervision retain process-load identity. Job cwd and empty seat envelopes retain their existing behavior. The tree lease is released once when the supervisor finishes or the caller detaches; durable running records keep the tree pinned. Cancellation before the admission reply may still stop the pending supervisor. CLI `--wait` bounds the wait after the existing admission handshake. For supervised MCP jobs, use `run_id` for status, result and cancellation; `job_id` controls and steering remain local to the runner that owns the job. The launch-spec module adapter imports launch construction from the selected tree and appends a `run_tree` event, including when child events are null.
 Terminal means `runner.is_terminal`; `needs_input` and `orphaned` keep their trees.
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
@@ -296,6 +296,11 @@ with that tag. The witness proves the model served for tagged gateway calls;
 it does not prove independence from the child or bind a response to its answer.
 The management log credential stays in the parent. The child-writable OpenCode
 store remains review-only request-side evidence.
+The provider-state snapshot behind leg routing (`routing_support/omniroute_state.py`)
+reads `/api/providers` with the same parent-only management token from
+`routing_support/opencode_render.py::load_token` (re-exported by `gateway_witness`), never with the
+gateway client key; without a management
+token the snapshot is unreachable (`no_key`) instead of refusing every gateway leg.
 Run `python -m pytest -q -s tests/test_gateway_witness.py -k route_table_witness_paths`
 to list default and explicit legs without a witness path, including disabled
 legs. The check uses synthetic rows, assumes gateway-backed MiMo, and also checks
@@ -660,6 +665,12 @@ admit or reject a new worktree. Clean main is fast-forwarded when behind; a main
 checkout already at origin/main needs no mutation and may retain local edits.
 Session launch (`src/plangraph/spawner/sessions.py`), routing `bin/fleet-launch`,
 and the external package-worktree script do not call this gate in this part.
+When launching or relaunching a background session (`claude --bg`), `Sessions`
+spawns `claude` directly via Python subprocess (never through the Bash tool),
+so `tools/hooks/bash_guard.py` denies every non-resume `claude --bg` /
+`--background` invocation in the Bash tool unconditionally under rule D-158
+(only `Sessions` allocates session name counters; `--resume <uuid|hex>` without
+`-n`/`--name` stays allowed).
 
 Cancellation waits for an in-flight worktree creation thread before returning;
 new unlaunched attempts are removed, and normal Git branch deletion removes the

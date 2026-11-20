@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
-                              batch_workflow_gate, part_review)
+                              batch_workflow_gate, part_review, run)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -339,13 +340,15 @@ def cmd_land(args):
         raise MergeBatchError(f"batch PR #{number} is {pr['state']} with no merge commit yet: run land again")
     git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
     views = settle(repo, st["merged"], args.wait)
-    problems, moved = [], []
+    problems, moved, landed = [], [], []
     for rec in st["merged"]:
         outcome, why = included_pr(repo, number, rec, views[rec["pr"]], merge)
         if outcome == "moved":
             moved.append(rec["pr"])
         elif outcome == "problem":
             problems.append(why)
+        else:
+            landed.append(rec)
     if problems:
         raise MergeBatchError("batch PR merged, but " + "; ".join(problems) + " (state kept, land again after a fix)")
     if moved:
@@ -354,8 +357,35 @@ def cmd_land(args):
     for skip in st["skipped"]:
         print(f"not merged: #{skip['pr']} ({skip['reason']})", file=sys.stderr)
     drop_state(st)
-    print(f"cleanup when done: git worktree remove {st['worktree']} && git branch -D {st['branch']}", file=sys.stderr)
+    try:
+        cleanup_landed(st, landed)
+    except Exception as exc:  # Cleanup is strictly best effort after GitHub has landed.
+        print(f"cleanup failed: {exc}", file=sys.stderr)
     return 0
+
+
+def cleanup_landed(st, landed):
+    """Best effort cleanup with exact state SHAs; all sweep protections still apply."""
+    try:
+        repo = git("rev-parse", "--show-toplevel").stdout.strip()
+        trees = worktrees()
+        targets = [(st["worktree"], st["branch"], st["head"])]
+        for rec in landed:
+            branch = st["prs"][str(rec["pr"])]["ref"]
+            for path, name in trees:
+                if name == branch or (not name and git("rev-parse", "HEAD", cwd=path).stdout.strip() == rec["head"]):
+                    targets.append((path, name, rec["head"]))
+        pins = os.environ.get("PG_PINS", str(Path.home() / ".config/plangraph/pins.json"))
+        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--delete-remote"]
+        for path, branch, sha in targets:
+            argv.extend(["--root", str(Path(path).parent), "--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
+        for rec in landed:
+            branch = st["prs"][str(rec["pr"])]["ref"]
+            argv.extend(["--remote-target", f"{branch}:{rec['head']}"])
+        result = run(argv)
+        print(result.stdout, end="", file=sys.stderr)
+    except MergeBatchError as exc:
+        print(f"cleanup sweep failed: {exc}", file=sys.stderr)
 
 
 def cmd_status(args):

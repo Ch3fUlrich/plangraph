@@ -83,7 +83,7 @@ def test_429_without_summary_is_a_refusal():
 
 def test_resetless_api_refresh_does_not_extend_hold_forever(monkeypatch):
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda env: 'k')
+    monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     clock = [1000.0]
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: clock[0])
     data = [dict(provider='codex:a1', remainingPct=0)]
@@ -161,7 +161,7 @@ def test_missing_or_corrupt_snapshot_db_never_blocks_or_creates_file(tmp_path):
 
 def test_api_reset_and_resetless_observation_holds(monkeypatch):
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda env: 'k')
+    monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: 1000.0)
     for extra, until in [('', 2800.0), (', "next_reset_at": "1970-01-01T02:00:00Z"', 7200.0)]:
         def fetch(*args):
@@ -218,7 +218,7 @@ def test_missing_or_unreadable_snapshot_never_blocks_routing(source):
 
 def test_snapshot_fetch_is_read_only_json_and_unreadable_is_a_lookup_error(monkeypatch):
     monkeypatch.setattr(quota_snapshots, 'effective_gateway_base_url', lambda env: 'https://gw/v1')
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda env: 'k')
+    monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     seen = []
     def fetch(url, headers, timeout):
         seen.append((url, headers))
@@ -230,7 +230,12 @@ def test_snapshot_fetch_is_read_only_json_and_unreadable_is_a_lookup_error(monke
     for bad in (lambda u, h, t: (500, b'{}'), lambda u, h, t: (200, b'nope'), lambda u, h, t: (_ for _ in ()).throw(OSError())):
         with pytest.raises(LookupError):
             fetch_snapshot_rows({}, fetch=bad)
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda env: None)
+    monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: None)
+    with pytest.raises(LookupError):
+        fetch_snapshot_rows({}, fetch=fetch)
+    def missing_token(env):
+        raise LookupError('no PLANGRAPH_GATEWAY_LOG_TOKEN')
+    monkeypatch.setattr(quota_snapshots, 'load_token', missing_token)
     with pytest.raises(LookupError):
         fetch_snapshot_rows({}, fetch=fetch)
 

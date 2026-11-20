@@ -286,3 +286,42 @@ def test_real_header_missing_cutoff_or_row_date_refuses(unseated_w, monkeypatch,
     with pytest.raises(Refused, match=reason):
         world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
     assert world.store._item("demo:H")["state"] == "in_review"
+
+
+def test_merged_waiver_cutoff_without_space_refuses(unseated_w, monkeypatch):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch)
+    world.decision_path.write_text(world.decision_path.read_text().replace(
+        "Waives-seats: demo:H", "Waives-seats: demo:H; Cutoff:2026-11-14"))
+    before = world.store._evidence("demo:H")
+    with pytest.raises(Refused, match="operator_seat_waiver_invalid_or_ineligible: historical_cutoff"):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before
+
+
+def test_real_header_go_without_date_refuses(unseated_w, monkeypatch):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch)
+    world.decision_path.write_text(
+        "| id | project | decision | by | why / evidence |\n"
+        f"| D-5504 | demo | GO #1; GO-HEAD {HEAD} | router | fixture |\n"
+        "| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H; "
+        "Cutoff: 2026-11-14; Date: 2026-11-14 | operator | fixture |\n")
+    before = world.store._evidence("demo:H")
+    with pytest.raises(Refused, match="operator_seat_waiver_go_date_ineligible"):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before
+
+
+def test_merged_waiver_date_column_and_field_refuse(unseated_w, monkeypatch):
+    world = unseated_w
+    historical_waiver_fixture(world, monkeypatch)
+    world.decision_path.write_text(world.decision_path.read_text().replace(
+        "Waives-seats: demo:H", "Waives-seats: demo:H; Cutoff: 2026-11-14; Date: 2026-11-14"))
+    before = world.store._evidence("demo:H")
+    with pytest.raises(Refused, match="operator_seat_waiver_invalid_or_ineligible: historical_cutoff"):
+        world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert world.store._item("demo:H")["state"] == "in_review"
+    assert world.store._evidence("demo:H") == before

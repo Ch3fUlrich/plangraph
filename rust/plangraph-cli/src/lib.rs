@@ -8,5 +8,6 @@ mod fast_check_packages;
 pub mod fast_checks;
 pub mod feeder;
 pub mod paths;
+pub mod runner;
 pub mod setup;
 pub mod watchers;
