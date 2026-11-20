@@ -12,6 +12,9 @@ default); tracked repo symlinks (``--repo``). A symlinked file
 is followed to its content. Detail lines are masked by
 tools/hooks/redact_common.py before they are printed.
 
+``--only opencode`` runs the OpenCode root alone (config, ``instructions``
+entries, skills links); the full scan can take minutes on a real home.
+
 Exit codes: 0 clean; 1 actionable AutoOS hits; 2 scan error (a --home,
 --repo, --launch-dir or --routing-root that cannot be scanned); 3 only
 SECRET-PATH hits (secret-named files that must not be opened: their own report
@@ -31,7 +34,7 @@ from autoos_refs_core import (  # noqa: F401  (re-exported: the scanner's public
 )
 from autoos_refs_roots import (
     scan_claude_hooks, scan_claude_settings, scan_launch_specs, scan_mcp_configs,
-    scan_router_bin, scan_routing_launch, scan_routing_tree, scan_skills_and_opencode,
+    scan_router_bin, scan_opencode, scan_routing_launch, scan_routing_tree, scan_skills_and_opencode,
     scan_systemd, RootScanError,
 )
 
@@ -128,6 +131,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="Home directory to scan (default: Path.home())")
     parser.add_argument("--repo", type=Path, default=None,
                         help="Repository path to scan for tracked symlinks")
+    parser.add_argument("--only", choices=("all", "opencode"), default="all",
+                        help="Scan every root (default) or only the OpenCode root "
+                             "(config, instructions, skills links): fast on a real home")
     parser.add_argument("--launch-dir", type=Path, default=None,
                         help="Routing launch records (default: "
                              "<home>/.local/state/routing/launch)")
@@ -148,8 +154,9 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     try:
-        hits = scan_all(home=args.home, repo=args.repo,
-                        launch_dir=args.launch_dir, routing_root=args.routing_root)
+        hits = (scan_opencode(args.home) if args.only == "opencode"
+                else scan_all(home=args.home, repo=args.repo,
+                              launch_dir=args.launch_dir, routing_root=args.routing_root))
     except (RepoScanError, RootScanError) as exc:
         print(f"autoos_refs_check: error: {exc}", file=sys.stderr)
         return 2
