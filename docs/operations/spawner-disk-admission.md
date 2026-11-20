@@ -3,9 +3,14 @@
 Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 `overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 5
 (GiB); the checkout, configured `worktree_root`, and state tree filesystems must
-all meet it. A refusal reports `disk_low` and measured GB and uses RAM's overflow
-or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5); the
-receiving spawner also checks live disk before launching.
+all meet it (or, when `work_drives` are configured, at least one drive meets its
+floor). Before refusing `disk_low`, admission cleans idle rebuildable caches
+(`shared_cargo_target`, `~/.cache/pg-target-po`, `~/.cache/pg-target-warm`, and
+idle worktree `rust/target` directories) once and re-measures free space; a
+persistent breach records a `disk-hygiene.json` floor alarm (`alarm: true`).
+A refusal reports `disk_low` and measured GB and uses RAM's overflow
+or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5) and
+optional `work_drives`; the receiving spawner also checks live disk before launching.
 
 Every harness child, including writers and fixers, receives `CARGO_TARGET_DIR`
 from `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`).

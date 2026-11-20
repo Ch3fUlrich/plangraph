@@ -1,13 +1,8 @@
 use pg_worker_core::{
     disk_hygiene::{self, Guards, Report, Thresholds},
     disk_runtime,
-    run::record_io,
 };
-use std::{
-    env, io,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{env, io, path::PathBuf, time::SystemTime};
 
 fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     let (mut repo, mut root, mut pins) = (None, None, None);
@@ -136,17 +131,7 @@ fn run() -> io::Result<()> {
             serde_json::json!({"alarm":true,"error":error.to_string(),"freed_bytes":0,"actions":[],"skipped":[],"dry_run":!args.iter().any(|a| a == "--apply"),"free_bytes":null})
         }
     };
-    let mut report = report;
-    report["ts"] = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(io::Error::other)?
-        .as_secs()
-        .into();
-    let bytes = serde_json::to_vec(&report)?;
-    record_io::atomic_write_private(&state.join("disk-hygiene.json"), &bytes)?;
-    let mut line = bytes.clone();
-    line.push(b'\n');
-    record_io::append_private(&state.join("disk-hygiene.ndjson"), &line)?;
+    let bytes = disk_runtime::write_hygiene_report(&state, &report)?;
     println!("{}", String::from_utf8_lossy(&bytes));
     result.and_then(|r| match r.error {
         Some(e) => Err(io::Error::other(e)),

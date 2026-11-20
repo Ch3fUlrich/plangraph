@@ -1,0 +1,1 @@
+- **LE-CODING-VM-DISK-GUARD**: Clean idle rebuildable caches (`shared_cargo_target`, `~/.cache/pg-target-po`, `~/.cache/pg-target-warm`, and idle worktree `rust/target` dirs) once before refusing `disk_low`, persist floor alarms to `disk-hygiene.json`, and support per-drive `work_drives` floors with `statvfs`-based drive/host fallback.

@@ -84,9 +84,106 @@ def _windows_cargo_lease(path, exclusive):
 CLEANUP_WAIT_ENV = 'PLANGRAPH_CARGO_CLEANUP_WAIT_S'
 
 
-def cargo_lease(exclusive=False, wait=0.0):
-    """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
-    target = shared_cargo_target()
+def _safe_cache_dir(target, worktree):
+    checkout, cache = Path(worktree).resolve(), target.resolve()
+    return not (target.is_symlink() or checkout.is_relative_to(cache) or
+                cache.is_relative_to(checkout) or cache == Path.home().resolve())
+
+
+def _shared_cache_roots():
+    primary = shared_cargo_target()
+    roots = [primary]
+    for rel in ('.cache/pg-target-po', '.cache/pg-target-warm'):
+        extra = (Path.home() / rel).expanduser().absolute()
+        if extra not in roots:
+            roots.append(extra)
+    return roots
+
+
+def _clean_single_cache(target, service, cap=None):
+    """Remove an idle, unleased shared cache dir. Returns True if cleaned."""
+    if not target.exists() or target.is_symlink():
+        return False
+    if cap is not None and cargo_target_size_gb(target) < cap:
+        return False
+    if any(cargo_run_busy(r) for r in service.ps()['runs']):
+        return False
+    try:
+        wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
+        with _cargo_lease_for(target, exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
+            if target.exists():
+                shutil.rmtree(target)
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _cleanup_before_disk_refusal(worktree, service, cap):
+    """Reclaim idle rebuildable build caches before refusing disk_low."""
+    cleaned = False
+    for root in _shared_cache_roots():
+        if _safe_cache_dir(root, worktree) and _clean_single_cache(root, service):
+            cleaned = True
+    try:
+        wt_path = Path(worktree)
+        if wt_path.is_dir() and not any(cargo_run_busy(r) for r in service.ps()['runs']):
+            proc = subprocess.run(
+                ['git', '-C', str(wt_path), 'worktree', 'list', '--porcelain'],
+                capture_output=True, text=True, timeout=15)
+            if proc.returncode == 0:
+                live_cwds = {Path(r['cwd']).resolve() for r in service.ps()['runs']
+                             if cargo_run_busy(r) and r.get('cwd')}
+                for line in proc.stdout.splitlines():
+                    if not line.startswith('worktree '):
+                        continue
+                    tree = Path(line[len('worktree '):])
+                    if not tree.is_dir() or tree.is_symlink():
+                        continue
+                    if any(tree.resolve() == c or tree.resolve().is_relative_to(c) for c in live_cwds):
+                        continue
+                    rust_target = tree / 'rust/target'
+                    if rust_target.is_dir() and not rust_target.is_symlink():
+                        try:
+                            with _cargo_lease_for(rust_target, exclusive=True, wait=0.0):
+                                shutil.rmtree(rust_target)
+                                cleaned = True
+                        except OSError:
+                            pass
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return cleaned
+
+
+def _record_disk_floor_alarm(service, free_gb, floor_gb, reason):
+    """Persist disk-hygiene.json alarm so heartbeat and keeper observe floor breaches."""
+    state = getattr(service, 'state', None)
+    if state is None:
+        return
+    state = Path(state)
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        payload = dict(
+            alarm=True,
+            free_bytes=max(0, int(free_gb * (1024 ** 3))),
+            floor_bytes=max(0, int(floor_gb * (1024 ** 3))),
+            dry_run=False,
+            freed_bytes=0,
+            actions=[],
+            skipped=[],
+            error=reason,
+            ts=int(time.time()),
+        )
+        raw = json.dumps(payload)
+        atomic_write_private(state / 'disk-hygiene.json', raw)
+        with (state / 'disk-hygiene.ndjson').open('a', encoding='utf-8') as f:
+            f.write(raw + '\n')
+    except OSError:
+        pass
+
+
+def _cargo_lease_for(target, exclusive=False, wait=0.0):
+    target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     path = target.with_name(target.name + '.plangraph-lock')
     deadline = time.monotonic() + wait
@@ -108,6 +205,11 @@ def cargo_lease(exclusive=False, wait=0.0):
             time.sleep(min(0.5, max(deadline - time.monotonic(), 0)))
 
 
+def cargo_lease(exclusive=False, wait=0.0):
+    """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
+    return _cargo_lease_for(shared_cargo_target(), exclusive=exclusive, wait=wait)
+
+
 def cargo_run_busy(record):
     """A run keeps the shared cargo target busy only while one of its processes can still build.
 
@@ -121,6 +223,24 @@ def cargo_run_busy(record):
     if is_terminal(status) or status in ('queued', 'timed_out', 'stalled') or record.get('ended') is not None:
         return False
     return not run_pids_dead(record)
+
+
+def _configured_work_drives(policy):
+    raw = os.environ.get('PLANGRAPH_WORK_DRIVES')
+    drives = json.loads(raw) if raw else policy.get('work_drives')
+    if not drives:
+        return None
+    if not isinstance(drives, list):
+        raise ValueError('work_drives must be a list')
+    parsed = []
+    for entry in drives:
+        if not isinstance(entry, dict) or not entry.get('path'):
+            raise ValueError('invalid work_drive entry')
+        drive_floor = float(entry.get('disk_floor_gb', entry.get('floor_gb', 5)))
+        if not math.isfinite(drive_floor) or drive_floor < 0:
+            raise ValueError('invalid work_drive floor')
+        parsed.append((entry['path'], drive_floor))
+    return parsed
 
 
 def local_disk_refusal(worktree, service):
@@ -137,30 +257,45 @@ def local_disk_refusal(worktree, service):
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
         target = shared_cargo_target()
-        checkout, cache = Path(worktree).resolve(), target.resolve()
-        if (target.is_symlink() or checkout.is_relative_to(cache) or
-                cache.is_relative_to(checkout) or cache == Path.home().resolve()):
+        if not _safe_cache_dir(target, worktree):
             raise ValueError('unsafe cache directory')
         size = cargo_target_size_gb(target)
         if size >= cap:
             if any(cargo_run_busy(r) for r in service.ps()['runs']):
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy'
-            try:
-                wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
-                with cargo_lease(exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
-                    if target.exists():
-                        shutil.rmtree(target)
-            except OSError:
+            if not _clean_single_cache(target, service, cap=cap):
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
+        # Hold legacy plan-order shared target under the same cap.
+        po_target = (Path.home() / '.cache/pg-target-po').expanduser().absolute()
+        if po_target != target and _safe_cache_dir(po_target, worktree) and cargo_target_size_gb(po_target) >= cap:
+            _clean_single_cache(po_target, service, cap=cap)
         if cap == 0:
             return 'cargo_target_cap: cap 0 GB; no build capacity'
+        drives = _configured_work_drives(policy)
+        if drives:
+            ok_drives = [p for p, df in drives if disk_free_gb(p) >= df]
+            if not ok_drives:
+                _cleanup_before_disk_refusal(worktree, service, cap)
+                ok_drives = [p for p, df in drives if disk_free_gb(p) >= df]
+            if not ok_drives:
+                low_path, low_floor = drives[0]
+                free = disk_free_gb(low_path)
+                reason = f'disk_low: free {free:.2f} GB, floor {low_floor:g} GB'
+                _record_disk_floor_alarm(service, free, low_floor, reason)
+                return reason
+            return None
         paths = [worktree, target]
         if getattr(service, 'state', None) is not None:
             paths.append(policy.get('worktree_root') or service.state / 'worktrees')
             paths.append(service.state / 'trees')
         free = min(disk_free_gb(p) for p in paths)
         if free < floor:
-            return f'disk_low: free {free:.2f} GB, floor {floor:g} GB'
+            _cleanup_before_disk_refusal(worktree, service, cap)
+            free = min(disk_free_gb(p) for p in paths)
+            if free < floor:
+                reason = f'disk_low: free {free:.2f} GB, floor {floor:g} GB'
+                _record_disk_floor_alarm(service, free, floor, reason)
+                return reason
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: measurement or configuration unavailable'
     return None

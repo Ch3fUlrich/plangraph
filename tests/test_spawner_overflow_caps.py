@@ -411,3 +411,56 @@ def test_local_disk_uses_launch_cwd(tmp_path, monkeypatch, source):
     monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
     assert o.main(args) == 3
     assert seen == [cwd]
+
+
+def test_disk_low_runs_cleanup_once_and_raises_floor_alarm(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '5')
+    target = tmp_path / 'shared'
+    target.mkdir()
+    (target / 'artifact').write_text('stale build')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    state = tmp_path / 'state'
+    state.mkdir()
+    service = SimpleNamespace(state=state, ps=lambda: {'runs': []})
+    free_values = [4.0]
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: free_values[0])
+
+    # When cleanup does not free enough disk, refusal happens after 1 cleanup and records alarm.
+    reason = h.local_disk_refusal(tmp_path / 'checkout', service)
+    assert reason and reason.startswith('disk_low:')
+    assert not target.exists()
+    alarm = json.loads((state / 'disk-hygiene.json').read_text())
+    assert alarm['alarm'] is True
+
+    # When cleanup raises free space >= floor, admission succeeds without refusal.
+    target.mkdir()
+    (target / 'artifact').write_text('stale build')
+    def cleanup_frees(worktree, svc, cap):
+        free_values[0] = 6.0
+        return True
+    monkeypatch.setattr(h, '_cleanup_before_disk_refusal', cleanup_frees)
+    free_values[0] = 4.0
+    assert h.local_disk_refusal(tmp_path / 'checkout', service) is None
+
+
+def test_remote_work_drives_selects_eligible_drive_or_overflows(tmp_path):
+    low_drive_only = dict(
+        ssh='a', ok=True, fresh=True, live_runs=0, mem_available_mb=10000,
+        role_mb=2048, floor_mb=3000, disk_free_gb=2, disk_floor_gb=5,
+        work_drives=[{'path': '/d1', 'disk_free_gb': 2, 'disk_floor_gb': 5}],
+    )
+    second_drive_ok = dict(
+        ssh='b', ok=True, fresh=True, live_runs=0, mem_available_mb=10000,
+        role_mb=2048, floor_mb=3000, disk_free_gb=2, disk_floor_gb=5,
+        work_drives=[
+            {'path': '/d1', 'disk_free_gb': 2, 'disk_floor_gb': 5},
+            {'path': '/d2', 'disk_free_gb': 12, 'disk_floor_gb': 5},
+        ],
+    )
+    assert o.decide(10000, 2048, 3000, {'a': low_drive_only, 'b': second_drive_ok}, True,
+                    local_refusal='disk_low: free 2 GB').host == 'b'
+    no_host = o.decide(10000, 2048, 3000, {'a': low_drive_only}, True,
+                       local_refusal='disk_low: free 2 GB')
+    assert no_host.host is None and 'disk_low' in no_host.reason
