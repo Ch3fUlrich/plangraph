@@ -69,15 +69,15 @@ impl Driver for Fake {
             return Ok((*head).into());
         }
         // Every writer turn after the uncommitted ones commits: the head changes per turn.
-        Ok(if self.calls.is_empty() {
-            "base".into()
-        } else if self.uncommitted_turns > 0 && self.calls.len() <= self.uncommitted_turns {
-            "base".into()
-        } else if self.calls.len() <= self.uncommitted_turns + 1 {
-            "final-head".into()
-        } else {
-            format!("final-head-{}", self.calls.len())
-        })
+        Ok(
+            if self.calls.is_empty() || self.calls.len() <= self.uncommitted_turns {
+                "base".into()
+            } else if self.calls.len() <= self.uncommitted_turns + 1 {
+                "final-head".into()
+            } else {
+                format!("final-head-{}", self.calls.len())
+            },
+        )
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         if self.fast_failures > 0 {
