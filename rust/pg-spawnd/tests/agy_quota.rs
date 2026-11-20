@@ -26,9 +26,9 @@ initial = route()
 store.record_harness_limit('agy/gemini-4-hydrogen-high',
     'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 10h40m26s.', 'fixture')
 hydrogen = route()
-store.record_harness_limit('agy/gemini-4-neon-medium',
+store.record_harness_limit('agy/gemini-4-argon-medium',
     'Individual quota reached. Resets in 2h.', 'fixture')
-neon = route()
+argon = route()
 store.record_harness_limit('agy/gemini-4-hydrogen-medium',
     'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 10h40m26s.', 'fixture')
 store.record_harness_limit('claude-sonnet-5-5-high',
@@ -41,10 +41,10 @@ with legacy._connect() as db:
                ('agy/gemini-4-hydrogen-high', None, None, 429, 'old quota', 36000, 36010, 10, 'fixture', 'harness-stderr'))
 legacy_state = legacy.leg_status('agy:gemini-4-hydrogen', now=7*3600)
 snapshot = plan_spawn(card, role='review', writer_families=['openai'], now=42, catalog_rows=[],
-    leg_reader=lambda model, **kw: dict(state='limited' if model == 'gemini-4-neon-medium' else 'ok', evidence=dict(ts=kw['now']))).to_dict()
+    leg_reader=lambda model, **kw: dict(state='limited' if model == 'gemini-4-argon-medium' else 'ok', evidence=dict(ts=kw['now']))).to_dict()
 sonnet_only = plan_spawn(card, role='review', writer_families=['openai'], catalog_rows=[],
-    leg_reader=lambda model, **kw: dict(state='ok' if model == 'agy/gemini-4-neon-medium' or model == 'gemini-4-neon-medium' else 'limited', evidence=None)).to_dict()
-print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet_only, initial=initial, hydrogen=hydrogen, neon=neon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
+    leg_reader=lambda model, **kw: dict(state='ok' if model == 'agy/gemini-4-argon-medium' or model == 'gemini-4-argon-medium' else 'limited', evidence=None)).to_dict()
+print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
 "#,
         ])
         .output()
@@ -57,23 +57,23 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         result["initial"]["first_leg"]["model"],
-        "gemini-4-neon-medium"
+        "gemini-4-argon-medium"
     );
     assert_eq!(
         result["hydrogen"]["first_leg"]["model"],
-        "gemini-4-neon-medium"
+        "gemini-4-argon-medium"
     );
     assert_eq!(
-        result["neon"]["first_leg"]["model"],
+        result["argon"]["first_leg"]["model"],
         "opencode/deepseek-v4.1-flash-free"
     );
     assert_eq!(result["later"]["state"], "limited");
     assert_eq!(
-        result["snapshot"]["agy_quota_states"]["agy:gemini-4-neon"]["state"],
+        result["snapshot"]["agy_quota_states"]["agy:gemini-4-argon"]["state"],
         "limited"
     );
     assert_eq!(
-        result["snapshot"]["agy_quota_states"]["agy:gemini-4-neon"]["evidence"]["ts"],
+        result["snapshot"]["agy_quota_states"]["agy:gemini-4-argon"]["evidence"]["ts"],
         42
     );
     assert!(!result["final"]["legs"]
@@ -84,12 +84,12 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     assert_eq!(result["legacy"]["state"], "limited");
     assert_eq!(
         result["sonnet_only"]["first_leg"]["model"],
-        "gemini-4-neon-medium"
+        "gemini-4-argon-medium"
     );
     assert!(result["sonnet_only"]["error"].is_null());
     let states = &result["hydrogen"]["agy_quota_states"];
     assert_eq!(states["agy:gemini-4-hydrogen"]["state"], "limited");
-    assert_eq!(states["agy:gemini-4-neon"]["state"], "ok");
+    assert_eq!(states["agy:gemini-4-argon"]["state"], "ok");
     assert_eq!(states["agy:claude-sonnet-5-5"]["state"], "ok");
     assert_eq!(states.as_object().unwrap().len(), 3);
     for state in result["final"]["agy_quota_states"]
@@ -111,10 +111,12 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     assert_eq!(
         models,
         [
-            "gemini-4-neon-medium",
+            "gemini-4-argon-medium",
             "opencode/deepseek-v4.1-flash-free",
             "opencode-go/deepseek-v4.1-flash",
-            "opencode-go/glm-5.3-flash"
+            "opencode-go/glm-5.3-flash",
+            "gemini-4-neon-medium",
+            "claude-sonnet-5-5-high"
         ]
     );
 }

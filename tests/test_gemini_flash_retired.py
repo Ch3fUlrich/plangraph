@@ -100,12 +100,12 @@ def test_spawner_review_routes_hydrogen_in_retired_flash_position(tmp_path, monk
     card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
     plan = service.route(card, role='review', writer_families=(writer,))
     ids = [leg.id for leg in plan.legs]
-    # D-6310: neon medium leads review, followed by opencode deepseek/glm legs.
-    assert ids[:4] == ['agy-gemini-4-neon-medium', 'opencode-deepseek-v4.1-flash-free',
-                       'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash']
+    # D-6366: argon medium leads review, then mimo-pro and the opencode deepseek legs.
+    assert ids[:4] == ['agy-gemini-4-argon-medium', 'mimo-v2.6-pro',
+                       'opencode-deepseek-v4.1-flash-free', 'opencode-go-deepseek-v4-flash']
     from plangraph.planner.legs import spawnable_legs
     from plangraph.planner.review_order import payment_order
-    for tier, first in (('high', 'agy-gemini-4-neon-medium'), ('standard', 'agy-gemini-4-neon-medium')):
+    for tier, first in (('high', 'agy-gemini-4-argon-medium'), ('standard', 'agy-gemini-4-argon-medium')):
         fixed = payment_order(spawnable_legs(), 'review', order_class=tier,
                               writer_families=(writer,), diff_tokens=1000)
         assert fixed[0].id == first

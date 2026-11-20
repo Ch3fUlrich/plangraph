@@ -20,12 +20,12 @@ R-batch-04: Start an other-family review with repository access on the exact hea
   At the cap, close the PR unmerged and have the strongest available planner define slices <=800 changed lines (excluding Cargo.lock and generated files) with all open findings verbatim.
   Exception: one or two confirmed MED findings with clear fixes permit one narrow fix round. A HIGH, three or more MED, or a second miss closes and replans.
   (why: an in-session fix loop avoids relaunch cost; source: routing DECISIONS 3.35, D-5909, D-5927, D-5964)
-R-batch-05: Reviews run on Claude Sonnet or OpenCode DeepSeek (subscription legs), without waiting; mimo only after plangraph:MIMO-BATCH-CAPACITY-D6357 measures it on real batches.
+R-batch-05: Reviews run first on agy gemini-4-argon (argon-low when the leg exists, argon-medium until then), then mimo-v2.6-pro, then OpenCode DeepSeek (deepseek-v4.1-flash), without waiting; the reviewer's family always differs from the writer's (a gemini writer skips argon).
   Run them with the agent-neutral review command: today plan-order `bin/review.sh TAG BASE HEAD PROMPT` with WRITER_FAMILY and REVIEW_WORKTREE set.
   It spawns role review with the writer's family excluded in a no-remote checkout; long term `plangraph review` (plangraph:REVIEW-CMD).
   Credential, auth, access and secrets reviews require witnessed Sonnet high; every seat's family differs from all writers and its verdict names the exact head.
   Scripts and rules name the role, never one agent (review.sh, writer.sh).
-  (why: reviews must progress cheaply while preserving seat eligibility; source: routing DECISIONS 3.56 (3)-(4) D-6357, 3.26)
+  (why: reviews must progress cheaply while preserving seat eligibility; source: routing DECISIONS 3.58 D-6366, 3.26)
 R-batch-06: Use `VERDICT: ACCEPT` or `VERDICT: REQUEST_CHANGES` for writer reviews, naming the full head sha in the review.
   For the batch merge-delta approval, request `HEAD: <full sha>` then `VERDICT: PASS` as its last two non-empty lines, as required by merge_batch land.
   Never translate a reviewer's verdict yourself.

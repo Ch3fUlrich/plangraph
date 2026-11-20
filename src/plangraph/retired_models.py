@@ -11,7 +11,7 @@ class RetiredModelError(SpawnRefused, ValueError):
 
 def is_retired(value):
     return isinstance(value, str) and bool(
-        re.search(r'(?:gemini[\s\S]*flash|gpt-6\.1-sol|gemini-4-argon)', value, re.I)
+        re.search(r'(?:gemini[\s\S]*flash|gpt-6\.1-sol)', value, re.I)
     )
 
 
@@ -32,11 +32,6 @@ def check_retired(value):
         if "gpt-6.1-sol" in low:
             exc = RetiredModelError('model_retired: gpt-6.1-sol retired by operator order '
                                     '2026-11-19 (D-6310); use cx-gpt-6.2-sol-medium')
-            exc.reason = exc.code = 'model_retired'
-            raise exc
-        if "gemini-4-argon" in low:
-            exc = RetiredModelError('model_retired: gemini-4-argon retired by operator order '
-                                    '2026-11-19 (D-6310); use agy-gemini-4-neon-medium')
             exc.reason = exc.code = 'model_retired'
             raise exc
         exc = RetiredModelError('gemini_flash_retired: model retired by operator order '

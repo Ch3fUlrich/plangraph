@@ -165,20 +165,43 @@ def test_route_and_refusal(tmp_path, capsys):
 
 
 def test_review_order_rule_350_mimo_pro_then_flash_then_326():
-    # D-6310: neon medium first, then opencode deepseek-v4.1-flash-free > deepseek-v4.1-flash > glm-5.3-flash.
-    assert REVIEW_ORDER == ("agy-gemini-4-neon-medium", "opencode-deepseek-v4.1-flash-free",
-                            "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash")
+    # Rule 3.58 / D-6366: agy argon first, then mimo-v2.6-pro, then the OpenCode
+    # DeepSeek legs and glm-5.3-flash; neon, Sonnet high and mimo flash follow.
+    assert REVIEW_ORDER == (
+        "agy-gemini-4-argon-medium",
+        "mimo-v2.6-pro",
+        "opencode-deepseek-v4.1-flash-free",
+        "opencode-go-deepseek-v4-flash",
+        "opencode-go-glm-5.3-flash",
+        "agy-gemini-4-neon-medium",
+        "claude-sonnet-5-5-high",
+        "mimo-v2.6-flash",
+    )
     plan = plan_spawn(CARD, role="review", writer_families=("openai",),
                       leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
     # An OpenAI writer gets exactly the operator order.
     assert [leg.id for leg in plan.legs] == list(REVIEW_ORDER)
-    assert plan.legs[0].model == "gemini-4-neon-medium"
+    assert plan.legs[0].model == "gemini-4-argon-medium"
+    # A Gemini writer skips argon and neon (same family) and starts on mimo-pro.
+    gem_plan = plan_spawn(CARD, role="review", writer_families=("gemini",),
+                          leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
+    assert [leg.id for leg in gem_plan.legs] == [
+        "mimo-v2.6-pro",
+        "opencode-deepseek-v4.1-flash-free",
+        "opencode-go-deepseek-v4-flash",
+        "opencode-go-glm-5.3-flash",
+        "claude-sonnet-5-5-high",
+        "mimo-v2.6-flash",
+        "cx-gpt-6-luna",
+        "agy-gpt-oss-120b",
+    ]
 
 
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids == [*REVIEW_ORDER, "cx-gpt-6-luna", "agy-gpt-oss-120b"]
+    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high"],
+                   "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
 
@@ -195,7 +218,9 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons[FREE[1]].startswith("disabled: D-6310")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
-    assert [leg.id for leg in rev.legs] == [REVIEW_NEON, "cx-gpt-6-luna", "agy-gpt-oss-120b"]
+    assert [leg.id for leg in rev.legs] == [
+        "agy-gemini-4-argon-medium", REVIEW_MIMO_PRO, REVIEW_NEON, REVIEW_MIMO_FLASH,
+        "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert reasons[FREE[0]] == "banned_family"
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
     assert reasons["opencode-go-glm-5.3-flash"] == "off_family"
@@ -223,9 +248,10 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids == [*REVIEW_ORDER, "cx-gpt-6-luna", "agy-gpt-oss-120b"]
+    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high"],
+                   "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
-    assert ids.index(REVIEW_NEON) == 0
+    assert ids[:2] == ["agy-gemini-4-argon-medium", "mimo-v2.6-pro"]
 
 
 def test_route_sol_unavailable_keeps_tier_writer_order():
@@ -394,7 +420,7 @@ def test_main_policy_gpt_first_and_retained_routes():
                             policy=policy, leg_reader=clear)
         assert not {leg.family for leg in review.legs} & set(writers)
         assert not {leg.family for leg in review.review_seats} & set(writers)
-        assert review.first_leg.id == REVIEW_NEON
+        assert review.first_leg.id == ("mimo-v2.6-pro" if "gemini" in writers else "agy-gemini-4-argon-medium")
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
@@ -455,19 +481,36 @@ def test_d6310_route_orders_low_risk_and_families():
             assert f'cx-gpt-6.2-sol-{e}' in EXPLICIT_WRITERS
     assert 'cx-gpt-6.2-sol' in EXPLICIT_WRITERS
 
-    rev = plan_spawn({'estimate_tokens': 40000}, role='review', writer_families=('gpt',))
+    rev = plan_spawn(CARD, role='review', writer_families=('gpt',))
     assert [(l.id, l.effort) for l in rev.legs] == [
-        ('agy-gemini-4-neon-medium', 'medium'),
+        ('agy-gemini-4-argon-medium', 'medium'),
+        ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None),
+        ('agy-gemini-4-neon-medium', 'medium'),
+        ('claude-sonnet-5-5-high', 'high'),
+        ('mimo-v2.6-flash', None),
+    ]
+    rev_diff = plan_spawn(CARD, role='review', writer_families=('gemini',))
+    assert [(l.id, l.effort) for l in rev_diff.legs] == [
+        ('mimo-v2.6-pro', None),
+        ('opencode-deepseek-v4.1-flash-free', None),
+        ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-go-glm-5.3-flash', None),
+        ('claude-sonnet-5-5-high', 'high'),
+        ('mimo-v2.6-flash', None),
+        ('cx-gpt-6-luna', None),
+        ('agy-gpt-oss-120b', None),
     ]
 
     # Retired models absent from routes and rejected
     for leg in spawnable_legs():
         assert 'gpt-6.1-sol' not in leg.id and 'gpt-6.1-sol' not in leg.model
-        assert 'gemini-4-argon' not in leg.id and 'gemini-4-argon' not in leg.model
-    for bad in ('omniroute/cx-gpt-6.1-sol-xhigh', 'gemini-4-argon-high'):
+        # D-6366: argon is a review leg only; no implement leg serves it.
+        assert 'gemini-4-argon' not in leg.model or leg.roles == ('review',)
+    assert not any('argon' in l.id for l in imp.legs)
+    for bad in ('omniroute/cx-gpt-6.1-sol-xhigh',):
         assert is_retired(bad)
         with pytest.raises(RetiredModelError):
             check_retired(bad)

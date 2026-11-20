@@ -409,7 +409,7 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
     monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: None if name == 'pg-spawnd' else '/bin/' + name)
     store = LegStateStore(tmp_path / 'legs.sqlite')
-    failing = {'gemini-4-neon-medium'}
+    failing = {'gemini-4-argon-medium'}
     seen = []
 
     class Runner:
@@ -438,13 +438,13 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     assert first['ok'] is False
     assert [row['id'] for row in first['probes']] == list(REVIEW_ORDER)
     assert all(role == 'review' and prompt == leg_probe.REVIEW_PROMPT for _, role, prompt in seen)
-    assert store.leg_status('agy/gemini-4-neon-medium')['state'] == 'down'
+    assert store.leg_status('agy/gemini-4-argon-medium')['state'] == 'down'
 
     card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
     plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=store, catalog_rows=())
-    assert 'agy-gemini-4-neon-medium' not in [leg.id for leg in plan.legs]
-    assert plan.legs[0].id == 'opencode-deepseek-v4.1-flash-free'
-    assert any(s['leg'] == 'agy-gemini-4-neon-medium' and s['reason'] == 'down' for s in plan.skipped)
+    assert 'agy-gemini-4-argon-medium' not in [leg.id for leg in plan.legs]
+    assert plan.legs[0].id == 'mimo-v2.6-pro'
+    assert any(s['leg'] == 'agy-gemini-4-argon-medium' and s['reason'] == 'down' for s in plan.skipped)
 
     # Shared LegAdapter must honor the stored down probe even when the gateway snapshot is healthy.
     provider = SimpleNamespace(snapshot=lambda: {
@@ -459,15 +459,15 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     adapter = leg_state.LegAdapter(store, provider, lambda: served, enabled=True, clock=lambda: 0)
     svc = SpawnService(runner=runner, state=tmp_path, leg_reader=adapter)
     routed = svc.route(card, role='review', writer_families=('openai',), benchmark={})
-    assert 'agy-gemini-4-neon-medium' not in [leg.id for leg in routed.legs]
-    assert routed.legs[0].id == 'opencode-deepseek-v4.1-flash-free'
+    assert 'agy-gemini-4-argon-medium' not in [leg.id for leg in routed.legs]
+    assert routed.legs[0].id == 'mimo-v2.6-pro'
 
     failing.clear()
     recovered = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
     assert recovered['ok'] is True
-    assert store.leg_status('agy/gemini-4-neon-medium')['state'] == 'ok'
+    assert store.leg_status('agy/gemini-4-argon-medium')['state'] == 'ok'
     after = svc.route(card, role='review', writer_families=('openai',), benchmark={})
-    assert after.legs[0].id == 'agy-gemini-4-neon-medium'
+    assert after.legs[0].id == 'agy-gemini-4-argon-medium'
 
 
 def test_cli_probe_all_reviewers(tmp_path, monkeypatch, capsys):

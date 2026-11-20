@@ -173,17 +173,22 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# Rule 3.53 (OPERATOR D-6310, 2026-11-19): reviews use gemini-4-neon-medium (agy),
-# then opencode deepseek-v4.1-flash-free, deepseek-v4.1-flash, glm-5.3-flash.
+# Rule 3.58 (OPERATOR D-6366, 2026-11-20; overrides the D-6310 and D-6357 review lists):
+# reviews run first on agy gemini-4-argon (medium until a low leg exists), then
+# mimo-v2.6-pro, then the OpenCode DeepSeek legs, then glm-5.3-flash; neon and Sonnet
+# high follow as fallbacks.  The reviewer's family always differs from the writer's.
 REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH = "mimo-v2.6-pro", "mimo-v2.6-flash"
 REVIEW_HYDROGEN, REVIEW_NEON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-neon-medium"
-REVIEW_ARGON = REVIEW_NEON
+REVIEW_ARGON = "agy-gemini-4-argon-medium"
 REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
 REVIEW_SONNET = "claude-sonnet-5-5-high"
-REVIEW_ORDER = (REVIEW_NEON, "opencode-deepseek-v4.1-flash-free",
-                "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash")
+REVIEW_ORDER = (REVIEW_ARGON, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK, "opencode-go-deepseek-v4-flash",
+                "opencode-go-glm-5.3-flash", REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
+    Leg(REVIEW_ARGON, "subscription", "agy", "gemini-4-argon-medium", "gemini",
+        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium",
+        tool_mode="tools", note="D-6366: first review leg; retired for implement (D-6310)"),
     Leg("console-deepseek-flash", "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
         ("128k",), 100000, False, roles=("review",)),
     Leg(REVIEW_SONNET, "subscription", "claude", "claude-sonnet-5-5-high", "claude",

@@ -54,24 +54,39 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
 
 def test_standard_review_order_efforts_and_writer_fence(catalog):
     result = ordered(catalog.values(), 'review', writer_families=('gpt',), diff_tokens=99999)
-    assert signature(result) == [('agy-gemini-4-neon-medium', 'medium'),
+    assert signature(result) == [
+        ('agy-gemini-4-argon-medium', 'medium'),
+        ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
-        ('opencode-go-deepseek-v4-flash', None), ('opencode-go-glm-5.3-flash', None)]
-    assert ordered(result, 'review', writer_families=('gemini',),
-                   diff_tokens=99999) == result[1:]
+        ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-go-glm-5.3-flash', None),
+        ('agy-gemini-4-neon-medium', 'medium'),
+        ('claude-sonnet-5-5-high', 'high'),
+        ('mimo-v2.6-flash', None),
+    ]
+    assert ordered(result, 'review', writer_families=('claude',),
+                   diff_tokens=99999) == result[:6] + result[7:]
 
 
 @pytest.mark.parametrize('order_class', ['high', 'complex'])
 def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
     from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
     assert OPERATOR_ROUTE_ORDERS['review'][order_class] == (
-        'agy-gemini-4-neon-medium', 'opencode-deepseek-v4.1-flash-free',
-        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash')
+        'agy-gemini-4-argon-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
+        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+        'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash')
     result = ordered(catalog.values(), 'review', order_class=order_class,
-                     writer_families=('claude',), diff_tokens=1000)
-    assert signature(result) == [('agy-gemini-4-neon-medium', 'medium'),
+                     writer_families=('gpt',), diff_tokens=1000)
+    assert signature(result) == [
+        ('agy-gemini-4-argon-medium', 'medium'),
+        ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
-        ('opencode-go-deepseek-v4-flash', None), ('opencode-go-glm-5.3-flash', None)]
+        ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-go-glm-5.3-flash', None),
+        ('agy-gemini-4-neon-medium', 'medium'),
+        ('claude-sonnet-5-5-high', 'high'),
+        ('mimo-v2.6-flash', None),
+    ]
 
 
 def test_planning_fable_high(catalog):
@@ -84,15 +99,23 @@ def test_planning_fable_high(catalog):
 
 @pytest.mark.parametrize('order_class,effort,hydrogen', [('high', 'medium', 'medium'), ('complex', 'xhigh', 'high')])
 def test_explicit_upstream_roles_keep_full_high_review_order(catalog, order_class, effort, hydrogen):
-    """D-6310 review order applies across standard/high/complex classes."""
-    ids = ('agy-gemini-4-neon-medium', 'opencode-deepseek-v4.1-flash-free',
-           'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash')
+    """D-6366 review order applies across standard/high/complex classes."""
+    ids = ('agy-gemini-4-argon-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
+           'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+           'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash')
     admitted = [replace(catalog[id], roles=('review',)) for id in ids]
-    result = ordered(admitted, 'review', order_class=order_class, writer_families=('claude',))
-    assert signature(result) == [('agy-gemini-4-neon-medium', 'medium'),
+    result = ordered(admitted, 'review', order_class=order_class, writer_families=('gpt',))
+    assert signature(result) == [
+        ('agy-gemini-4-argon-medium', 'medium'),
+        ('mimo-v2.6-pro', None),
         ('opencode-deepseek-v4.1-flash-free', None),
-        ('opencode-go-deepseek-v4-flash', None), ('opencode-go-glm-5.3-flash', None)]
-    assert ordered(admitted, 'review', order_class=order_class, writer_families=('gemini',)) == tuple(admitted[1:])
+        ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-go-glm-5.3-flash', None),
+        ('agy-gemini-4-neon-medium', 'medium'),
+        ('claude-sonnet-5-5-high', 'high'),
+        ('mimo-v2.6-flash', None),
+    ]
+    assert ordered(admitted, 'review', order_class=order_class, writer_families=('claude',)) == tuple(admitted[:6] + admitted[7:])
 
 
 def test_payment_order_unmodified_registry_names_every_drop(catalog):
@@ -104,20 +127,23 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
             cx-gpt-6.1-terra-medium
             cx-gpt-6.1-terra-xhigh muse-ember-max claude-fable-5.2-high''',
         'not_in_order': '''agy-gemini-4-hydrogen-high
-            console-deepseek-flash opencode-go-beam-free claude-sonnet-5-5-high agy-gemini-4-hydrogen-medium qodercli-qwen3.8-flash
+            console-deepseek-flash opencode-go-beam-free agy-gemini-4-hydrogen-medium qodercli-qwen3.8-flash
             opencode-glm-5.3-flash-free cx-gpt-6-luna opencode-flint-40b-free
-            opencode-big-pickle agy-gpt-oss-120b mimo-v2.6-flash mimo-v2.6-pro agy-sonnet-5.5 agy-claude-opus agy-opus-5.5
+            opencode-big-pickle agy-gpt-oss-120b agy-sonnet-5.5 agy-claude-opus agy-opus-5.5
             omniroute-deepseek-flash omniroute-muse-spark agy-opus
             opencode-go-qwen3.8-max omniroute-grok-4.7 opencode-go-muse-spark
             opencode-console-muse-spark claude-haiku-5.5 agy-claude-sonnet-5-5-low
             agy-claude-sonnet-5-5-medium agy-claude-sonnet-5-5-high agy-claude-opus-5-5-low
             agy-claude-opus-5-5-medium agy-claude-opus-5-5-high cx-gpt-6-luna-low
             cx-gpt-6-luna-medium cx-gpt-6-luna-high cx-gpt-6-luna-xhigh cx-gpt-6-luna-max''',
-        'writer_family': 'agy-gemini-4-neon-medium'}
+        'writer_family': 'agy-gemini-4-neon-medium agy-gemini-4-argon-medium'}
     dropped = {id: reason for reason, ids in reasons.items() for id in ids.split()}
-    assert signature(result) == [('opencode-deepseek-v4.1-flash-free', None),
+    assert signature(result) == [('mimo-v2.6-pro', None),
+                                 ('opencode-deepseek-v4.1-flash-free', None),
                                  ('opencode-go-deepseek-v4-flash', None),
-                                 ('opencode-go-glm-5.3-flash', None)]
+                                 ('opencode-go-glm-5.3-flash', None),
+                                 ('claude-sonnet-5-5-high', 'high'),
+                                 ('mimo-v2.6-flash', None)]
     assert catalog.keys() - {leg.id for leg in result} == dropped.keys()
     from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
     for id, reason in dropped.items():

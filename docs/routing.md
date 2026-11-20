@@ -171,14 +171,18 @@ Verdict delivery uses the same resolver to forward canonical writer families.
 
 ## Route order and family admission (D-6310 / rule 3.53)
 
-D-6310 retires `gpt-6.1-sol` and `gemini-4-argon`, lists `opencode` as a provider,
+D-6310 retires `gpt-6.1-sol` (and `gemini-4-argon` for implement; D-6366 serves it as the first review leg), lists `opencode` as a provider,
 removes the `deepseek` and `glm` family bans, and leaves no `opencode-go` leg disabled.
 Implementation routes prioritize `cx-gpt-6.2-sol-medium` (with `cx-gpt-6.2-sol-{low,medium,high,xhigh,max}`
 explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 `opencode/deepseek-v4.1-flash-free` (200k) > `opencode-go/deepseek-v4.1-flash` (1M) >
 `opencode-go/glm-5.3-flash` (1M) on `opencode` as implementation fallback.
-Review routes prioritize `agy-gemini-4-neon-medium`, followed by `opencode/deepseek-v4.1-flash-free`,
-`opencode-go/deepseek-v4.1-flash`, and `opencode-go/glm-5.3-flash`.
+Review routes follow rule 3.58 (D-6366, overriding the D-6310 and D-6357 review lists):
+`agy-gemini-4-argon-medium` first (argon-low once that leg exists; review only, never an
+implement leg), then `mimo/mimo-v2.6-pro`, `opencode/deepseek-v4.1-flash-free`,
+`opencode-go/deepseek-v4.1-flash` and `opencode-go/glm-5.3-flash`, with
+`agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high` and `mimo/mimo-v2.6-flash` as
+fallbacks. The reviewer's family differs from the writer's (a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.

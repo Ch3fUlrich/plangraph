@@ -23,7 +23,7 @@ TIER_RUNG: dict[str, int] = {
 # D-5696/D-5706 opt-in order inputs, not live admission or capability evidence.
 LEGACY_ROUTE_REPLACEMENTS = {
     'gemini-3.8-flash': 'gemini-4-hydrogen', 'gpt-6-luna': 'gpt-6.1-terra',
-    'gpt-6.1-sol': 'gpt-6.2-sol', 'gemini-4-argon': 'gemini-4-neon-medium',
+    'gpt-6.1-sol': 'gpt-6.2-sol',
 }
 OPERATOR_ROUTE_ORDERS = {
     'implement': (
@@ -32,16 +32,22 @@ OPERATOR_ROUTE_ORDERS = {
     ),
     'review': {
         'standard': (
-            'agy-gemini-4-neon-medium', 'opencode-deepseek-v4.1-flash-free',
+            'agy-gemini-4-argon-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
             'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high',
+            'mimo-v2.6-flash',
         ),
         'high': (
-            'agy-gemini-4-neon-medium', 'opencode-deepseek-v4.1-flash-free',
+            'agy-gemini-4-argon-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
             'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high',
+            'mimo-v2.6-flash',
         ),
         'complex': (
-            'agy-gemini-4-neon-medium', 'opencode-deepseek-v4.1-flash-free',
+            'agy-gemini-4-argon-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
             'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high',
+            'mimo-v2.6-flash',
         ),
     },
     'planning': ('claude-fable-5.2-high',),
