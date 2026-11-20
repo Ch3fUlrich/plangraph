@@ -366,10 +366,6 @@ class WaiverMixin:
             if family is None:
                 raise Refused("writer_unknown", "recorded writer model family unknown")
             writers.append(family)
-        for name in (item.get("claimed_by"), item.get("delegate")):
-            peer = auth.get_principal(self.conn, name)
-            if peer is not None:
-                writers.append(peer.family)
         for row in self.conn.execute(
                 "SELECT payload FROM events WHERE key=? AND type='run_recorded'",
                 (item["key"],)):
@@ -381,6 +377,13 @@ class WaiverMixin:
                 raise Refused("writer_unknown", "recorded run writer family unknown")
             writers.append(family)
             writers.append(model)
+        if not any(writers):
+            # No writer is on record: the claimant and delegate stand for it (fail closed).
+            # With a recorded writer they are the orchestrating principals, not the diff's authors.
+            for name in (item.get("claimed_by"), item.get("delegate")):
+                peer = auth.get_principal(self.conn, name)
+                if peer is not None:
+                    writers.append(peer.family)
         return {model_family(w) or auth.norm_family(w) for w in writers if w}
 
     def _merged_backfill(self, item, decision_id, head, now, prs=()):
@@ -395,6 +398,11 @@ class WaiverMixin:
             heads = [p["head"] for p in prs] if prs else [head]
             claude = [e for e in self._evidence(item["key"])
                       if e["epoch"] == item["epoch"] and e["kind"] == "claude-seat"]
+            if claude and not prs:
+                # A merge made of several parts: seat evidence for another merged head of the item counts per part.
+                merged = self._merged_heads(item, all_work=True)
+                heads += [h for h in dict.fromkeys(e["ref"].get("head") for e in claude)
+                          if h in merged and h not in heads]
             if (claude and item.get("kind") == "lane"
                     and re.search(r"(?<![\w-])D-4504(?![\w-])",
                                   item.get("done_criteria", "") + " " + text)):
