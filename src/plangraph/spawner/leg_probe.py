@@ -340,6 +340,7 @@ class ProbeBudget:
         window = ADMISSION_TIMEOUT if window is None else window
         self.each = window / 3
         self.left = window / 2
+        self.grace = min(5, self.each / 6)  # probe setup and cleanup around its own deadline
 
     def timeout(self):
         """Seconds the next probe may run, or 0 when the spawn's probe budget is spent."""
@@ -407,9 +408,11 @@ async def before_launch(runner, leg, role, dry_run, budget=None):
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state, timeout_s=timeout))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
     try:
-        # The probe bounds itself to `timeout`; a spawn that joins another's probe waits only
-        # as long as its own budget allows, and every spawn is charged for the time it waited.
-        result = await asyncio.wait_for(asyncio.shield(pending), timeout) if joined else await asyncio.shield(pending)
+        # The probe bounds itself to `timeout`; every spawn, the one that started the probe and
+        # any that join it, waits only as long as its own budget allows (the owner a short grace
+        # more for the probe's setup and cleanup) and is charged for the time it waited. A probe
+        # that outlives the wait keeps running for its other waiters.
+        result = await asyncio.wait_for(asyncio.shield(pending), timeout if joined else timeout + budget.grace)
     except asyncio.TimeoutError:
         return 'probe_budget_exhausted'
     finally:

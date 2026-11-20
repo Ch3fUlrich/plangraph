@@ -35,6 +35,52 @@ fn log_bytes(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     git_bytes(repo, args).map_err(|e| e.to_string())
 }
 
+/// Run `code` with `python`, feeding `payload` on stdin; returns stdout. `what` names the
+/// helper in refusals.
+fn run_python(
+    python: &dyn Fn() -> Command,
+    code: &str,
+    payload: Vec<u8>,
+    what: &str,
+) -> Result<Vec<u8>, String> {
+    let mut child = python()
+        .args(["-c", code])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("refused: {what} unavailable: {e}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("refused: {what} has no stdin"))?;
+    let writer = std::thread::spawn(move || stdin.write_all(&payload));
+    let out = child
+        .wait_with_output()
+        .map_err(|e| format!("refused: {what} failed: {e}"))?;
+    let _ = writer.join();
+    if !out.status.success() {
+        return Err(format!(
+            "refused: {what} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(out.stdout)
+}
+
+/// The versioned review brief (`plangraph.review.prompt.render_brief("review", context)`):
+/// its fixed prefix and the item-context block for the fields `context` names.
+pub fn render_review_brief(
+    context: &Value,
+    python: &dyn Fn() -> Command,
+) -> Result<String, String> {
+    const CODE: &str = "import json, sys; from plangraph.review.prompt import render_brief; sys.stdout.write(render_brief('review', json.load(sys.stdin)))";
+    let payload =
+        serde_json::to_vec(context).map_err(|e| format!("serialize brief context: {e}"))?;
+    let out = run_python(python, CODE, payload, "review brief")?;
+    String::from_utf8(out).map_err(|e| format!("refused: review brief output: {e}"))
+}
+
 /// Map each text to its model family through `plangraph.review.family.model_family`,
 /// the one name-to-family table; `None` means unknown or ambiguous.
 fn resolve_families(
@@ -42,32 +88,11 @@ fn resolve_families(
     python: &dyn Fn() -> Command,
 ) -> Result<HashMap<String, Option<String>>, String> {
     const CODE: &str = "import json, sys; from plangraph.review.family import model_family; print(json.dumps({t: model_family(t) for t in json.load(sys.stdin)}))";
-    let mut child = python()
-        .args(["-c", CODE])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("refused: family table unavailable: {e}"))?;
     let payload = serde_json::to_vec(&texts.iter().collect::<Vec<_>>())
         .map_err(|e| format!("serialize family texts: {e}"))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or("refused: family table has no stdin")?;
-    let writer = std::thread::spawn(move || stdin.write_all(&payload));
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("refused: family table failed: {e}"))?;
-    let _ = writer.join();
-    if !out.status.success() {
-        return Err(format!(
-            "refused: family table failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let parsed: Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("refused: family table output: {e}"))?;
+    let out = run_python(python, CODE, payload, "family table")?;
+    let parsed: Value =
+        serde_json::from_slice(&out).map_err(|e| format!("refused: family table output: {e}"))?;
     Ok(parsed
         .as_object()
         .map(|m| {

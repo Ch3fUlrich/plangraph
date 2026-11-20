@@ -390,6 +390,8 @@ prompt = pathlib.Path(value('--prompt-file')).read_text()
 head = card['diff_ref']['head']
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
+assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
+assert 'Exact head SHA: ' + head in prompt and 'Exact base SHA: ' in prompt, prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'

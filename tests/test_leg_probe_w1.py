@@ -621,3 +621,25 @@ def test_a_spawn_joining_an_inflight_probe_is_bounded_and_charged(monkeypatch):
     skips, waited = asyncio.run(run())
     assert skips == ['probe_budget_exhausted'] * 3
     assert waited < 0.6  # 0.3 + 0.15 of budget, then nothing: not 3 x 0.3
+
+
+def test_the_spawn_that_starts_a_probe_is_bounded_too(monkeypatch):
+    """A probe stuck in setup or cleanup cannot hold its own spawn past the probe budget."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 0.9)  # 0.3 s per probe
+
+    async def stuck(runner, leg, **kwargs):
+        await asyncio.sleep(5)  # e.g. delayed log scanning before its own deadline starts
+        return dict(ok=True, reason='', seconds=0)
+
+    monkeypatch.setattr(leg_probe, 'probe', stuck)
+
+    async def run():
+        budget, started = leg_probe.ProbeBudget(), time.monotonic()
+        skip = await leg_probe.before_launch(None, _leg(), 'implement', False, budget)
+        return skip, time.monotonic() - started, budget.left
+
+    skip, waited, left = asyncio.run(run())
+    assert skip == 'probe_budget_exhausted'
+    assert waited < 0.5 and left < 0.45  # 0.3 s probe + a short grace, charged to the budget
