@@ -138,7 +138,7 @@ def test_land_merges_closes_unmerged_and_reports(env):
     assert res.returncode == 0, res.stderr
     merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
     assert res.stdout.splitlines() == [f"MERGED 1 {merge} plangraph:ITEM-A", f"MERGED 2 {merge} plangraph:ITEM-B",
-                                       f"MERGED 3 {merge} -"]
+                                       f"MERGED 3 {merge} plangraph:ITEM-C"]
     prs = env.load()["prs"]
     assert (prs["1"]["state"], prs["3"]["state"], prs["3"]["closed_with"]) == ("MERGED", "CLOSED",
                                                                                "merged via batch PR #100")
@@ -180,7 +180,7 @@ def test_land_reports_a_moved_head_instead_of_merged(env):
     assert time.monotonic() - started < 20
     merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
     assert res.stdout.splitlines() == [f"MERGED 1 {merge} plangraph:ITEM-A", "NOT-MERGED 2 head moved",
-                                       f"MERGED 3 {merge} -"]
+                                       f"MERGED 3 {merge} plangraph:ITEM-C"]
     prs = env.load()["prs"]
     assert (prs["2"]["state"], prs["2"]["headRefOid"]) == ("OPEN", late) and "closed_with" not in prs["2"]
     assert {"name": "needs-update"} in prs["2"]["labels"] and {"name": "needs-update"} not in prs["1"]["labels"]
@@ -203,7 +203,7 @@ def test_land_reads_the_head_again_right_before_it_closes(env):
     assert res.returncode == 0, res.stderr
     merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
     assert res.stdout.splitlines() == [f"MERGED 1 {merge} plangraph:ITEM-A", "NOT-MERGED 2 head moved",
-                                       f"MERGED 3 {merge} -"]
+                                       f"MERGED 3 {merge} plangraph:ITEM-C"]
     prs = env.load()["prs"]
     assert (prs["2"]["state"], prs["2"]["headRefOid"]) == ("OPEN", late) and "closed_with" not in prs["2"]
     assert {"name": "needs-update"} in prs["2"]["labels"] and not [c for c in env.calls("pr", "close") if c[2] == "2"]
@@ -221,7 +221,8 @@ def test_land_reports_a_merged_pr_whose_head_is_not_in_the_merge_as_a_problem(en
     env.state["prs"]["2"].update(state="MERGED", headRefOid=stray)  # GitHub: MERGED, with exactly that head
     env.save()
     res = land(env, approval)
-    assert res.returncode == 1 and "is not in merge" in res.stderr
+    assert res.returncode == 1 and "is not in batch head" in res.stderr
+    assert not env.calls("pr", "merge")
     assert "MERGED 2" not in res.stdout and "NOT-MERGED 2" not in res.stdout
     assert env.state_file("l1").exists() and not [c for c in env.calls("pr", "close") if c[2] == "2"]
 
@@ -275,7 +276,7 @@ def test_push_takes_over_a_batch_pr_a_dead_push_created(env):
     assert "| #1 |" in env.load()["prs"]["100"]["body"]
 
 
-def go_ready(env):
+def go_ready(env, *, seats=True):
     env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
     env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
     assert env.run("build", "--name", "g1", "--prs", "1,2", "--plan", "plangraph:BATCH").returncode == 0
@@ -285,11 +286,43 @@ def go_ready(env):
         path = env.tmp / f"review-{rec['pr']}.txt"
         path.write_text(f"HEAD: {rec['head']}\nVERDICT: ACCEPT\n")
         assert env.run("review", "--name", "g1", "--pr", str(rec["pr"]), "--file", str(path)).returncode == 0
+        if seats:
+            env.attach_seat("g1", rec)
     env.load()["runs"] = {"42": {"databaseId": 42, "headSha": st["head"],
                                     "status": "completed", "conclusion": "success"}}
     env.save()
     assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
     return json.loads(env.state_file("g1").read_text())
+
+
+def test_plain_review_cannot_authorize_go_or_land(env):
+    st = go_ready(env, seats=False)
+    refused = env.run("go-req", "--name", "g1")
+    assert refused.returncode == 1 and "keeper-bound" in refused.stderr
+    approval = env.tmp / "approval.txt"
+    approval.write_text(f"HEAD: {st['head']}\nVERDICT: PASS\n")
+    refused = land(env, approval, name="g1")
+    assert refused.returncode == 1 and "keeper-bound" in refused.stderr
+    assert not env.calls("pr", "merge")
+    for rec in st["merged"]:
+        env.attach_seat("g1", rec)
+    accepted = env.run("go-req", "--name", "g1")
+    assert accepted.returncode == 0, accepted.stderr
+
+
+@pytest.mark.parametrize("field,value", [
+    ("role", "implement"), ("item_key", "plangraph:OTHER"),
+    ("head_sha", "b" * 40), ("stdout_tail", "TEST_GAMING: no\n"),
+])
+def test_go_req_revalidates_the_keeper_bound_review(env, field, value):
+    st = go_ready(env)
+    run = next(iter(st["merged"][0]["review_runs"].values()))
+    path = env.tmp / "mirror" / "fixture" / run / "record.json"
+    record = json.loads(path.read_text())
+    record[field] = value
+    path.write_text(json.dumps(record))
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 1 and "keeper-bound" in result.stderr
 
 
 def test_go_req_from_recorded_evidence(env):
@@ -301,7 +334,8 @@ def test_go_req_from_recorded_evidence(env):
     assert re.findall(r"\b(?:GO-HEAD|head|at)\s+([0-9a-fA-F]{8,40})\b", result.stdout) == [st["head"]]
     assert result.stdout.startswith(f"GO-REQ #100 owner/proj head {st['head']}; diff stat: 2 files changed")
     for rec in st["merged"]:
-        assert f"#{rec['pr']} sha={rec['head']} review={rec['review']['file']} verdict=ACCEPT" in result.stdout
+        run = next(iter(rec["review_runs"].values()))
+        assert f"#{rec['pr']} sha={rec['head']} review={run} verdict=ACCEPT" in result.stdout
     assert "CI run 42 state=completed conclusion=success" in result.stdout
     assert result.stdout.endswith("PLAN plangraph:BATCH conforms=yes deviations=none\n")
 
@@ -312,7 +346,7 @@ def test_go_req_refuses_missing_or_stale_part_accept(env, case):
     rec = st["merged"][1]
     path = Path(rec["review"]["file"])
     if case == "missing":
-        del rec["review"]
+        del rec["review_runs"]
     elif case == "wrong_head":
         rec["review"]["head"] = st["head"]
     elif case == "reject":

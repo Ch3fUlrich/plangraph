@@ -82,7 +82,8 @@ class SpawnerRecordAdapter:
         if not directory and info.st_size > MAX_RECORD_BYTES:
             raise ValueError("record exceeds size limit")
 
-    def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False):
+    def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False,
+                     require_diff_head=False):
         """Read cited mirrored review witnesses, never infer a served model."""
         from ..review.family import model_family
         ids = json.loads(item.get("run_ids") or "[]")
@@ -109,6 +110,8 @@ class SpawnerRecordAdapter:
             if (record.get("run_id") != run_id or record.get("host") != host
                     or record.get("item_key") != item["key"]):
                 raise ValueError(f"{run_id}: record identity mismatch")
+            if require_diff_head and record.get("head_sha") != head:
+                raise ValueError(f"{run_id}: review diff head mismatch")
             model = record.get("served_model")
             family = model_family(model) if isinstance(model, str) else None
             completion = record.get("completion")
