@@ -16,7 +16,8 @@ R-batch-03: Run fast checks on the exact head before review; require its fast-ch
   (why: review and CI must not find gate failures first; source: plan-order/bin/fast-checks.sh and review.sh)
 R-batch-04: Start an other-family review with repository access on the exact head, fix confirmed HIGH/MED findings and repeat while progress permits.
   Native admission: `rust/pg-spawnd/src/round_progress.rs` records confirmed HIGH+MED per writer round.
-  Stop rule (one owner): 3 rounds in a row that bring the count no lower than the best so far refuse the next writer with `no_progress`; from round 3 on a count still above half of the round-1 count refuses with `slow_progress`; round 9 always refuses with `round_cap`.
+  Stop rule (one owner): 3 rounds in a row that bring the count no lower than the best so far refuse the next writer with `no_progress`;
+  from round 3 on a count still above half of the round-1 count refuses with `slow_progress`; round 9 always refuses with `round_cap`.
   See `docs/SPAWNER.md` for verdict-file binding and the single narrow fix exception.
   At the cap, close the PR unmerged and have the strongest available planner define slices <=800 changed lines (excluding Cargo.lock and generated files) with all open findings verbatim.
   Exception: one or two confirmed MED findings with clear fixes permit one narrow fix round. A HIGH, three or more MED, or a second miss closes and replans.
