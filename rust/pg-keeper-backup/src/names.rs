@@ -6,6 +6,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub const MIN_SEQ: u64 = 19096;
 const PREFIX: &str = "keeper-schema-seq";
 const SUFFIX: &str = ".dump";
+/// A dump whose restore test failed: never counts toward retention, kept for diagnosis.
+pub const UNVERIFIED: &str = ".unverified";
 
 /// `YYYYMMDDTHHMMZ` for a unix time (UTC, civil-from-days).
 pub fn stamp(unix_secs: u64) -> String {

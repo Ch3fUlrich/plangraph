@@ -1,5 +1,5 @@
 use pg_keeper_backup::pg::{count_tables, redact, Pg, ScratchState};
-use pg_keeper_backup::{ledger, names, restore_test, retention, run_dump};
+use pg_keeper_backup::{ledger, names, restore_test, retention, run_dump, Verify};
 use std::cell::RefCell;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
@@ -11,6 +11,7 @@ struct Fake {
     seq: u64,
     tables: usize,
     scratch_seq: u64,
+    collide: bool,
     calls: RefCell<Vec<String>>,
 }
 
@@ -20,6 +21,7 @@ impl Fake {
             seq,
             tables: 43,
             scratch_seq: seq,
+            collide: false,
             calls: RefCell::new(Vec::new()),
         }
     }
@@ -55,7 +57,14 @@ impl Pg for Fake {
         self.log("list");
         Ok(listing(self.tables))
     }
-    fn restore_scratch(&self, _: &Path, _: &str) -> Result<(), String> {
+    fn create_scratch(&self, _: &str) -> Result<(), String> {
+        self.log("create");
+        if self.collide {
+            return Err("database already exists".into());
+        }
+        Ok(())
+    }
+    fn load_scratch(&self, _: &Path, _: &str) -> Result<(), String> {
         self.log("restore");
         Ok(())
     }
@@ -102,7 +111,7 @@ fn dump_name_round_trips_and_rejects_other_names() {
 #[test]
 fn a_dump_run_writes_a_0600_file_and_one_ledger_line() {
     let dir = tempfile::tempdir().unwrap();
-    let out = run_dump(&Fake::new(19200), dir.path(), "keeper", 14, NOW).unwrap();
+    let out = run_dump(&Fake::new(19200), dir.path(), "keeper", 14, NOW, None).unwrap();
     let file = dir.path().join(&out.entry.file);
     assert_eq!(std::fs::read(&file).unwrap(), b"PGDMP-fake");
     assert_eq!(mode(&file), 0o600);
@@ -111,7 +120,7 @@ fn a_dump_run_writes_a_0600_file_and_one_ledger_line() {
     assert_eq!(text.lines().count(), 1);
     // sha256 of "PGDMP-fake"
     let want = format!(
-        "20261106T2120Z seq=19200 size=10 sha256={} file=keeper-schema-seq19200-20261106T2120Z.dump",
+        "20261106T2120Z seq=19200 size=10 sha256={} verified=skipped file=keeper-schema-seq19200-20261106T2120Z.dump",
         out.entry.sha256
     );
     assert_eq!(text.trim(), want);
@@ -130,7 +139,7 @@ fn retention_deletes_the_fifteenth_oldest_and_keeps_fourteen() {
     let fake = Fake::new(19200);
     let mut first = String::new();
     for day in 0..15u64 {
-        let out = run_dump(&fake, dir.path(), "keeper", 14, NOW + day * 86_400).unwrap();
+        let out = run_dump(&fake, dir.path(), "keeper", 14, NOW + day * 86_400, None).unwrap();
         if day == 0 {
             first = out.entry.file.clone();
         }
@@ -183,8 +192,11 @@ fn a_failed_dump_leaves_no_file_and_no_ledger_line() {
         fn list(&self, d: &Path) -> Result<String, String> {
             self.0.list(d)
         }
-        fn restore_scratch(&self, d: &Path, s: &str) -> Result<(), String> {
-            self.0.restore_scratch(d, s)
+        fn create_scratch(&self, s: &str) -> Result<(), String> {
+            self.0.create_scratch(s)
+        }
+        fn load_scratch(&self, d: &Path, s: &str) -> Result<(), String> {
+            self.0.load_scratch(d, s)
         }
         fn scratch_state(&self, s: &str, c: &str) -> Result<ScratchState, String> {
             self.0.scratch_state(s, c)
@@ -194,9 +206,16 @@ fn a_failed_dump_leaves_no_file_and_no_ledger_line() {
         }
     }
     let dir = tempfile::tempdir().unwrap();
-    let err = run_dump(&Broken(Fake::new(19200)), dir.path(), "keeper", 14, NOW)
-        .err()
-        .unwrap();
+    let err = run_dump(
+        &Broken(Fake::new(19200)),
+        dir.path(),
+        "keeper",
+        14,
+        NOW,
+        None,
+    )
+    .err()
+    .unwrap();
     assert_eq!(err, "pg_dump failed");
     assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
 }
@@ -218,7 +237,7 @@ fn restore_test_passes_on_a_fresh_dump_and_drops_the_scratch() {
     let name = "/x/keeper-schema-seq19096-20261113T1535Z.dump";
     let report = restore_test(&fake, Path::new(name), "keeper", 43, names::MIN_SEQ).unwrap();
     assert_eq!((report.seq, report.tables), (19096, 43));
-    assert_eq!(*fake.calls.borrow(), ["list", "restore", "drop"]);
+    assert_eq!(*fake.calls.borrow(), ["list", "create", "restore", "drop"]);
 }
 
 #[test]
@@ -275,9 +294,109 @@ fn the_password_never_appears_in_text_or_arguments() {
     );
     assert!(args.windows(2).any(|w| w == ["-e", "PGPASSWORD"]));
     assert!(
+        args.windows(2).any(|w| w == ["--log-driver", "none"]),
+        "docker must keep no log copy"
+    );
+    assert!(
         args.iter()
             .all(|a| !a.contains('=') || a.starts_with("/b:")),
         "{args:?}"
     );
     assert!(args.contains(&"/b:/backup:ro".to_owned()));
+}
+
+const VERIFY: Verify = Verify {
+    tables: 43,
+    min_seq: names::MIN_SEQ,
+};
+
+#[test]
+fn a_name_collision_never_drops_a_database_this_run_did_not_create() {
+    let mut fake = Fake::new(19200);
+    fake.collide = true;
+    let name = Path::new("/x/keeper-schema-seq19200-20261113T1535Z.dump");
+    assert!(restore_test(&fake, name, "keeper", 43, names::MIN_SEQ).is_err());
+    assert_eq!(*fake.calls.borrow(), ["list", "create"]);
+}
+
+#[test]
+fn a_dump_that_fails_its_restore_test_is_quarantined_and_prunes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = Fake::new(19200);
+    for day in 0..14u64 {
+        run_dump(
+            &good,
+            dir.path(),
+            "keeper",
+            14,
+            NOW + day * 86_400,
+            Some(&VERIFY),
+        )
+        .unwrap();
+    }
+    let mut bad = Fake::new(19300);
+    bad.tables = 42;
+    let err = run_dump(
+        &bad,
+        dir.path(),
+        "keeper",
+        14,
+        NOW + 14 * 86_400,
+        Some(&VERIFY),
+    )
+    .err()
+    .unwrap();
+    assert!(err.contains("restore test failed"), "{err}");
+    let all: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(all.iter().filter(|n| names::parse(n).is_some()).count(), 14);
+    assert_eq!(
+        all.iter()
+            .filter(|n| n.ends_with(names::UNVERIFIED))
+            .count(),
+        1
+    );
+    let ledger = std::fs::read_to_string(dir.path().join(ledger::LEDGER_NAME)).unwrap();
+    assert!(ledger.lines().last().unwrap().contains("verified=no"));
+    assert_eq!(
+        ledger
+            .lines()
+            .filter(|l| l.contains("verified=yes"))
+            .count(),
+        14
+    );
+}
+
+#[test]
+fn unverified_dumps_are_capped_and_never_counted_as_backups() {
+    let all: Vec<String> = (1..=5)
+        .map(|d| format!("keeper-schema-seq19200-2026111{d}T0240Z.dump.unverified"))
+        .collect();
+    assert_eq!(retention::plan(&all, 14), all[..2].to_vec());
+}
+
+#[test]
+fn a_second_run_in_the_same_minute_does_not_overwrite_the_first_dump() {
+    let dir = tempfile::tempdir().unwrap();
+    let fake = Fake::new(19200);
+    let first = run_dump(&fake, dir.path(), "keeper", 14, NOW, None).unwrap();
+    let before = std::fs::read(dir.path().join(&first.entry.file)).unwrap();
+    let err = run_dump(&fake, dir.path(), "keeper", 14, NOW + 20, None)
+        .err()
+        .unwrap();
+    assert!(err.contains("already exists"), "{err}");
+    assert_eq!(
+        std::fs::read(dir.path().join(&first.entry.file)).unwrap(),
+        before
+    );
+    let ledger = std::fs::read_to_string(dir.path().join(ledger::LEDGER_NAME)).unwrap();
+    assert_eq!(ledger.lines().count(), 1);
+    assert!(std::fs::read_dir(dir.path()).unwrap().all(|e| !e
+        .unwrap()
+        .file_name()
+        .to_str()
+        .unwrap()
+        .ends_with(".part")));
 }

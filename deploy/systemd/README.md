@@ -10,7 +10,7 @@ All units are user units (`systemctl --user`), not system units.
 | pg-snapshot-pull.timer | timer driving pg-snapshot-pull.service every 5 min | reader host |
 | pg-ci-watch.service + .timer | Rust CI failure scan and keeper fix tasks every 5 min; see [CI watch](../../docs/ci-watch.md) | CI watcher host |
 | plangraph-keeper.service | persistent keeper daemon | keeper host |
-| pg-keeper-backup.service + .timer | daily keeper schema dump (newest 14 kept, ledger, restore test); see [keeper backup](../../docs/keeper-backup.md); needs `~/.config/plangraph/keeper-backup.env` (mode 0600, template `keeper-backup.env.example`) | keeper host |
+| pg-keeper-backup.service + .timer | daily keeper schema dump (newest 14 verified kept, ledger, restore test); see [keeper backup](../../docs/keeper-backup.md); needs `~/.config/plangraph/keeper-backup.env` (mode 0600, template `keeper-backup.env.example`) | keeper host |
 | plangraph-projector.service | continuous projector run loop (30 s poll): attempts reach the keeper | keeper host |
 | plangraph-projector-reconcile.service | one nightly run: reconcile open Temporal workflows vs keeper state | keeper host |
 | plangraph-projector-reconcile.timer | nightly timer (03:30) starting the reconcile service | keeper host |

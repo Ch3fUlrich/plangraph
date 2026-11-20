@@ -9,3 +9,12 @@ sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[bin]]
+name = "pg-keeper-backup"
+path = "src/main.rs"
+
+[[bin]]
+name = "fake-docker"
+path = "tests/support/fake_docker.rs"
+test = false

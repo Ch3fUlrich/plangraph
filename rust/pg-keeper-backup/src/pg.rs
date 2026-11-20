@@ -17,8 +17,11 @@ pub trait Pg {
     fn dump(&self, schema: &str, out: &mut dyn Write) -> Result<(), String>;
     /// `pg_restore -l` of a dump file.
     fn list(&self, dump: &Path) -> Result<String, String>;
-    /// Create the scratch database and load the dump into it.
-    fn restore_scratch(&self, dump: &Path, scratch: &str) -> Result<(), String>;
+    /// Create the scratch database; fails when the name is taken, so a database this run
+    /// did not create is never touched afterwards.
+    fn create_scratch(&self, scratch: &str) -> Result<(), String>;
+    /// Load the dump into the scratch database.
+    fn load_scratch(&self, dump: &Path, scratch: &str) -> Result<(), String>;
     fn scratch_state(&self, scratch: &str, schema: &str) -> Result<ScratchState, String>;
     fn drop_scratch(&self, scratch: &str) -> Result<(), String>;
 }

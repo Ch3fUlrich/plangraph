@@ -1,4 +1,4 @@
-//! One ledger line per dump: `<stamp> seq=<n> size=<bytes> sha256=<hex> file=<name>`.
+//! One ledger line per dump: `<stamp> seq=<n> size=<bytes> sha256=<hex> verified=<yes|no|skipped> file=<name>`.
 
 use sha2::{Digest, Sha256};
 use std::fs::OpenOptions;
@@ -15,13 +15,15 @@ pub struct Entry {
     pub size: u64,
     pub sha256: String,
     pub file: String,
+    /// `yes` (restore test passed), `no` (it failed) or `skipped`.
+    pub verified: &'static str,
 }
 
 impl Entry {
     pub fn line(&self) -> String {
         format!(
-            "{} seq={} size={} sha256={} file={}",
-            self.stamp, self.seq, self.size, self.sha256, self.file
+            "{} seq={} size={} sha256={} verified={} file={}",
+            self.stamp, self.seq, self.size, self.sha256, self.verified, self.file
         )
     }
 }

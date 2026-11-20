@@ -1,6 +1,7 @@
 //! `Pg` over `docker run postgres:17`. The connection comes from the PG* variables of
 //! this process, handed to the container by NAME (`-e PGPASSWORD`): no value is ever
-//! put on a command line, in a log or in an error message.
+//! put on a command line, in a log or in an error message. The container runs with
+//! `--log-driver none`, so the docker daemon keeps no copy of its output either.
 
 use crate::pg::{check_ident, redact, Pg, ScratchState};
 use std::io::{Read, Write};
@@ -18,14 +19,24 @@ pub const PG_ENV: [&str; 6] = [
 ];
 
 pub struct Docker {
+    /// The `docker` executable.
+    pub program: String,
     pub image: String,
 }
 
 /// Arguments of `docker run`; the dump directory is mounted read-only at `/backup`.
 pub fn run_args(image: &str, mount: Option<&Path>, tool: &[&str]) -> Vec<String> {
-    let mut args: Vec<String> = ["run", "--rm", "-i", "--network", "host"]
-        .map(String::from)
-        .into();
+    let mut args: Vec<String> = [
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        "host",
+        "--log-driver",
+        "none",
+    ]
+    .map(String::from)
+    .into();
     for name in PG_ENV {
         args.extend(["-e".to_owned(), name.to_owned()]);
     }
@@ -57,7 +68,7 @@ fn backup_path(dump: &Path) -> Result<(PathBuf, String), String> {
 impl Docker {
     /// Run a tool; stdout goes to `out`, stderr comes back redacted on failure.
     fn exec(&self, mount: Option<&Path>, tool: &[&str], out: &mut dyn Write) -> Result<(), String> {
-        let mut child = Command::new("docker")
+        let mut child = Command::new(&self.program)
             .args(run_args(&self.image, mount, tool))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -121,12 +132,16 @@ impl Pg for Docker {
         Ok(String::from_utf8_lossy(&buf).into_owned())
     }
 
-    fn restore_scratch(&self, dump: &Path, scratch: &str) -> Result<(), String> {
-        let (dir, file) = backup_path(dump)?;
+    fn create_scratch(&self, scratch: &str) -> Result<(), String> {
         self.query(
             None,
             &format!("CREATE DATABASE \"{}\"", check_ident(scratch)?),
-        )?;
+        )
+        .map(|_| ())
+    }
+
+    fn load_scratch(&self, dump: &Path, scratch: &str) -> Result<(), String> {
+        let (dir, file) = backup_path(dump)?;
         let tool = [
             "pg_restore",
             "--no-owner",
