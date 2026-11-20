@@ -12,8 +12,9 @@ or measurement>)`; a rule that grew past 200 characters wraps onto continuation 
 indented two spaces and the checks run on the joined rule. check exits 1 on a duplicate id,
 a missing or empty source, a why over 12 words, a physical line over 200 characters, a
 near-duplicate imperative (difflib ratio >= 0.85), a missing file or a file without rules.
-lint exits 1 when any .md in a skill exceeds 500 physical lines, or a SKILL.md lacks
-frontmatter with a non-empty name matching its directory and a non-empty description.
+lint exits 1 when any .md in a skill exceeds 500 physical lines or names a path under
+the retired routing folder, or a SKILL.md lacks frontmatter with a
+non-empty name matching its directory and a non-empty description.
 all runs lint, then check on every skills/*/cards/*.md.
 """
 import argparse
@@ -29,6 +30,9 @@ MALFORMED_REGEX = re.compile(r"^(?:-\s+)?(R-\S*?):")
 CONTINUATION_INDENT = "  "
 
 MAX_MD_LINES = 500
+
+# A path under the retired routing folder or its worktrees folder.
+OLD_ROUTING_PATH = re.compile(r"code/" r"routing")
 
 def iter_rule_blocks(lines):
     """Yield (first line number, physical lines) for every rule in `lines`."""
@@ -168,9 +172,13 @@ def lint_dirs(dirs):
             problems.append((str(path), 0, "", "not a directory"))
             continue
         for md in sorted(path.rglob("*.md")):
-            count = len(md.read_text(encoding="utf-8").splitlines())
+            text = md.read_text(encoding="utf-8")
+            count = len(text.splitlines())
             if count > MAX_MD_LINES:
                 problems.append((str(md), 0, "", f"{count} lines (max {MAX_MD_LINES})"))
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if OLD_ROUTING_PATH.search(line):
+                    problems.append((str(md), lineno, "", "names a path under the retired routing folder"))
         skill = path / "SKILL.md"
         if not skill.is_file():
             problems.append((str(skill), 0, "", "missing SKILL.md"))

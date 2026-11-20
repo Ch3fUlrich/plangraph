@@ -36,3 +36,13 @@ brief starts with a skill's text, that text is the skill: do not look for anothe
 - `skills/mcp-servers-setup/SKILL.md`: the self-hosted MCP server stack.
 - `skills/routing-registry/SKILL.md`: OmniRoute combos, providers, models and routes.
 - `skills/homelab-access/SKILL.md`: reaching the hosts safely.
+
+Router skills (site values come from the router config keys named in each skill):
+
+- `skills/router-core/SKILL.md`: the router's per-input checklist and hard rules.
+- `skills/router-heartbeat/SKILL.md`: the hourly status digest and read-only verification.
+- `skills/router-launch/SKILL.md`: launch, stop and recycle fleet sessions.
+- `skills/router-handoff/SKILL.md`: router card, handoff and changelog before a restart.
+- `skills/router-accept-record/SKILL.md`: seat record acceptance and the GO-REQ plan block.
+- `skills/route-question/SKILL.md`: research, default and operator question routing.
+- `skills/fleet-handoff/SKILL.md`: L1/L2 handoff file and card.
