@@ -121,24 +121,36 @@ fn definition(line: &str, python: bool) -> Option<(usize, String, bool)> {
     (!name.is_empty()).then_some((indent, name, public))
 }
 
-/// The nearest enclosing public definition of line `at` (1-based) of `source`.
+/// Whether the body of a definition at `indent` is still open at line `at`: no later
+/// non-blank line between them returns to that indent, other than a signature continuation
+/// (`)`, `where`, `{`) that Rust and Python wrap at the definition's own indent.
+fn scope_open(between: &[&str], indent: usize) -> bool {
+    between.iter().all(|line| {
+        let text = line.trim_start();
+        let continuation = text.starts_with([')', '{', ']']) || text.starts_with("where");
+        text.is_empty() || line.len() - text.len() > indent || continuation
+    })
+}
+
+/// The nearest enclosing public definition of line `at` (1-based) of `source`: only
+/// definitions whose body still contains the line count, so a line after a closed `impl`
+/// or after a function at module level belongs to none of them.
 fn enclosing_public(source: &str, at: usize, python: bool) -> Option<String> {
     let lines: Vec<&str> = source.lines().collect();
     let line = *lines.get(at.checked_sub(1)?)?;
-    let mut scope = line.len() - line.trim_start().len() + 1;
-    if let Some((_, name, public)) = definition(line, python) {
-        if public {
-            return Some(name);
-        }
+    if let Some((_, name, true)) = definition(line, python) {
+        return Some(name);
     }
-    for earlier in lines[..at - 1].iter().rev() {
-        if let Some((indent, name, public)) = definition(earlier, python) {
-            if indent < scope {
-                if public {
-                    return Some(name);
-                }
-                scope = indent;
+    let mut scope = line.len() - line.trim_start().len() + 1;
+    for (index, earlier) in lines[..at - 1].iter().enumerate().rev() {
+        let Some((indent, name, public)) = definition(earlier, python) else {
+            continue;
+        };
+        if indent < scope && scope_open(&lines[index + 1..at - 1], indent) {
+            if public {
+                return Some(name);
             }
+            scope = indent;
         }
     }
     None
@@ -172,29 +184,45 @@ pub(super) fn changed_symbols(diff: &str, read: &dyn Fn(&str) -> Option<String>)
 }
 
 /// Whether a `git grep -n` line is a use of `symbol` worth naming: a `.rs`/`.py` code line
-/// that is neither a comment nor the symbol's own definition.
+/// that is neither a comment nor the symbol's own definition and holds the symbol as code
+/// (outside a string literal) in call or path position: `symbol(`, `symbol::`, `symbol {`,
+/// `symbol<` or `symbol!(`; `mod symbol;` is a declaration, not a use.
 fn is_caller(symbol: &str, line: &str) -> bool {
     let mut parts = line.splitn(3, ':');
     let (Some(path), Some(_), Some(code)) = (parts.next(), parts.next(), parts.next()) else {
         return false;
     };
     let code = code.trim_start();
-    let defined = [
-        "fn ", "def ", "class ", "struct ", "enum ", "trait ", "const ", "type ",
+    let boundary = |c: Option<char>| !c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let declared = [
+        "fn ", "def ", "class ", "struct ", "enum ", "trait ", "const ", "type ", "mod ",
     ]
     .iter()
     .any(|kw| {
         code.split(kw).skip(1).any(|after| {
             after
                 .strip_prefix(symbol)
-                .is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+                .is_some_and(|rest| boundary(rest.chars().next()))
         })
+    });
+    let used = code.match_indices(symbol).any(|(at, _)| {
+        let before = code[..at].chars().next_back();
+        let rest = &code[at + symbol.len()..];
+        let in_string = code[..at].matches('"').count() % 2 == 1;
+        boundary(before)
+            && boundary(rest.chars().next())
+            && !in_string
+            && (rest.starts_with(['(', '<', '{'])
+                || rest.starts_with("::")
+                || rest.starts_with(" {")
+                || rest.starts_with("!("))
     });
     (path.ends_with(".rs") || path.ends_with(".py"))
         && !code.starts_with("//")
         && !code.starts_with('#')
         && !code.starts_with('*')
-        && !defined
+        && !declared
+        && used
 }
 
 /// `symbol: file:line, ...` for the first few real uses of each symbol, from `git grep -n -w`.

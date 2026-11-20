@@ -677,3 +677,14 @@ def test_probe_budget_counts_routing_time_spent_before_the_run_record(repository
     attempts = service.result(record['run_id'])['attempts']
     assert [a['skip_reason'] for a in attempts] == ['probe_budget_exhausted'], attempts
     assert not calls
+
+
+def test_admitted_spawn_leaves_the_callers_admission_clock_unset(repository, dispatch):
+    from plangraph.spawner import base_fresh
+    service = dispatch[0](True)
+    async def main():
+        await base_fresh.admitted_spawn(service, dict(
+            card=dict(estimate_tokens=100), prompt='Implement a tested change', role='implement'))
+        await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+        return base_fresh.ADMISSION_STARTED.get()
+    assert asyncio.run(main()) is None

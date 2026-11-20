@@ -412,7 +412,8 @@ assert 'fixture_symbol: src/lib.rs:3\n' in prompt, prompt  # the code use, not t
 import re
 log = re.search(r'fast checks \(exact head\): ([^;\s]+)', prompt).group(1)
 assert log.endswith('/fast-checks/' + head + '.log') and '== ci_commit_gate.py' in pathlib.Path(log).read_text(), prompt
-assert 'the turn that produced this head ends at byte ' in prompt and 'native.log' in prompt, prompt
+excerpt = re.search(r'with their cargo runs: (\S+\.session\.log)', prompt).group(1)
+assert excerpt.endswith('/fast-checks/' + head + '.session.log') and 'cargo test: 3 passed' in pathlib.Path(excerpt).read_text(), prompt
 assert '== ci_commit_gate.py (exit status: 0)' in pathlib.Path(log).read_text(), prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
@@ -452,6 +453,13 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert!(!host.stamped(&head));
     assert!(host.gates().unwrap_err().starts_with("ci_commit_gate.py"));
     fs::remove_file(dir.path().join("gate-red")).unwrap();
+    // The writer session log of the turns that produced this head (cargo runs included).
+    fs::create_dir_all(state.join("runs/run-host")).unwrap();
+    fs::write(
+        state.join("runs/run-host/native.log"),
+        "cargo test: 3 passed\n",
+    )
+    .unwrap();
     host.fast_checks(&head).unwrap();
     assert!(host.stamped(&head));
     assert!(!host.stamped(&base));
@@ -534,5 +542,47 @@ fn a_failing_command_carries_its_stdout_and_stderr() {
     assert!(
         error.starts_with("command failed (exit status: 1)"),
         "{error}"
+    );
+}
+
+#[test]
+fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let record_dir = dir.path().join("runs/run-x");
+    fs::create_dir_all(&record_dir).unwrap();
+    let host = Host {
+        repo: dir.path().to_path_buf(),
+        run_id: "run-x".into(),
+        cwd: dir.path().to_path_buf(),
+        reviews: dir.path().join("reviews"),
+        record_path: record_dir.join("record.json"),
+        base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.path().to_path_buf(),
+        brief: "brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
+        python_src: None,
+    };
+    let stamp = dir.path().join("fast-checks").join("h1");
+    fs::create_dir_all(stamp.parent().unwrap()).unwrap();
+    // No session log: no excerpt, so the brief names none.
+    host.session_excerpt(&stamp).unwrap();
+    assert!(!stamp.with_extension("session.log").exists());
+    // Each stamped head gets only the turns written since the previous one.
+    fs::write(record_dir.join("native.log"), "turn one\n").unwrap();
+    host.session_excerpt(&stamp).unwrap();
+    fs::write(record_dir.join("native.log"), "turn one\nturn two\n").unwrap();
+    let second = dir.path().join("fast-checks").join("h2");
+    host.session_excerpt(&second).unwrap();
+    assert_eq!(
+        fs::read_to_string(stamp.with_extension("session.log")).unwrap(),
+        "turn one\n"
+    );
+    assert_eq!(
+        fs::read_to_string(second.with_extension("session.log")).unwrap(),
+        "turn two\n"
     );
 }

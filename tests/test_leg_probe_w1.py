@@ -654,3 +654,17 @@ def test_probe_budget_is_net_of_the_admission_time_already_spent(monkeypatch):
     assert late.timeout() == pytest.approx(10, abs=0.5)
     spent = leg_probe.ProbeBudget(started=time.time() - window)
     assert spent.timeout() == 0
+
+
+def test_a_backward_wall_clock_step_does_not_restore_probe_budget(monkeypatch):
+    from plangraph.spawner import base_fresh, leg_probe
+    window = base_fresh.ADMISSION_TIMEOUT
+    token = base_fresh.ADMISSION_STARTED.set(time.monotonic() - (window - window / 6 - 10))
+    try:
+        # The wall clock jumped back an hour: only the monotonic admission clock is trusted.
+        monkeypatch.setattr(leg_probe.time, 'time', lambda: 1_000_000.0)
+        budget = leg_probe.ProbeBudget(started=1_000_000.0 + 3600)
+        assert budget.timeout() == pytest.approx(10, abs=0.5)
+    finally:
+        base_fresh.ADMISSION_STARTED.reset(token)
+

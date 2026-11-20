@@ -351,6 +351,7 @@ impl Driver for Host {
             .map_err(|e| e.to_string())?;
         // The exact-head gate output, named in the review brief next to the stamp.
         fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
+        self.session_excerpt(&stamp)?;
         fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
             .map_err(|e| e.to_string())
     }

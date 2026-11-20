@@ -111,19 +111,41 @@ impl Host {
                 stamp.with_extension("log").display()
             ));
         }
-        if let Some(directory) = self.record_path.parent() {
-            // The session log holds every writer turn: this head's turn ended at its current end.
-            let session = directory.join("native.log");
-            let end = fs::metadata(&session).map_or(0, |m| m.len());
-            logs.push(format!(
-                "writer session log with its cargo runs, the turn that produced this head ends at byte {end}: {}",
-                session.display()
-            ));
+        if let Ok(stamp) = self.stamp(head) {
+            let excerpt = stamp.with_extension("session.log");
+            if excerpt.is_file() {
+                logs.push(format!(
+                    "writer session of the turns that produced this head, with their cargo runs: {}",
+                    excerpt.display()
+                ));
+            }
         }
         if !logs.is_empty() {
             context["test_output_paths"] = json!(logs.join("; "));
         }
         context
+    }
+    /// Copies the part of the writer session log written since the previous stamped head to
+    /// `<stamp>.session.log`: the turns, with their cargo runs, that produced this head. No
+    /// session log, no excerpt.
+    pub(super) fn session_excerpt(&self, stamp: &Path) -> Result<(), String> {
+        let Some(session) = self.record_path.parent().map(|d| d.join("native.log")) else {
+            return Ok(());
+        };
+        let Ok(data) = fs::read(&session) else {
+            return Ok(());
+        };
+        let marker = stamp.with_file_name("session-offset");
+        let from: usize = fs::read_to_string(&marker)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .unwrap_or(0);
+        fs::write(
+            stamp.with_extension("session.log"),
+            &data[from.min(data.len())..],
+        )
+        .map_err(|e| e.to_string())?;
+        fs::write(&marker, data.len().to_string()).map_err(|e| e.to_string())
     }
     /// Review prompt for `head`: review skill, writer brief, diff range (the delta from the
     /// previous review's head when it is an ancestor) and the required closing lines.

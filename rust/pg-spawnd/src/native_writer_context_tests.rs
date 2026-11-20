@@ -52,11 +52,27 @@ fn changed_symbols_are_the_enclosing_public_definitions_of_every_changed_line() 
     assert!(changed_symbols("+++ b/gone.rs\n@@ -1,1 +1,1 @@\n+x\n", &read).is_empty());
 }
 #[test]
-fn callers_are_code_uses_not_definitions_or_comments() {
-    let grep = "docs.md:1:sym is documented\na.rs:2:/// sym docs\na.rs:3:// sym comment\na.rs:4:pub fn sym() {}\nb.py:5:def sym(a):\nb.py:6:# sym again\nc.rs:7:    sym();\nd.py:8:x = sym(1)\ne.rs:9:let a = sym();\nf.rs:10:sym();\n";
+fn closed_scopes_do_not_own_later_lines() {
+    let rust = "pub struct S;\nimpl S {\n    pub fn method(&self) {\n        let a = 1;\n    }\n}\nconst LATER: u8 = 1;\n";
+    // Line 4 is inside `method`; line 7 follows the closed impl.
+    assert_eq!(enclosing_public(rust, 4, false).as_deref(), Some("method"));
+    assert_eq!(enclosing_public(rust, 7, false), None);
+    let python = "def early():\n    return 1\n\nif FLAG:\n    VALUE = 2\n\nclass K:\n    def m(self):\n        pass\n";
+    assert_eq!(enclosing_public(python, 5, true), None);
+    assert_eq!(enclosing_public(python, 9, true).as_deref(), Some("m"));
+    // A wrapped signature does not close its own scope.
+    let wrapped = "pub fn long(\n    a: u8,\n) -> u8 {\n    a\n}\n";
+    assert_eq!(enclosing_public(wrapped, 4, false).as_deref(), Some("long"));
+}
+#[test]
+fn callers_are_code_uses_not_definitions_comments_strings_or_declarations() {
+    let grep = "docs.md:1:sym is documented\na.rs:2:/// sym docs\na.rs:3:// sym comment\na.rs:4:pub fn sym() {}\nb.py:5:def sym(a):\nb.py:6:# sym again\ng.rs:7:pub mod sym;\ng.rs:8:let key = \"sym\";\ng.rs:9:json!({\"sym\": 1});\nc.rs:10:    sym();\nd.py:11:x = sym(1)\ne.rs:12:let a = crate::sym::sym(2);\nf.rs:13:sym();\n";
     assert_eq!(
         callers_line("sym", grep).unwrap(),
-        "sym: c.rs:7, d.py:8, e.rs:9"
+        "sym: c.rs:10, d.py:11, e.rs:12"
     );
-    assert_eq!(callers_line("sym", "a.rs:4:pub fn sym() {}\n"), None);
+    assert_eq!(
+        callers_line("sym", "a.rs:4:pub fn sym() {}\na.rs:5:pub mod sym;\n"),
+        None
+    );
 }
