@@ -18,7 +18,12 @@ pub(crate) fn eligible(leg: &Value) -> bool {
         (leg["harness"].as_str(), leg["model"].as_str()),
         (
             Some("agy"),
-            Some("gemini-4-hydrogen-high" | "gemini-4-neon-medium")
+            Some(
+                "gemini-4-hydrogen-high"
+                    | "gemini-4-argon-low"
+                    | "gemini-4-argon-medium"
+                    | "gemini-4-neon-medium"
+            )
         ) | (Some("claude"), Some("claude-sonnet-5-5-high"))
     )
 }

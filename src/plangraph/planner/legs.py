@@ -280,7 +280,8 @@ def explicit_only_skips(role: str) -> tuple[dict, ...]:
     return tuple({"leg": leg.id, "reason": "explicit_only", "evidence": {
         "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
         for leg in EXPLICIT_LEGS if role in leg.roles
-        and not (role == "review" and leg.id in REVIEW_ORDER))
+        and not (role == "review" and leg.id in REVIEW_ORDER)
+        and not (role == "implement" and leg.id in CODEX_FALLBACK_WRITERS))
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",

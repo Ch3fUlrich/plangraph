@@ -119,7 +119,7 @@ The probe result adds `state` only for serving failures (or `host-not-ready`);
 ordinary successes and failures omit the key, rather than returning null.
 
 D-5966 / D-6310 agy quotas use agy:<model>, shared across effort variants of that model.
-Hydrogen, Neon and Sonnet limits are independent. Gateway aggregate antigravity
+Hydrogen, Argon, Neon and Sonnet limits are independent. Gateway aggregate antigravity
 quota snapshots do not suppress these native CLI models.
 Legacy agy/<model>-<effort> events remain readable under the canonical key.
 Explicit provider resets (including `agy` and `opencode-go`) survive the six-hour

@@ -368,3 +368,18 @@ print(json.dumps(dict(argv=argv, status=record['status'])))
     assert_eq!(value["argv"][0], "claude");
     assert_eq!(value["status"], "dry_run");
 }
+
+#[test]
+fn agy_argon_and_neon_review_legs_are_eligible() {
+    for model in [
+        "gemini-4-hydrogen-high",
+        "gemini-4-argon-low",
+        "gemini-4-argon-medium",
+        "gemini-4-neon-medium",
+    ] {
+        assert!(eligible(&json!({"harness":"agy","model":model})), "{model}");
+    }
+    assert!(!eligible(
+        &json!({"harness":"agy","model":"gemini-4-argon-high"})
+    ));
+}

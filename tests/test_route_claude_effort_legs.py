@@ -91,7 +91,8 @@ def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
 
 @pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA,
                                                     'console-deepseek-flash': 'console-deepseek/deepseek-flash'}),
-                                         ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER})])
+                                         ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER}
+                                                      - {'agy-claude-sonnet-5-5-high'})])
 def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     writers = ('xiaomi',) if role == 'review' else ()
     routed = _svc(tmp_path).route({'estimate_tokens': 1000}, role=role, writer_families=writers)
@@ -101,6 +102,9 @@ def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     if role == 'implement':
         from test_route_free_first import WRITERS
         assert [leg.id for leg in routed.legs] == WRITERS
+        # Rule 3.58: the Claude fallback writer has one skip row, never explicit_only.
+        rows = [s for s in routed.skipped if s['leg'] == 'agy-claude-sonnet-5-5-high']
+        assert [r['reason'] for r in rows] == ['codex_available']
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])

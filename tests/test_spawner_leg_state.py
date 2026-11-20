@@ -460,3 +460,16 @@ def test_provider_resets_are_uncapped_while_flat_down_s_stays_capped(store, monk
     monkeypatch.setenv("PLANGRAPH_LEG_DOWN_S", "172800")
     store.record_probe_fail("opencode-go/flat-probe", "timeout", "leg-probe", now=now)
     assert store.leg_status("opencode-go/flat-probe", now=now + 1)["evidence"]["reset_at"] == now + ls.RESET_CAP_S
+
+
+def test_argon_efforts_share_one_agy_quota_key(tmp_path):
+    """D-5966 / rule 3.58: a limit on argon-low is the argon-medium limit too."""
+    from plangraph.routing_support.leg_state import LegAdapter, LegStateStore, quota_key
+    assert quota_key('agy/gemini-4-argon-low') == quota_key('agy:gemini-4-argon-medium') == 'agy:gemini-4-argon'
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    store.record_harness_limit('agy/gemini-4-argon-low', 'Individual quota reached. Resets in 2h.', 'fixture')
+    assert store.leg_status('agy/gemini-4-argon-medium')['state'] == 'limited'
+    assert store.leg_status('agy:gemini-4-argon')['state'] == 'limited'
+    adapter = LegAdapter(store, None, lambda: (), enabled=True, clock=lambda: 0)
+    assert adapter.leg_status('agy/gemini-4-argon-medium')['state'] == 'limited'
+    assert adapter.leg_status('gemini-4-argon-medium') == store.leg_status('gemini-4-argon-medium')  # store, not the gateway
