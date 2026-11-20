@@ -315,7 +315,8 @@ def stage_review_diff(diff, directory):
     from .prompt_input import checkout_env
     def git(repo, *args):
         return subprocess.run(['git', '-C', repo, *args], capture_output=True, check=True,
-                              text=True, env=checkout_env(), timeout=30).stdout.strip()
+                              text=True, encoding='utf-8', errors='replace',
+                              env=checkout_env(), timeout=30).stdout.strip()
     source = diff['repo']
     clone = str(directory / 'review.git')
     git(source, 'clone', '-q', '--shared', '--bare', '--', source, clone)
