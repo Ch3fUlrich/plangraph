@@ -7,7 +7,7 @@ The config maps the store and its verifiers onto real paths:
                       (or env ``PG_DSN``) names the server and ``pg_schema`` the
                       namespace (``db`` then only anchors the derived schema name)
 * ``snapshot``      — where ``plan.snapshot.json`` is rewritten after every write
-* ``repos``         — ``{project: working tree path}`` for the git verifier
+* ``repos``         — project paths or maps with ``path``, ``ref`` and optional ``non_pr``
 * ``runs_dir``      — where ``run-record`` jobs live
 * ``decisions_file``— the DECISIONS.md the ``decision`` verifier reads
 * ``ci``            — ``{project: "owner/repo" | "forgejo:owner/repo" | "none"}``
@@ -69,6 +69,8 @@ class Config:
                 if not isinstance(ref, str) or not valid_ref(ref):
                     raise ConfigError(f"repo {proj!r} ref {ref!r} is invalid")
                 self.repos[proj] = {"path": path, "ref": ref}
+                if entry.get("non_pr") is True:
+                    self.repos[proj]["non_pr"] = True
             else:
                 raise ConfigError(f"repo {proj!r} entry must be a path string or dict")
         self.db_options = self._db_options(data)
