@@ -133,7 +133,7 @@ def _cleanup_before_disk_refusal(worktree, service, cap):
         if wt_path.is_dir() and not any(cargo_run_busy(r) for r in service.ps()['runs']):
             proc = subprocess.run(
                 ['git', '-C', str(wt_path), 'worktree', 'list', '--porcelain'],
-                capture_output=True, text=True, timeout=15)
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15)
             if proc.returncode == 0:
                 live_cwds = {Path(r['cwd']).resolve() for r in service.ps()['runs']
                              if cargo_run_busy(r) and r.get('cwd')}
