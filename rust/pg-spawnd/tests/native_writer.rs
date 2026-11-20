@@ -176,7 +176,7 @@ if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in pro
         assert pathlib.Path('fresh.txt').read_text() == 'new main base'
         assert pathlib.Path('partial.txt').read_text() == 'preserved writer work'
 
-assert 'brief marker' in prompt or 'no required review' in prompt
+assert 'brief marker' in prompt or 'requests changes' in prompt, prompt
 assert 'model_reasoning_effort=medium' in sys.argv
 assert sys.argv[sys.argv.index('-m') + 1] == 'gpt-6.2-sol'
 if 'hold marker' in prompt:
@@ -186,9 +186,9 @@ if 'hold marker' in prompt:
     time.sleep(30)
     sys.exit(0)
 if 'resume' in sys.argv:
+    # Fix turns only follow a driver-run review that requested changes.
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
-    head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
-    pathlib.Path('reviews', head[:8] + '-hydrogen.txt').write_text('Reviewed writer.txt\nVERDICT: ACCEPT\n')
+    assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
 else:
     import os
     pathlib.Path('writer-path').write_text(os.environ['PATH'])
@@ -196,14 +196,29 @@ else:
     subprocess.run(['git','add','writer.txt','writer-path'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','writer'], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}))
-if 'reject marker' in prompt:
-    head = subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
-    pathlib.Path('reviews', head[:8] + '-rejected.txt').write_text('VERDICT: REQUEST_CHANGES\n')
-    sys.exit(1)
 print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1000,'output_tokens':234}}))
 print('tokens used\n1,234')
 "#).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
+    let review_cli = dir.join("review-cli.py");
+    fs::write(&review_cli, r#"import json, pathlib, sys, uuid
+argv = sys.argv[1:]
+value = lambda flag: argv[argv.index(flag) + 1]
+assert value('--role') == 'review' and value('--writer-family') == 'openai', argv
+card = json.loads(value('--card'))
+head = card['diff_ref']['head']
+prompt = pathlib.Path(value('--prompt-file')).read_text()
+run_id = 'run-' + uuid.uuid4().hex
+run = pathlib.Path(value('--state')) / 'runs' / run_id
+run.mkdir(parents=True)
+if 'reject marker' in prompt:
+    text = 'HIGH writer.txt:1 - fixture finding\nHEAD: ' + head + '\nVERDICT: REQUEST_CHANGES\n'
+else:
+    text = 'Reviewed writer.txt\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
+(run / 'live.log').write_text(json.dumps({'type':'result','is_error':False,'result':text}) + '\n')
+print(json.dumps({'run_id':run_id,'status':'completed','live_log':str(run / 'live.log'),'chosen_leg':{'id':'fixture-seat'}}))
+"#).unwrap();
     fs::create_dir_all(dir.join("supervisor-bin")).unwrap();
     // The fixture does not depend on free space on the host's /tmp mount.
     let df = bin.join("df");
@@ -256,6 +271,7 @@ print('tokens used\n1,234')
         .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
         .env("NATIVE_BINARY", binary::spawnd())
+        .env("PLANGRAPH_NATIVE_REVIEW_CLI", serde_json::json!(["python3", review_cli]).to_string())
         .env("FIXTURE_DIR", &dir).env("FIXTURE_BASE", &base)
         .args(["-c", r#"
 import asyncio, json, os, pathlib
@@ -274,7 +290,7 @@ assert pathlib.Path.home() == pathlib.Path(os.environ['FIXTURE_HOME']), pathlib.
 for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR'):
     assert os.path.realpath(os.environ[name]).startswith(os.path.realpath(root) + os.sep), (name, os.environ[name])
 # Keys the fixture sets itself (isolation paths and, in the hostile-policy variant, host policy).
-FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'PLANGRAPH_DISK_FLOOR_GB', 'PLANGRAPH_HOST_NAME', 'PLANGRAPH_OVERFLOW_HOSTS'}
+FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'PLANGRAPH_DISK_FLOOR_GB', 'PLANGRAPH_HOST_NAME', 'PLANGRAPH_OVERFLOW_HOSTS', 'PLANGRAPH_NATIVE_REVIEW_CLI'}
 assert not [k for k in os.environ if k.startswith(('AUTOOS_', 'PLANGRAPH_', 'XDG_', 'GIT_CONFIG')) and k not in FIXTURE_KEYS], sorted(os.environ)
 async def check():
     service = SpawnService(state=root/'state')
@@ -289,8 +305,10 @@ async def check():
     assert record['base_sha'] == os.environ['FIXTURE_BASE'], record
     assert record['final_head'] != record['base_sha'], record
     assert record['host'] and record['exit_code'] == 0, record
-    assert record['session_id'] == 'fixture-session' and record['resumes'] == 1, record
+    assert record['session_id'] == 'fixture-session' and record['resumes'] == 0, record
     assert record['review']['verdict'] == 'ACCEPT' and record['review']['head'] == record['final_head'], record
+    assert record['review']['leg'] == 'fixture-seat' and record['status_line'] == 'DONE', record
+    assert record['fast_checks'] == {'head': record['final_head'], 'status': 'passed'}, record
     assert pathlib.Path(record['cwd']).is_dir(), record
     # A remote ref that is absent must never resolve the local-only branch.
     subprocess = __import__('subprocess')
@@ -314,6 +332,8 @@ async def check():
         assert final['manifest']['worktree'] == final['cwd'], final
         if marker == 'reject marker':
             assert final['exit_code'] == 3 and final['review']['verdict'] == 'REQUEST_CHANGES', final
+            assert final['round_stop'] == 'no_progress' and final['review_rounds'] == 3, final
+            assert final['resumes'] == 2 and final['session_id'] == 'fixture-session', final
         elif status == 'failed':
             assert final['result'] == 'BLOCKED' and final['exit_code'] == 9, final
         else:
@@ -361,8 +381,8 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         let row: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         if row["exit_code"] == 0 {
-            // Two counted CLI executions per completed run, each logs 1,234.
-            assert_eq!(row["tokens"], 2468);
+            // One counted CLI execution per completed run logs 1,234.
+            assert_eq!(row["tokens"], 1234);
             assert_eq!(row["review_rounds"], 1);
             assert!(row["wall_minutes"].as_f64().unwrap() > 0.0);
             completed.push(row["changed_lines"].as_u64().unwrap());

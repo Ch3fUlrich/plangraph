@@ -21,7 +21,7 @@ pub(crate) const STALL_ROUNDS: u64 = 3;
 
 /// Why the next writer round (`next`) must not start, given the confirmed HIGH+MED count of
 /// every round so far.
-fn stop_reason(counts: &[u64], next: u64, used_exception: bool) -> Option<&'static str> {
+pub(crate) fn stop_reason(counts: &[u64], next: u64, used_exception: bool) -> Option<&'static str> {
     if next > MAX_ROUNDS || used_exception {
         return Some("round_cap");
     }

@@ -10,15 +10,37 @@ use std::{
     time::Duration,
 };
 
+/// Lead writer leg cx-gpt-6.2-sol-medium (operator D-6397).
 const WRITER_MODEL: &str = "gpt-6.2-sol";
 const WRITER_EFFORT: &str = "medium";
-/// Model and effort flags for the codex invocation; the ledger row records the same constants.
-fn model_args() -> [String; 4] {
+/// Writer effort: medium unless the card names `effort` high or xhigh together with
+/// an `effort_decision` D-id that authorises it.
+pub(crate) fn writer_effort(card: &Value) -> Result<String, String> {
+    let Some(effort) = card.get("effort").filter(|v| !v.is_null()) else {
+        return Ok(WRITER_EFFORT.into());
+    };
+    let effort = effort
+        .as_str()
+        .filter(|e| ["medium", "high", "xhigh"].contains(e))
+        .ok_or("effort_invalid: card.effort must be medium, high or xhigh")?;
+    let decided = card["effort_decision"].as_str().is_some_and(|d| {
+        d.strip_prefix("D-")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    });
+    if effort != WRITER_EFFORT && !decided {
+        return Err(format!(
+            "effort_needs_decision: card.effort {effort} requires card.effort_decision D-<n>"
+        ));
+    }
+    Ok(effort.into())
+}
+/// Model and effort flags for the codex invocation; the ledger row records the same values.
+fn model_args(effort: &str) -> [String; 4] {
     [
         "-m".into(),
         WRITER_MODEL.into(),
         "-c".into(),
-        format!("model_reasoning_effort={WRITER_EFFORT}"),
+        format!("model_reasoning_effort={effort}"),
     ]
 }
 
@@ -30,6 +52,16 @@ struct Host {
     record_path: PathBuf,
     base_ref: String,
     tool_path: String,
+    effort: String,
+    /// Run state root holding `runs/<run-id>/`; review runs are recorded there too.
+    state: PathBuf,
+    /// Writer brief, repeated in every review prompt for its item keys and Done-when lines.
+    brief: String,
+    /// `refs/heads/...` that receives the accepted head; None keeps the head on the host.
+    push_ref: Option<String>,
+    reviews_started: usize,
+    /// Spawner CLI argv prefix that starts review runs (`review_cli`).
+    review_cli: Vec<String>,
 }
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
@@ -96,13 +128,16 @@ impl Host {
         let accepted = record["review"]["verdict"] == "ACCEPT";
         Ok(
             json!({"schema_version":1,"kind":"writer","run_id":record["run_id"],
-            "host":record["host"],"model":WRITER_MODEL,"effort":WRITER_EFFORT,
+            "host":record["host"],"model":WRITER_MODEL,"effort":self.effort,
             "started":record["started"],"ended":record["ended"],"exit_code":record["exit_code"],
             "item_key":record["item_key"],"items_given":item.map(|_| 1),"items_done":done,
             "changed_lines":lines,"wall_minutes":wall,"tokens":crate::writer_ledger::tokens(&log)?,
             "review_rounds":record["review_rounds"],
             "high_held":accepted.then_some(0),"med_held":accepted.then_some(0)}),
         )
+    }
+    fn base_pin(&self) -> String {
+        format!("refs/plangraph/native/{}/base", self.run_id)
     }
     fn free(&self) -> Result<u64, String> {
         // State and repository may be on different filesystems. Probe the worktree's
@@ -207,7 +242,7 @@ impl Driver for Host {
             )
             .env("CARGO_INCREMENTAL", "0")
             .args(["--json"])
-            .args(model_args())
+            .args(model_args(&self.effort))
             .args([
                 "-c",
                 "approval_policy=never",
@@ -299,32 +334,34 @@ impl Driver for Host {
     fn head(&mut self) -> Result<String, String> {
         self.git(&["rev-parse", "HEAD"])
     }
-    fn review(&mut self, head: &str) -> Result<Option<Value>, String> {
-        let paths = crate::review_citation::diff_paths(
-            &self.cwd,
-            Some(&format!("refs/plangraph/native/{}/base", self.run_id)),
-            head,
-        );
-        find_review(&self.reviews, head, &paths)
+    fn fast_checks(&mut self, head: &str) -> Result<(), String> {
+        if self.git(&["rev-parse", "HEAD"])? != head {
+            return Err(format!("worktree is not at {head}"));
+        }
+        self.checks()?;
+        let stamp = self.stamp(head)?;
+        fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
+            .map_err(|e| e.to_string())?;
+        fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
+            .map_err(|e| e.to_string())
+    }
+    fn stamped(&mut self, head: &str) -> bool {
+        self.stamp(head).is_ok_and(|stamp| stamp.is_file())
+    }
+    fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String> {
+        self.review_run(head, previous)
     }
     fn gates(&mut self) -> Result<(), String> {
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
-        if !self.cwd.join("tools/check_file_size.py").is_file() {
-            return Ok(());
-        }
-        for gate in [
-            "check_file_size.py",
-            "check_new_code_lang.py",
-            "check_changelog_docs.py",
-        ] {
-            let path = self.cwd.join("tools").join(gate);
-            output(
-                self.command(if cfg!(windows) { "python" } else { "python3" })
-                    .arg(path)
-                    .current_dir(&self.cwd),
-            )?;
-        }
-        Ok(())
+        self.checks()
+    }
+    fn push(&mut self, head: &str) -> Result<Option<String>, String> {
+        let Some(target) = self.push_ref.clone() else {
+            return Ok(None);
+        };
+        // No force flag: the remote refuses anything but a fast-forward.
+        self.git(&["push", "origin", &format!("{head}:{target}")])?;
+        Ok(Some(target))
     }
     fn save(&mut self, record: &Value) -> Result<(), String> {
         let mut record = record.clone();
@@ -350,52 +387,17 @@ impl Driver for Host {
         ledger
     }
 }
-pub(crate) fn find_review(
-    directory: &Path,
-    head: &str,
-    paths: &[String],
-) -> Result<Option<Value>, String> {
-    if head.len() < 8 {
-        return Err("invalid final head".into());
-    }
-    let mut matches = Vec::new();
-    for entry in fs::read_dir(directory).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("txt") {
-            continue;
-        }
-        let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-        if !meta.is_file() || meta.len() > 1024 * 1024 {
-            continue;
-        }
-        let text = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let name = path.file_name().unwrap().to_string_lossy();
-        if !name.contains(&head[..8]) && !text.lines().take(5).any(|l| l.contains(head)) {
-            continue;
-        }
-        let verdict = text
-            .lines()
-            .rev()
-            .find(|l| l.to_ascii_uppercase().contains("VERDICT"));
-        if let Some(line) = verdict {
-            let verdict = match line.trim() {
-                "VERDICT: ACCEPT" => "ACCEPT",
-                "VERDICT: REQUEST_CHANGES" | "VERDICT: REJECT" => "REQUEST_CHANGES",
-                _ => continue,
-            };
-            let weak = verdict == "ACCEPT" && !crate::review_citation::names_file(&text, paths);
-            matches.push((
-                meta.modified().map_err(|e| e.to_string())?,
-                if weak {
-                    json!({"path":path,"text":text,"verdict":"no_verdict","status":"no_verdict","reason":"weak_verdict","head":head})
-                } else {
-                    json!({"path":path,"text":text,"verdict":verdict,"head":head})
-                },
-            ));
-        }
-    }
-    matches.sort_by_key(|m| m.0);
-    Ok(matches.pop().map(|m| m.1))
+/// State root of a run whose record lives at `<state>/runs/<run-id>/record.json`.
+fn record_path_state(request: &Value) -> Result<PathBuf, String> {
+    Path::new(
+        request["record_path"]
+            .as_str()
+            .ok_or("record_path missing")?,
+    )
+    .ancestors()
+    .nth(3)
+    .map(Path::to_path_buf)
+    .ok_or_else(|| "record_path has no state root".into())
 }
 pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     if cfg!(windows) {
@@ -447,7 +449,32 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             .as_str()
             .ok_or("tool PATH missing")?
             .into(),
+        effort: WRITER_EFFORT.into(),
+        state: record_path_state(&request)?,
+        brief: request["prompt"].as_str().unwrap_or("").into(),
+        push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
+        reviews_started: 0,
+        review_cli: review_cli()?,
     };
+    if let Some(target) = &host.push_ref {
+        if !target.starts_with("refs/heads/") {
+            record["status"] = json!("failed");
+            record["exit_code"] = json!(5);
+            record["reason"] = json!("push_ref must name refs/heads/...");
+            return host.save(&record);
+        }
+    }
+    match writer_effort(&request["card"]) {
+        Ok(effort) => host.effort = effort,
+        Err(reason) => {
+            // Refused before Codex starts: the record names the reason.
+            record["status"] = json!("failed");
+            record["exit_code"] = json!(5);
+            record["reason"] = json!(reason);
+            return host.save(&record);
+        }
+    }
+    record["effort"] = json!(host.effort);
     record["cwd"] = json!(host.cwd);
     host.save(&record)?;
     native_writer::run(
@@ -457,6 +484,11 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     );
     Ok(())
 }
+#[path = "native_writer_review.rs"]
+mod review;
+use review::review_cli;
+#[cfg(test)]
+use review::{review_run_text, review_verdict};
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;

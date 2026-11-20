@@ -82,3 +82,8 @@ set this marker. Use one writer per checkout; unrelated concurrent edits can
 prevent the unchanged proof, so review that diff rather than inventing a count.
 
 Progress tests use the shared isolated Rust Git fixture command; inherited hook repository variables cannot redirect fixture commits into the pushing checkout.
+
+The native-codex worker's in-session review loop applies the same stop rule:
+`native_writer::round_stop` calls `round_progress::stop_reason` with the HIGH+MED
+counts of the REQUEST_CHANGES rounds so far, for the round just finished, and
+caps the run at `round_progress::MAX_ROUNDS` review rounds (see `docs/native-codex-writer.md`).
