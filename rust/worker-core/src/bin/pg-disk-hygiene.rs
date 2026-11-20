@@ -8,7 +8,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     let (mut repo, mut root, mut pins) = (None, None, None);
     let (mut apply, mut dry) = (false, false);
     let mut thresholds = Thresholds::default();
-    let mut cap = 10_000_000_000u64;
+    let mut cap = pg_worker_core::cargo_pool::configured_cap_bytes();
     let mut args = args.iter();
     while let Some(flag) = args.next() {
         match flag.as_str() {
@@ -110,6 +110,16 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
             ) {
                 report.alarm = true;
                 report.error = Some(error.to_string());
+            }
+        }
+        if !building {
+            if let Some(primary) = pg_worker_core::cargo_cache::shared_cache_roots()?.first() {
+                if let Err(error) =
+                    pg_worker_core::cargo_pool::enforce_pool(primary, cap, apply, &mut report)
+                {
+                    report.alarm = true;
+                    report.error = Some(error.to_string());
+                }
             }
         }
     }

@@ -1,22 +1,28 @@
-//! Leased fixed-size pool of Cargo target directories and lock-wait telemetry.
+//! Leased fixed-size pool of Cargo target directories with a per-slot size cap.
 use crate::{
     cargo_cache::{try_exclusive_lease, ExclusiveLease},
-    disk_hygiene::{scan, Report},
-    run::record_io::{append_private, atomic_write_private},
-    shared_target, sweep_runs,
+    disk_hygiene::Report,
+    run::record_io::atomic_write_private,
+    sweep_runs,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+pub use crate::cargo_pool_telemetry::{
+    count_cargo_lock_waits, host_name, record_lock_wait, summarize_lock_waits, LockWaitSample,
+    LockWaitSummary, LockWaitTracker,
+};
+
+pub use crate::cargo_pool_trim::enforce_pool_cap;
+use crate::cargo_pool_trim::slot_size;
+
 pub const DEFAULT_CARGO_TARGET_CAP_GB: u64 = 20;
 pub const DEFAULT_POOL_SLOTS: usize = 3;
 const GIB: u64 = 1024 * 1024 * 1024;
-const LOCK_WAIT_LOG: &str = "cargo-pool-lock-waits.jsonl";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SlotLeaseRecord {
@@ -37,35 +43,6 @@ pub struct SlotLease {
 impl Drop for SlotLease {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.lease_file);
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LockWaitSample {
-    pub host: String,
-    pub run_id: String,
-    pub slot: usize,
-    pub build_ms: u64,
-    pub lock_wait_ms: u64,
-    pub blocking_events: u64,
-    pub ts: u64,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct LockWaitSummary {
-    pub builds: u64,
-    pub build_ms: u64,
-    pub lock_wait_ms: u64,
-    pub blocking_events: u64,
-}
-
-impl LockWaitSummary {
-    pub fn lock_wait_ratio(&self) -> f64 {
-        if self.build_ms == 0 {
-            0.0
-        } else {
-            self.lock_wait_ms as f64 / self.build_ms as f64
-        }
     }
 }
 
@@ -92,6 +69,62 @@ pub fn slot_count(free_bytes: u64, measured_slot_bytes: u64, default_slots: usiz
         return max_slots;
     }
     ((free_bytes / measured_slot_bytes) as usize).clamp(1, max_slots)
+}
+
+/// Pool size for `primary`: how many measured slots fit in the free disk beside it,
+/// at most `DEFAULT_POOL_SLOTS`; falls back to the default when free space is unknown.
+pub fn configured_slot_count(primary: &Path) -> usize {
+    let measured = existing_pool_slots(primary)
+        .iter()
+        .map(|slot| slot_size(slot))
+        .max()
+        .unwrap_or(0);
+    let mut probe = primary;
+    while !probe.exists() {
+        match probe.parent() {
+            Some(parent) => probe = parent,
+            None => return DEFAULT_POOL_SLOTS,
+        }
+    }
+    match crate::disk_runtime::disk_usage(probe) {
+        Ok(free) => slot_count(free, measured, DEFAULT_POOL_SLOTS),
+        Err(_) => DEFAULT_POOL_SLOTS,
+    }
+}
+
+/// `primary` plus every `slot-*` directory currently present in its pool root.
+pub fn existing_pool_slots(primary: &Path) -> Vec<PathBuf> {
+    let mut slots = vec![primary.to_path_buf()];
+    let Ok(root) = pool_root(primary) else {
+        return slots;
+    };
+    let mut extra: Vec<PathBuf> = fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("slot-") && !n.contains('.'))
+                && path.is_dir()
+                && !path.is_symlink()
+        })
+        .collect();
+    extra.sort();
+    slots.extend(extra);
+    slots
+}
+
+/// Trim every idle slot of the pool at `primary` to `cap_bytes` each, and the pool
+/// as a whole to N x cap. Leased slots are skipped.
+pub fn enforce_pool(
+    primary: &Path,
+    cap_bytes: u64,
+    apply: bool,
+    report: &mut Report,
+) -> io::Result<u64> {
+    enforce_pool_cap(&existing_pool_slots(primary), cap_bytes, apply, report)
 }
 
 pub fn pool_root(primary: &Path) -> io::Result<PathBuf> {
@@ -239,186 +272,4 @@ pub fn acquire_slot(
         io::ErrorKind::WouldBlock,
         format!("all {} cargo pool slots are busy", slots.len()),
     ))
-}
-
-fn remove_path(path: &Path) -> io::Result<()> {
-    if path.is_symlink() || path.is_file() {
-        fs::remove_file(path)
-    } else if path.is_dir() {
-        fs::remove_dir_all(path)
-    } else {
-        Ok(())
-    }
-}
-
-fn slot_size(slot: &Path) -> u64 {
-    if !slot.exists() {
-        0
-    } else {
-        scan(slot).map_or(0, |x| x.0)
-    }
-}
-
-fn trim_slot_to(
-    slot: &Path,
-    target_bytes: u64,
-    apply: bool,
-    report: &mut Report,
-) -> io::Result<u64> {
-    let mut size = slot_size(slot);
-    if size <= target_bytes {
-        return Ok(size);
-    }
-    let now = SystemTime::now();
-    for (candidate, bytes) in shared_target::candidates(slot, now)? {
-        if size <= target_bytes {
-            break;
-        }
-        if apply {
-            match remove_path(&candidate) {
-                Ok(()) => {
-                    report.freed_bytes += bytes;
-                    report
-                        .actions
-                        .push(format!("pool_evict {} ({bytes}B)", candidate.display()));
-                    size = size.saturating_sub(bytes);
-                }
-                Err(e) => report
-                    .skipped
-                    .push(format!("{} ({e})", candidate.display())),
-            }
-        } else {
-            report.actions.push(format!(
-                "would pool_evict {} ({bytes}B)",
-                candidate.display()
-            ));
-            size = size.saturating_sub(bytes);
-        }
-    }
-    if size <= target_bytes {
-        return Ok(size);
-    }
-    // Remove idle slot profile subdirectories/files oldest-first when unit-level eviction is insufficient.
-    let mut entries = vec![];
-    if let Ok(read_dir) = fs::read_dir(slot) {
-        for entry in read_dir {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_symlink() {
-                continue;
-            }
-            let (bytes, modified) = scan(&path).unwrap_or((0, UNIX_EPOCH));
-            entries.push((modified, path, bytes));
-        }
-    }
-    entries.sort_by_key(|(modified, _, _)| *modified);
-    for (_, path, bytes) in entries {
-        if size <= target_bytes {
-            break;
-        }
-        if apply {
-            match remove_path(&path) {
-                Ok(()) => {
-                    report.freed_bytes += bytes;
-                    report
-                        .actions
-                        .push(format!("pool_trim {} ({bytes}B)", path.display()));
-                    size = size.saturating_sub(bytes);
-                }
-                Err(e) => report.skipped.push(format!("{} ({e})", path.display())),
-            }
-        } else {
-            report
-                .actions
-                .push(format!("would pool_trim {} ({bytes}B)", path.display()));
-            size = size.saturating_sub(bytes);
-        }
-    }
-    Ok(if apply { slot_size(slot) } else { size })
-}
-
-/// Keep each idle slot under `slot_cap_bytes` and total across `slots` under `N * slot_cap_bytes`.
-pub fn enforce_pool_cap(
-    slots: &[PathBuf],
-    slot_cap_bytes: u64,
-    apply: bool,
-    report: &mut Report,
-) -> io::Result<u64> {
-    let mut sizes = vec![0u64; slots.len()];
-    let mut idle_flags = vec![false; slots.len()];
-    for (idx, slot) in slots.iter().enumerate() {
-        let initial = slot_size(slot);
-        let Some(_lease) = try_exclusive_lease(slot)? else {
-            sizes[idx] = initial;
-            if initial > slot_cap_bytes {
-                report.skipped.push(format!("{} (leased)", slot.display()));
-            }
-            continue;
-        };
-        idle_flags[idx] = true;
-        sizes[idx] = trim_slot_to(slot, slot_cap_bytes, apply, report)?;
-    }
-
-    let total_cap = slot_cap_bytes.saturating_mul(slots.len() as u64);
-    let mut total: u64 = sizes.iter().sum();
-    if total > total_cap {
-        let mut idle_order: Vec<usize> = (0..slots.len())
-            .filter(|&i| idle_flags[i] && sizes[i] > 0)
-            .collect();
-        idle_order.sort_by(|&a, &b| sizes[b].cmp(&sizes[a]));
-        for idx in idle_order {
-            if total <= total_cap {
-                break;
-            }
-            let Some(_lease) = try_exclusive_lease(&slots[idx])? else {
-                continue;
-            };
-            let excess = total - total_cap;
-            let desired = sizes[idx].saturating_sub(excess);
-            let after = trim_slot_to(&slots[idx], desired, apply, report)?;
-            total = total.saturating_sub(sizes[idx].saturating_sub(after));
-            sizes[idx] = after;
-        }
-    }
-    Ok(total)
-}
-
-pub fn count_cargo_lock_waits(stderr: &str) -> u64 {
-    stderr
-        .lines()
-        .filter(|line| {
-            line.contains("Blocking waiting for file lock on build directory")
-                || line.contains("Blocking waiting for file lock on artifact directory")
-        })
-        .count() as u64
-}
-
-pub fn record_lock_wait(state: &Path, sample: &LockWaitSample) -> io::Result<()> {
-    fs::create_dir_all(state)?;
-    let mut line = serde_json::to_string(sample).map_err(io::Error::other)?;
-    line.push('\n');
-    append_private(&state.join(LOCK_WAIT_LOG), line.as_bytes())
-}
-
-pub fn summarize_lock_waits(state: &Path) -> io::Result<BTreeMap<String, LockWaitSummary>> {
-    let path = state.join(LOCK_WAIT_LOG);
-    let content = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(e) => return Err(e),
-    };
-    let mut summary: BTreeMap<String, LockWaitSummary> = BTreeMap::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let sample: LockWaitSample = serde_json::from_str(trimmed).map_err(io::Error::other)?;
-        let entry = summary.entry(sample.host).or_default();
-        entry.builds += 1;
-        entry.build_ms += sample.build_ms;
-        entry.lock_wait_ms += sample.lock_wait_ms;
-        entry.blocking_events += sample.blocking_events;
-    }
-    Ok(summary)
 }

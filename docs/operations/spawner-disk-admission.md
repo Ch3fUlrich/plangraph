@@ -5,8 +5,8 @@ Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 (GiB); the checkout, configured `worktree_root`, and state tree filesystems must
 all meet it (or, when `work_drives` are configured, at least one drive meets its
 floor). Before refusing `disk_low`, admission cleans idle rebuildable caches
-(`shared_cargo_target`, `~/.cache/pg-target-po`, `~/.cache/pg-target-warm`, and
-idle worktree `rust/target` directories) once and re-measures free space; a
+(`shared_cargo_target`, its pool slots `<target>-pool/slot-N`, `~/.cache/pg-target-po`,
+`~/.cache/pg-target-warm`, and idle worktree `rust/target` directories) once and re-measures free space; a
 persistent breach records a `disk-hygiene.json` floor alarm (`alarm: true`).
 A refusal reports `disk_low` and measured GB and uses RAM's overflow
 or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5) and
@@ -16,7 +16,7 @@ Every harness child, including writers and fixers, receives `CARGO_TARGET_DIR`
 from `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`).
 Caller and per-worktree target overrides are replaced; children also receive
 `CARGO_INCREMENTAL=0`. The cache cap is
-`PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB). Over-cap busy hosts refuse with
+`PLANGRAPH_CARGO_TARGET_CAP_GB` (default 20 GiB, per slot; one value shared with the Rust pool). Over-cap busy hosts refuse with
 `cargo_target_cap`; idle hosts clear the cache before checking free space. A run keeps the
 host busy only while a recorded child or supervisor pid is alive (or it has survivors): ended,
 `timed_out`, `stalled` and `queued` records, and `running` records whose recorded pids are all gone, do

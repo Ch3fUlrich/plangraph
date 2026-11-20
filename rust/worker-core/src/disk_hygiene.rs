@@ -13,7 +13,7 @@ pub struct Guards {
     pub pinned: Vec<PathBuf>,
     pub live: Vec<PathBuf>,
 }
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct Report {
     pub free_bytes: u64,
     pub alarm: bool,

@@ -20,6 +20,12 @@ from .private_io import atomic_write_private
 
 HOST_TIMEOUT = 120
 MAX_AGE = 600
+# Mirrors pg_worker_core::cargo_pool::DEFAULT_CARGO_TARGET_CAP_GB (a test pins both).
+DEFAULT_CARGO_TARGET_CAP_GB = 20
+
+
+def cargo_target_cap_gb():
+    return float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', str(DEFAULT_CARGO_TARGET_CAP_GB)))
 
 
 def shared_cargo_target():
@@ -91,11 +97,26 @@ def _safe_cache_dir(target, worktree):
                 cache.is_relative_to(checkout) or cache == Path.home().resolve())
 
 
+def _legacy_cache_roots():
+    """Per-user caches of earlier layouts, held under the same cap as the shared target."""
+    return [(Path.home() / rel).expanduser().absolute()
+            for rel in ('.cache/pg-target-po', '.cache/pg-target-warm')]
+
+
+def _pool_slot_roots(primary):
+    """Pool slots beside the primary target (`<primary>-pool/slot-N`), as created by cargo_pool."""
+    pool = primary.with_name(primary.name + '-pool')
+    try:
+        return sorted(p for p in pool.glob('slot-*')
+                      if p.is_dir() and not p.is_symlink() and '.' not in p.name)
+    except OSError:
+        return []
+
+
 def _shared_cache_roots():
     primary = shared_cargo_target()
     roots = [primary]
-    for rel in ('.cache/pg-target-po', '.cache/pg-target-warm'):
-        extra = (Path.home() / rel).expanduser().absolute()
+    for extra in _legacy_cache_roots() + _pool_slot_roots(primary):
         if extra not in roots:
             roots.append(extra)
     return roots
@@ -122,7 +143,7 @@ def _clean_single_cache(target, service, cap=None):
     return False
 
 
-def _cleanup_before_disk_refusal(worktree, service, cap):
+def _cleanup_before_disk_refusal(worktree, service):
     """Reclaim idle rebuildable build caches before refusing disk_low."""
     cleaned = False
     for root in _shared_cache_roots():
@@ -221,7 +242,7 @@ def capped_cargo_lease(worktree):
     if not _safe_cache_dir(target, worktree):
         raise ValueError('cargo_target_cap: unsafe cache directory')
     floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
-    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+    cap = cargo_target_cap_gb()
     if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
         raise ValueError('invalid disk limits')
     service = SimpleNamespace(ps=lambda: {'runs': []})
@@ -270,6 +291,25 @@ def _configured_work_drives(policy):
     return parsed
 
 
+def select_work_drive(drives, cleanup):
+    """The one drive decision: the first configured drive at or above its floor.
+
+    ``drives`` is ``[(path, floor_gb)]``. When none qualifies, ``cleanup`` runs once
+    and every drive is measured again. Returns ``(path, None)`` for the selected
+    drive, or ``(None, (free_gb, floor_gb))`` of the first drive when all stay low.
+    """
+    def pick():
+        return next((p for p, floor in drives if disk_free_gb(p) >= floor), None)
+    selected = pick()
+    if selected is None:
+        cleanup()
+        selected = pick()
+    if selected is not None:
+        return selected, None
+    first_path, first_floor = drives[0]
+    return None, (disk_free_gb(first_path), first_floor)
+
+
 def local_disk_refusal(worktree, service):
     """Check the worktree filesystem and bound the host's shared build cache."""
     # SettingsError derives from ValueError: validate before measurement's catch.
@@ -280,7 +320,7 @@ def local_disk_refusal(worktree, service):
         raise as_spawn_refused(exc) from None
     try:
         floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
-        cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+        cap = cargo_target_cap_gb()
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
         target = shared_cargo_target()
@@ -290,32 +330,29 @@ def local_disk_refusal(worktree, service):
         if size >= cap:
             if not _clean_single_cache(target, service, cap=cap):
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
-        # Hold legacy plan-order shared target under the same cap.
-        po_target = (Path.home() / '.cache/pg-target-po').expanduser().absolute()
-        if po_target != target and _safe_cache_dir(po_target, worktree) and cargo_target_size_gb(po_target) >= cap:
-            _clean_single_cache(po_target, service, cap=cap)
+        # Hold the legacy caches and the pool slots under the same cap.
+        for extra in _legacy_cache_roots() + _pool_slot_roots(target):
+            if extra != target and _safe_cache_dir(extra, worktree) and cargo_target_size_gb(extra) >= cap:
+                _clean_single_cache(extra, service, cap=cap)
         if cap == 0:
             return 'cargo_target_cap: cap 0 GB; no build capacity'
         drives = _configured_work_drives(policy)
         if drives:
-            ok_drives = [p for p, df in drives if disk_free_gb(p) >= df]
-            if not ok_drives:
-                _cleanup_before_disk_refusal(worktree, service, cap)
-                ok_drives = [p for p, df in drives if disk_free_gb(p) >= df]
-            if not ok_drives:
-                low_path, low_floor = drives[0]
-                free = disk_free_gb(low_path)
-                reason = f'disk_low: free {free:.2f} GB, floor {low_floor:g} GB'
-                _record_disk_floor_alarm(service, free, low_floor, reason)
-                return reason
-            return None
+            selected, low = select_work_drive(
+                drives, lambda: _cleanup_before_disk_refusal(worktree, service))
+            if selected is not None:
+                return None
+            free, low_floor = low
+            reason = f'disk_low: free {free:.2f} GB, floor {low_floor:g} GB'
+            _record_disk_floor_alarm(service, free, low_floor, reason)
+            return reason
         paths = [worktree, target]
         if getattr(service, 'state', None) is not None:
             paths.append(policy.get('worktree_root') or service.state / 'worktrees')
             paths.append(service.state / 'trees')
         free = min(disk_free_gb(p) for p in paths)
         if free < floor:
-            _cleanup_before_disk_refusal(worktree, service, cap)
+            _cleanup_before_disk_refusal(worktree, service)
             free = min(disk_free_gb(p) for p in paths)
             if free < floor:
                 reason = f'disk_low: free {free:.2f} GB, floor {floor:g} GB'

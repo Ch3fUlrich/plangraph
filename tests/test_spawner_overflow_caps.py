@@ -439,12 +439,104 @@ def test_disk_low_runs_cleanup_once_and_raises_floor_alarm(tmp_path, monkeypatch
     # When cleanup raises free space >= floor, admission succeeds without refusal.
     target.mkdir()
     (target / 'artifact').write_text('stale build')
-    def cleanup_frees(worktree, svc, cap):
+    def cleanup_frees(worktree, svc):
         free_values[0] = 6.0
         return True
     monkeypatch.setattr(h, '_cleanup_before_disk_refusal', cleanup_frees)
     free_values[0] = 4.0
     assert h.local_disk_refusal(tmp_path / 'checkout', service) is None
+
+
+def test_cleanup_touches_only_the_pinned_cache_roots(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    home = tmp_path / 'home'
+    real = home / '.cache/pg-target-po'
+    real.mkdir(parents=True)
+    (real / 'artifact').write_text('real host build state')
+    monkeypatch.setenv('HOME', str(home))
+    pinned = tmp_path / 'pinned-po'
+    pinned.mkdir()
+    (pinned / 'artifact').write_text('rebuildable')
+    monkeypatch.setattr(h, '_legacy_cache_roots', lambda: [pinned])
+    target = tmp_path / 'shared'
+    target.mkdir()
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 99)
+    service = SimpleNamespace(ps=lambda: {'runs': []})
+    assert h.local_disk_refusal(tmp_path / 'checkout', service) is None
+    assert not pinned.exists()
+    assert (real / 'artifact').read_text() == 'real host build state'
+
+
+def test_pool_slots_are_cache_roots_cleaned_over_the_cap(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    target = tmp_path / 'cache/cargo-target'
+    slot = tmp_path / 'cache/cargo-target-pool/slot-1'
+    for path in (target, slot):
+        path.mkdir(parents=True)
+        (path / 'artifact').write_text('x')
+    (tmp_path / 'cache/cargo-target-pool/slot-1.lease.json').write_text('{}')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    assert h._shared_cache_roots()[:1] == [target]
+    assert slot in h._shared_cache_roots()
+    assert not any(str(p).endswith('.lease.json') for p in h._shared_cache_roots())
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 13 if path == slot else 1)
+    assert h.local_disk_refusal(tmp_path / 'checkout', SimpleNamespace(ps=lambda: {'runs': []})) is None
+    assert not slot.exists() and (target / 'artifact').exists()
+
+
+def test_cap_default_is_one_value_shared_with_the_rust_pool(monkeypatch):
+    import re
+    from pathlib import Path
+    from plangraph.spawner import host_ready as h
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_CAP_GB', raising=False)
+    source = (Path(__file__).parents[1] / 'rust/worker-core/src/cargo_pool.rs').read_text()
+    rust = int(re.search(r'DEFAULT_CARGO_TARGET_CAP_GB: u64 = (\d+);', source).group(1))
+    assert h.cargo_target_cap_gb() == rust == h.DEFAULT_CARGO_TARGET_CAP_GB
+
+
+def _drive_state(monkeypatch, free):
+    from plangraph.spawner import host_ready as h
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: free[path])
+    return h
+
+
+def test_select_work_drive_cleans_once_then_picks_or_refuses(monkeypatch):
+    free = {'/d1': 4.0, '/d2': 4.5}
+    h = _drive_state(monkeypatch, free)
+    calls = []
+    def cleanup(freed=None):
+        calls.append(1)
+        free.update(freed or {})
+    drives = [('/d1', 5.0), ('/d2', 5.0)]
+    assert h.select_work_drive(drives, lambda: cleanup({'/d2': 6.0})) == ('/d2', None)
+    assert calls == [1]
+    free.update({'/d1': 4.0, '/d2': 4.5})
+    assert h.select_work_drive(drives, cleanup) == (None, (4.0, 5.0))
+    assert calls == [1, 1]
+    free.update({'/d1': 9.0})
+    assert h.select_work_drive(drives, lambda: pytest.fail('no cleanup needed')) == ('/d1', None)
+
+
+def test_local_work_drives_branch_admits_selected_drive_and_records_alarm(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    free = {'/d1': 4.0, '/d2': 8.0}
+    h = _drive_state(monkeypatch, free)
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps(
+        [{'path': '/d1', 'disk_floor_gb': 5}, {'path': '/d2', 'disk_floor_gb': 5}]))
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 0)
+    state = tmp_path / 'state'
+    service = SimpleNamespace(state=state, ps=lambda: {'runs': []})
+    assert h.local_disk_refusal(tmp_path / 'checkout', service) is None
+    free['/d2'] = 4.5
+    reason = h.local_disk_refusal(tmp_path / 'checkout', service)
+    assert reason == 'disk_low: free 4.00 GB, floor 5 GB'
+    assert json.loads((state / 'disk-hygiene.json').read_text())['alarm'] is True
 
 
 def test_remote_work_drives_selects_eligible_drive_or_overflows(tmp_path):

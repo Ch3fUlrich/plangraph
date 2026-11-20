@@ -187,6 +187,16 @@ def hermetic_writer_env(monkeypatch):
     ):
         monkeypatch.delenv(name, raising=False)
 
+@pytest.fixture(autouse=True)
+def hermetic_cargo_caches(monkeypatch, tmp_path_factory):
+    """Cache cleanup deletes whole directories: never let a test reach the host's real caches."""
+    from plangraph.spawner import host_ready
+    root = tmp_path_factory.mktemp('cargo-caches')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', os.environ.get(
+        'PLANGRAPH_CARGO_TARGET_DIR') or str(root / 'cargo-target'))
+    monkeypatch.setattr(host_ready, '_legacy_cache_roots',
+                        lambda: [root / 'pg-target-po', root / 'pg-target-warm'])
+
 @pytest.fixture
 def short_socket_dir():
     """Bound Unix sockets avoid pytest's long per-test directory names."""

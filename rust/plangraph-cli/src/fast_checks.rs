@@ -9,7 +9,7 @@ pub(super) type Result<T> = std::result::Result<T, String>;
 
 #[path = "fast_check_target.rs"]
 mod target;
-use target::{jail_binary, resolve_cargo_target};
+use target::{jail_binary, resolve_cargo_target, run_step};
 
 #[derive(Debug)]
 struct Step {
@@ -323,14 +323,13 @@ fn execute(args: &[String]) -> Result<()> {
                 .env("PG_JAIL", "off")
                 .env("PG_TEST_ALLOW_UNJAILED", "1");
         }
-        let status = command
+        command
             .args(&step.args[1..])
             .current_dir(&root)
             .env("FILESIZE_REQUIRE_BASE", &base)
             .env("NEWCODE_BASE", &base)
-            .env("CHANGELOG_BASE", &base)
-            .status()
-            .map_err(|e| e.to_string())?;
+            .env("CHANGELOG_BASE", &base);
+        let status = run_step(&mut command, &step.args[0], &target).map_err(|e| e.to_string())?;
         println!(
             "{} wall seconds: {:.3}",
             step.label,
