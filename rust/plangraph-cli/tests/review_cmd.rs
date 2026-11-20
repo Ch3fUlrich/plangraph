@@ -58,8 +58,8 @@ fn init_repo_with_origin() -> (TempDir, PathBuf, PathBuf, String) {
     git(&work, &["config", "user.name", "Test Bot"]);
     git(&work, &["config", "user.email", "test@example.com"]);
 
-    fs::write(work.join("README.md"), "seed\n").unwrap();
-    git(&work, &["add", "README.md"]);
+    fs::write(work.join("fixture-seed.txt"), "seed\n").unwrap();
+    git(&work, &["add", "fixture-seed.txt"]);
     git(&work, &["commit", "-m", "seed\n\nWriter: gemini run-0"]);
     git(&work, &["push", "-u", "origin", "main"]);
     let base_sha = git(&work, &["rev-parse", "HEAD"]);
@@ -207,8 +207,8 @@ fn stale_head_is_refused() {
     assert!(st.success());
     git(&other, &["config", "user.name", "Other"]);
     git(&other, &["config", "user.email", "other@example.com"]);
-    fs::write(other.join("README.md"), "ahead\n").unwrap();
-    git(&other, &["add", "README.md"]);
+    fs::write(other.join("fixture-seed.txt"), "ahead\n").unwrap();
+    git(&other, &["add", "fixture-seed.txt"]);
     git(&other, &["commit", "-m", "advance\n\nWriter: gpt run-2"]);
     git(&other, &["push", "origin", "main"]);
 
