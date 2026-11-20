@@ -123,12 +123,12 @@ fn publish(
         name.to_owned()
     };
     let target = dir.join(&file);
-    fs::hard_link(part, &target).map_err(|e| {
-        format!(
-            "{}: {e} (a dump of seq {seq} already exists for this minute)",
+    if target.exists() {
+        return Err(format!(
+            "{}: a dump of seq {seq} already exists for this minute",
             target.display()
-        )
-    })?;
+        ));
+    }
     let entry = ledger::Entry {
         stamp: names::stamp(now),
         seq,
@@ -137,11 +137,16 @@ fn publish(
         file,
         verified,
     };
-    if let Err(error) = ledger::append(dir, &entry) {
-        // Every dump file has a ledger line: do not leave an unrecorded archive behind.
-        let _ = fs::remove_file(&target);
-        return Err(format!("ledger: {error}; dump {} removed", entry.file));
-    }
+    // Ledger line first: an archive never gets a retention-eligible name without its
+    // record, whatever interrupts the run. (A line without a file is harmless.)
+    ledger::append(dir, &entry).map_err(|e| format!("ledger: {e}; dump not published"))?;
+    fs::hard_link(part, &target).map_err(|e| {
+        format!(
+            "{}: {e} (ledger line for {} has no file)",
+            target.display(),
+            entry.file
+        )
+    })?;
     Ok((entry, failure))
 }
 

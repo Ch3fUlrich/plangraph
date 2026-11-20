@@ -10,8 +10,8 @@ Install and run on the keeper host only; nothing here touches the live keeper be
 1. reads `max(seq)` of `keeper.events`;
 2. runs `pg_dump -Fc -n keeper` in `docker run postgres:17`, streaming it into `.keeper-schema-seq<SEQ>-<YYYYMMDDTHHMMZ>.dump.part` (created `0600`, never world-readable) and fsyncs it;
 3. with `--verify`, runs the restore test on that `.part` file **before it has any retention-eligible name**;
-4. publishes it by hard link, which refuses to overwrite: as `keeper-schema-seq<SEQ>-<stamp>.dump` when it passed (or verification was not asked), as `<name>.dump.unverified` when it failed. A failed run exits non-zero, writes a `verified=no` line and prunes **no verified dump**; only the newest 3 `.unverified` files are kept, for diagnosis, and they never count as backups;
-5. appends one line `<stamp> seq=<n> size=<bytes> sha256=<hex> verified=<yes|no|skipped> file=<name>` to `keeper-schema-ledger.txt` (mode `0600`; the ledger keeps its history when a dump is pruned; if the line cannot be written the published file is removed again, so no archive is unrecorded);
+4. appends one line `<stamp> seq=<n> size=<bytes> sha256=<hex> verified=<yes|no|skipped> file=<name>` to `keeper-schema-ledger.txt` (mode `0600`; the ledger keeps its history when a dump is pruned). The line comes **before** the archive gets its name, so an interrupted run never leaves an unrecorded `.dump` that could count toward retention (a line without a file is harmless);
+5. publishes the `.part` file by hard link, which refuses to overwrite: as `keeper-schema-seq<SEQ>-<stamp>.dump` when it passed (or verification was not asked), as `<name>.dump.unverified` when it failed. A failed run exits non-zero and prunes **no verified dump**; only the newest 3 `.unverified` files are kept, for diagnosis, and they never count as backups;
 6. keeps the newest `--keep` (default 14) verified dump files and deletes the rest; only names that fully match the dump pattern are ever deleted.
 
 A failed or empty dump leaves no file and no ledger line.

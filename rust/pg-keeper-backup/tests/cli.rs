@@ -126,11 +126,35 @@ fn restore_test_rejects_a_file_that_is_not_an_archive() {
     let good = tmp
         .path()
         .join("keeper-schema-seq19200-20261114T1535Z.dump");
-    std::fs::write(&good, "PGDMP-real-looking").unwrap();
+    std::fs::write(&good, "PGDMP seq=19200").unwrap();
     let ok = run(
         &["restore-test", "--file", good.to_str().unwrap()],
         &log,
         false,
     );
     assert!(ok.status.success(), "{}", text(&ok));
+}
+
+#[test]
+fn restore_test_rejects_an_archive_whose_content_is_older_than_its_name() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("docker.log");
+    let renamed = tmp
+        .path()
+        .join("keeper-schema-seq19200-20261114T1535Z.dump");
+    std::fs::write(&renamed, "PGDMP seq=18000").unwrap();
+    let out = run(
+        &["restore-test", "--file", renamed.to_str().unwrap()],
+        &log,
+        false,
+    );
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("below the dump name's seq 19200"),
+        "{}",
+        text(&out)
+    );
+    assert!(std::fs::read_to_string(&log)
+        .unwrap()
+        .contains("DROP DATABASE"));
 }

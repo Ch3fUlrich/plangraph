@@ -479,3 +479,18 @@ fn failed_restores_keep_only_three_quarantined_dumps_and_every_verified_one() {
         3
     );
 }
+
+#[test]
+fn a_ledger_failure_publishes_no_archive_under_a_dump_name() {
+    let dir = tempfile::tempdir().unwrap();
+    // A directory where the ledger file should be makes every append fail.
+    std::fs::create_dir(dir.path().join(ledger::LEDGER_NAME)).unwrap();
+    let err = run_dump(&Fake::new(19200), dir.path(), "keeper", 14, NOW, None)
+        .err()
+        .unwrap();
+    assert!(
+        err.contains("ledger") && err.contains("not published"),
+        "{err}"
+    );
+    assert_eq!(files(dir.path()), [ledger::LEDGER_NAME]);
+}
