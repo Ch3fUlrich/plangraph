@@ -106,6 +106,39 @@ def test_alerts_flags_repeated_refusals(w):
     assert refusals.get("demo:A", 0) >= 2
 
 
+def _refuse_twice(w, key="demo:A"):
+    for _ in range(2):
+        with pytest.raises(Refused):
+            w.store.claim(w.p("reader"), key)
+
+
+def test_alerts_drop_old_findings_and_refusals_into_history(w):
+    _refuse_twice(w)
+    w.store._finding("demo:A", "old_code", "old", w.store.now())
+    w.clock.advance(w.store.alert_window_s + 60)
+    w.store._finding("demo:A", "fresh_code", "fresh", w.store.now())
+    _refuse_twice(w, "demo:B")
+    alerts = w.store.alerts(w.p("reader"))
+    assert [f["code"] for f in alerts["findings"]] == ["fresh_code"]
+    assert {r["key"] for r in alerts["refusals"]} == {"demo:B"}
+    assert alerts["history"]["findings"] == 1
+    assert alerts["history"]["refusal_keys"] == 1
+    assert alerts["history"]["window_s"] == w.store.alert_window_s
+
+
+def test_alerts_drop_findings_and_refusals_of_done_items(w):
+    _refuse_twice(w)
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    to_done(w, "demo:A")
+    alerts = w.store.alerts(w.p("reader"))
+    assert not [f for f in alerts["findings"] if f["key"] == "demo:A"]
+    assert "demo:A" not in {r["key"] for r in alerts["refusals"]}
+    assert alerts["history"]["findings"] >= 1
+    assert alerts["history"]["refusal_keys"] >= 1
+    rows = w.conn.execute("SELECT COUNT(*) FROM audit_findings").fetchone()[0]
+    assert rows >= 1
+
+
 # ------------------------------------------------------------------ digest
 
 def test_digest_router_only(w):

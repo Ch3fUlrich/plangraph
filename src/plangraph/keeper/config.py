@@ -106,6 +106,7 @@ class Config:
         self.default_lease = self._positive_seconds(data, "default_lease", 7200)
         self.review_overdue_s = self._positive_seconds(data, "review_overdue_s", 4 * 3600)
         self.lease_warn_s = self._positive_seconds(data, "lease_warn_s", 15 * 60)
+        self.alert_window_s = self._positive_seconds(data, "alert_window_s", 7 * 86400)
         self.reap_interval = float(data.get("reap_interval", 60))
         # KEEPER-SNAPSHOT-PG: the snapshot file is rebuilt after writes go quiet for this long
         # (<= 0: synchronously after every write) and at most max_delay_s after a change.
