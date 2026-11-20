@@ -351,7 +351,8 @@ otherwise); evidence for an item an earlier op creates or moves is verified in
 the lock, and `close_on_decision` re-reads its batch and decision files in the
 lock as it always did.
 
-The router manages L1 apply grants with `POST /v1/grant_apply` and
+Grant rows compare principal and project names using binary collation in SQLite
+and Postgres. The router manages L1 apply grants with `POST /v1/grant_apply` and
 `POST /v1/revoke_apply` (both take `principal` and `project`). Set up site grants
 after deployment; nothing is granted by default. Grants apply only inside this
 atomic verb, to `create`, `edit`, `cancel`, `priority`, `add_evidence`,

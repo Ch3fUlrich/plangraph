@@ -322,7 +322,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(11, "placement rules", PLACEMENT_RULES_DDL),
               Migration(12, "host samples", HOST_SAMPLES_DDL),
               Migration(13, "alerts table", _V13),
-              Migration(14, "apply grants", APPLY_GRANTS_DDL))
+              Migration(14, "apply grants", APPLY_GRANTS_DDL.replace(
+                  'TEXT NOT NULL', 'TEXT COLLATE "C" NOT NULL')))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
