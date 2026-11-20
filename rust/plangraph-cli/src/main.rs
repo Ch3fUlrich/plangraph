@@ -12,6 +12,9 @@ fn run() -> i32 {
     if let Some(code) = plangraph_cli::watchers::cli(&args) {
         return code;
     }
+    if let Some(code) = plangraph_cli::wait_pid::cli(&args) {
+        return code;
+    }
     if let [command, path] = args.as_slice() {
         if command == "batch-merge-check" {
             return match plangraph_cli::batch_merge::run(std::path::Path::new(path)) {
@@ -82,7 +85,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | runner plan|install|check | feed --once [--dry-run] | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | runner plan|install|check | feed --once [--dry-run] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | --version"
             );
             return 2;
         }

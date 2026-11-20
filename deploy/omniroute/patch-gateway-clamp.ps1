@@ -76,9 +76,9 @@ if (Test-Path $McpBundle) {
 
 # --- 2. Gateway Next build (what the live gateway loads) --------------------
 # Remove the supportsThinking gate from the clamp, name-agnostic.
-$gatePattern = 'let ([A-Za-z0-9_$]+)=\(0,[A-Za-z0-9_$]+\.getResolvedModelCapabilities\)\([A-Za-z0-9_$]+\);if\(!0!==\1\.supportsThinking\)return null;'
+$gatePattern = '\blet ([A-Za-z0-9_$]+)=\(0,[A-Za-z0-9_$]+\.getResolvedModelCapabilities\)\([A-Za-z0-9_$]+\);if\(!0!==\1\.supportsThinking\)return null;'
 $gatewayFiles = Get-ChildItem $NextRoot -Recurse -Filter *.js -File -ErrorAction SilentlyContinue |
-    Select-String -Pattern $gatePattern -List
+    Select-String -Pattern $gatePattern -CaseSensitive -List
 $gatewayFiles = @($gatewayFiles)
 
 if ($gatewayFiles.Count -eq 0) {
@@ -100,7 +100,7 @@ if (Test-Path $McpBundle) {
     if (-not $m.Contains($Marker)) { Write-Host "  ! verify: mcp marker missing"; $ok = $false }
 }
 $left = Get-ChildItem $NextRoot -Recurse -Filter *.js -File -ErrorAction SilentlyContinue |
-    Select-String -Pattern $gatePattern -List
+    Select-String -Pattern $gatePattern -CaseSensitive -List
 if ($left) { Write-Host "  ! verify: $($left.Count) gateway file(s) still carry the gate"; $ok = $false }
 
 if ($ok) {

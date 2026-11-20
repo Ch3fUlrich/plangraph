@@ -199,7 +199,7 @@ non-read Bash execution still grants the same one-shot local retry.
 
 Recognised reads include ordinary git status/log/show/diff/rev-parse/ls-files,
 gh PR checks/view/list/status, gh run view/list, spawner ps/status/result and
-cat/head/tail/grep/rg/ls/stat/test/ps. Recognised mutations include file operations
+cat/head/tail/grep/rg/ls/stat/test/ps/pgrep. Recognised mutations include file operations
 (touch/mkdir/mv/cp/rm/install/tee), git writes, and output redirection. Unsupported
 shell syntax, variable expansion, aliases, heredocs and arbitrary custom checks
 are not a sandbox: they fail open rather than being guessed read-only. The
