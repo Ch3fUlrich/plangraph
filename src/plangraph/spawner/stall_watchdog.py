@@ -95,6 +95,10 @@ def status(findings):
 def _expire_queue(record, now):
     if record.get('status') not in ('queued', 'queue_claimed'):
         return record
+    from .exit_outcome import queue_stale_reason
+    stale = queue_stale_reason(record, ownerless=False)
+    if stale:
+        return dict(record, status='refused', reason='queue_owner_gone', error=stale, ended=now, exit_code=2)
     number = lambda value: type(value) in (int, float) and math.isfinite(value)
     deadline = record.get('queued_until')
     if deadline is None:

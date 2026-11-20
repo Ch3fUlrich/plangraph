@@ -415,6 +415,7 @@ def isolated_build_cache(tmp_path, monkeypatch):
     """Isolate disk and default RAM readings; admission tests override either seam."""
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path.with_name(tmp_path.name + '-cargo-target')))
     monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '0')
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '0')  # no real waiting for room in tests; wait tests set it
     from plangraph.spawner import seat_spawn, overflow
     default_memory, default_read = overflow.available_memory_mb, Path.read_text
     def guarded_memory():

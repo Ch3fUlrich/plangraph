@@ -157,6 +157,17 @@ counter (the flock'd file fleet-launch also draws from; `ROUTING_STATE_DIR` over
 every role. An explicit `<role>-NNNN` that is not the next host number is refused. See
 [spawner sessions](spawner-sessions.md).
 
+### Admission window and queued runs (LE-SPAWNER-QUEUE-STUCK-AFTER-FLOOR-CLEARS)
+
+A local spawn without room (memory floor, disk, or no admitting overflow host) is not left queued.
+The spawning process records a `queued` run (`owner_pid`, `queued_until`), re-checks admission every
+`PLANGRAPH_ADMISSION_POLL_S` seconds (default 15, at most 60) for `PLANGRAPH_ADMISSION_WAIT_S` seconds
+(default 120), and then either starts the run (the waiting record is removed), places it on an
+admitting overflow host, or ends it `refused` (exit code 2) with the admission reason. `spawner cancel`
+of a queued run writes `cancelled` and ends the wait. `ps` and `status` mark a `queued` record whose
+owner process is gone (or that has none, as records written before this change) with `stale: true` and
+`stale_reason`; the stall watchdog sweep ends such a record `refused` / `queue_owner_gone`.
+
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
 

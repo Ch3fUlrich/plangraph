@@ -109,7 +109,8 @@ def _read_result(service, run_id):
     """Local record read; asyncio.run only for a running remote native Codex run, so callers inside an event loop still work."""
     from .service import remote_native_running
     record = service.result(run_id)
-    return asyncio.run(service.refresh_result(run_id)) if remote_native_running(record) else record
+    from .exit_outcome import with_stale_queue
+    return asyncio.run(service.refresh_result(run_id)) if remote_native_running(record) else with_stale_queue(record)
 
 
 def main(argv=None):
