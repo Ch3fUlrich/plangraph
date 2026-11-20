@@ -318,7 +318,7 @@ def test_probe_many_selection_errors():
     from plangraph.spawner.leg_probe import probe_many
     with pytest.raises(ParameterRefused) as nothing:
         asyncio.run(probe_many(None, (), False))
-    assert str(nothing.value) == 'select --leg ID or --all-writers'
+    assert str(nothing.value) == 'select --leg ID, --all-writers or --all-reviewers'
     with pytest.raises(ParameterRefused) as unknown:
         asyncio.run(probe_many(None, 'zz/nope', False))
     assert str(unknown.value) == 'unknown legs: zz/nope'
@@ -397,3 +397,145 @@ def test_echoed_tool_output_is_not_a_harness_limit():
         assert harness_limit_line(1, '', text) is None
     assert harness_limit_line(0, '', 'error: usage limit reached') is None
     assert harness_limit_line(1, '', 'error: usage limit reached') == 'error: usage limit reached'
+
+
+def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_path, monkeypatch):
+    from plangraph.planner.legs import REVIEW_ORDER
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.routing_support import leg_state, resolver
+    from plangraph.spawner import leg_probe
+    from plangraph.spawner.service import SpawnService
+
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: None if name == 'pg-spawnd' else '/bin/' + name)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    failing = {'mimo/mimo-v2.6-pro'}
+    seen = []
+
+    class Runner:
+        state = tmp_path
+        leg_reader = store
+        _tasks = {}
+        jobs = {}
+
+        async def spawn(self, **kwargs):
+            seen.append((kwargs['model_or_combo'], kwargs['role'], kwargs['prompt']))
+            fail = kwargs['model_or_combo'] in failing
+            return SimpleNamespace(
+                job_id=f"j-{len(seen)}",
+                status='failed' if fail else 'completed',
+                exit_code=1 if fail else 0,
+                stdout='' if fail else 'OK',
+                stderr='simulated review failure' if fail else '',
+                events=[{'event': 'opencode_reasoning_exhausted'}] if fail else [],
+            )
+
+        async def cancel(self, job_id):
+            pass
+
+    runner = Runner()
+    first = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+    assert first['ok'] is False
+    assert [row['id'] for row in first['probes']] == list(REVIEW_ORDER)
+    assert all(role == 'review' and prompt == leg_probe.REVIEW_PROMPT for _, role, prompt in seen)
+    assert store.leg_status('mimo/mimo-v2.6-pro')['state'] == 'down'
+
+    card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
+    plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=store, catalog_rows=())
+    assert 'mimo-v2.6-pro' not in [leg.id for leg in plan.legs]
+    assert plan.legs[0].id == 'mimo-v2.6-flash'
+    assert any(s['leg'] == 'mimo-v2.6-pro' and s['reason'] == 'down' for s in plan.skipped)
+
+    # Shared LegAdapter must honor the stored down probe even when the gateway snapshot is healthy.
+    provider = SimpleNamespace(snapshot=lambda: {
+        'mimo': SimpleNamespace(available=True, stale=False),
+        'omniroute': SimpleNamespace(available=True, stale=False),
+        'console-deepseek': SimpleNamespace(available=True, stale=False),
+        'opencode-go': SimpleNamespace(available=True, stale=False),
+    })
+    from plangraph.planner.legs import routed_review_legs
+    served = tuple(leg.model for leg in routed_review_legs())
+    adapter = leg_state.LegAdapter(store, provider, lambda: served, enabled=True, clock=lambda: 0)
+    svc = SpawnService(runner=runner, state=tmp_path, leg_reader=adapter)
+    routed = svc.route(card, role='review', writer_families=('openai',), benchmark={})
+    assert 'mimo-v2.6-pro' not in [leg.id for leg in routed.legs]
+    assert routed.legs[0].id == 'mimo-v2.6-flash'
+
+    failing.clear()
+    recovered = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
+    assert recovered['ok'] is True
+    assert store.leg_status('mimo/mimo-v2.6-pro')['state'] == 'ok'
+    after = svc.route(card, role='review', writer_families=('openai',), benchmark={})
+    assert after.legs[0].id == 'mimo-v2.6-pro'
+
+
+def test_cli_probe_all_reviewers(tmp_path, monkeypatch, capsys):
+    import json
+    from plangraph.spawner import cli, leg_probe
+    calls = []
+
+    async def fake(runner, legs, all_writers, timeout, *, all_reviewers=False):
+        calls.append((legs, all_writers, timeout, all_reviewers))
+        return dict(ok=True, probes=[dict(id='mimo-v2.6-pro', ok=True, reason='', seconds=0.1)])
+
+    monkeypatch.setattr(leg_probe, 'probe_many', fake)
+    monkeypatch.setattr(cli, 'SpawnService', lambda **kw: SimpleNamespace(runner=SimpleNamespace()))
+    assert cli.main(['--state', str(tmp_path), 'probe', '--all-reviewers', '--json']) == 0
+    assert calls == [([], False, None, True)]
+    assert json.loads(capsys.readouterr().out)['ok'] is True
+
+
+def test_review_probe_flags_caller_repo_leak(tmp_path, monkeypatch):
+    from plangraph.spawner import leg_probe
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/' + name)
+    heads = iter([{'cwd': 'a', 'env': 'a'}, {'cwd': 'b', 'env': 'a'}])
+    monkeypatch.setattr(leg_probe, 'caller_heads', lambda: next(heads))
+
+    class Runner:
+        state = tmp_path
+        leg_reader = LegStateStore(tmp_path / 'legs.sqlite')
+        _tasks = {}
+        jobs = {}
+
+        async def spawn(self, **kwargs):
+            return SimpleNamespace(job_id='j', status='completed', exit_code=0, stdout='OK', stderr='', events=[])
+
+        async def cancel(self, job_id):
+            pass
+
+    leg = SimpleNamespace(model='mimo/mimo-v2.6-pro', harness='opencode', roles=('review',))
+    out = asyncio.run(leg_probe.probe(Runner(), leg, timeout_s=5, role='review'))
+    assert out['ok'] is False
+    assert out['reason'] == 'probe leaked into caller repo'
+
+
+def test_review_probe_coverage_equals_review_route(tmp_path, monkeypatch):
+    from plangraph.planner.legs import REVIEW_ORDER, routed_review_legs
+    from plangraph.planner.routing import plan_spawn
+    from plangraph.routing_support import resolver
+    monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
+    card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
+    plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=LegStateStore(tmp_path / 'l.sqlite'), catalog_rows=())
+    assert [leg.id for leg in plan.legs] == [leg.id for leg in routed_review_legs()] == list(REVIEW_ORDER)
+
+
+def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkeypatch):
+    from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_ORDER, leg_active
+    from plangraph.spawner import leg_probe
+    writer = next(leg for leg in DEFAULT_LEGS if 'implement' in leg.roles and leg_active(leg) and leg.id not in REVIEW_ORDER)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    roles = {}
+
+    async def fake_probe(runner, leg, *, timeout_s=None, store=None, role=None):
+        roles[leg.id] = role
+        if leg.id == writer.id:
+            store.record_probe_fail(leg_probe.key(leg), 'boom', 'leg-probe')
+        return dict(ok=leg.id != writer.id, reason='' if leg.id != writer.id else 'boom', seconds=0.0)
+
+    monkeypatch.setattr(leg_probe, 'probe', fake_probe)
+    monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
+    runner = SimpleNamespace(leg_reader=store, state=tmp_path)
+    asyncio.run(leg_probe.probe_many(runner, [writer.id], all_reviewers=True, timeout=5))
+    assert roles[writer.id] is None
+    assert all(roles[leg_id] == 'review' for leg_id in roles if leg_id != writer.id) and len(roles) > 1
+    assert store.leg_status(leg_probe.key(writer))['state'] != 'down'

@@ -219,37 +219,40 @@ class MessagesMixin:
 
     def messages(self, principal, **filters):
         """Read ordered rows using parameterized cursor and linkage filters."""
-        self._check_principal(principal)
-        allowed = {"trace_id", "key", "run_id", "ts_min", "ts_max", "since", "msg_id"}
-        if set(filters) - allowed:
-            raise Refused("validation", "unknown message filter")
-        clauses, params = [], []
-        for name, value in filters.items():
-            if name == "msg_id":
-                clauses.append('e.msg_id = ?')
+        def work(_now):
+            allowed = {"trace_id", "key", "run_id", "ts_min", "ts_max", "since", "msg_id"}
+            if set(filters) - allowed:
+                raise Refused("validation", "unknown message filter")
+            clauses, params = [], []
+            for name, value in filters.items():
+                if name == "msg_id":
+                    clauses.append('e.msg_id = ?')
+                    params.append(value)
+                    continue
+                column, op = {"ts_min": ("ts", ">="), "ts_max": ("ts", "<="),
+                              "since": ("seq", ">")}.get(name, (name, "="))
+                if name in {"ts_min", "ts_max", "since"}:
+                    try:
+                        value = int(value)
+                    except (TypeError, ValueError):
+                        raise Refused("validation", "invalid message cursor") from None
+                    if value < 0 or value > 2**63 - 1:
+                        raise Refused("validation", "invalid message cursor")
+                clauses.append(f'm."{column}" {op} ?')
                 params.append(value)
-                continue
-            column, op = {"ts_min": ("ts", ">="), "ts_max": ("ts", "<="),
-                          "since": ("seq", ">")}.get(name, (name, "="))
-            if name in {"ts_min", "ts_max", "since"}:
-                try:
-                    value = int(value)
-                except (TypeError, ValueError):
-                    raise Refused("validation", "invalid message cursor") from None
-                if value < 0 or value > 2**63 - 1:
-                    raise Refused("validation", "invalid message cursor")
-            clauses.append(f'm."{column}" {op} ?')
-            params.append(value)
-        sql = """
-            SELECT m.*, e.msg_id
-            FROM messages m
-            LEFT JOIN message_envelopes e ON m.seq = e.seq
-        """ + (" WHERE " + " AND ".join(clauses) if clauses else "")
-        rows = []
-        for record in self.conn.execute(sql + " ORDER BY m.seq LIMIT 1000", params).fetchall():
-            row = dict(record)
-            row["body"] = json.loads(row["body"])
-            if row.get("msg_id") is None:
-                row.pop("msg_id", None)
-            rows.append(row)
-        return rows
+            sql = """
+                SELECT m.*, e.msg_id
+                FROM messages m
+                LEFT JOIN message_envelopes e ON m.seq = e.seq
+            """ + (" WHERE " + " AND ".join(clauses) if clauses else "")
+            rows = []
+            for record in self.conn.execute(sql + " ORDER BY m.seq LIMIT 1000", params).fetchall():
+                row = dict(record)
+                row["body"] = json.loads(row["body"])
+                if row.get("msg_id") is None:
+                    row.pop("msg_id", None)
+                rows.append(row)
+            return rows
+
+        audit_key = filters.get("key") if isinstance(filters.get("key"), str) else None
+        return self._run(principal, "messages", audit_key, work)

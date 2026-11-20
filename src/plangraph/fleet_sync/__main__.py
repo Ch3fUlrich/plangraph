@@ -1,10 +1,43 @@
 """Fleet release, rollout, drift, production checkout checks and HEAD audit."""
 import argparse
 import json
+import os
+from pathlib import Path
+import shutil
 import subprocess
 import sys
 
 from . import advance, drift, genconfig, release
+
+
+def _host_sync_command():
+    for name in ('host-sync', 'plangraph'):
+        found = shutil.which(name)
+        if found:
+            return [found] if name == 'host-sync' else [found, 'host-sync']
+    roots = []
+    if os.environ.get('CARGO_TARGET_DIR'):
+        roots.append(Path(os.environ['CARGO_TARGET_DIR']))
+    roots.append(Path(__file__).resolve().parents[3] / 'rust/target')
+    for root in roots:
+        for profile in ('release', 'debug'):
+            for name in ('host-sync', 'plangraph'):
+                candidate = root / profile / name
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return [str(candidate)] if name == 'host-sync' else [str(candidate), 'host-sync']
+    return None
+
+
+def _run_host_sync(data_dir, bin_dir):
+    command = _host_sync_command()
+    if command is None:
+        print('FAIL host-sync: plangraph host-sync binary not found')
+        return 1
+    if data_dir:
+        command.extend(['--data-dir', data_dir])
+    if bin_dir:
+        command.extend(['--bin-dir', bin_dir])
+    return subprocess.run(command, check=False).returncode
 
 
 def main(argv=None):
@@ -30,8 +63,13 @@ def main(argv=None):
     check = commands.choices['check-checkout']
     check.add_argument('--default-branch')
     commands.choices['install-audit'].add_argument('--apply', action='store_true')
+    host_sync = commands.add_parser('host-sync')
+    host_sync.add_argument('--data-dir')
+    host_sync.add_argument('--bin-dir')
     args = parser.parse_args(argv)
     try:
+        if args.command == 'host-sync':
+            return _run_host_sync(args.data_dir, args.bin_dir)
         if args.command == 'check-checkout':
             send = drift.alert_sender()
             def notify(line):

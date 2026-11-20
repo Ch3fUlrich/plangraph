@@ -157,7 +157,7 @@ def test_installed_real_push(repo, tmp_path, monkeypatch, shape):
     content = {"home": "/" + "home/fixture/notes", "word": word, "id": "D-1234"}[shape]
     (repo / "note.txt").write_text(content + "\n")
     commit(repo)
-    result = subprocess.run(["git", "-C", str(repo), "push", "origin", "main"],
+    result = subprocess.run(["git", "-C", str(repo), "push", "origin", "HEAD:refs/heads/phase/scrub-check"],
                             capture_output=True, text=True)
     assert (result.returncode == 0) == (shape == "id"), result.stderr
     if shape != "id":

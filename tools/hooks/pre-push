@@ -399,9 +399,14 @@ def push_main():
               "(rule ids above; matched values are never shown)", file=sys.stderr)
         return 1
     if os.environ.get("PREFLIGHT_SKIP") == "1":
-        print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
-              file=sys.stderr)
-        return 0
+        if all(rec[2].startswith("refs/heads/phase/")
+               and len(rec[2]) > len("refs/heads/phase/") for rec in refs):
+            print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
+                  file=sys.stderr)
+            return 0
+        print("pre-push: PREFLIGHT_SKIP=1 is allowed only for refs/heads/phase/* "
+              "(D-5843): push refused", file=sys.stderr)
+        return 1
     # Prune deleted heads too: stale tracking refs cannot vouch for parts.
     fetched = refresh_origin()
     for _, local_sha, remote_ref, remote_sha in refs:

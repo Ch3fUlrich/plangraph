@@ -315,3 +315,118 @@ def test_xdg_config_does_not_require_home(isolated_config, monkeypatch):
     endpoint = 'https://gateway.invalid/v1'
     (isolated_config / 'omniroute-base-url').write_text(endpoint)
     assert clients.effective_gateway_base_url() == endpoint
+
+
+def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path, monkeypatch):
+    """CLI review run for mimo-v2.6-pro overrides direct root options/env and records served_family=mimo."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import os
+    import subprocess
+    import sys
+    from threading import Thread
+    from pathlib import Path
+    from plangraph.spawner import cli as spawner_cli
+
+    origin = tmp_path / 'origin.git'
+    subprocess.run(['git', 'init', '--bare', '-q', str(origin)], check=True)
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    git('init', '-q')
+    git('config', 'user.name', 'Test')
+    git('config', 'user.email', 'test@example.invalid')
+    (repo / 'f.txt').write_text('before\n')
+    git('add', 'f.txt')
+    git('commit', '-qm', 'base')
+    base = git('rev-parse', 'HEAD')
+    (repo / 'f.txt').write_text('after\n')
+    git('commit', '-qam', 'head')
+    head = git('rev-parse', 'HEAD')
+    git('remote', 'add', 'origin', str(origin))
+    git('push', '-q', 'origin', 'HEAD:refs/heads/main')
+
+    seen_tags = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            assert self.headers.get('Authorization') == 'Bearer fixture-mgmt-token'
+            from urllib.parse import parse_qs, urlsplit
+            tag = parse_qs(urlsplit(self.path).query).get('sessionTag', [''])[0]
+            seen_tags.append(tag)
+            body = json.dumps([{'sessionTag': tag, 'status': 200,
+                                'model': 'mimo-v2.6-pro', 'provider': 'xiaomi-mimo'}]).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(body)
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(('127.0.0.1', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        gw_url = f'http://127.0.0.1:{server.server_port}/v1'
+        providers_file = tmp_path / 'providers.json'
+        providers_file.write_text(json.dumps({'providers': {
+            'omniroute': {'env': ['AUTOOS_OMNIROUTE_KEY'],
+                          'settings': {'baseURL': '{env:PLANGRAPH_REVIEW_URL}'}},
+            'mimo': {'package': '@opencode/ai/providers/openai-compatible',
+                     'env': ['MIMO_API_KEY'],
+                     'options': {'baseURL': 'https://direct-mimo.invalid/v1'},
+                     'models': {'mimo-v2.6-pro': {'modelID': 'mimo/mimo-v2.6-pro',
+                                                  'limit': {'context': 1000000, 'output': 65536}}}},
+        }}))
+        bin_dir = tmp_path / 'bin'
+        bin_dir.mkdir()
+        captured_cfg = tmp_path / 'child_cfg.json'
+        opencode = bin_dir / 'opencode'
+        opencode.write_text(
+            f'#!{sys.executable}\n'
+            'import json, os, sys\n'
+            'from pathlib import Path\n'
+            'if sys.argv[1:] == ["models"]:\n'
+            '    print("mimo/mimo-v2.6-pro")\n'
+            '    raise SystemExit(0)\n'
+            f'Path({str(captured_cfg)!r}).write_text(os.environ.get("OPENCODE_CONFIG_CONTENT", "{{}}"))\n'
+            'sys.stdin.read()\n'
+            'print(json.dumps({"type": "text", "part": {"text": "TEST_GAMING: no\\nVERDICT: ACCEPT"}}))\n'
+            'print(json.dumps({"type": "step_finish", "part": {"reason": "stop", "tokens": {"output": 5, "reasoning": 0}}}))\n'
+        )
+        opencode.chmod(0o755)
+        monkeypatch.setenv('PATH', str(bin_dir) + os.pathsep + os.environ['PATH'])
+        monkeypatch.setenv('PLANGRAPH_GATEWAY_URL', gw_url)
+        monkeypatch.setenv('PLANGRAPH_PROVIDERS_FILE', str(providers_file))
+        monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', 'fixture-client-key')
+        monkeypatch.setenv(gw.TOKEN_ENV, 'fixture-mgmt-token')
+        monkeypatch.setenv('PLANGRAPH_OMNIROUTE_LEG_STATE', '0')
+        monkeypatch.setattr(spawner_cli, 'live_runner', lambda *_: False)
+
+        state = tmp_path / 'state'
+        card = json.dumps({'estimate_tokens': 100,
+                           'diff_ref': {'repo': str(repo), 'base': base, 'head': head}})
+        import io
+        buf = io.StringIO()
+        monkeypatch.setattr(sys, 'stdout', buf)
+        rc = spawner_cli.main([
+            '--state', str(state), 'spawn',
+            '--cwd', str(repo), '--card', card, '--role', 'review', '--writer-family', 'gpt',
+            '--leg', 'mimo-v2.6-pro', '--override-reason', 'cli mimo gateway witness test',
+            '--wait', '10', 'Review this change',
+        ])
+        assert rc == 0, buf.getvalue()
+        record = json.loads(buf.getvalue())
+        assert record['status'] == 'completed'
+        assert record['served_family'] == 'mimo'
+        assert record['served_model'] == 'mimo/mimo-v2.6-pro'
+        assert record['served_witness_reason'] == 'gateway call log (sessionTag) response-side model'
+        assert seen_tags
+        mimo_cfg = json.loads(captured_cfg.read_text())['providers']['mimo']
+        assert mimo_cfg['settings']['baseURL'] == gw_url
+        assert mimo_cfg['options']['baseURL'] == gw_url
+        assert mimo_cfg['env'] == ['AUTOOS_OMNIROUTE_KEY']
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

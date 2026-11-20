@@ -40,8 +40,10 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/pg-feeder.service",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
+    "src/plangraph/planner/measured_down.py",
     # D-6054: native/agy quota isolation regressions exercise these boundaries.
     "src/plangraph/planner/provider_stop.py",
+    "src/plangraph/planner/measured_down.py",
     "src/plangraph/routing_support/liveness.py",
     # D-6054: rendered OpenCode catalog integration-test inputs.
     "src/plangraph/planner/legs.py",

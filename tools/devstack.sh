@@ -77,6 +77,18 @@ wait_for() { # wait_for <seconds> <cmd...> — poll once per second until the co
   done
   return 1
 }
+wait_pid_exit() { # wait_pid_exit <pid> <timeout_s> — exact-pid wait via plangraph wait-pid when available
+  local pid="$1" limit="$2" i=0
+  if command -v plangraph >/dev/null 2>&1 && plangraph wait-pid --help >/dev/null 2>&1; then
+    plangraph wait-pid --pid "$pid" --timeout "$limit" >/dev/null 2>&1
+    return $?
+  fi
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt "$limit" ]; do
+    sleep 1
+    i=$((i + 1))
+  done
+  ! kill -0 "$pid" 2>/dev/null
+}
 docker_available() { command -v docker >/dev/null 2>&1; }
 pg_docker_up() {
   docker_available || return 1
@@ -262,15 +274,7 @@ start_temporal() {
   echo "temporal: not healthy within ${DEVSTACK_HEALTH_TIMEOUT} s; last log lines:" >&2
   tail -n 20 "$DEVSTACK_STATE/temporal.log" >&2 || true
   kill "$pid" 2>/dev/null || true
-  local g=0
-  while kill -0 "$pid" 2>/dev/null && [ "$g" -lt 3 ]; do
-    sleep 1
-    g=$((g + 1))
-  done
-  # Escalate only while the pid is still alive after the grace period.
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -9 "$pid" 2>/dev/null || true
-  fi
+  wait_pid_exit "$pid" 3 || kill -9 "$pid" 2>/dev/null || true
   rm -f "$DEVSTACK_STATE/temporal.pid"
   exit 1
 }
@@ -372,15 +376,7 @@ stop_pidfile() { # TERM, grace 10 s, then KILL; the pid file goes away either wa
     return 0
   fi
   kill "$pid" 2>/dev/null || true
-  local i=0
-  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 10 ]; do
-    sleep 1
-    i=$((i + 1))
-  done
-  # Only escalate when the pid is still alive: it may have exited and been reused.
-  if kill -0 "$pid" 2>/dev/null; then
-    kill -9 "$pid" 2>/dev/null || true
-  fi
+  wait_pid_exit "$pid" 10 || kill -9 "$pid" 2>/dev/null || true
   rm -f "$file"
 }
 

@@ -174,6 +174,7 @@ fn help() {
         vec!["probe", "-h"],
         vec!["serve", "--help"],
         vec!["shim", "-h"],
+        vec!["check-manage-key", "--help"],
     ] {
         let output = cli(&args);
         assert_eq!(output.status.code(), Some(0), "{args:?}");

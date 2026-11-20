@@ -97,17 +97,17 @@ def run_hook(repo, lines, env_extra=None):
     env["HOME"] = str(Path(repo).parent / "home")
     env.pop("PLANGRAPH_SCRUB_WORDS", None)
     env.pop("PLANGRAPH_SCRUB_RULES", None)
-    env["PREFLIGHT_SKIP"] = "1"  # Scrub/changelog fixtures, not preflight.
+    env.pop("PREFLIGHT_SKIP", None)
     env.update(env_extra or {})
     stdin = "".join(l + "\n" for l in lines)
     command = [sys.executable, str(HOOK), "origin", "https://example.invalid/r.git"]
     result = subprocess.run(command,
                           cwd=str(repo), input=stdin, capture_output=True, text=True,
                           env=env, timeout=120)
-    if result.returncode == 0:
+    if result.returncode == 0 and env.get("PREFLIGHT_SKIP") == "1":
         notice = "pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
         assert result.stderr.splitlines().count(notice) == 1
-    else:
+    elif result.returncode != 0:
         assert "tools/preflight.py missing" not in result.stderr
     return result
 
@@ -130,7 +130,7 @@ def push_line(ref, sha, remote_sha):
 def test_hook_refuses_pushed_public_pattern_hit(repo):
     r, base = repo
     head = commit_file(r, "app/net.py", f"url = \"{fake_ip()}\"\n")
-    res = run_hook(r, [push_line("main", head, base)])
+    res = run_hook(r, [push_line("topic", head, base)])
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
     assert "app/net.py:1: ipv4" in out
@@ -140,7 +140,7 @@ def test_hook_refuses_pushed_public_pattern_hit(repo):
 def test_hook_passes_a_clean_push(repo):
     r, base = repo
     head = commit_file(r, "app/other.py", "y = 2\n")
-    res = run_hook(r, [push_line("main", head, base)])
+    res = run_hook(r, [push_line("topic", head, base)])
     assert res.returncode == 0, res.stdout + res.stderr
 
 
@@ -148,7 +148,7 @@ def test_hook_refuses_a_type_change_into_a_home_path_symlink(repo):
     r, _ = repo
     remote = commit_file(r, "app/notes.txt", "plain file\n")
     head = commit_symlink(r, "app/notes.txt", "/home/" + "zoe/prod-notes.txt")
-    res = run_hook(r, [push_line("main", head, remote)])
+    res = run_hook(r, [push_line("topic", head, remote)])
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
     assert "app/notes.txt:0: symlink" in out
@@ -160,11 +160,11 @@ def test_type_change_to_an_in_repo_relative_symlink_matches_the_added_case(repo)
     addition are refused alike (scrub_check: a link target is never allow-listable)."""
     r, base = repo
     added = commit_symlink(r, "app/new_link.txt", "../clean.py")
-    res_add = run_hook(r, [push_line("main", added, base)])
+    res_add = run_hook(r, [push_line("topic", added, base)])
     out_add = res_add.stdout + res_add.stderr
     remote = commit_file(r, "app/old_notes.txt", "plain file\n")
     head = commit_symlink(r, "app/old_notes.txt", "../clean.py")
-    res_chg = run_hook(r, [push_line("main", head, remote)])
+    res_chg = run_hook(r, [push_line("topic", head, remote)])
     out_chg = res_chg.stdout + res_chg.stderr
     for res, out, rel in ((res_add, out_add, "app/new_link.txt"),
                           (res_chg, out_chg, "app/old_notes.txt")):
@@ -176,7 +176,7 @@ def test_type_change_to_an_in_repo_relative_symlink_matches_the_added_case(repo)
 def test_unset_scrub_words_is_graceful_with_notice(repo):
     r, base = repo
     head = commit_file(r, "app/third.py", "z = 3\n")
-    res = run_hook(r, [push_line("main", head, base)])
+    res = run_hook(r, [push_line("topic", head, base)])
     assert res.returncode == 0, res.stdout + res.stderr
     assert "Traceback" not in res.stderr
     notices = [l for l in res.stderr.splitlines() if "PLANGRAPH_SCRUB_WORDS" in l]
@@ -203,7 +203,7 @@ def test_words_file_from_env_refuses_without_echoing_the_word(repo, tmp_path):
     words = tmp_path / "words.txt"
     words.write_text(f"# comment\n{fake_word()}\n")
     head = commit_file(r, "app/plan.py", f"plan = \"{fake_word()}\"\n")
-    res = run_hook(r, [push_line("main", head, base)],
+    res = run_hook(r, [push_line("topic", head, base)],
                    env_extra={"PLANGRAPH_SCRUB_WORDS": str(words)})
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
@@ -219,7 +219,7 @@ def test_hook_applies_an_allow_value_so_the_push_passes(repo, tmp_path):
     rules = tmp_path / "rules.toml"
     rules.write_text(value_rules("app/data.json", "ipv4", fake_ip()))
     head = commit_file(r, "app/data.json", '{"ip": "' + fake_ip() + '"}\n')
-    res = run_hook(r, [push_line("main", head, base)],
+    res = run_hook(r, [push_line("topic", head, base)],
                    env_extra={"PLANGRAPH_SCRUB_RULES": str(rules)})
     out = res.stdout + res.stderr
     assert res.returncode == 0, out
@@ -232,7 +232,7 @@ def test_hook_refuses_when_a_second_value_on_the_line_is_not_allowed(repo, tmp_p
     rules.write_text(value_rules("app/data.json", "ipv4", fake_ip()))
     head = commit_file(r, "app/data.json",
                        '{"ips": ["' + fake_ip() + '", "' + fake_ip2() + '"]}\n')
-    res = run_hook(r, [push_line("main", head, base)],
+    res = run_hook(r, [push_line("topic", head, base)],
                    env_extra={"PLANGRAPH_SCRUB_RULES": str(rules)})
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
@@ -247,7 +247,7 @@ def test_hook_allow_value_is_bound_to_its_path(repo, tmp_path):
     rules = tmp_path / "rules.toml"
     rules.write_text(value_rules("app/data.json", "ipv4", fake_ip()))
     head = commit_file(r, "app/other.json", '{"ip": "' + fake_ip() + '"}\n')
-    res = run_hook(r, [push_line("main", head, base)],
+    res = run_hook(r, [push_line("topic", head, base)],
                    env_extra={"PLANGRAPH_SCRUB_RULES": str(rules)})
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
@@ -263,7 +263,7 @@ def test_hook_value_allows_a_path_level_private_word_hit(repo, tmp_path):
     words = tmp_path / "words.txt"
     words.write_text(fake_word() + "\n")
     head = commit_file(r, rel, "clean\n")
-    lines = [push_line("main", head, base)]
+    lines = [push_line("topic", head, base)]
 
     res = run_hook(r, lines, env_extra={"PLANGRAPH_SCRUB_WORDS": str(words)})
     out = res.stdout + res.stderr
@@ -310,14 +310,14 @@ def test_private_words_routing(repo, tmp_path, case):
     if case in ("group", "other"):
         words.chmod(0o640 if case == "group" else 0o604)
     head = commit_file(r, "app/plan.py", fake_word() + "\n")
-    res = run_hook(r, [push_line("main", head, base)], env)
+    res = run_hook(r, [push_line("topic", head, base)], env)
     out = res.stdout + res.stderr
     assert res.returncode == (0 if case in ("env-wins", "absent", "private") else 1), out
     assert fake_word() not in out and str(words) not in out
     if case == "env-wins":
         assert str(override) not in out
         head = commit_file(r, "app/plan.py", "syntheticreplacement\n")
-        res = run_hook(r, [push_line("main", head, base)], env)
+        res = run_hook(r, [push_line("topic", head, base)], env)
         assert res.returncode == 1
         assert "syntheticreplacement" not in res.stdout + res.stderr
     if case in ("group", "other"):
@@ -327,7 +327,7 @@ def test_private_words_routing(repo, tmp_path, case):
                     if "private-word rule is inactive" in line]) == 1
     if case in ("absent", "private"):
         head = commit_file(r, "app/net.py", fake_ip() + "\n")
-        res = run_hook(r, [push_line("main", head, base)], env)
+        res = run_hook(r, [push_line("topic", head, base)], env)
         assert res.returncode == 1
         assert "ipv4" in res.stdout + res.stderr
         assert fake_word() not in res.stdout + res.stderr
@@ -359,7 +359,7 @@ def test_nonlocal_private_marker_cannot_skip_private_words(repo, tmp_path, sourc
     if explicit:
         env["PLANGRAPH_SCRUB_WORDS"] = str(words)
     head = commit_file(r, "app/plan.py", fake_word() + "\n")
-    res = run_hook(r, [push_line("main", head, base)], env)
+    res = run_hook(r, [push_line("topic", head, base)], env)
     out = res.stdout + res.stderr
     assert res.returncode == 1, out
     assert "app/plan.py:1: private-word" in out
@@ -381,7 +381,7 @@ def test_ci_scrub_job_yaml_parses_and_calls_the_scrub():
 def test_prepush_runs_changelog_docs_warn_only(repo):
     r, base = repo
     head = commit_file(r, "app/feature.py", "x = 42\n")
-    res = run_hook(r, [push_line("main", head, base)])
+    res = run_hook(r, [push_line("topic", head, base)])
     out = res.stdout + res.stderr
     assert res.returncode == 0, out
     assert "check-changelog-docs: ok" in out

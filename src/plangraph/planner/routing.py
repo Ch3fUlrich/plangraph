@@ -259,9 +259,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Account/combo scope comes from the card and is never a wildcard.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, REVIEW_FALLBACK_LEGS, REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_SONNET
+    from .legs import REVIEW_ORDER, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_SONNET
     if native_review:
-        legs = (*legs, *REVIEW_FALLBACK_LEGS)
+        legs = review_route_pool(legs)
     check_route_targets(card, legs)
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:

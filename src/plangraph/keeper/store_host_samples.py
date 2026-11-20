@@ -119,7 +119,7 @@ class HostSamplesMixin:
 
     def _host_reader(self, principal, admin=False):
         self._host_pg()
-        if type(principal) is not auth.Principal or principal.role == 'system':
+        if type(principal) is not auth.Principal or principal.role in ('system', 'sweep'):
             raise Refused('forbidden', 'normal keeper principal required')
         self._check_principal(principal)
         if admin:

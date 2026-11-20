@@ -31,8 +31,10 @@ timeout or interruption, including nested worker sessions on Linux, then reaps
 git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
-`PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
-invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
+`PREFLIGHT_FAST=1` for its fast mode or, on `refs/heads/phase/*` pushes only
+(D-5843), `PREFLIGHT_SKIP=1` to bypass only that hook invocation (not the existing
+scrub/ref/file-size/commit gates or direct CLI runs; `PREFLIGHT_SKIP=1` on any
+other ref is refused). Private
 scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
 when neither is present, public rules still run but scrub reports SKIP with a reason.
 `PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.
@@ -99,7 +101,9 @@ these inputs select the Rust CI job through
 ## Setup and tests
 
 New devstack keeper configs require `PLANGRAPH_DECISIONS_REPO` naming a decisions
-checkout; existing valid configs are reused when it is unset. Explicit setup
+checkout; existing valid configs are reused when it is unset. Process waits in
+devstack and orchestrator scripts use `plangraph wait-pid` (exact PID or PID file,
+never `pgrep -f` pattern scans). Explicit setup
 adds missing `repos.decisions` at `origin/main` privately and preserves all existing values.
 See the [keeper install config](docs/RUNBOOK.md#1-init-and-config).
 
@@ -132,7 +136,7 @@ the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
 Rust review record assertions run on every platform; keeper-backed assertions run only on Unix because the keeper imports POSIX `fcntl`.
-Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well. `rust/plangraph-cli/src/runner/config.rs` tests parse `docs/operations/ci-runners.example.toml`, which is a `RUST_INPUTS` entry too.
+Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/measured_down.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well. `rust/plangraph-cli/src/runner/config.rs` tests parse `docs/operations/ci-runners.example.toml`, which is a `RUST_INPUTS` entry too.
 
 CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 `RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
@@ -504,7 +508,8 @@ Both pytest CI jobs validate collection once without `PYTEST_SHARD` on shard 0, 
 affected selection or the full push/nightly suite. Empty individual shards remain
 valid; a nonempty file selection that collects no tests fails the job. Local
 preflight timeouts terminate the selector and its pytest descendants. Missing
-`tools/preflight.py` refuses pushes to main unless `PREFLIGHT_SKIP=1` is explicit.
+`tools/preflight.py` refuses pushes to main; `PREFLIGHT_SKIP=1` is allowed only when
+every pushed ref is `refs/heads/phase/*` (D-5843) and is refused on all other refs.
 Topic and tag pushes without preflight still run the scrub, ref and file-size gates.
 
 The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy

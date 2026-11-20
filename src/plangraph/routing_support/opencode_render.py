@@ -105,6 +105,7 @@ def _mimo_template() -> dict[str, Any]:
                 "modelID": mid,
                 "name": f"Xiaomi MiMo v2.6 {'Pro' if 'pro' in mid else 'Flash'}",
                 "limit": {"context": 1000000, "output": 65536},
+                "body": {"reasoning": {"max_tokens": 32768}},
             }
             for mid in ACCEPTED_MIMO_IDS
         },
@@ -171,42 +172,70 @@ def render_gateway_providers(
     # Read the parsed config directly: no clients import or eager fallback call.
     omniroute = providers.get("omniroute")
     child_settings = omniroute.get("settings") if isinstance(omniroute, dict) else None
+    child_options = omniroute.get("options") if isinstance(omniroute, dict) else None
     resolved_url = None
     for cand in (
         child_settings.get("baseURL") if isinstance(child_settings, dict) else None,
         env.get("OMNIROUTE_BASE_URL"),
         env.get("PLANGRAPH_GATEWAY_URL"),
         env.get("AUTOOS_OMNIROUTE_URL"),  # transitional: drop with AO-SPAWNER-REMOVE (D-2800)
+        child_options.get("baseURL") if isinstance(child_options, dict) else None,
     ):
         if isinstance(cand, str) and cand.strip() and _is_valid_url(cand):
             resolved_url = _normalize_gateway_url(cand)
             break
 
-    # Step 5: Fill missing env on gateway providers
-    for p_name, p_val in providers.items():
-        if isinstance(p_val, dict):
-            if p_name in ("mimo", "omniroute") or GATEWAY_KEY_NAME in _env_names(p_val):
-                if not isinstance(p_val.get("env"), list):
+    containers = [providers]
+    singular = config.get("provider")
+    if isinstance(singular, dict):
+        containers.append(singular)
+
+    # Step 5: Fill missing env on gateway providers (and gateway auth when routed via gateway)
+    for container in containers:
+        for p_name, p_val in container.items():
+            if isinstance(p_val, dict):
+                is_gateway = p_name in ("mimo", "omniroute") or GATEWAY_KEY_NAME in _env_names(p_val)
+                if not is_gateway:
+                    continue
+                if not isinstance(p_val.get("env"), list) or (
+                    resolved_url
+                    and p_name in ("mimo", "omniroute")
+                    and GATEWAY_KEY_NAME not in _env_names(p_val)
+                ):
                     p_val["env"] = [GATEWAY_KEY_NAME]
 
     if resolved_url:
-        for p_val in providers.values():
-            if isinstance(p_val, dict) and GATEWAY_KEY_NAME in _env_names(p_val):
-                settings = p_val.setdefault("settings", {})
-                if isinstance(settings, dict):
-                    settings["baseURL"] = resolved_url
+        for container in containers:
+            for p_name, p_val in container.items():
+                if isinstance(p_val, dict) and (
+                    p_name in ("mimo", "omniroute") or GATEWAY_KEY_NAME in _env_names(p_val)
+                ):
+                    settings = p_val.setdefault("settings", {})
+                    if isinstance(settings, dict):
+                        settings["baseURL"] = resolved_url
+                    options = p_val.get("options")
+                    if isinstance(options, dict) and "baseURL" in options:
+                        options["baseURL"] = resolved_url
     else:
         active_block = providers.get(provider_prefix)
-        existing = (
-            active_block.get("settings", {}).get("baseURL")
-            if isinstance(active_block, dict) and isinstance(active_block.get("settings"), dict)
-            else None
-        )
+        if not isinstance(active_block, dict) and isinstance(singular, dict):
+            active_block = singular.get(provider_prefix)
+        existing = None
+        if isinstance(active_block, dict):
+            for section_name in ("settings", "options"):
+                section = active_block.get(section_name)
+                if isinstance(section, dict) and isinstance(section.get("baseURL"), str):
+                    existing = section["baseURL"]
+                    break
         if not (isinstance(existing, str) and existing.strip()
                 and "{env:" not in existing and _is_valid_url(existing)):
             return REFUSAL_UNRESOLVED
         # The /v1 rule applies to a root-supplied URL exactly as to an override.
-        active_block["settings"]["baseURL"] = _normalize_gateway_url(existing)
+        normalized = _normalize_gateway_url(existing)
+        for section_name in ("settings", "options"):
+            section = active_block.get(section_name)
+            if isinstance(section, dict) and "baseURL" in section:
+                section["baseURL"] = normalized
 
     # D-5066: a silent gateway must not consume the seat's 25-minute cap.
     # Headers alone do not guarantee a first token: also bound silent SSE gaps.

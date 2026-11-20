@@ -106,7 +106,7 @@ def test_push_revision_expression_uses_installed_hook(
     remote = tmp_path / "remote.git"
     git(r, "init", "--bare", str(remote))
     if not new_branch:
-        git(r, "push", str(remote), f"{base}:refs/heads/main")
+        git(r, "push", str(remote), f"{base}:refs/heads/topic")
     head = commit_file(r, "app/next.py", "next = 2\n")
     if source == "HEAD~1":
         commit_file(r, "app/later.py", "later = 3\n")
@@ -123,13 +123,13 @@ def test_push_revision_expression_uses_installed_hook(
     git(r, "config", "core.hooksPath", str(hooks))
     # Like run_hook(), isolate ref-safety coverage from preflight: this tiny
     # repository deliberately has no tools/preflight.py or project toolchain.
-    monkeypatch.setenv("PREFLIGHT_SKIP", "1")
+    monkeypatch.delenv("PREFLIGHT_SKIP", raising=False)
     try:
-        git(r, "push", str(remote), f"{source}:refs/heads/main")
+        git(r, "push", str(remote), f"{source}:refs/heads/topic")
     except subprocess.CalledProcessError as exc:
         pytest.fail(f"installed pre-push hook refused the push:\n{exc.stderr}")
     assert marker.exists(), "Git must invoke the installed pre-push hook"
-    assert git(remote, "rev-parse", "refs/heads/main").strip() == head
+    assert git(remote, "rev-parse", "refs/heads/topic").strip() == head
 
 
 def test_hook_refuses_lightweight_tag_fast_forward(repo):
@@ -437,3 +437,78 @@ def test_incremental_batch_preserves_published_part_overlap(repo, tmp_path, monk
         capture_output=True, text=True, check=True)
     assert json.loads(result.stdout)['tests'] == ['tests/test_shared.py']
     assert 'mode=normal' in result.stderr
+
+
+def _install_marker_preflight(r, marker):
+    (r / "tools").mkdir(parents=True, exist_ok=True)
+    (r / "tools/preflight.py").write_text(
+        "import os\nfrom pathlib import Path\n"
+        "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text('ran')\n"
+    )
+    return {"TEST_PREFLIGHT_MARKER": str(marker)}
+
+
+@pytest.mark.parametrize("ref,allowed", [
+    ("phase/x", True),
+    ("phase/nested/y", True),
+    ("feat/x", False),
+    ("lane/x", False),
+    ("main", False),
+    ("phase-x", False),
+])
+def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref, allowed):
+    r, base = repo
+    head = commit_file(r, "app/clean_change.py", "clean = 1\n")
+    marker = tmp_path / "preflight-ran"
+    env = _install_marker_preflight(r, marker)
+    env["PREFLIGHT_SKIP"] = "1"
+    res = run_hook(r, [push_line(ref, head, base)], env)
+    out = res.stdout + res.stderr
+    assert not marker.exists(), "PREFLIGHT_SKIP=1 must never invoke preflight"
+    if allowed:
+        assert res.returncode == 0, out
+        assert ("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
+                in res.stderr)
+    else:
+        assert res.returncode == 1, out
+        assert "D-5843" in res.stderr
+
+
+def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
+    r, base = repo
+    clean_head = commit_file(r, "app/clean_change.py", "clean = 1\n")
+    marker = tmp_path / "preflight-ran"
+    env = _install_marker_preflight(r, marker)
+    # Mixed batch (phase + non-phase) refuses PREFLIGHT_SKIP=1 with D-5843.
+    mixed = run_hook(
+        r,
+        [push_line("phase/x", clean_head, base), push_line("feat/x", clean_head, base)],
+        {**env, "PREFLIGHT_SKIP": "1"},
+    )
+    assert mixed.returncode == 1, mixed.stdout + mixed.stderr
+    assert "D-5843" in mixed.stderr
+    assert not marker.exists()
+    # Non-branch ref refuses PREFLIGHT_SKIP=1 with D-5843.
+    tag_push = run_hook(
+        r,
+        [f"HEAD {clean_head} refs/tags/v1 {ZERO}"],
+        {**env, "PREFLIGHT_SKIP": "1"},
+    )
+    assert tag_push.returncode == 1, tag_push.stdout + tag_push.stderr
+    assert "D-5843" in tag_push.stderr
+    assert not marker.exists()
+    # Without PREFLIGHT_SKIP, non-phase ref runs preflight.
+    normal = run_hook(r, [push_line("feat/x", clean_head, base)], env)
+    assert normal.returncode == 0, normal.stdout + normal.stderr
+    assert marker.exists(), "normal push on feat/x must run preflight"
+    marker.unlink()
+    # On phase/*, PREFLIGHT_SKIP=1 still runs the other gates (e.g. scrub).
+    dirty_head = commit_file(r, "app/leak.py", f'peer = "{fake_ip()}"\n')
+    dirty = run_hook(
+        r,
+        [push_line("phase/x", dirty_head, clean_head)],
+        {**env, "PREFLIGHT_SKIP": "1"},
+    )
+    assert dirty.returncode == 1, dirty.stdout + dirty.stderr
+    assert "app/leak.py:1: ipv4" in dirty.stdout + dirty.stderr
+    assert not marker.exists()

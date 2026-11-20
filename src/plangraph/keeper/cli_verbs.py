@@ -384,8 +384,8 @@ def cmd_sweep_claims(args, session):
             raise ValueError("empty sweep state path")
         state = Path(state_value)
         who = session.call("GET", "whoami")
-        if who.get("role") != "router" or who.get("projects") != []:
-            raise ValueError("sweep claims needs an unscoped router token")
+        if who.get("role") not in ("router", "sweep") or who.get("projects") != []:
+            raise ValueError("sweep claims needs an unscoped sweep or router token")
         snap = session.call("GET", "snapshot")
         if not isinstance(snap.get("items"), list) or "filter" in snap or type(snap.get("head_seq")) is not int:
             raise ValueError("incomplete snapshot")

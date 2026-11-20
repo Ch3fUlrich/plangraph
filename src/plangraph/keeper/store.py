@@ -213,6 +213,8 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                 oversight_policy.check_action(action)
             else:
                 self._check_principal(principal)
+                from .api_routes import check_sweep
+                check_sweep(principal, action)
             result = fn(now)
         except Refused as exc:
             self._audit(principal, action, key, False, exc.code, exc.msg, now)

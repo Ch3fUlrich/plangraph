@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|health|agents-view|ledger-report> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|health|agents-view|ledger-report|check-manage-key> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -142,6 +142,9 @@ pub(crate) fn execute(
     }
     if verb.as_deref() == Some("health") {
         return crate::health_cli::execute(rest, out);
+    }
+    if verb.as_deref() == Some("check-manage-key") {
+        return crate::manage_key_alert::execute(rest, out);
     }
     if matches!(verb.as_deref(), Some("probe" | "serve" | "shim"))
         && rest.first().is_some_and(|arg| is_help(arg))

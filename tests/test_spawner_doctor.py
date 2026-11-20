@@ -338,7 +338,7 @@ def test_aggregate_exit_and_independence(isolated, monkeypatch, capsys, mode):
 def test_opt_in_probe(isolated, monkeypatch, capsys, answer):
     from plangraph.spawner import leg_probe
     calls = []
-    async def probe(runner, legs):
+    async def probe(runner, legs, *, role=None):
         calls.append(legs)
         return dict(probes=[dict(id=leg, ok=answer and i == 1,
             reason='Free usage limit reached' if i == 0 else 'Model unavailable')
@@ -398,3 +398,52 @@ def test_real_service_review_family(isolated, monkeypatch):
     result = run(d.diagnose())
     assert result['ok'], result
     assert seen
+
+
+def test_doctor_probe_passes_review_role(isolated, monkeypatch):
+    from plangraph.spawner import leg_probe
+    calls = []
+
+    async def probe(runner, legs, *, role=None):
+        calls.append((legs, role))
+        return dict(probes=[dict(id=leg, ok=True, reason='') for leg in legs])
+
+    monkeypatch.setattr(leg_probe, 'probe_many', probe)
+    result = run(d.diagnose(probe=True))
+    assert result['ok'], result
+    assert calls == [(calls[0][0], None), (calls[1][0], 'review')]
+
+
+def test_review_probe_systemd_units():
+    import configparser
+    import shlex
+    units = Path(__file__).resolve().parents[1] / 'deploy' / 'systemd'
+    svc_path = units / 'plangraph-review-probe.service'
+    tim_path = units / 'plangraph-review-probe.timer'
+    assert svc_path.is_file() and tim_path.is_file()
+    for path in (svc_path, tim_path):
+        text = path.read_text(encoding='utf-8')
+        assert '/home/' not in text and '/Users/' not in text
+    svc = configparser.ConfigParser(strict=False, interpolation=None)
+    svc.optionxform = str
+    svc.read_string(svc_path.read_text(encoding='utf-8'))
+    assert svc.get('Service', 'Type') == 'oneshot'
+    assert not svc.has_section('Install')
+    assert svc.get('Service', 'ExecStartPre') == '-%h/.local/bin/pg-spawnd check-manage-key --state %S/plangraph --json'
+    assert shlex.split(svc.get('Service', 'ExecStart')) == [
+        '/usr/bin/python3', '-m', 'plangraph.spawner.cli', '--state', '%S/plangraph', 'probe', '--all-reviewers', '--timeout', '120', '--json',
+    ]
+    from plangraph.planner.legs import REVIEW_ORDER
+    exec_args = shlex.split(svc.get('Service', 'ExecStart'))
+    per_leg = int(exec_args[exec_args.index('--timeout') + 1])
+    start_timeout = svc.get('Service', 'TimeoutStartSec')
+    assert start_timeout.endswith('min')
+    assert int(start_timeout[:-3]) * 60 >= len(REVIEW_ORDER) * per_leg + 30
+    tim = configparser.ConfigParser(strict=False, interpolation=None)
+    tim.optionxform = str
+    tim.read_string(tim_path.read_text(encoding='utf-8'))
+    assert tim.get('Timer', 'Unit') == 'plangraph-review-probe.service'
+    assert tim.get('Timer', 'Persistent') == 'true'
+    assert tim.get('Install', 'WantedBy') == 'timers.target'
+    readme = (units / 'README.md').read_text(encoding='utf-8')
+    assert 'plangraph-review-probe.service' in readme

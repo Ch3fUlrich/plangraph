@@ -348,7 +348,17 @@ fn read_command(c: &[String]) -> bool {
                 ..
             ]
             | [
-                "cat" | "head" | "tail" | "grep" | "rg" | "ls" | "stat" | "test" | "[" | "ps",
+                "cat"
+                    | "head"
+                    | "tail"
+                    | "grep"
+                    | "rg"
+                    | "ls"
+                    | "stat"
+                    | "test"
+                    | "["
+                    | "ps"
+                    | "pgrep",
                 ..
             ]
     )

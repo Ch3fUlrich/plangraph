@@ -266,3 +266,27 @@ def test_hosts_example_demonstrates_remote_ssh_target(tmp_path, monkeypatch):
     registry = json.loads((ROOT / 'docs/schemas/examples/hosts.example.json').read_text())
     assert any(h.get('ssh_target') for h in registry['hosts'] if h['transport'] == 'ssh')
     assert all('ssh_target' not in h for h in registry['hosts'] if h['transport'] == 'local')
+
+
+def test_fleet_sync_host_sync_delegates_and_fails_when_missing(tmp_path, monkeypatch, capsys):
+    import sys
+    from plangraph.fleet_sync.__main__ import main
+
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    fake = bin_dir / 'host-sync'
+    log = tmp_path / 'argv.json'
+    fake.write_text(f'#!{sys.executable}\nimport json, sys\n'
+                    f'open({str(log)!r}, "w").write(json.dumps(sys.argv[1:]))\n')
+    fake.chmod(0o755)
+    monkeypatch.setenv('PATH', str(bin_dir))
+    assert main(['host-sync', '--data-dir', str(tmp_path / 'data'),
+                 '--bin-dir', str(bin_dir)]) == 0
+    assert json.loads(log.read_text()) == [
+        '--data-dir', str(tmp_path / 'data'), '--bin-dir', str(bin_dir)]
+
+    monkeypatch.setenv('PATH', '')
+    monkeypatch.setenv('CARGO_TARGET_DIR', str(tmp_path / 'no-target'))
+    monkeypatch.setattr('plangraph.fleet_sync.__main__.Path', lambda *a: tmp_path / 'missing')
+    assert main(['host-sync']) == 1
+    assert 'FAIL host-sync:' in capsys.readouterr().out

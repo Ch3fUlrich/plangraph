@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import threading
@@ -21,8 +22,9 @@ qwen-clamp-reapply-README.md qwen-clamp-reapply.ps1 reason-fix-README.md
 reason-fix-reapply.ps1 reasoning-defense.md verify-clamp.mjs vertex-failover-knobs.json
 vertex-trailing-turn-README.md'''.split()
 CHANGED = set('''apply-capability-overrides.ps1 apply-custom-models.sh apply.ps1 apply.sh
-qwen-clamp-reapply-README.md qwen-clamp-reapply.ps1 reason-fix-README.md reason-fix-reapply.ps1
-reasoning-defense.md verify-clamp.mjs live/server-combos.json vertex-failover-knobs.json'''.split())
+patch-gateway-clamp.ps1 qwen-clamp-reapply-README.md qwen-clamp-reapply.ps1
+reason-fix-README.md reason-fix-reapply.ps1 reasoning-defense.md verify-clamp.mjs
+live/server-combos.json vertex-failover-knobs.json'''.split())
 
 
 @pytest.mark.parametrize('name', ['apply.sh', 'apply-custom-models.sh'])
@@ -171,3 +173,34 @@ def test_export_api(tmp_path):
         server.shutdown()
         thread.join()
         server.server_close()
+
+
+def _select_string_violations(text):
+    violations = []
+    patterns = dict(re.findall(r"(\$[A-Za-z0-9_]+)\s*=\s*'([^']+)'", text))
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if not re.search(r'\bSelect-String\b', line, re.IGNORECASE):
+            continue
+        if '-CaseSensitive' not in line:
+            violations.append(f'line {lineno}: missing -CaseSensitive')
+        match = re.search(r"-Pattern\s+('([^']+)'|\$[A-Za-z0-9_]+)", line)
+        if not match:
+            violations.append(f'line {lineno}: missing -Pattern')
+            continue
+        raw = match.group(1)
+        pattern = match.group(2) if raw.startswith("'") else patterns.get(raw, '')
+        if not any(anchor in pattern for anchor in ('^', r'\b', r'\A')):
+            violations.append(f'line {lineno}: unanchored Select-String pattern {pattern!r}')
+    return violations
+
+
+def test_select_string_case_sensitive_and_anchored():
+    clamp = (HOME / 'patch-gateway-clamp.ps1').read_text()
+    assert clamp.count('Select-String') == 2
+    assert _select_string_violations(clamp) == []
+    assert _select_string_violations(clamp.replace(' -CaseSensitive', ''))
+    assert _select_string_violations(clamp.replace(r'\blet ', 'let '))
+
+    for directory in (ROOT / 'deploy', ROOT / 'tools'):
+        for path in sorted(directory.rglob('*.ps1')):
+            assert _select_string_violations(path.read_text()) == [], str(path)
