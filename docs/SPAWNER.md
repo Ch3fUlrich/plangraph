@@ -148,7 +148,7 @@ credential ID. This selection also applies to mixed legacy/v2 stores. A failed q
 `no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
-Moved to [spawner doctor host source checks](operations/spawner-doctor.md).
+Moved to [doctor checks](operations/spawner-doctor.md); session names, admission window: [queue](operations/spawner-admission-queue.md).
 
 ## Land on a GO row
 

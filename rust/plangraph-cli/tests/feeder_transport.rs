@@ -83,19 +83,25 @@ fn feeder_unit_keeps_asynchronous_children_after_oneshot_exit() {
 
 #[test]
 fn early_admission_queue_retains_identity_host_role_and_start_time() {
+    // The waiting record is saved through the service: the double keeps what it was asked to save.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
         .parent()
         .unwrap();
     let out=Command::new(if cfg!(windows){"python"}else{"python3"}).current_dir(root).env("PYTHONPATH",root.join("src"))
-        .args(["-c",r#"import json
+        .args(["-c",r#"import json, os
 from types import SimpleNamespace
 from unittest.mock import patch
 from plangraph.spawner import seat_spawn, overflow, host_ready
-service=SimpleNamespace(runner=SimpleNamespace(default_cwd='.'))
+saved,store=[],{}
+def save(record):
+    saved.append(dict(record)); store[record['run_id']]=dict(record)
+service=SimpleNamespace(runner=SimpleNamespace(default_cwd='.'),_save=save,result=lambda run_id: store[run_id])
+os.environ.update(PLANGRAPH_ADMISSION_WAIT_S='0.5',PLANGRAPH_ADMISSION_POLL_S='0.01')
 with patch.object(overflow,'registry_caps',return_value={'self':'dell','hosts':[]}), patch.object(overflow,'placement_policy',return_value=('dell',False)), patch.object(overflow,'local_limits',return_value=(3000,2048)), patch.object(seat_spawn,'resources',return_value=(0,100)), patch.object(host_ready,'local_disk_refusal',return_value=None), patch.object(overflow,'ready_records',return_value={}), patch.object(overflow,'repos_public',return_value=False), patch.object(overflow,'decide',return_value=overflow.Decision(None,'low memory')):
-    print(json.dumps(seat_spawn.admit(service,{'role':'implement'},card={'item_key':'plangraph:QUEUE-TEST','repo':'.'})))
+    final=seat_spawn.admit(service,{'role':'implement'},card={'item_key':'plangraph:QUEUE-TEST','repo':'.'})
+    print(json.dumps(dict(saved[0],final=final)))
 "#]).output().unwrap();
     assert!(
         out.status.success(),
@@ -108,4 +114,11 @@ with patch.object(overflow,'registry_caps',return_value={'self':'dell','hosts':[
     assert_eq!(row["host"], "dell");
     assert_eq!(row["role"], "implement");
     assert!(row["started"].is_number());
+    assert!(row["owner_pid"].is_number());
+    let end = &row["final"];
+    assert_eq!(end["status"], "refused");
+    assert_eq!(end["run_id"], row["run_id"]);
+    assert_eq!(end["item_key"], "plangraph:QUEUE-TEST");
+    assert_eq!(end["host"], "dell");
+    assert_eq!(end["started"], row["started"]);
 }

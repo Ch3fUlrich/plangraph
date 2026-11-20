@@ -81,20 +81,46 @@ def _windows_cargo_lease(path, exclusive):
     return os.fdopen(fd, 'rb')
 
 
-def cargo_lease(exclusive=False):
+CLEANUP_WAIT_ENV = 'PLANGRAPH_CARGO_CLEANUP_WAIT_S'
+
+
+def cargo_lease(exclusive=False, wait=0.0):
+    """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
     target = shared_cargo_target()
     target.parent.mkdir(parents=True, exist_ok=True)
     path = target.with_name(target.name + '.plangraph-lock')
-    if os.name == 'nt':
-        return _windows_cargo_lease(path, exclusive)
-    lease = path.open('a+b')
-    try:
-        import fcntl
-        fcntl.flock(lease, (fcntl.LOCK_EX | fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)
-        return lease
-    except BaseException:
-        lease.close()
-        raise
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            if os.name == 'nt':
+                return _windows_cargo_lease(path, exclusive)
+            lease = path.open('a+b')
+            try:
+                import fcntl
+                fcntl.flock(lease, (fcntl.LOCK_EX | fcntl.LOCK_NB) if exclusive else fcntl.LOCK_SH)
+                return lease
+            except BaseException:
+                lease.close()
+                raise
+        except OSError:
+            if not exclusive or time.monotonic() >= deadline:
+                raise
+            time.sleep(min(0.5, max(deadline - time.monotonic(), 0)))
+
+
+def cargo_run_busy(record):
+    """A run keeps the shared cargo target busy only while one of its processes can still build.
+
+    Ended, timed_out, stalled and queued records, and records whose recorded pids are all gone,
+    do not; the exclusive lease taken by the cleanup is the final guard against a live build."""
+    from .runner import is_terminal
+    from .exit_outcome import run_pids_dead
+    if record.get('survivors'):
+        return True
+    status = record.get('status')
+    if is_terminal(status) or status in ('queued', 'timed_out', 'stalled') or record.get('ended') is not None:
+        return False
+    return not run_pids_dead(record)
 
 
 def local_disk_refusal(worktree, service):
@@ -117,12 +143,11 @@ def local_disk_refusal(worktree, service):
             raise ValueError('unsafe cache directory')
         size = cargo_target_size_gb(target)
         if size >= cap:
-            from .runner import is_terminal
-            if any(r.get('survivors') or (r.get('status') != 'queued' and not is_terminal(r.get('status')))
-                   for r in service.ps()['runs']):
+            if any(cargo_run_busy(r) for r in service.ps()['runs']):
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy'
             try:
-                with cargo_lease(exclusive=True):
+                wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
+                with cargo_lease(exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
                     if target.exists():
                         shutil.rmtree(target)
             except OSError:
