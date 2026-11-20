@@ -6,11 +6,13 @@ opens a secret-named file; symlinked files are followed by ``check_file``.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import stat
 from pathlib import Path
 
-from autoos_refs_core import Hit, check_file, looks_secret
+from autoos_refs_core import Hit, check_file, has_autoos, looks_secret, redact
 
 
 def scan_claude_settings(home: Path) -> list[Hit]:
@@ -74,6 +76,88 @@ def _scan_skill_tree(root: Path, link_budget: int = 3) -> list[Hit]:
     return hits
 
 
+_OPENCODE_CONFIGS = ("opencode.json", "opencode.jsonc")
+
+
+def _jsonc_loads(text: str) -> object:
+    """Parse JSON with ``//`` and ``/* */`` comments and trailing commas (the
+    ``opencode.jsonc`` dialect). Raises ValueError on text that is still not JSON."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif text.startswith("//", i):
+            i = text.find("\n", i) if "\n" in text[i:] else n
+        elif text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        else:
+            out.append(c)
+            i += 1
+    return json.loads(re.sub(r",(\s*[\]}])", r"\1", "".join(out)))
+
+
+def scan_opencode_instructions(home: Path, config_dir: Path) -> list[Hit]:
+    """``instructions`` entries of the OpenCode config that name an AutoOS path,
+    in their own text or through a link they resolve through (``~`` is *home*,
+    a relative entry is relative to *config_dir*). A config that is not valid
+    JSON has no entries to read; its text is still scanned line by line."""
+    hits: list[Hit] = []
+    for cfg_name in _OPENCODE_CONFIGS:
+        cfg = config_dir / cfg_name
+        if looks_secret(cfg) or not cfg.is_file():
+            continue
+        try:
+            doc = _jsonc_loads(cfg.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        entries = doc.get("instructions") if isinstance(doc, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if not isinstance(entry, str):
+                continue
+            path = entry.removeprefix("{file:").removesuffix("}")
+            path = str(home) + path[1:] if path.startswith("~") else path
+            resolved = os.path.realpath(os.path.join(config_dir, path))
+            if has_autoos(entry) or has_autoos(resolved):
+                hits.append(("opencode-instructions", str(cfg), redact(entry)))
+    return hits
+
+
+def scan_opencode(home: Path) -> list[Hit]:
+    """The OpenCode root on its own: config text, ``instructions`` entries,
+    instruction files, skills trees and links, other links in the config dir."""
+    hits: list[Hit] = []
+    opencode_dir = home / ".config" / "opencode"
+    if opencode_dir.is_dir():
+        hits.extend(scan_instruction_files(opencode_dir))
+        for cfg_name in _OPENCODE_CONFIGS:
+            cfg = opencode_dir / cfg_name
+            if cfg.exists() or cfg.is_symlink():
+                hits.extend(check_file(cfg, "opencode"))
+        hits.extend(scan_opencode_instructions(home, opencode_dir))
+
+        for skills_name in ("skills", "skill"):
+            op_skills = opencode_dir / skills_name
+            if op_skills.is_symlink():
+                hits.extend(check_file(op_skills, "skill"))
+            if op_skills.is_dir():
+                hits.extend(_scan_skill_tree(op_skills))
+
+        for p in sorted(opencode_dir.iterdir()):
+            if p.is_symlink() and p.name not in (*_OPENCODE_CONFIGS, "skills", "skill"):
+                hits.extend(check_file(p, "opencode"))
+
+    alt_cfg = home / ".config" / "opencode.json"
+    if alt_cfg.exists() or alt_cfg.is_symlink():
+        hits.extend(check_file(alt_cfg, "opencode"))
+    return hits
+
+
 def scan_skills_and_opencode(home: Path) -> list[Hit]:
     hits: list[Hit] = []
     hits.extend(scan_instruction_files(home / ".claude"))
@@ -84,28 +168,7 @@ def scan_skills_and_opencode(home: Path) -> list[Hit]:
     if claude_skills.is_dir():
         hits.extend(_scan_skill_tree(claude_skills))
 
-    opencode_dir = home / ".config" / "opencode"
-    if opencode_dir.is_dir():
-        hits.extend(scan_instruction_files(opencode_dir))
-        for cfg_name in ("opencode.json", "opencode.jsonc"):
-            cfg = opencode_dir / cfg_name
-            if cfg.exists() or cfg.is_symlink():
-                hits.extend(check_file(cfg, "opencode"))
-
-        op_skills = opencode_dir / "skills"
-        if op_skills.is_symlink():
-            hits.extend(check_file(op_skills, "skill"))
-        if op_skills.is_dir():
-            hits.extend(_scan_skill_tree(op_skills))
-
-        for p in sorted(opencode_dir.iterdir()):
-            if p.is_symlink() and p.name not in ("opencode.json", "opencode.jsonc", "skills"):
-                hits.extend(check_file(p, "opencode"))
-
-    alt_cfg = home / ".config" / "opencode.json"
-    if alt_cfg.exists() or alt_cfg.is_symlink():
-        hits.extend(check_file(alt_cfg, "opencode"))
-
+    hits.extend(scan_opencode(home))
     return hits
 
 

@@ -239,3 +239,73 @@ def test_unreadable_explicit_roots_are_a_scan_error(ar, tmp_path: Path, capsys: 
         assert ar.main(["--home", str(home), "--routing-root", str(tree)]) == 2
     finally:
         (tree / "bin").chmod(0o755)
+
+
+# --- OpenCode on its own: `instructions` entries and skills links ---------------
+
+
+def opencode_home(tmp_path: Path, config: str) -> Path:
+    """A fixture home whose ~/.config/opencode/opencode.json holds *config*."""
+    home = tmp_path / "oc_home"
+    write(home / ".config" / "opencode" / "opencode.json", config)
+    return home
+
+
+def test_opencode_instructions_naming_the_removed_tree_are_hits(ar, tmp_path: Path) -> None:
+    home = opencode_home(tmp_path, '{\n  "instructions": [\n    "~/code/AutoOS/skills/coding-principles/SKILL.md",\n'
+                                   '    "/synthetic-home/x/code/AutoOS/leaf-contract.md"\n  ]\n}\n')
+    hits = [h for h in ar.scan_opencode(home) if h[0] == "opencode-instructions"]
+    assert len(hits) == 2
+    assert all(h[1].endswith("opencode.json") for h in hits)
+
+
+def test_opencode_instructions_through_a_link_are_hits(ar, tmp_path: Path) -> None:
+    """An entry whose own text is clean but whose link resolves into the tree."""
+    home = opencode_home(tmp_path, '{"instructions": ["rules/base.md", "{file:./rules/other.md}"]}\n')
+    removed = tmp_path / "tree" / "AutoOS"
+    write(removed / "base.md", "x\n")
+    (home / ".config" / "opencode" / "rules").mkdir()
+    (home / ".config" / "opencode" / "rules" / "base.md").symlink_to(removed / "base.md")
+    hits = [h for h in ar.scan_opencode(home) if h[0] == "opencode-instructions"]
+    assert [h[2] for h in hits] == ["rules/base.md"]
+
+
+def test_opencode_jsonc_comments_and_bad_json_do_not_hide_or_crash(ar, tmp_path: Path) -> None:
+    jsonc = '{\n // "instructions": ["/old/path"],\n "instructions": ["/synthetic-home/AutoOS/x.md",], /* c */\n}\n'
+    home = opencode_home(tmp_path, jsonc)
+    assert [h[0] for h in ar.scan_opencode(home) if h[0] == "opencode-instructions"] == ["opencode-instructions"]
+    broken = opencode_home(tmp_path / "b", '{"instructions": [\n')
+    assert ar.scan_opencode(broken) == []  # unreadable JSON: nothing to read, no crash
+
+
+@windows_skip
+def test_opencode_skills_link_into_the_removed_tree_is_a_hit(ar, tmp_path: Path) -> None:
+    home = opencode_home(tmp_path, '{"instructions": []}\n')
+    removed = tmp_path / "tree" / "AutoOS" / "skills"
+    write(removed / "s" / "SKILL.md", "x\n")
+    (home / ".config" / "opencode" / "skills").symlink_to(removed)
+    assert [h[0] for h in ar.scan_opencode(home)] == ["skill"]
+    # a skills dir of its own holding one link into the tree
+    solo = tmp_path / "solo"
+    skills = solo / ".config" / "opencode" / "skills"
+    skills.mkdir(parents=True)
+    (skills / "s").symlink_to(removed / "s")
+    assert [h[0] for h in ar.scan_opencode(solo)] == ["skill"]
+
+
+def test_plangraph_only_opencode_fixture_is_clean(ar, tmp_path: Path) -> None:
+    home = opencode_home(tmp_path, '{"instructions": ["~/code/plangraph/AGENTS.md", "rules/*.md"]}\n')
+    write(home / ".config" / "opencode" / "skills" / "s" / "SKILL.md", "plangraph skill\n")
+    write(home / ".config" / "opencode" / "rules" / "a.md", "rule\n")
+    assert ar.scan_opencode(home) == []
+    assert run_cli("--home", str(home), "--only", "opencode").returncode == 0
+
+
+def test_only_opencode_skips_every_other_root(ar, tmp_path: Path) -> None:
+    home = opencode_home(tmp_path, '{"instructions": ["/synthetic-home/AutoOS/x.md"]}\n')
+    routing_fixture(home)  # three more hits in roots the opencode run must not read
+    proc = run_cli("--home", str(home), "--only", "opencode")
+    assert proc.returncode == 1
+    kinds = {line.split("\t")[0] for line in proc.stdout.splitlines()}
+    assert kinds == {"opencode", "opencode-instructions"}
+    assert {h[0] for h in ar.scan_all(home)} > kinds
