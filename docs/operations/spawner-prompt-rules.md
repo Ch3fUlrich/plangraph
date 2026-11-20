@@ -47,5 +47,6 @@ size refusal leaves the caller's environment unchanged.
 Every implement and review prompt starts with a role header naming the agent's own
 harness (`src/plangraph/config/role_headers.json`, also embedded by the native writer),
 then the role skill (`batch-writer` for a batch brief, `implement`, or `review`) read
-byte-identical from the run checkout's `origin/main`, then the caller's brief. A brief
+byte-identical from the run checkout's `origin/main` (the working-tree copy of the same file when no
+`origin/main` exists; if neither is readable the prompt carries the header only), then the caller's brief. A brief
 that already starts with the skill text gets it once.

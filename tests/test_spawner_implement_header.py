@@ -34,7 +34,17 @@ def test_header_names_own_harness(role, harness, leg_id, words, forbidden):
     assert 'AutoOS' not in text and 'build agent' not in text
     assert ('read-only' in text) == (role == 'review')
     assert 'never push' in text or role == 'review'
-    assert compose('x', role, harness, str(ROOT), leg_id).startswith(text)
+    full = compose('brief body', role, harness, str(ROOT), leg_id)
+    assert full.startswith(text) and _skill('review' if role == 'review' else 'implement') in full
+    # the whole built prompt, skill text included, carries none of the forbidden words
+    assert 'AutoOS' not in full and 'opencode build agent' not in full
+    assert forbidden not in full.split('\n---\n')[0]
+
+
+def test_batch_prompt_has_no_forbidden_words():
+    for harness, leg in (('agy', 'agy-x'), ('opencode', 'cx-gpt-6.1-sol'), ('opencode', 'opencode-x')):
+        full = compose('b' + BATCH_TAIL.format(n=1), 'implement', harness, str(ROOT), leg)
+        assert 'AutoOS' not in full and 'opencode build agent' not in full
 
 
 def test_spawned_prompts_have_header_and_skill():
@@ -81,11 +91,19 @@ def test_continuation_is_idempotent():
     assert _prompt('implement', once) == once
 
 
-def test_missing_skill_fails_the_check(monkeypatch):
-    # The guard of the guard: a prompt built without the skill text must not satisfy these checks.
+def test_prompt_built_without_skill_fails_the_presence_check(monkeypatch):
     monkeypatch.setattr('plangraph.spawner.prompt_input.read_skill', lambda *a: None)
     out = _prompt('review')
-    assert _skill('review') not in out
+    with pytest.raises(AssertionError):
+        assert _skill('review') in out
+
+
+def test_skill_falls_back_to_working_tree_without_origin_main(tmp_path, monkeypatch):
+    monkeypatch.setattr('plangraph.spawner.prompt_input._REPO_ROOT', tmp_path / 'none')
+    (tmp_path / 'skills' / 'review').mkdir(parents=True)
+    (tmp_path / 'skills' / 'review' / 'SKILL.md').write_text('---\nname: review\n---\nlocal\n')
+    assert read_skill('review', str(tmp_path)) == '---\nname: review\n---\nlocal\n'
+    assert compose('x', 'review', 'agy', str(tmp_path), 'agy-x').endswith('local\n\nx')
 
 
 def test_gemini_md_links_agents_md():

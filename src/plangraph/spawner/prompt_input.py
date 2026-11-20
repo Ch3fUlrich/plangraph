@@ -114,10 +114,10 @@ def skill_name(role: str, brief: str) -> str | None:
 
 
 def read_skill(name: str, cwd: str | None) -> str | None:
-    """Skill text from origin/main of the run checkout, falling back to this repository."""
-    for root in (cwd, str(_REPO_ROOT)):
-        if not root:
-            continue
+    """Skill text from origin/main of the run checkout or this repository; when neither has
+    origin/main, the working-tree copy of the same file."""
+    roots = [r for r in (cwd, str(_REPO_ROOT)) if r]
+    for root in roots:
         try:
             proc = subprocess.Popen(['git', '-C', root, 'show', f'origin/main:skills/{name}/SKILL.md'],
                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=checkout_env())
@@ -126,6 +126,13 @@ def read_skill(name: str, cwd: str | None) -> str | None:
             continue
         if proc.returncode == 0 and out:
             return out.decode('utf-8')
+    for root in roots:
+        try:
+            text = (Path(root) / 'skills' / name / 'SKILL.md').read_bytes().decode('utf-8')
+        except (OSError, UnicodeDecodeError):
+            continue
+        if text:
+            return text
     return None
 
 
