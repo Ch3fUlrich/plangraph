@@ -305,6 +305,8 @@ def result_text(verb: str, result) -> str:
     if isinstance(result, dict):
         if "created" in result:
             text = f"created {len(result['created'])} items"
+            for refusal in result.get("refused") or []:
+                text += f"\nrefused {refusal['key']}: {refusal['code']}: {refusal['message']}"
             for warning in result.get("warnings") or []:
                 text += f" | warning: {warning}"
             return text

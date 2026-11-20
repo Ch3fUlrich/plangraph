@@ -224,3 +224,24 @@ def test_cmd_check_unreachable_cli(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("PG_CONFIG", raising=False)
     assert cli.main(["check"]) == 3
     assert "check needs a readable plan snapshot" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
+def test_check_lists_gates_with_cancelled_dependencies(json_mode, capsys):
+    items = [
+        {"key": "demo:X", "kind": "lane", "state": "cancelled"},
+        {"key": "demo:G", "kind": "gate", "depends_on": ["demo:X"]},
+        {"key": "demo:GOAL", "kind": "goal", "depends_on": ["demo:X"]},
+        {"key": "demo:WORK", "kind": "lane", "depends_on": ["demo:X"]},
+    ]
+    assert cli_check.cmd_check(SimpleNamespace(strict=True),
+                              _Session(items, json_mode=json_mode)) == 1
+    out = capsys.readouterr().out
+    if json_mode:
+        assert json.loads(out)["cancelled_gate_deps"] == [
+            {"gate": "demo:G", "dependency": "demo:X"},
+            {"gate": "demo:GOAL", "dependency": "demo:X"}]
+    else:
+        assert "CANCELLED-GATE-DEP demo:G -> demo:X" in out
+        assert "CANCELLED-GATE-DEP demo:GOAL -> demo:X" in out
+        assert "CANCELLED-GATE-DEP demo:WORK" not in out

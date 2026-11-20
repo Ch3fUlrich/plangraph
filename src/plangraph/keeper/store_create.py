@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 
+from ..views import cancelled_gate_dependencies
 from .auth import validate_family
 from .brief import creation_error
 from .errors import Refused
@@ -213,6 +214,24 @@ class CreateMixin:
             if gate is not None:
                 attach.append((definition, gate))
         before = self._all_items()
+        blocked = {}
+        for gate_key, dep in cancelled_gate_dependencies(before):
+            blocked.setdefault(gate_key, []).append(dep)
+        refused = []
+        for definition, gate in attach:
+            if gate["key"] in blocked:
+                deps = ", ".join(blocked[gate["key"]])
+                message = (f"{gate['key']} depends on cancelled item(s) {deps}; "
+                           "use remove_dep on the gate for each cancelled dependency, "
+                           "then define this item again")
+                if self._batch is not None:
+                    raise Refused("depends_on_cancelled", message)
+                refused.append({"key": definition["key"],
+                                "code": "depends_on_cancelled", "message": message})
+        refused_keys = {entry["key"] for entry in refused}
+        defs = [d for d in defs if d["key"] not in refused_keys]
+        keys = [d["key"] for d in defs]
+        attach = [(d, g) for d, g in attach if d["key"] not in refused_keys]
         check_fix_limit(before + defs, set(keys))
         # Validate cycles/reachability with gate -> new edges before inserting.
         candidate = [dict(item) for item in before] + defs
@@ -246,6 +265,8 @@ class CreateMixin:
                 self._append(principal, gate["key"], "item_defined",
                              {"fields": ["depends_on"]}, now)
         result = {"created": keys}
+        if refused:
+            result["refused"] = refused
         if attach:
             result["attached"] = [{"key": definition["key"],
                                    "under": gate["key"]}
