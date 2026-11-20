@@ -2,6 +2,10 @@
 use crate::evidence::{regular, EvidenceError};
 use pg_worker_core::run::{record::run_dir, record_io::atomic_write_private};
 use serde_json::{json, Value};
+
+/// Text of the review artifact when no rendered review exists; `seat_verdict` recognises it.
+pub(crate) const DIAGNOSTIC_REVIEW_TEXT: &str =
+    "Full rendered review unavailable or unsupported.\nVERDICT: HALT\n";
 use std::{
     fs,
     io::Read,
@@ -43,7 +47,7 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
                 .collect();
             Ok(format!("Agy review unavailable: empty, failed or unsupported output.\nDiagnostics (untrusted): {}\nVERDICT: FAIL\nTEST_GAMING: yes\n", json!({"log":detail, "stderr":stderr})))
         } else {
-            Ok("Full rendered review unavailable or unsupported.\nVERDICT: HALT\n".into())
+            Ok(DIAGNOSTIC_REVIEW_TEXT.into())
         }
     };
     if record["live_log"].as_str().map(Path::new) != Some(path.as_path()) {
@@ -69,34 +73,24 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
     if text.len() > 8 * 1024 * 1024 || !text.ends_with('\n') {
         return diagnostic(&text);
     }
-    let mut result = None;
-    for line in text.lines() {
-        let Ok(frame) = serde_json::from_str::<Value>(line) else {
-            return diagnostic(&text);
-        };
-        if frame["event"] == "result" {
-            result = if frame["result"]["status"] == "SUCCESS" {
-                frame["result"]["response"].as_str().map(str::to_owned)
-            } else {
-                None
-            };
-        } else if frame["type"] == "result" {
-            result = if frame["is_error"] == false {
-                frame["result"].as_str().map(str::to_owned)
-            } else {
-                None
-            };
-        }
-    }
-    match result {
-        Some(text) if !text.is_empty() && (!agy || !text.trim().is_empty()) => Ok(text),
+    match pg_worker_core::review_split::extract_review_text_from_live_log(&text) {
+        Some(result) if !result.is_empty() && (!agy || !result.trim().is_empty()) => Ok(result),
         _ => diagnostic(&text),
     }
 }
+#[cfg(test)]
 pub(crate) fn write_review_artifacts(
     state: &Path,
     record: &Value,
     review: &str,
+) -> Result<(), EvidenceError> {
+    write_review_artifacts_with_allowlist(state, record, review, &Default::default())
+}
+pub(crate) fn write_review_artifacts_with_allowlist(
+    state: &Path,
+    record: &Value,
+    review: &str,
+    allow_shas: &std::collections::BTreeSet<String>,
 ) -> Result<(), EvidenceError> {
     let seat = directory(state, record)?.join("seat");
     regular(&seat, true)?;
@@ -143,7 +137,7 @@ pub(crate) fn write_review_artifacts(
     for (name, bytes) in [
         (
             "review.txt",
-            pg_worker_core::redact::redact(review).into_bytes(),
+            pg_worker_core::redact::redact_with_allowlist(review, allow_shas).into_bytes(),
         ),
         (
             "evidence.json",

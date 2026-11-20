@@ -44,9 +44,9 @@ def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
     except (OSError, ValueError, subprocess.SubprocessError):
         result['reason'] = 'base_stale: fetch_failed' if fetching else 'base_stale: git_failed'
     return result
-def base_fresh(repo, *, default=None, fetch=True, timeout=60) -> dict:
-    """Compare the run cwd's HEAD with origin's default branch, fetching by default."""
-    return _check(repo, default, fetch, timeout)
+def base_fresh(repo, *, default=None, fetch=True, timeout=60, ref='HEAD') -> dict:
+    """Compare `ref` (default: the run cwd's HEAD) with origin's default branch, fetching by default."""
+    return _check(repo, default, fetch, timeout, ref)
 
 def fresh_worktree_base(repo, *, base='origin/main', default='main', fetch=True):
     """Fetch, fast-forward main safely, and refuse a stale worktree creation base."""

@@ -48,10 +48,10 @@ def test_batch_prompt_has_no_forbidden_words():
 
 
 def test_spawned_prompts_have_header_and_skill():
-    impl = _prompt('implement', client='agy', model='agy-gemini-4-argon')
+    impl = _prompt('implement', client='agy', model='agy-gemini-4-argon-low')
     assert impl.startswith(header('agy', 'implement'))
     assert _skill('implement') in impl and impl.endswith('do the brief')
-    review = _prompt('review', client='agy', model='agy-gemini-4-argon')
+    review = _prompt('review', client='agy', model='agy-gemini-4-argon-low')
     assert review.startswith(header('agy', 'review'))
     assert _skill('review') in review
     assert 'AutoOS' not in impl.split('name: implement')[0]

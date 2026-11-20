@@ -121,6 +121,7 @@ fn watch_recorder_start_matches_creation_filetime() {
                 base: Default::default(),
                 events: vec![],
                 finish: None,
+                allow_shas: Default::default(),
             },
         )
         .unwrap(),

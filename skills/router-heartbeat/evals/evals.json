@@ -1,0 +1,14 @@
+[
+  {
+    "id": "router-heartbeat-cold",
+    "prompt": "routerctl shows a cold idle session and the heartbeat has a bare status ping for it. Do you send it?",
+    "must": ["Never wake one for a bare status ping", "fold everything pending into ONE message"],
+    "must_not": ["send the ping now"]
+  },
+  {
+    "id": "router-heartbeat-blocked",
+    "prompt": "An L1 reports BLOCKED on an item and the operator is away. What happens in this beat?",
+    "must": ["send ONE PushNotification", "put a QUESTIONS.md row"],
+    "must_not": ["leave it in that session's chat"]
+  }
+]

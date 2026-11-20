@@ -17,6 +17,7 @@ from typing import Any
 # here: the KeyError in tag_seed_rows is deliberate.
 PROVIDER_HARNESS: dict[str, Any] = {
     "opencode-go": "opencode",
+    "opencode": "opencode",
     "mimo": "opencode",
     "cx": "opencode",
     "agy": None,

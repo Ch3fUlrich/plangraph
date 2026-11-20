@@ -320,7 +320,7 @@ def test_route_table_witness_paths():
 def test_adapter_rejects_unregistered_model_segments(model):
     from plangraph.spawner.runner import JobInfo, SpawnerRunner
     runner = SpawnerRunner()
-    job = JobInfo('admission', 'running', 'fixture', 'omniroute/cx-gpt-6.1-sol')
+    job = JobInfo('admission', 'running', 'fixture', 'omniroute/cx-gpt-6.2-sol')
     runner.jobs[job.job_id] = job
     token = runner._adapter_tokens[job.job_id] = object()
     with pytest.raises(ValueError, match='not an admitted model id'):
@@ -331,8 +331,8 @@ def test_adapter_rejects_unregistered_model_segments(model):
 @pytest.mark.parametrize('model,family', [
     ('console-meta/muse-spark-1.3-contributor', 'muse'),
     ('omniroute/muse-spark-1.3-contributor', 'muse'),
-    ('cx/gpt-6.1-sol-medium', 'gpt'),
-    ('omniroute/cx-gpt-6.1-sol-medium', 'gpt'),
+    ('cx/gpt-6.2-sol-medium', 'gpt'),
+    ('omniroute/cx-gpt-6.2-sol-medium', 'gpt'),
     ('xiaomi-mimo/mimo-v2.6-flash', 'mimo'),
 ])
 def test_adapter_family_uses_registered_model_segment(model, family):

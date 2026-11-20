@@ -23,23 +23,41 @@ TIER_RUNG: dict[str, int] = {
 # D-5696/D-5706 opt-in order inputs, not live admission or capability evidence.
 LEGACY_ROUTE_REPLACEMENTS = {
     'gemini-3.8-flash': 'gemini-4-hydrogen', 'gpt-6-luna': 'gpt-6.1-terra',
+    'gpt-6.1-sol': 'gpt-6.2-sol',
 }
 OPERATOR_ROUTE_ORDERS = {
-    'implement': ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'agy-claude-sonnet-5-5-high'),
+    'implement': (
+        'cx-gpt-6.2-sol-medium', 'cx-gpt-6.2-astra', 'agy-gemini-4-hydrogen-high',
+        'opencode-deepseek-v4.1-flash-free', 'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+    ),
     'review': {
-        'standard': ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
-                     'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
-        'high': ('cx-gpt-6.1-sol-medium', 'cx-gpt-6.1-terra-medium', 'agy-gemini-4-hydrogen-medium',
-                 'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
-                 'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
-        'complex': ('cx-gpt-6.1-sol-xhigh', 'cx-gpt-6.1-terra-xhigh', 'agy-gemini-4-hydrogen-high',
-                    'mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash', 'mimo-v2.6-flash',
-                    'claude-haiku-5.5', 'muse-ember-max', 'omniroute-deepseek-flash'),
+        'standard': (
+            'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium', 'mimo-v2.6-pro',
+            'opencode-go-deepseek-v4-flash', 'opencode-deepseek-v4.1-flash-free',
+            'opencode-go-glm-5.3-flash',
+            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high',
+            'mimo-v2.6-flash',
+        ),
+        'high': (
+            'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium', 'mimo-v2.6-pro',
+            'opencode-go-deepseek-v4-flash', 'opencode-deepseek-v4.1-flash-free',
+            'opencode-go-glm-5.3-flash',
+            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high',
+            'mimo-v2.6-flash',
+        ),
+        'complex': (
+            'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium', 'mimo-v2.6-pro',
+            'opencode-go-deepseek-v4-flash', 'opencode-deepseek-v4.1-flash-free',
+            'opencode-go-glm-5.3-flash',
+            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high',
+            'mimo-v2.6-flash',
+        ),
     },
     'planning': ('claude-fable-5.2-high',),
 }
-OPERATOR_REVIEW_CHEAP_LEGS = ('mimo-v2.6-pro', 'opencode-go-deepseek-v4-flash',
-                             'mimo-v2.6-flash', 'claude-haiku-5.5')
+OPERATOR_REVIEW_CHEAP_LEGS = (
+    'opencode-deepseek-v4.1-flash-free', 'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+)
 IMPLEMENT_SONNET_REFUSAL = 'D-5712: claude_code_subscription_forbidden_for_implement'
 
 SEED_QUOTA_POOLS: list[dict[str, Any]] = [
@@ -161,6 +179,15 @@ SEED_QUOTA_POOLS: list[dict[str, Any]] = [
         "notes": "Retired AgY Gemini Flash allocation; benchmark foreign key history only",
     },
     {
+        "pool_id": "opencode-free",
+        "provider_id": "opencode",
+        "tier": "free",
+        "window_type": "daily_quota",
+        "pool_burn_multiplier": 1.0,
+        "cache_hit_discount": 0.0,
+        "notes": "OpenCode free tier pool",
+    },
+    {
         "pool_id": "free-qwen-flash",
         "provider_id": "qoder",
         "tier": "free",
@@ -211,6 +238,16 @@ SEED_PROVIDERS: list[dict[str, Any]] = [
         "available": 1,
         "unavailable_reason": None,
         "updated_at": "2026-10-19T00:00:00Z",
+    },
+    {
+        "provider_id": "opencode",
+        "omniroute_id": "opencode",
+        "tier": "free",
+        "transport": "gateway",
+        "gateway_mode": "omniroute_acp",
+        "available": 1,
+        "unavailable_reason": None,
+        "updated_at": "2026-11-19T00:00:00Z",
     },
     {
         "provider_id": "opencode-go",
@@ -865,7 +902,7 @@ SEED_ROUTE_LEGS: list[dict[str, Any]] = [
     {
         "route_id": "l1-orchestrator",
         "position": 2,
-        "model_id": "opencode-go/gemini-4-argon",
+        "model_id": "opencode-go/glm-5.3-flash",
         "min_risk_band": "low",
     },
     {
@@ -917,24 +954,23 @@ SEED_ROUTE_LEGS: list[dict[str, Any]] = [
     {"route_id": "l2-worker", "position": 2, "model_id": "agy/claude-sonnet-5-5-medium", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 3, "model_id": "mimo/mimo-v2.6-pro", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 4, "model_id": "agy/claude-sonnet-5-5-high", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 5, "model_id": "opencode-go/gemini-4-argon", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 5, "model_id": "opencode-go/deepseek-v4.1-flash", "min_risk_band": "low"},
     {"route_id": "l2-worker", "position": 6, "model_id": "opencode-go/qwen3.8-max", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 7, "model_id": "opencode-go/deepseek-v4.1-flash", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 8, "model_id": "opencode-go/glm-5.2", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 9, "model_id": "opencode-go/muse-spark-1.3-contributor", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 10, "model_id": "claude/claude-haiku-4-5", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 11, "model_id": "cxa/gpt-6-luna-high", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 12, "model_id": "mimo/mimo-v2.6-flash", "min_risk_band": "low"},
-    {"route_id": "l2-worker", "position": 13, "model_id": "deepseek/deepseek-v4-flash-max", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 7, "model_id": "opencode-go/glm-5.3-flash", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 8, "model_id": "opencode-go/muse-spark-1.3-contributor", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 9, "model_id": "claude/claude-haiku-4-5", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 10, "model_id": "cxa/gpt-6-luna-high", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 11, "model_id": "mimo/mimo-v2.6-flash", "min_risk_band": "low"},
+    {"route_id": "l2-worker", "position": 12, "model_id": "deepseek/deepseek-v4-flash-max", "min_risk_band": "low"},
     # l2-reviewer legs:
     # cxa/gpt-6-luna-high active, high code/review fidelity
     {"route_id": "l2-reviewer", "position": 1, "model_id": "agy/claude-sonnet-5-5-xhigh", "min_risk_band": "low"},
     {"route_id": "l2-reviewer", "position": 2, "model_id": "agy/claude-sonnet-5-5-medium", "min_risk_band": "low"},
     {"route_id": "l2-reviewer", "position": 3, "model_id": "mimo/mimo-v2.6-pro", "min_risk_band": "low"},
-    {"route_id": "l2-reviewer", "position": 4, "model_id": "opencode-go/gemini-4-argon", "min_risk_band": "low"},
+    {"route_id": "l2-reviewer", "position": 4, "model_id": "opencode-go/deepseek-v4.1-flash", "min_risk_band": "low"},
     {"route_id": "l2-reviewer", "position": 5, "model_id": "agy/claude-sonnet-5-5-high", "min_risk_band": "low"},
     {"route_id": "l2-reviewer", "position": 6, "model_id": "cxa/gpt-6-luna-high", "min_risk_band": "low"},
-    {"route_id": "l2-reviewer", "position": 7, "model_id": "opencode-go/glm-5.2", "min_risk_band": "low"},
+    {"route_id": "l2-reviewer", "position": 7, "model_id": "opencode-go/glm-5.3-flash", "min_risk_band": "low"},
     # l3-driver legs:
     # cxa/gpt-6-luna-high active, high token speed, paid deepseek last
     {

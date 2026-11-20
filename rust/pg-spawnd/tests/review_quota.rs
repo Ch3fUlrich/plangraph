@@ -19,7 +19,7 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
         let mut f = Fixture::new("exit 1", json!("review"), &[]);
         let first = json!({"id":"agy-hydrogen","harness":"agy","model":"gemini-4-hydrogen","family":"google"});
         let next = json!({"id":"sonnet","harness":"claude","model":"claude-sonnet-5-5","family":"anthropic"});
-        let plan = json!({"first_leg":first,"legs":[first,{"id":"writer","harness":"codex","model":"gpt-6.1-sol","family":"gpt"},{"id":"unavailable","harness":"missing","model":"unavailable","family":"deepseek"},next],"skipped":[]});
+        let plan = json!({"first_leg":first,"legs":[first,{"id":"writer","harness":"codex","model":"gpt-6.2-sol","family":"gpt"},{"id":"unavailable","harness":"missing","model":"unavailable","family":"deepseek"},next],"skipped":[]});
         std::fs::write(
             f.state.path().join("route"),
             format!("#!/bin/sh\nprintf '%s' '{plan}'\n"),
@@ -28,7 +28,7 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
         let quota = "RESOURCE_EXHAUSTED (code 429): Individual quota reached";
         let bad = json!({"argv":["/bin/sh","-c",format!("printf '%s' '{quota}' >&2; {ending}")],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
         let good = json!({"argv":["/bin/sh","-c","printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-sonnet-5-5\"}' '{\"type\":\"result\",\"is_error\":false,\"result\":\"VERDICT: PASS\"}'"],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
-        std::fs::write(f.state.path().join("launch"), format!("#!/bin/sh\nrequest=$(cat)\nprintf '%s' \"$request\" | python3 -c 'import json,sys; assert json.load(sys.stdin)[\"writer_families\"] == [\"openai\"]' || exit 3\ncase \"$request\" in *gemini-4-hydrogen*) printf '%s' '{bad}';; *gpt-6.1-sol*|*unavailable*) exit 1;; *) printf '%s' '{good}';; esac\n").replace(&format!("'{bad}'"), &shell_quote(&bad.to_string())).replace(&format!("'{good}'"), &shell_quote(&good.to_string()))).unwrap();
+        std::fs::write(f.state.path().join("launch"), format!("#!/bin/sh\nrequest=$(cat)\nprintf '%s' \"$request\" | python3 -c 'import json,sys; assert json.load(sys.stdin)[\"writer_families\"] == [\"openai\"]' || exit 3\ncase \"$request\" in *gemini-4-hydrogen*) printf '%s' '{bad}';; *gpt-6.2-sol*|*unavailable*) exit 1;; *) printf '%s' '{good}';; esac\n").replace(&format!("'{bad}'"), &shell_quote(&bad.to_string())).replace(&format!("'{good}'"), &shell_quote(&good.to_string()))).unwrap();
         let mut r = payload(f.call("spawn", json!({"prompt":"review","card":{"x":1},"role":"review","writer_families":["openai"],"wait_seconds":0,"no_fallthrough":no_fallthrough})));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while !pg_worker_core::run::record::Status::parse(r["status"].as_str().unwrap())
