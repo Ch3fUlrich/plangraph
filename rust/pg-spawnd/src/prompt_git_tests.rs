@@ -329,3 +329,69 @@ mod race;
 
 #[path = "prompt_git_boundary_tests.rs"]
 mod boundary;
+
+#[test]
+fn inline_only_tool_mode_inlines_without_env_and_refuses_oversized_with_reason() {
+    let (root, repo, diff) = fixture();
+    std::fs::write(root.join("big.txt"), "a".repeat(400)).unwrap();
+    git(&root, &["add", "big.txt"]);
+    git(&root, &["commit", "-qm", "big"]);
+    let big_diff = DiffRef {
+        head_sha: git(&root, &["rev-parse", "HEAD"]),
+        ..diff
+    };
+    let mut repos = std::collections::BTreeMap::new();
+    repos.insert("repo".into(), repo);
+
+    // Within leg limit: inlines full diff with NO-tools header even when enabled=false.
+    let mut fits = crate::launch::LaunchSpec {
+        argv: vec!["opencode".into()],
+        cwd: root.clone(),
+        env: Default::default(),
+        stdin: Some("review".into()),
+        prompt: Some("review".into()),
+        warnings: None,
+        events: None,
+    };
+    crate::prompt::prepare_review(
+        &serde_json::json!({"role":"review", "card":{"diff_ref":big_diff}}),
+        &serde_json::json!({"tool_mode":"inline-only", "max_request_tokens":500}),
+        &mut fits,
+        &repos,
+        false,
+    )
+    .unwrap();
+    let prompt_text = fits.prompt.as_deref().unwrap();
+    assert!(prompt_text.starts_with("NO-tools:"));
+    assert!(prompt_text.contains(&"a".repeat(400)));
+
+    // Exceeds leg limit: refuses with named prompt_too_large reason, never cuts silently.
+    for tokens in [5_u64, 150_u64] {
+        let mut oversized = crate::launch::LaunchSpec {
+            argv: vec!["opencode".into()],
+            cwd: root.clone(),
+            env: Default::default(),
+            stdin: Some("review".into()),
+            prompt: Some("review".into()),
+            warnings: None,
+            events: None,
+        };
+        let err = crate::prompt::prepare_review(
+            &serde_json::json!({"role":"review", "card":{"diff_ref":big_diff}}),
+            &serde_json::json!({"tool_mode":"inline-only", "max_request_tokens":tokens}),
+            &mut oversized,
+            &repos,
+            false,
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.starts_with("inline_diff_failed: prompt_too_large:")
+                && msg.contains(&format!("max_request_tokens {tokens}")),
+            "{msg}"
+        );
+        assert_eq!(oversized.prompt.as_deref(), Some("review"));
+        assert_eq!(oversized.stdin.as_deref(), Some("review"));
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}

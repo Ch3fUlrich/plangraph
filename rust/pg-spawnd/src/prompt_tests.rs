@@ -137,3 +137,48 @@ fn shared_preparation_keeps_inline_only_reference_validation() {
     assert_eq!(carrier.prompt.as_deref(), Some("review"));
     assert_eq!(carrier.stdin.as_deref(), Some("review"));
 }
+
+#[test]
+fn tool_mode_inline_only_missing_diff_ref_refused() {
+    let mut carrier = launch("review");
+    let args = json!({"role":"review", "card":{}});
+    let error = prepare_launch(
+        args.as_object().unwrap(),
+        &json!({"harness":"opencode", "tool_mode":"inline-only", "max_request_tokens":100}),
+        &mut carrier,
+        false,
+    )
+    .unwrap_err()
+    .into_error_data();
+    assert_eq!(error.message, "missing diff_ref");
+}
+
+#[test]
+fn adapter_inlined_tool_mode_leg_refuses_when_exceeding_max_request_tokens() {
+    let mut carrier = launch(
+        "review\n\n=== INLINE DIFF (base a, head b) ===\n+1234567890\n=== END INLINE DIFF ===\n",
+    );
+    carrier.events = Some(vec![serde_json::Map::from_iter([(
+        "event".into(),
+        json!("launch_spec"),
+    )])]);
+    let args = json!({"role":"review", "card":{"diff_ref":{
+        "repo":"/caller-selected-checkout", "base":"HEAD~1", "head":"HEAD"
+    }}});
+    let error = prepare_launch(
+        args.as_object().unwrap(),
+        &json!({"harness":"opencode", "tool_mode":"inline-only", "max_request_tokens":5}),
+        &mut carrier,
+        false,
+    )
+    .unwrap_err();
+    assert!(matches!(error, crate::errors::ToolError::Refused { .. }));
+    let data = error.into_error_data();
+    assert!(
+        data.message
+            .contains("inline_diff_failed: prompt_too_large:")
+            && data.message.contains("max_request_tokens 5"),
+        "{}",
+        data.message
+    );
+}
