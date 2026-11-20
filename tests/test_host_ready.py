@@ -498,3 +498,61 @@ def test_unit_umask_from_a_failed_systemctl_query_is_not_accepted(tmp_path, monk
         return real_run(argv, **kwargs)
     monkeypatch.setattr(h.subprocess, 'run', fake_run)
     assert h.pre_push_report(str(tmp_path), 'spawner.service', {})['unit_umask'] is None
+
+
+def plan_runner(calls, src_code=0, missing=()):
+    """A runner that answers `pg-spawnd steps` plans like `runner` answers shell scripts."""
+    def run(argv, **kwargs):
+        plan = json.loads(kwargs['input'])
+        calls.append((argv, plan))
+        steps = plan['steps']
+        if steps[0].get('fail_code') == 10:
+            return SimpleNamespace(returncode=src_code, stdout='ok\n')
+        text = ' '.join(steps[0].get('argv', []))
+        if 'plangraph.spawner.remote_ps' in text:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(runs=[])))
+        if '--test-tools' in text:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                dict(missing=list(missing), umask='0022', unit_umask=None)))
+        return runner(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', 'x', text], **kwargs)
+    return run
+
+
+def test_local_registry_host_runs_every_probe_as_a_step_plan_without_a_shell(tmp_path):
+    calls = []
+    config = dict(CONFIG, local=True, registry=True, env_file='/invented/env', state_dir='/invented/state')
+    result = h.check_host('fiction', config, tmp_path, plan_runner(calls))
+    assert result['ok'], result['failures']
+    assert calls and all(argv == ['pg-spawnd', 'steps'] for argv, _ in calls)
+    spawner_plans = [plan for _, plan in calls if plan.get('cwd') == '/invented/source']
+    assert spawner_plans and all(plan['env_file'] == '/invented/env' for plan in spawner_plans)
+    assert all(plan['steps'][0]['env'] == {'PYTHONPATH': 'src', 'PLANGRAPH_SPAWN_STATE': '/invented/state'}
+               for plan in spawner_plans)
+    tools = next(plan for _, plan in calls if plan['steps'][0]['argv'][1:] == ['--version'])
+    assert [step['argv'][0] for step in tools['steps']] == ['git', 'python3', 'codex']
+
+
+@pytest.mark.parametrize('code,failure', [(10, 'src_missing: failed'), (11, 'src_import: failed')])
+def test_source_probe_plan_reports_missing_and_unimportable_sources_by_exit_code(tmp_path, code, failure):
+    calls = []
+    config = dict(CONFIG, local=True, registry=True)
+    result = h.check_host('fiction', config, tmp_path, plan_runner(calls, src_code=code))
+    assert failure in result['failures']
+    src = next(plan for _, plan in calls if plan['steps'][0].get('fail_code') == 10)
+    assert [step.get('fail_code') for step in src['steps']] == [10, 11, None]
+    assert src['steps'][1]['cwd'] == '/' and src['steps'][1]['argv'][-1] == 'import plangraph'
+
+
+def test_wsl_registry_host_probes_travel_as_plans_over_ssh(tmp_path):
+    seen = []
+    def fake(argv, **kwargs):
+        seen.append((argv, kwargs.get('input')))
+        return plan_runner([], missing=())(argv, **kwargs) if 'input' in kwargs else runner(argv, **kwargs)
+    (tmp_path / 'plangraph' / 'ps-hosts.json').write_text(json.dumps({'hosts': [
+        dict(name='fiction', target=CONFIG['ssh'], src='/invented/source', wsl_distro='Ubuntu')]}))
+    config = dict(CONFIG, registry=True, wsl_distro='Ubuntu')
+    result = h.check_host('fiction', config, tmp_path, fake)
+    assert result['ok'], result['failures']
+    assert seen and all(argv[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
+                        and argv[-1] == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
+                        and json.loads(body)['steps'] for argv, body in seen)

@@ -53,7 +53,11 @@ def check_sources(name, config, command, fail):
                   f'elif (cd / && PYTHONPATH={import_path} python3 -c '
                   + shlex.quote('import plangraph') +
                   ') >/dev/null 2>&1; then echo ok; else echo src_import; fi')
-        result = command('src', script)
+        steps = [{'argv': ['test', '-d', source], 'fail_code': 10},
+                 {'argv': ['python3', '-c', 'import plangraph'], 'cwd': '/',
+                  'env': {'PYTHONPATH': source + '/src' if checkout else source}, 'fail_code': 11},
+                 {'argv': ['echo', 'ok']}]
+        result = command('src', script, steps, outputs={10: 'src_missing', 11: 'src_import'})
         if result is None:
             ok = False
         elif result.strip() != 'ok':

@@ -308,12 +308,13 @@ def pre_push_report(repo, unit=None, environ=None):
     return report
 
 
-def python_test_tools(measure, fail, prefix, repo, unit=None):
+def python_test_tools(measure, fail, prefix, repo, unit=None, spawner=None):
     """Run pre_push_report on the host and report missing pytest/xdist or a writable umask."""
     command = prefix + 'host_ready --test-tools ' + shlex.quote(repo)
     if unit:
         command += ' --unit ' + shlex.quote(unit)
-    report = measure('python', command, json.loads)
+    plan = spawner(command[len(prefix):]) if spawner else {}
+    report = measure('python', command, json.loads, **plan)
     if report is None:
         return False
     missing = [m for m in report['missing'] if m in ('pytest', 'xdist')]
@@ -339,18 +340,24 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
     def fail(check, reason):
         record['failures'].append(clean(f'{check}: {reason}'))
 
-    def command(check, script):
+    def command(check, script, steps=None, outputs=None, **plan):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             fail(check, 'timeout')
             return None
         try:
-            from .remote_ps import linux_command
-            argv = (['sh', '-c', script] if config.get('local') else
-                    ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
-                     '--', config['ssh'], linux_command(config, script)])
+            from .remote_ps import invocation, plan_body
+            if config.get('local'):
+                argv, body = ['pg-spawnd', 'steps'], plan_body(script, steps, **plan)
+            else:
+                remote, body = invocation(config, script, steps, **plan)
+                argv = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                        '--', config['ssh'], remote]
+            extra = {} if body is None else {'input': body.decode('utf-8')}
             reply = runner(argv, capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=remaining)
+                           text=True, encoding="utf-8", errors="replace", timeout=remaining, **extra)
+            if body is not None and outputs and reply.returncode in outputs:
+                return outputs[reply.returncode] + '\n'  # A plan reports its branch as an exit code.
             if reply.returncode and not (check == 'doctor' and reply.returncode == 1):
                 fail(check, 'command_failed')
                 return None
@@ -361,8 +368,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             fail(check, 'command_failed')
         return None
 
-    def measure(check, script, parse):
-        output = command(check, script)
+    def measure(check, script, parse, **plan):
+        output = command(check, script, **plan)
         if output is not None:
             try:
                 return parse(output)
@@ -378,7 +385,9 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             record['reachable'] = True
             record['src_ok'] = check_sources(name, config, command, fail)
             if config.get('registry'):
-                record['tools_ok'] = command('tools', 'command -v git && command -v python3 && command -v codex') is not None
+                record['tools_ok'] = command(
+                    'tools', 'command -v git && command -v python3 && command -v codex',
+                    [{'argv': [tool, '--version']} for tool in ('git', 'python3', 'codex')]) is not None
                 record['tokens_ok'] = command('tokens', 'codex login status') is not None
                 record['trust_ok'] = command(
                     'trust', 'pg-host-readiness --project ' + shlex.quote(config['repo'])) is not None
@@ -389,11 +398,22 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             if config.get('state_dir'):
                 prefix += 'PLANGRAPH_SPAWN_STATE=' + shlex.quote(config['state_dir']) + ' '
             prefix += 'PYTHONPATH=src python3 -m plangraph.spawner.'
+            def spawner(rest):
+                """The step plan of `python3 -m plangraph.spawner.<rest>` run from the source dir."""
+                name, *args = shlex.split(rest)
+                env = {'PYTHONPATH': 'src'}
+                if config.get('state_dir'):
+                    env['PLANGRAPH_SPAWN_STATE'] = config['state_dir']
+                plan = dict(cwd=config['spawner_src'], steps=[
+                    {'argv': ['python3', '-m', 'plangraph.spawner.' + name, *args], 'env': env}])
+                if config.get('env_file'):
+                    plan['env_file'] = config['env_file']
+                return plan
             if config.get('registry'):
                 session = config.get('session_unit') or ''
                 record['python_ok'] = python_test_tools(
                     measure, fail, prefix, config['repo'],
-                    session if session.endswith('.service') else None)
+                    session if session.endswith('.service') else None, spawner)
             record['mem_available_mb'] = measure('memory', 'cat /proc/meminfo',
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
             record['disk_free_gb'] = measure('disk', 'df -Pk -- ' + repo,
@@ -426,7 +446,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     if not isinstance(row['name'], str) or row['status'] not in ('pass', 'warn', 'fail'):
                         raise ValueError()
                 return ok, rows
-            doctor = measure('doctor', prefix + 'doctor --json', parse_doctor)
+            doctor = measure('doctor', prefix + 'doctor --json', parse_doctor, **spawner('doctor --json'))
             if doctor is not None:
                 ok, rows = doctor
                 record['doctor_ok'] = ok and not any(r['status'] == 'fail' for r in rows)
@@ -449,7 +469,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             elif not config.get('registry'):
                 fail('session', 'not_configured')
             run_probe = 'remote_ps' if config.get('registry') else 'cli ps'
-            runs = measure('runs', prefix + run_probe, lambda s: json.loads(s)['runs'])
+            runs = measure('runs', prefix + run_probe, lambda s: json.loads(s)['runs'],
+                           **spawner(run_probe))
             if runs is not None:
                 record['live_runs'] = sum(r['status'] == 'running' for r in runs)
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:

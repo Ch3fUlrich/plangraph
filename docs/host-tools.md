@@ -181,7 +181,9 @@ entry, current main checkout in `repos.plangraph.root`, role-specific
 reservations, and memory floor. List the repository IDs approved for SSH
 transport in the registry's `public_repos` field. A workstation WSL entry uses
 `os: linux`, the Windows SSH endpoint in `ssh_target`, and the distribution in
-`wsl_distro`. Its paths use the distribution's Linux filesystem. Set
+`wsl_distro`. Placement, readiness and status probes reach the guest
+through `wsl.exe --exec pg-spawnd steps` with a JSON step plan on stdin, never a shell; install
+`pg-spawnd` on the guest's `PATH`. Its paths use the distribution's Linux filesystem. Set
 `placement_fallback: true` on the orchestration host to rank it after ready
 workers. Among ready worker hosts, placement uses free memory above each
 host's floor. The run record includes the selected host and placement reason.

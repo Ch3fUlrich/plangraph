@@ -159,3 +159,15 @@ fn fail_code_replaces_a_failing_steps_code_and_a_leading_tilde_means_home() {
     assert_eq!(code, 0);
     assert_eq!(out, format!("{}/marker\n", home.path().display()));
 }
+
+#[test]
+fn a_step_cwd_replaces_the_plan_cwd_for_that_step_only() {
+    let plan = tempfile::tempdir().unwrap();
+    let (code, out) = run(json!({"cwd": plan.path(), "steps": [
+        {"argv": ["pwd"], "cwd": "/"}, {"argv": ["pwd"]}]}));
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        format!("/\n{}\n", fs::canonicalize(plan.path()).unwrap().display())
+    );
+}

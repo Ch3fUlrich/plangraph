@@ -45,6 +45,9 @@ pub struct Step {
     pub ensure_commit: Option<EnsureCommit>,
     #[serde(default)]
     pub receipt: Option<Receipt>,
+    /// Working directory of this step, replacing the plan's.
+    #[serde(default)]
+    pub cwd: Option<String>,
     /// Exit code reported when this step fails, in place of the step's own.
     #[serde(default)]
     pub fail_code: Option<i32>,
@@ -194,6 +197,8 @@ fn run_step(
 ) -> Result<i32, String> {
     let mut env = env.to_vec();
     env.extend(step.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let step_cwd = step.cwd.as_deref().map(expand_home);
+    let cwd = step_cwd.as_deref().map(Path::new).or(cwd);
     let code = run_action(step, &env, cwd, out)?;
     Ok(match step.fail_code {
         Some(replacement) if code != 0 => replacement,

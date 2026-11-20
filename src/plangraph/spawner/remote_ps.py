@@ -1,6 +1,5 @@
 """Optional, bounded SSH fan-out for ps; transport diagnostics stay private."""
 from concurrent.futures import ThreadPoolExecutor
-import base64
 import json
 import os
 from pathlib import Path
@@ -66,20 +65,54 @@ def source_path(src):
     return shlex.quote(src)
 
 
-def linux_command(host, command):
-    """Pass a POSIX command in one cmd.exe-safe line through the WSL hop."""
+WSL_RUNNER = 'pg-spawnd steps'
+SHELL_SYNTAX = re.compile(r'[;&|<>$`(){}\\\n]')
+
+
+def wsl_distro(host):
     distro = host.get('wsl_distro')
-    if distro is None:
-        return command
-    if not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*', distro):
+    if distro is not None and not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*', distro):
         raise ValueError('invalid WSL distribution')
-    payload = base64.b64encode(command.encode()).decode('ascii')
-    launcher = f"import base64,os;os.execl('/bin/sh','sh','-c',base64.b64decode('{payload}').decode())"
-    return f'wsl.exe --distribution {distro} --exec python3 -c "{launcher}"'
+    return distro
+
+
+def plan_body(script, steps=None, **plan):
+    """The JSON step plan for `pg-spawnd steps`: `steps`, or the one argv of a simple `script`."""
+    if steps is None:
+        if SHELL_SYNTAX.search(script):
+            raise ValueError('compound script needs a step plan')
+        steps = [{'argv': shlex.split(script)}]
+    return json.dumps({**plan, 'steps': steps}).encode()
+
+
+def invocation(host, script, steps=None, **plan):
+    """The remote command and its stdin: a script for a POSIX login shell, or a step plan.
+
+    A WSL guest is reached through `wsl.exe --exec`, which runs no shell, so it gets the plan
+    as JSON on stdin for `pg-spawnd steps`.
+    """
+    distro = wsl_distro(host)
+    if distro is None:
+        return script, None
+    return f'wsl.exe --distribution {distro} --exec {WSL_RUNNER}', plan_body(script, steps, **plan)
+
+
+def host_invocation(host, *, query=False):
+    """Same source probe for both callers; Windows hosts keep their cmd.exe text."""
+    module = ['python3', '-m', 'plangraph.spawner.remote_ps']
+    if 'win_src' in host:
+        return host_command(host, query=query), None
+    steps = []
+    if 'src' in host:
+        steps.append({'argv': ['test', '-d', host['src']], 'fail_code': SRC_MISSING})
+    if query:
+        steps.append({'argv': module, 'env': {'PYTHONPATH': host['src']}} if 'src' in host
+                     else {'argv': module})
+    return invocation(host, host_command(host, query=query), steps)
 
 
 def host_command(host, *, query=False):
-    """Build the same source probe and shell wrapper for both callers."""
+    """Build the same source probe for both callers (the POSIX or cmd.exe script)."""
     module = 'python3 -m plangraph.spawner.remote_ps'
     if 'win_src' in host:
         command = source_check(host)
@@ -92,7 +125,8 @@ def host_command(host, *, query=False):
     command = source_check(host) if 'src' in host else ''
     if query:
         command += f'; PYTHONPATH={source_path(host["src"])} {module}' if command else module
-    return linux_command(host, command)
+    return command
+
 
 def exit_reason(code):
     return {0: None, SRC_MISSING: 'host src missing', 255: 'host unreachable'}.get(
@@ -100,12 +134,19 @@ def exit_reason(code):
 
 
 def query_host(host, timeout):
-    command = host_command(host, query=True)
+    command, plan = host_invocation(host, query=True)
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL if plan is None else subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         ) as process:
+        if plan is not None:
+            try:
+                process.stdin.write(plan)
+                process.stdin.close()
+            except OSError:
+                pass  # The exit status below names the failure.
         deadline = time.monotonic() + timeout
         output = bytearray()
         try:
@@ -260,9 +301,18 @@ def native_result(record, *, verb='result'):
             argv.extend(['--state', host['state_dir']])
         command += 'PYTHONPATH=' + shlex.quote(host['spawner_src']) + ' ' + shlex.join([*argv, verb, run_id])
         command += "; printf '\\n%s\\n' " + shlex.quote(end)
+        plan = {'cwd': host['repo'], 'steps': [
+            {'argv': [*argv, verb, run_id], 'env': {'PYTHONPATH': host['spawner_src']},
+             'receipt': {'begin': begin, 'end': end}}]}
+        if host.get('env_file'):
+            plan['env_file'] = host['env_file']
+        command, body = invocation(host, command, plan.pop('steps'), **plan)
         reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
-                                '--', host['ssh'], linux_command(host, command)], capture_output=True,
-                               text=True, encoding='utf-8', errors='replace', timeout=10)
+                                '--', host['ssh'], command], capture_output=True, timeout=10,
+                               **(dict(text=True, encoding='utf-8', errors='replace') if body is None
+                                  else dict(input=body)))
+        if body is not None:
+            reply.stdout = reply.stdout.decode('utf-8', errors='replace')
         # A terminal nonzero exit is the writer's exit, with a valid JSON record.
         text, _ = mask(reply.stdout)
         lines = text.splitlines()

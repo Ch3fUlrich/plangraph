@@ -53,29 +53,35 @@ def test_parallel_partial_and_private(tmp_path, monkeypatch):
     '~/code/plangraph/src']] +
     [(s, d) for s in ['/opt/plangraph/src', '~/code/plangraph/src']
      for d in ['Ubuntu-24.04', 'a_B.9-', '.distro', '_distro', '1']])
-def test_transport_is_bounded_and_noninteractive(monkeypatch, src, distro):
+def test_transport_is_bounded_and_noninteractive(monkeypatch, tmp_path, src, distro):
     original = subprocess.Popen
     host = dict(target='private-target')
     command = 'python3 -m plangraph.spawner.remote_ps'
+    steps = [{'argv': ['python3', '-m', 'plangraph.spawner.remote_ps']}]
     if src is not None:
         host['src'] = src
         quoted = '"$HOME"/code/plangraph/src' if src.startswith('~/') else src
         command = f'test -d {quoted} || exit 44; PYTHONPATH={quoted} {command}'
+        steps = [{'argv': ['test', '-d', src], 'fail_code': 44},
+                 {'argv': ['python3', '-m', 'plangraph.spawner.remote_ps'], 'env': {'PYTHONPATH': src}}]
     if distro is not None:
         host['wsl_distro'] = distro
-        encoded = base64.b64encode(command.encode()).decode()
-        launcher = f"import base64,os;os.execl('/bin/sh','sh','-c',base64.b64decode('{encoded}').decode())"
-        command = f'wsl.exe --distribution {distro} --exec python3 -c "{launcher}"'
+        command = f'wsl.exe --distribution {distro} --exec pg-spawnd steps'
+    received = tmp_path / 'plan.json'
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'private-target', command]
-        assert kwargs['stdin'] == subprocess.DEVNULL
+        assert kwargs['stdin'] == (subprocess.DEVNULL if distro is None else subprocess.PIPE)
         assert kwargs['stdout'] == subprocess.PIPE
         assert kwargs['stderr'] == subprocess.DEVNULL
         assert kwargs.get('shell', False) is False
-        return original([sys.executable, '-c', 'print(\'{"runs": []}\', end="")'], **kwargs)
+        child = ('import sys,pathlib;pathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read());'
+                 'print(\'{"runs": []}\', end="")')
+        return original([sys.executable, '-c', child, str(received)], **kwargs)
     monkeypatch.setattr(subprocess, 'Popen', run)
     assert remote_ps.query_host(host, 2) == '{"runs": []}'
+    if distro is not None:
+        assert json.loads(received.read_text()) == {'steps': steps}
 
 @pytest.mark.parametrize('wsl', [False, True])
 @pytest.mark.parametrize('src', ['/opt/src;id', '$(id)',
@@ -509,3 +515,30 @@ def test_transport_error_metadata_keeps_reason_private(monkeypatch):
                          error='HostQueryError (SSH exit 1)')]
     assert ps_reply(rows)['runs'] == rows
     assert 'PRIVATE-DIAGNOSTIC' not in json.dumps(rows)
+
+
+def test_native_result_over_a_wsl_guest_sends_a_receipt_plan_not_a_script(monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import overflow
+    host = dict(ssh='alias', repo='/r', spawner_src='/s', env_file='/e', wsl_distro='Ubuntu', state_dir='/st')
+    monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
+    monkeypatch.setattr(overflow, 'placement_config', lambda registry, role=None: {'hosts': {'ash': host}})
+    seen = []
+    def run(argv, **kwargs):
+        plan = json.loads(kwargs['input'])
+        seen.append((argv, plan))
+        receipt = plan['steps'][0]['receipt']
+        body = json.dumps(dict(run_id='run-a', host='ash', run_kind='native-codex', role='implement',
+                               status='completed'))
+        return SimpleNamespace(returncode=0, stdout=(
+            receipt['begin'] + '\n' + body + '\n\n' + receipt['end'] + '\n').encode())
+    monkeypatch.setattr(remote_ps.subprocess, 'run', run)
+    record = dict(host='ash', run_id='run-a', run_kind='native-codex', role='implement')
+    result = remote_ps.native_result(record)
+    assert result.get('remote_query_error') is None
+    argv, plan = seen[0]
+    assert argv[-1] == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
+    assert plan['cwd'] == '/r' and plan['env_file'] == '/e'
+    step = plan['steps'][0]
+    assert step['argv'][:3] == ['python3', '-m', 'plangraph.spawner.cli']
+    assert step['argv'][-2:] == ['result', 'run-a'] and step['env'] == {'PYTHONPATH': '/s'}

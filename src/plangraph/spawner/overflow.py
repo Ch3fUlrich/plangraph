@@ -338,13 +338,17 @@ def remote_spawn(name, host, card, prompt, options):
     options = list(options)
     if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
         raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
-    from .remote_ps import linux_command
+    from .remote_ps import invocation
     alias = host['ssh']
     checkout = target_checkout(host, card)
-    def ssh(command, *, binary=False, **kwargs):
+    def ssh(command, *, binary=False, steps=None, plan=None, **kwargs):
+        """Run a script on the host's login shell, or a step plan where no shell exists (WSL)."""
         encoding = {} if binary else {'text': True, 'encoding': 'utf-8', 'errors': 'replace'}
+        remote, body = invocation(host, command, steps, **(plan or {}))
+        if body is not None:
+            kwargs['input'] = body if binary else body.decode('utf-8')
         return subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
-                               '--', alias, linux_command(host, command)], capture_output=True,
+                               '--', alias, remote], capture_output=True,
                               timeout=165, **encoding, **kwargs)
     try:
         staging = ssh('mktemp -d')
@@ -377,9 +381,10 @@ def remote_spawn(name, host, card, prompt, options):
             files = [Path(local) / 'card.json', Path(local) / 'prompt.txt', *bundle_files]
             if host.get('wsl_distro'):
                 for path in files:
-                    with path.open('rb') as source:
-                        copied = ssh('umask 077 && cat > ' + q(directory + '/' + path.name),
-                                     binary=True, stdin=source)
+                    target = directory + '/' + path.name
+                    copied = ssh('', binary=True, steps=[{
+                        'write_file': {'path': target, 'mode': 0o600},
+                        'stdin_hex': path.read_bytes().hex()}])
                     if copied.returncode:
                         raise RemoteRefusal('remote copy failed')
             else:
@@ -394,16 +399,21 @@ def remote_spawn(name, host, card, prompt, options):
         commands.append('cd ' + q(checkout))
         if diff:
             prepare = [f'cd {q(checkout)}']
+            prepare_steps = []
             if bundle_files:
-                prepare.append('git fetch --no-write-fetch-head -q origin main')
-                prepare.append(shlex.join(['git', 'fetch', '--no-write-fetch-head', '--no-tags',
-                    '--', directory + '/review.bundle', 'refs/review/head']))
+                fetch_main = ['git', 'fetch', '--no-write-fetch-head', '-q', 'origin', 'main']
+                fetch_bundle = ['git', 'fetch', '--no-write-fetch-head', '--no-tags',
+                                '--', directory + '/review.bundle', 'refs/review/head']
+                prepare.extend(shlex.join(argv) for argv in (fetch_main, fetch_bundle))
+                prepare_steps.extend({'argv': argv} for argv in (fetch_main, fetch_bundle))
             for rev in ('base', 'head'):
                 object_ref = diff[rev] + '^{commit}'
                 present = shlex.join(['git', 'cat-file', '-e', object_ref])
-                fetch = shlex.join(['git', 'fetch', '--no-write-fetch-head', '-q', 'origin', '--', diff[rev]])
+                fetch_argv = ['git', 'fetch', '--no-write-fetch-head', '-q', 'origin', '--', diff[rev]]
+                fetch = shlex.join(fetch_argv)
                 prepare.append(f'({present} || ({fetch} && {present}))')
-            if ssh(' && '.join(prepare)).returncode:
+                prepare_steps.append({'ensure_commit': {'sha': diff[rev], 'fetch_argv': fetch_argv}})
+            if ssh(' && '.join(prepare), steps=prepare_steps, plan={'cwd': checkout}).returncode:
                 raise RemoteRefusal('remote checkout cannot resolve the reviewed commits')
         command = ['python3', '-m', 'plangraph.spawner.cli']
         if host.get('state_dir'):
@@ -420,8 +430,12 @@ def remote_spawn(name, host, card, prompt, options):
         assignments = ' '.join(f'{key}={q(value)}' for key, value in env.items())
         commands.append('{ ' + assignments + ' ' + spawn
                         + "; rc=$?; printf '\n%s\n' " + q(end) + ' ; exit "$rc"; }')
+        spawn_plan = dict(cwd=checkout)
+        if host.get('env_file'):
+            spawn_plan['env_file'] = host['env_file']
+        spawn_steps = [{'argv': command + options, 'env': env, 'receipt': {'begin': begin, 'end': end}}]
         try:
-            result = ssh(' && '.join(commands))
+            result = ssh(' && '.join(commands), steps=spawn_steps, plan=spawn_plan)
         except (OSError, subprocess.SubprocessError):
             return {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'unknown',
                     'host': name, 'acknowledged_unknown': True, 'reason': 'remote_launch_uncertain'}
@@ -448,8 +462,10 @@ def remote_spawn(name, host, card, prompt, options):
         raise RemoteRefusal('remote preparation failed before launch') from None
     finally:
         try:
-            ssh('rm -f -- ' + ' '.join(q(directory + '/' + name)
-                for name in ('card.json', 'prompt.txt', 'review.bundle')) + '; rmdir -- ' + q(directory))
+            staged = [directory + '/' + name for name in ('card.json', 'prompt.txt', 'review.bundle')]
+            ssh('rm -f -- ' + ' '.join(q(path) for path in staged) + '; rmdir -- ' + q(directory),
+                steps=[{'argv': ['rm', '-f', '--', *staged]}, {'argv': ['rmdir', '--', directory]}],
+                plan={'keep_going': True})
         except (OSError, subprocess.SubprocessError):
             logging.warning('remote staging cleanup could not be confirmed')
 
