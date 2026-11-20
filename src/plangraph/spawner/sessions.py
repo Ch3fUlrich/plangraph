@@ -392,7 +392,9 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         cap = cfg.get("ctx_cap_tokens") or 300000
         rows = self._agents_rows()
         sessions = []
-        for rec in self._all_records():
+        records = self._all_records()
+        family = self._family(records)
+        for rec in records:
             sid = rec.get("session_id")
             agent = next((r for r in rows if (sid and r.get("sessionId") == sid)
                           or (not sid and r.get("name") == rec.get("name")
@@ -407,4 +409,5 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
                           and bool(NAME_RE.fullmatch(rec["name"]))
                           and self._marker_path(rec["name"]).is_file()),
             })
+            sessions[-1].update(family(rec))
         return {"sessions": sessions}

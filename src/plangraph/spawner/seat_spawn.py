@@ -175,6 +175,70 @@ def resources(service):
     from .overflow import available_memory_mb
     return 0, available_memory_mb()
 
+_sleep = time.sleep   # test seam
+ADMISSION_WAIT_ENV, ADMISSION_POLL_ENV = 'PLANGRAPH_ADMISSION_WAIT_S', 'PLANGRAPH_ADMISSION_POLL_S'
+
+def _seconds(name, default):
+    try:
+        value = float(os.environ.get(name, default))
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+def admission_window():
+    """Seconds a spawn without room keeps re-checking admission before it is refused."""
+    return _seconds(ADMISSION_WAIT_ENV, 120.0)
+
+def admission_poll():
+    """Seconds between re-checks (at most 60: a queued run is never left unchecked longer)."""
+    return min(max(_seconds(ADMISSION_POLL_ENV, 15.0), 0.01), 60.0)
+
+def _no_hosts_hint(config):
+    """Why a refusal had nowhere to overflow to, when the overflow config names no host."""
+    if config.get('hosts'):
+        return {}
+    return {'hint': 'overflow-hosts.json is absent or lists no host: run `python3 -m plangraph.fleet_sync genconfig write` '
+                    'so a review without local room can be placed on another host'}
+
+def _open_queue(service, role, decision, window, host=None, card=None):
+    """The queued record of a spawn waiting for room; its owner is this process.
+
+    It carries the placing host and the card's item identity, as every other run record does."""
+    from .proc_kill import _stat
+    now = time.time()
+    record = {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'queued', 'role': role or 'implement',
+              'reason': decision.reason, 'overflow_reason': decision.reason, 'started': now,
+              'queued_until': now + window, 'owner_pid': os.getpid(),
+              'owner_pid_start': (_stat(os.getpid()) or (None,) * 5)[4]}
+    if host:
+        record['host'] = host
+    from .item_key import annotate_item
+    annotate_item(record, card)
+    service._save(record)
+    return record
+
+def _queue_status(service, queued):
+    try:
+        return service.result(queued['run_id']).get('status')
+    except (OSError, ValueError):
+        return 'queued'
+
+def _close_queue(service, queued, **fields):
+    """End the wait: a run that found room leaves no record behind, any other end is saved.
+
+    A run someone else ended meanwhile (cancel) keeps its saved record, which is returned."""
+    if _queue_status(service, queued) != 'queued':
+        return service.result(queued['run_id'])
+    if fields.get('status') is None:
+        import shutil
+        shutil.rmtree(service._path(queued['run_id']).parent, ignore_errors=True)
+        return None
+    record = dict(queued, ended=time.time(), **fields)
+    for key in ('owner_pid', 'owner_pid_start', 'queued_until'):
+        record.pop(key, None)
+    service._save(record)
+    return record
+
 def admit(service, options, *, card=None, preview=False):
     """Enforce disk and RAM admission even without overflow configuration."""
     if options.get('dry_run'):
@@ -209,15 +273,19 @@ def admit(service, options, *, card=None, preview=False):
     benchmark_local = remote_first and options.get('benchmark') is not None
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
-    rows = overflow.ready_records(config, role)
-    if native:
-        for row in rows.values():
-            if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
-                row.setdefault('refusal', 'disk_low: need 5 GB free to start')
-    if remote_first:
-        rows = {name: row for name, row in rows.items()
-                if name != local and overflow.host_config(registry, name).get('id') != local}
+    def load_rows():
+        rows = overflow.ready_records(config, role)
+        if native:
+            for row in rows.values():
+                if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
+                    row.setdefault('refusal', 'disk_low: need 5 GB free to start')
+        if remote_first:
+            rows = {name: row for name, row in rows.items()
+                    if name != local and overflow.host_config(registry, name).get('id') != local}
+        return rows
+    rows = load_rows()
     health = disk or (overflow.local_health_refusal(config, memory) if remote_first else None)
+    queued, window = None, 0 if remote_first or preview else admission_window()
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -244,10 +312,32 @@ def admit(service, options, *, card=None, preview=False):
             if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
                 return None
         if decision.host is None:
+            if window > 0 and queued is None:
+                queued = _open_queue(service, role, decision, window, local, card)
+            if queued is not None:
+                outcome = _queue_status(service, queued)
+                if outcome != 'queued':   # cancelled (or ended) by someone else while it waited
+                    return service.result(queued['run_id'])
+                if time.time() < queued['queued_until']:
+                    _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
+                    _, memory = resources(service)
+                    disk = local_disk_refusal(repo, service)
+                    health = disk
+                    rows = load_rows()
+                    if not disk and not overflow.memory_refusal(memory, role_mb, floor):
+                        taken = _close_queue(service, queued)
+                        if taken is not None:
+                            return taken
+                        if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
+                        return None
+                    continue
+                return _close_queue(service, queued, status='refused', reason=decision.reason,
+                                    overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
+                                    error=f'{decision.reason} (admission window {window:g}s elapsed)')
             record = {'run_id': 'run-' + uuid.uuid4().hex,
-                      'status': 'refused' if remote_first else 'queued',
+                      'status': 'refused',
                       'reason': decision.reason, 'overflow_reason': decision.reason,
-                      'exit_code': 2 if remote_first else 5}
+                      'exit_code': 2, **_no_hosts_hint(config)}
             break
         name = decision.host
         try:

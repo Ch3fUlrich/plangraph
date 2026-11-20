@@ -1,0 +1,1 @@
+The pre-push affected-tests bound now scales with the selection: 2 s per selected test path, at least 240 s and at most 1200 s, so a commit that selects hundreds of test paths no longer needs PREFLIGHT_FAST=1.

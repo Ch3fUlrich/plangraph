@@ -53,7 +53,7 @@ def test_overflow_checks_selected_and_diff_repositories(checkouts, tmp_path, mon
     else:
         service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(caller)))
         result = seat_spawn.admit(service, {'cwd': str(reviewed)} if source == 'flag' else {}, card=card)
-        assert result['status'] == 'queued'
+        assert result['status'] == 'refused'
         if not (selected_public and diff_public):
             assert 'not public' in result['reason']
     assert seen[-1] is (selected_public and diff_public)
@@ -95,7 +95,7 @@ def test_explicit_checkout_never_uses_healthy_remote(checkouts, tmp_path, monkey
     else:
         service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(caller)))
         result = seat_spawn.admit(service, {}, card={'cwd': str(reviewed)})
-        assert result['status'] == ('refused' if remote_first else 'queued')
+        assert result['status'] == 'refused'
         assert not result.get('overflow_remote')
         assert ('memory' if remote_first else 'explicit cwd') in result['reason']
 

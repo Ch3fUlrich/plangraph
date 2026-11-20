@@ -7,6 +7,11 @@ from .private_io import SAVE_READ_ATTEMPTS
 
 async def cancel_recorded(service, run_id):
     record = service.result(run_id, attempts=SAVE_READ_ATTEMPTS)
+    if record['status'] == 'queued' and not record.get('survivors'):
+        # A queued run holds no process: cancelling it ends the wait (its owner sees the status).
+        record.update(status='cancelled', reason='cancelled_while_queued', exit_code=1, ended=time.time())
+        service._save(record)
+        return record
     if record['status'] not in ('running', 'dry_run') and not record.get('survivors'):
         # A finisher may already have published a newer record: never rewrite
         # an unchanged terminal snapshot.

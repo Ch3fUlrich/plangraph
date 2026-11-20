@@ -1,0 +1,1 @@
+The shared cargo target is cleaned at its cap when only dead records remain: ended, timed_out, stalled and queued runs and running records with every recorded pid gone no longer count as busy (ps marks the latter stale), and the exclusive cleanup waits up to 30 s for live builds instead of refusing at once.
