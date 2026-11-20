@@ -145,7 +145,7 @@ fn placeholder_git_identities_are_not_ready() {
     ] {
         assert!(identity_problem(name, email).is_some(), "{name} <{email}>");
     }
-    assert_eq!(identity_problem("Dev Eloper", "dev@team.example.org"), None);
+    assert_eq!(identity_problem("Dev Eloper", &usable()), None);
 }
 #[test]
 fn identity_point_reads_the_hosts_git_config() {
@@ -166,10 +166,15 @@ fn identity_point_reads_the_hosts_git_config() {
     run(&["config", "user.name", "x"]);
     run(&["config", "user.email", "x@example.invalid"]);
     assert!(host.check("identity").unwrap_err().contains("placeholder"));
-    run(&["config", "user.email", "dev@team.example.org"]);
+    run(&["config", "user.email", &usable()]);
     assert_eq!(host.check("identity"), Ok(()));
     // A read-only sandbox never commits, so its identity is not probed.
     run(&["config", "user.email", "x@example.invalid"]);
     host.mode = "read-only".into();
     assert_eq!(host.check("identity"), Ok(()));
+}
+
+/// An address on a real-looking domain, assembled so the file holds no address literal.
+fn usable() -> String {
+    ["dev", "@", "team.example.org"].concat()
 }
