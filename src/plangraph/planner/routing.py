@@ -374,6 +374,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped = []
     from plangraph.routing_support.resolver import score_model
     from plangraph.routing_support.liveness import agy_limit_reason
+    from plangraph.routing_support.quota_snapshots import skip_reason as quota_skip_reason
     candidate_details = []
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
     for leg in candidates:
@@ -382,11 +383,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "codex_available"
         if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
             reason = 'auth_refused'
-        if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('caller') == 'quota-snapshot':
-            reset = states[leg.id]['evidence'].get('reset_at')
-            reason = 'quota_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset)) if reset else reason
         if reason == 'limited':
             reason = agy_limit_reason(leg_key(leg), states[leg.id]) or reason
+        if reason == 'limited':
+            reason = quota_skip_reason(states[leg.id]) or reason
         if reason:
             pass
         elif leg.family in excluded:

@@ -116,6 +116,12 @@ def build(request: dict) -> dict:
             require_available(leg, service.leg_reader, request['card'])
         except SpawnRefused as exc:
             raise LaunchRefused('leg_unavailable', str(exc)) from None
+    from plangraph.routing_support.quota_snapshots import pool_of, skip_reason
+    if service.leg_reader is not None and pool_of(leg.model):
+        card = request['card']
+        status = service.leg_reader.leg_status(leg.model, account=card.get('account'), combo=card.get('combo'))
+        if reason := skip_reason(status):
+            raise LaunchRefused('quota_snapshot', reason)
     headers = None
     if request['role'] == 'review':
         from plangraph.planner.seats import seat_family
