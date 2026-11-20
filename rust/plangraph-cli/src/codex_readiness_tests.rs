@@ -110,8 +110,16 @@ fn read_only_mode_skips_the_commit_point_but_writable_modes_probe_it() {
 }
 #[test]
 fn workspace_write_commit_passes_in_the_real_sandbox_when_it_can_start() {
-    // Under the crate dir, not /tmp, which the sandbox always allows to write.
-    let parent = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
+    // Under HOME, not /tmp, which the sandbox always allows to write, and not
+    // the crate dir, where a killed run would leave a repository in the source tree.
+    let Some(home) = std::env::var_os("HOME") else {
+        eprintln!("skipped: HOME is not set");
+        return;
+    };
+    let parent = tempfile::Builder::new()
+        .prefix(".pg-readiness-test-")
+        .tempdir_in(home)
+        .unwrap();
     let repo = parent.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
     let mut host = Host {

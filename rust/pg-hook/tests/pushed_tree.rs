@@ -15,7 +15,7 @@ fn fixture_path(root: &Path, relative: &str) -> PathBuf {
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
+    let output = pg_worker_core::git_test_support::command(root)
         .args([
             "-c",
             "user.name=Test",
@@ -23,7 +23,6 @@ fn git(root: &Path, args: &[&str]) -> String {
             "user.email=test@example.invalid",
         ])
         .args(args)
-        .current_dir(root)
         .output()
         .unwrap();
     assert!(output.status.success(), "{args:?}: {output:?}");
