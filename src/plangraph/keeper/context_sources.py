@@ -382,19 +382,19 @@ def named_merge(git, project, revision):
     if pr is not None:
         return {"head": pr_head, "pr": pr}
     introduced = _merge_of(git, repo, ref, sha)
-    landed = introduced["sha"] if introduced else sha
+    landed = sha
+    if introduced:
+        on_first_parent = _git(git, repo, ["merge-base", "--is-ancestor",
+                                          "--end-of-options", sha, f"{introduced['sha']}^1"])[0]
+        if on_first_parent not in (0, 1):
+            return None
+        if on_first_parent == 1:
+            landed = introduced["sha"]
     shown = _ok(git, repo, ["show", "-s", "--format=%P%x1f%s", "--end-of-options", landed])
     if shown is None:
         return None
     parent_text, _, subject = shown.partition("\x1f")
     parents = parent_text.split()
-    if introduced and parents:
-        on_first_parent = _git(git, repo, ["merge-base", "--is-ancestor",
-                                          "--end-of-options", sha, parents[0]])[0]
-        if on_first_parent not in (0, 1):
-            return None
-        if on_first_parent == 0:
-            return {"head": sha, "pr": None}
     match = _PR_RE.search(subject)
     return {"head": parents[1] if len(parents) == 2 else sha,
             "pr": int(match[1]) if match else None}

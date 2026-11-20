@@ -441,7 +441,12 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
             w.store.close_merged(router, "demo:A", "D-5504", ["google"])
         audit = w.conn.execute("SELECT msg FROM audit_log WHERE action='close_merged' ORDER BY id DESC LIMIT 1").fetchone()
         assert reason in audit["msg"]
-    w.store.edit_definition(router, "demo:A", {"note": f"Merge-Repo: other {_git(repo, 'rev-parse', 'main')}"})
+    landed = _git(repo, "rev-parse", "main")
+    _git(repo, "checkout", "-qb", "later", "main")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "later work")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "later merge (#166)", "later")
+    w.store.edit_definition(router, "demo:A", {"note": f"Merge-Repo: other {landed}"})
     edited = w.store._item("demo:A")
     assert [edited[f] for f in ("state", "epoch", "round")] == [before[f] for f in ("state", "epoch", "round")]
     assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
