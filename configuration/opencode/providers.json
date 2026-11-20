@@ -31,7 +31,8 @@
       "settings": {"baseURL": "http://127.0.0.1:8080/v1"},
       "models": {
         "agy-claude-sonnet-5-5-high": {"modelID": "agy/claude-sonnet-5-5-high", "name": "agy-claude-sonnet-5-5-high - direct Claude Sonnet 5.5 High (agy seat, no combo; Claude budget applies); site data only after T1-CLEAN", "limit": {"context": 1048576, "output": 32768}},
-        "cx-gpt-6.1-sol": {"modelID": "cx/gpt-6.1-sol", "name": "cx-gpt-6.1-sol - direct GPT-6.1 Sol (codex subscription via OmniRoute cx, no combo)", "limit": {"context": 475000, "output": 128000}},
+        "cx-gpt-6.2-sol": {"modelID": "cx/gpt-6.2-sol", "name": "cx-gpt-6.2-sol - direct GPT-6.2 Sol (codex subscription via OmniRoute cx, no combo)", "limit": {"context": 500000, "output": 128000}},
+        "cx-gpt-6.2-astra": {"modelID": "cx/gpt-6.2-astra", "name": "cx-gpt-6.2-astra - direct GPT-6.2 Astra (codex subscription via OmniRoute cx, no combo)", "limit": {"context": 272000, "output": 128000}},
         "cx-gpt-6-luna": {"modelID": "cx/gpt-6-luna", "name": "cx-gpt-6-luna - direct GPT-6 Luna (codex subscription via OmniRoute cx, no combo)", "limit": {"context": 475000, "output": 128000}},
         "spark-1.3-contributor": {"modelID": "spark-1.3-contributor"},
         "deepseek-v4.1-flash": {"modelID": "deepseek-v4.1-flash"},

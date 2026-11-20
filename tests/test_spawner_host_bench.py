@@ -104,10 +104,8 @@ def test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch):
     bare = route_json(tmp_path, capsys)
     assert bare["p_source"] == "operator-order"
     assert all(c["u_core"] is None and c["p_source"] == "prior" for c in bare["candidates"])
-    # luna, mimo-pro and mimo-flash are inline-only: skipped while the card has no diff_ref.
     from plangraph.planner.legs import REVIEW_ORDER
-    assert [leg["id"] for leg in bare["legs"]] == [*REVIEW_ORDER[2:-1], "agy-gpt-oss-120b"]
-
+    assert [leg["id"] for leg in bare["legs"]] == [*REVIEW_ORDER, "agy-gpt-oss-120b"]
 
 
 def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatch):
@@ -117,14 +115,13 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     reads = []
     def ambient_catalog():
         reads.append(1)
-        return [{'id': 'agy/gemini-4-argon-high', 'tier': 'paid', 'available': 1, 'active': True}]
+        return [{'id': 'agy/gemini-4-neon-medium', 'tier': 'paid', 'available': 1, 'active': True}]
 
     monkeypatch.setattr(resolver, 'get_catalog_models', ambient_catalog)
-    # Positive control: an unpinned CLI route reads this snapshot and changes order.
     ambient = route_json(tmp_path, capsys)
     assert reads == [1]
-    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-4-argon')['tier'] == 'paid'
-    assert ambient['first_leg']['id'] == 'agy-gemini-4-hydrogen-high'
+    assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-4-neon-medium')['tier'] == 'paid'
+    assert ambient['first_leg']['id'] == 'agy-gemini-4-neon-medium'
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
     assert reads == [1]  # The exact-order probe must inject its own catalog input.
 
@@ -166,9 +163,12 @@ def test_implement_order_unchanged_by_benchmark(tmp_path):
     assert {leg["id"] for leg in with_bench["legs"]} == {leg["id"] for leg in bare["legs"]}
     from plangraph.planner.legs import TIERS
     for plan in (with_bench, bare):
-        assert [l["id"] for l in plan["legs"][:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high"]
-        assert plan["first_leg"]["effort"] == "xhigh"
-        tiers = [TIERS.index(l["tier"]) for l in plan["legs"][2:]]
+        assert [l["id"] for l in plan["legs"][:6]] == [
+            "cx-gpt-6.2-sol-medium", "cx-gpt-6.2-astra", "agy-gemini-4-hydrogen-high",
+            "opencode-deepseek-v4.1-flash-free", "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",
+        ]
+        assert plan["first_leg"]["effort"] == "medium"
+        tiers = [TIERS.index(l["tier"]) for l in plan["legs"][6:]]
         assert tiers == sorted(tiers)
 
 

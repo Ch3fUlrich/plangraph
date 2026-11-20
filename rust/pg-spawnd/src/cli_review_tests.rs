@@ -275,13 +275,13 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
     }
     let output = Command::new("python3").current_dir(&root)
         .env("PYTHONPATH", root.join("src")).env("XDG_STATE_HOME", dir.path())
-        .args(["-c", "import json; from plangraph.routing_support.leg_state import _default_store; print(json.dumps({m:_default_store().leg_status(k) for m,k in [('gemini-4-hydrogen','agy:gemini-4-hydrogen'),('gemini-4-argon','agy:gemini-4-argon'),('claude-sonnet-5-5','claude-sonnet-5-5-high'),('agy-sonnet','agy:claude-sonnet-5-5')]}))"])
+        .args(["-c", "import json; from plangraph.routing_support.leg_state import _default_store; print(json.dumps({m:_default_store().leg_status(k) for m,k in [('gemini-4-hydrogen','agy:gemini-4-hydrogen'),('gemini-4-neon','agy:gemini-4-neon'),('claude-sonnet-5-5','claude-sonnet-5-5-high'),('agy-sonnet','agy:claude-sonnet-5-5')]}))"])
         .output().unwrap();
     assert!(output.status.success());
     let states: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(states["gemini-4-hydrogen"]["state"], "limited");
     assert_eq!(states["claude-sonnet-5-5"]["state"], "limited");
-    assert_eq!(states["gemini-4-argon"]["state"], "ok");
+    assert_eq!(states["gemini-4-neon"]["state"], "ok");
     assert_eq!(states["agy-sonnet"]["state"], "ok");
     let id = new_run_id();
     let record = crate::runs::create(

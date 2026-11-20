@@ -159,7 +159,7 @@ def test_gateway_qwen_refused():
     assert leg_for("ovh/qwen3-8b") is None
 
 
-@pytest.mark.parametrize('name', ['codex', 'cx-gpt-6.1-sol', 'gpt', 'cx-gpt-6.1-sol-medium'])
+@pytest.mark.parametrize('name', ['codex', 'cx-gpt-6.2-sol', 'gpt', 'cx-gpt-6.2-sol-medium'])
 def test_writer_codex_aliases_share_seats(name):
     from plangraph.review.family import writer_key
     assert writer_key(name) == 'openai'

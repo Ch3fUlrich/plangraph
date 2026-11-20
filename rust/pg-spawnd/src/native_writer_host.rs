@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-const WRITER_MODEL: &str = "gpt-6.1-sol";
+const WRITER_MODEL: &str = "gpt-6.2-sol";
 const WRITER_EFFORT: &str = "medium";
 /// Model and effort flags for the codex invocation; the ledger row records the same constants.
 fn model_args() -> [String; 4] {

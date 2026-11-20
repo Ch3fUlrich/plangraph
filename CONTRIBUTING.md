@@ -609,6 +609,9 @@ D-6054: OpenCode catalog integration tests use the shipped provider configuratio
 and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
 so changes to catalog identities or rendering select the Rust CI suite.
 
+Notification smoke: `tools/smoke-run-exit-notify.sh` targets
+`omniroute/cx-gpt-6.2-sol-medium` (D-6310).
+
 Claude transcript census: see [usage and classification limits](docs/claude-census.md).
 
 ## Bash guard rules (`tools/hooks/bash_guard.py`)

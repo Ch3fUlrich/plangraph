@@ -22,7 +22,7 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
   HIGH survives a fix round, the same host or tooling failure twice in a shift,
   a replan, or an operator audit): cuts packages, briefs writers, folds, runs
   CI waits and reviews, sends one GO request, merges with its own keeper token.
-- **Package writer**: Codex `gpt-6.1-sol` high in its native CLI does the bulk;
+- **Package writer**: Codex `gpt-6.2-sol` medium in its native CLI does the bulk;
   a Claude Sonnet subagent only small fixes.
 - **Reviewer**: at least one review per checkpoint. Codex reviews Claude-written
   code; a cheap reviewer of another family or Claude Sonnet reviews Sol-written code.
@@ -81,7 +81,7 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
   uses disposable Git metadata and does not run the target repository's hooks;
   repository-specific gates still run in the writer session.
 - Start: `herdr workspace create --cwd <worktree> --label <name>`, then
-  `herdr agent start <name> --kind codex --pane <pane> -- -m gpt-6.1-sol -c model_reasoning_effort="high" -c approval_policy="on-request" --sandbox workspace-write`,
+  `herdr agent start <name> --kind codex --pane <pane> -- -m gpt-6.2-sol -c model_reasoning_effort="medium" -c approval_policy="on-request" --sandbox workspace-write`,
   then `herdr agent prompt <name> "<read PACKAGE-x.md and carry it out>"`.
   Use `--sandbox danger-full-access -c approval_policy="never"` only after
   explicit operator approval naming the host and task; record the reason and

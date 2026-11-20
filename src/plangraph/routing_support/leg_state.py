@@ -39,7 +39,7 @@ def quota_key(leg):
     """D-5966: agy efforts share a model quota; native harness keys stay separate."""
     if not isinstance(leg, str):
         return leg
-    return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
+    return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|neon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
                   r'agy:\1', leg)
 
 
@@ -419,7 +419,7 @@ class LegAdapter:
             self.leg_status(leg)
             self._served.discard(self.identity(leg))
     def leg_status(self, leg, **kwargs):
-        if not self.enabled or leg.startswith(("agy:", "agy/")) or leg.startswith(("gemini-4-hydrogen-", "gemini-4-argon-", "claude-sonnet-5-5")):
+        if not self.enabled or leg.startswith(("agy:", "agy/")) or leg.startswith(("gemini-4-hydrogen-", "gemini-4-neon-", "claude-sonnet-5-5")):
             return self.store.leg_status(leg, **kwargs)
         from .resolver import OPERATOR_REMOVED_MODELS
         if leg in OPERATOR_REMOVED_MODELS:

@@ -9,16 +9,18 @@ from plangraph.planner.review_order import catalog_tiers, review_key
 from plangraph.planner.routing import SpawnPlan, plan_spawn
 
 
-@pytest.mark.parametrize('leg_id', ['agy-gemini-4-argon', 'opencode-big-pickle',
-                                  'opencode-deepseek-v4.1-flash-free'])
+@pytest.mark.parametrize('leg_id', ['agy-gemini-4-neon-medium', 'opencode-big-pickle',
+                                  'opencode-deepseek-v4.1-flash-free',
+                                  'opencode-glm-5.3-flash-free'])
 def test_missing_legs_roles_and_probe_evidence(leg_id, store):
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
-    if leg_id == 'opencode-deepseek-v4.1-flash-free':
+    if leg_id == 'opencode-glm-5.3-flash-free':
         assert not leg_active(leg)
-        assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
+        assert leg.disabled.startswith('D-6310:')
     else:
         assert leg_active(leg)
-    assert set(leg.roles) == {'review', 'implement'}
+    expected = {'review'} if leg_id == 'agy-gemini-4-neon-medium' else {'review', 'implement'}
+    assert set(leg.roles) == expected
     store.record_probe_pass(leg.model, 'leg-probe', now=100)
     assert store.last_probe_ts(leg.model) == 100
     assert store.leg_status(leg.model, now=101)['state'] == 'ok'
@@ -26,7 +28,7 @@ def test_missing_legs_roles_and_probe_evidence(leg_id, store):
 
 def test_go_usage_limit_leaves_personal_free_available(store):
     from plangraph.routing_support.resolver import is_model_available
-    go, personal = 'opencode-go/gemini-4-argon', 'opencode/big-pickle'
+    go, personal = 'opencode-go/glm-5.3-flash', 'opencode/big-pickle'
     store.record_provider_response(go, 429, 'usage_limit', {'Retry-After': '60'}, 'test')
     store.record_probe_pass(personal, 'leg-probe')
     rows = [{'id': model, 'tier': tier, 'available': 1, 'active': True} for model, tier in
@@ -68,16 +70,16 @@ def test_route_free_first_keys():
     from plangraph.planner.legs import spawnable_legs, TIERS
     from plangraph.planner.review_order import review_key
     from plangraph.planner.route_policy import implement_key
-    sol = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.1-sol')
+    sol = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.2-sol')
     free = replace(sol, id='free-test', tier='free', family='gemini')
     for key in (review_key, implement_key):
         assert key(free, TIERS.index('free'), 1) < key(sol, TIERS.index('subscription'), 0)
 
 
 def test_catalog_tiers_preserve_roles():
-    rows = [{'id': 'agy/gemini-4-argon-high', 'tier': 'free'}]
+    rows = [{'id': 'agy/gemini-4-neon-medium', 'tier': 'free'}]
     updated = catalog_tiers(DEFAULT_LEGS, rows)
-    assert next(l for l in updated if l.id == 'agy-gemini-4-argon').tier == 'free'
+    assert next(l for l in updated if l.id == 'agy-gemini-4-neon-medium').tier == 'free'
     assert [l.roles for l in updated] == [l.roles for l in DEFAULT_LEGS]
     assert next(l for l in updated if l.id == 'deepseek').tier == 'paid'
 
@@ -113,7 +115,7 @@ def test_registered_pool_seats_exclude_claude_writers():
 @pytest.mark.parametrize('tier', ['free', 'subscription', 'paid'])
 @pytest.mark.parametrize('source', ['id', 'model_id', 'provider_id'])
 def test_catalog_tier_identity_and_route_output(tier, source):
-    leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-neon-medium')
     # Provider-qualified catalog identity must win over an unrelated bare name.
     rows = [{source: 'agy/' + leg.model, 'tier': tier},
             {source: leg.model, 'tier': 'paid' if tier != 'paid' else 'free'}]
@@ -139,7 +141,7 @@ def test_catalog_tier_survives_planning_and_cli(tier, role, monkeypatch, tmp_pat
     from plangraph.planner.routing import plan_spawn
     from plangraph.routing_support import resolver
     from plangraph.spawner.cli import main
-    base = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.1-sol')
+    base = next(l for l in spawnable_legs() if l.id == 'cx-gpt-6.2-sol')
     legs = (replace(base, roles=(role,)), replace(base, id='free-review',
             model='test/free-review', family='gemini', tier='free', roles=(role,)))
     monkeypatch.setattr('plangraph.planner.legs.DEFAULT_LEGS', legs)
@@ -241,12 +243,12 @@ def store(tmp_path):
 
 @pytest.mark.parametrize("status", [429, 402])
 def test_reset(store, status):
-    store.record_provider_response("cx/gpt-6.1-sol", status, "quota", {"Retry-After": "60"}, "gateway", now=100)
-    result = store.leg_status("cx/gpt-6.1-sol", now=159)
+    store.record_provider_response("cx/gpt-6.2-sol", status, "quota", {"Retry-After": "60"}, "gateway", now=100)
+    result = store.leg_status("cx/gpt-6.2-sol", now=159)
     assert result["state"] == "limited"
     assert result["evidence"]["status"] == status
     assert result["evidence"]["reset_at"] == 160
-    assert store.leg_status("cx/gpt-6.1-sol", now=160)["state"] == "ok"
+    assert store.leg_status("cx/gpt-6.2-sol", now=160)["state"] == "ok"
 
 
 def test_reprobe(store):
@@ -279,15 +281,15 @@ def test_route(store):
     from plangraph.spawner.resolver import resolve_model_for_task
     class Catalog:
         def list_models(self, **kwargs):
-            return [dict(id=leg, available=1, active=True, aa_intelligence=50, cost_per_task_usd=cost, context_window=1000000) for leg, cost in [("cx/gpt-6.1-sol", 0), ("other/sol", 1)]]
-    store.record_provider_response("cx/gpt-6.1-sol", 429, "quota", {"Retry-After": "60"}, "gateway", now=100, combo="l2-worker")
+            return [dict(id=leg, available=1, active=True, aa_intelligence=50, cost_per_task_usd=cost, context_window=1000000) for leg, cost in [("cx/gpt-6.2-sol", 0), ("other/sol", 1)]]
+    store.record_provider_response("cx/gpt-6.2-sol", 429, "quota", {"Retry-After": "60"}, "gateway", now=100, combo="l2-worker")
     def route(now):
         return resolve_model_for_task(db=Catalog(), leg_state_reader=partial(store.leg_status, now=now))
     result = route(101)
     assert result["model"] == "other/sol"
     assert result["leg_state"]["state"] == "ok"
     assert result["candidates"][0]["leg_state"]["evidence"]["status"] == 429
-    assert route(160)["model"] == "cx/gpt-6.1-sol"
+    assert route(160)["model"] == "cx/gpt-6.2-sol"
 
 
 def test_no_mcp_writer():

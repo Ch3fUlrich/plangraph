@@ -76,7 +76,7 @@ def test_unknown(request_data):
 @pytest.mark.parametrize('explicit', [False, True])
 def test_tools(request_data, role, tmp_path, explicit):
     from plangraph.spawner.runner import IMPLEMENT_HEADER
-    leg_id = 'cx-gpt-6.1-sol' if role == 'implement' else request_data['leg']['id']
+    leg_id = 'cx-gpt-6.2-sol' if role == 'implement' else request_data['leg']['id']
     exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')
     exe.chmod(0o700)
@@ -111,13 +111,13 @@ def test_opencode(request_data):
 
 
 def test_agy_stream_spec(request_data):
-    request_data.update(leg={'id': 'agy-gemini-4-argon'}, prompt='é\n' + 'x' * (300 * 1024))
+    request_data.update(leg={'id': 'agy-gemini-4-neon-medium'}, prompt='é\n' + 'x' * (300 * 1024))
     result = spec.build(request_data)
     assert request_data['prompt'] not in result['argv']
     assert json.loads(result['stdin'])['message']['content'] == result['prompt'] == request_data['prompt']
 
 
-@pytest.mark.parametrize('leg_id', ['agy-gemini-4-argon', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
+@pytest.mark.parametrize('leg_id', ['agy-gemini-4-neon-medium', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
 @pytest.mark.parametrize('dry_run', [False, True])
 @pytest.mark.parametrize('size', [16, 200 * 1024], ids=['short', '200KiB'])
 def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id, dry_run, size):
@@ -145,7 +145,7 @@ def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id
     assert payload == result['prompt'] == prompt
 
 
-@pytest.mark.parametrize('harness,leg', [('agy', 'agy-gemini-4-argon'), ('qodercli', 'qodercli-qwen3.8-flash')])
+@pytest.mark.parametrize('harness,leg', [('agy', 'agy-gemini-4-neon-medium'), ('qodercli', 'qodercli-qwen3.8-flash')])
 @pytest.mark.parametrize('tail', [[], ['-p'], ['-p', 'private task']])
 def test_transport_refusal_is_named(request_data, monkeypatch, harness, leg, tail):
     request_data['leg'] = {'id': leg}

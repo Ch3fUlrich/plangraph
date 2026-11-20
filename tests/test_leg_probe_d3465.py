@@ -57,7 +57,7 @@ def _caller_repo(tmp_path):
 
 
 def _leg():
-    return SimpleNamespace(model='gemini-4-argon-high', harness='agy')
+    return SimpleNamespace(model='gemini-4-neon-medium', harness='agy')
 
 
 # The measured incident's writer: asked to create and commit ok.txt, a real
@@ -150,7 +150,7 @@ def test_probe_reports_leak_when_the_writer_commits_into_the_caller_repo(tmp_pat
 
 @pytest.mark.parametrize('client, binary, model', [
     ('opencode', 'opencode', 'omniroute/cx-gpt-6-luna'),
-    ('agy', 'agy', 'gemini-4-argon-high'),
+    ('agy', 'agy', 'gemini-4-neon-medium'),
     ('qodercli', 'qodercli', 'fixture-qoder-model'),
 ])
 def test_every_harness_client_is_launched_with_the_explicit_cwd(

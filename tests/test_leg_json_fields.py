@@ -12,10 +12,10 @@ from plangraph.spawner.service import SpawnService
 
 
 def sol_row(**fields):
-    row = dict(id="cx-gpt-6.1-sol-xhigh", tier="subscription", harness="opencode",
-               model="omniroute/cx-gpt-6.1-sol-xhigh", family="gpt",
+    row = dict(id="cx-gpt-6.2-sol-medium", tier="subscription", harness="opencode",
+               model="omniroute/cx-gpt-6.2-sol-medium", family="gpt",
                windows=["128k", "256k", "1m"], max_request_tokens=900000,
-               trains_on_data=False, roles=["implement"], effort="xhigh")
+               trains_on_data=False, roles=["implement"], effort="medium")
     return dict(row, **fields)
 
 
@@ -32,7 +32,7 @@ def test_json_effort_reaches_implement_route_and_saved_record(tmp_path, monkeypa
     def ambient_catalog():
         pytest.fail("JSON effort roundtrip must not read the host catalog")
     monkeypatch.setattr("plangraph.routing_support.resolver.get_catalog_models", ambient_catalog)
-    model = "omniroute/cx-gpt-6.1-sol" + ("-" + effort if effort else "")
+    model = "omniroute/cx-gpt-6.2-sol" + ("-" + effort if effort else "")
     leg = load_row(tmp_path, sol_row(id=model.split("/", 1)[1], model=model, effort=effort))
     assert leg.effort == effort
     card = {"estimate_tokens": 1000}

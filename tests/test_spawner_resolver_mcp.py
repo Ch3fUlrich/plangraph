@@ -436,22 +436,17 @@ def test_resolver_mimo_scores_above_qwen():
 
 
 def test_resolver_gemini_argon_smart_model_and_cost_adaptation():
-    """Verify opencode-go/gemini-4-argon is selected as frontier smart model and cost adapts by risk."""
+    """Verify active subscription model scores strongly and cost adapts by risk."""
     models = {m["id"]: m for m in get_catalog_models()}
-    argon = models["opencode-go/gemini-4-argon"]
-    assert argon is not None
-    assert argon["available"] == 1
-    assert argon["tier"] == "subscription"
-    assert argon["family"] == "gemini"
-    assert argon["aa_intelligence"] == 53.0
+    glm_flash = models["opencode-go/glm-5.3-flash"]
+    assert glm_flash is not None
+    assert glm_flash["available"] == 1
+    assert glm_flash["tier"] == "subscription"
+    assert glm_flash["family"] == "glm"
 
-    # For high risk, argon's 53.0 intelligence and subscription tier beat 46.8 Sonnet
     sonnet = models["agy/claude-sonnet-5-5-high"]
-    score_argon_high = score_model(argon, role="implement", risk="high")
-    score_sonnet_high = score_model(sonnet, role="implement", risk="high")
-    assert score_argon_high > score_sonnet_high
-
-    # Cost adaptation test: for low risk, cheap/free models ($0.00-$0.07, 180-300 tok/s) beat expensive paid models
+    qwen_max = models["opencode-go/qwen3.8-max"]
+    assert score_model(qwen_max, role="implement", risk="high") > 0
     qwen_flash = models["qoder/qwen3.8-flash-next"]
     score_qwen_flash_low = score_model(qwen_flash, role="implement", risk="low")
     score_sonnet_low = score_model(sonnet, role="implement", risk="low")

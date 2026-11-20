@@ -14,8 +14,8 @@ import pytest
 @pytest.mark.parametrize('explicit', [False, True])
 def test_real_binary_unavailable_and_secret(tmp_path, monkeypatch, caplog, explicit):
     from plangraph.spawner.runner import SpawnerRunner
-    first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.1-sol', disabled=None)
-    second = replace(first, id='second', model='opencode-go/gemini-4-argon')
+    first = replace(DEFAULT_LEGS[0], harness='opencode', model='omniroute/cx-gpt-6.2-sol', disabled=None)
+    second = replace(first, id='second', model='opencode-go/deepseek-v4.1-flash')
     binary = tmp_path / 'opencode'
     binary.write_text('#!/bin/sh\ncase "$*" in *cx-gpt*) echo "Error: Model unavailable: x $MY_GATEWAY_TOKEN" >&2; exit 1;; esac\necho success\n')
     binary.chmod(0o755)
@@ -50,19 +50,20 @@ def test_dry_run_never_probes(tmp_path, monkeypatch):
 
 def test_free_zen_legs_are_exactly_the_disabled_set():
     free = {l.id: l.disabled for l in DEFAULT_LEGS if l.model.startswith('opencode/')}
-    reason = 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
-    assert free == {'opencode-deepseek-v4.1-flash-free': reason,
+    reason = 'D-6310: opencode/glm-5.3-flash-free not served by opencode models (use opencode-go/glm-5.3-flash); never remove (D-3828)'
+    assert free == {'opencode-deepseek-v4.1-flash-free': None,
                     'opencode-glm-5.3-flash-free': reason,
-                    'opencode-big-pickle': None, 'opencode-gemini-4-argon': None}
+                    'opencode-flint-40b-free': None,
+                    'opencode-big-pickle': None}
 
 
-@pytest.mark.parametrize('leg_id', ['opencode-deepseek-v4.1-flash-free', 'opencode-glm-5.3-flash-free'])
+@pytest.mark.parametrize('leg_id', ['opencode-glm-5.3-flash-free'])
 def test_explicit_disabled_zen_leg_refused(tmp_path, leg_id):
     leg = next(l for l in DEFAULT_LEGS if l.id == leg_id)  # D-3828: disabled, never removed
     from plangraph.planner.routing import SpawnRefused
     service = spawn_service(state=tmp_path)
     assert leg.disabled
-    with pytest.raises(SpawnRefused, match='leg disabled: .*D-4196'):
+    with pytest.raises(SpawnRefused, match='leg disabled: .*D-6310'):
         asyncio.run(service.spawn(card={'estimate_tokens': 100}, prompt='x',
             leg=leg.id, override_reason='disabled leg must not launch', dry_run=True))
     assert not service.runner.jobs
@@ -83,7 +84,7 @@ def test_real_launch_plan_skips_unserved(monkeypatch):
 
 def test_explicit_leg_unavailable_one_attempt(tmp_path, monkeypatch):
     from plangraph.spawner.runner import SpawnerRunner
-    leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
+    leg = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.2-sol-medium')
     binary = tmp_path / 'opencode'
     # W33B host admission probes are not child attempts: serve the requested id.
     binary.write_text('#!/bin/sh\nif [ "$1" = models ]; then echo "' + leg.model + '"; exit 0; fi\necho launched >> "' + str(tmp_path / 'launches') + '"\necho "Model unavailable: fixture" >&2\nexit 1\n')
@@ -112,7 +113,7 @@ def test_agy_does_not_receive_overlay(tmp_path, monkeypatch):
     (tmp_path / 'providers.json').write_text('{"providers":{"fixture":{}}}')
     async def run():
         runner = SpawnerRunner(default_cwd=str(tmp_path))
-        job = await runner.spawn('x', 'gemini-4-argon-high', client='agy')
+        job = await runner.spawn('x', 'gemini-4-neon-medium', client='agy')
         await runner._tasks[job.job_id]
         return job
     job = asyncio.run(run())

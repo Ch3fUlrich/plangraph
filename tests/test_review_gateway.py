@@ -410,7 +410,7 @@ def test_evidence_keys_exact_and_extra(monkeypatch, tmp_path):
     assert not (tmp_path / "error.json").exists()
 
 
-@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.1-sol', 'gpt'])
+@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.2-sol', 'gpt'])
 def test_review_request_carries_resolved_author(monkeypatch, writer):
     cap = {}
     server = make_server(cap)

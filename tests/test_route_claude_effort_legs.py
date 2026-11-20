@@ -21,13 +21,13 @@ from plangraph.routing_support import leg_state
 BY_ID = {leg.id: leg for leg in spawnable_legs()}
 CLAUDE = {f"agy-claude-{m}-5-5-{e}": f"claude-{m}-5-5-{e}"
           for m in ("sonnet", "opus") for e in ("low", "medium", "high")}
-SOL = {f"cx-gpt-6.1-sol-{e}": f"omniroute/cx-gpt-6.1-sol-{e}"
+SOL = {f"cx-gpt-6.2-sol-{e}": f"omniroute/cx-gpt-6.2-sol-{e}"
        for e in ("low", "medium", "high", "xhigh", "max")}
 LUNA = {f"cx-gpt-6-luna-{e}": f"omniroute/cx-gpt-6-luna-{e}"
         for e in ("low", "medium", "high", "xhigh", "max")}
 GEMINI = {}  # Gemini effort variants retired; Claude/Sol/Luna retain effort coverage.
 NEW = {**CLAUDE, **SOL, **LUNA, **GEMINI}
-MANUAL = (set(NEW) - {LEAD_WRITER}) | {'cx-gpt-6.1-sol'}
+MANUAL = (set(NEW) - {LEAD_WRITER}) | {'cx-gpt-6.2-sol'}
 
 
 @pytest.fixture
@@ -86,11 +86,13 @@ def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
     assert spawnable_legs() == fake + EXPLICIT_LEGS
     from plangraph.spawner.target import resolve_target
     assert resolve_target('zz-test')[1].id == 'zz-test'
-    assert EXPLICIT_WRITERS == (frozenset(CLAUDE) | frozenset(SOL) | {'cx-gpt-6.1-sol'}) - {LEAD_WRITER}
+    assert EXPLICIT_WRITERS == (frozenset(CLAUDE) | frozenset(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER}
 
 
-@pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA}),
-                                         ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.1-sol'}) - {LEAD_WRITER})])
+@pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA,
+                                                    'claude-sonnet-5-5-high': 'claude-sonnet-5-5-high',
+                                                    'console-deepseek-flash': 'console-deepseek/deepseek-flash'}),
+                                         ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER})])
 def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
     writers = ('xiaomi',) if role == 'review' else ()
     routed = _svc(tmp_path).route({'estimate_tokens': 1000}, role=role, writer_families=writers)
@@ -130,7 +132,7 @@ def test_explicit_claude_review_seat(tmp_path, leg_id):
             override_reason='operator 2026-11-09 claude seats'))
 
 
-@pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.1-sol', *SOL, 'agy-gemini-4-argon'])
+@pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.2-sol', *SOL, 'agy-gemini-4-hydrogen-high'])
 def test_explicit_writer_implement_allowed(tmp_path, leg_id):
     result = asyncio.run(_svc(tmp_path).spawn(
         card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
@@ -154,7 +156,7 @@ def test_agy_prefixed_model_resolves_to_its_leg(leg_id):
 
 
 @pytest.mark.parametrize('model,leg_id', [
-    ('agy/gemini-4-argon-high', 'agy-gemini-4-argon'),
+    ('agy/gemini-4-neon-medium', 'agy-gemini-4-neon-medium'),
     # agy-sonnet-5.5 (orchestrate only) shares this model; the seat leg wins.
     ('agy/claude-sonnet-5-5-medium', 'agy-claude-sonnet-5-5-medium')])
 def test_agy_prefixed_model_prefers_the_seat_leg(model, leg_id):
@@ -210,26 +212,26 @@ def test_effort_variant_gets_a_per_run_opencode_model(model):
 
 
 def test_effort_variant_takes_its_base_model_limit():
-    base = {'modelID': 'cx/gpt-6.1-sol', 'limit': {'context': 475000, 'output': 128000}}
-    models = _render('omniroute/cx-gpt-6.1-sol-xhigh', {'cx-gpt-6.1-sol': base})
-    assert models['cx-gpt-6.1-sol-xhigh']['limit'] == base['limit']
-    assert models['cx-gpt-6.1-sol'] == base
+    base = {'modelID': 'cx/gpt-6.2-sol', 'limit': {'context': 500000, 'output': 128000}}
+    models = _render('omniroute/cx-gpt-6.2-sol-xhigh', {'cx-gpt-6.2-sol': base})
+    assert models['cx-gpt-6.2-sol-xhigh']['limit'] == base['limit']
+    assert models['cx-gpt-6.2-sol'] == base
 
 
-@pytest.mark.parametrize('model', ['omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6-luna',
-                                   'omniroute/agy/gemini-4-argon-high',
-                                   'omniroute/cx-gpt-6.1-sol-ultra'])
+@pytest.mark.parametrize('model', ['omniroute/cx-gpt-6.2-sol', 'omniroute/cx-gpt-6-luna',
+                                   'omniroute/agy/gemini-4-neon-medium',
+                                   'omniroute/cx-gpt-6.2-sol-ultra'])
 def test_base_and_unknown_models_get_no_entry(model):
     assert _render(model) == {}
 
 
 def test_declared_entry_is_kept():
-    mine = {'modelID': 'cx/gpt-6.1-sol-high', 'limit': {'context': 1, 'output': 1}}
-    models = _render('omniroute/cx-gpt-6.1-sol-high', {'cx-gpt-6.1-sol-high': mine})
-    assert models['cx-gpt-6.1-sol-high'] == mine
+    mine = {'modelID': 'cx/gpt-6.2-sol-high', 'limit': {'context': 1, 'output': 1}}
+    models = _render('omniroute/cx-gpt-6.2-sol-high', {'cx-gpt-6.2-sol-high': mine})
+    assert models['cx-gpt-6.2-sol-high'] == mine
 
 
-@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.1-sol', 'gpt'])
+@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.2-sol', 'gpt'])
 def test_codex_seat_refused_for_writer_named_by_review_of(tmp_path, monkeypatch, writer):
     svc = _svc(tmp_path)
     monkeypatch.setattr(svc, 'result', lambda *a, **k: {'writer_family': writer})

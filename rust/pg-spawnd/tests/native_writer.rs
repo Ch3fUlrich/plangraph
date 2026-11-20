@@ -178,7 +178,7 @@ if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in pro
 
 assert 'brief marker' in prompt or 'no required review' in prompt
 assert 'model_reasoning_effort=medium' in sys.argv
-assert sys.argv[sys.argv.index('-m') + 1] == 'gpt-6.1-sol'
+assert sys.argv[sys.argv.index('-m') + 1] == 'gpt-6.2-sol'
 if 'hold marker' in prompt:
     import os, time
     child = subprocess.Popen(['sleep', '30'])

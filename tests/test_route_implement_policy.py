@@ -13,8 +13,9 @@ from plangraph.spawner.cli import main
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 CARD = {"estimate_tokens": 20000, "risk_tags": [],
         "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-WRITERS = ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high", "openrouter-free",
-           "opencode-big-pickle", "agy-gemini-4-argon", "mimo-v2.6-flash", "mimo-v2.6-pro",
+WRITERS = ["cx-gpt-6.2-sol-medium", "cx-gpt-6.2-astra", "agy-gemini-4-hydrogen-high",
+           "opencode-deepseek-v4.1-flash-free", "opencode-go-deepseek-v4-flash",
+           "opencode-go-glm-5.3-flash", "openrouter-free", "mimo-v2.6-flash", "mimo-v2.6-pro",
            "omniroute-deepseek-flash", "omniroute-muse-spark", "deepseek"]
 
 
@@ -32,7 +33,7 @@ def isolated_catalog(monkeypatch, tmp_path):
 def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card, state):
     from plangraph.spawner.service import SpawnService
     def reader(model, **kwargs):
-        return {"state": state if model == "omniroute/cx-gpt-6.1-sol-xhigh" else "available", "evidence": None}
+        return {"state": state if model == "omniroute/cx-gpt-6.2-sol-medium" else "available", "evidence": None}
     service = SpawnService(state=tmp_path, leg_reader=reader)
     plan = service.route(card, role="implement")
     expected = WRITERS if state == "available" else WRITERS[1:]
@@ -44,7 +45,7 @@ def test_implement_defaults_effort_and_fallback_without_override(tmp_path, card,
                for leg in plan.legs)
     record = asyncio.run(service.spawn(card=card, prompt="Implement public code", dry_run=True))
     assert record["chosen_leg"]["id"] == expected[0]
-    assert record["chosen_leg"]["effort"] == ("xhigh" if state == "available" else "high")
+    assert record["chosen_leg"]["effort"] == ("medium" if state == "available" else None)
     assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
@@ -59,7 +60,7 @@ def test_implement_family_exclusion_over_all_catalog_rows():
         model = row.get("model_id", row.get("id"))
         from plangraph.retired_models import is_retired
         if is_retired(model):
-            with pytest.raises(ValueError, match="gemini_flash_retired"):
+            with pytest.raises(ValueError, match="(gemini_flash_retired|model_retired)"):
                 route_card(CARD, legs=(dataclasses.replace(template, model=model), fallback), role="implement")
             continue
         candidate = dataclasses.replace(template, id="catalog:" + model, model=model,
@@ -156,8 +157,8 @@ def test_implement_alias_detection_does_not_change_shared_resolver(alias):
 @pytest.mark.parametrize("family", ["pickle", "claude", "fable"])
 def test_registered_model_proves_family_without_lifting_claude_aliases(family):
     from plangraph.planner.routing import route_card
-    template = next(leg for leg in DEFAULT_LEGS if leg.id == "opencode-big-pickle")
-    fallback = next(leg for leg in DEFAULT_LEGS if leg.id == WRITERS[1])
+    template = next(leg for leg in DEFAULT_LEGS if leg.id == "openrouter-free")
+    fallback = next(leg for leg in DEFAULT_LEGS if leg.id == WRITERS[2])
     candidate = dataclasses.replace(template, id="renamed", family=family, roles=("implement",))
     route = route_card(CARD, legs=(candidate, fallback), role="implement")
     assert (candidate in route.legs) == (family == "pickle")
@@ -180,11 +181,11 @@ def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):
         return job
     runner.spawn = spawn
     service = SpawnService(runner, state=tmp_path)
-    table = tuple(l for l in DEFAULT_LEGS if l.id in ("cx-gpt-6.1-sol-xhigh", "agy-gemini-4-argon"))
+    table = tuple(l for l in DEFAULT_LEGS if l.id in ("cx-gpt-6.2-sol-medium", "agy-gemini-4-hydrogen-high"))
     plan = plan_spawn(CARD, role="implement", legs=table, catalog_rows=())
     record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None, _plan=plan))
-    assert calls == [("omniroute/cx-gpt-6.1-sol-xhigh", "opencode"), ("gemini-4-argon-high", "agy")]
+    assert calls == [("omniroute/cx-gpt-6.2-sol-medium", "opencode"), ("gemini-4-hydrogen-high", "agy")]
     assert record["status"] == "completed"
-    assert record["chosen_leg"]["id"] == "agy-gemini-4-argon"
-    assert record["chosen_leg"]["effort"] is None
+    assert record["chosen_leg"]["id"] == "agy-gemini-4-hydrogen-high"
+    assert record["chosen_leg"]["effort"] == "high"
     assert not (tmp_path / "spawn-overrides.jsonl").exists()

@@ -78,7 +78,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     let leg = if sonnet {
         json!({"id":"sonnet", "model":"claude-sonnet-5-5-high", "harness":"claude", "family":"anthropic"})
     } else if retry {
-        json!({"id":"argon", "model":"gemini-4-argon-medium", "harness":"agy", "family":"gemini"})
+        json!({"id":"neon", "model":"gemini-4-neon-medium", "harness":"agy", "family":"gemini"})
     } else {
         leg
     };

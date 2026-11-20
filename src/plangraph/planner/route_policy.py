@@ -60,7 +60,7 @@ def implement_family_excluded(leg):
     identities = {implement_model_family(value) for value in
                   (leg.id, leg.family, leg.model, leg.harness, *registered)}
     return (leg.claude_family or "claude" in identities
-            or not identities.intersection(MODEL_FAMILIES | {"grok", "openrouter"}))
+            or not identities.intersection(MODEL_FAMILIES | {"grok", "openrouter", "flint", "beam", "pickle"}))
 
 
 @dataclass(frozen=True)

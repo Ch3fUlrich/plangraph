@@ -113,12 +113,14 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
     from .route_policy import implement_family_excluded
+    from .legs import LOW_RISK_ONLY_LEGS
     check_route_targets(card, legs)
     effective_role = role if role is not None else card.get("role")
     exclude_fams = set(exclude_families)
     legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
+    low_risk = card.get("risk", "normal") == "low" and not tags
     bad = [t for t in tags if t not in RISK_TAGS]
     if bad:
         raise ValueError(f"unknown risk tags: {bad}")
@@ -147,6 +149,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             why = "disabled"
         elif effective_role == "implement" and implement_family_excluded(leg):
             why = "excluded_family"
+        elif effective_role in ("implement", "review") and leg.id in LOW_RISK_ONLY_LEGS and not low_risk:
+            why = "low_risk_only"
         elif leg.id in unavailable:
             why = "unavailable"
         elif leg.family in exclude_fams:
@@ -259,7 +263,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Account/combo scope comes from the card and is never a wildcard.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_SONNET
+    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_NEON, REVIEW_SONNET
     if native_review:
         legs = review_route_pool(legs)
     check_route_targets(card, legs)
@@ -348,7 +352,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     quota_states = {"agy:" + model: (states[leg_id] if leg_id in states and leg_id != REVIEW_SONNET else
         reader("agy:" + model, now=now, account=card.get("account"), combo=card.get("combo")))
         for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
-                             ("gemini-4-argon", REVIEW_ARGON),
+                             ("gemini-4-neon", REVIEW_NEON),
                              ("claude-sonnet-5-5", REVIEW_SONNET))}
     limited = {key for key, state in states.items() if unavailable(state)}
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
@@ -357,6 +361,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
+    low_risk = ranking_risk == "low" and not card.get('risk_tags')
     for leg in candidates:
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
@@ -365,9 +370,12 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             pass
         elif leg.family in excluded:
             reason = "excluded_family"
+        elif leg.id in LOW_RISK_ONLY_LEGS and not low_risk:
+            reason = "low_risk_only"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
             reason = "inline_only_needs_diff"
-        elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai":
+        elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai" and not (
+                low_risk and leg.id in LOW_RISK_ONLY_LEGS):
             reason = "review_route_excluded"
         else:
             try:
@@ -388,7 +396,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         candidate_details.append(detail)
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
-        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat", "review_route_excluded")}
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
+        "review_route_excluded", "low_risk_only")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
@@ -435,8 +444,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     if native_review:
-        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER[:-1]
-                     else len(REVIEW_ORDER) if leg.id == REVIEW_ORDER[-1] else len(REVIEW_ORDER) - 1)
+        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
+                     else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
         source = "operator-order"
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     seats, coverage, open_parts = [], (), []

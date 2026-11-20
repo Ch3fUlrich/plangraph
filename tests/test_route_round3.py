@@ -20,9 +20,8 @@ def assert_review_seat_safety(estimate):
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
         # D-6028: with diff metadata the inline-only mimo-v2.6-pro leads; without it main's seats stay.
-        expected = (["mimo-v2.6-pro", "agy-gemini-4-hydrogen-high"] if diff else
-                    ["agy-gemini-4-hydrogen-high", "console-deepseek-flash"
-                     if estimate <= 72089 else "claude-sonnet-5-5-high"])
+        expected = ["agy-gemini-4-neon-medium", "opencode-deepseek-v4.1-flash-free"
+                    if estimate <= 72089 else "opencode-go-deepseek-v4-flash"]
         assert [leg.id for leg in review.review_seats] == expected
 
 
@@ -78,10 +77,10 @@ def test_registered_fallback_inputs():
     from plangraph.planner.legs import DEFAULT_LEGS
     table = {leg.id: leg for leg in DEFAULT_LEGS}
     for id in ("omniroute-deepseek-flash", "omniroute-muse-spark", "agy-opus",
-               "opencode-gemini-4-argon"):
+               "opencode-go-glm-5.3-flash"):
         assert table[id].disabled is None
     assert table["deepseek"].tier == "paid"
-    assert table["opencode-gemini-4-argon"].model == "opencode/gemini-4-argon"
+    assert table["opencode-go-glm-5.3-flash"].model == "opencode-go/glm-5.3-flash"
 
 
 def test_each_role_falls_through_failed_and_limited():
