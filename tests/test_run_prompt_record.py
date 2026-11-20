@@ -28,7 +28,7 @@ def test_no_run_redacts_once_and_dispatches_without_file(tmp_path, monkeypatch):
     prompt = 'sk' + '-' + 'a' * 20
     job = asyncio.run(runner.SpawnerRunner().spawn(prompt=prompt, role='review', dry_run=True, cwd=str(tmp_path)))
     assert calls == [prompt]
-    assert commands == [job.task_prompt] == ['[REDACTED]']
+    assert commands == [job.task_prompt] and job.task_prompt.endswith('\n\n[REDACTED]')
     assert not list(tmp_path.iterdir())
 
 
@@ -78,8 +78,7 @@ def test_prompt_record(tmp_path, monkeypatch):
         asyncio.run(runner.SpawnerRunner().spawn(
             prompt='héllo ' + secret, role='review',
             prompt_record=(path, record, lambda r: saves.append(dict(r)))))
-    assert path.read_bytes() == b'h\xc3\xa9llo [REDACTED]'
-    assert path.read_bytes() == received[0].encode()
+    assert path.read_bytes() == received[0].encode() and received[0].endswith('h\u00e9llo [REDACTED]')
     assert secret not in received[0]
     assert secret not in json.dumps(record)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
@@ -94,7 +93,7 @@ def test_launch_preparation_redacts_once(monkeypatch):
     prompt = 'sk' + '-' + 'a' * 20
     job = asyncio.run(runner.SpawnerRunner().spawn(
         prompt=prompt, role='review', dry_run=True, prepare_launch=True))
-    assert job.task_prompt == '[REDACTED]'
+    assert job.task_prompt.endswith('\n\n[REDACTED]')
     assert calls == [prompt]
     with pytest.raises(ValueError, match='requires dry run'):
         asyncio.run(runner.SpawnerRunner().spawn(prompt=prompt, prepare_launch=True))
@@ -128,8 +127,8 @@ def test_single_redaction_at_command_boundary(tmp_path, monkeypatch):
     asyncio.run(runner.SpawnerRunner().spawn(prompt='hello', role='review', dry_run=True,
         prompt_record=(path, record, lambda r: pytest.fail('dry save'))))
     assert calls == ['hello']
-    assert commands == ['hello']
-    assert record == dict(prompt_sha256=hashlib.sha256(b'hello').hexdigest(), wake_variant='initial')
+    assert len(commands) == 1 and commands[0].endswith('\n\nhello')
+    assert record == dict(prompt_sha256=hashlib.sha256(commands[0].encode()).hexdigest(), wake_variant='initial')
     assert not path.exists()
 
 

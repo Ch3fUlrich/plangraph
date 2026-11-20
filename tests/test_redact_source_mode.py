@@ -52,7 +52,10 @@ def capture(monkeypatch, tmp_path, prompt, role='review'):
         asyncio.run(runner.SpawnerRunner().spawn(prompt=prompt, role=role,
             prompt_record=(path, {}, lambda record: None)))
     assert path.read_text() == sent[0]
-    return sent[0]
+    from plangraph.spawner.prompt_input import compose
+    prefix = compose('', role, None, None)  # role header and skill precede the caller text
+    assert sent[0].startswith(prefix)
+    return sent[0][len(prefix):]
 
 
 def test_computed_assignments_readable_in_spawner_diff(monkeypatch, tmp_path):

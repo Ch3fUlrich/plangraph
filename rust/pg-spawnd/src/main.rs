@@ -43,6 +43,7 @@ mod records;
 mod review_artifacts;
 mod review_citation;
 mod review_retry;
+mod role_header;
 mod round_progress;
 mod runs;
 mod serve;

@@ -88,6 +88,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/keeper/evidence_spawner.py",
     "src/plangraph/routing_support/leg_state.py",
     "tests/fixtures/doctor_sources.json",
+    "src/plangraph/config/role_headers.json",
     "tests/fixtures/keeper_mcp_replies.json",
     "tests/fixtures/keeper_mcp_tools.json",
     "tests/fixtures/redact_parity.json",

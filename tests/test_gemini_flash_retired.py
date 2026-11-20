@@ -270,7 +270,8 @@ def test_hydrogen_tools_review_launches_in_head_checkout(tmp_path, monkeypatch):
     assert '--dangerously-skip-permissions' not in cmd
     assert record['status'] == 'completed', json.dumps(record)
     job = runner.jobs[record['job_id']]
-    assert job.task_prompt == 'Read marker.txt and review'
+    assert job.task_prompt.endswith('\n\nRead marker.txt and review')
+    assert 'name: review' in job.task_prompt
     assert (job.served_model, job.served_family, job.witness_kind) == ('unwitnessed', 'unwitnessed', None)
 
 
