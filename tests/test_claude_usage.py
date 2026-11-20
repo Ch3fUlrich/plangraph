@@ -318,3 +318,28 @@ def test_mtime_skips_old_files_including_subagents(tree, capsys, monkeypatch):
     monkeypatch.setattr(Path, "open", opened)
     assert run(tree, capsys, "roles", "--since", "2026-11-06")["result"]["unnamed"]["requests"] == 1
     assert run(tree, capsys, "pace", "--day", "2026-11-06")["result"]["weighted"] == 70
+
+
+def test_census_fixture_command(tree, tmp_path):
+    import subprocess
+    import sys
+
+    write(tree / "s.jsonl", [dict(type="agent-name", agentName="router-12"),
+        dict(type="user", message=dict(content="msg-in: synthetic task")),
+        assistant(output=1), assistant(output=20),
+        dict(type="user", message=dict(content="beat: synthetic status")),
+        assistant("m2")])
+    merges = tmp_path / "merges.json"
+    merges.write_text(json.dumps([dict(number=1, mergedAt="2026-11-06T12:00:00Z")]))
+    result = subprocess.run([sys.executable, str(usage.__file__), "--census",
+        "--projects", str(tree.parent), "--since", "2026-11-06", "--until", "2026-11-09",
+        "--merged-prs", str(merges), "--json"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    report = json.loads(result.stdout)
+    router = report["roles"]["router"]
+    assert router["turns"] == 2
+    assert router["weighted_tokens"] == router["weighted_tokens_per_merged_pr"] == 150
+    assert router["trigger_share"]["msg-in"] == router["trigger_share"]["beat"] == 0.5
+    assert report["merged_prs_per_day"] == {"2026-11-06": 1, "2026-11-07": 0, "2026-11-08": 0}
+    assert report["guard"]["revert_required"] is True
+    assert "synthetic task" not in result.stdout

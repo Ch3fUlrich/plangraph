@@ -91,6 +91,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "tools/check_file_size.py",
     "tools/check_new_code_lang.py",
     "tools/ci_select.py",
+    "tools/claude_usage_policy.json",
     "tools/ci_commit_gate.py",
     "tools/check_push_gate.py",
     "tools/merge_batch_util.py",

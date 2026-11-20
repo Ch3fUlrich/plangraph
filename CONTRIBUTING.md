@@ -532,3 +532,5 @@ required before claiming that host's five-minute done criterion.
 D-6054: OpenCode catalog integration tests use the shipped provider configuration
 and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
 so changes to catalog identities or rendering select the Rust CI suite.
+
+Claude transcript census: see [usage and classification limits](docs/claude-census.md).
