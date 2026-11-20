@@ -153,3 +153,23 @@ in the fallback list before final Sonnet. GPT writers may use `omniroute-deepsee
 may use the `cx-gpt-6-luna` Codex seat. Unknown names fail with accepted family names
 and aliases within native refusal limits; registered leg/model ids remain accepted.
 Verdict delivery uses the same resolver to forward canonical writer families.
+
+## Automatic work mode (D-5952 / rule 3.41)
+
+`pg-spawnd` route JSON, including the `plangraph_agent_route` MCP response,
+reports `work_mode` and `work_mode_reason`. The repository/user setting follows
+[work-mode configuration](work-mode.md); absent settings still default to batch.
+Manual `batch` and `piecewise` bypass auto and report `manual <mode>`.
+
+`pg_worker_core::work_mode_auto::resolve` selects `batch` in auto when at least
+one served implementation leg has catalog `aa_intelligence >= 50.0`, the
+strong-writer threshold. Served means admitted by the existing writer planner,
+including its quota, availability and policy filters; a registered strong leg
+with exhausted quota does not count. Otherwise auto selects `piecewise`.
+Missing/non-finite scores cannot qualify a strong writer. Reasons name the
+first deciding strong leg, unavailable strong leg, or lower-tier served leg;
+an empty snapshot explicitly reports no served writers. Review and orchestrate
+routes consult the implementation snapshot, so a strong review-only leg cannot
+select batch. This does not change route order or start orchestration.
+The config root comes from `card.repo`, `card.cwd`, `card.diff_ref.repo`, then
+the daemon working directory, in that order.

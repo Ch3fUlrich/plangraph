@@ -122,10 +122,47 @@ pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
 }
 pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
     let args = &crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)?;
-    crate::cli_review::select(
-        args,
-        run(state, route_args(args)?, Duration::from_secs(30), false)?,
-    )
+    let mut argv = route_args(args)?;
+    let fallback = std::env::current_dir().map_err(|e| ToolError::Internal(e.to_string()))?;
+    let repo = args["card"]
+        .get("repo")
+        .or_else(|| args["card"].get("cwd"))
+        .or_else(|| args["card"]["diff_ref"].get("repo"))
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .unwrap_or(&fallback);
+    let mode = crate::work_mode_config::configured_mode(repo).map_err(parameter)?;
+    if mode == pg_worker_core::work_mode::WorkMode::Auto {
+        argv.push("--writer-snapshot".into());
+    }
+    let text = crate::cli_review::select(args, run(state, argv, Duration::from_secs(30), false)?)?;
+    resolve_work_mode(mode, &text)
+}
+
+fn resolve_work_mode(
+    mode: pg_worker_core::work_mode::WorkMode,
+    text: &str,
+) -> Result<String, ToolError> {
+    use pg_worker_core::{
+        work_mode::WorkMode,
+        work_mode_auto::{resolve, WriterLeg},
+    };
+    let mut plan: Value = serde_json::from_str(text)
+        .map_err(|_| ToolError::Internal("invalid work mode route".into()))?;
+    let snapshot = plan
+        .as_object_mut()
+        .unwrap()
+        .remove("work_mode_writer_legs");
+    let legs: Vec<WriterLeg> = if mode == WorkMode::Auto {
+        serde_json::from_value(snapshot.ok_or_else(|| parameter("missing writer snapshot"))?)
+            .map_err(|_| parameter("invalid writer snapshot"))?
+    } else {
+        vec![]
+    };
+    let result = resolve(mode, &legs);
+    plan["work_mode"] = serde_json::to_value(result.work_mode).unwrap();
+    plan["work_mode_reason"] = Value::String(result.work_mode_reason);
+    Ok(plan.to_string())
 }
 pub(crate) fn probe(state: &Path, args: &Args) -> Result<String, ToolError> {
     crate::leg_ref::check_review_role(args)?;

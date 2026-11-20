@@ -13,7 +13,7 @@ Only absent files fall through to the next source; unreadable files, malformed
 JSON, missing/unknown keys and unknown values in the selected file return an
 error with its path. A valid repository file overrides even an invalid user file.
 If both files are absent, the setting is `batch`. This repository explicitly
-sets `batch`. `auto` is accepted as a setting; selection and UI are later slices.
+sets `batch`. `auto` resolves from served writer legs in route output; see [routing](routing.md#automatic-work-mode-d-5952--rule-341). The UI is a later slice.
 See the [schema](schemas/work-mode.schema.json) and
 [example](schemas/examples/work-mode.json).
 

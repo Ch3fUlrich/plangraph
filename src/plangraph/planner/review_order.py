@@ -25,6 +25,26 @@ def catalog_tiers(legs, rows):
                  if tier(leg) in TIERS else leg for leg in legs)
 
 
+#: Legs whose model name differs from the catalog row that carries their score.
+LEG_CATALOG_IDS = {'cx-gpt-6.1-sol-xhigh': 'cxa/gpt-6-sol-xhigh',
+                   'agy-gemini-4-argon': 'gemini/gemini-4-argon-high'}
+
+
+def catalog_score(leg, rows):
+    """AA intelligence of the catalog row a leg maps to, or None when unscored."""
+    by_id = {row.get('id') or row.get('model_id'): row for row in rows}
+    for row in rows:
+        provider = row.get('provider_id') or row.get('harness')
+        if provider and row.get('upstream_id'):
+            by_id.setdefault(f"{provider}/{row['upstream_id']}", row)
+    leg_model = leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}'
+    for key in (leg.model, leg_model, LEG_CATALOG_IDS.get(leg.id)):
+        score = (by_id.get(key) or {}).get('aa_intelligence')
+        if score is not None:
+            return score
+    return None
+
+
 def payment_tier(leg, role):
     """Classify supplied raw or catalog-projected legs; unknown costs stay put."""
     from .legs import TIERS

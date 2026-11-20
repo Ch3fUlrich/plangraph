@@ -2,7 +2,7 @@
 
 | Config key | Values | Default / details |
 | --- | --- | --- |
-| `work_mode` | `auto`, `piecewise`, `batch` | `batch`; [files, precedence, schema and example](work-mode.md) |
+| `work_mode` | `auto`, `piecewise`, `batch` | `batch`; [configuration](work-mode.md), [auto rule and route mode/reason output](routing.md#automatic-work-mode-d-5952--rule-341) |
 
 ### QUOTA-PAUSE-GATE
 
