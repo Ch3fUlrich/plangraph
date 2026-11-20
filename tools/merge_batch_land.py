@@ -360,7 +360,8 @@ def cmd_land(args):
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
-        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"])
+        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
+           "--body", merge_trailers(st))
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
     for _ in range(10):  # the merge commit can lag the merge by a moment
@@ -396,6 +397,12 @@ def cmd_land(args):
         print(f"cleanup failed: {exc}", file=sys.stderr)
     close_merged_items()
     return 0
+
+
+def merge_trailers(st):
+    """The body of the batch merge commit: one Plan-Item trailer per item of every included part."""
+    keys = sorted({key for rec in st["merged"] for key in part_items(st, rec)})
+    return "\n".join(f"Plan-Item: {key}" for key in keys)
 
 
 def close_merged_items():

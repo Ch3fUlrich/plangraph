@@ -1,0 +1,1 @@
+`commit+ci` evidence on a merge commit without trailers now binds the item through the `Plan-Item` trailers of its branch range, and `merge_batch.py land` merges the batch PR with one `Plan-Item` trailer per item of every included part, so the merge commit itself verifies on green CI.

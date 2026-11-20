@@ -143,7 +143,11 @@ def test_land_merges_closes_unmerged_and_reports(env):
     assert (prs["1"]["state"], prs["3"]["state"], prs["3"]["closed_with"]) == ("MERGED", "CLOSED",
                                                                                "merged via batch PR #100")
     assert env.calls("pr", "merge") == [["pr", "merge", "100", "--repo", "owner/proj", "--merge",
-                                         "--match-head-commit", head]]
+                                         "--match-head-commit", head,
+                                         "--body", "Plan-Item: plangraph:ITEM-A\nPlan-Item: plangraph:ITEM-B\n"
+                                                   "Plan-Item: plangraph:ITEM-C"]]
+    trailers = env.git("log", "-1", "--format=%(trailers:key=Plan-Item,valueonly)", merge, cwd=env.origin)
+    assert trailers.split() == ["plangraph:ITEM-A", "plangraph:ITEM-B", "plangraph:ITEM-C"]
     assert env.calls("pr", "checks") == [["pr", "checks", "100", "--repo", "owner/proj", "--required"]]
     assert not env.state_file("l1").exists() and env.git("for-each-ref", "refs/merge-batch") == ""
 

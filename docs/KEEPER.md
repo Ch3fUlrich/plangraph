@@ -192,6 +192,8 @@ injected adapters so tests use fakes: `ctx.git`, `ctx.ci`, `ctx.runs`, `ctx.sema
 
 ### Forgejo CI statuses (PG-CI-FORGEJO)
 
+`commit+ci` binds the item by the `Plan-Item` trailer of the commit. A merge commit that carries none (a merge made in the hosting UI) stands for the non-merge commits of its second-parent range: a trailer of any of them naming the item binds it, and a commit with neither is refused `does not carry trailer 'Plan-Item: <key>'`. `tools/merge_batch.py land` merges the batch PR with one `Plan-Item` trailer per item of every included part in the merge commit body.
+
 A `ci` value of `forgejo:<owner>/<repo>` routes `commit+ci` away from `gh` and into
 `src/plangraph/keeper/evidence_forgejo.py`, which reads Forgejo commit statuses: `GET
 {base}/api/v1/repos/{owner}/{repo}/commits/{sha}/statuses?page=N&limit=M` (operationId
