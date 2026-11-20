@@ -9,6 +9,9 @@ fn run() -> i32 {
     if args.first().map(String::as_str) == Some("fast-checks") {
         return plangraph_cli::fast_checks::run(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("batch-size") {
+        return plangraph_cli::batch_size::run(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("host-sync") {
         let rest: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         return plangraph_cli::host_sync::run_cli(&rest);

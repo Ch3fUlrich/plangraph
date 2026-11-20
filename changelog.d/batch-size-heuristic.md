@@ -1,0 +1,1 @@
+- `plangraph batch-size` computes the item count of a batch brief from the writer model (cap 10, 5 or 3), the items' expected diff bytes and the last batch's outcome, and names the reason.
