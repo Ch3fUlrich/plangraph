@@ -1,5 +1,14 @@
 # Provider limit evidence
 
+Snapshot HTTP 401/403 responses are `auth_refused`, distinct from
+`OmniRouteUnreachable`. The diagnostic includes the validated management gateway
+URL, HTTP status, and caller's `PLANGRAPH_PRINCIPAL` (or `unknown` when unset),
+never the key or response body. The adapter retains its `limited` availability
+contract, with `auth_refused` evidence and a detailed reason. Auth refusal clears
+cached successful health and bypasses transport retries and recovery probes.
+Routing candidates and saved run plans expose `auth_refused` and its evidence;
+an already planned leg records the detailed refusal in its attempt skip reason.
+
 `plangraph.spawner.leg_state` stores provider 429/402 responses in SQLite at
 `$XDG_STATE_HOME/plangraph/leg-state.sqlite` (default
 `~/.local/state/plangraph/leg-state.sqlite`). Tests inject a `LegStateStore(path)`.
@@ -110,6 +119,12 @@ quota snapshots do not suppress these native CLI models.
 Legacy agy/<model>-<effort> events remain readable under the canonical key.
 Explicit agy resets survive the generic six-hour evidence TTL, up to the existing
 24-hour booking cap.
-The native Sonnet-high fallback reads and books the declared agy:claude-sonnet-5-5
-seat key, including structured CLI limits and provider reset timestamps. Route
+The native Claude-harness Sonnet-high fallback reads and books its own
+claude-sonnet-5-5-high subscription key. It never shares agy:claude-sonnet-5-5
+quota evidence. CLI review quota results carry the serving harness, including
+structured CLI limits and provider reset timestamps. Route
 JSON carries the planning reader/clock snapshot rather than rereading global state.
+Its agy Sonnet quota snapshot reads the agy key independently of the native leg.
+Explicit-leg admission and provider-stop booking/fallback use the same
+harness-aware quota key as dispatch. The helper lives in routing support;
+`leg_probe.key` remains its compatibility alias.

@@ -80,6 +80,17 @@ impl Runs {
         if let Some(head) = review_head {
             base["head_sha"] = json!(head);
         }
+        let checkout = crate::cli_review::isolate(&mut launch, &leg, base["head_sha"].as_str())?;
+        if checkout.is_some() {
+            base["review_checkout"] = json!(launch.cwd);
+        }
+        if role == "review" {
+            base["review_base"] = args["card"]["diff_ref"]
+                .get("base_sha")
+                .or_else(|| args["card"]["diff_ref"].get("base"))
+                .cloned()
+                .unwrap_or(Value::Null);
+        }
         base.as_object_mut()
             .unwrap()
             .extend(admission.fields.as_object().unwrap().clone());
@@ -143,7 +154,12 @@ impl Runs {
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
                 events: events.clone(),
-                finish: Some(crate::review_retry::hook(args.clone(), leg, attempt_id)),
+                finish: Some(crate::review_retry::hook(
+                    args.clone(),
+                    leg,
+                    attempt_id,
+                    checkout,
+                )),
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}

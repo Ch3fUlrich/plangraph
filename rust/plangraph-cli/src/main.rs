@@ -1,4 +1,4 @@
-use plangraph_cli::{env, setup};
+use plangraph_cli::{base_fresh, env, feeder, setup};
 use std::path::PathBuf;
 
 fn main() {
@@ -6,12 +6,37 @@ fn main() {
 }
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("fast-checks") {
+        return plangraph_cli::fast_checks::run(&args[1..]);
+    }
+    if let Some(code) = plangraph_cli::watchers::cli(&args) {
+        return code;
+    }
+    if let [command, path] = args.as_slice() {
+        if command == "batch-merge-check" {
+            return match plangraph_cli::batch_merge::run(std::path::Path::new(path)) {
+                Ok(message) => {
+                    println!("{message}");
+                    0
+                }
+                Err(reason) => {
+                    eprintln!("{reason}");
+                    1
+                }
+            };
+        }
+    }
     if args == ["--version"] {
         println!("plangraph {}", env!("CARGO_PKG_VERSION"));
         return 0;
     }
     if args.first().is_some_and(|s| s == "codex-host-readiness") {
         return plangraph_cli::codex_readiness::run(&args[1..]);
+    }
+    if let [command, repo] = args.as_slice() {
+        if command == "base-fresh" {
+            return base_fresh::run(repo);
+        }
     }
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -30,9 +55,21 @@ fn run() -> i32 {
             return 2;
         }
     };
+    if args.first().is_some_and(|s| s == "feed") {
+        return feeder::run(&home, &effective, &args[1..]);
+    }
     if args == ["env", "check"] {
         println!("environment checked {} keys", effective.len());
         return 0;
+    }
+    if args.first().is_some_and(|arg| arg == "ci-watch") {
+        return match plangraph_cli::ci_watch::run(&home, &effective, &args[1..]) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("ci-watch: {error}");
+                2
+            }
+        };
     }
     let mode = match args
         .iter()
@@ -45,7 +82,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | feed --once [--dry-run] | --version"
             );
             return 2;
         }

@@ -6,7 +6,11 @@ edition = "2021"
 [dependencies]
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "0.8"
+regex = "1"
+sha2 = "0.10"
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 tempfile = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
@@ -19,3 +23,6 @@ path = "src/main.rs"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[features]
+systemd-tests = []

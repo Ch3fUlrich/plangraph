@@ -10,6 +10,7 @@ import math
 import os
 import threading
 import time
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -25,6 +26,15 @@ TTL_ENV_VAR = "PLANGRAPH_OMNIROUTE_STATE_TTL_S"
 
 class OmniRouteUnreachable(RuntimeError):
     """State cannot be established; message is a controlled code only."""
+
+
+class OmniRouteAuthRefused(RuntimeError):
+    """Gateway answered but refused the snapshot caller's credentials."""
+
+    def __init__(self, status, gateway_url, principal):
+        self.evidence = dict(kind='auth_refused', http_status=status,
+                             gateway_url=gateway_url, principal=principal)
+        super().__init__(f'auth_refused: HTTP {status} gateway={gateway_url} principal={principal}')
 
 
 @dataclass(frozen=True)
@@ -79,7 +89,7 @@ def _build(body, now):
 class OmniRouteState:
     """Serialized refresh with injected transport and monotonic cache clock."""
 
-    def __init__(self, base_url, key, *, ttl_s=60, fetch=None,
+    def __init__(self, base_url, key, *, principal='unknown', ttl_s=60, fetch=None,
                  clock=time.monotonic, wall_clock=lambda: datetime.now(timezone.utc)):
         try:
             ttl_s = float(ttl_s)
@@ -89,6 +99,7 @@ class OmniRouteState:
             raise ValueError("invalid_ttl")
         self.base_url = base_url.strip().rstrip("/") if isinstance(base_url, str) else ""
         self._key = key if isinstance(key, str) and key.strip() else None
+        self._principal = principal
         self._ttl_s, self._fetch = ttl_s, fetch or _default_fetch
         self._clock, self._wall_clock = clock, wall_clock
         self._lock = threading.Lock()
@@ -102,8 +113,19 @@ class OmniRouteState:
         try:
             status, body = self._fetch(self.base_url + "/api/providers",
                                        {"Authorization": "Bearer " + self._key}, 8.0)
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            exc.close()
+            if status not in (401, 403):
+                raise OmniRouteUnreachable("transport_error") from None
         except Exception:
             raise OmniRouteUnreachable("transport_error") from None
+        if status in (401, 403):
+            from .leg_state import _redact
+            gateway = self.base_url if valid_gateway_endpoint(self.base_url) else 'unknown'
+            principal = _redact(str(self._principal).replace(self._key, '[REDACTED]'), 80)
+            raise OmniRouteAuthRefused(status, gateway.replace(self._key, '[REDACTED]'),
+                                       principal) from None
         if status != 200:
             raise OmniRouteUnreachable("http_error")
         try:
@@ -119,6 +141,9 @@ class OmniRouteState:
                 return dict(self._good)
             try:
                 states = self._read()
+            except OmniRouteAuthRefused:
+                self._good = None
+                raise
             except OmniRouteUnreachable:
                 if self._good is not None and self._clock() - self._good_at <= 2 * self._ttl_s:
                     return {name: replace(state, stale=True)
@@ -144,4 +169,5 @@ def from_env(env=None, *, key_resolver=None, **kwargs):
         except (Exception, SystemExit):
             pass
     kwargs.setdefault("ttl_s", source.get(TTL_ENV_VAR, 60))
+    kwargs.setdefault("principal", source.get('PLANGRAPH_PRINCIPAL') or 'unknown')
     return OmniRouteState(base, key, **kwargs)

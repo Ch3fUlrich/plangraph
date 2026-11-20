@@ -19,7 +19,7 @@ from autoos_refs_support import (  # noqa: F401  (ar is a fixture)
     ar, assert_no_leak, run_cli, windows_skip, write,
 )
 
-MENTION = "exec /home/x/code/AutoOS/bin/svc\n"
+MENTION = "exec /synthetic-home/x/code/AutoOS/bin/svc\n"
 MARKER = "PAYLOAD" + "_MARKER_7"  # text that must never be printed
 
 
@@ -27,8 +27,8 @@ def routing_fixture(home: Path, routing: Path | None = None, launch: Path | None
     """One file naming AutoOS in each of the three routing roots."""
     routing = routing or home / "code" / "routing"
     launch = launch or home / ".local" / "state" / "routing" / "launch"
-    write(launch / "sess.json", '{"name": "sess", "cmd": "/home/x/code/AutoOS/bin/svc"}\n')
-    write(routing / "ops" / "set.mcp.json", '{"command": "/home/x/code/AutoOS/mcp"}\n')
+    write(launch / "sess.json", '{"name": "sess", "cmd": "/synthetic-home/x/code/AutoOS/bin/svc"}\n')
+    write(routing / "ops" / "set.mcp.json", '{"command": "/synthetic-home/x/code/AutoOS/mcp"}\n')
     write(routing / "bin" / "tool", "#!/bin/sh\n" + MENTION)
 
 
@@ -69,9 +69,9 @@ def test_routing_secret_named_and_binary_files_are_not_read(ar, tmp_path: Path) 
     home = tmp_path / "h"
     launch = home / ".local" / "state" / "routing" / "launch"
     routing = home / "code" / "routing"
-    write(launch / "session_token.json", MARKER + " /home/x/code/AutoOS\n")
-    write(routing / "bin" / "api_key.sh", MARKER + " /home/x/code/AutoOS\n")
-    (routing / "bin").joinpath("blob").write_bytes(b"\0\1\2 /home/x/code/AutoOS\n")
+    write(launch / "session_token.json", MARKER + " /synthetic-home/x/code/AutoOS\n")
+    write(routing / "bin" / "api_key.sh", MARKER + " /synthetic-home/x/code/AutoOS\n")
+    (routing / "bin").joinpath("blob").write_bytes(b"\0\1\2 /synthetic-home/x/code/AutoOS\n")
     hits = ar.scan_all(home)
     assert_no_leak((MARKER,), repr(hits), run_cli("--home", str(home)).stdout)
     assert sorted(h[2] for h in hits) == ["SECRET-PATH", "SECRET-PATH"]
@@ -141,8 +141,8 @@ def test_symlink_targets_that_must_not_be_read(ar, tmp_path: Path) -> None:
     home = tmp_path / "h"
     bin_dir = home / ".local" / "bin"
     bin_dir.mkdir(parents=True)
-    write(tmp_path / "store" / "token.sh", MARKER + " /home/x/code/AutoOS\n")
-    (tmp_path / "store" / "blob").write_bytes(b"\0\1 /home/x/code/AutoOS\n")
+    write(tmp_path / "store" / "token.sh", MARKER + " /synthetic-home/x/code/AutoOS\n")
+    (tmp_path / "store" / "blob").write_bytes(b"\0\1 /synthetic-home/x/code/AutoOS\n")
     (bin_dir / "secretish").symlink_to(tmp_path / "store" / "token.sh")
     (bin_dir / "binary").symlink_to(tmp_path / "store" / "blob")
     (bin_dir / "dangling").symlink_to(tmp_path / "store" / "missing")
@@ -172,14 +172,14 @@ def test_odd_tracked_symlink_names_are_read_with_z(
     home.mkdir()
     init_repo(repo)
     try:
-        os.symlink(os.fsencode("/home/x/code/AutoOS/tools/h.sh"),
+        os.symlink(os.fsencode("/synthetic-home/x/code/AutoOS/tools/h.sh"),
                    os.path.join(os.fsencode(repo), os.fsencode(name)))
     except (OSError, ValueError):
         pytest.skip("this file system refuses the name")
     subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
     hits = ar.scan_all(home, repo=repo)
     assert [(h[0], h[1], h[2]) for h in hits] == [
-        ("repo-symlink", str(repo / name), "/home/x/code/AutoOS/tools/h.sh")]
+        ("repo-symlink", str(repo / name), "/synthetic-home/x/code/AutoOS/tools/h.sh")]
     proc = run_cli("--home", str(home), "--repo", str(repo))
     assert proc.returncode == 1 and proc.stderr == ""  # reported, no crash, not 'broken-link'
     assert "broken-link" not in proc.stdout

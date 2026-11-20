@@ -83,20 +83,25 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     } else {
         leg
     };
-    let frame = json!({"event":"result", "result":{"status":"SUCCESS", "response":"No findings.\nVERDICT: PASS\nTEST_GAMING: no\n"}});
+    let frame = json!({"event":"result", "result":{"status":"SUCCESS", "response":"No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n"}});
     let frame = if sonnet {
         format!(
             "{}\n{}",
             json!({"type":"system", "subtype":"init", "model":"claude-sonnet-5-5-high"}),
-            json!({"type":"result", "is_error":false, "result":"No findings.\nVERDICT: PASS\nTEST_GAMING: no\n"})
+            json!({"type":"result", "is_error":false, "result":"No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n"})
         )
     } else {
         frame.to_string()
     };
     let program = state.path().join("reviewer");
+    let isolation_checks = if sonnet {
+        String::new()
+    } else {
+        format!("test \"$PWD\" != '{}' || exit 2\ntest \"$(git rev-parse HEAD)\" = '{head}' || exit 3\ntest -z \"$(git remote)\" || exit 4\ncase \"$*\" in *'command(*)'*) ;; *) exit 5;; esac\n", repo.display())
+    };
     executable(
         &program,
-        &format!("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{frame}'\n"),
+        &format!("#!/bin/sh\n{isolation_checks}cat >/dev/null\nprintf '%s\\n' '{frame}'\n"),
     );
     let route = state.path().join("route");
     executable(
@@ -170,6 +175,12 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     assert_eq!(record["witness_kind"], "cli_reported");
     assert_eq!(record["verdict"], "pass");
     assert_eq!(record["served_model"], leg["model"]);
+    assert_eq!(record["cwd"], json!(repo));
+    if !sonnet {
+        let clone = Path::new(record["review_checkout"].as_str().unwrap());
+        assert_ne!(clone, repo);
+        assert!(!clone.exists(), "completed review must clean up its clone");
+    }
     let attempts = record["attempts"].as_array().unwrap();
     assert_eq!(attempts.len(), if retry { 2 } else { 1 });
     assert_eq!(attempts.last().unwrap()["witness_kind"], "cli_reported");

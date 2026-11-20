@@ -54,6 +54,7 @@ fn lifecycle(
     record["base_admitted"] = json!(true);
     driver.save(record).map_err(|e| (6, e))?;
     let prompt = format!("{brief}\nNative writer rules: new code is Rust with Rust tests. No new Python, shell or Node source files or additions to tools/new_code_allowlist.txt without an operator D-id; fixes inside existing Python files remain allowed until their port. Do not push. Before finishing, commit your work, run the repository's fast gates, and obtain a repository-access review for the final HEAD. Store the review in the configured review directory with the HEAD's eight-character SHA in its filename and a VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES line. Review routing must use role review and writer_families [\"openai\"].\n");
+    let prompt = format!("{prompt}\nUse the inherited shared CARGO_TARGET_DIR for every Cargo command, including reviews and preflight. Never override it with a private /tmp or worktree target, --target-dir, or Cargo configuration.\n");
     let session = driver.execute(None, &prompt).map_err(|e| (6, e))?;
     record["session_id"] = json!(session);
     for attempt in 0..=3 {
@@ -64,7 +65,11 @@ fn lifecycle(
         if let Some(review) = driver.review(&head).map_err(|e| (4, e))? {
             record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
             let accepts = review["verdict"] == "ACCEPT";
+            let weak = review["status"] == "no_verdict";
             record["review"] = review;
+            if weak {
+                return Err((4, "weak_verdict".into()));
+            }
             if !accepts {
                 return Ok(3);
             }

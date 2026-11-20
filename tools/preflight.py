@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Blocking local CI policy, Rust and affected-test preflight."""
 import argparse
+import asyncio
 import importlib.util
 import json
 import os
@@ -12,6 +13,9 @@ import subprocess
 import sys
 import time
 import tomllib
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+from plangraph.spawner.host_ready import cargo_child_env, cargo_lease, running_disk_refusal
 
 CHECK_TIMEOUT = 60
 # Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
@@ -39,21 +43,56 @@ class FailFamily(ValueError):
 
 
 def run_test_process(command, **kwargs):
-    """Bound the selector and its pytest workers as one process tree."""
+    """Kill the command's tree on timeout/interruption, including nested Linux sessions."""
     timeout = kwargs.pop('timeout')
+    tree = None
+    if sys.platform.startswith('linux'):
+        # Reuse checkout-local helpers without requiring an installed package.
+        spec = importlib.util.spec_from_file_location(
+            'preflight_proc_kill', Path(__file__).resolve().parents[1]
+            / 'src/plangraph/spawner/proc_kill.py')
+        tree = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(tree)
     with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
+        ident = tree.root_identity(process.pid) if tree else None
         try:
-            stdout, _ = process.communicate(timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            if os.name == 'posix':
-                os.killpg(process.pid, signal.SIGKILL)
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException:
+            if tree:
+                members = {}
+                try:
+                    os.killpg(process.pid, signal.SIGSTOP)
+                    # Freeze discovered sessions before rescanning: their children
+                    # must remain attached until every potential parent is stopped.
+                    while True:
+                        added = tree.snapshot(process.pid, ident).items() - members.items()
+                        if not added:
+                            break
+                        for pid, start in added:
+                            if tree.alive(pid, start):
+                                try:
+                                    os.kill(pid, signal.SIGSTOP)
+                                except ProcessLookupError:
+                                    pass
+                        members.update(added)
+                    asyncio.run(tree.finish(process.pid, ident, members))
+                finally:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            elif os.name == 'posix':
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             else:
                 subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)],
                                capture_output=True, timeout=CHECK_TIMEOUT)
                 process.kill()
             process.communicate()
-            raise exc
-        return subprocess.CompletedProcess(command, process.returncode, stdout)
+            raise
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
 def run(command, cwd, env):
@@ -139,7 +178,9 @@ def rust_commands(root, base, head, env=None):
         data = tomllib.loads(manifest.read_text())
         owner = manifest.parent.relative_to(root).as_posix()
         if members is not None and manifest.parent not in members:
-            if "workspace" not in data or "package" not in data:
+            # Excluded packages can stand alone without a [workspace] table.
+            # Address their owning manifest, never a package in rust/.
+            if "package" not in data:
                 continue
             standalone[owner] = manifest
         elif "package" in data:
@@ -233,7 +274,7 @@ def main(argv=None, root=None):
     policy_base = policy_baseline(root, args.base)
     policy_bases = dict(FILESIZE_REQUIRE_BASE=policy_base, NEWCODE_BASE=policy_base,
                         CHANGELOG_BASE=policy_base)
-    env = dict(os.environ, CARGO_BUILD_JOBS="4")
+    env = cargo_child_env(dict(os.environ, CARGO_BUILD_JOBS="4"))
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():
         env['PATH'] = str(cargo_bin) + os.pathsep + env.get('PATH', '')
@@ -244,6 +285,18 @@ def main(argv=None, root=None):
 
     def python(name, *extra):
         return [interpreter, str(tools / name), *extra]
+
+    def invoke(command, cwd, command_env):
+        if command[0] != 'cargo':
+            return run(command, cwd, command_env)
+        # Share the spawner's target, cap checks and cleanup lease.
+        with cargo_lease():
+            refusal = running_disk_refusal(root)
+            if refusal:
+                return 1, refusal + '\n'
+            code, output = run(command, cwd, command_env)
+            refusal = running_disk_refusal(root)
+            return (1, output + refusal + '\n') if refusal else (code, output)
 
     scrub = python("split/scrub_check.py", ".", "--base", args.scrub_base or args.base, "--head", args.head,
                    "--rules", str(tools / "split/manifest.toml"),
@@ -256,8 +309,7 @@ def main(argv=None, root=None):
     elif default_words.exists():
         words = str(default_words)
     if words:
-        scrubs.append(python("preflight_private_scrub.py", "--base", args.scrub_base or args.base,
-                             "--head", args.head, "--words", words))
+        scrub.extend(["--words", words])
     tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
                    "--root", str(root), "--files-only", "--local", "--run")
     if importlib.util.find_spec("xdist") is not None:
@@ -299,12 +351,12 @@ def main(argv=None, root=None):
                         command_env = dict(family_env)
                         command_env.setdefault("PG_JAIL", "off")
                         command_env.setdefault("PG_TEST_ALLOW_UNJAILED", "1")
-                    code, output = run(command, cwd, command_env)
+                    code, output = invoke(command, cwd, command_env)
                     print(output, end="", flush=True)
                     infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     if infra:
                         print(f"{family}: INFRA HTTP 5xx; rerun once", flush=True)
-                        code, output = run(command, cwd, command_env)
+                        code, output = invoke(command, cwd, command_env)
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")

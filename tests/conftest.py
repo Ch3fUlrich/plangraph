@@ -13,6 +13,7 @@ import hashlib
 import atexit
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,12 @@ import threading
 from contextlib import contextmanager
 import pytest
 from pathlib import Path
+from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
+    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
+
+# Initial nested conftests load before sessionstart and may invoke Git at import.
+_clear_inherited_git_environment()
+
 from pgtest_shm import _sweep_dead_pgtest_dirs
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
@@ -90,8 +97,6 @@ def no_leaked_keeper_threads(request, no_leaked_keeper_fixture_threads):
     with thread_scope(request):
         yield
 
-from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
-    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
 @pytest.fixture(scope="session", autouse=True)
 def no_leaked_keeper_fixture_threads(request):
     import _keeper_threads as guard
@@ -185,11 +190,27 @@ def hermetic_writer_env(monkeypatch):
 @pytest.fixture
 def short_socket_dir():
     """Bound Unix sockets avoid pytest's long per-test directory names."""
-    with tempfile.TemporaryDirectory(prefix="s-", dir=tempfile.gettempdir()) as directory:
+    with tempfile.TemporaryDirectory(prefix="s-", dir="/tmp") as directory:
         path = Path(directory)
-        assert len(os.fsencode(path / "anchor.sock")) < 108
-        assert len(os.fsencode(path / "silent.sock")) < 108
+        assert len(os.fsencode(path / "anchor.sock")) < 100
+        assert len(os.fsencode(path / "silent.sock")) < 100
         yield path
+
+@pytest.fixture(autouse=True)
+def unix_socket_path_guard(monkeypatch, tmp_path_factory):
+    """Filesystem Unix sockets must stay short and outside pytest temp roots."""
+    bind = socket.socket.bind
+
+    def guarded_bind(sock, address):
+        if sock.family == socket.AF_UNIX:
+            encoded = os.fsencode(address)
+            if encoded and not encoded.startswith(b"\0"):
+                path = Path(os.fsdecode(encoded)).absolute()
+                assert (len(os.fsencode(path)) < 100 and not path.resolve().is_relative_to(
+                    tmp_path_factory.getbasetemp().resolve())), "use short_socket_dir for AF_UNIX binds"
+        return bind(sock, address)
+
+    monkeypatch.setattr(socket.socket, "bind", guarded_bind)
 
 from plangraph.spawner import resolver as _resolver
 _real_served_models = getattr(_resolver, '_served_models_real', _resolver.served_models)

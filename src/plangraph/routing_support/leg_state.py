@@ -26,12 +26,19 @@ EVIDENCE_TTL_S = 6 * 60 * 60
 _SCOPE = "((account IS ? AND combo IS ?) OR (account IS NULL AND combo IS NULL AND source != 'provider-response'))"
 
 
+def leg_key(leg):
+    """One leg key for probe and quota bookkeeping (Q16/M8).
+    Prefix only bare agy models; provider-qualified models are their own keys.
+    Legacy rows without a harness keep their historical model-only keys.
+    """
+    return ('agy/' + leg.model if getattr(leg, 'harness', None) == 'agy' and '/' not in leg.model
+            else leg.model)
+
+
 def quota_key(leg):
-    """D-5966: effort variants share one quota within each agy model, never across models."""
+    """D-5966: agy efforts share a model quota; native harness keys stay separate."""
     if not isinstance(leg, str):
         return leg
-    if leg == "claude-sonnet-5-5-high":
-        leg = "agy/" + leg  # D-5966: the native Sonnet fallback uses this model seat quota.
     return re.sub(r'^agy[/:]((?:gemini-4-(?:hydrogen|argon)|claude-sonnet-5-5))(?:-(?:low|medium|high|xhigh|max))?$',
                   r'agy:\1', leg)
 
@@ -399,11 +406,16 @@ class LegAdapter:
             return dict(state='unavailable', evidence=None)
         now = self.clock()
         if self._at is None or now - self._at >= self.ttl_s:
+            from .omniroute_state import OmniRouteAuthRefused
+            self._auth_error = None
             try:
                 states = self.provider.snapshot()
                 served = {self.identity(mid) for mid in (self.models() if callable(self.models) else self.models)}
                 self._states, self._served = states, served
                 self._error = None if states else 'unreachable'
+            except OmniRouteAuthRefused as exc:
+                self._error = str(exc)
+                self._auth_error = exc.evidence
             except Exception as exc:
                 self._error = f'leg_state_snapshot_error: {type(exc).__name__}: {_redact(str(exc))}'
             self._at = now
@@ -421,4 +433,4 @@ class LegAdapter:
                 state = 'ok' if provider.available else 'unavailable'
         # Legacy planner understands limited/down only; preserve explicit reason.
         return dict(state='ok' if state == 'ok' else 'limited',
-                    reason=state, evidence=None)
+                    reason=state, evidence=dict(self._auth_error) if self._auth_error else None)

@@ -96,29 +96,7 @@ impl Leader {
 #[cfg(target_os = "linux")]
 impl Authority for Leader {
     fn empty(&mut self) -> io::Result<bool> {
-        let pgid = self
-            .identity
-            .pgid
-            .ok_or_else(|| io::Error::other("Unknown"))?;
-        for entry in std::fs::read_dir("/proc")? {
-            let entry = entry?;
-            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
-                continue;
-            }
-            let stat = match std::fs::read_to_string(entry.path().join("stat")) {
-                Ok(stat) => stat,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e),
-            };
-            let observed = stat
-                .rsplit_once(')')
-                .and_then(|(_, rest)| rest.split_whitespace().nth(2)?.parse::<u32>().ok())
-                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
-            if observed == pgid {
-                return Ok(false);
-            }
-        }
-        Ok(true)
+        self.empty_with(|path| std::fs::read_to_string(path))
     }
     fn signal(&mut self, force: bool) -> io::Result<()> {
         use std::os::fd::AsRawFd;
@@ -138,6 +116,38 @@ impl Authority for Leader {
         } else {
             Ok(())
         }
+    }
+}
+#[cfg(target_os = "linux")]
+impl Leader {
+    fn empty_with(
+        &mut self,
+        mut read_stat: impl FnMut(&std::path::Path) -> io::Result<String>,
+    ) -> io::Result<bool> {
+        let pgid = self
+            .identity
+            .pgid
+            .ok_or_else(|| io::Error::other("Unknown"))?;
+        for entry in std::fs::read_dir("/proc")? {
+            let entry = entry?;
+            if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+                continue;
+            }
+            let stat = match read_stat(&entry.path().join("stat")) {
+                Ok(stat) => stat,
+                // A reaper can collect any enumerated process before stat is read.
+                Err(e) if native::vanished(&e) => continue,
+                Err(e) => return Err(e),
+            };
+            let observed = stat
+                .rsplit_once(')')
+                .and_then(|(_, rest)| rest.split_whitespace().nth(2)?.parse::<u32>().ok())
+                .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidData))?;
+            if observed == pgid {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 #[cfg(all(test, target_os = "linux"))]

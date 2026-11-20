@@ -242,7 +242,7 @@ def _git_snapshot(repo):
     return snapshot
 
 
-@pytest.mark.parametrize('boundary', ['preflight', 'selector', 'pytest'])
+@pytest.mark.parametrize('boundary', ['preflight', 'selector', 'pytest', 'initial-conftest'])
 def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
     """Every repository and every deliberately leaked variable belongs to this fixture."""
     import shutil
@@ -297,7 +297,16 @@ def test_hook_binding_never_mutates_caller_repository(tmp_path, boundary):
         else:
             for name in ('conftest.py', 'pgtest_shm.py', '_keeper_threads.py', 'win_skips.py', '_split_ci_environment.py'):
                 shutil.copy2(source / 'tests' / name, tests / name)
-            command = [sys.executable, '-m', 'pytest', '-q', 'tests/test_binding.py']
+            if boundary == 'initial-conftest':
+                # Explicit paths load nested conftests before pytest_sessionstart.
+                nested = tests / 'nested'
+                nested.mkdir()
+                (nested / 'conftest.py').write_text(mutation + '\ntest_fixture()\n')
+                (nested / 'test_binding.py').write_text('def test_loaded(): pass\n')
+                target = 'tests/nested/test_binding.py'
+            else:
+                target = 'tests/test_binding.py'
+            command = [sys.executable, '-m', 'pytest', '-q', target]
     result = subprocess.run(command, cwd=suite, env=incoming, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert _git_snapshot(victim) == before, 'caller repository or working tree changed'

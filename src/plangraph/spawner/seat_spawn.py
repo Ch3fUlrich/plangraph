@@ -114,6 +114,12 @@ def admit(service, options, *, card=None, preview=False):
         rows[name]['refusal'] = refusal
     if remote_first:
         record.update(host=placement['host'], placement=placement)
+    record.setdefault('role', role or 'implement')
+    record.setdefault('started', time.time())
+    if placement.get('host'):
+        record.setdefault('host', placement['host'])
+    from .item_key import annotate_item
+    annotate_item(record, card)
     return record
 
 

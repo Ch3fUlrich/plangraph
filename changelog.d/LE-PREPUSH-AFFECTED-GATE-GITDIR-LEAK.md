@@ -1,0 +1,1 @@
+Clear inherited Git hook bindings as soon as the root pytest conftest loads, before initial nested conftests can invoke Git. The byte-snapshot regression now covers nested conftest imports before session start, alongside preflight, affected-test execution, and ordinary pytest sessions.

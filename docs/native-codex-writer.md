@@ -38,6 +38,28 @@ The Rust MCP bridge delegates native launch, result refresh and cancellation to
 the same Python owner. Remote receipts refresh before returning a result; cancel
 reaches the Python supervisor locally or the target host over SSH.
 
+## WSL executable selection
+
+The native writer resolves `codex` from PATH before starting the Codex process.
+It refuses a selected executable under `/mnt/`, including a Linux-side symlink
+into that tree, with `tool_wrong_platform`. A Windows npm shim can otherwise
+pass a presence check and then fail looking for `@openai/codex-linux-x64`.
+Missing executables report `tool_missing`; the launcher does not fall through
+from a rejected Windows executable to another PATH entry.
+
+For a WSL writer started through `ssh ws-build wsl -d Ubuntu -- bash script`,
+the invoked script must export the Linux install directory before launching:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+# Then invoke the writer launcher (or pg-spawnd native-writer request.json).
+```
+
+Non-login `bash` does not load the login-shell PATH setup. Install Linux Codex
+in `$HOME/.local/bin`; the export also lets npm's Linux shim find Linux tools.
+The external `codex-writer.sh` is not tracked in this repository; the guard here
+covers the native writer path.
+
 ## Health check
 
 After a spawner move, each target must answer `pg-spawnd health --json` with exit 0;

@@ -1,0 +1,1 @@
+Reject weak positive spawner reviews that name no changed path or file:line. Preserve their output as no_verdict with reason weak_verdict, block passing seat evidence and native writer ACCEPT, and forbid background commands in the CLI review prompt. Rust regressions cover 288-byte background-only responses.

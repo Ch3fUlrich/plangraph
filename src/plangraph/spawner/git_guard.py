@@ -97,10 +97,11 @@ def run_worktree_lock(root):
 
 
 @contextmanager
-def run_tree(state, repo=None):
-    """Select fetched main without moving live trees; lease until context exit."""
+def run_tree(state, repo=None, *, fetch=True):
+    """Lease fetched main; fetch=False reuses this admission's completed fetch."""
     from contextlib import ExitStack
     from .runner import is_terminal
+    from .base_fresh import _check
     import json
     state = Path(state).resolve()
     repo = Path(repo or os.environ.get('PLANGRAPH_SPAWNER_REPO') or
@@ -117,8 +118,9 @@ def run_tree(state, repo=None):
     # Fetches serialize independently of creation; neither waits for live runs.
     with run_worktree_lock(root / '.fetch'):
         try:
-            git('fetch', '--no-write-fetch-head', 'origin',
-                '+refs/heads/main:refs/remotes/origin/main')
+            if fetch:
+                git('fetch', '--no-write-fetch-head', 'origin',
+                    '+refs/heads/main:refs/remotes/origin/main')
         except (OSError, subprocess.SubprocessError) as exc:
             stale = 'fetch_timeout' if isinstance(exc, subprocess.TimeoutExpired) else 'fetch_failed'
         # Even offline, prefer the verified tracking ref, never directory mtimes.
@@ -131,6 +133,11 @@ def run_tree(state, repo=None):
         with run_worktree_lock(root / '.locks' / sha):
             if path.is_symlink() or (path.exists() and not valid(path)):
                 raise RuntimeError('run_tree_invalid')
+            # Another admission may have advanced origin/main while we waited
+            # for this SHA's lock. Reuse the fetched ref, never fetch twice.
+            check = _check(repo, default='main', fetch=False, timeout=30, ref=sha)
+            if not check['ok']:
+                raise SpawnRefused(check['reason'])
             if not path.exists():
                 # Reuse only this missing registration; never prune other trees.
                 git('worktree', 'add', '--detach', '--force', '--force', path, sha)

@@ -1,4 +1,4 @@
-# Plangraph Spawner & Model Routing Architecture — [disk admission](operations/spawner-disk-admission.md)
+# Plangraph Spawner & Model Routing Architecture — [disk admission](operations/spawner-disk-admission.md) · [writer feeder](writer-feeder.md)
 
 | Config key | Values | Default / details |
 | --- | --- | --- |
@@ -148,37 +148,7 @@ credential ID. This selection also applies to mixed legacy/v2 stores. A failed q
 `no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
-`python3 -m plangraph.spawner.doctor` delegates host source checks to the Rust
-`pg-spawnd doctor-sources` subcommand. `doctor.py` resolves it on the host's
-`PATH`, never from checkout build artifacts, and reads its JSON check rows with
-a derived subprocess timeout: ten seconds plus three seconds per batch of up to
-16 configured hosts (at least ten seconds). Before any checks, optional `env.PATH` from the
-local hosts registry entry replaces the inherited PATH for both pg-spawnd and
-harness discovery/children. Identity is `PLANGRAPH_HOST_NAME` or registry `self`,
-with case-insensitive id/alias lookup; absent configuration retains inherited PATH.
-Windows PATH keys are case-insensitive (`Path` is accepted).
-A present but unusable registry produces `host_path: fail`, distinguishing an identity mismatch from invalid
-configuration without printing registry or environment values. PATH is restored after checks, even on exceptions.
-There is no Python fallback for source checks; fresh release clones need no build.
-Fleet snapshots likewise delegate the read-only JSON projection to
-`pg-spawnd fleet-snapshot`; the Python loader supplies persisted registry and run
-records without probing, and projection failures preserve the existing
-`fleet: null` fallback.
-
-The Rust command reads `plangraph/ps-hosts.json` under `XDG_CONFIG_HOME` (or
-`~/.config`), checking valid entries with `src` or `win_src` in parallel with
-at most 16 workers. SSH uses batch mode, a two-second connection timeout and
-a three-second probe deadline; source checks support POSIX, WSL and Windows
-paths. SSH output and diagnostics are discarded. A missing config or no
-eligible entries produces no source check rows; unreadable or malformed
-configuration produces `ps_hosts: fail` with `invalid configuration`.
-
-Each `ps_host_<name>` row passes with `ok` on SSH exit 0; exit 44 reports
-`src missing`, exit 255 or an SSH launch/I/O error reports `unreachable`, and
-a timeout or other exit reports `host query failed`. If the Rust binary is
-missing, Python adds `ps_hosts: fail` with `unavailable`; a nonzero subcommand
-exit, invalid JSON/non-list response, timeout or other invocation error instead
-reports `host query failed`. Any failed check makes doctor exit 1.
+Moved to [spawner doctor host source checks](operations/spawner-doctor.md).
 
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
@@ -260,11 +230,11 @@ Plain stdout, including text saying 429, is never provider evidence.
 
 ### SHA-named run-tree primitive (SPAWNER-RUN-TREE-S1)
 
-`git_guard.run_tree(state, repo)` attempts to fetch `origin/main`, then selects
-its verified commit SHA and uses the detached tree at `<state>/trees/<sha>`.
-If fetching fails or times out, it uses the verified tracking ref, not cache
-directory mtimes. It creates the tree when its directory is missing, including
-when Git still has a stale registration for that path, even if locked (double `--force`).
+`git_guard.run_tree(state, repo)` attempts to fetch `origin/main`, selects its verified SHA, and uses the detached tree at `<state>/trees/<sha>`.
+If fetching fails or times out, it uses the verified tracking ref, not cache directory mtimes.
+It creates missing trees, including stale Git registrations even if locked (double `--force`).
+Under the SHA's creation lock, the shared ancestry checker checks the selected base against fetched `origin/main` without another fetch, refusing `base_stale` if a parallel admission advanced the ref while selection waited.
+An admission that already fetched this repository can use `run_tree(state, repo, fetch=False)`. This check leaves local `main` and live cached trees untouched.
 
 POSIX reaping keeps the selected tree, trees named by nonterminal run records
 or records with survivors, trees with held creation locks or context leases, directories
@@ -344,7 +314,7 @@ the destination session and keeper item. The private parent inbox does not by
 itself inject a message into an agent session. Terminal run records are the
 durable retry journal. The pluggable `deliver(recipient, event)` sink can bridge
 a fleet bus. The default keeper sink uses the spawner-role `record_run` API;
-it does not close items or bypass the keeper's authorization checks.
+it does not close items or bypass the keeper's authorization checks. Itemless completions still reach `inbox/parent.jsonl`; the keeper marker records `not-applicable: no item` regardless of transport configuration. Silent-run alerts persist in `watchdog/alerts/*.json` as `kind=stall` with `stalled_at` and `noticed_at`, while bridge outbox events keep `kind=completion`.
 `PLANGRAPH_SPAWN_NOTIFY_CMD` optionally names an argv-style command (no shell);
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.
@@ -363,7 +333,7 @@ audited through `routing.hand_picked` to `spawn-overrides.jsonl`.
 The Mimo path fence still applies to overrides. Review seats: [spawner-seats.md](spawner-seats.md) (D-3198).
 
 CLI `probe --leg ID` / `probe --all-writers` (`--timeout S`, `--json`) and MCP `plangraph_agent_probe`: [liveness and env knobs](spawner-leg-state.md) (`PLANGRAPH_LEG_DOWN_S`, `PLANGRAPH_LEG_PROBE_TIMEOUT_S`, `PLANGRAPH_LEG_PROBE_TTL_S`).
-A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables ordinary automatic probes, not snapshot-error recovery). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness. `src/plangraph/spawner/leg_probe.py:before_launch` retries snapshot read errors once, then probes before admitting/skipping; failed-probe reasons retain the probe's own cause; only an empty or `unknown` reason is recorded as `leg_probe_failed` (`host_not_ready` for a missing host binary), never as `unknown` (run-e99aae2287e541b48886d0f04e46c37e). See [snapshot recovery](spawner-leg-state.md#snapshot-read-errors-slice-1).
+A probe with its harness binary missing reports `host-not-ready` and books no leg event. Probe timeouts must be finite and strictly positive; TTL remains nonnegative (zero disables ordinary automatic probes, not snapshot-error recovery). Invalid settings refuse before probe state writes, and CLI parameter refusals are JSON `ParameterRefused` with exit 2. Timeout errors name `--timeout` for an explicit CLI argument, `timeout_s` for a direct probe argument, or `PLANGRAPH_LEG_PROBE_TIMEOUT_S` for the environment. CLI and MCP probe refusal handlers catch only parameter-validation errors, not internal `ValueError`s. Spawn-call exceptions report probe infrastructure failure and never book leg liveness. `src/plangraph/spawner/leg_probe.py:before_launch` retries snapshot read errors once, then probes before admitting/skipping; failed-probe reasons retain the probe's own cause; only an empty or `unknown` reason is recorded as `leg_probe_failed` (`host_not_ready` for a missing host binary), never as `unknown` (run-e99aae2287e541b48886d0f04e46c37e). See [snapshot recovery](spawner-leg-state.md#snapshot-read-errors-slice-1). Snapshot HTTP 401/403 is an `auth_refused` skip (gateway URL and `PLANGRAPH_PRINCIPAL`, no credentials), not retried or probed; see [leg state](spawner-leg-state.md).
 Probe and quota bookkeeping key a leg by its model string: only a bare model of an agy leg gets the `agy/` prefix, a provider-qualified model is its own key, and legacy record rows without a harness keep their model-only key. Gateway quota refusals (omniroute "quota policy filtered" / "reached configured quota threshold", agy `RESOURCE_EXHAUSTED`) book like any harness limit. Before routing, `src/plangraph/routing_support/quota_snapshots.py::QuotaGate` reads omniroute `quota_snapshots` (read-only `QUOTA_SNAPSHOT_DB` mount/copy when configured, otherwise the management API; cached 60 s) and reads a leg `limited` while every account of its provider pool is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1) until the earliest reset (`next_reset_at`; a reset-less row holds 30 min from its timestamp or API observation); a missing or unreadable snapshot never blocks routing. A gateway leg silent for 60 s is checked against the call log (`sessionTag`) at the next 30 s watchdog tick (detected 60-90 s after the stall, bounded 3 s per check) and a logged quota error ends the run (exit 7) so the next leg runs; agy is not a gateway leg and its printed refusal is caught by the output refusal gate.
 Failed probes retain a scrubbed, single-line excerpt of the last 400 stderr
 characters in their result, output line and leg-state event. A `running` record
@@ -401,7 +371,7 @@ Other roles and the remaining implementation fallbacks put eligible free inputs 
 Callers may supply `catalog_rows` explicitly for deterministic offline planning;
 an empty snapshot uses the registered leg tiers and still rejects unknown models.
 Exact-order tests pin this input and isolate benchmark discovery from host files. Role-neutral keeper routes over the default table retain main's D-3828 readiness admission; S5's implementation fallbacks apply to role-bearing routes, not readiness. Custom tables remain explicit inputs.
-Review ordering preserves main's cost-first, per-leg measurement gate: measured rows precede missing rows within the same tier; unmeasured rows retain MiMo's existing role preference and Haiku's last-within-tier fallback. Provider-qualified tier identities win over unrelated bare names. Neither Haiku nor a measured paid row crosses a cheaper tier. A no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
+Review ordering preserves main's cost-first, per-leg measurement gate: measured rows precede missing rows within the same tier; unmeasured rows retain MiMo's existing role preference and Haiku's last-within-tier fallback. Provider-qualified tier identities win over unrelated bare names. Neither Haiku nor a measured paid row crosses a cheaper tier. A no-verdict model (`opencode-go/qwen3.8-flash`, D-3225) is never a seat. A review without a writer family refuses (D-1533). The `claude` harness (Haiku review leg, D-3605) runs with an allowlisted env (`claude_env.py`: HOME, PATH, PWD, locale, XDG_*, proxies, `CLAUDE_CONFIG_DIR`; every other variable is dropped whatever its case), and a host without the `claude` binary skips the leg as `harness_missing: claude` (D-3649). Native Claude Sonnet-high reads and books its own subscription quota, separate from agy Sonnet; CLI review quota results include the serving harness. A finished claude run's stdout (the record's `stdout_tail`) is the final text of its stream-json `result` event (else the last assistant text), so `tools/seat_verdict.py` finds the `VERDICT:` line; the raw stream is kept as `claude-stream.jsonl` beside the run's `live.log`, which still carries the raw activity feed.
 Claude 5.5 and effort-variant legs (operator 2026-11-09): `agy-claude-{sonnet,opus}-5-5-{low,medium,high}`
 (agy harness, review and implement), Hydrogen high and medium are enabled, unwitnessed (see retirement below),
 `cx-gpt-6-luna-{low,medium,high,xhigh,max}` (inline-only review) and
@@ -680,7 +650,7 @@ OOM wrapper lines are recognized by their known event shape, including `wrapper:
 
 See [admission contracts](operations/spawner-admission-contracts.md) for split admission and cleanup details.
 
-Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window.
+Quota polling considers only the newest request of a session, including a 429 without text. Timestamp-less pool observations keep their first-seen hold until recovery; database reads select the latest row per window. Gateway session tags retain the full per-launch UUID to avoid truncated-ID collisions across retries or parallel runs; see the [witness-share alert](spawner-reliability.md#witnessed-share-alerts).
 
 Stale-base waivers require PLANGRAPH_BASE_DECISIONS_FILE configured by the operator. Admission fetches its origin/main, requires one decision row whose DECISION cell contains Source: operator, Waives: spawn-base:<checked-base-sha> and Origin: <fetched-origin-sha>, and refuses missing, duplicate, unreadable or mismatched proof. A card D-id alone never waives lag or failed fetches. Refused-worktree cleanup requires matching created_by_run_id and never removes continuations or admitted workers.
 
@@ -710,12 +680,23 @@ Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
 Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md).
 
+Native agy CLI reviews (D-6054) use a disposable `git clone --shared` at the
+stamped HEAD with origin removed. Commands are pre-approved inside that checkout
+so headless plan mode can inspect callers and run bounded tests without a
+permission prompt. This is checkout isolation, not a command security sandbox.
+The original checkout remains the provenance source and is rechecked when the
+review ends. The clone lives through completion and quota fallthrough setup,
+then is removed. Empty or whitespace-only agy responses produce an explicit
+`VERDICT: FAIL` with available tool frames and stderr diagnostics; they never
+gain a served-model witness or count as a passing seat. No empty-output retry
+can replace the required repository-access review.
+
 Review hard walls default to 25 minutes and implement/fix to 90 minutes; progressing runs retain these prior budgets. Read-only git status/diff/log and GitHub run/status polling do not count as tool loops. Queue expiry preserves records owned by live or unobservable supervisors.
 
 Every emitted context pack includes this rule within its size cap: new code is Rust with Rust tests; no new Python or shell file; an allowlist line needs an operator D-id. The planner brief template carries the same rule (D-5912).
 
 Review route (rule 3.50, D-6028): mimo/mimo-v2.6-pro, mimo/mimo-v2.6-flash (inline-only: skipped without card diff_ref), then the D-5966 order gemini-4-hydrogen-high, gemini-4-argon-medium, free console-deepseek/deepseek-flash and opencode-go/beam-free, then claude-sonnet-5-5-high. CLI quota responses use leg-state keys agy:<model> without effort, including native Sonnet; each model resets independently. Route JSON exposes all three agy_quota_states with reset_at evidence. Rust review kinds `agy-cli` and `claude-cli` select admitted review legs; Python MCP rejects these native kinds. Hydrogen and Argon use agy plan mode with preallowed read tools; commands stay unapproved. Writer aliases (codex, cx-gpt-6.1-sol, gpt/openai) share review.family.writer_key across route, spawn admission and seats; registered leg/model families take precedence. Unknown writers fail with accepted names. Python seats and native initial/quota-retry launches carry the resolved gateway family (gpt for OpenAI) in X-OmniRoute-Author-Model and X-OmniRoute-Exclude-Family; missing or placeholder writers refuse launch. Eligible OpenAI and DeepSeek fallbacks precede final Sonnet; only the resolved writer family is excluded.
-Sonnet uses Claude restricted review tools and high effort. CLI reviews use the checkout rather than inline-diff rollout, requiring a clean worktree and an exact HEAD fast-checks stamp. Rust binds head_sha and records verdict/findings with cli_reported provenance: agy reports the CLI-selected model, not provider telemetry; Claude must report a single Sonnet model. Repository HEAD and tracked cleanliness are rechecked at completion. Failed/quota streams never count. When tests share a Cargo target across worktrees, verify that `CARGO_BIN_EXE_pg-spawnd` belongs to the intended revision: a stale main executable can reject branch-only CLI kinds or misinterpret checkout diff_ref. A controlled main/branch comparison reproduced stale executable and unit-test inventory reuse. Clear affected package artifacts in a private diagnostic target; preserve configured host shared caches. The Unix keeper integration uses production modules with stdlib setup; its direct Python inputs in `tools/ci_select.py` select Rust CI. Record/provenance assertions also run on Windows. Initial launch and quota fallthrough share Rust review preparation: select transport before interpreting diff_ref. CLI checkout refs avoid the inline SHA validator; inline-only legs retain strict validation. Each native CLI retry requires the same stamped HEAD. Keeper counts the final serving attempt after quota refusals, preserving cli_reported trust for Sonnet. Native CLI reviews use card.cwd or legacy diff_ref.repo, then the daemon checkout if neither is supplied. Symbolic diff heads resolve there and must equal its stamped HEAD.
+Sonnet uses Claude restricted review tools and high effort. CLI reviews use the checkout rather than inline-diff rollout, requiring a clean worktree and an exact HEAD fast-checks stamp. Rust binds head_sha and records verdict/findings with cli_reported provenance: agy reports the CLI-selected model, not provider telemetry; Claude must report a single Sonnet model. Repository HEAD and tracked cleanliness are rechecked at completion. Failed/quota streams never count. When tests share a Cargo target across worktrees, verify that `CARGO_BIN_EXE_pg-spawnd` belongs to the intended revision: a stale main executable can reject branch-only CLI kinds or misinterpret checkout diff_ref. A controlled main/branch comparison reproduced stale executable and unit-test inventory reuse. Use the inherited host shared Cargo target; private diagnostic targets are forbidden. See [disk admission and cleanup](operations/spawner-disk-admission.md) for leases and target limits. The Unix keeper integration uses production modules with stdlib setup; its direct Python inputs in `tools/ci_select.py` select Rust CI. Record/provenance assertions also run on Windows. Initial launch and quota fallthrough share Rust review preparation: select transport before interpreting diff_ref. CLI checkout refs avoid the inline SHA validator; inline-only legs retain strict validation. Each native CLI retry requires the same stamped HEAD. Keeper counts the final serving attempt after quota refusals, preserving cli_reported trust for Sonnet. Native CLI reviews use card.cwd or legacy diff_ref.repo, then the daemon checkout if neither is supplied. Symbolic diff heads resolve there and must equal its stamped HEAD.
 
 Seat-pool cleanup tests create their initial commit with Git plumbing in an
 isolated fixture environment, without signing, hooks, index updates or automatic

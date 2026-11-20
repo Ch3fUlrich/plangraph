@@ -34,8 +34,10 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
    cut. Work never starts from a local main; the base is `origin/main` or
    `origin/phase/<name>`.
 2. Group items that share a source file into one package; two packages never
-   share a file. Default size: about 10 items per package, one combined
-   checkpoint of about 2000 changed lines (see the ledger for the current best).
+   share a file. Until PHASE-BATCH-SIZE-EXPERIMENT sets measured defaults, each
+   checkpoint must have **under 100,000 diff bytes and at most 25 changed files**.
+   Either exceeded budget requires splitting; item and changed-line counts do
+   not override this limit. See [checkpoint evidence](../../docs/checkpoints/checkpoint-size.md).
 3. `phase/<name>` is cut from `origin/main`; one draft PR to main carries CI.
    Each writer has its own worktree and cluster branch cut from the phase
    branch. Only the orchestrator folds (merge commit with the item's
@@ -90,7 +92,19 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 
 ## Checkpoint
 
-1. Fold, push, wait for CI with one shell command.
+1. At package time, plan stacked checkpoints within the byte/file budget above.
+   Fold and commit each checkpoint, then run from the checkout root:
+   `cargo run --manifest-path rust/Cargo.toml -p pg-hook --bin checkpoint-size -- BASE HEAD`.
+   BASE is the PR target (`origin/main` for the first checkpoint, the preceding
+   checkpoint head for each stacked PR); HEAD is the exact committed checkpoint.
+   The command reports the merge-base PR diff including binary payloads; exit 1
+   refuses an oversized package and exit 2 means measurement failed. Both block
+   pushing and launching seats. Uncommitted edits are outside this measurement.
+   Split along package/dependency boundaries into separate stacked branches and
+   PRs, each targeting its predecessor. Never split only a seat's input while
+   retaining an oversized PR. Recheck after every fold, fix or target change,
+   including when retargeting a stack to main. Only after the check passes:
+   push and wait for CI with one shell command.
 2. Review the whole phase diff on that one head; the prompt names each folded
    item and its intent and forbids findings on unchanged code.
 3. One fix brief with every finding; the writer reproduces each with a test and
@@ -102,6 +116,26 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 6. Append the ledger rows; every third checkpoint, set the defaults above from them.
 
 ## Waiting and handoff
+
+When SSH exits 255, keep the existing wait deadline and retry the read-only
+status probe at the waiter's normal cadence. Report the unreachable host; never
+interpret a transport failure as a completed writer or replay a writer launch.
+Other exit codes retain their existing failure handling. Do not increase the
+deadline to conceal a failed connection.
+
+If SSH cannot carry a brief, hand the brief file to the named host session by
+message over Remote Control: include its contents (or an already accessible
+attachment), destination path, base SHA, branch, gates and return contract.
+A path on the orchestrator alone is insufficient. The host session writes the
+file locally, acknowledges the branch/session identity and starts it once.
+Read the result from the pushed branch on GitHub: fetch that exact branch and
+verify the returned SHA and artifacts locally. Do not wait for SSH to recover
+to read a result already pushed. The orchestrator owns this handoff; writers
+retain their brief's push restrictions. If no authorized session can push,
+report that blocker instead of claiming a branch result exists.
+
+Host-local Tailscale monitoring and its deployment/peer-block test are described
+in [host-link.md](../../docs/host-link.md).
 
 The orchestrator waits with one background shell command that exits; nothing
 waits inside a subagent. The handoff card carries: phase branch and head, PR,
