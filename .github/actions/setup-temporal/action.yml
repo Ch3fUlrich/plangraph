@@ -3,15 +3,24 @@ description: Cache the verified Temporal CLI 1.9.1 binary
 runs:
   using: composite
   steps:
+    # One absolute path, from the step shell's $HOME, for the cache, the install and the export:
+    # actions/cache expands a leading ~ with the runner process home, which differs on
+    # self-hosted runners.
+    - name: Resolve Temporal CLI path
+      id: temporal-path
+      shell: bash
+      run: echo "bin=$HOME/.cache/temporal-cli/1.9.1/temporal" >> "$GITHUB_OUTPUT"
     - name: Restore Temporal CLI cache
       id: temporal-cache
       uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
       with:
-        path: ~/.cache/temporal-cli/1.9.1/temporal
+        path: ${{ steps.temporal-path.outputs.bin }}
         key: temporal-cli-${{ runner.os }}-${{ runner.arch }}-1.9.1
     - name: Download Temporal CLI 1.9.1
       if: steps.temporal-cache.outputs.cache-hit != 'true'
       shell: bash
+      env:
+        TEMPORAL_BIN: ${{ steps.temporal-path.outputs.bin }}
       run: |
         set -euo pipefail
         dir=$(mktemp -d)
@@ -25,8 +34,16 @@ runs:
         # Both official sources must match this pinned release archive SHA-256.
         echo "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5  $dir/temporal.tar.gz" | sha256sum -c -
         tar -xzf "$dir/temporal.tar.gz" -C "$dir" temporal
-        mkdir -p "$HOME/.cache/temporal-cli/1.9.1"
-        install -m 0755 "$dir/temporal" "$HOME/.cache/temporal-cli/1.9.1/temporal"
+        mkdir -p "$(dirname "$TEMPORAL_BIN")"
+        install -m 0755 "$dir/temporal" "$TEMPORAL_BIN"
     - name: Export Temporal CLI path
       shell: bash
-      run: echo "TEMPORAL_CLI=$HOME/.cache/temporal-cli/1.9.1/temporal" >> "$GITHUB_ENV"
+      env:
+        TEMPORAL_BIN: ${{ steps.temporal-path.outputs.bin }}
+      run: |
+        set -euo pipefail
+        if [ ! -x "$TEMPORAL_BIN" ]; then
+          echo "::error::setup-temporal: Temporal CLI missing or not executable at $TEMPORAL_BIN after cache restore and download"
+          exit 1
+        fi
+        echo "TEMPORAL_CLI=$TEMPORAL_BIN" >> "$GITHUB_ENV"

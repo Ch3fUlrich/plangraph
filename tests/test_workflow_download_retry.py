@@ -1,5 +1,7 @@
 """Offline guard for retrying workflow curl downloads (7f96931 already complies)."""
+import os
 import shlex
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -96,10 +98,10 @@ def test_temporal_workflow_cache_and_retry_window():
         ROOT / ".github/workflows/tests.yml"
     ).read_text() for form in ("temporalio/cli/releases/download", "temporal.download/"))
     action = yaml.safe_load((ROOT / ".github/actions/setup-temporal/action.yml").read_text())
-    cache, download, export = action["runs"]["steps"]
+    resolve, cache, download, export = action["runs"]["steps"]
     assert cache["uses"] == "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809"
     assert cache["with"]["key"] == "temporal-cli-${{ runner.os }}-${{ runner.arch }}-1.9.1"
-    assert cache["with"]["path"] == "~/.cache/temporal-cli/1.9.1/temporal"
+    assert cache["with"]["path"] == "${{ steps.%s.outputs.bin }}" % resolve["id"]
     assert download["if"] == f"steps.{cache['id']}.outputs.cache-hit != 'true'"
     commands = list(downloads((ROOT / ".github/actions/setup-temporal/action.yml").read_text()))
     assert len(commands) == 2
@@ -131,7 +133,56 @@ def test_temporal_workflow_cache_and_retry_window():
     assert "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5" in download["run"]
     assert "install -m 0755" in download["run"]
     assert "if" not in export  # Cache hits must also export the binary path.
-    assert 'TEMPORAL_CLI=$HOME/.cache/temporal-cli/1.9.1/temporal' in export["run"]
+    assert 'TEMPORAL_CLI=$TEMPORAL_BIN' in export["run"]
+    assert export["env"]["TEMPORAL_BIN"] == download["env"]["TEMPORAL_BIN"] == cache["with"]["path"]
+
+
+def _temporal_steps():
+    action = yaml.safe_load((ROOT / ".github/actions/setup-temporal/action.yml").read_text())
+    return {step["name"].split()[0]: step for step in action["runs"]["steps"]}
+
+
+def _run_step(step, tmp_path, binary):
+    """Run a composite step's script with its env expanded the way the runner does."""
+    github_env, github_output = tmp_path / "env", tmp_path / "out"
+    for path in (github_env, github_output):
+        path.write_text("")
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path / "step-home"),
+           "GITHUB_ENV": str(github_env), "GITHUB_OUTPUT": str(github_output),
+           "TEMPORAL_BIN": str(binary)}
+    proc = subprocess.run(["bash", "-c", step["run"]], env=env, capture_output=True, text=True)
+    return proc, github_env.read_text(), github_output.read_text()
+
+
+def test_temporal_path_is_absolute_and_follows_the_step_home(tmp_path):
+    steps = _temporal_steps()
+    assert "~" not in steps["Resolve"]["run"] + steps["Restore"]["with"]["path"]
+    proc, _, out = _run_step(steps["Resolve"], tmp_path, "unused")
+    assert proc.returncode == 0, proc.stderr
+    # The self-hosted incident: the cache restored under a different home than the export used.
+    assert out == f"bin={tmp_path}/step-home/.cache/temporal-cli/1.9.1/temporal\n"
+
+
+def test_temporal_export_uses_the_restored_binary(tmp_path):
+    binary = tmp_path / "deep" / "temporal"
+    binary.parent.mkdir()
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    proc, env_file, _ = _run_step(_temporal_steps()["Export"], tmp_path, binary)
+    assert proc.returncode == 0, proc.stderr
+    assert env_file == f"TEMPORAL_CLI={binary}\n"
+
+
+@pytest.mark.parametrize("mode", [None, 0o644])
+def test_temporal_export_fails_clearly_when_binary_is_missing(tmp_path, mode):
+    binary = tmp_path / "missing" / "temporal"
+    if mode is not None:
+        binary.parent.mkdir()
+        binary.write_text("x")
+        binary.chmod(mode)
+    proc, env_file, _ = _run_step(_temporal_steps()["Export"], tmp_path, binary)
+    assert proc.returncode == 1 and env_file == ""
+    assert f"::error::setup-temporal: Temporal CLI missing or not executable at {binary}" in proc.stdout
 
 
 TEMPORAL_SHA = "09a0326a51db84d02735e53542b9ebd8c4758daf47482a9ab0abce15844e60d5"
