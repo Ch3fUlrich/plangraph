@@ -95,6 +95,9 @@ In every mode:
 - Speedups that do not require smarter agents are the default (rule 3.41).
 
 Batch rules, including the writer's five-round limit: [batch](cards/batch.md).
+Every batch writer brief starts with `skills/batch-writer/SKILL.md` verbatim and every
+review prompt of a writer head with `skills/review/SKILL.md`: an agent that is not told
+the workflow in its prompt does not follow it.
 These batch-specific instructions govern grouped writers and their in-session fix loop;
 the per-card L3 contract above describes `piecewise` work.
 
