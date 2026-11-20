@@ -14,7 +14,7 @@ pub mod retention;
 use pg::{check_ident, count_tables, Pg};
 use std::fs::{self, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub const KEEP: usize = 14;
 pub const TABLES: usize = 43;
@@ -30,10 +30,14 @@ pub struct Verify {
     pub min_seq: u64,
 }
 
-/// One dump run: dump, fsync, publish (never over an existing file), optional restore
-/// test, ledger line, retention. A candidate that fails its restore test is renamed
-/// `<name>.unverified`, gets a `verified=no` line and prunes nothing, so a run of bad
-/// dumps can never evict the last verified ones.
+/// One dump run. The dump is written to a `.part` file that is verified (with `verify`)
+/// BEFORE it gets any retention-eligible name:
+///
+/// * passed (or no verification asked): published as `<name>.dump` by hard link, which
+///   refuses to overwrite, then a ledger line, then retention;
+/// * failed: published as `<name>.dump.unverified` (also never overwriting), a
+///   `verified=no` line, the oldest `.unverified` beyond the cap pruned, verified dumps
+///   untouched, and the run fails. A bad dump can never evict a verified one.
 pub fn run_dump(
     pg: &dyn Pg,
     dir: &Path,
@@ -57,49 +61,26 @@ pub fn run_dump(
     let result = pg
         .dump(schema, &mut out)
         .and_then(|()| out.finish().map_err(|e| e.to_string()));
-    let (sha256, size) = match result {
-        Ok((_, 0)) => return discard(&part, "pg_dump wrote nothing".into()),
-        Ok(done) => done,
-        Err(error) => return discard(&part, error),
+    let outcome = match result {
+        Ok((_, 0)) => Err("pg_dump wrote nothing".to_owned()),
+        Ok((sha256, size)) => publish(
+            pg,
+            dir,
+            &part,
+            &name,
+            seq,
+            now,
+            (sha256, size),
+            schema,
+            verify,
+        ),
+        Err(error) => Err(error),
     };
-    let final_path = dir.join(&name);
-    let published = fs::File::open(&part)
-        .and_then(|f| f.sync_all())
-        .and_then(|()| fs::set_permissions(&part, fs::Permissions::from_mode(0o600)))
-        .and_then(|()| fs::hard_link(&part, &final_path));
     let _ = fs::remove_file(&part);
-    published.map_err(|e| {
-        format!(
-            "{}: {e} (a dump of seq {seq} already exists for this minute)",
-            final_path.display()
-        )
-    })?;
-    let mut entry = ledger::Entry {
-        stamp: names::stamp(now),
-        seq,
-        size,
-        sha256,
-        file: name.clone(),
-        verified: "skipped",
-    };
-    let mut failure = None;
-    if let Some(v) = verify {
-        match restore_test(pg, &final_path, schema, v.tables, v.min_seq) {
-            Ok(_) => entry.verified = "yes",
-            Err(error) => {
-                entry.verified = "no";
-                entry.file = format!("{name}{}", names::UNVERIFIED);
-                fs::rename(&final_path, dir.join(&entry.file)).map_err(|e| e.to_string())?;
-                failure = Some(error);
-            }
-        }
-    }
-    if let Err(error) = ledger::append(dir, &entry) {
-        // Every dump file has a ledger line: do not leave an unrecorded archive behind.
-        let _ = fs::remove_file(dir.join(&entry.file));
-        return Err(format!("ledger: {error}; dump {} removed", entry.file));
-    }
+    let (entry, failure) = outcome?;
     if let Some(error) = failure {
+        // Quarantine only: verified backups are never pruned for a bad dump.
+        let _ = retention::prune(dir, usize::MAX);
         return Err(format!(
             "restore test failed, dump kept as {}: {error}",
             entry.file
@@ -109,9 +90,59 @@ pub fn run_dump(
     Ok(DumpOutcome { entry, pruned })
 }
 
-fn discard<T>(part: &PathBuf, error: String) -> Result<T, String> {
-    let _ = fs::remove_file(part);
-    Err(error)
+type Published = (ledger::Entry, Option<String>);
+
+#[allow(clippy::too_many_arguments)]
+fn publish(
+    pg: &dyn Pg,
+    dir: &Path,
+    part: &Path,
+    name: &str,
+    seq: u64,
+    now: u64,
+    (sha256, size): (String, u64),
+    schema: &str,
+    verify: Option<&Verify>,
+) -> Result<Published, String> {
+    fs::File::open(part)
+        .and_then(|f| f.sync_all())
+        .and_then(|()| fs::set_permissions(part, fs::Permissions::from_mode(0o600)))
+        .map_err(|e| e.to_string())?;
+    let failure = match verify {
+        Some(v) => check_dump(pg, part, name, seq, schema, v.tables, v.min_seq).err(),
+        None => None,
+    };
+    let verified = match (verify, &failure) {
+        (None, _) => "skipped",
+        (Some(_), None) => "yes",
+        (Some(_), Some(_)) => "no",
+    };
+    let file = if failure.is_some() {
+        format!("{name}{}", names::UNVERIFIED)
+    } else {
+        name.to_owned()
+    };
+    let target = dir.join(&file);
+    fs::hard_link(part, &target).map_err(|e| {
+        format!(
+            "{}: {e} (a dump of seq {seq} already exists for this minute)",
+            target.display()
+        )
+    })?;
+    let entry = ledger::Entry {
+        stamp: names::stamp(now),
+        seq,
+        size,
+        sha256,
+        file,
+        verified,
+    };
+    if let Err(error) = ledger::append(dir, &entry) {
+        // Every dump file has a ledger line: do not leave an unrecorded archive behind.
+        let _ = fs::remove_file(&target);
+        return Err(format!("ledger: {error}; dump {} removed", entry.file));
+    }
+    Ok((entry, failure))
 }
 
 #[derive(Debug)]
@@ -135,6 +166,19 @@ pub fn restore_test(
         .ok_or("dump name")?;
     let (seq, _) =
         names::parse(name).ok_or_else(|| format!("{name}: not a keeper schema dump name"))?;
+    check_dump(pg, dump, name, seq, schema, expected_tables, min_seq)
+}
+
+/// The restore test of the file `dump`, labelled `name` and claimed to hold state `seq`.
+fn check_dump(
+    pg: &dyn Pg,
+    dump: &Path,
+    name: &str,
+    seq: u64,
+    schema: &str,
+    expected_tables: usize,
+    min_seq: u64,
+) -> Result<RestoreReport, String> {
     if seq < min_seq {
         return Err(format!("{name}: seq {seq} is older than {min_seq}; keeper state that old is never restored (D-5796)"));
     }

@@ -8,10 +8,11 @@ Install and run on the keeper host only; nothing here touches the live keeper be
 `pg-keeper-backup dump --verify --dir ~/.local/share/plangraph/backups`:
 
 1. reads `max(seq)` of `keeper.events`;
-2. runs `pg_dump -Fc -n keeper` in `docker run postgres:17`, streams it into `.keeper-schema-seq<SEQ>-<YYYYMMDDTHHMMZ>.dump.part` (created `0600`, never world-readable), fsyncs and publishes it as `keeper-schema-seq<SEQ>-<stamp>.dump` by a hard link, which refuses to overwrite an existing dump;
-3. with `--verify`, runs the restore test on the new dump; a dump that fails it is renamed `<name>.unverified`, gets a `verified=no` line, the run exits non-zero and **nothing is pruned**, so failing dumps never evict the last verified ones (the newest 3 `.unverified` files are kept for diagnosis, never counted as backups);
-4. appends one line `<stamp> seq=<n> size=<bytes> sha256=<hex> verified=<yes|no|skipped> file=<name>` to `keeper-schema-ledger.txt` (mode `0600`; the ledger keeps its history when a dump is pruned; if the line cannot be written the dump is removed again, so no archive is unrecorded);
-5. keeps the newest `--keep` (default 14) verified dump files and deletes the rest; only names that fully match the dump pattern are ever deleted.
+2. runs `pg_dump -Fc -n keeper` in `docker run postgres:17`, streaming it into `.keeper-schema-seq<SEQ>-<YYYYMMDDTHHMMZ>.dump.part` (created `0600`, never world-readable) and fsyncs it;
+3. with `--verify`, runs the restore test on that `.part` file **before it has any retention-eligible name**;
+4. publishes it by hard link, which refuses to overwrite: as `keeper-schema-seq<SEQ>-<stamp>.dump` when it passed (or verification was not asked), as `<name>.dump.unverified` when it failed. A failed run exits non-zero, writes a `verified=no` line and prunes **no verified dump**; only the newest 3 `.unverified` files are kept, for diagnosis, and they never count as backups;
+5. appends one line `<stamp> seq=<n> size=<bytes> sha256=<hex> verified=<yes|no|skipped> file=<name>` to `keeper-schema-ledger.txt` (mode `0600`; the ledger keeps its history when a dump is pruned; if the line cannot be written the published file is removed again, so no archive is unrecorded);
+6. keeps the newest `--keep` (default 14) verified dump files and deletes the rest; only names that fully match the dump pattern are ever deleted.
 
 A failed or empty dump leaves no file and no ledger line.
 

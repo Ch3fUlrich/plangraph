@@ -400,3 +400,82 @@ fn a_second_run_in_the_same_minute_does_not_overwrite_the_first_dump() {
         .unwrap()
         .ends_with(".part")));
 }
+
+fn files(dir: &Path) -> Vec<String> {
+    let mut all: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    all.sort();
+    all
+}
+
+#[test]
+fn a_failed_candidate_never_has_a_dump_name_and_an_existing_quarantine_is_not_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut bad = Fake::new(19200);
+    bad.tables = 42;
+    run_dump(&bad, dir.path(), "keeper", 14, NOW, Some(&VERIFY))
+        .err()
+        .unwrap();
+    let kept = dir
+        .path()
+        .join("keeper-schema-seq19200-20261106T2120Z.dump.unverified");
+    std::fs::write(&kept, "first").unwrap();
+    let err = run_dump(&bad, dir.path(), "keeper", 14, NOW + 10, Some(&VERIFY))
+        .err()
+        .unwrap();
+    assert!(err.contains("already exists"), "{err}");
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), "first");
+    let names = files(dir.path());
+    assert!(
+        names.iter().all(|n| names::parse(n).is_none()),
+        "no .dump name: {names:?}"
+    );
+    assert!(names.iter().all(|n| !n.ends_with(".part")), "{names:?}");
+    let ledger = std::fs::read_to_string(dir.path().join(ledger::LEDGER_NAME)).unwrap();
+    assert_eq!(ledger.lines().count(), 1, "one record for one path");
+}
+
+#[test]
+fn failed_restores_keep_only_three_quarantined_dumps_and_every_verified_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let good = Fake::new(19200);
+    for day in 0..14u64 {
+        run_dump(
+            &good,
+            dir.path(),
+            "keeper",
+            14,
+            NOW + day * 86_400,
+            Some(&VERIFY),
+        )
+        .unwrap();
+    }
+    let mut bad = Fake::new(19300);
+    bad.tables = 42;
+    for day in 14..19u64 {
+        run_dump(
+            &bad,
+            dir.path(),
+            "keeper",
+            14,
+            NOW + day * 86_400,
+            Some(&VERIFY),
+        )
+        .err()
+        .unwrap();
+    }
+    let names = files(dir.path());
+    assert_eq!(
+        names.iter().filter(|n| names::parse(n).is_some()).count(),
+        14
+    );
+    assert_eq!(
+        names
+            .iter()
+            .filter(|n| n.ends_with(names::UNVERIFIED))
+            .count(),
+        3
+    );
+}

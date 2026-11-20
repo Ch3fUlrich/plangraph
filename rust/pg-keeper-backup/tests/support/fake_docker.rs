@@ -16,6 +16,12 @@ fn main() {
     }
     let at = args.iter().position(|a| a == "postgres:17").expect("image") + 1;
     let tool = &args[at..];
+    // The archive named by a `pg_restore` call is read through the `-v dir:/backup:ro` mount.
+    let archive = args.windows(2).find(|w| w[0] == "-v").and_then(|w| {
+        let dir = w[1].split(':').next()?;
+        let file = tool_file(&args)?;
+        std::fs::read(std::path::Path::new(dir).join(file.strip_prefix("/backup/")?)).ok()
+    });
     let sql = tool
         .iter()
         .skip_while(|a| *a != "-c")
@@ -31,6 +37,9 @@ fn main() {
     };
     match tool[0].as_str() {
         "pg_dump" => print!("PGDMP-fake"),
+        "pg_restore" if !archive.as_deref().is_some_and(|a| a.starts_with(b"PGDMP")) => {
+            fail("pg_restore: input file does not appear to be a valid archive")
+        }
         "pg_restore" if tool.contains(&"-l".to_owned()) => {
             for i in 0..43 {
                 println!("{}; 1259 {} TABLE keeper t{i} keeper", 200 + i, 16000 + i);
@@ -48,4 +57,8 @@ fn main() {
         "psql" if sql.contains("max(seq)") => println!("19200"),
         other => fail(&format!("unexpected tool {other}")),
     }
+}
+
+fn tool_file(args: &[String]) -> Option<&String> {
+    args.iter().rev().find(|a| a.starts_with("/backup/"))
 }

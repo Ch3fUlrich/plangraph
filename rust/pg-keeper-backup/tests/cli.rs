@@ -45,7 +45,7 @@ fn dump_verify_runs_the_postgres_commands_and_prints_no_password() {
         "--log-driver none",
         "-e PGPASSWORD ",
         "pg_dump -Fc --no-owner -n keeper",
-        "pg_restore -l /backup/keeper-schema-seq19200-",
+        "pg_restore -l /backup/.keeper-schema-seq19200-",
         "CREATE DATABASE \"pgkb_scratch_19200_",
         "pg_restore --no-owner --no-privileges --exit-on-error -d pgkb_scratch_19200_",
         "DROP DATABASE IF EXISTS \"pgkb_scratch_19200_",
@@ -102,4 +102,35 @@ fn restore_test_refuses_an_old_dump_without_calling_docker() {
     assert!(!out.status.success());
     assert!(text(&out).contains("older than 19096"));
     assert!(!log.exists());
+}
+
+#[test]
+fn restore_test_rejects_a_file_that_is_not_an_archive() {
+    let tmp = tempfile::tempdir().unwrap();
+    let log = tmp.path().join("docker.log");
+    let junk = tmp
+        .path()
+        .join("keeper-schema-seq19200-20261113T1535Z.dump");
+    std::fs::write(&junk, "not an archive").unwrap();
+    let out = run(
+        &["restore-test", "--file", junk.to_str().unwrap()],
+        &log,
+        false,
+    );
+    assert!(!out.status.success());
+    assert!(
+        text(&out).contains("valid archive") && !text(&out).contains(SECRET),
+        "{}",
+        text(&out)
+    );
+    let good = tmp
+        .path()
+        .join("keeper-schema-seq19200-20261114T1535Z.dump");
+    std::fs::write(&good, "PGDMP-real-looking").unwrap();
+    let ok = run(
+        &["restore-test", "--file", good.to_str().unwrap()],
+        &log,
+        false,
+    );
+    assert!(ok.status.success(), "{}", text(&ok));
 }
