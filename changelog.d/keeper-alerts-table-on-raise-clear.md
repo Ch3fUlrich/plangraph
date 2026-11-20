@@ -1,1 +1,2 @@
 - Keeper alerts live in an `alerts` table written when an alert is raised or cleared (one telemetry row each); the alerts call reads only that table, and the daemon backfills it once from history.
+- The unreadable-decision claim test checks that a refusal records an alert counter without changing item state, leases or events.
