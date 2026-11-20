@@ -41,6 +41,8 @@ fn sleep_polling_shapes_are_refused() {
         "for i in 1 2 3; do watch git status; done",
         "for ((;;)); do git status; done",
         "for i in 1 2 3; do cat notes.txt; done; sleep 2; git status",
+        "while pgrep -f \"codex exec -m foo\"; do :; done",
+        "while pgrep -f \"codex exec -m foo\"; do sleep 1; done",
     ] {
         let line = handle(&event(command, "PreToolUse"), &c, 1)
             .unwrap_or_else(|| panic!("poll escaped: {command}"));

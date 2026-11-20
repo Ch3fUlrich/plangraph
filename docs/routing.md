@@ -52,6 +52,7 @@ positions after registered role filtering; it never grants roles or capabilities
 The implement table lists Sol xhigh, Hydrogen high and non-Claude-Code Sonnet high.
 Hydrogen high is enabled by D-5903; the real registry returns Sol xhigh, Hydrogen high
 and Sonnet high (subject to upstream eligibility).
+The active review legs the route can offer come from `planner.legs.routed_review_legs` (also used by the scheduled review probe).
 Review excludes writer families, requires diff <100k for Haiku, and needs opposing
 eligible cheaper verdicts for Ember. Spec amendment: MiMo and both DeepSeek review
 legs retain null registered effort, as does Haiku; requested medium/xhigh efforts
@@ -154,3 +155,7 @@ shipped provider config. The Rust `opencode_catalog` integration tests check ena
 default, explicit and review fallback OpenCode legs against the launch renderer and
 `host_skip_reason` on a fixture host. Named exclusions cover external catalogs and
 the existing Grok declaration gap; an unknown model fails with its leg name.
+
+D-6082 / D-6143: `measured_down` extends its run-record scan window to cover the
+oldest active uncapped provider reset in `leg_state`, so legs with multi-day
+provider resets remain suppressed past 24 hours until their `reset_at` elapses.

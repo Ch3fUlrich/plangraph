@@ -1,0 +1,1 @@
+- **LE-HANDOFF-CHECK-PATH:** Add Rust `host-sync` (`plangraph host-sync` and `python3 -m plangraph.fleet_sync host-sync`) to verify `handoff-check`, `resume-digest`, and `fleet-name` resolve on `PATH`, linking missing tools from the private data checkout or emitting named `FAIL` lines.

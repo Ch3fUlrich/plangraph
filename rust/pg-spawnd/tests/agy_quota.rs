@@ -213,3 +213,65 @@ assert store.leg_status(agy)['state'] == 'ok'
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn provider_stated_resets_are_booked_and_honoured_uncapped() {
+    let state = tempfile::tempdir().unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let output = Command::new("python3")
+        .current_dir(&root)
+        .env("PYTHONPATH", root.join("src"))
+        .env("XDG_STATE_HOME", state.path())
+        .env("PLANGRAPH_HOST", "fixture-host")
+        .args([
+            "-c",
+            r#"
+import json, os, sys
+from pathlib import Path
+from plangraph.routing_support.leg_state import LegStateStore, RESET_CAP_S
+from plangraph.planner.measured_down import measured_down
+from plangraph.planner.routing import plan_spawn
+
+root = Path(sys.argv[1])
+store = LegStateStore(root / 'plangraph' / 'leg-state.sqlite')
+now = 1_795_000_000.0
+store.record_harness_limit(
+    'agy/gemini-4-hydrogen-high',
+    'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 135h6m15s',
+    'fixture', now=now, down_s=1800)
+assert store.leg_status('agy/gemini-4-hydrogen-high', now=now + 1)['evidence']['reset_at'] == now + 486375
+assert store.leg_status('agy/gemini-4-hydrogen-high', now=now + 25 * 3600)['state'] == 'limited'
+store.record_harness_limit(
+    'opencode-go/beam-free',
+    'HTTP 429: usage_limit (reset after 176616000ms)',
+    'fixture', now=now, down_s=1800)
+assert store.leg_status('opencode-go/beam-free', now=now + 7 * 3600)['state'] == 'limited'
+store.record_harness_limit('opencode-go/flat', 'error: quota threshold', 'fixture', now=now, down_s=172800)
+assert store.leg_status('opencode-go/flat', now=now + 1)['evidence']['reset_at'] == now + RESET_CAP_S
+
+rec = root / 'runs' / 'run-fixture' / 'record.json'
+rec.parent.mkdir(parents=True)
+rec.write_text(json.dumps(dict(host='fixture-host', ended=now, attempts=[
+    dict(status='failed', down_reason='usage_limit',
+         leg=dict(id='agy-gemini-4-hydrogen', model='gemini-4-hydrogen-high', harness='agy')),
+    dict(status='failed', down_reason='usage_limit',
+         leg=dict(id='opencode-go-beam-free', model='opencode-go/beam-free', harness='opencode')),
+])))
+os.utime(rec, (now, now))
+down_25h = measured_down(root, now=now + 25 * 3600)
+assert 'agy-gemini-4-hydrogen' in down_25h and 'opencode-go-beam-free' in down_25h
+plan = plan_spawn(dict(estimate_tokens=1000), role='review', writer_families=['openai'],
+                  leg_reader=store, catalog_rows=[], now=now + 25 * 3600)
+ids = {leg.id for leg in plan.legs}
+assert 'agy-gemini-4-hydrogen' not in ids and 'opencode-go-beam-free' not in ids
+"#,
+            state.path().to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -25,7 +25,7 @@ def test_json_limit(status, delay, exit_code, tmp_path):
     assert line and early_refusal(event(status, delay) + '\n') == line
     store = LegStateStore(tmp_path / 'legs.sqlite')
     store.record_harness_limit('opencode-go/test', line, 'test', now=100)
-    assert store.leg_status('opencode-go/test', now=101)['evidence']['reset_at'] == 100 + min(delay / 1000, RESET_CAP_S)
+    assert store.leg_status('opencode-go/test', now=101)['evidence']['reset_at'] == 100 + delay / 1000
 
 
 @pytest.mark.parametrize('exit_code', [0, 1])
@@ -59,6 +59,21 @@ def test_old_run_keeps_booked_limit(tmp_path, monkeypatch):
         measured_down(tmp_path, now=7300))] == ['other', 'third', 'go-test']
     assert not measured_down(tmp_path, now=8100)
     assert not measured_down(tmp_path, now=100 + RESET_CAP_S)
+
+
+def test_old_run_keeps_uncapped_booked_limit_past_24h(tmp_path, monkeypatch):
+    monkeypatch.setenv('PLANGRAPH_HOST', 'test-host')
+    monkeypatch.setenv('XDG_STATE_HOME', str(tmp_path))
+    store = LegStateStore(tmp_path / 'plangraph' / 'leg-state.sqlite')
+    store.record_harness_limit('opencode-go/test', early_refusal(event(delay=176616000)), 'test', now=100)
+    path = tmp_path / 'runs' / 'run-test' / 'record.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(dict(host='test-host', ended=100, attempts=[dict(
+        status='failed', down_reason='usage_limit', leg=dict(id='go-test', model='opencode-go/test', harness='opencode'))])))
+    os.utime(path, (100, 100))
+    assert 'go-test' in measured_down(tmp_path, now=100 + 7 * 3600)
+    assert 'go-test' in measured_down(tmp_path, now=100 + 25 * 3600)
+    assert not measured_down(tmp_path, now=100 + 176616)
 
 
 @pytest.mark.parametrize('status,token', [(429, 'usage_limit'), (402, 'credit_limit')])

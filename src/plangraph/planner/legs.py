@@ -278,6 +278,17 @@ def leg_active(leg: Leg, now=None) -> bool:
                                    (time.time() if now is None else now) >= leg.expires)
 
 
+def review_route_pool(base=None) -> tuple[Leg, ...]:
+    """Candidate pool of the native review route: the routed legs plus the review fallbacks."""
+    return (*(DEFAULT_LEGS if base is None else base), *REVIEW_FALLBACK_LEGS)
+
+
+def routed_review_legs() -> list[Leg]:
+    """Active legs the native review route can offer, in REVIEW_ORDER."""
+    pool = {leg.id: leg for leg in review_route_pool()}
+    return [pool[leg_id] for leg_id in REVIEW_ORDER if leg_id in pool and leg_active(pool[leg_id])]
+
+
 def _is_int(value) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 

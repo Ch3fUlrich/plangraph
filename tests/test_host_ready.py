@@ -137,8 +137,9 @@ def test_parallel_deadlines(tmp_path):
 
 
 @pytest.mark.parametrize('session,probe', [
-    ('myworker', 'pgrep -f -- myworker'),
-    ('worker; secret-value', "pgrep -f -- 'worker; secret-value'"),
+    ('myworker', 'pgrep -x -- myworker'),
+    ('worker; secret-value', "pgrep -x -- 'worker; secret-value'"),
+    ('/run/worker.pid', 'plangraph wait-pid --check --pid-file /run/worker.pid'),
     ('fiction.service', 'systemctl --user is-active --quiet -- fiction.service'),
     ('fiction.scope', 'systemctl --user is-active --quiet -- fiction.scope'),
 ])
@@ -146,7 +147,8 @@ def test_parallel_deadlines(tmp_path):
 def test_session_probe(tmp_path, session, probe, live):
     seen = []
     def fake(argv, **kwargs):
-        if 'pgrep' in argv[-1] or 'systemctl' in argv[-1]:
+        if any(cmd in argv[-1] for cmd in ('pgrep', 'systemctl', 'wait-pid')):
+            assert 'pgrep -f' not in argv[-1]
             seen.append(argv[-1])
             return SimpleNamespace(returncode=0 if live and argv[-1] == probe else 1,
                                    stdout='secret-value')

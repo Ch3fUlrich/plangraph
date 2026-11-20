@@ -60,9 +60,16 @@ not relax ancestry or push safety. `--apply --dry-run` is a refusal.
 
 The separate `pg-worktree-sweep.timer` invokes the sweep hourly; disk checks stay
 on their 15-minute timer. Install both sweep units and both binaries. See
-`deploy/systemd/disk-hygiene.env.example` for all four roots and pins. Set
+`deploy/systemd/disk-hygiene.env.example` for all four roots, pins, and the
+claims-reader settings (`PG_SWEEP_CLAIMS_READER`, `PG_URL`, `PG_TOKEN_FILE`).
+Per host, the operator mints an unscoped read-only `sweep` principal
+(`pg admin add-principal <name> --role sweep`, reads claims, runs and PR links
+only; all writes return `403`) into a mode-0600 `~/.config/plangraph/sweep.token`
+file. When that token file exists, `deploy/bootstrap.sh` creates
+`~/.config/plangraph/disk-hygiene.env` from `deploy/systemd/disk-hygiene.env.example`
+and an empty `~/.config/plangraph/pins.json` (`[]`) if missing. Set
 `PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"` with `PG_URL` and `PG_TOKEN_FILE`
-configured for an unscoped router token. This verb reads every project directly
+configured for that unscoped `sweep` (or `router`) token. This verb reads every project directly
 from keeper, refuses unknown/truncated open lanes and changing snapshots, and
 never falls back to a local copy. The reader setting is a trusted shell invocation.
 

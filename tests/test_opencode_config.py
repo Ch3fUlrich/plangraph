@@ -361,3 +361,37 @@ def test_no_credential_like_keys():
     cfg = load_config()
     for val in iter_values(cfg):
         assert not key_regex.search(str(val)), f"Credential-like key found in config value: {val}"
+
+
+def test_mimo_direct_options_and_env_routed_through_configured_gateway(monkeypatch, tmp_path):
+    from plangraph.routing_support.clients import build_child_env
+    from plangraph.routing_support.opencode_overlay import overlay_env
+    from plangraph.routing_support.opencode_render import render_gateway_providers
+    from plangraph.spawner import gateway_witness as gw
+
+    for name in ("OMNIROUTE_BASE_URL", "PLANGRAPH_GATEWAY_URL", "AUTOOS_OMNIROUTE_URL",
+                 "PLANGRAPH_REVIEW_URL", "OPENCODE_CONFIG_CONTENT"):
+        monkeypatch.delenv(name, raising=False)
+    providers_file = tmp_path / "providers.json"
+    providers_file.write_text(json.dumps({"providers": {
+        "omniroute": {
+            "env": ["AUTOOS_OMNIROUTE_KEY"],
+            "settings": {"baseURL": "{env:PLANGRAPH_REVIEW_URL}"},
+        },
+        "mimo": {
+            "package": "@opencode/ai/providers/openai-compatible",
+            "env": ["MIMO_API_KEY"],
+            "options": {"baseURL": "https://direct-mimo.invalid/v1"},
+            "models": {"mimo-v2.6-pro": {"modelID": "mimo/mimo-v2.6-pro"}},
+        },
+    }}), encoding="utf-8")
+    monkeypatch.setenv("PLANGRAPH_PROVIDERS_FILE", str(providers_file))
+    monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "https://gateway.invalid/v1")
+
+    env = overlay_env(build_child_env())
+    assert render_gateway_providers(env, "mimo/mimo-v2.6-pro") is None
+    mimo = json.loads(env["OPENCODE_CONFIG_CONTENT"])["providers"]["mimo"]
+    assert mimo["env"] == ["AUTOOS_OMNIROUTE_KEY"]
+    assert mimo["settings"]["baseURL"] == "https://gateway.invalid/v1"
+    assert mimo["options"]["baseURL"] == "https://gateway.invalid/v1"
+    assert gw.gateway_leg("mimo/mimo-v2.6-pro", env) is True

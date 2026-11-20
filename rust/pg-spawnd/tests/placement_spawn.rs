@@ -235,3 +235,125 @@ fn malformed_prompt_transport_records_named_reason() {
         "stdin_prompt_flag_missing: expected -p with an empty value"
     );
 }
+
+#[test]
+fn inline_diff_exceeding_leg_limit_refuses_with_reason_without_launching() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new("touch should_not_run", json!("review"), &[]);
+    let repo = f.state.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let run_git = |args: &[&str]| -> String {
+        let out = std::process::Command::new("git")
+            .current_dir(&repo)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{:?} {:?}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().into()
+    };
+    run_git(&["init", "-q"]);
+    run_git(&["config", "user.name", "Fixture"]);
+    run_git(&["config", "user.email", "fixture@example.invalid"]);
+    std::fs::write(repo.join("change.txt"), "before\n").unwrap();
+    run_git(&["add", "change.txt"]);
+    run_git(&["commit", "-qm", "base"]);
+    let base = run_git(&["rev-parse", "HEAD"]);
+    std::fs::write(repo.join("change.txt"), "x".repeat(400) + "\n").unwrap();
+    run_git(&["commit", "-qam", "head"]);
+    let head = run_git(&["rev-parse", "HEAD"]);
+
+    let leg = json!({
+        "id": "mimo-v2.6-pro",
+        "harness": "opencode",
+        "model": "mimo/mimo-v2.6-pro",
+        "family": "mimo",
+        "tool_mode": "inline-only",
+        "max_request_tokens": 10
+    });
+    let plan = json!({"legs": [leg.clone()], "first_leg": leg, "skipped": []});
+    std::fs::write(
+        f.state.path().join("route"),
+        format!(
+            "#!/bin/sh\nprintf '%s' '{}'\n",
+            plan.to_string().replace('\'', "'\\''")
+        ),
+    )
+    .unwrap();
+    let cfg_dir = f.state.path().join("xdg/plangraph");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    let hosts = json!({
+        "version": 1,
+        "self": "local",
+        "hosts": [{
+            "id": "local",
+            "class": "worker",
+            "aliases": [],
+            "transport": "ssh",
+            "os": "linux",
+            "state_dir": f.state.path(),
+            "caps": {"max_runs": 4, "max_writers": 2, "max_seats": 2, "max_sessions": 2, "mem_floor_mb": 1024},
+            "warmup": {"warmup_s": 1, "ramp_mb": {"review": 0}},
+            "session_mb": 256,
+            "roles": ["review"],
+            "repos": {
+                "demo": {
+                    "root": repo,
+                    "worktrees_root": f.state.path().join("wt"),
+                    "remote": "https://example.invalid/demo.git",
+                    "import_roots": [],
+                    "cache_env": {}
+                }
+            }
+        }]
+    });
+    std::fs::write(cfg_dir.join("hosts.json"), hosts.to_string()).unwrap();
+
+    let socket2 = f.state.path().join("socket-xdg");
+    let mut cmd = std::process::Command::new(binary::spawnd());
+    cmd.args(["serve", "--no-scope", "--socket"])
+        .arg(&socket2)
+        .arg("--state")
+        .arg(f.state.path())
+        .env("XDG_CONFIG_HOME", f.state.path().join("xdg"))
+        .env("PG_SPAWND_ADAPTER", f.state.path().join("route"))
+        .env("PG_SPAWND_LAUNCH_CMD", f.state.path().join("launch"));
+    std::fs::set_permissions(
+        f.state.path().join("route"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let child = cmd.spawn().unwrap();
+    let _guard2 = common::ChildGuard { child };
+    let mut client = common::McpClient::connect(&socket2);
+    client.initialize();
+    let reply = client.request(
+        "tools/call",
+        json!({
+            "name": "plangraph_agent_spawn",
+            "arguments": {
+                "role": "review",
+                "prompt": "review",
+                "card": {"diff_ref": {"repo_id": "demo", "base_sha": base, "head_sha": head}},
+                "wait_seconds": 2
+            }
+        }),
+    );
+    let row = payload(reply);
+    assert_eq!(row["status"], "failed");
+    assert_eq!(row["reason"], "prompt_too_large");
+    assert_eq!(row["attempts"][0]["skip_reason"], "prompt_too_large");
+    let err = row["error"].as_str().unwrap();
+    assert!(
+        err.contains("inline_diff_failed: prompt_too_large:")
+            && err.contains("max_request_tokens 10"),
+        "{err}"
+    );
+    assert!(!f.state.path().join("should_not_run").exists());
+}

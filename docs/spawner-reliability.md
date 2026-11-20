@@ -52,7 +52,12 @@ the operator config `plangraph/reliability.json`; `roles.review` overrides the
 global setting. Shadow computes a boolean count without changing the prompt.
 Inline-only review requires diff_ref and the NO-tools header even when off.
 Repositories resolve through the self host in operator-owned hosts.json, never
-adapter cwd. Raw diffs are capped at 262144 bytes before lossy UTF-8 decoding.
+adapter cwd. Tool-less legs (`review_mode: "inline_only"` or
+`tool_mode: "inline-only"`) require `diff_ref` and the NO-tools header; raw diffs
+are capped at 262144 bytes (or `leg.max_request_tokens * 3` when tighter) before
+lossy UTF-8 decoding, and oversized diffs or prompts refuse explicitly with
+`inline_diff_failed: prompt_too_large: ...` (recorded as `prompt_too_large`)
+instead of cutting silently.
 Only exact stdin carriers are injected; multiline .cmd/.bat launchers refuse.
 Prompt persistence and hashing remain the final redaction step. No workspace
 cleanup or verdict classification changes are included.

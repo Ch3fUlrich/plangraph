@@ -14,7 +14,9 @@ def measured_down(state, *, now=None):
     host = os.environ.get('PLANGRAPH_HOST') or socket.gethostname()
     down = {}
     from plangraph.routing_support.leg_state import leg_status, RESET_CAP_S, _default_store
-    window = max(RESET_CAP_S, LEG_DOWN_WINDOW_S) if _default_store().path.exists() else LEG_DOWN_WINDOW_S
+    store = _default_store()
+    window = (max(RESET_CAP_S, LEG_DOWN_WINDOW_S, store.active_limit_window(now) + LEG_DOWN_WINDOW_S)
+              if store.path.exists() else LEG_DOWN_WINDOW_S)
     for path in (state / 'runs').glob('run-*/record.json'):
         try:
             if not 0 <= now - path.stat().st_mtime < window:

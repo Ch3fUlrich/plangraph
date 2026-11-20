@@ -324,9 +324,10 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     fail('keeper', 'whoami_failed')
             if config.get('session_unit'):
                 session = config['session_unit']
-                probe = ('systemctl --user is-active --quiet -- ' if session.endswith(
-                    ('.service', '.scope', '.socket', '.target', '.timer', '.path',
-                     '.mount', '.automount', '.swap', '.slice', '.device')) else 'pgrep -f -- ')
+                probe = ('systemctl --user is-active --quiet -- ' if session.endswith((
+                    '.service', '.scope', '.socket', '.target', '.timer', '.path', '.mount',
+                    '.automount', '.swap', '.slice', '.device')) else
+                    'plangraph wait-pid --check --pid-file ' if session.endswith('.pid') else 'pgrep -x -- ')
                 record['spawner_session'] = command('session', probe + shlex.quote(session)) is not None
             else:
                 fail('session', 'not_configured')

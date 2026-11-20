@@ -282,3 +282,244 @@ def test_sweep_claims_incomplete_or_unreachable_never_uses_snapshot(capsys, lane
         def call(self, *args): raise cli_verbs.Unreachable("offline")
     assert cli_verbs.cmd_sweep_claims(None, Down()) == 3
     assert capsys.readouterr().out == ""
+
+
+def test_sweep_role_allows_sweep_claims_and_refuses_writes_and_other_roles(live, tmp_path, capsys):
+    import urllib.error
+    import urllib.request
+    from plangraph.keeper import auth
+    from plangraph.keeper.errors import Refused
+    from plangraph.keeper.evidence_git import GitAdapter
+    from plangraph.keeper.evidence_runs import RunRecordAdapter
+
+    server, w, tokens, _, _ = live
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+
+    def http(token_text, method, path, body=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(base_url + path, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {token_text}")
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    repo = tmp_path / "sweep-repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-qb", "main"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Fixture", "-c", "user.email=test@example.invalid",
+         "commit", "--allow-empty", "-qm", "initial"],
+        cwd=repo, check=True,
+    )
+    state = tmp_path / "state"
+    for rid, role in (("run-w1", "writer"), ("run-r1", "reviewer")):
+        job = state / "runs" / rid / "job.json"
+        job.parent.mkdir(parents=True, exist_ok=True)
+        job.write_text(json.dumps({
+            "request": {"item_key": "demo:A", "role": role, "model": "m"},
+            "family": "teamR",
+        }), encoding="utf-8")
+    w.store.ctx = {
+        "git": GitAdapter({"demo": {"path": str(repo), "ref": "main"}}),
+        "runs": RunRecordAdapter(state / "runs"),
+    }
+
+    sweep_tok = auth.add_principal(w.conn, "sweep-host", "sweep", [])
+    sweep_tf = tmp_path / "sweep.token"
+    sweep_tf.write_text(sweep_tok, encoding="utf-8")
+    os.chmod(sweep_tf, 0o600)
+
+    # Scoped sweep tokens cannot be minted via add_principal or CLI admin.
+    with pytest.raises(Refused) as exc:
+        auth.add_principal(w.conn, "sweep-scoped", "sweep", ["demo"])
+    assert exc.value.code == "validation"
+    assert cli.main(["admin", "add-principal", "sweep-scoped", "--role", "sweep", "--projects", "demo"]) == 2
+    capsys.readouterr()
+
+    # Defense in depth: even if a legacy/tampered DB row has scoped sweep projects, runtime checks refuse it.
+    scoped_sweep_tok = "scoped-sweep-fixture-token"
+    w.conn.execute(
+        "INSERT INTO principals(name,role,projects,family,token_sha256,active) VALUES(?,?,?,?,?,1)",
+        ("sweep-scoped", "sweep", json.dumps(["demo"]), None, auth.hash_token(scoped_sweep_tok)),
+    )
+    scoped_tf = tmp_path / "sweep-scoped.token"
+    scoped_tf.write_text(scoped_sweep_tok, encoding="utf-8")
+    os.chmod(scoped_tf, 0o600)
+
+    assert run(tokens["l1main"], "claim", "demo:A") == 0
+    writer_run = w.store.mint_run_token(w.p("l1main"), "demo:A", "writer", "run-w1")["token"]
+    writer_tf = tmp_path / "writer-run.token"
+    writer_tf.write_text(writer_run, encoding="utf-8")
+    os.chmod(writer_tf, 0o600)
+
+    spawner_tok = auth.add_principal(w.conn, "sweep-spawner2", "spawner", [])
+    w.store.record_run(auth.authenticate(w.conn, spawner_tok), "demo:A",
+                       {"run_id": "writer-run-2", "phase": "started"})
+    wt = tmp_path / "wt-a"
+    subprocess.run(["git", "worktree", "add", "-qb", "lane/a", str(wt)], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Fixture", "-c", "user.email=test@example.invalid",
+         "commit", "--allow-empty", "-qm", "wip"],
+        cwd=wt, check=True,
+    )
+    rec = state / "runs/writer-run-2/record.json"
+    rec.parent.mkdir(parents=True)
+    rec.write_text(json.dumps({"status": "running", "checkout": str(wt)}), encoding="utf-8")
+
+    assert run(tokens["l1main"], "evidence", "demo:A", "--kind", "decision", "--decision", "D-1") == 0
+    assert run(tokens["l1main"], "submit", "demo:A") == 0
+    reviewer_run = w.store.mint_run_token(w.p("l1main"), "demo:A", "reviewer", "run-r1")["token"]
+    reviewer_tf = tmp_path / "reviewer-run.token"
+    reviewer_tf.write_text(reviewer_run, encoding="utf-8")
+    os.chmod(reviewer_tf, 0o600)
+    capsys.readouterr()
+
+    # Unscoped sweep token succeeds with sweep-claims.
+    assert run(sweep_tf, "sweep-claims", "--state", str(state)) == 0
+    assert out_json(capsys) == {"paths": [str(wt)], "branches": ["a", "lane/a"]}
+
+    # Scoped sweep, writer run, reviewer run, worker, reviewer and reader tokens are all refused.
+    for bad_tf in (scoped_tf, writer_tf, reviewer_tf, tokens["workerB"], tokens["reviewer"], tokens["reader"]):
+        assert run(bad_tf, "sweep-claims", "--state", str(state)) != 0
+        assert capsys.readouterr().out == ""
+
+    # Sweep token can call only whoami, snapshot, show (unscoped); scoped sweep cannot read snapshot/show.
+    assert http(sweep_tok, "GET", "/v1/whoami") == (
+        200, {"name": "sweep-host", "role": "sweep", "projects": [], "family": None}
+    )
+    assert http(sweep_tok, "GET", "/v1/snapshot")[0] == 200
+    assert http(sweep_tok, "GET", "/v1/show?key=demo:A&fmt=json")[0] == 200
+    assert http(scoped_sweep_tok, "GET", "/v1/snapshot")[0] == 403
+    assert http(scoped_sweep_tok, "GET", "/v1/show?key=demo:A&fmt=json")[0] == 403
+
+    # Negative tests: writes and unrelated reads all return 403 (forbidden).
+    forbidden_calls = [
+        ("POST", "/v1/claim", {"key": "demo:B"}),
+        ("POST", "/v1/close_on_decision", {"key": "demo:A", "batch_ref": "b@" + "0" * 64}),
+        ("POST", "/v1/close_merged", {"key": "demo:A", "decision_id": "D-1"}),
+        ("POST", "/v1/create_items", {"items": [defn("NEW", project="demo")]}),
+        ("POST", "/v1/import_items", {"items": [defn("IMP", project="demo")]}),
+        ("POST", "/v1/edit_definition", {"key": "demo:B", "fields": {"title": "hijack"}}),
+        ("POST", "/v1/apply_ops", {"ops": [{"op": "priority", "key": "demo:B", "priority": 9}]}),
+        ("POST", "/v1/set_priority", {"key": "demo:B", "n": 9}),
+        ("POST", "/v1/cancel", {"key": "demo:B", "reason": "nope"}),
+        ("POST", "/v1/record_run", {"key": "demo:A", "run": {"run_id": "x", "phase": "started"}}),
+        ("POST", "/v1/add_evidence", {"key": "demo:A", "epoch": 1, "kind": "decision", "ref": {"id": "D-1"}}),
+        ("POST", "/v1/submit", {"key": "demo:A", "epoch": 1}),
+        ("POST", "/v1/verdict", {"key": "demo:A", "ok": True}),
+        ("POST", "/v1/ask_question", {"key": "demo:A", "text": "q"}),
+        ("POST", "/v1/post_message", {"from": "sweep-host", "to": "router", "body": "hi"}),
+        ("POST", "/v1/locks/demo/acquire", {"owner": "sweep-host", "ttl_s": 30}),
+        ("GET", "/v1/ready", None),
+        ("GET", "/v1/digest", None),
+        ("GET", "/v1/alerts", None),
+        ("GET", "/v1/hosts", None),
+        ("GET", "/v1/messages", None),
+        ("GET", "/v1/questions", None),
+        ("GET", "/v1/alarms", None),
+    ]
+    for method, path, body in forbidden_calls:
+        status, payload = http(sweep_tok, method, path, body)
+        assert status == 403 and payload["error"] == "forbidden", (method, path, status, payload)
+
+    # CLI write verbs exit 2 (refused) with sweep token.
+    define_file = tmp_path / "define.json"
+    swp = defn("SWP", project="demo")
+    swp["description"] = "Why: x\nHow: y"
+    define_file.write_text(json.dumps({"items": [swp]}), encoding="utf-8")
+    edit_file = tmp_path / "edit.json"
+    edit_file.write_text(json.dumps({"fields": {"title": "hijack"}}), encoding="utf-8")
+    for argv in (
+        ("claim", "demo:B"),
+        ("close", "demo:A", "--batch", "b@" + "0" * 64),
+        ("define", "--file", str(define_file)),
+        ("define", "demo:B", "--edit", "--file", str(edit_file)),
+        ("priority", "demo:B", "5"),
+    ):
+        assert run(sweep_tf, *argv) == 2
+        assert "forbidden" in capsys.readouterr().err
+
+    # Direct Store calls also refuse with Refused("forbidden") and audit the denial.
+    sweep_p = auth.authenticate(w.conn, sweep_tok)
+    for fn in (
+        lambda: w.store.claim(sweep_p, "demo:B"),
+        lambda: w.store.close_on_decision(sweep_p, "demo:A", "b@" + "0" * 64),
+        lambda: w.store.create_items(sweep_p, [defn("NEW2", project="demo")]),
+        lambda: w.store.edit_definition(sweep_p, "demo:B", {"title": "x"}),
+        lambda: w.store.ready(sweep_p),
+        lambda: w.store.messages(sweep_p),
+    ):
+        with pytest.raises(Refused) as exc:
+            fn()
+        assert exc.value.code == "forbidden"
+    denied_actions = {
+        row["action"]
+        for row in w.conn.execute(
+            "SELECT action FROM audit_log WHERE actor=? AND ok=0 AND code='forbidden'",
+            ("sweep-host",),
+        ).fetchall()
+    }
+    assert {"claim", "close_on_decision", "create_items", "edit_definition", "ready", "messages"} <= denied_actions
+
+
+def test_sweep_transport_and_store_refusal_layers(live, monkeypatch):
+    import urllib.error
+    import urllib.request
+    from plangraph.keeper import api_routes, auth
+    from plangraph.keeper.errors import Refused
+
+    server, w, _, _, _ = live
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    sweep_tok = auth.add_principal(w.conn, "sweep-layer", "sweep", [])
+    sweep_p = auth.authenticate(w.conn, sweep_tok)
+
+    def http(method, path, body=None):
+        data = None if body is None else json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(base_url + path, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {sweep_tok}")
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    # Transport layer (api_routes.run_gate) refuses directly and before body validation or non-Store routes.
+    for verb in ("claim", "hosts", "messages"):
+        with pytest.raises(Refused) as exc:
+            api_routes.run_gate(sweep_p, verb)
+        assert exc.value.code == "forbidden"
+
+    # Empty body on POST /v1/claim would return 400 validation if it reached _write; run_gate refuses 403 first.
+    status, payload = http("POST", "/v1/claim", {})
+    assert status == 403 and payload["error"] == "forbidden"
+    assert w.conn.execute(
+        "SELECT count(*) FROM audit_log WHERE actor='sweep-layer' AND action='claim'"
+    ).fetchone()[0] == 0
+
+    # GET /v1/hosts bypasses Store._run, so run_gate is the layer that refuses it.
+    status, payload = http("GET", "/v1/hosts")
+    assert status == 403 and payload["error"] == "forbidden"
+
+    # When transport gate is bypassed, Store._run refuses and records the audited denial.
+    monkeypatch.setattr(api_routes, "run_gate", lambda principal, name: None)
+    status, payload = http("POST", "/v1/claim", {"key": "demo:B"})
+    assert status == 403 and payload["error"] == "forbidden"
+    row = w.conn.execute(
+        "SELECT ok, code FROM audit_log WHERE actor='sweep-layer' AND action='claim'"
+    ).fetchone()
+    assert row is not None and row["ok"] == 0 and row["code"] == "forbidden"
+
+    # Direct store.messages() refusal also flows through Store._run and is audited.
+    with pytest.raises(Refused) as exc:
+        w.store.messages(sweep_p)
+    assert exc.value.code == "forbidden"
+    msg_row = w.conn.execute(
+        "SELECT ok, code FROM audit_log WHERE actor='sweep-layer' AND action='messages'"
+    ).fetchone()
+    assert msg_row is not None and msg_row["ok"] == 0 and msg_row["code"] == "forbidden"
