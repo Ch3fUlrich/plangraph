@@ -452,3 +452,82 @@ fn card_refusals_exit_five_before_codex_starts() {
         assert!(!dir.path().join("state/runs/run-card/native.log").exists());
     }
 }
+
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    output(
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+            ])
+            .args(args),
+    )
+    .unwrap()
+}
+
+/// A host over a clone whose `origin` has only `main`; `lane/local` exists in the clone alone.
+fn local_base_fixture(dir: &Path) -> Host {
+    let origin = dir.join("origin.git");
+    let repo = dir.join("repo");
+    git_in(dir, &["init", "-q", "--bare", "-b", "main", "origin.git"]);
+    git_in(dir, &["clone", "-q", origin.to_str().unwrap(), "repo"]);
+    git_in(&repo, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    git_in(&repo, &["push", "-q", "origin", "HEAD:refs/heads/main"]);
+    git_in(&repo, &["checkout", "-q", "-b", "lane/local"]);
+    git_in(
+        &repo,
+        &["commit", "-q", "--allow-empty", "-m", "unpushed lane head"],
+    );
+    Host {
+        repo,
+        run_id: "run-local-base".into(),
+        cwd: dir.join("worktrees/run-local-base"),
+        reviews: dir.join("reviews"),
+        record_path: dir.join("record.json"),
+        base_ref: "refs/heads/lane/local".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.to_path_buf(),
+        brief: "brief".into(),
+        push_ref: Some("refs/heads/phase/local-result".into()),
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
+    }
+}
+
+#[test]
+fn base_ref_that_exists_only_in_the_host_repo_starts_and_pushes_its_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    let local_head = git_in(&host.repo, &["rev-parse", "refs/heads/lane/local"]);
+    assert_eq!(host.prepare().unwrap(), local_head);
+    assert_eq!(git_in(&host.cwd, &["rev-parse", "HEAD"]), local_head);
+    git_in(
+        &host.cwd,
+        &["commit", "-q", "--allow-empty", "-m", "writer result"],
+    );
+    let head = git_in(&host.cwd, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        host.push(&head).unwrap().as_deref(),
+        Some("refs/heads/phase/local-result")
+    );
+    let origin = dir.path().join("origin.git");
+    assert_eq!(
+        git_in(&origin, &["rev-parse", "refs/heads/phase/local-result"]),
+        head
+    );
+}
+
+#[test]
+fn base_ref_on_neither_remote_nor_host_repo_is_refused_by_name_before_a_worktree() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    host.base_ref = "refs/heads/lane/missing".into();
+    let error = host.prepare().unwrap_err();
+    assert!(error.contains("refs/heads/lane/missing"), "{error}");
+    assert!(!host.cwd.exists());
+}

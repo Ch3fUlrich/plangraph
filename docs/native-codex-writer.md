@@ -1,7 +1,7 @@
 # Native Codex writer runs
 
 Native Codex writer cards use `run_kind: "native-codex"`, `repo` (an explicit absolute local
-repository path; missing or relative paths are refused before admission), and `base_ref` (a pushed `refs/heads/...` or `refs/tags/...`).
+repository path; missing or relative paths are refused before admission), and `base_ref` (a `refs/heads/...` or `refs/tags/...` ref that exists on `origin` or, for a lane head never pushed, in the host repository; a ref found in neither is refused by name before any worktree is made).
 Submit through `python3 -m plangraph.spawner.cli spawn --card @card.json
 --prompt-file brief.txt`. The usual admission/overflow policy selects the host;
 remote forwarding rewrites `repo` to that host's configured repository. Public

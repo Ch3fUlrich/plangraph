@@ -155,13 +155,60 @@ impl Host {
             .ok_or_else(|| "disk probe failed".into())
     }
 }
+impl Host {
+    /// Pin `base_ref` at `pin`: the pushed ref when `origin` has it, else the host
+    /// repository's own ref (a lane head that was never pushed). A ref found in
+    /// neither place is refused by name; an unreachable `origin` stays an error.
+    fn pin_base(&self, pin: &str) -> Result<(), String> {
+        let repo = |host: &Host, args: &[&str]| {
+            output(host.command("git").arg("-C").arg(&host.repo).args(args))
+        };
+        repo(
+            self,
+            &[
+                "fetch",
+                "--no-write-fetch-head",
+                "origin",
+                "+refs/heads/main:refs/remotes/origin/main",
+            ],
+        )?;
+        if !repo(self, &["ls-remote", "origin", &self.base_ref])?.is_empty() {
+            return repo(
+                self,
+                &[
+                    "fetch",
+                    "--no-write-fetch-head",
+                    "origin",
+                    &format!("+{}:{pin}", self.base_ref),
+                ],
+            )
+            .map(drop);
+        }
+        let local = repo(
+            self,
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{}^{{commit}}", self.base_ref),
+            ],
+        )
+        .map_err(|_| {
+            format!(
+                "base_ref {} exists neither on origin nor in the host repository",
+                self.base_ref
+            )
+        })?;
+        repo(self, &["update-ref", pin, &local]).map(drop)
+    }
+}
 impl Driver for Host {
     fn disk_gb(&mut self) -> Result<u64, String> {
         self.free()
     }
     fn prepare(&mut self) -> Result<String, String> {
         if !self.base_ref.starts_with("refs/heads/") && !self.base_ref.starts_with("refs/tags/") {
-            return Err("base_ref must name a pushed refs/heads/ or refs/tags/ ref".into());
+            return Err("base_ref must name a refs/heads/ or refs/tags/ ref".into());
         }
         output(
             self.command("git")
@@ -169,15 +216,9 @@ impl Driver for Host {
                 .arg(&self.repo)
                 .args(["check-ref-format", &self.base_ref]),
         )?;
-        // Pin the pushed ref in a per-run namespace: parallel fetches cannot change this base.
+        // Pin the base in a per-run namespace: parallel fetches cannot change this base.
         let pin = format!("refs/plangraph/native/{}/base", self.run_id);
-        output(self.command("git").arg("-C").arg(&self.repo).args([
-            "fetch",
-            "--no-write-fetch-head",
-            "origin",
-            &format!("+{}:{pin}", self.base_ref),
-            "+refs/heads/main:refs/remotes/origin/main",
-        ]))?;
+        self.pin_base(&pin)?;
         let base = output(
             self.command("git")
                 .arg("-C")
