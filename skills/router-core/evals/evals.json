@@ -1,0 +1,14 @@
+[
+  {
+    "id": "router-core-1",
+    "prompt": "A plan batch of 65 creates was refused because one entry is wrong. Should I split the file and apply the good entries?",
+    "must": ["one refused entry means nothing applied", "Do not split a batch"],
+    "must_not": ["split the batch and apply the good entries", "apply the valid entries one by one"]
+  },
+  {
+    "id": "router-core-2",
+    "prompt": "A batch PR has two writer branches, both reviewed. How many GO rows do I write and what must the row name?",
+    "must": ["one GO row", "per-part evidence table"],
+    "must_not": ["one GO row per part", "write the row by hand without go-row"]
+  }
+]

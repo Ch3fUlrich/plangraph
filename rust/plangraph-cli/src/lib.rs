@@ -10,6 +10,7 @@ pub mod fast_checks;
 pub mod feeder;
 pub mod host_sync;
 pub mod paths;
+pub mod router_batch;
 pub mod runner;
 pub mod setup;
 pub mod wait_pid;
