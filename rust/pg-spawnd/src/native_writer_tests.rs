@@ -5,7 +5,6 @@ use serde_json::json;
 struct Fake {
     calls: Vec<Option<String>>,
     heads: usize,
-    review_after: usize,
     stale: bool,
     disk: u64,
     disk_after_prepare: Option<u64>,
@@ -14,8 +13,18 @@ struct Fake {
     refreshes: usize,
     refresh_error: bool,
     prompts: Vec<String>,
-    rejected: bool,
     skill: Option<String>,
+    /// Verdict and HIGH count of each review run, in order; then ACCEPT.
+    verdicts: Vec<(&'static str, usize)>,
+    /// Head a review run reports instead of the requested one.
+    review_head: Option<&'static str>,
+    /// Fast-check runs that fail before the first green one.
+    fast_failures: usize,
+    /// When false, green fast checks leave no stamp.
+    stamps: bool,
+    stamped: Vec<String>,
+    reviews: Vec<Option<serde_json::Value>>,
+    pushed: Vec<String>,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
@@ -50,11 +59,37 @@ impl Driver for Fake {
         self.heads += 1;
         Ok("final-head".into())
     }
-    fn review(&mut self, _: &str) -> Result<Option<serde_json::Value>, String> {
+    fn fast_checks(&mut self, head: &str) -> Result<(), String> {
+        if self.fast_failures > 0 {
+            self.fast_failures -= 1;
+            return Err("check_file_size.py: too large".into());
+        }
+        if self.stamps {
+            self.stamped.push(head.into());
+        }
+        Ok(())
+    }
+    fn stamped(&mut self, head: &str) -> bool {
+        self.stamped.iter().any(|h| h == head)
+    }
+    fn review(
+        &mut self,
+        head: &str,
+        previous: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        self.reviews.push(previous.cloned());
+        let (verdict, high) = if self.verdicts.is_empty() {
+            ("ACCEPT", 0)
+        } else {
+            self.verdicts.remove(0)
+        };
+        let text = format!(
+            "{}VERDICT: {verdict}\n",
+            "HIGH a.rs:1 - finding\n".repeat(high)
+        );
         Ok(
-            (self.calls.len() > self.review_after && self.calls.len() > self.failures).then(
-                || json!({"verdict":if self.rejected { "REQUEST_CHANGES" } else { "ACCEPT" }}),
-            ),
+            json!({"verdict":verdict, "head":self.review_head.unwrap_or(head),
+            "run_id":format!("run-review{}", self.reviews.len()), "text":text}),
         )
     }
     fn gates(&mut self) -> Result<(), String> {
@@ -63,6 +98,10 @@ impl Driver for Fake {
         } else {
             Err("gate failed".into())
         }
+    }
+    fn push(&mut self, head: &str) -> Result<Option<String>, String> {
+        self.pushed.push(head.into());
+        Ok(Some("refs/heads/lane/fixture".into()))
     }
     fn save(&mut self, _: &serde_json::Value) -> Result<(), String> {
         Ok(())
@@ -75,20 +114,28 @@ fn fake() -> Fake {
     Fake {
         disk: 5,
         gates: true,
+        stamps: true,
         ..Fake::default()
     }
 }
 #[test]
 fn native_missing_final_review_resumes_same_session_and_records_host_head() {
+    // REQUEST_CHANGES resumes the same session; the second review on the head accepts.
     let mut driver = Fake {
-        review_after: 1,
+        verdicts: vec![("REQUEST_CHANGES", 1)],
         ..fake()
     };
     let record = run(&mut driver, json!({"host":"other-host"}), "brief");
     assert_eq!(driver.calls, vec![None, Some("same-session".into())]);
+    assert!(driver.prompts[1].contains("HIGH a.rs:1 - finding"));
+    assert_eq!(driver.reviews[1].as_ref().unwrap()["run_id"], "run-review1");
     assert_eq!(record["host"], "other-host");
     assert_eq!(record["base_sha"], "base");
     assert_eq!(record["final_head"], "final-head");
+    assert_eq!(record["review_rounds"], 2);
+    assert_eq!(record["round_counts"], json!([1]));
+    assert_eq!(record["reviews"][0]["verdict"], "REQUEST_CHANGES");
+    assert_eq!(record["review"]["run_id"], "run-review2");
     assert_eq!(record["exit_code"], 0);
 }
 #[test]
@@ -117,17 +164,34 @@ fn native_disk_floor_and_stale_base_prevent_execution() {
 }
 #[test]
 fn native_resume_cap_and_final_gates_fail_closed() {
+    // Falling HIGH+MED counts at or below half of round 1 from round 3 on keep progress;
+    // the eighth REQUEST_CHANGES round is the ceiling of the one stop rule (round_progress.rs).
     let mut driver = Fake {
-        review_after: 9,
+        verdicts: vec![
+            ("REQUEST_CHANGES", 20),
+            ("REQUEST_CHANGES", 15),
+            ("REQUEST_CHANGES", 9),
+            ("REQUEST_CHANGES", 8),
+            ("REQUEST_CHANGES", 7),
+            ("REQUEST_CHANGES", 6),
+            ("REQUEST_CHANGES", 5),
+            ("REQUEST_CHANGES", 4),
+        ],
         ..fake()
     };
-    assert_eq!(run(&mut driver, json!({}), "brief")["exit_code"], 4);
-    assert_eq!(driver.calls.len(), 4);
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 3);
+    assert_eq!(record["round_stop"], "round_cap");
+    assert_eq!(record["review_rounds"], 8);
+    assert_eq!(driver.calls.len(), 8);
+    assert_eq!(driver.reviews.len(), 8);
+    assert!(driver.pushed.is_empty());
     let mut driver = Fake {
         gates: false,
         ..fake()
     };
     assert_eq!(run(&mut driver, json!({}), "brief")["exit_code"], 7);
+    assert!(driver.pushed.is_empty());
 }
 #[test]
 fn native_placement_uses_existing_ram_overflow_and_disk_floor() {
@@ -136,25 +200,25 @@ fn native_placement_uses_existing_ram_overflow_and_disk_floor() {
         .args(["-c", r#"
 from unittest.mock import patch
 from types import SimpleNamespace
-from plangraph.spawner import seat_spawn as s, overflow as o
+from plangraph.spawner import seat_spawn as s, overflow as o, host_ready as h
 row = dict(ssh='other', ok=True, fresh=True, live_runs=0, mem_available_mb=17000, role_mb=2048, floor_mb=3000, disk_free_gb=6)
 opts = dict(card={}, prompt='brief')
 card = dict(run_kind='native-codex', base_ref='refs/heads/main')
-with patch.object(o, 'registry_caps', return_value={'self':'primary','hosts':[]}), patch.object(o, 'local_limits', return_value=(2048,3000)), patch.object(s, 'resources', return_value=(0,1000)), patch.object(o, 'ready_records', return_value={'other':row}), patch.object(o, 'repos_public', return_value=True):
-    placed = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+with patch.object(o, 'registry_caps', return_value={'self':'primary','hosts':[]}), patch.object(o, 'local_limits', return_value=(2048,3000)), patch.object(s, 'resources', return_value=(0,1000)), patch.object(o, 'ready_records', return_value={'other':row}), patch.object(o, 'repos_public', return_value=True), patch.object(h, 'cargo_target_size_gb', return_value=0.0):
+    placed = s.admit(SimpleNamespace(runner=SimpleNamespace(), ps=lambda: {'runs': []}), opts, card=card, preview=True)
     assert placed['host'] == 'other', placed
     row['disk_free_gb'] = 4
-    refused = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+    refused = s.admit(SimpleNamespace(runner=SimpleNamespace(), ps=lambda: {'runs': []}), opts, card=card, preview=True)
     assert refused['host'] != 'other', refused
     row.update(disk_free_gb=6)
     row.pop('refusal', None)
     card['repo'] = '/nonexistent-controller-repo'
     with patch.object(o, 'placement_policy', return_value=('primary',True)), patch('shutil.disk_usage', side_effect=FileNotFoundError):
-        placed = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+        placed = s.admit(SimpleNamespace(runner=SimpleNamespace(), ps=lambda: {'runs': []}), opts, card=card, preview=True)
         assert placed['host'] == 'other', placed
         row['refusal'] = 'stale readiness'
         row.pop('disk_free_gb')
-        refused = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+        refused = s.admit(SimpleNamespace(runner=SimpleNamespace(), ps=lambda: {'runs': []}), opts, card=card, preview=True)
         assert row['refusal'] == 'stale readiness', row
         assert refused['host'] != 'other' and refused['reason'] == 'disk_low: measurement or configuration unavailable', refused
 "#]).output().unwrap();
@@ -450,13 +514,16 @@ fn native_third_failure_is_blocked_and_review_rejection_is_terminal() {
     assert_eq!(driver.calls.len(), 3);
     assert_eq!(record["result"], "BLOCKED");
     assert_eq!(record["manifest"]["try_count"], 3);
+    // A rejection is terminal once the stop rule ends the rounds: equal counts twice.
     let mut driver = Fake {
-        rejected: true,
+        verdicts: vec![("REQUEST_CHANGES", 2); 3],
         ..fake()
     };
     let record = run(&mut driver, json!({}), "brief");
     assert_eq!(record["exit_code"], 3);
-    assert_eq!(driver.calls.len(), 1);
+    assert_eq!(record["round_stop"], "no_progress");
+    assert_eq!(record["review"]["verdict"], "REQUEST_CHANGES");
+    assert_eq!(driver.calls.len(), 3);
 }
 
 #[test]
@@ -482,4 +549,143 @@ fn native_prompt_starts_with_header_then_role_skill() {
     let header = crate::role_header::header("codex", "implement");
     assert!(driver.prompts[0].starts_with(&format!("{header}\n\n{skill}\nthe brief")));
     assert!(!driver.prompts[0].contains("AutoOS"));
+}
+#[test]
+fn batch_driver_reaches_done_on_accept_and_pushes_once() {
+    let mut driver = fake();
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 0);
+    assert_eq!(record["status_line"], "DONE");
+    assert_eq!(record["review_rounds"], 1);
+    assert_eq!(record["fast_checks"]["status"], "passed");
+    assert_eq!(record["pushed"], "refs/heads/lane/fixture");
+    assert_eq!(driver.pushed, vec!["final-head".to_owned()]);
+    assert!(driver.reviews[0].is_none());
+    assert!(!driver.prompts[0].contains("configured review directory"));
+}
+#[test]
+fn batch_driver_refuses_review_without_fast_checks_stamp() {
+    let mut driver = Fake {
+        stamps: false,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert!(driver.reviews.is_empty());
+    assert_eq!(record["exit_code"], 7);
+    assert!(record["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("review_refused: no fast-checks stamp"));
+}
+#[test]
+fn batch_driver_resumes_on_fast_check_failure_then_fails() {
+    let mut driver = Fake {
+        fast_failures: 1,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 0);
+    assert_eq!(driver.calls, vec![None, Some("same-session".into())]);
+    assert!(driver.prompts[1].contains("check_file_size.py: too large"));
+    let mut driver = Fake {
+        fast_failures: 9,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 7);
+    assert!(driver.reviews.is_empty());
+    assert_eq!(driver.calls.len(), 1 + FAST_CHECK_FIXES);
+}
+#[test]
+fn batch_driver_retries_weak_or_other_head_reviews_then_blocks() {
+    let mut driver = Fake {
+        verdicts: vec![("no_verdict", 0), ("ACCEPT", 0)],
+        ..fake()
+    };
+    assert_eq!(run(&mut driver, json!({}), "brief")["exit_code"], 0);
+    assert_eq!(driver.reviews.len(), 2);
+    let mut driver = Fake {
+        review_head: Some("older-head"),
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 4);
+    assert_eq!(driver.reviews.len(), REVIEW_TRIES);
+    assert!(record["reason"]
+        .as_str()
+        .unwrap()
+        .starts_with("weak_verdict"));
+}
+#[test]
+fn batch_driver_relaunch_keeps_open_findings_and_round_counts() {
+    // Writer crashes during the fix turn after one REQUEST_CHANGES round.
+    let mut driver = Fake {
+        verdicts: vec![("REQUEST_CHANGES", 2)],
+        ..fake()
+    };
+    let record = {
+        let mut wrapped = CrashOnSecond { inner: &mut driver };
+        run(&mut wrapped, json!({}), "brief")
+    };
+    assert_eq!(record["exit_code"], 0);
+    assert_eq!(driver.calls, vec![None, Some("same-session".into()), None]);
+    assert!(driver.prompts[2].contains("Open findings of the last review"));
+    assert!(driver.prompts[2].contains("HIGH a.rs:1 - finding"));
+    assert_eq!(record["round_counts"], json!([2]));
+    assert_eq!(record["manifest"]["try_count"], 2);
+}
+struct CrashOnSecond<'a> {
+    inner: &'a mut Fake,
+}
+impl Driver for CrashOnSecond<'_> {
+    fn prepare(&mut self) -> Result<String, String> {
+        self.inner.prepare()
+    }
+    fn refresh_base(&mut self) -> Result<String, String> {
+        self.inner.refresh_base()
+    }
+    fn disk_gb(&mut self) -> Result<u64, String> {
+        self.inner.disk_gb()
+    }
+    fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
+        let result = self.inner.execute(session, prompt);
+        if self.inner.calls.len() == 2 {
+            return Err("codex killed: SIGKILL".into());
+        }
+        result
+    }
+    fn head(&mut self) -> Result<String, String> {
+        self.inner.head()
+    }
+    fn fast_checks(&mut self, head: &str) -> Result<(), String> {
+        self.inner.fast_checks(head)
+    }
+    fn stamped(&mut self, head: &str) -> bool {
+        self.inner.stamped(head)
+    }
+    fn review(
+        &mut self,
+        head: &str,
+        previous: Option<&serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        self.inner.review(head, previous)
+    }
+    fn gates(&mut self) -> Result<(), String> {
+        self.inner.gates()
+    }
+    fn save(&mut self, record: &serde_json::Value) -> Result<(), String> {
+        self.inner.save(record)
+    }
+}
+#[test]
+fn round_stop_is_the_round_progress_rule_capped_at_max_rounds() {
+    assert_eq!(round_stop(&[3]), None);
+    assert_eq!(round_stop(&[3, 2, 1, 0]), None);
+    assert_eq!(round_stop(&[3, 3, 3]), Some("no_progress"));
+    assert_eq!(round_stop(&[5, 4, 3, 2, 1]), None);
+    assert_eq!(round_stop(&[16, 8, 7, 6, 5, 4, 3, 2]), Some("round_cap"));
+    assert_eq!(
+        high_med("HIGH a.rs:1 x\n- MED b.rs:2 y\nLOW c\nVERDICT: REQUEST_CHANGES\n"),
+        2
+    );
 }

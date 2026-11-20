@@ -204,6 +204,7 @@ pub(crate) fn native_spawn(state: &Path, args: &Args) -> Result<Value, ToolError
     if args.get("role").is_some_and(|role| role != "implement") {
         return Err(parameter("native-codex requires implement role"));
     }
+    crate::native_writer_host::writer_effort(&args["card"]).map_err(parameter)?;
     let prompt = args
         .get("prompt")
         .and_then(Value::as_str)

@@ -1,23 +1,56 @@
 //! Native CLI writer lifecycle, independent of placement and transport.
 use serde_json::{json, Value};
+/// Batch writer driver (R-batch-01..04, 06): one writer session, fast checks per head,
+/// an other-family review run on the exact head, fixes in the same session.
 pub(crate) trait Driver {
     fn prepare(&mut self) -> Result<String, String>;
     fn refresh_base(&mut self) -> Result<String, String>;
     fn disk_gb(&mut self) -> Result<u64, String>;
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String>;
     fn head(&mut self) -> Result<String, String>;
-    fn review(&mut self, head: &str) -> Result<Option<Value>, String>;
+    /// Run the fast checks on `head`; success writes that head's stamp.
+    fn fast_checks(&mut self, head: &str) -> Result<(), String>;
+    /// Whether the fast-checks stamp for exactly `head` exists.
+    fn stamped(&mut self, head: &str) -> bool;
+    /// Start one review run on `head` and return its structured verdict, read from the
+    /// review run record: `verdict` (ACCEPT, REQUEST_CHANGES or no_verdict), `head`,
+    /// `run_id`, `text`. `previous` is the last REQUEST_CHANGES review, for a delta review.
+    fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String>;
+    /// Final gates on the accepted head, the commit-trailer gate included.
     fn gates(&mut self) -> Result<(), String>;
+    /// Push the accepted head once; returns the pushed ref, or None when no push is configured.
+    fn push(&mut self, _head: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
     fn save(&mut self, record: &Value) -> Result<(), String>;
     /// Skill text from origin/main of the run checkout; absent when unreadable.
     fn skill(&mut self, _name: &str) -> Result<String, String> {
         Err("skill unavailable".into())
     }
 }
+/// Review attempts per round before the run ends BLOCKED for want of a verdict.
+const REVIEW_TRIES: usize = 3;
+/// Fast-check fix turns per head before the run fails.
+const FAST_CHECK_FIXES: usize = 2;
+/// Stop rule after a REQUEST_CHANGES round, given the confirmed HIGH+MED count of every
+/// round so far: the round progress rule of `round_progress`, applied to the round just
+/// finished. The one seam a later stop rule replaces.
+pub(crate) fn round_stop(counts: &[u64]) -> Option<&'static str> {
+    if counts.len() as u64 >= crate::round_progress::MAX_ROUNDS {
+        return Some("round_cap");
+    }
+    crate::round_progress::stop_reason(counts, counts.len() as u64, false)
+}
+/// HIGH+MED (P1/P2) finding lines of a review text.
+pub(crate) fn high_med(text: &str) -> u64 {
+    text.lines()
+        .filter(|line| crate::pre_review::finding_description(line).is_some())
+        .count() as u64
+}
 pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> Value {
     record["manifest"] = json!({
         "name":record["run_id"], "host":record["host"], "worktree":record["cwd"],
-        "brief":brief, "effort":"medium", "try_count":0
+        "brief":brief, "effort":record["effort"].as_str().unwrap_or("medium"), "try_count":0
     });
     record["review_rounds"] = json!(0);
     let result = lifecycle(driver, &mut record, brief);
@@ -67,22 +100,22 @@ fn lifecycle(
     driver.save(record).map_err(|e| (6, e))?;
     let skill = driver.skill(crate::role_header::skill_name(brief)).ok();
     let brief = crate::role_header::compose("codex", brief, skill.as_deref());
-    let prompt = format!("{brief}\nNative writer rules: new code is Rust with Rust tests. No new Python, shell or Node source files or additions to tools/new_code_allowlist.txt without an operator D-id; fixes inside existing Python files remain allowed until their port. Do not push. Before finishing, commit your work, run the repository's fast gates, and obtain a repository-access review for the final HEAD. Store the review in the configured review directory with the HEAD's eight-character SHA in its filename and a VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES line. Review routing must use role review and writer_families [\"openai\"].\n");
+    let prompt = format!("{brief}\nNative writer rules: new code is Rust with Rust tests. No new Python, shell or Node source files or additions to tools/new_code_allowlist.txt without an operator D-id; fixes inside existing Python files remain allowed until their port. Do not push. Commit your work and end your turn: the driver runs the fast checks and an other-family review on your final HEAD and resumes this session with any failure or finding.\n");
     let prompt = format!("{prompt}\nUse the inherited shared CARGO_TARGET_DIR for every Cargo command, including reviews and preflight. Never override it with a private /tmp or worktree target, --target-dir, or Cargo configuration.\n");
     for attempt in 1..=3 {
         record["manifest"]["try_count"] = json!(attempt);
         driver.save(record).map_err(|e| (6, e))?;
-        match writer_attempt(driver, record, &prompt) {
+        // A relaunched session inherits the open findings of the last review.
+        let open = (record["review"]["verdict"] == "REQUEST_CHANGES")
+            .then(|| record["review"]["text"].as_str().unwrap_or("").to_owned());
+        let launch = match open {
+            Some(text) => format!(
+                "{prompt}\nOpen findings of the last review on this worktree; fix them:\n{text}\n"
+            ),
+            None => prompt.clone(),
+        };
+        match writer_attempt(driver, record, &launch) {
             Err((6, error)) => {
-                // A review decision is terminal even if the CLI subsequently crashed.
-                if let Ok(head) = driver.head() {
-                    if let Ok(Some(review)) = driver.review(&head) {
-                        if review["verdict"] == "REQUEST_CHANGES" {
-                            record["review"] = review;
-                            return Ok(3);
-                        }
-                    }
-                }
                 record["last_writer_failure"] = json!(error);
                 driver.save(record).map_err(|e| (9, e))?;
                 if attempt == 3 {
@@ -93,7 +126,7 @@ fn lifecycle(
                 }
                 admit_disk(driver).map_err(|(_, e)| (9, e))?;
                 record["base_sha"] = json!(driver.refresh_base().map_err(|e| (9, e))?);
-                for key in ["session_id", "review", "final_head", "resumes"] {
+                for key in ["session_id", "final_head", "resumes"] {
                     record.as_object_mut().unwrap().remove(key);
                 }
             }
@@ -102,6 +135,54 @@ fn lifecycle(
     }
     unreachable!()
 }
+fn resume(
+    driver: &mut impl Driver,
+    record: &mut Value,
+    session: &str,
+    prompt: &str,
+) -> Result<(), (i32, String)> {
+    record["resumes"] = json!(record["resumes"].as_u64().unwrap_or(0) + 1);
+    driver.save(record).map_err(|e| (6, e))?;
+    driver.execute(Some(session), prompt).map_err(|e| (6, e))?;
+    Ok(())
+}
+/// One review round on `head`: refused without the fast-checks stamp; a run without a
+/// verdict on exactly `head` is retried, then the run ends BLOCKED (exit 4).
+fn review_round(
+    driver: &mut impl Driver,
+    head: &str,
+    previous: Option<&Value>,
+) -> Result<Value, (i32, String)> {
+    if !driver.stamped(head) {
+        return Err((
+            7,
+            format!("review_refused: no fast-checks stamp for {head}"),
+        ));
+    }
+    let mut last = String::from("no review run");
+    for _ in 0..REVIEW_TRIES {
+        match driver.review(head, previous) {
+            Ok(review)
+                if review["head"] == head
+                    && ["ACCEPT", "REQUEST_CHANGES"]
+                        .contains(&review["verdict"].as_str().unwrap_or("")) =>
+            {
+                return Ok(review)
+            }
+            Ok(review) => {
+                last = review["reason"]
+                    .as_str()
+                    .unwrap_or("weak_verdict")
+                    .to_owned()
+            }
+            Err(error) => last = error,
+        }
+    }
+    Err((
+        4,
+        format!("weak_verdict: no review run returned a verdict on {head}: {last}"),
+    ))
+}
 fn writer_attempt(
     driver: &mut impl Driver,
     record: &mut Value,
@@ -109,34 +190,67 @@ fn writer_attempt(
 ) -> Result<i32, (i32, String)> {
     let session = driver.execute(None, prompt).map_err(|e| (6, e))?;
     record["session_id"] = json!(session);
-    for attempt in 0..=3 {
+    record["resumes"] = json!(0);
+    let mut fixes = 0;
+    loop {
         let head = driver.head().map_err(|e| (6, e))?;
         record["final_head"] = json!(head);
-        record["resumes"] = json!(attempt);
         driver.save(record).map_err(|e| (6, e))?;
-        if let Some(review) = driver.review(&head).map_err(|e| (4, e))? {
-            record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
-            let accepts = review["verdict"] == "ACCEPT";
-            let weak = review["status"] == "no_verdict";
-            record["review"] = review;
-            if weak {
-                return Err((4, "weak_verdict".into()));
+        if let Err(failure) = driver.fast_checks(&head) {
+            record["fast_checks"] = json!({"head":head, "status":"failed", "output":failure});
+            fixes += 1;
+            if fixes > FAST_CHECK_FIXES || session.is_empty() {
+                return Err((7, format!("fast checks failed on {head}: {failure}")));
             }
-            if !accepts {
-                return Ok(3);
-            }
+            resume(driver, record, &session, &format!("The fast checks failed on your head {head}:\n{failure}\nFix the cause, commit and end your turn; keep this session."))?;
+            continue;
+        }
+        fixes = 0;
+        record["fast_checks"] = json!({"head":head, "status":"passed"});
+        let previous =
+            (record["review"]["verdict"] == "REQUEST_CHANGES").then(|| record["review"].clone());
+        let review = review_round(driver, &head, previous.as_ref())?;
+        record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
+        let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"]});
+        record["review"] = review;
+        if record["reviews"].as_array().is_none() {
+            record["reviews"] = json!([]);
+        }
+        record["reviews"].as_array_mut().unwrap().push(summary);
+        if record["review"]["verdict"] == "ACCEPT" {
             driver.gates().map_err(|e| (7, e))?;
             if driver.head().map_err(|e| (7, e))? != head {
                 return Err((7, "HEAD changed during final gates".into()));
             }
+            // One push per package: only the accepted, gated head leaves the host.
+            record["pushed"] = json!(driver.push(&head).map_err(|e| (7, e))?);
+            record["status_line"] = json!("DONE");
             return Ok(0);
         }
-        if attempt == 3 || session.is_empty() {
-            return Ok(4);
+        let text = record["review"]["text"].as_str().unwrap_or("").to_owned();
+        if record["round_counts"].as_array().is_none() {
+            record["round_counts"] = json!([]);
         }
-        driver.execute(Some(&session), &format!("Your final head {head} has no required review. Run the mandatory repository-access review on that exact head, address findings and finish. Use the configured review directory; keep this session.")).map_err(|e| (6, e))?;
+        record["round_counts"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!(high_med(&text)));
+        let counts: Vec<u64> = record["round_counts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_u64)
+            .collect();
+        if let Some(reason) = round_stop(&counts) {
+            record["round_stop"] = json!(reason);
+            return Ok(3);
+        }
+        if session.is_empty() {
+            record["round_stop"] = json!("no_session");
+            return Ok(3);
+        }
+        resume(driver, record, &session, &format!("The review of your head {head} requests changes. Fix every confirmed HIGH and MED finding with a test that fails without the fix, or refute it with evidence in your final message; commit and end your turn; keep this session.\n----- review -----\n{text}\n----- end of review -----"))?;
     }
-    Ok(4)
 }
 #[cfg(test)]
 #[path = "native_writer_tests.rs"]

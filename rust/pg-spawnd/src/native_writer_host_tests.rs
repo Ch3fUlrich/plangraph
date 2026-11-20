@@ -1,30 +1,29 @@
 use super::*;
 #[test]
 fn final_head_review_ignores_old_head_and_requires_last_canonical_verdict() {
-    let dir = std::env::temp_dir().join(format!("native-review-{}", std::process::id()));
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("aaaaaaaa-hydrogen.txt"), "VERDICT: ACCEPT\n").unwrap();
-    assert!(find_review(&dir, "bbbbbbbbbbbbbbbb", &[])
-        .unwrap()
-        .is_none());
-    fs::write(
-        dir.join("bbbbbbbb-hydrogen.txt"),
-        "VERDICT: ACCEPT\nVERDICT: UNKNOWN\n",
-    )
-    .unwrap();
-    assert!(find_review(&dir, "bbbbbbbbbbbbbbbb", &[])
-        .unwrap()
-        .is_none());
-    fs::write(
-        dir.join("bbbbbbbb-hydrogen.txt"),
-        "VERDICT: REQUEST_CHANGES\n",
-    )
-    .unwrap();
-    assert_eq!(
-        find_review(&dir, "bbbbbbbbbbbbbbbb", &[]).unwrap().unwrap()["verdict"],
-        "REQUEST_CHANGES"
+    let head = "b".repeat(40);
+    let paths = vec!["src/lib.rs".to_owned()];
+    let old = format!(
+        "src/lib.rs fine\nHEAD: {}\nVERDICT: ACCEPT\n",
+        "a".repeat(40)
     );
-    fs::remove_dir_all(dir).unwrap();
+    assert_eq!(review_verdict(&old, &head, &paths)["verdict"], "no_verdict");
+    let unknown = "src/lib.rs\nVERDICT: ACCEPT\nVERDICT: UNKNOWN\n";
+    assert_eq!(
+        review_verdict(unknown, &head, &paths)["verdict"],
+        "no_verdict"
+    );
+    let weak = format!("HEAD: {head}\nVERDICT: ACCEPT\n");
+    assert_eq!(
+        review_verdict(&weak, &head, &paths)["reason"],
+        "weak_verdict"
+    );
+    let changes = format!("HIGH src/lib.rs:3 - x\nHEAD: {head}\nVERDICT: REQUEST_CHANGES\n");
+    let verdict = review_verdict(&changes, &head, &paths);
+    assert_eq!(verdict["verdict"], "REQUEST_CHANGES");
+    assert_eq!(verdict["head"], head.as_str());
+    let accept = format!("src/lib.rs:3 checked\nHEAD: {head}\nVERDICT: ACCEPT\n");
+    assert_eq!(review_verdict(&accept, &head, &paths)["verdict"], "ACCEPT");
 }
 
 #[test]
@@ -40,6 +39,12 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         record_path: dir.path().join("record.json"),
         base_ref: "refs/heads/main".into(),
         tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.path().to_path_buf(),
+        brief: "brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
     };
     output(Command::new("git").arg("init").arg(&host.cwd)).unwrap();
     fs::write(
@@ -62,7 +67,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
     assert_eq!(row["host"], "fixture");
     assert_eq!(row["model"], WRITER_MODEL);
     assert_eq!(row["effort"], WRITER_EFFORT);
-    let args = model_args();
+    let args = model_args(&host.effort);
     assert_eq!(args[1], row["model"].as_str().unwrap());
     assert!(args[3].ends_with(row["effort"].as_str().unwrap()));
     assert_eq!(row["tokens"], 1290);
@@ -137,6 +142,12 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         record_path: dir.path().join("record.json"),
         base_ref: "refs/heads/main".into(),
         tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.path().to_path_buf(),
+        brief: "brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
     };
     host.git(&["init"]).unwrap();
     let commit = |message: &str| {
@@ -190,10 +201,8 @@ fn stored_accept_without_reviewed_file_is_no_verdict() {
         " ".repeat(288 - prefix.len() - tail.len())
     );
     assert_eq!(text.len(), 288);
-    fs::write(dir.path().join("aaaaaaaa-argon.txt"), text).unwrap();
-    let review = find_review(dir.path(), "aaaaaaaaaaaaaaaa", &[])
-        .unwrap()
-        .unwrap();
+    let review = review_verdict(&text, "aaaaaaaaaaaaaaaa", &[]);
+    let _ = &dir;
     assert_eq!(review["status"], "no_verdict");
     assert_eq!(review["reason"], "weak_verdict");
     assert_ne!(review["verdict"], "ACCEPT");
@@ -203,15 +212,10 @@ fn stored_accept_without_reviewed_file_is_no_verdict() {
 fn stored_accept_with_changed_path_or_file_line_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     for citation in ["Reviewed src/lib.rs", "Reviewed Makefile:12"] {
-        fs::write(
-            dir.path().join("aaaaaaaa-argon.txt"),
-            format!("{citation}\nFINDING none\nVERDICT: ACCEPT\n"),
-        )
-        .unwrap();
+        let text = format!("{citation}\nFINDING none\nVERDICT: ACCEPT\n");
+        let _ = &dir;
         assert_eq!(
-            find_review(dir.path(), "aaaaaaaaaaaaaaaa", &["src/lib.rs".into()])
-                .unwrap()
-                .unwrap()["verdict"],
+            review_verdict(&text, "aaaaaaaaaaaaaaaa", &["src/lib.rs".into()])["verdict"],
             "ACCEPT"
         );
     }
@@ -237,10 +241,16 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
         fn head(&mut self) -> Result<String, String> {
             Ok("head".into())
         }
-        fn review(&mut self, _: &str) -> Result<Option<Value>, String> {
-            Ok(Some(
-                json!({"status":"no_verdict", "verdict":"no_verdict", "reason":"weak_verdict"}),
-            ))
+        fn fast_checks(&mut self, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn stamped(&mut self, _: &str) -> bool {
+            true
+        }
+        fn review(&mut self, head: &str, _: Option<&Value>) -> Result<Value, String> {
+            Ok(
+                json!({"status":"no_verdict", "verdict":"no_verdict", "reason":"weak_verdict", "head":head}),
+            )
         }
         fn gates(&mut self) -> Result<(), String> {
             panic!("weak review cannot authorize final gates")
@@ -251,6 +261,191 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
     }
     let record = crate::native_writer::run(&mut Weak, json!({}), "brief");
     assert_eq!(record["exit_code"], 4);
-    assert_eq!(record["reason"], "weak_verdict");
-    assert_eq!(record["review"]["status"], "no_verdict");
+    let reason = record["reason"].as_str().unwrap();
+    assert!(reason.starts_with("weak_verdict") && reason.ends_with(": weak_verdict"));
+    assert!(record["review"].is_null());
+}
+
+#[test]
+fn writer_effort_is_medium_unless_a_decision_names_a_higher_one() {
+    assert_eq!(WRITER_MODEL, "gpt-6.2-sol");
+    assert_eq!(writer_effort(&json!({})).unwrap(), "medium");
+    assert_eq!(
+        writer_effort(&json!({"effort":"medium"})).unwrap(),
+        "medium"
+    );
+    assert_eq!(
+        writer_effort(&json!({"effort":"xhigh","effort_decision":"D-6397"})).unwrap(),
+        "xhigh"
+    );
+    for card in [
+        json!({"effort":"high"}),
+        json!({"effort":"high","effort_decision":"because"}),
+        json!({"effort":"high","effort_decision":"D-"}),
+    ] {
+        assert!(writer_effort(&card)
+            .unwrap_err()
+            .starts_with("effort_needs_decision"));
+    }
+    assert!(writer_effort(&json!({"effort":"low"}))
+        .unwrap_err()
+        .starts_with("effort_invalid"));
+    assert_eq!(model_args("high")[3], "model_reasoning_effort=high");
+}
+
+#[test]
+fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = |cwd: &Path, args: &[&str]| {
+        output(
+            Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "fixture")
+                .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+                .env("GIT_COMMITTER_NAME", "fixture")
+                .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid"),
+        )
+        .unwrap()
+    };
+    let remote = dir.path().join("remote.git");
+    let cwd = dir.path().join("worktree");
+    fs::create_dir_all(&cwd).unwrap();
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", remote.to_str().unwrap()],
+    );
+    git(&cwd, &["init", "-q", "-b", "main"]);
+    git(&cwd, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    // The commit-trailer gate records its arguments and fails while gate-red exists.
+    fs::create_dir_all(cwd.join("tools")).unwrap();
+    fs::write(
+        cwd.join("tools/ci_commit_gate.py"),
+        "import pathlib, subprocess, sys\nhead = subprocess.check_output(['git', 'rev-parse', sys.argv[sys.argv.index('--head') + 1]], text=True).strip()\npathlib.Path('../gate-runs.txt').open('a').write(' '.join(sys.argv[1:]) + ' ' + head + '\\n')\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
+    )
+    .unwrap();
+    git(&cwd, &["add", "tools"]);
+    git(&cwd, &["commit", "-q", "-m", "base"]);
+    let base = git(&cwd, &["rev-parse", "HEAD"]);
+    git(
+        &cwd,
+        &["update-ref", "refs/plangraph/native/run-host/base", &base],
+    );
+    fs::create_dir_all(cwd.join("src")).unwrap();
+    fs::write(cwd.join("src/lib.rs"), "// writer\n").unwrap();
+    git(&cwd, &["add", "src/lib.rs"]);
+    git(&cwd, &["commit", "-q", "-m", "writer"]);
+    let head = git(&cwd, &["rev-parse", "HEAD"]);
+    let state = dir.path().join("state");
+    let cli = dir.path().join("review-cli.py");
+    fs::write(
+        &cli,
+        r#"import json, pathlib, subprocess, sys
+argv = sys.argv[1:]
+value = lambda flag: argv[argv.index(flag) + 1]
+state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
+assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
+assert value('--writer-family') == 'openai' and 'cwd' in card
+prompt = pathlib.Path(value('--prompt-file')).read_text()
+head = card['diff_ref']['head']
+assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
+assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
+assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
+run = state / 'runs' / 'run-rv1'
+run.mkdir(parents=True)
+text = 'src/lib.rs:1 checked\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
+(run / 'live.log').write_text(json.dumps({'type': 'result', 'is_error': False, 'result': text}) + '\n')
+print('banner line')
+print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'mimo-v2.6-pro'}}, indent=2))
+"#,
+    )
+    .unwrap();
+    let mut host = Host {
+        repo: cwd.clone(),
+        run_id: "run-host".into(),
+        cwd: cwd.clone(),
+        reviews: dir.path().join("reviews"),
+        record_path: state.join("runs/run-host/record.json"),
+        base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: state.clone(),
+        brief: "the item brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
+    };
+    assert!(!host.stamped(&head));
+    // A red commit-trailer gate fails the fast checks without a stamp and blocks the final gates.
+    fs::write(dir.path().join("gate-red"), "").unwrap();
+    assert!(host
+        .fast_checks(&head)
+        .unwrap_err()
+        .starts_with("ci_commit_gate.py"));
+    assert!(!host.stamped(&head));
+    assert!(host.gates().unwrap_err().starts_with("ci_commit_gate.py"));
+    fs::remove_file(dir.path().join("gate-red")).unwrap();
+    host.fast_checks(&head).unwrap();
+    assert!(host.stamped(&head));
+    assert!(!host.stamped(&base));
+    host.gates().unwrap();
+    let runs = fs::read_to_string(dir.path().join("gate-runs.txt")).unwrap();
+    let expected = format!("check --base refs/plangraph/native/run-host/base --head HEAD {head}");
+    assert_eq!(runs.lines().filter(|l| *l == expected).count(), 4, "{runs}");
+    let review = host.review(&head, None).unwrap();
+    assert_eq!(review["verdict"], "ACCEPT", "{review}");
+    assert_eq!(review["head"], head.as_str());
+    assert_eq!(review["run_id"], "run-rv1");
+    assert_eq!(review["leg"], "mimo-v2.6-pro");
+    assert!(Path::new(review["path"].as_str().unwrap()).is_file());
+    assert!(!host
+        .reviews
+        .join(format!("checkout-{}-1", &head[..8]))
+        .exists());
+    // OpenCode legs: no result frame in the live log, the answer is the stdout tail.
+    let record = json!({"run_id":"run-rv2", "status":"completed",
+        "stdout_tail":format!("HIGH src/lib.rs:1 - x\nHEAD: {head}\nVERDICT: REQUEST_CHANGES\n")});
+    let text = review_run_text(&state, &record).unwrap();
+    assert_eq!(
+        review_verdict(&text, &head, &[])["verdict"],
+        "REQUEST_CHANGES"
+    );
+    // A spawner that prints no run record is an error, never a verdict.
+    host.review_cli = vec!["true".into()];
+    assert!(host
+        .review(&head, None)
+        .unwrap_err()
+        .starts_with("review run returned no record"));
+}
+
+#[cfg(unix)]
+#[test]
+fn card_refusals_exit_five_before_codex_starts() {
+    for (card, reason) in [
+        (json!({"effort":"high"}), "effort_needs_decision"),
+        (json!({"effort":"low"}), "effort_invalid"),
+        (json!({"push_ref":"main"}), "push_ref must name refs/heads/"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let record_path = dir.path().join("state/runs/run-card/record.json");
+        fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+        let request = dir.path().join("request.json");
+        fs::write(
+            &request,
+            json!({"record":{"run_id":"run-card", "repo":dir.path(), "base_ref":"refs/heads/main",
+                "tool_path":"/nonexistent"}, "record_path":record_path, "card":card, "prompt":"brief"})
+            .to_string(),
+        )
+        .unwrap();
+        execute(vec![request.to_string_lossy().into_owned()]).unwrap();
+        let record: Value = serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+        assert_eq!(record["exit_code"], 5, "{record}");
+        assert_eq!(record["status"], "failed");
+        assert!(
+            record["reason"].as_str().unwrap().starts_with(reason),
+            "{record}"
+        );
+        assert!(!dir.path().join("state/runs/run-card/native.log").exists());
+    }
 }

@@ -21,19 +21,42 @@ PATH, including tools launched by gate scripts.
 
 The Rust worker fetches the pushed base into a per-run ref, refuses ancestry
 behind fetched origin/main, and creates a detached worktree in the
-run state directory under `runs/<run-id>/worktree`, outside the repository. It runs gpt-6.1-sol at medium
-reasoning with the brief on stdin. A review on the final HEAD is mandatory:
-missing reviews resume the same Codex thread at most three times. Review routes
-must use role `review`, writer_families `["openai"]`. The optional `review_dir`
-card field selects a target-host directory; the default is `<worktree>/reviews`.
-Review `.txt` filenames must contain head8, or their first five lines must name
-the full head. The newest matching file with a canonical verdict counts; ACCEPT
-then runs the available file-size, language and changelog/docs gates. Repositories
-without these scripts rely on the brief's own tests, as the plan-order driver did.
+run state directory under `runs/<run-id>/worktree`, outside the repository. It runs gpt-6.2-sol (lead writer leg, operator D-6397) at medium
+reasoning with the brief on stdin. A card may name `effort` `high` or `xhigh` only
+together with `effort_decision: "D-<n>"`; any other effort refuses with
+`effort_invalid` or `effort_needs_decision` before Codex starts, and the manifest
+and ledger row record the effort used. The worker drives the batch writer loop itself (R-batch-01..04, 06;
+`rust/pg-spawnd/src/native_writer.rs`). After each writer turn it runs the
+repository's fast gates present in the checkout (file size, new-code language,
+changelog/docs, `ci_commit_gate.py check` against the pinned base, and the private
+scrub when `~/.config/plangraph/scrub-words.txt` exists) and writes the stamp
+`<git-dir>/fast-checks/<head>`. A failure resumes the same Codex session with the
+output, at most twice per head. A review is refused without the stamp of exactly
+that head. The worker then starts one review run through the spawner CLI (role
+`review`, writer family `openai`, a diff_ref card in a disposable no-push clone
+at the head; `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
+`python3 -m plangraph.spawner.cli`). The verdict is read from that run's record
+(`review_artifacts::review_text`), never from a file name: the last `VERDICT:`
+line must be canonical, a `HEAD:` line naming another head or an ACCEPT that names
+no changed file is `no_verdict`, retried twice, then the run ends BLOCKED with
+exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.
+REQUEST_CHANGES resumes the same session with the review text; later rounds review
+the delta from the previous head. The HIGH+MED count of each round goes to
+`round_counts`; `native_writer::round_stop` applies the round progress rule of
+`round_progress.rs` to the round just finished and caps the run at that file's
+`MAX_ROUNDS` (exit 3 with `round_stop` `round_cap`, `no_progress` or
+`slow_progress`; `no_session` when Codex
+reported no session ID to resume). ACCEPT runs the same
+gates on the clean final head, then pushes it once to the card's optional
+`push_ref` (`refs/heads/...`, no force) and records `status_line: DONE`.
+The card's `review_dir` selects a target-host directory; the default is
+`<worktree>/reviews`.
 
 Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
-final head, resume count, review path/text/verdict and exit code. Exits are 0
-accepted, 3 review changes, 4 missing review, 5 base refusal, 6 writer failure,
+final head, resume count, fast-check result, every review round, the last review
+path/text/verdict/run ID, pushed ref and exit code. Exits are 0 accepted, 3 review
+changes at the round stop, 4 no verdict, 5 base or card refusal (stale or unpushed base, `effort_invalid`,
+`effort_needs_decision`, a `push_ref` outside `refs/heads/`), 6 writer failure,
 7 final gate failure, 8 start disk refusal. Worktrees and logs remain for recovery.
 Exit 9 reports `result: BLOCKED` when writer relaunches are exhausted or their
 disk/base preparation fails.
@@ -46,7 +69,8 @@ Before relaunch it checks the existing disk floor, fetches and merges origin/mai
 into the same worktree, preserving writer commits. Dirty-tree or merge failures
 stop with BLOCKED; no reset or cleanup discards work. There are at most three
 writer attempts (two relaunches), separate from missing-review session resumes.
-REQUEST_CHANGES is terminal, including when a review was saved before a crash.
+A relaunched session receives the open findings of the last REQUEST_CHANGES review;
+round counts carry over, so the cap holds across relaunches.
 The last writer failure remains in the record for the orchestrator.
 
 This first relaunch slice covers failure of the writer child while the native
