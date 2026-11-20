@@ -561,3 +561,47 @@ def test_base_fresh_checks_the_named_ref_not_head(repository):
     current = git(repo, 'rev-parse', 'HEAD')
     assert base_fresh(repo, ref=current, fetch=False)['ok'] is True
     assert base_fresh(repo, ref=old, fetch=False)['ok'] is False
+
+
+def lane_clone(repository, tmp_path):
+    """A clone of a lane-branch checkout, its origin pointed back at the real remote."""
+    origin, repo = repository
+    git(repo, 'checkout', '-b', 'lane/x')
+    git(repo, 'commit', '--allow-empty', '-m', 'lane work')
+    clone = tmp_path / 'clone'
+    git(tmp_path, 'clone', '-q', str(repo), str(clone))
+    git(clone, 'remote', 'set-url', 'origin', str(origin))
+    assert git(clone, 'symbolic-ref', 'refs/remotes/origin/HEAD') == 'refs/remotes/origin/lane/x'
+    return origin, clone
+
+
+def test_origin_head_naming_an_absent_remote_branch_is_unknown(repository, tmp_path):
+    from plangraph.spawner.base_fresh import base_fresh
+    origin, clone = lane_clone(repository, tmp_path)
+    result = base_fresh(clone)
+    assert result['ok'] is True and result['reason'] is None
+    assert result['default_branch'] == 'main'
+    assert result['origin_sha'] == git(origin, 'rev-parse', 'main')
+
+
+def test_origin_head_naming_an_absent_remote_branch_still_refuses_a_stale_head(repository, tmp_path):
+    from plangraph.spawner.base_fresh import base_fresh
+    origin, repo = repository
+    old = advance(origin, repo)
+    _, clone = lane_clone(repository, tmp_path)
+    git(clone, 'checkout', '-q', '--detach', old)
+    result = base_fresh(clone)
+    assert result['ok'] is False and result['reason'] == 'base_stale: behind=2'
+    assert result['default_branch'] == 'main'
+
+
+def test_origin_head_naming_a_present_remote_branch_stays_the_default(repository, tmp_path):
+    from plangraph.spawner.base_fresh import base_fresh
+    origin, repo = repository
+    git(repo, 'push', 'origin', 'HEAD:refs/heads/trunk')
+    git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/trunk')
+    clone = tmp_path / 'trunk-clone'
+    git(tmp_path, 'clone', '-q', str(origin), str(clone))
+    assert git(clone, 'symbolic-ref', 'refs/remotes/origin/HEAD') == 'refs/remotes/origin/trunk'
+    result = base_fresh(clone)
+    assert result['default_branch'] == 'trunk' and result['ok'] is True

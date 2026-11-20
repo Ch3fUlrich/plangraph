@@ -21,6 +21,10 @@ def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
         if default is None:
             symbolic = git('symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD', check=False)
             default = symbolic.stdout.strip().removeprefix('refs/remotes/origin/') if symbolic.returncode == 0 else 'main'
+            # A clone of a lane checkout names a lane branch the remote lacks: unknown, not the default.
+            if default != 'main' and fetch and not default.startswith('-') \
+                    and git('ls-remote', '--exit-code', '--heads', 'origin', 'refs/heads/' + default, check=False).returncode == 2:
+                default = 'main'
         result['default_branch'] = default
         if not isinstance(default, str) or default.startswith('-'): return result
         git('check-ref-format', 'refs/heads/' + default)
