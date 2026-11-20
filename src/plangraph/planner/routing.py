@@ -18,6 +18,7 @@ from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # n
                          BenchRequired, benchmark_rows_from_db)
 from .legs import CODEX_FALLBACK_WRITERS, DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
+from .readiness import WINDOW_TOKENS, USABLE_FRACTION
 from .review_order import review_key, catalog_tiers
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts, seat_family  # noqa: F401
 
@@ -26,11 +27,7 @@ __all__ = ["RouteError", "Route", "effective_estimate", "pick_window_class",
             "SpawnRefused", "SpawnPlan", "plan_spawn",
               "hand_picked", "next_leg_after_provider_stop", "benchmark_rows_from_db"]
 
-#: Window sizes in tokens.
-WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
-#: Share of a window a card may use (design number).
-USABLE_FRACTION_PCT = 55
-USABLE_FRACTION = USABLE_FRACTION_PCT / 100
+USABLE_FRACTION_PCT = round(USABLE_FRACTION * 100)
 #: Attempts on one tier before promotion, and promotions allowed.
 ATTEMPT_BUDGET = 3
 PROMOTIONS = 1
@@ -113,7 +110,7 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
                overflow: bool = False, role: str | None = None, now=None) -> Route:
     """Route ``card`` (keeper card dict) over ``legs``; see module docstring.
     ``role`` falls back to ``card["role"]``; absent roles retain keeper admission.
-    Implement uses Sol xhigh then Gemini before cost tiers (D-5206/D-5212).
+    Spawn roles use the leg's context; the keeper pack still budgets by class.
     ``overflow`` marks a context-overflow failure: the window class grows by one.
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
@@ -143,7 +140,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
         reasons.append(f"overflow: window class upgraded to {window_class}")
 
     no_train = bool(_NO_TRAIN_TAGS.intersection(tags))
-    if effective_role == 'review' and not _fits(effective, window_class):
+    per_leg = effective_role in ('implement', 'review', 'orchestrate') and not overflow
+    if per_leg and not _fits(effective, window_class):
         window_class = pick_window_class(effective, floor=window_class)
         reasons.append(f'request limit: window class upgraded to {window_class}')
     window_fits = _fits(effective, window_class)
@@ -162,7 +160,9 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             why = "excluded_family"
         elif no_train and leg.trains_on_data:
             why = "trains_on_data"
-        elif window_class not in leg.windows:
+        elif per_leg and effective * 100 > USABLE_FRACTION_PCT * (leg.max_request_tokens or 0):
+            why = "window_class"
+        elif not per_leg and window_class not in leg.windows:
             why = "window_class"
         elif not window_fits:
             why = "over_window_share"
@@ -427,6 +427,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                          tuple([str(exc), *bench_reasons]), str(exc), gaps, tuple(candidate_details), placement=placement, agy_quota_states=quota_states)
     ordered = list(route.legs)
     reasons, source = [*route.reasons, *bench_reasons], "operator-order"
+    preferred = LEAD_WRITER if role == 'implement' else REVIEW_ORDER[0] if role == 'review' else None
+    if any(s['leg'] == preferred and s['reason'] == 'window_class' for s in skipped):
+        reasons.insert(0, f'{preferred}: window_class (estimate exceeds {USABLE_FRACTION_PCT}% of leg context)')
     if benchmark is not None:
         from plangraph.routing_support.resolver import rank_candidates
         for tier in TIERS:

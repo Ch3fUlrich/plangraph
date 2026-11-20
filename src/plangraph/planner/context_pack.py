@@ -25,13 +25,12 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from plangraph.keeper.schema import RISK_TAGS, WINDOW_CLASSES
+from .readiness import WINDOW_TOKENS
 
 __all__ = ["CHARS_PER_TOKEN", "WINDOW_TOKENS", "PackFile", "Pack", "PackTooBig",
            "estimate_tokens", "pack_budget", "build_pack"]
 
 CHARS_PER_TOKEN = 4
-#: window class -> tokens (design numbers).
-WINDOW_TOKENS = {"128k": 131072, "256k": 262144, "1m": 1048576}
 ENTRY_CAP = 50
 TAIL_MIN, TAIL_MAX = 40, 60
 _BINARY_SNIFF = 8192

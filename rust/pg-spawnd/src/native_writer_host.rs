@@ -35,12 +35,14 @@ pub(crate) fn writer_effort(card: &Value) -> Result<String, String> {
     Ok(effort.into())
 }
 /// Model and effort flags for the codex invocation; the ledger row records the same values.
-fn model_args(effort: &str) -> [String; 4] {
+fn model_args(effort: &str) -> [String; 6] {
     [
         "-m".into(),
         WRITER_MODEL.into(),
         "-c".into(),
         format!("model_reasoning_effort={effort}"),
+        "-c".into(),
+        "model_context_window=1000000".into(),
     ]
 }
 

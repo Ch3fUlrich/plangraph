@@ -291,6 +291,7 @@ fn writer_effort_is_medium_unless_a_decision_names_a_higher_one() {
         .unwrap_err()
         .starts_with("effort_invalid"));
     assert_eq!(model_args("high")[3], "model_reasoning_effort=high");
+    assert_eq!(model_args(WRITER_EFFORT)[5], "model_context_window=1000000");
 }
 
 #[test]
