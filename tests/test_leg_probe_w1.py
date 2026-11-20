@@ -517,3 +517,25 @@ def test_review_probe_coverage_equals_review_route(tmp_path, monkeypatch):
     card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
     plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=LegStateStore(tmp_path / 'l.sqlite'), catalog_rows=())
     assert [leg.id for leg in plan.legs] == [leg.id for leg in routed_review_legs()] == list(REVIEW_ORDER)
+
+
+def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkeypatch):
+    from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_ORDER, leg_active
+    from plangraph.spawner import leg_probe
+    writer = next(leg for leg in DEFAULT_LEGS if 'implement' in leg.roles and leg_active(leg) and leg.id not in REVIEW_ORDER)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    roles = {}
+
+    async def fake_probe(runner, leg, *, timeout_s=None, store=None, role=None):
+        roles[leg.id] = role
+        if leg.id == writer.id:
+            store.record_probe_fail(leg_probe.key(leg), 'boom', 'leg-probe')
+        return dict(ok=leg.id != writer.id, reason='' if leg.id != writer.id else 'boom', seconds=0.0)
+
+    monkeypatch.setattr(leg_probe, 'probe', fake_probe)
+    monkeypatch.setattr(leg_probe, '_check_manage_key', lambda runner: None)
+    runner = SimpleNamespace(leg_reader=store, state=tmp_path)
+    asyncio.run(leg_probe.probe_many(runner, [writer.id], all_reviewers=True, timeout=5))
+    assert roles[writer.id] is None
+    assert all(roles[leg_id] == 'review' for leg_id in roles if leg_id != writer.id) and len(roles) > 1
+    assert store.leg_status(leg_probe.key(writer))['state'] != 'down'

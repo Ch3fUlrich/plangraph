@@ -426,20 +426,21 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
     # --all-writers means the routed writers; --all-reviewers means the routed reviewers.
     selected = []
     seen = set()
-    def add(leg):
+    review_ids = set()
+    def add(leg, review=False):
         if leg.id not in seen:
             seen.add(leg.id)
             selected.append(leg)
+            if review:
+                review_ids.add(leg.id)
     for leg in SPAWNABLE_LEGS:
         if leg_active(leg) and (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and
                                                   any(r in leg.roles for r in ('implement', 'fix')))):
             add(leg)
     if all_reviewers:
         for leg in routed_review_legs():
-            add(leg)
+            add(leg, review=True)
     manage_key = await asyncio.to_thread(_check_manage_key, runner) if (all_reviewers or role == 'review') else None
-    probe_role = 'review' if (all_reviewers and not all_writers) or role == 'review' else role
-    probe_kwargs = {'role': probe_role} if probe_role is not None else {}
     results = []
     state = _store_for(runner)
     state = state.store if getattr(state, 'enabled', False) else state
@@ -454,6 +455,9 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
                                 skipped='limited',
                                 reset_at=(status.get('evidence') or {}).get('reset_at')))
             continue
+        # Review mode only for legs added by the reviewer selection; named legs keep the writer path.
+        probe_role = 'review' if role == 'review' or leg.id in review_ids else role
+        probe_kwargs = {'role': probe_role} if probe_role is not None else {}
         results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)))
     reply = dict(ok=all(row['ok'] for row in results), probes=results)
     if manage_key is not None:
