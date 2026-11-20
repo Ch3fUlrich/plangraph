@@ -477,3 +477,24 @@ def test_unit_umask_that_cannot_be_read_is_a_failure(tmp_path, monkeypatch, fail
         lambda check, command, parse: parse(json.dumps(h.pre_push_report(str(tmp_path), 'spawner.service', {}))),
         lambda check, reason: failures.append(f'{check}: {reason}'), 'prefix ', str(tmp_path), 'spawner.service')
     assert 'umask: unit umask of spawner.service unavailable' in failures
+
+
+def test_cli_with_a_relative_checkout_argument_resolves_path_entries_in_that_checkout(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / 'checkout'
+    (repo / 'bin').mkdir(parents=True)
+    shim(repo / 'bin', 'python3')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('PATH', 'bin:/nonexistent')
+    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
+    assert h.main(['--test-tools', 'checkout']) == 0
+    assert json.loads(capsys.readouterr().out)['missing'] == ['xdist']
+
+
+def test_unit_umask_from_a_failed_systemctl_query_is_not_accepted(tmp_path, monkeypatch):
+    real_run = subprocess.run
+    def fake_run(argv, **kwargs):
+        if argv[0] == 'systemctl':
+            return SimpleNamespace(returncode=1, stdout='0022\n')
+        return real_run(argv, **kwargs)
+    monkeypatch.setattr(h.subprocess, 'run', fake_run)
+    assert h.pre_push_report(str(tmp_path), 'spawner.service', {})['unit_umask'] is None

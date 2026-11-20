@@ -271,7 +271,7 @@ def pre_push_report(repo, unit=None, environ=None):
     so this process's umask and the user service's UMask must keep both bits.
     """
     environ = os.environ if environ is None else environ
-    root = Path(repo)
+    root = Path(repo).absolute()
     venv = next((root / rel for rel in VENV_PYTHONS if (root / rel).is_file()), None)
     configured = environ.get('PREFLIGHT_PYTHON')
     if venv is not None:
@@ -298,10 +298,11 @@ def pre_push_report(repo, unit=None, environ=None):
     report = dict(missing=missing, umask=format(mask, '04o'), unit_umask=None)
     if unit:
         try:
-            shown = subprocess.run(['systemctl', '--user', 'show', '--property=UMask', '--value', unit],
+            reply = subprocess.run(['systemctl', '--user', 'show', '--property=UMask', '--value', unit],
                                    capture_output=True, text=True, encoding='utf-8',
-                                   errors='replace', timeout=10).stdout.strip()
-            report['unit_umask'] = shown if re.fullmatch(r'[0-7]+', shown) else None
+                                   errors='replace', timeout=10)
+            shown = reply.stdout.strip()
+            report['unit_umask'] = shown if reply.returncode == 0 and re.fullmatch(r'[0-7]+', shown) else None
         except (OSError, subprocess.SubprocessError):
             pass
     return report
