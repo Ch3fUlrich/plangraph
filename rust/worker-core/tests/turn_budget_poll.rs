@@ -224,14 +224,8 @@ fn edits_clear_poll_history_but_wakes_and_different_sessions_do_not_confuse_it()
     let mut other = check.clone();
     other["session_id"] = json!("other-session");
     assert_eq!(handle(&other, &c, 2), None);
-    assert_eq!(
-        handle(
-            &json!({"session_id":"test-session", "hook_event_name":"Notification"}),
-            &c,
-            3
-        ),
-        None
-    );
+    let wake = json!({"session_id":"other-session", "hook_event_name":"Notification"});
+    assert_eq!(handle(&wake, &c, 3), None);
     assert!(handle(&check, &c, 4).is_some());
     assert_eq!(
         handle(
@@ -244,6 +238,21 @@ fn edits_clear_poll_history_but_wakes_and_different_sessions_do_not_confuse_it()
         None
     );
     assert_eq!(handle(&check, &c, 6), None);
+}
+
+#[test]
+fn each_wake_allows_the_first_read_in_the_same_session() {
+    for boundary in ["UserPromptSubmit", "Notification"] {
+        let dir = tempfile::tempdir().unwrap();
+        let c = config(&dir);
+        let check = event("cat status.json", "PreToolUse");
+        assert_eq!(handle(&check, &c, 1), None);
+        assert!(handle(&check, &c, 2).is_some());
+        let wake = json!({"session_id":"test-session", "hook_event_name":boundary});
+        assert_eq!(handle(&wake, &c, 3), None);
+        assert_eq!(handle(&check, &c, 4), None, "{boundary}");
+        assert!(handle(&check, &c, 5).is_some());
+    }
 }
 
 #[test]
