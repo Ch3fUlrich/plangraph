@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from test_keeper_exec_projector_path import scoped, world as owner_world
+
 from plangraph.projector.apply import Projector, project_source
 from plangraph.projector.reconcile import ReconcileReport, open_alarms, reconcile
 from plangraph.projector.source import FileSource
@@ -129,7 +131,8 @@ def test_state_drift_when_keeper_owns_the_item_while_workflow_is_open(world, src
     from keeper_util import to_claimed
     put(src_dir, *OPEN_01)
     project(world, src_dir, projector)
-    world.store.set_state(world.p("system"), "demo:DEMO-1", "open", "")
+    assert world.store._item("demo:DEMO-1")["exec_run_id"] is not None
+    world.store.set_state(world.p("system"), "demo:DEMO-1", "open", "", hand_back=True)
     to_claimed(world, "demo:DEMO-1")
     assert state(world, "demo:DEMO-1") == "claimed"
     assert kinds(run(world, src_dir)) == [("state_drift", "card:DEMO-1", "demo:DEMO-1")]
@@ -271,3 +274,44 @@ def test_projector_argument_supplies_the_clock(world, src_dir, projector):
     world.clock.advance(2000)
     report = reconcile(world.store, FileSource(src_dir), projector)
     assert kinds(report) == [("orphan_running", "", "demo:DEMO-2")]
+
+
+@pytest.mark.parametrize("old_watermark", [False, True])
+def test_refused_r3_retries_after_worker_recorded_r2_is_projected(owner_world, old_watermark):
+    from keeper_util import to_claimed
+    from plangraph.keeper.errors import Refused
+    from test_keeper_exec_projector_path import identity, project
+    from plangraph.projector.reconcile import open_alarms, reconcile
+    from test_projector_apply import FakeSource
+    w, key = owner_world, "demo:A"
+    if old_watermark:
+        project(w, "R0", ordinal=0)
+        w.store.set_state(w.p("router"), key, "open", hand_back=True)
+    to_claimed(w, key, "workerA")
+    w.store.worker_park(w.p("workerA"), {
+        "card": key, "exit_class": "needs_input", **identity()})
+    before = dict(w.store._item(key))
+    watermark = list(w.conn.execute("SELECT * FROM projector_watermark"))
+    assert before["claimed_by"] is None and before["delegate"] is None
+    for _ in range(2):  # New Projector instance per pass: alarms must survive restarts.
+        w.clock.advance(1)
+        assert project(w, "R3", ordinal=2).states_skipped_state == 2
+        assert dict(w.store._item(key)) == before
+        assert list(w.conn.execute("SELECT * FROM projector_watermark")) == watermark
+        assert w.conn.execute(
+            "SELECT 1 FROM projector_applied WHERE run_id='R3' AND kind='state'").fetchone() is None
+        alarms = open_alarms(w.store)
+        assert len(alarms) == 2 and all(a["kind"] == "exec_stale" for a in alarms)
+        assert all(a["raised_at"] == w.store._iso(w.clock()) for a in alarms)
+    reconcile(w.store, FakeSource([]), now=w.clock)
+    assert open_alarms(w.store) == alarms
+    project(w, "R2", ordinal=1)
+    assert project(w, "R3", ordinal=2).states_written == 2
+    assert open_alarms(w.store) == []
+    item = w.store._item(key)
+    assert (item["exec_run_id"], item["exec_principal"]) == ("R3", "workerA")
+    w.store.worker_alarm(w.p("workerA"), {"card": key, "reason": "live", **identity("R3")})
+    with pytest.raises(Refused) as exc:
+        w.store.worker_alarm(w.p("workerB"), {"card": key, "reason": "wrong", **identity("R3")})
+    assert exc.value.code == "forbidden"
+    assert w.store.verify_integrity() == []

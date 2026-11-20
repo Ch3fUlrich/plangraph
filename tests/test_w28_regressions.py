@@ -8,9 +8,10 @@ import pytest
 
 from plangraph.spawner import cli
 from plangraph.spawner.runner import JobInfo, spawn_service
+from test_w20_round8 import supervisor_host
 
 
-def test_supervisor_imports_without_install(tmp_path, monkeypatch, capsys):
+def test_supervisor_imports_without_install(tmp_path, monkeypatch, capsys, supervisor_host):
     from pathlib import Path
     monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: SimpleNamespace(returncode=1))
     original = cli._start_supervisor
