@@ -5,9 +5,10 @@ use std::path::Path;
 use std::process::Command;
 
 #[cfg(unix)]
-fn python(source: &str) {
+fn python(source: &str, script: &str) {
     let output = Command::new("python3")
         .args(["-c", source])
+        .env("BOUNDED_STEP_SCRIPT", script)
         .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .output()
         .unwrap();
@@ -78,11 +79,22 @@ fn every_pytest_step_has_a_timeout_below_its_job() {
 #[cfg(unix)]
 #[test]
 fn bounded_step_keeps_logs_and_exit_status_without_inheriting_a_pipe() {
+    // The action's run script is read here, so the Python body needs no YAML module.
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.github/actions/bounded-step/action.yml");
+    let source = std::fs::read_to_string(path).unwrap();
+    let docs = Yaml::load_from_str(&source).unwrap();
+    let step = &docs[0]
+        .as_mapping_get("runs")
+        .and_then(|runs| runs.as_mapping_get("steps"))
+        .and_then(Yaml::as_sequence)
+        .unwrap()[0];
+    let script = text(step.as_mapping_get("run"));
+    assert!(!script.is_empty(), "bounded-step action has no run script");
     python(
         r#"
-import os, pathlib, signal, subprocess, tempfile, time, yaml
-action = yaml.safe_load(pathlib.Path('.github/actions/bounded-step/action.yml').read_text())
-script = action['runs']['steps'][0]['run']
+import os, pathlib, signal, subprocess, tempfile, time
+script = os.environ['BOUNDED_STEP_SCRIPT']
 with tempfile.TemporaryDirectory() as tmp:
     env = dict(os.environ, RUNNER_TEMP=tmp, CI_STEP_SECONDS='0.2s')
     def run(command):
@@ -109,5 +121,6 @@ with tempfile.TemporaryDirectory() as tmp:
         if pidfile.exists():
             os.killpg(int(pidfile.read_text()), signal.SIGKILL)
 "#,
+        script,
     );
 }
