@@ -23,6 +23,7 @@ import threading
 import time
 from urllib.parse import urlsplit
 
+from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell
 from .evidence_git import valid_ref
 from .evidence_types import valid_commit_ref
@@ -350,7 +351,7 @@ def pr_merge_of(git, project, head):
 
 
 def named_merge(git, project, revision):
-    """Resolve a named commit or merged PR and verify it against the default ref."""
+    """Verify a named merge on the default ref. Refuse a PR known to be unmerged."""
     repo, ref = _repo_ref(git, project)
     if repo is None:
         return None
@@ -368,6 +369,9 @@ def named_merge(git, project, revision):
                  "--json", "state,mergeCommit,headRefOid"], cwd=repo, capture_output=True,
                 text=True, timeout=20, check=True)
             info = json.loads(result.stdout)
+            if info["state"] in ("OPEN", "CLOSED"):
+                raise Refused("evidence_unverified",
+                              f"merge_repo_pr_not_merged: {project} {revision} ({info['state']})")
             if info["state"] != "MERGED":
                 return None
             sha = info["mergeCommit"]["oid"]

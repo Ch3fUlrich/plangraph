@@ -457,6 +457,47 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
         w.store.close_merged(w.p("router"), "demo:H", "D-5504", ["google", "deepseek"])
 
 
+@pytest.mark.parametrize("state", ["MERGED", "OPEN", "CLOSED"])
+def test_merge_repo_note_verifies_a_hosted_pr(w, monkeypatch, tmp_path, state):
+    import json
+    import subprocess
+
+    from plangraph.keeper.evidence_git import GitAdapter
+    repo = tmp_path / "other"
+    heads = merged_repo(repo, [(165, None, "2026-11-01T12:00:00Z")])
+    landed = _git(repo, "rev-parse", "main")
+    _git(repo, "remote", "add", "origin", "https://github.com/example/other")
+    empty = tmp_path / "demo"
+    merged_repo(empty, [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
+                                     "other": {"path": str(repo), "ref": "main"}})
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    w.decision_path.write_text(
+        HEADER + f"| D-5504 | demo | GO other PR #165 demo:A; GO-HEAD {heads[165]} | ROUTER | 2026-11-05 |\n")
+    calls = []
+    run = subprocess.run
+
+    def hosted(args, **kwargs):
+        if args[0] != "gh":
+            return run(args, **kwargs)
+        calls.append(args)
+        info = {"state": state, "mergeCommit": {"oid": landed}, "headRefOid": heads[165]}
+        return subprocess.CompletedProcess(args, 0, json.dumps(info))
+
+    monkeypatch.setattr(subprocess, "run", hosted)
+    router = w.p("router")
+    w.store.edit_definition(router, "demo:A", {"note": "Merge-Repo: other #165"})
+    if state == "MERGED":
+        result = w.store.close_merged(router, "demo:A", "D-5504", ["google"])
+        assert result["state"] == "done"
+    else:
+        with pytest.raises(Refused, match=r"merge_repo_pr_not_merged: other #165"):
+            w.store.close_merged(router, "demo:A", "D-5504", ["google"])
+        assert w.store._item("demo:A")["state"] == "in_review"
+    assert calls and all(args[1:6] == ["pr", "view", "165", "--repo", "example/other"]
+                         for args in calls)
+
+
 WAIVER = ("| D-6400 | demo | Waiver: merged-without-witnesses (operator order); Date: 2026-11-20T14:55:00Z; "
           "Waives-seats: {keys} | {by} | 2026-11-20 |\n")
 

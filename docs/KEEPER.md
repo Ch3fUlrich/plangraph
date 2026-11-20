@@ -293,7 +293,9 @@ Origin-main `decision_ref` closes need no batch file; exactly `[decision]` evide
 The router may add `Merge-Repo: <project> <commit SHA or #PR>` to an open or
 in-review item's note. Keeper verifies the named merge on the configured
 repository's default branch and binds it to the item's GO row. The close audit
-records `merged_on_default` or the refusal reason. Item context reports
+records `merged_on_default` or the refusal reason, including
+`merge_repo_pr_not_merged` for an open PR or a closed PR without a merge.
+Item context reports
 `closed_pr_lanes` when a closed PR's hosted head still matches the lane branch.
 These lanes no longer block a merged close.
 
