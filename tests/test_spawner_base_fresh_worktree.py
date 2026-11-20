@@ -17,7 +17,7 @@ def test_fresh_worktree_does_not_admit_the_stale_caller(repository, dispatch, ha
     if detached:
         git(repo, 'checkout', '--detach', old)
     service, calls = dispatch[0](hardened), dispatch[1]
-    options = dict(leg='cx-gpt-6.1-sol-xhigh', override_reason='hermetic admission test') if pinned else {}
+    options = dict(leg='cx-gpt-6.2-sol-medium', override_reason='hermetic admission test') if pinned else {}
     record = asyncio.run(service.spawn({'estimate_tokens': 100}, 'Implement a tested change',
         run_worktree=True, wait_seconds=None, **options))
     expected = git(origin, 'rev-parse', 'main')

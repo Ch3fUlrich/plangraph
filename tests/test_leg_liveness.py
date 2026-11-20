@@ -32,7 +32,7 @@ def test_probe_module_key_semantics():
     """Q16/M8: probe and quota bookkeeping share one leg key -- 'agy/<model>' only
     for an agy leg's bare model. Replaces the token `assert callable(probe)`."""
     from plangraph.spawner.leg_probe import key
-    assert key(SimpleNamespace(harness='agy', model='gemini-4-argon-high')) == 'agy/gemini-4-argon-high'
+    assert key(SimpleNamespace(harness='agy', model='gemini-4-neon-medium')) == 'agy/gemini-4-neon-medium'
     assert key(SimpleNamespace(harness='agy', model='prov/model')) == 'prov/model'
     assert key(SimpleNamespace(harness='qodercli', model='Qwen3.8-Flash')) == 'Qwen3.8-Flash'
     assert key(SimpleNamespace(model='agy/model')) == 'agy/model'   # legacy rows stay stable
@@ -115,7 +115,7 @@ def test_execute_probe_falls_through(tmp_path, monkeypatch):
     assert record['attempts'][0]['skip_reason'] == 'down: timeout'
 
 
-@pytest.fixture(params=['cx-gpt-6.1-sol', 'cx-gpt-6.1-sol-xhigh'])
+@pytest.fixture(params=['cx-gpt-6.2-sol', 'cx-gpt-6.2-sol-medium'])
 def failed_probe(tmp_path, monkeypatch, request):
     from plangraph.spawner import leg_probe
     from plangraph.planner.legs import spawnable_legs

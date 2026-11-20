@@ -44,13 +44,13 @@ def test_schema_initialization_and_idempotency(tmp_path: Path) -> None:
         # First init and seed
         db.init_and_seed()
         models_first = db.list_models()
-        assert len(models_first) == 26
+        assert len(models_first) == 28
         assert len({m["master_rank"] for m in models_first if m.get("master_rank")}) == 22
 
         # Second init and seed (must not raise UNIQUE constraint violations)
         db.init_and_seed()
         models_second = db.list_models()
-        assert len(models_second) == 26
+        assert len(models_second) == 28
 
         # Verify key tables exist with rows
         tables = [
@@ -72,7 +72,7 @@ def test_schema_initialization_and_idempotency(tmp_path: Path) -> None:
 def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> None:
     """Verify all 22 models are present with exact AA v4.3.2 matrix figures."""
     models = memory_db.list_models()
-    assert len(models) == 26
+    assert len(models) == 28
     assert len({m["master_rank"] for m in models if m.get("master_rank")}) == 22
 
     # 1. mimo/mimo-v2.6-flash: 54.0 overall verified, 29.0 direct, 75.4 cyberbench, 0.04 USD cost
@@ -108,24 +108,24 @@ def test_all_22_models_and_exact_aa_v432_benchmarks(memory_db: CatalogDB) -> Non
     assert opus["verified_tok_per_s"] == 98.0
     assert opus["cost_per_task_usd"] == 1.82
 
-    # 4. opencode-go/gemini-4-argon: rank 2, active smart model under OpenCode Go subscription
+    # 4. opencode-go/gemini-4-argon: rank 2 historical FK row, retired by D-6310
     argon_oc = memory_db.get_model("opencode-go/gemini-4-argon")
     assert argon_oc is not None
     assert argon_oc["master_rank"] == 2
     assert argon_oc["aa_intelligence"] == 53.0
     assert argon_oc["deepswe"] == 77.9
-    assert argon_oc["status"] == "active"
-    assert argon_oc["available"] == 1
+    assert argon_oc["status"] == "retired"
+    assert argon_oc["available"] == 0
     assert argon_oc["tier"] == "subscription"
 
-    # gemini/gemini-4-argon-high: rank 2, upgrade placeholder on direct Gemini API
+    # gemini/gemini-4-argon-high: rank 2 historical FK row, retired by D-6310
     argon = memory_db.get_model("gemini/gemini-4-argon-high")
     assert argon is not None
     assert argon["master_rank"] == 2
     assert argon["aa_intelligence"] == 53.0
     assert argon["terminal_bench"] == 57.0
     assert argon["deepswe"] == 77.9
-    assert argon["status"] == "upgrade"
+    assert argon["status"] == "retired"
     assert argon["available"] == 0
 
     # 5. cxa/gpt-6-astra-max: rank 3, intelligence 53.0, coding_index 62.0
@@ -168,7 +168,7 @@ def test_5_rung_tier_ladder_ordering(memory_db: CatalogDB) -> None:
     }
 
     all_models = memory_db.list_models()
-    assert len(all_models) == 26
+    assert len(all_models) == 28
 
     # Check non-decreasing tier rung sequence
     rungs = [TIER_RUNG[m["tier"]] for m in all_models]
@@ -319,7 +319,7 @@ def test_export_json_and_combos_roundtrip(memory_db: CatalogDB, tmp_path: Path) 
     # Export catalog tables
     exported_data = memory_db.export_json(export_file)
     assert export_file.is_file()
-    assert len(exported_data["models"]) == 26
+    assert len(exported_data["models"]) == 28
     assert len(exported_data["benchmarks"]) == 25
     assert len(exported_data["routes"]) == 4
 
@@ -330,7 +330,7 @@ def test_export_json_and_combos_roundtrip(memory_db: CatalogDB, tmp_path: Path) 
     assert imported_count > 0
 
     reloaded_models = fresh_db.list_models()
-    assert len(reloaded_models) == 26
+    assert len(reloaded_models) == 28
     assert len({m["master_rank"] for m in reloaded_models if m.get("master_rank")}) == 22
 
     # Export OmniRoute combos

@@ -31,6 +31,7 @@ fn spec(dir: &Path, n: usize, script: &str) -> RunSpec {
         base: Default::default(),
         events: vec![],
         finish: None,
+        allow_shas: Default::default(),
     }
 }
 fn until(mut f: impl FnMut() -> bool) {

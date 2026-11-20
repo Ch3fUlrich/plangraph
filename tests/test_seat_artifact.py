@@ -174,7 +174,7 @@ def test_dispatch_hash_is_in_memory(tmp_path, monkeypatch, dry_run):
 def test_authenticated_finish_not_inferred(tmp_path):
     from plangraph.spawner.runner import SpawnerRunner
     instance = SpawnerRunner()
-    model = 'synthetic/gpt-6.1-sol'
+    model = 'omniroute/cx-gpt-6.2-sol'
     record, job = completed(model)
     job.response_finish_reason = None
     instance.jobs[job.job_id] = job

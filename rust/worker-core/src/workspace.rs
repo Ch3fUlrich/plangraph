@@ -69,6 +69,8 @@ pub struct DiffRef {
     pub repo_id: String,
     pub base_sha: String,
     pub head_sha: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paths: Option<Vec<String>>,
 }
 
 /// Every refusal names the field and the rule it violates.
@@ -223,6 +225,7 @@ impl Workspace {
             repo_id: self.repo_id.clone(),
             base_sha: self.base_sha.clone().ok_or_else(|| m("base_sha"))?,
             head_sha: self.revision_sha.clone().ok_or_else(|| m("revision_sha"))?,
+            paths: None,
         })
     }
 }
@@ -247,6 +250,7 @@ impl WorkspaceRecord {
             repo_id: self.repo_id.clone(),
             base_sha: self.base_sha.clone(),
             head_sha: self.head_at_end.clone(),
+            paths: None,
         })
     }
 }

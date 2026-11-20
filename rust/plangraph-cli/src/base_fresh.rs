@@ -1,41 +1,74 @@
 //! CLI adapter to the existing admission gate, pending its Rust port.
 use serde_json::Value;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 // Only invoke the canonical helper here: no Git checks or policy belong in this
 // adapter. The Python package must be installed, as for pg-spawnd's adapter.
-const CHECK: &str = "import json, sys; from plangraph.spawner.base_fresh import base_fresh; print(json.dumps(base_fresh(sys.argv[1])))";
+const CHECK: &str = "import json, sys; from plangraph.spawner.base_fresh import base_fresh; print(json.dumps(base_fresh(sys.argv[1], ref=sys.argv[2], fetch=sys.argv[3] == '1')))";
 
-pub fn run(repo: &str) -> i32 {
-    let result = Command::new(
+/// Python interpreter command shared by every adapter to the Python helpers.
+/// `src_root` (a checkout holding `src/plangraph`) is put on `PYTHONPATH` when it exists.
+pub fn python_command(src_root: Option<&Path>) -> Command {
+    let mut cmd = Command::new(
         std::env::var_os("PG_SPAWND_PYTHON")
             .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
-    )
-    .args(["-c", CHECK, repo])
-    .stdin(Stdio::null())
-    .output()
-    .ok()
-    .filter(|output| output.status.success())
-    .and_then(|output| serde_json::from_slice::<Value>(&output.stdout).ok());
+    );
+    if let Some(src) = src_root
+        .map(|root| root.join("src"))
+        .filter(|s| s.join("plangraph").is_dir())
+    {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let existing = std::env::var("PYTHONPATH").unwrap_or_default();
+        let joined = if existing.is_empty() {
+            src.display().to_string()
+        } else {
+            format!("{}{sep}{existing}", src.display())
+        };
+        cmd.env("PYTHONPATH", joined);
+    }
+    cmd
+}
+
+/// Run the canonical D-5661 gate on `git_ref` of `repo`; Err carries its one-line reason.
+pub fn check_ref(
+    repo: &str,
+    git_ref: &str,
+    fetch: bool,
+    src_root: Option<&Path>,
+) -> Result<(), String> {
+    let result = python_command(src_root)
+        .args(["-c", CHECK, repo, git_ref, if fetch { "1" } else { "0" }])
+        .stdin(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| serde_json::from_slice::<Value>(&output.stdout).ok());
     match result {
-        Some(result) if result["ok"] == true && result["reason"].is_null() => {
-            println!("base_current");
-            0
-        }
+        Some(result) if result["ok"] == true && result["reason"].is_null() => Ok(()),
         Some(result) if result["ok"] == false => {
             // Keep the helper's reason verbatim, but preserve the one-line CLI
             // contract if its output is ever malformed.
-            let reason = result["reason"]
+            Err(result["reason"]
                 .as_str()
                 .filter(|reason| {
                     reason.starts_with("base_stale: ") && !reason.contains(['\r', '\n'])
                 })
-                .unwrap_or("base_stale: gate_unavailable");
-            eprintln!("{reason}");
-            1
+                .unwrap_or("base_stale: gate_unavailable")
+                .to_owned())
         }
-        _ => {
-            eprintln!("base_stale: gate_unavailable");
+        _ => Err("base_stale: gate_unavailable".to_owned()),
+    }
+}
+
+pub fn run(repo: &str) -> i32 {
+    match check_ref(repo, "HEAD", true, None) {
+        Ok(()) => {
+            println!("base_current");
+            0
+        }
+        Err(reason) => {
+            eprintln!("{reason}");
             1
         }
     }

@@ -131,3 +131,29 @@ def test_all_against_real_skills_passes():
         text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+OLD = "rout" + "ing"
+
+
+def test_lint_old_routing_path_fails(tmp_path):
+    for index, path in enumerate(
+        ("/srv/code/" + OLD + "/status/x", "/srv/code/" + OLD + "-worktrees/a/b")
+    ):
+        base = tmp_path / str(index)
+        base.mkdir()
+        content = skill_md("demo", 8) + f"See {path}.\n"
+        directory = write_skill(base, "demo", content=content)
+        problems = tool.lint_dirs([str(directory)])
+        assert any("retired routing folder" in p[3] for p in problems), path
+
+
+def test_lint_other_code_paths_pass(tmp_path):
+    content = skill_md("demo", 8) + "See /srv/code/other-repo/bin.\n"
+    directory = write_skill(tmp_path, "demo", content=content)
+    assert tool.lint_dirs([str(directory)]) == []
+
+
+def test_real_skills_name_no_old_routing_path():
+    problems = tool.lint_dirs([str(p) for p in tool.default_skill_dirs()])
+    assert [p for p in problems if "retired routing folder" in p[3]] == []

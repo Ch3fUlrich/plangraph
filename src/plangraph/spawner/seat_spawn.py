@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import asdict, replace
+import inspect
 import json
 import os
 import time
@@ -496,6 +497,11 @@ class SeatSpawnMixin:
                 raise SpawnRefused(str(exc)) from None
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
+        if 'allow_shas' in options:
+            params = inspect.signature(self.runner.spawn).parameters
+            if 'allow_shas' not in params and not any(
+                    p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+                options.pop('allow_shas')
         async def launch(prompt_record, **kwargs):
             job = await self.runner.spawn(prompt_record=prompt_record, chosen=chosen, **kwargs)
             self._running_records[job.job_id] = record

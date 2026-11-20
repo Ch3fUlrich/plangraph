@@ -58,4 +58,5 @@ client key is never sent to a management endpoint.
 Shipped MiMo model cards in `configuration/opencode/providers.json` and the
 fallback `_mimo_template()` in `opencode_render` carry a `body.reasoning.max_tokens`
 cap strictly below their output limit (`32768` on the 65536 template, `65536`
-on the 131072 shipped/runtime cards).
+on the 131072 shipped/runtime cards). The OmniRoute provider declares `cx-gpt-6.2-sol`
+and `cx-gpt-6.2-astra` in place of retired `cx-gpt-6.1-sol`.

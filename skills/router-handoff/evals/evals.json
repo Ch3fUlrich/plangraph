@@ -1,0 +1,14 @@
+[
+  {
+    "id": "router-handoff-last-call",
+    "prompt": "The card is written, committed and checked. What is the last tool call of the turn?",
+    "must": ["Last tool call of the turn", "start NO new work"],
+    "must_not": ["/clear"]
+  },
+  {
+    "id": "router-handoff-card",
+    "prompt": "Which headings does the router card need and what goes in an empty one?",
+    "must": ["All 8 headings, in this order", "the single line `- none`"],
+    "must_not": ["omit empty sections"]
+  }
+]

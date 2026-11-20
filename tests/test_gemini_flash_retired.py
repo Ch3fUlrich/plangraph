@@ -81,8 +81,8 @@ def test_guard_leg_catalog_and_configuration_data():
 
 
 def test_hydrogen_replaces_writer_position_without_inventing_admission():
-    # D-5903 now authorizes the two registrations; telemetry remains unwitnessed.
-    assert WRITER_ORDER[:2] == ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high')
+    # D-5903/D-6310: Hydrogen high follows Sol/Astra; telemetry remains unwitnessed.
+    assert WRITER_ORDER[:3] == ('cx-gpt-6.2-sol-medium', 'cx-gpt-6.2-astra', 'agy-gemini-4-hydrogen-high')
     for effort, role in (('high', 'implement'), ('medium', 'review')):
         leg = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-hydrogen-' + effort)
         assert leg.disabled is None and leg.roles == (("implement", "review") if effort == "high" else (role,))
@@ -100,17 +100,18 @@ def test_spawner_review_routes_hydrogen_in_retired_flash_position(tmp_path, monk
     card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
     plan = service.route(card, role='review', writer_families=(writer,))
     ids = [leg.id for leg in plan.legs]
-    # D-6028: mimo-v2.6-pro and mimo-v2.6-flash lead; Hydrogen holds the retired flash position after them.
-    assert ids[:4] == ['mimo-v2.6-pro', 'mimo-v2.6-flash', 'agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon-medium']
+    # D-6366: argon-low leads review (argon-medium as fallback), then mimo-pro and the opencode deepseek legs.
+    assert ids[:5] == ['agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium', 'mimo-v2.6-pro',
+                       'opencode-go-deepseek-v4-flash', 'opencode-deepseek-v4.1-flash-free']
     from plangraph.planner.legs import spawnable_legs
     from plangraph.planner.review_order import payment_order
-    for tier, first in (('high', 'agy-gemini-4-hydrogen-medium'), ('standard', 'mimo-v2.6-pro')):
+    for tier, first in (('high', 'agy-gemini-4-argon-low'), ('standard', 'agy-gemini-4-argon-low')):
         fixed = payment_order(spawnable_legs(), 'review', order_class=tier,
                               writer_families=(writer,), diff_tokens=1000)
         assert fixed[0].id == first
     assert not any(re.search('gemini.*flash', leg.id + leg.model, re.I) for leg in plan.legs)
     implement = service.route(dict(estimate_tokens=1000), role='implement')
-    assert [leg.id for leg in implement.legs[:2]] == list(WRITER_ORDER)
+    assert [leg.id for leg in implement.legs[:6]] == list(WRITER_ORDER)
 
 
 def test_hydrogen_prompt_uses_stdin_and_seat_stays_unwitnessed():
@@ -191,7 +192,7 @@ def test_no_diff_review_keeps_hydrogen_when_other_seats_unavailable():
     plan = plan_spawn(dict(estimate_tokens=1000), role='review',
                       writer_families=('gpt', 'claude'), leg_reader=reader, catalog_rows=[])
     assert plan.error is None
-    assert 'agy-gemini-4-hydrogen-high' in [leg.id for leg in plan.legs]
+    assert 'agy-gemini-4-neon-medium' in [leg.id for leg in plan.legs]
 
 
 @pytest.mark.parametrize('field', ['leg', 'chosen_leg', 'legs', 'override'])
@@ -277,7 +278,7 @@ def test_hydrogen_tools_review_launches_in_head_checkout(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('model', ['claude-opus-5-5-high', 'claude-sonnet-5-5-medium',
-                                   'gpt-oss-120b-medium', 'gemini-4-argon-high'])
+                                   'gpt-oss-120b-medium'])
 def test_other_agy_review_commands_keep_existing_permissions(model):
     from plangraph.routing_support.clients import build_command
     cmd = build_command('review', model, role='review', client='agy')

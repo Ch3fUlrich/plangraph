@@ -26,9 +26,10 @@ def test_catalog_missing_role_metadata_is_not_inferred(monkeypatch, capsys):
     ('omniroute-muse-spark', 'omniroute/spark-1.3-contributor'),
     ('agy-sonnet-5.5', 'claude-sonnet-5-5-medium'),
     ('agy-opus-5.5', 'claude-opus-5-5-high'),
-    ('agy-gemini-4-argon', 'gemini-4-argon-high'),
+    ('agy-gemini-4-neon-medium', 'gemini-4-neon-medium'),
     ('opencode-big-pickle', 'opencode/big-pickle'),
     ('opencode-deepseek-v4.1-flash-free', 'opencode/deepseek-v4.1-flash-free'),
+    ('opencode-glm-5.3-flash-free', 'opencode/glm-5.3-flash-free'),
 ])
 def test_missing_legs_registered_for_utility(lid, model):
     from plangraph.planner.legs import DEFAULT_LEGS, leg_active
@@ -36,12 +37,12 @@ def test_missing_legs_registered_for_utility(lid, model):
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == lid)
     expected_roles = {'review', 'implement'} | ({'orchestrate'} if lid in {
         'agy-sonnet-5.5', 'omniroute-deepseek-flash', 'omniroute-muse-spark'} else set())
-    if lid in {'agy-sonnet-5.5', 'agy-opus-5.5'}:
+    if lid in {'agy-sonnet-5.5', 'agy-opus-5.5', 'agy-gemini-4-neon-medium'}:
         expected_roles.remove('implement')
-    active = lid != 'opencode-deepseek-v4.1-flash-free'
+    active = lid != 'opencode-glm-5.3-flash-free'
     assert (leg.model, leg_active(leg), set(leg.roles)) == (model, active, expected_roles)
     if not active:
-        assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
+        assert leg.disabled.startswith('D-6310:')
     row = next(row for row in DEFAULT_FALLBACK_MODELS if row['id'] == model)
     assert (row['active'], row['family'], row['harness']) == (True, leg.family, leg.harness)
 
@@ -51,7 +52,7 @@ def test_writer_snapshot_scores_real_legs_from_seed_catalog():
     from plangraph.planner.review_order import catalog_score
     rows = resolver.get_catalog_models()
     scores = {leg.id: catalog_score(leg, rows) for leg in DEFAULT_LEGS if 'implement' in leg.roles}
-    assert scores['cx-gpt-6.1-sol-xhigh'] >= 50.0
-    assert scores['agy-gemini-4-argon'] >= 50.0
+    assert scores['cx-gpt-6.2-sol-medium'] >= 50.0
+    assert scores['cx-gpt-6.2-astra'] >= 50.0
     assert scores['mimo-v2.6-pro'] == 46.0
     assert scores['agy-gemini-4-hydrogen-high'] is None

@@ -118,7 +118,7 @@ def test_sentinel_key_never_leaks(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            model="omniroute/cx-gpt-6.1-sol",
+            model="omniroute/cx-gpt-6.2-sol-medium",
             override_reason="testing manual model override",
             prompt="task",
             dry_run=True,
@@ -254,7 +254,7 @@ def test_parent_env_gateway_key_passthrough_and_no_leak(tmp_path, monkeypatch):
     async def run():
         record = await service.spawn(
             card={"estimate_tokens": 1000},
-            model="omniroute/cx-gpt-6.1-sol",
+            model="omniroute/cx-gpt-6.2-sol-medium",
             override_reason="testing manual model override",
             prompt="task",
             wait_seconds=None,
@@ -377,7 +377,7 @@ def test_unresolved_refusal_falls_through_to_next_leg(tmp_path, monkeypatch):
     monkeypatch.setattr(resolver, "host_skip_reason_async", no_skip)
     monkeypatch.setattr(resolver, "host_skip_reason", lambda row, **kw: None)  # launch path, not admission
     mimo_leg = next(l for l in DEFAULT_LEGS if l.model == "mimo/mimo-v2.6-flash")
-    agy_leg = next(l for l in DEFAULT_LEGS if l.model == "gemini-4-argon-high")
+    agy_leg = next(l for l in DEFAULT_LEGS if l.model == "gemini-4-neon-medium")
     plan = SpawnPlan(legs=(mimo_leg, agy_leg), skipped=(), p_source="test",
                      review_seats=(), reasons=())
 

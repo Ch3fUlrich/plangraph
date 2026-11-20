@@ -14,15 +14,15 @@ def test_qoder_off_for_review_even_with_old_active_leg():
 
 def test_disabled_leg_never_a_route_option():
     disabled = next(l for l in DEFAULT_LEGS if l.harness == 'qodercli')
-    later = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
+    later = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-neon-medium')
     route = route_card({'estimate_tokens': 1000}, legs=(disabled, later), role='review')
     assert route.legs == (later,)
     assert 'excluded 1 legs: disabled' in route.reasons
 
 
 def test_large_review_falls_through_small_window_with_reason():
-    small = next(l for l in DEFAULT_LEGS if l.id == 'opencode-go-gemini-4-argon')
-    large = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
+    small = next(l for l in DEFAULT_LEGS if l.id == 'opencode-deepseek-v4.1-flash-free')
+    large = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-neon-medium')
     route = route_card({'estimate_tokens': 200000, 'window_class': '128k'},
                        legs=(small, large), role='review')
     assert route.legs == (large,)
@@ -31,15 +31,14 @@ def test_large_review_falls_through_small_window_with_reason():
 
 
 def test_review_route_never_offers_qwen_max():
-    route = route_card({'estimate_tokens': 1000}, role='review')
+    route = plan_spawn({'estimate_tokens': 1000}, role='review', writer_families=('gpt',), catalog_rows=())
     assert 'opencode-go-qwen3.8-max' not in [leg.id for leg in route.legs]
 
 
-def test_glm_never_a_review_option():
+def test_glm_is_an_admitted_review_option():
     policy = load_route_policy(Path('src/plangraph/planner/route_policy.json'))
-    assert 'glm' not in policy.review_allowed_families
-    # The low-level route_card orders eligible legs; plan_spawn applies policy.
+    assert 'glm' not in policy.off_families
     route = plan_spawn({'estimate_tokens': 1000}, role='review',
                        writer_families=('gpt',), policy=policy, catalog_rows=())
-    assert 'glm' not in {leg.family for leg in route.legs}
-    assert {s['leg']: s['reason'] for s in route.skipped}['opencode-big-pickle'] == 'off_family'
+    assert 'opencode-go-glm-5.3-flash' in {leg.id for leg in route.legs}
+    assert {s['leg']: s['reason'] for s in route.skipped}['opencode-big-pickle'] == 'low_risk_only'

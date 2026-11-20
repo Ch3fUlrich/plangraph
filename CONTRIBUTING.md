@@ -91,6 +91,8 @@ key, including subitems of a larger item. `ci_commit_gate.py check --base BASE
 --head HEAD --item-text PART.txt` warns for uncovered keys; GitHub CI reads the
 matching PR event automatically. See [the commit gate](docs/ci-gate.md).
 
+CI job ids stay fixed; each job's display name and the per-job audit are in [the CI gate page](docs/ci-gate.md).
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 The feeder's `deploy/feeder/house-rules.md` and policy are repository inputs to
@@ -209,7 +211,7 @@ headers and extra columns are allowed. Missing or unreadable authority refuses t
 exception. Explicit pin flags still refuse, and the served model must be witnessed
 and the completion HEAD bound (D-5874). Rust regressions:
 `cargo test --manifest-path rust/Cargo.toml -p pg-policy --test seat_operator_order`.
-Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text. For an opencode seat, the review text is the text parts after the last step-start event of the JSON `live.log`, plain-text logs are used unchanged, and the `VERDICT` line must still be the last line (F8, D-3420). Lifecycle events decide event mode: at least one JSON object with `type` equal to `step_start` or `step_finish` and an object-valued `part` is required; `text`/`tool_use` lines, quoted JSON and other typed objects alone leave a plain-text log unchanged.
+Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text. For an opencode seat, the review text is the text parts after the last step-start event of the JSON `live.log`, plain-text logs are used unchanged, and the `VERDICT` line must still be the last line (F8, D-3420). Lifecycle events decide event mode: at least one JSON object with `type` equal to `step_start` or `step_finish` and an object-valued `part` is required; `text`/`tool_use` lines, quoted JSON and other typed objects alone leave a plain-text log unchanged. `codex` names the openai family in both family tables (`tools/seat_verdict.py` and `src/plangraph/review/family.py`, kept equal by a test).
 The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
 When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
 
@@ -270,6 +272,10 @@ New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for
 example the keeper's host-sample store stays Python because the keeper is Python (D-5038).
 The `spawner/gateway_models.py` entry covers a responsibility-only extraction of existing Python model admission and row parsing; `gateway_witness.py` keeps compatible re-exports.
+
+## AutoOS references
+
+`python3 tools/autoos_refs_check.py --only opencode` scans the OpenCode config root alone for AutoOS paths in `instructions` entries and skill links.
 
 ## Changelog and documentation
 
@@ -609,6 +615,9 @@ D-6054: OpenCode catalog integration tests use the shipped provider configuratio
 and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
 so changes to catalog identities or rendering select the Rust CI suite.
 
+Notification smoke: `tools/smoke-run-exit-notify.sh` targets
+`omniroute/cx-gpt-6.2-sol-medium` (D-6310).
+
 Claude transcript census: see [usage and classification limits](docs/claude-census.md).
 
 ## Bash guard rules (`tools/hooks/bash_guard.py`)
@@ -626,3 +635,10 @@ denies:
   `claude agents`, and `claude stop <id>` stay allowed.
 - Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
   (see `docs/TESTING.md`).
+
+## Skill lint (`tools/skill-rules.py`)
+
+`python3 tools/skill-rules.py lint` fails when a skill markdown file passes 500
+lines, a `SKILL.md` lacks frontmatter, or any skill text names a path under the
+retired routing folder. Skills read site values from the router
+config keys they name, never from absolute paths.

@@ -29,6 +29,8 @@ hydrogen = route()
 store.record_harness_limit('agy/gemini-4-argon-medium',
     'Individual quota reached. Resets in 2h.', 'fixture')
 argon = route()
+store.record_harness_limit('agy/gemini-4-hydrogen-medium',
+    'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 10h40m26s.', 'fixture')
 store.record_harness_limit('claude-sonnet-5-5-high',
     'Individual quota reached. Resets in 1h.', 'fixture')
 store.record_harness_limit('agy/claude-sonnet-5-5-high',
@@ -39,9 +41,9 @@ with legacy._connect() as db:
                ('agy/gemini-4-hydrogen-high', None, None, 429, 'old quota', 36000, 36010, 10, 'fixture', 'harness-stderr'))
 legacy_state = legacy.leg_status('agy:gemini-4-hydrogen', now=7*3600)
 snapshot = plan_spawn(card, role='review', writer_families=['openai'], now=42, catalog_rows=[],
-    leg_reader=lambda model, **kw: dict(state='limited' if model == 'gemini-4-hydrogen-high' else 'ok', evidence=dict(ts=kw['now']))).to_dict()
+    leg_reader=lambda model, **kw: dict(state='limited' if 'gemini-4-argon' in model else 'ok', evidence=dict(ts=kw['now']))).to_dict()
 sonnet_only = plan_spawn(card, role='review', writer_families=['openai'], catalog_rows=[],
-    leg_reader=lambda model, **kw: dict(state='ok' if model == 'claude-sonnet-5-5-high' else 'limited', evidence=None)).to_dict()
+    leg_reader=lambda model, **kw: dict(state='ok' if 'gemini-4-argon' in model else 'limited', evidence=None)).to_dict()
 print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet_only, initial=initial, hydrogen=hydrogen, argon=argon, final=route(), later=store.leg_status('agy:gemini-4-hydrogen', now=store.leg_status('agy:gemini-4-hydrogen')['evidence']['ts'] + 7*3600))))
 "#,
         ])
@@ -55,23 +57,23 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         result["initial"]["first_leg"]["model"],
-        "gemini-4-hydrogen-high"
+        "gemini-4-argon-low"
     );
     assert_eq!(
         result["hydrogen"]["first_leg"]["model"],
-        "gemini-4-argon-medium"
+        "gemini-4-argon-low"
     );
     assert_eq!(
         result["argon"]["first_leg"]["model"],
-        "console-deepseek/deepseek-flash"
+        "opencode-go/deepseek-v4.1-flash"
     );
     assert_eq!(result["later"]["state"], "limited");
     assert_eq!(
-        result["snapshot"]["agy_quota_states"]["agy:gemini-4-hydrogen"]["state"],
+        result["snapshot"]["agy_quota_states"]["agy:gemini-4-argon"]["state"],
         "limited"
     );
     assert_eq!(
-        result["snapshot"]["agy_quota_states"]["agy:gemini-4-hydrogen"]["evidence"]["ts"],
+        result["snapshot"]["agy_quota_states"]["agy:gemini-4-argon"]["evidence"]["ts"],
         42
     );
     assert!(!result["final"]["legs"]
@@ -82,7 +84,7 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     assert_eq!(result["legacy"]["state"], "limited");
     assert_eq!(
         result["sonnet_only"]["first_leg"]["model"],
-        "claude-sonnet-5-5-high"
+        "gemini-4-argon-low"
     );
     assert!(result["sonnet_only"]["error"].is_null());
     let states = &result["hydrogen"]["agy_quota_states"];
@@ -109,10 +111,12 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     assert_eq!(
         models,
         [
-            "gemini-4-hydrogen-high",
+            "gemini-4-argon-low",
             "gemini-4-argon-medium",
-            "console-deepseek/deepseek-flash",
-            "opencode-go/beam-free",
+            "opencode-go/deepseek-v4.1-flash",
+            "opencode/deepseek-v4.1-flash-free",
+            "opencode-go/glm-5.3-flash",
+            "gemini-4-neon-medium",
             "claude-sonnet-5-5-high"
         ]
     );
@@ -133,13 +137,14 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace as NS
 from plangraph.routing_support.leg_state import LegStateStore, quota_key
+from plangraph.planner.legs import REVIEW_FALLBACK_LEGS
 from plangraph.planner.routing import plan_spawn, SpawnPlan, SpawnRefused, next_leg_after_provider_stop
 from plangraph.routing_support.liveness import require_available
 from plangraph.spawner.exit_outcome import fallthrough_reason
 from plangraph.spawner.leg_probe import DispatchReader
 
 initial = plan_spawn(dict(estimate_tokens=1000), role='review', writer_families=['openai'],
-                     leg_reader=lambda *a, **kw: dict(state='ok', evidence=None), catalog_rows=[])
+                     legs=REVIEW_FALLBACK_LEGS, leg_reader=lambda *a, **kw: dict(state='ok', evidence=None), catalog_rows=[])
 native = next(leg for leg in initial.legs if leg.id == 'claude-sonnet-5-5-high')
 assert native.harness == 'claude' and native.tier == 'subscription'
 agy = 'agy/claude-sonnet-5-5-high'

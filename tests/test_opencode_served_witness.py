@@ -12,7 +12,7 @@ from plangraph.review.verdict import parse_test_gaming
 from plangraph.spawner import resolver
 from plangraph.spawner.runner import SpawnerRunner, _opencode_served_model
 from fake_pid import FAKE_PID; from go_credential_fake import go_credential  # noqa: E702,F401
-REQUESTED = 'opencode-go/' + 'gemini-4-argon'; pytestmark = pytest.mark.usefixtures('go_credential')
+REQUESTED = 'opencode-go/' + 'deepseek-v4.1-flash'; pytestmark = pytest.mark.usefixtures('go_credential')
 
 
 def _store(home, sessions, assistants):
@@ -26,7 +26,7 @@ def _store(home, sessions, assistants):
         conn.executemany('INSERT INTO session_v2 VALUES (?, ?)', sessions)
         conn.executemany('INSERT INTO session_message VALUES (?, ?, ?, ?)',
                          [(f'm{i}', sid, 'assistant',
-                           json.dumps({'model': {'id': 'gemini-4-argon' if mid == 'glm-5.2' else mid, 'providerID': 'opencode-go'}}))
+                           json.dumps({'model': {'id': 'deepseek-v4.1-flash' if mid == 'glm-5.2' else mid, 'providerID': 'opencode-go'}}))
                           for i, (sid, mid) in enumerate(assistants)])
 
 
@@ -211,7 +211,7 @@ def test_title_flag_on_opencode_leg_and_not_on_plain_leg(tmp_path):
         runner = SpawnerRunner(default_cwd=str(tmp_path))
         opencode_job = await runner.spawn('p', model_or_combo=REQUESTED, client='opencode',
                                           cwd=str(tmp_path), dry_run=True)
-        plain_job = await runner.spawn('p', model_or_combo='gemini-4-argon-high', client='agy',
+        plain_job = await runner.spawn('p', model_or_combo='gemini-4-neon-medium', client='agy',
                                        cwd=str(tmp_path), dry_run=True)
         return opencode_job, plain_job
     opencode_job, plain_job = asyncio.run(run())

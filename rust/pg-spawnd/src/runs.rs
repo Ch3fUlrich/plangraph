@@ -8,8 +8,8 @@ use pg_worker_core::run::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
-    path::Path,
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -48,7 +48,7 @@ impl Runs {
         host: &str,
         role: Value,
         plan: Value,
-        launch: impl FnOnce(&Path, &Value) -> Result<crate::launch::LaunchSpec, ToolError>,
+        mut launch_adapter: impl FnMut(&Path, &Value) -> Result<crate::launch::LaunchSpec, ToolError>,
     ) -> Result<Value, ToolError> {
         let (run_id, job_id) = (new_run_id(), new_job_id());
         let admission = match crate::round_progress::admit(state, args) {
@@ -64,23 +64,155 @@ impl Runs {
         } else {
             cwd
         };
-        let mut launch = launch(
+        let launch_req = json!({
+            "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
+            "writer_families":args.get("writer_families").cloned().unwrap_or(json!([])),
+            "review_of":args.get("review_of"),
+            "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
+        });
+        let mut launch = match launch_adapter(state, &launch_req) {
+            Ok(spec) => spec,
+            Err(ToolError::Refused {
+                kind: crate::errors::RefusalKind::Spawn,
+                ref message,
+                ..
+            }) if role == "review"
+                && message.contains("prompt_too_large:")
+                && args["card"]["diff_ref"].get("repo").is_some()
+                && args["card"]["diff_ref"].get("repo_id").is_none()
+                && args["card"]["diff_ref"].get("paths").is_none()
+                && leg["review_mode"] != "inline_only" =>
+            {
+                drop(admission);
+                return crate::review_split::spawn_adapter_split_groups(
+                    self,
+                    state,
+                    args,
+                    host,
+                    &role,
+                    &plan,
+                    &leg,
+                    &cwd,
+                    dry,
+                    &mut launch_adapter,
+                );
+            }
+            Err(err) => return Err(err),
+        };
+        let review_head = match crate::prompt::prepare_launch(args, &leg, &mut launch, dry) {
+            Ok(head) => head,
+            Err(ToolError::Refused {
+                kind: crate::errors::RefusalKind::Spawn,
+                ref message,
+                ..
+            }) if role == "review"
+                && message.contains("prompt_too_large:")
+                && args["card"]["diff_ref"].is_object() =>
+            {
+                let repos = crate::prompt::repos();
+                let mode = crate::prompt::configured_mode("review");
+                let review_args = json!(args);
+                match crate::review_split::plan_review_groups(
+                    &review_args,
+                    &leg,
+                    &launch,
+                    &repos,
+                    mode == "on",
+                ) {
+                    Ok(Some(groups)) => {
+                        drop(admission);
+                        return crate::review_split::spawn_rust_split_groups(
+                            self,
+                            state,
+                            args,
+                            host,
+                            &role,
+                            &plan,
+                            &leg,
+                            &cwd,
+                            dry,
+                            &groups,
+                            &mut launch_adapter,
+                        );
+                    }
+                    Ok(None) => {
+                        return Err(ToolError::Refused {
+                            kind: crate::errors::RefusalKind::Spawn,
+                            message: message.clone(),
+                            legs: vec![],
+                        });
+                    }
+                    Err(
+                        e @ (crate::prompt::InlineDiffError::TooLarge
+                        | crate::prompt::InlineDiffError::Oversized(_)),
+                    ) => {
+                        return Err(ToolError::Refused {
+                            kind: crate::errors::RefusalKind::Spawn,
+                            message: e.to_string(),
+                            legs: vec![],
+                        });
+                    }
+                    Err(e) => return Err(internal(&e.to_string())),
+                }
+            }
+            Err(err) => return Err(err),
+        };
+        let started = self.start_prepared(
             state,
-            &json!({
-                "run_id":run_id,"job_id":job_id,"role":role,"dry_run":dry,"leg":leg,
-                "writer_families":args.get("writer_families").cloned().unwrap_or(json!([])),
-                "review_of":args.get("review_of"),
-                "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
-            }),
+            args,
+            host,
+            &role,
+            &plan,
+            &leg,
+            &run_id,
+            &job_id,
+            launch,
+            review_head.as_deref(),
+            &admission.fields,
+            dry,
+            None,
         )?;
-        let review_head = crate::prompt::prepare_launch(args, &leg, &mut launch, dry)?;
+        drop(admission);
+        if started["status"] == "refused" {
+            return Ok(started);
+        }
+        wait(state, &run_id, wait_duration(args.get("wait_seconds")))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_prepared(
+        &self,
+        state: &Path,
+        args: &Args,
+        host: &str,
+        role: &Value,
+        plan: &Value,
+        leg: &Value,
+        run_id: &str,
+        job_id: &str,
+        mut launch: crate::launch::LaunchSpec,
+        review_head: Option<&str>,
+        admission_fields: &Value,
+        dry: bool,
+        group_meta: Option<(&str, usize, usize, &[String])>,
+    ) -> Result<Value, ToolError> {
         let mut base = json!({"card_hash":crate::pyjson::card_hash(&args["card"]),"role":role,
             "plan":plan,"chosen_leg":null,"request_side_model":null,"witness_kind":null,
             "writer_family":leg["family"],"cwd":launch.cwd.to_string_lossy(),"job_id":job_id});
         if let Some(head) = review_head {
             base["head_sha"] = json!(head);
         }
-        let checkout = crate::cli_review::isolate(&mut launch, &leg, base["head_sha"].as_str())?;
+        if let Some((seat_group_id, index, total, paths)) = group_meta {
+            base["seat_group"] = json!(seat_group_id);
+            base["review_group"] = json!({
+                "seat_group": seat_group_id,
+                "index": index,
+                "total": total,
+                "paths": paths,
+            });
+        }
+        let pre_isolate_cwd = launch.cwd.clone();
+        let checkout = crate::cli_review::isolate(&mut launch, leg, base["head_sha"].as_str())?;
         if checkout.is_some() {
             base["review_checkout"] = json!(launch.cwd);
         }
@@ -93,11 +225,12 @@ impl Runs {
         }
         base.as_object_mut()
             .unwrap()
-            .extend(admission.fields.as_object().unwrap().clone());
+            .extend(admission_fields.as_object().unwrap().clone());
         if !dry && base["writer_round"].is_u64() {
             base["round_work_before"] = json!(crate::round_progress::work_fingerprint(&launch.cwd));
         }
-        store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
+        let allow_shas = allow_shas(args, &launch, &pre_isolate_cwd, base["head_sha"].as_str());
+        store_prompt(state, run_id, &mut launch, &mut base, dry, &allow_shas)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
@@ -108,19 +241,19 @@ impl Runs {
             .map(Value::Object)
             .collect();
         crate::records::annotate_item(&mut base, &args["card"], &mut events);
-        if !dry && crate::gitconfig_guard::writer_role(&role) {
-            let dir = crate::gitconfig_guard::run_dir(state, &run_id)
+        if !dry && crate::gitconfig_guard::writer_role(role) {
+            let dir = crate::gitconfig_guard::run_dir(state, run_id)
                 .map_err(|_| internal("invalid run id"))?;
             match crate::gitconfig_guard::capture(&launch.cwd, &dir) {
                 Ok(armed) => base["gitconfig_guard"] = json!(armed),
                 Err(_) => {
                     base["events"] = json!(events);
                     base["reason"] = json!("gitconfig_capture_refused");
-                    return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
+                    return Ok(create(state, run_id, host, base, Status::Refused)?.to_value());
                 }
             }
         }
-        let attempt_id = book_attempt(&mut base, &leg);
+        let attempt_id = book_attempt(&mut base, leg);
         if dry {
             let mut tail = format!("[dry-run] Planned command: {}", launch.argv.join(" "));
             if let Some(stdin) = &launch.stdin {
@@ -133,16 +266,17 @@ impl Runs {
             base["chosen_leg"] = leg.clone();
             base["served_model"] = leg["model"].clone();
             base["served_family"] = leg["family"].clone();
-            let mut record = create(state, &run_id, host, base, Status::DryRun)?;
-            finish(&mut record, Status::DryRun, &leg, attempt_id);
+            let mut record = create(state, run_id, host, base, Status::DryRun)?;
+            finish(&mut record, Status::DryRun, leg, attempt_id);
             record
                 .save()
                 .map_err(|_| internal("could not save run record"))?;
         } else {
             base.as_object_mut().unwrap().remove("job_id");
+            let hook_group = group_meta.map(|(_, i, t, p)| (i, t, p.to_vec()));
             let spec = RunSpec {
-                run_id: run_id.clone(),
-                job_id: job_id.clone(),
+                run_id: run_id.to_owned(),
+                job_id: job_id.to_owned(),
                 program: launch.argv[0].clone().into(),
                 args: launch.argv[1..].iter().map(Into::into).collect(),
                 cwd: launch.cwd,
@@ -154,12 +288,15 @@ impl Runs {
                 stdin: launch.stdin.map(String::into_bytes),
                 base: base.as_object().unwrap().clone(),
                 events: events.clone(),
-                finish: Some(crate::review_retry::hook(
+                finish: Some(crate::review_retry::hook_with_group(
                     args.clone(),
-                    leg,
+                    leg.clone(),
                     attempt_id,
                     checkout,
+                    allow_shas.clone(),
+                    hook_group,
                 )),
+                allow_shas,
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}
@@ -168,7 +305,7 @@ impl Runs {
                     base["refusal"] = json!("QueueFull");
                     base["error"] = json!("run queue full");
                     base["exit_code"] = json!(2);
-                    return Ok(create(state, &run_id, host, base, Status::Refused)?.to_value());
+                    return Ok(create(state, run_id, host, base, Status::Refused)?.to_value());
                 }
                 Err(SupervisorError::DuplicateRun) => {
                     return Err(internal("run id already started by this supervisor"));
@@ -176,10 +313,60 @@ impl Runs {
                 Err(_) => return Err(internal("could not start run")),
             }
         }
-        drop(admission);
-        self.jobs.lock().unwrap().insert(job_id, run_id.clone());
-        wait(state, &run_id, wait_duration(args.get("wait_seconds")))
+        self.jobs
+            .lock()
+            .unwrap()
+            .insert(job_id.to_owned(), run_id.to_owned());
+        Ok(json!({"run_id": run_id, "status": if dry { "dry_run" } else { "running" }}))
     }
+}
+pub(crate) fn allow_shas(
+    args: &Args,
+    launch: &crate::launch::LaunchSpec,
+    pre_isolate_cwd: &Path,
+    review_head: Option<&str>,
+) -> BTreeSet<String> {
+    let mut shas = BTreeSet::new();
+    let diff_ref = args
+        .get("card")
+        .and_then(|c| c.get("diff_ref"))
+        .unwrap_or(&Value::Null);
+    let diff_repo = diff_ref
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(|| {
+            diff_ref
+                .get("repo_id")
+                .and_then(Value::as_str)
+                .and_then(|id| {
+                    crate::prompt::repos()
+                        .get(id)
+                        .map(|e| PathBuf::from(&e.root))
+                })
+                .filter(|p| p.is_dir())
+        })
+        .unwrap_or_else(|| pre_isolate_cwd.to_path_buf());
+    for key in ["head", "head_sha", "base", "base_sha"] {
+        if let Some(rev) = diff_ref.get(key).and_then(Value::as_str) {
+            if let Some(sha) = pg_worker_core::run::scrub::resolve_commit_sha(&diff_repo, rev) {
+                shas.insert(sha);
+            }
+        }
+    }
+    if let Some(head) = review_head {
+        if head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit()) {
+            shas.insert(head.to_ascii_lowercase());
+        }
+    }
+    if let Some(prompt) = launch.prompt.as_deref() {
+        shas.extend(pg_worker_core::run::scrub::collect_prompt_commit_shas(
+            &launch.cwd,
+            prompt,
+        ));
+    }
+    shas
 }
 pub(crate) fn store_prompt(
     state: &Path,
@@ -187,6 +374,7 @@ pub(crate) fn store_prompt(
     launch: &mut crate::launch::LaunchSpec,
     base: &mut Value,
     dry: bool,
+    allow_shas: &BTreeSet<String>,
 ) -> Result<(), ToolError> {
     use sha2::{Digest, Sha256};
     let missing = || internal("launch prompt missing");
@@ -198,7 +386,7 @@ pub(crate) fn store_prompt(
     if !raw.is_empty() && exposed {
         return Err(internal("launch prompt must not be in argv or env"));
     }
-    let prompt = pg_worker_core::redact::redact(raw);
+    let prompt = pg_worker_core::redact::redact_with_allowlist(raw, allow_shas);
     match launch.stdin.as_mut() {
         Some(stdin) if stdin == raw => *stdin = prompt.clone(),
         Some(stdin) => {
@@ -283,6 +471,28 @@ pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, T
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+pub(crate) fn wait_many(
+    state: &Path,
+    ids: &[String],
+    timeout: Duration,
+) -> Result<Vec<Value>, ToolError> {
+    let began = Instant::now();
+    loop {
+        let mut records = Vec::with_capacity(ids.len());
+        let mut all_done = true;
+        for id in ids {
+            let record = crate::records::read_record(state, &json!(id))?;
+            if !terminal(&record) {
+                all_done = false;
+            }
+            records.push(record);
+        }
+        if all_done || began.elapsed() >= timeout {
+            return Ok(records);
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
 fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
     if base.get("attempts").is_none() {
         base["attempts"] = json!([]);
@@ -292,6 +502,15 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
     u32::try_from(attempts.len()).expect("attempt count fits u32")
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
+    finish_with_allowlist(record, status, leg, attempt_id, &BTreeSet::new());
+}
+pub(crate) fn finish_with_allowlist(
+    record: &mut RunRecord,
+    status: Status,
+    leg: &Value,
+    attempt_id: u32,
+    allow_shas: &BTreeSet<String>,
+) {
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     crate::round_progress::finish_round(record, status);
@@ -366,7 +585,9 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         if value["role"] == "review" {
             let text = crate::review_artifacts::review_text(&state, &value)
                 .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
-            let result = crate::review_artifacts::write_review_artifacts(&state, &value, &text);
+            let result = crate::review_artifacts::write_review_artifacts_with_allowlist(
+                &state, &value, &text, allow_shas,
+            );
             if result.is_ok() {
                 record.set("seat_dir", json!(record.path().with_file_name("seat")));
             } else {
@@ -400,7 +621,7 @@ mod record_tests;
 #[cfg(all(test, unix))]
 #[path = "runs_tests.rs"]
 mod tests;
-fn wait_duration(value: Option<&Value>) -> Duration {
+pub(crate) fn wait_duration(value: Option<&Value>) -> Duration {
     #[allow(clippy::manual_clamp)]
     let seconds = value
         .and_then(Value::as_f64)

@@ -23,6 +23,7 @@ permissions:
 
 jobs:
   select:
+    name: 'Select suites for this change'
     runs-on: ubuntu-24.04
     outputs:
       pytest: ${{ steps.sel.outputs.pytest }}
@@ -55,6 +56,7 @@ jobs:
   # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
   # the private word list never enters CI; output is path:line:rule only. Runs on every change.
   scrub:
+    name: 'Public scrub: no private names or secrets'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -68,6 +70,7 @@ jobs:
   # AO-400LOC (D-3198): a file over 400 lines needs a .filesize-baseline entry
   # that only shrinks vs the base: PR origin/main, push the pushed-over sha, else HEAD~1.
   file-size:
+    name: 'File size limit (400 lines)'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -79,6 +82,7 @@ jobs:
 
   # D-4691: added production source must be Rust unless explicitly allowlisted.
   new-code-lang:
+    name: 'New code is Rust'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -91,6 +95,7 @@ jobs:
 
   # D-653: every change -> CHANGELOG.md + docs (.docs-map)
   changelog-docs:
+    name: 'Changelog fragment and docs'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -101,6 +106,7 @@ jobs:
         run: python3 tools/check_changelog_docs.py
 
   pytest:
+    name: "Python tests, SQLite keeper (shard ${{ fromJSON('[1,2,3,4]')[matrix.shard] }} of ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 4 || 3 }})"
     strategy:
       fail-fast: false
       matrix:
@@ -235,6 +241,7 @@ jobs:
     # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
     # committed local assets, so the job never needs network access to a CDN.
   browser:
+    name: 'UI tests in headless Chromium'
     needs: select
     if: needs.select.outputs.browser == 'true'
     runs-on: ubuntu-24.04
@@ -280,6 +287,7 @@ jobs:
           if-no-files-found: warn
 
   pytest-postgres:
+    name: "Python tests, Postgres keeper: contract and storage (shard ${{ fromJSON('[1,2,3]')[matrix.shard] }} of 3)"
     strategy:
       fail-fast: false
       matrix:
@@ -398,6 +406,7 @@ jobs:
               tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
 
   rust:
+    name: 'Rust workspace on Linux: fmt, clippy, tests'
     needs: select
     if: needs.select.outputs.rust == 'true'
     runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
@@ -469,6 +478,7 @@ jobs:
         run: cargo test -p pg-spawnd --test native_writer
 
   rust-windows:
+    name: 'Rust spawner and worker core tests on Windows'
     needs: select
     if: needs.select.outputs.rust == 'true'
     runs-on: ${{ vars.CI_SELF_HOSTED_WIN == '1' && vars.CI_WIN_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_WIN_RUNNER_LABELS) || 'windows-latest' }}
@@ -494,6 +504,7 @@ jobs:
         run: cargo test -p pg-worker-core
 
   rust-worker:
+    name: 'Rust worker crate: fmt, clippy, tests'
     needs: select
     if: needs.select.outputs.rust-worker == 'true'
     runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
@@ -564,6 +575,7 @@ jobs:
           cargo run --manifest-path ../Cargo.toml -p pg-spawnd --bin ci-temporal -- cargo test
 
   rust-spike:
+    name: 'Rust replay spike tests'
     needs: select
     if: needs.select.outputs.rust-spike == 'true'
     runs-on: ${{ vars.CI_SELF_HOSTED == '1' && vars.CI_LINUX_RUNNER_LABELS != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_LINUX_RUNNER_LABELS) || 'ubuntu-24.04' }}
