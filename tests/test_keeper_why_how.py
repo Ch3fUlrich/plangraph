@@ -302,3 +302,49 @@ def test_show_and_brief_display_sections():
     text = brief.brief_text(brief.build(item))
     assert "Why: needed" in text and "How: implement" in text
     assert len(text) <= brief.BRIEF_CAP
+
+
+# ---- KEEPER-DEFINE-REQUIRES-DONE-CRITERIA: a lane needs done_criteria ----
+
+@pytest.mark.parametrize("path", ["single", "apply_ops"])
+@pytest.mark.parametrize("blank", [None, "", "  \n"])
+def test_lane_without_done_criteria_is_refused(w, path, blank):
+    goal = defn("G", ["L"], kind="goal")
+    lane = defn("L", description="Why: a\nHow: b\nDone when: x", done_criteria=blank)
+    with pytest.raises(Refused) as exc:
+        if path == "single":
+            w.store.create_items(w.p("router"), [goal, lane])
+        else:
+            w.store.apply_ops(w.p("router"), [{"op": "create", "item": [goal, lane]}])
+    assert exc.value.code == "done_criteria_missing"
+    assert "demo:L" in exc.value.msg
+    assert w.store._all_items() == []
+
+
+def test_lane_with_done_criteria_and_other_kinds_without_are_accepted(w):
+    items = [defn("L", done_criteria="by test"),
+             defn("G", ["L", "GT", "D"], kind="goal", done_criteria=None),
+             defn("GT", kind="gate", done_criteria=None),
+             defn("D", kind="decision", done_criteria=None,
+                  description="Why: a\nHow: b")]
+    w.store.create_items(w.p("router"), items)
+    assert {it["key"] for it in w.store._all_items()} == {
+        "demo:L", "demo:G", "demo:GT", "demo:D"}
+
+
+def test_edit_may_not_empty_done_criteria_of_a_lane(w):
+    w.store.create_items(w.p("router"), [defn("L", done_criteria="by test"),
+                                         defn("G", ["L"], kind="goal")])
+    for blank in (None, "", "   "):
+        with pytest.raises(Refused) as exc:
+            w.store.edit_definition(w.p("router"), "demo:L", {"done_criteria": blank})
+        assert exc.value.code == "done_criteria_missing"
+    w.store.edit_definition(w.p("router"), "demo:L", {"done_criteria": "other"})
+    assert w.store._item("demo:L")["done_criteria"] == "other"
+    w.store.edit_definition(w.p("router"), "demo:G", {"done_criteria": None})
+
+
+def test_legacy_import_keeps_a_lane_without_done_criteria(w):
+    lane = defn("L", done_criteria=None, state="open")
+    w.store.import_items(w.p("router"), [lane, defn("G", ["L"], kind="goal", state="open")])
+    assert w.store._item("demo:L")["done_criteria"] in (None, "")

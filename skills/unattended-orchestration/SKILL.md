@@ -102,7 +102,7 @@ In every mode:
 - Reviews never wait for a quota reset.
 - Speedups that do not require smarter agents are the default (rule 3.41).
 
-Batch rules, including the writer's five-round limit: [batch](cards/batch.md).
+Batch rules, including the writer round stop rule: [batch](cards/batch.md).
 Every batch writer brief starts with `skills/batch-writer/SKILL.md` verbatim, every
 single-task brief with `skills/implement/SKILL.md` and every review prompt, in both
 modes, with `skills/review/SKILL.md`: an agent that is not told the workflow in its

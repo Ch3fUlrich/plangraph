@@ -118,8 +118,8 @@ that skill, the skill wins.
    item and its intent and forbids findings on unchanged code.
 3. One fix brief with every finding; the writer reproduces each with a test and
    fixes or refutes it. One re-review of the delta in the reviewer's resumed session.
-   Writer rounds end at the round cap of the batch card (five), or earlier when two
-   rounds in a row do not lower the HIGH+MED count.
+   Writer rounds end by the one stop rule of the batch card (R-batch-04, owned by
+   `rust/pg-spawnd/src/round_progress.rs`).
 4. One GO request (PR, head, CI run, review ids, umbrella key, folded keys, weak
    points); merge at that head; close the folded items and superseded lane PRs.
 5. Every host pulls main, the hooks checkout and the installed binaries, and

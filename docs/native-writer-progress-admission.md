@@ -45,10 +45,13 @@ Prompt-only directories left by incomplete launches are skipped; malformed exist
 records refuse admission. Runs for an item must use
 one shared state directory. Copying state between hosts is not implemented.
 
-A count must be strictly below every earlier count to reset the miss streak.
-Thus `3,3,4` refuses writer 4 with `no_progress`; `4,2,1` admits writer 4;
-`2,1,2,1` refuses writer 5 with `no_progress`. Otherwise writer 5 refuses with
-`round_cap`; writer 6 always refuses with `round_cap`. At a stop only,
+The stop rule has one owner, `stop_reason` in `rust/pg-spawnd/src/round_progress.rs`; the
+Python setting, the batch-writer skill and R-batch-04 quote it. A count must be strictly
+below every earlier count to reset the miss streak, and round 1 counts as a miss until a
+later round is lower. 3 rounds in a row without a new best refuse the next writer with
+`no_progress` (`5,5,5` refuses writer 4; `6,4,3,2` admits writer 5). From round 3 on a
+count above half of the round-1 count refuses with `slow_progress` (`8,7,6` refuses
+writer 4). Writer 9 always refuses with `round_cap`. At a stop only,
 `card.narrow_fix: true` permits one additional narrow round if the latest
 verdict has exactly 1–2 confirmed MED, every one has `clear_fix: true`, and
 there are no confirmed HIGH. No further writer is admitted after that round.

@@ -84,6 +84,47 @@ class KeeperNotConfigured(ValueError):
     """Raised when live keeper delivery is unconfigured."""
 
 
+class KeeperRefused(Exception):
+    """The keeper answered a delivery with a 4xx refusal (``status``)."""
+
+    def __init__(self, status, detail=''):
+        super().__init__(f'keeper refused delivery: HTTP {status} {detail}'.strip())
+        self.status = status
+
+
+# Refusals that say nothing about the delivery itself and may clear on their own.
+_TRANSIENT_REFUSALS = frozenset({401, 403, 408, 425, 429})
+
+
+def refusal_is_final(directory, refusal):
+    """Whether a refused delivery is never sent again.
+
+    A conflict (HTTP 409: the item no longer takes this record, e.g. it is done)
+    is final at once; any other 4xx that is not transient is final when the same
+    status repeats for this run (the first one is remembered in ``keeper.refused``).
+    """
+    if refusal.status == 409:
+        return True
+    if refusal.status in _TRANSIENT_REFUSALS:
+        return False
+    seen = Path(directory) / 'keeper.refused'
+    if seen.exists() and seen.read_text(encoding='utf-8').strip() == str(refusal.status):
+        return True
+    atomic_write_private(seen, f'{refusal.status}\n')
+    return False
+
+
+def settle_refusal(marker, recipient, refusal):
+    """Mark a final refusal as delivered-as-refused (never resent); log a retryable one."""
+    import logging
+    log = logging.getLogger(__name__)
+    if refusal_is_final(Path(marker).parent, refusal):
+        atomic_write_private(marker, f'refused: HTTP {refusal.status}\n')
+        log.warning('completion delivery to %s refused (HTTP %s): not retried', recipient, refusal.status)
+    else:
+        log.warning('completion delivery to %s refused (HTTP %s): will retry', recipient, refusal.status)
+
+
 class KeeperSink:
     """Deliver through the keeper's idempotent run_recorded item-event API.
 
@@ -106,10 +147,15 @@ class KeeperSink:
             data=json.dumps(payload).encode(), method='POST',
             headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
         opener = urllib.request.build_opener(_NoRedirectHandler())
-        with opener.open(request, timeout=10) as response:
-            if not 200 <= response.status < 300:
-                raise RuntimeError('keeper did not acknowledge run completion')
-            response.read()
+        try:
+            with opener.open(request, timeout=10) as response:
+                if not 200 <= response.status < 300:
+                    raise RuntimeError('keeper did not acknowledge run completion')
+                response.read()
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                raise KeeperRefused(exc.code) from None
+            raise
 
     def item(self, key):
         from urllib.parse import urlencode

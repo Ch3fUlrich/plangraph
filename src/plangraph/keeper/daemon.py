@@ -79,6 +79,7 @@ def _make_store(conn, cfg):
     store.default_lease = cfg.default_lease
     store.lease_warn_s = cfg.lease_warn_s
     store.review_overdue_s = cfg.review_overdue_s
+    store.alert_window_s = cfg.alert_window_s
     return store
 
 

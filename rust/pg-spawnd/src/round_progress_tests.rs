@@ -2,13 +2,27 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn strict_best_and_consecutive_misses() {
+fn three_rounds_without_a_new_best_stop_and_progress_goes_on() {
+    // 3 rounds in a row no lower than the best so far (round 1 has nothing to beat).
+    assert_eq!(stop_reason(&[5, 5, 5], 4, false), Some("no_progress"));
     assert_eq!(stop_reason(&[3, 3, 4], 4, false), Some("no_progress"));
+    assert_eq!(stop_reason(&[6, 4, 3, 2], 5, false), None);
     assert_eq!(stop_reason(&[4, 2, 1], 4, false), None);
-    assert_eq!(stop_reason(&[2, 1, 2, 1], 5, false), Some("no_progress"));
-    assert_eq!(stop_reason(&[8, 7, 6, 5], 5, false), Some("round_cap"));
-    assert_eq!(stop_reason(&[8, 7, 6, 5, 4], 6, false), Some("round_cap"));
-    assert_eq!(stop_reason(&[3, 3, 2, 2], 5, false), Some("round_cap"));
+    // One miss or two do not stop a loop that still lowers the count.
+    assert_eq!(stop_reason(&[2, 1, 2, 1], 5, false), None);
+    assert_eq!(stop_reason(&[6, 4, 4, 3], 5, false), None);
+    assert_eq!(stop_reason(&[6, 3, 3, 3], 5, false), None);
+    assert_eq!(stop_reason(&[6, 3, 3, 3, 3], 6, false), Some("no_progress"));
+    // After round 3 the count must be at most half of round 1.
+    assert_eq!(stop_reason(&[8, 7, 6], 4, false), Some("slow_progress"));
+    assert_eq!(stop_reason(&[8, 5, 4], 4, false), None);
+    assert_eq!(stop_reason(&[8, 6], 3, false), None);
+    // The ceiling and the single narrow exception.
+    assert_eq!(stop_reason(&[16, 8, 7, 6, 5, 4, 3, 2], 8, false), None);
+    assert_eq!(
+        stop_reason(&[16, 8, 7, 6, 5, 4, 3, 2], 9, false),
+        Some("round_cap")
+    );
     assert_eq!(stop_reason(&[4, 2, 1], 4, true), Some("round_cap"));
 }
 
@@ -80,9 +94,9 @@ fn persisted_history_survives_reload_and_refuses_by_reason() {
     for (counts, expected) in [
         (vec![3, 3, 4], Some("no_progress")),
         (vec![4, 2, 1], None),
-        (vec![2, 1, 2, 1], Some("no_progress")),
-        (vec![8, 7, 6, 5], Some("round_cap")),
-        (vec![8, 7, 6, 5, 4], Some("round_cap")),
+        (vec![5, 5, 5], Some("no_progress")),
+        (vec![8, 7, 6], Some("slow_progress")),
+        (vec![16, 8, 7, 6, 5, 4, 3, 2], Some("round_cap")),
     ] {
         let dir = tempfile::tempdir().unwrap();
         let args = history(dir.path(), &counts, false);
@@ -90,7 +104,7 @@ fn persisted_history_survives_reload_and_refuses_by_reason() {
             assert!(reason(admit(dir.path(), &args)).starts_with(expected));
         } else {
             let admitted = admit(dir.path(), &args).ok().unwrap();
-            assert_eq!(admitted.fields["writer_round"], 4);
+            assert_eq!(admitted.fields["writer_round"], counts.len() as u64 + 1);
             assert_eq!(
                 admitted.fields["previous_confirmed_blockers"],
                 json!(counts)
@@ -165,14 +179,23 @@ fn missing_corrupt_or_mismatched_verdicts_fail_closed() {
 }
 
 #[test]
-fn fifth_round_exception_and_acceptance() {
+fn ceiling_refuses_even_with_the_narrow_exception_and_acceptance_ends_the_loop() {
     let dir = tempfile::tempdir().unwrap();
-    let mut args = history(dir.path(), &[5, 4, 3, 2], true);
+    let mut args = history(dir.path(), &[16, 8, 7, 6, 5, 4, 3, 2], true);
     assert!(reason(admit(dir.path(), &args)).starts_with("round_cap"));
     args["card"]["narrow_fix"] = json!(true);
-    let admission = admit(dir.path(), &args).ok().unwrap();
-    assert_eq!(admission.fields["writer_round"], 5);
-    drop(admission);
+    assert!(reason(admit(dir.path(), &args)).starts_with("round_cap"));
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = history(dir.path(), &[5, 5, 5], true);
+    assert!(reason(admit(dir.path(), &args)).starts_with("no_progress"));
+    args["card"]["narrow_fix"] = json!(true);
+    assert!(admit(dir.path(), &args).is_err());
+    let dir = tempfile::tempdir().unwrap();
+    let args = history(dir.path(), &[2, 1, 1], true);
+    assert_eq!(
+        admit(dir.path(), &args).ok().unwrap().fields["writer_round"],
+        4
+    );
     let dir = tempfile::tempdir().unwrap();
     let args = history(dir.path(), &[0], false);
     let source = dir.path().join("verdict-1.json");
@@ -293,4 +316,70 @@ fn work_fingerprint_detects_commits_tracked_and_untracked_changes() {
     record.set("pid", Value::Null);
     finish_round(&mut record, pg_worker_core::run::record::Status::Failed);
     assert_eq!(record.get("round_void"), Some(&json!(true)));
+}
+
+#[test]
+fn the_places_that_quote_the_stop_rule_name_no_other_round_number() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let text = |path: &str| std::fs::read_to_string(root.join(path)).unwrap();
+    let batch = text("skills/unattended-orchestration/cards/batch.md");
+    let card = batch
+        .split("R-batch-04")
+        .nth(1)
+        .unwrap()
+        .split("R-batch-05")
+        .next()
+        .unwrap()
+        .to_string();
+    let skill = text("skills/batch-writer/SKILL.md");
+    let step = skill
+        .split("10. On REQUEST_CHANGES")
+        .nth(1)
+        .unwrap()
+        .split("## Never")
+        .next()
+        .unwrap()
+        .to_string();
+    let settings = text("src/plangraph/settings.py");
+    let setting = settings
+        .lines()
+        .find(|l| l.contains("max_rounds: int"))
+        .unwrap()
+        .to_string();
+    let allowed = [1, STALL_ROUNDS, MAX_ROUNDS, MAX_ROUNDS + 1];
+    let number = regex_lite_numbers;
+    for (name, body) in [
+        ("R-batch-04", card),
+        ("batch-writer step 10", step),
+        ("settings.py", setting),
+    ] {
+        for n in number(&body) {
+            assert!(allowed.contains(&n), "{name} names the round number {n}");
+        }
+        assert!(
+            name == "settings.py" || body.contains(&MAX_ROUNDS.to_string()),
+            "{name} quotes the ceiling"
+        );
+    }
+    assert!(settings.contains(&format!("max_rounds: int = {MAX_ROUNDS}")));
+}
+
+/// Numbers that follow "round"/"rounds"/"ROUND_CAP (at most"/"max_rounds: int =" in `body`.
+fn regex_lite_numbers(body: &str) -> Vec<u64> {
+    let mut found = vec![];
+    for key in [
+        "round ", "rounds ", "rounds\n", "at most ", "int = ", "Round ", "round\n",
+    ] {
+        for part in body.split(key).skip(1) {
+            let digits: String = part
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if let Ok(n) = digits.parse() {
+                found.push(n);
+            }
+        }
+    }
+    found
 }
