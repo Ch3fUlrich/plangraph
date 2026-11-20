@@ -169,9 +169,9 @@ be established cause a failed check.
 The tool prints `READY` on success and `MISSING` with the check failure on exit
 1. It writes both results to
 `DIR/package-readiness/HOST/danger-full-access.json`. Make each host's latest
-record available under the placement command's state directory. Placement
-refuses missing, failed, future-dated, and older-than-120-second records and
-records for a different host or sandbox. Remote capacity samples come from the
+record available under the placement command's state directory. `pg-package-host`
+placement refuses missing, failed, future-dated, and older-than-120-second
+package-readiness records and records for a different host or sandbox. Remote capacity samples come from the
 same state directory's `fleet/HOST.ndjson` history.
 
 ### Three-host writer and review rollout
@@ -193,8 +193,9 @@ session projections with `python3 -m plangraph.fleet_sync genconfig write`,
 then restart the affected spawner units. Run
 `python3 -m plangraph.spawner.host_ready --json` on each placement origin.
 Confirm each host reports a trusted checkout, matching main SHA, working
-tools and login, and no failures. Refresh readiness before its ten-minute
-placement lifetime expires.
+tools and login, and no failures. Refresh the `host_ready` readiness record before its
+ten-minute freshness window expires, and the `package-readiness` record before
+its 120-second window expires.
 
 Submit a writer and a review from a placement origin and verify both run types
 land on the remote Linux worker and on the workstation WSL. Record the run IDs

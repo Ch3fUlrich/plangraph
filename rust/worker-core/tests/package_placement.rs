@@ -149,3 +149,18 @@ fn registry_ranks_by_memory_above_floor_and_keeps_fallback_last() {
     assert_eq!(result.host.as_deref(), Some("primary-b"));
     assert!(result.reason.contains("14000 MB above floor"));
 }
+#[test]
+fn ssh_host_without_ssh_target_routes_by_its_id() {
+    let registry = pg_worker_core::hosts::HostRegistry::from_json_str(include_str!(
+        "../../../docs/schemas/examples/hosts.example.json"
+    ))
+    .unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let hosts = pg_worker_core::package_placement::load(&registry, state.path(), 100);
+    let route = |id: &str| hosts.iter().find(|h| h.id == id).unwrap().ssh.clone();
+    assert_eq!(route("compact").as_deref(), Some("compact"));
+    assert_eq!(
+        route("workstation").as_deref(),
+        Some("worker.example.invalid")
+    );
+}

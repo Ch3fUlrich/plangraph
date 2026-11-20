@@ -252,6 +252,14 @@ impl HostEntry {
     pub fn repo(&self, id: &str) -> Option<&RepoEntry> {
         self.repos.get(id)
     }
+
+    /// The SSH destination for this host: `ssh_target`, else the host id on an
+    /// SSH-transport entry (the rule `fleet_sync` applies); none for other transports.
+    pub fn ssh_route(&self) -> Option<String> {
+        self.ssh_target
+            .clone()
+            .or_else(|| (self.transport == Transport::Ssh).then(|| self.id.clone()))
+    }
 }
 
 mod validate;

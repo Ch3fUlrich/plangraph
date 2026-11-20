@@ -119,9 +119,19 @@ fn real_commit_child_writes_only_temporary_git_metadata() {
 }
 
 #[test]
-fn launch_readiness_requires_danger_full_access_for_writer() {
+fn writer_launch_refuses_a_workspace_write_readiness_record() {
+    let record = pg_worker_core::host_readiness::Record {
+        host: "worker".into(),
+        sandbox: "workspace-write".into(),
+        checked_at: 100,
+        errors: vec![],
+    };
     assert_eq!(
-        pg_worker_core::host_readiness::WRITER_SANDBOX,
-        "danger-full-access"
+        record.refusal(
+            "worker",
+            pg_worker_core::host_readiness::WRITER_SANDBOX,
+            100
+        ),
+        Some("readiness sandbox mismatch")
     );
 }

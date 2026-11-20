@@ -229,7 +229,7 @@ pub fn load_for_role(
         .map(|h| Candidate {
             id: h.id.clone(),
             workstation: h.os == Os::Windows,
-            ssh: h.ssh_target.clone(),
+            ssh: h.ssh_route(),
             readiness: Record::read(state, &h.id, WRITER_SANDBOX).ok(),
             sample: fleet_series::read(&state.join("fleet").join(format!("{}.ndjson", h.id)))
                 .ok()
