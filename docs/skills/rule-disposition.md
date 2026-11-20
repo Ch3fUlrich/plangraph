@@ -73,7 +73,7 @@ role card.
 | R-batch-02 | card | role card: batch | D-5952 fixed brief fields and status line |
 | R-batch-03 | card | role card: batch | D-5952 fast checks before any review |
 | R-batch-04 | card | role card: batch | D-5964 native progress gate: rust/pg-spawnd/src/round_progress_tests.rs; D-5927 narrow fix; automatic replan pending |
-| R-batch-05 | card | role card: batch | D-5952 free legs then Sonnet, never wait for quota |
+| R-batch-05 | card | role card: batch | D-6366 review legs Argon low, mimo pro, DeepSeek flash; never wait for quota |
 | R-batch-06 | card | role card: batch | D-5952 one verdict vocabulary, full head sha |
 | R-batch-07 | card | role card: batch | D-5946 disk floor 5 GB, stop 2 GB |
 | R-batch-08 | card | role card: batch | D-5952 spawner host placement, no local launcher |
