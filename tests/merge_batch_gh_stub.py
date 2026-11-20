@@ -111,9 +111,13 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
         if "branch=main" in endpoint_get:
             run.update(head_sha=git("rev-parse", "refs/heads/main").stdout.strip(), head_branch="main", event="push")
         if "/jobs?" in endpoint_get:
-            names = ["select", "scrub", "file-size", "new-code-lang", "changelog-docs", "browser",
-                     "rust", "rust-windows", "rust-worker", "rust-spike", "ci-gate"]
-            names += [f"{suite} ({i})" for suite in ("pytest", "pytest-postgres") for i in range(3)]
+            names = ["Select suites for this change", "Public scrub: no private names or secrets",
+                     "File size limit (400 lines)", "New code is Rust", "Changelog fragment and docs",
+                     "UI tests in headless Chromium", "Rust workspace on Linux: fmt, clippy, tests",
+                     "Rust spawner and worker core tests on Windows", "Rust worker crate: fmt, clippy, tests",
+                     "Rust replay spike tests", "ci-gate"]
+            names += [f"Python tests, SQLite keeper (shard {i} of 3)" for i in (1, 2, 3)]
+            names += [f"Python tests, Postgres keeper: contract and storage (shard {i} of 3)" for i in (1, 2, 3)]
             jobs = [{"name": n, "status": "completed", "conclusion": "success"} for n in names]
             print(json.dumps({"jobs": jobs, "total_count": len(jobs)}))
         else:

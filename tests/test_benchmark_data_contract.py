@@ -209,12 +209,22 @@ def _assert_contract(rows, models, legs, pending=()):
     operator_admitted = {('missing_row', f'leg:agy-gemini-4-hydrogen-{effort}@agy/'
                           f'gemini-4-hydrogen-{effort}', effort)
                          for effort in ('high', 'medium')}
-    # D-5966: new review registrations have no measured benchmark scores.
+    # D-5966 / D-6310: new review/implement registrations have no measured benchmark scores.
     operator_admitted |= {('missing_row', subject, effort) for subject, effort in (
+        ('leg:agy-gemini-4-neon-medium@agy/gemini-4-neon-medium', 'medium'),
+        ('leg:agy-gemini-4-argon-low@agy/gemini-4-argon-low', 'low'),
         ('leg:agy-gemini-4-argon-medium@agy/gemini-4-argon-medium', 'medium'),
         ('leg:console-deepseek-flash@console-deepseek/deepseek-flash', None),
         ('leg:opencode-go-beam-free@opencode-go/beam-free', None),
-        ('leg:claude-sonnet-5-5-high@claude/claude-sonnet-5-5-high', 'high'))}
+        ('leg:claude-sonnet-5-5-high@claude/claude-sonnet-5-5-high', 'high'),
+        ('catalog:opencode/deepseek-v4.1-flash-free', None),
+        ('catalog:opencode-go/glm-5.3-flash', None),
+        ('leg:opencode-deepseek-v4.1-flash-free@opencode/deepseek-v4.1-flash-free', None),
+        ('leg:opencode-go-glm-5.3-flash@opencode-go/glm-5.3-flash', None),
+        ('leg:opencode-flint-40b-free@opencode/flint-40b-free', None),
+        ('leg:cx-gpt-6.2-astra@omniroute/cx-gpt-6.2-astra', None),
+        ('leg:cx-gpt-6.2-sol@omniroute/cx-gpt-6.2-sol', None),
+        *((f'leg:cx-gpt-6.2-sol-{e}@omniroute/cx-gpt-6.2-sol-{e}', e) for e in CX_EFFORTS))}
     # D-6054: corrected gateway identity remains explicitly unmeasured.
     # Retire its obsolete pending entry without rebaselining the frozen ceiling.
     operator_admitted.add(('missing_row',

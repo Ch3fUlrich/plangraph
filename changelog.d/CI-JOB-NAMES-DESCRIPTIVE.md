@@ -1,0 +1,1 @@
+- **CI-JOB-NAMES-DESCRIPTIVE:** every job of `tests.yml` has a display name that says what it checks (job ids, `needs` and `ci-gate` unchanged); `tools/merge_batch_land.py` matches the new names and the old ids, `tests/test_ci_job_names.py` fails on a missing or shared name, and `docs/ci-gate.md` lists the per-job audit with the duplicate runs marked.

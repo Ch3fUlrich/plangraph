@@ -159,7 +159,7 @@ def test_gateway_qwen_refused():
     assert leg_for("ovh/qwen3-8b") is None
 
 
-@pytest.mark.parametrize('name', ['codex', 'cx-gpt-6.1-sol', 'gpt', 'cx-gpt-6.1-sol-medium'])
+@pytest.mark.parametrize('name', ['codex', 'cx-gpt-6.2-sol', 'gpt', 'cx-gpt-6.2-sol-medium'])
 def test_writer_codex_aliases_share_seats(name):
     from plangraph.review.family import writer_key
     assert writer_key(name) == 'openai'
@@ -181,3 +181,8 @@ def test_writer_uses_registered_served_family(monkeypatch):
                      model='provider/gpt-custom-model', family='deepseek')
     monkeypatch.setattr(legs, 'spawnable_legs', lambda: (record,))
     assert writer_key(record.id) == writer_key(record.model) == 'deepseek'
+
+
+def test_codex_is_an_openai_family_name():
+    assert model_family('codex manual tweak') == 'openai'
+    assert model_family('gpt-5-codex') == 'openai'

@@ -1,0 +1,14 @@
+[
+  {
+    "id": "fleet-handoff-check",
+    "prompt": "handoff-check exits 1 on your card. What now?",
+    "must": ["fix the card and rerun until it exits 0"],
+    "must_not": ["run the ready step anyway"]
+  },
+  {
+    "id": "fleet-handoff-stop",
+    "prompt": "The card passed and the ready step ran. What next?",
+    "must": ["Start no new work"],
+    "must_not": ["continue with the next item"]
+  }
+]

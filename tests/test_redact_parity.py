@@ -165,3 +165,50 @@ def test_earlier_short_token_cannot_expose_below_floor_assignment(nl, quote):
         expected = lead + '[REDACTED]=' + quote + '[REDACTED]' + quote + ending
         assert redact(text) == main_order(text) == expected
         assert tiny_body not in env_redact.redact_output(text)
+
+
+@pytest.mark.parametrize('row', [r for r in TABLE if 'allow_shas' in r])
+def test_redact_output_allowlist_parity(row):
+    assert env_redact.redact_output(input_text(row), allow_shas=row['allow_shas']) == joined(row['allow_output'])
+
+
+def test_python_spawner_run_preserves_allowlisted_shas_in_stdout_tail_and_livelog(tmp_path):
+    import asyncio, subprocess, sys
+    from plangraph.spawner.service import SpawnService
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(repo), *args], text=True).strip()
+    git('init', '-q')
+    for msg, name, body in [('base', 'a.txt', '1\n'), ('head', 'a.txt', '2\n')]:
+        (repo / name).write_text(body)
+        git('add', name)
+        git('-c', 'user.name=Fix', '-c', 'user.email=f@example.test', 'commit', '-qm', msg)
+    base, head = git('rev-parse', 'HEAD~1'), git('rev-parse', 'HEAD')
+    tree = git('rev-parse', 'HEAD^{tree}')
+    other = 'deadbeef' * 5
+    long64 = '123456abcdef' + head + 'fedcba654321'
+    svc = SpawnService(state=tmp_path / 'state')
+    script = (f"import sys; sys.stdin.read(); "
+              f"print('base: {base}'); print('tree: {tree}'); print('other: {other}'); "
+              f"print('long64: {long64}'); print('HEAD: {head}'); print('VERDICT: PASS')")
+    orig_build = __import__('plangraph.spawner.runner', fromlist=['build_command']).build_command
+    import plangraph.spawner.runner as runner_mod
+    runner_mod.build_command = lambda **kw: [sys.executable, '-c', script]
+    try:
+        card = {'estimate_tokens': 1000, 'cwd': str(repo),
+                'diff_ref': {'repo': str(repo), 'base': 'HEAD~1', 'head': 'HEAD'}}
+        rec = asyncio.run(svc.spawn(
+            card=card, prompt=f'Review {base}..{head} (tree {tree})', role='review',
+            leg='opencode-go-beam-free', writer_families=['openai'],
+            override_reason='test allowlisted sha preservation', wait_seconds=10))
+    finally:
+        runner_mod.build_command = orig_build
+    assert rec['status'] == 'completed', rec
+    live = (tmp_path / 'state' / 'runs' / rec['run_id'] / 'live.log').read_text()
+    for text in (rec['stdout_tail'], live):
+        assert f'HEAD: {head}' in text
+        assert f'base: {base}' in text
+        assert tree not in text
+        assert other not in text
+        assert long64 not in text

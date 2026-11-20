@@ -168,7 +168,7 @@ def test_base_launch_preserves_shield_cancellation(launch_leg_case, cancel):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.1-sol', 'gpt'])
+@pytest.mark.parametrize('writer', ['codex', 'cx-gpt-6.2-sol', 'gpt'])
 def test_review_launch_sends_resolved_author_family(launch_leg_case, writer):
     import asyncio
     seat, record, chosen, jobs, calls = launch_leg_case

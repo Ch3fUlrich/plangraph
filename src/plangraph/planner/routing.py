@@ -16,7 +16,7 @@ from plangraph.model_admission import validate_model  # compatibility re-export
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
                          BenchRequired, benchmark_rows_from_db)
-from .legs import DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
+from .legs import CODEX_FALLBACK_WRITERS, DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .review_order import review_key, catalog_tiers
 from .seats import _check_diff_ref, family_spellings, claude_writer_fence, pick_seats, writer_parts, seat_family  # noqa: F401
@@ -99,6 +99,11 @@ def pick_window_class(effective: int, floor: str | None = None) -> str:
     raise RouteError("estimate too big")
 
 
+def _is_low_risk(risk: str, tags: Sequence[str] | None) -> bool:
+    """The one low-risk predicate behind the low_risk_only leg gate."""
+    return risk == "low" and not tags
+
+
 def _review(tags: Sequence[str]) -> tuple[str, int]:
     return ("risky", 2) if tags else ("standard", 1)
 
@@ -113,12 +118,14 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
     Raises ``RouteError`` when no leg is eligible, ``ValueError`` on a bad card.
     """
     from .route_policy import implement_family_excluded
+    from .legs import LOW_RISK_ONLY_LEGS
     check_route_targets(card, legs)
     effective_role = role if role is not None else card.get("role")
     exclude_fams = set(exclude_families)
     legs = tuple(READINESS_LEGS if effective_role is None and legs is DEFAULT_LEGS else legs)
     effective = effective_estimate(card.get("estimate_tokens"), subtasks)
     tags = list(card.get("risk_tags") or [])
+    low_risk = _is_low_risk(card.get("risk", "normal"), tags)
     bad = [t for t in tags if t not in RISK_TAGS]
     if bad:
         raise ValueError(f"unknown risk tags: {bad}")
@@ -147,6 +154,8 @@ def route_card(card: Mapping, *, legs: Sequence[Leg] = DEFAULT_LEGS, subtasks: i
             why = "disabled"
         elif effective_role == "implement" and implement_family_excluded(leg):
             why = "excluded_family"
+        elif effective_role in ("implement", "review") and leg.id in LOW_RISK_ONLY_LEGS and not low_risk:
+            why = "low_risk_only"
         elif leg.id in unavailable:
             why = "unavailable"
         elif leg.family in exclude_fams:
@@ -259,7 +268,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Account/combo scope comes from the card and is never a wildcard.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON, REVIEW_SONNET
+    native_implement = role == "implement" and legs is DEFAULT_LEGS
+    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_SONNET
     if native_review:
         legs = review_route_pool(legs)
     check_route_targets(card, legs)
@@ -323,6 +333,10 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                  for l in candidates if l.model not in rows and l.id not in rows)
     if strict and gaps:
         raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps), gaps)
+    if native_implement:   # Claude writers join the route behind Codex (rule 3.58); see codex_out.
+        from .legs import EXPLICIT_LEGS   # Added after the strict gap check: explicit legs carry no benchmark row.
+        candidates += tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
+                            and role in l.roles and leg_active(l, now=now))
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
@@ -348,26 +362,37 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     quota_states = {"agy:" + model: (states[leg_id] if leg_id in states and leg_id != REVIEW_SONNET else
         reader("agy:" + model, now=now, account=card.get("account"), combo=card.get("combo")))
         for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
-                             ("gemini-4-argon", REVIEW_ARGON),
+                             ("gemini-4-argon", REVIEW_ARGON_LOW),
                              ("claude-sonnet-5-5", REVIEW_SONNET))}
     limited = {key for key, state in states.items() if unavailable(state)}
+    codex = [l.id for l in candidates if l.id.startswith("cx-gpt-")]
+    codex_out = bool(codex) and all(leg_id in limited for leg_id in codex)
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
                for l in legs if role in l.roles and not leg_active(l, now=now)]
     skipped = []
     from plangraph.routing_support.resolver import score_model
     candidate_details = []
+    low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
     for leg in candidates:
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
+        if native_implement and leg.id in CODEX_FALLBACK_WRITERS and not codex_out and not reason:
+            reason = "codex_available"
         if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
             reason = 'auth_refused'
+        if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('caller') == 'quota-snapshot':
+            reset = states[leg.id]['evidence'].get('reset_at')
+            reason = 'quota_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset)) if reset else reason
         if reason:
             pass
         elif leg.family in excluded:
             reason = "excluded_family"
+        elif leg.id in LOW_RISK_ONLY_LEGS and not low_risk:
+            reason = "low_risk_only"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
             reason = "inline_only_needs_diff"
-        elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai":
+        elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai" and not (
+                low_risk and leg.id in LOW_RISK_ONLY_LEGS):
             reason = "review_route_excluded"
         else:
             try:
@@ -388,7 +413,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         candidate_details.append(detail)
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
-        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat", "review_route_excluded")}
+        "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
+        "review_route_excluded", "low_risk_only", "codex_available")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
@@ -435,8 +461,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     if native_review:
-        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER[:-1]
-                     else len(REVIEW_ORDER) if leg.id == REVIEW_ORDER[-1] else len(REVIEW_ORDER) - 1)
+        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
+                     else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
         source = "operator-order"
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     seats, coverage, open_parts = [], (), []

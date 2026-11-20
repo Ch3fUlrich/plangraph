@@ -130,7 +130,7 @@ fn attempt(
         let c = Arc::new(Capture::new(CaptureCfg {
             live_log: Some(log),
             live_cfg: Default::default(),
-            scrubber: Scrubber::from_env(&spec.env),
+            scrubber: Scrubber::from_env_with_allowlist(&spec.env, &spec.allow_shas),
         }));
         capture = Some(c.clone());
         let mut readers = Vec::new();

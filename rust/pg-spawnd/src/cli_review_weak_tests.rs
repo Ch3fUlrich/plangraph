@@ -20,7 +20,7 @@ fn background_only_288_byte_review_is_no_verdict() {
         ],
     );
     let head = git(dir.path(), &["rev-parse", "HEAD"]).ok().unwrap();
-    let leg = json!({"harness":"agy", "model":"gemini-4-argon-medium", "family":"gemini"});
+    let leg = json!({"harness":"agy", "model":"gemini-4-neon-medium", "family":"gemini"});
     let prefix =
         "I am running tests in the background. I will inspect the results when they finish.\n";
     let tail = "\nFINDING none\nVERDICT: PASS\nTEST_GAMING: no\n";

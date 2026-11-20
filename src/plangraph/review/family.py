@@ -27,7 +27,7 @@ __all__ = [
 ]
 
 FAMILIES = (
-    (r"gpt|^o\d", "openai"), (r"mimo", "xiaomi"), (r"llama|muse", "meta"),
+    (r"gpt|codex|^o\d", "openai"), (r"mimo", "xiaomi"), (r"llama|muse", "meta"),
     (r"deepseek", "deepseek"), (r"qwen", "alibaba"), (r"gemini", "google"),
     (r"claude|sonnet|opus|haiku", "anthropic"),
     (r"glm|zhipu", "zhipu"),
@@ -143,7 +143,7 @@ def writer_key(writer_family: object) -> str:
     records = spawnable_legs()
     name = _norm(writer_family)
     # Codex is the native harness for the registered Sol writer.
-    lookup = "cx-gpt-6.1-sol" if name == "codex" else name
+    lookup = "cx-gpt-6.2-sol" if name == "codex" else name
     served = {_family_key(leg.family) for leg in records
               if lookup in (_norm(leg.id), _norm(leg.model))}
     key = served.pop() if len(served) == 1 else None if served else _family_key(lookup)

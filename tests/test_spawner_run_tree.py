@@ -461,7 +461,7 @@ def test_all_python_entry_records_have_tree_sha_or_reason(tmp_path, monkeypatch,
     code = dict(tree_sha='a' * 40 if identity else None, tree_branch='detached' if identity else None)
     monkeypatch.setattr(git_guard, 'CODE_IDENTITY', code)
     service = _service(tmp_path, monkeypatch)
-    chosen = next(l for l in legs.DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
+    chosen = next(l for l in legs.DEFAULT_LEGS if l.id == 'cx-gpt-6.2-sol-medium')
     service._route = lambda *a, **k: routing.SpawnPlan((chosen,), (), 'test', (chosen,), ())
     options = dict(card={'estimate_tokens': 100}, prompt='fixture', role='review',
                    writer_families=['claude'], dry_run=True)
@@ -539,7 +539,7 @@ from plangraph.spawner import cli
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
 SeatSpawnMixin.admit_spawn = lambda *a, **k: None
 if sys.argv[1].startswith('cli'):
-    raise SystemExit(cli.main(['--state', sys.argv[2], 'spawn', '--wait', '0.02' if sys.argv[1] == 'cli-wait' else '0', '--card', '{"estimate_tokens":100}', '--cwd', sys.argv[3], '--role', 'review', '--writer-family', 'openai', '--leg', 'cx-gpt-6.1-sol-xhigh', '--override-reason', 'fixture', 'Review fixture']))
+    raise SystemExit(cli.main(['--state', sys.argv[2], 'spawn', '--wait', '0.02' if sys.argv[1] == 'cli-wait' else '0', '--card', '{"estimate_tokens":100}', '--cwd', sys.argv[3], '--role', 'review', '--writer-family', 'openai', '--leg', 'cx-gpt-6.2-sol-medium', '--override-reason', 'fixture', 'Review fixture']))
 from plangraph.spawner.mcp import MCPSpawnerServer
 from plangraph.spawner.runner import SpawnerRunner
 server = MCPSpawnerServer(SpawnerRunner(default_cwd=sys.argv[3]), state=sys.argv[2])

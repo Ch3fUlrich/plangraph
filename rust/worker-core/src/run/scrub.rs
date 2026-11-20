@@ -1,12 +1,96 @@
 //! Environment-value scrubbing before pattern redaction. Provider env names read
 //! by Python from OPENCODE_CONFIG_CONTENT are deliberately not ported here.
-use crate::redact::{redact, REDACTED};
+use crate::redact::{redact_with_allowlist, REDACTED};
 use regex::Regex;
-use std::{ffi::OsString, sync::OnceLock};
+use std::{
+    collections::BTreeSet, ffi::OsString, io::Write, path::Path, process::Stdio, sync::OnceLock,
+};
 
-pub struct Scrubber(Vec<String>);
+pub struct Scrubber {
+    env_values: Vec<String>,
+    allow_shas: BTreeSet<String>,
+}
+
+fn is_hex_sha(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+/// Resolve a revision to its full lowercase 40-hex commit sha in `repo`.
+pub fn resolve_commit_sha(repo: &Path, rev: &str) -> Option<String> {
+    let rev = rev.trim();
+    if rev.is_empty() || !repo.is_dir() {
+        return None;
+    }
+    let out = crate::workspace_resolver::git_command(repo)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{rev}^{{commit}}"),
+        ])
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let sha = std::str::from_utf8(&out.stdout)
+        .ok()?
+        .trim()
+        .to_ascii_lowercase();
+    is_hex_sha(&sha).then_some(sha)
+}
+
+/// Collect lowercase 40-hex strings in `prompt` that resolve as commits in `cwd`.
+pub fn collect_prompt_commit_shas(cwd: &Path, prompt: &str) -> BTreeSet<String> {
+    static SHA40: OnceLock<Regex> = OnceLock::new();
+    let sha_re = SHA40.get_or_init(|| Regex::new(r"\b[0-9a-fA-F]{40}\b").unwrap());
+    let candidates: BTreeSet<String> = sha_re
+        .find_iter(prompt)
+        .map(|m| m.as_str().to_ascii_lowercase())
+        .collect();
+    if candidates.is_empty() || !cwd.is_dir() {
+        return BTreeSet::new();
+    }
+    let Ok(mut child) = crate::workspace_resolver::git_command(cwd)
+        .args(["cat-file", "--batch-check"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return BTreeSet::new();
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        for sha in &candidates {
+            if writeln!(stdin, "{sha}^{{commit}}").is_err() {
+                break;
+            }
+        }
+    }
+    let Ok(out) = child.wait_with_output() else {
+        return BTreeSet::new();
+    };
+    if !out.status.success() {
+        return BTreeSet::new();
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    candidates
+        .into_iter()
+        .zip(stdout.lines())
+        .filter_map(|(sha, line)| (line.split_whitespace().nth(1) == Some("commit")).then_some(sha))
+        .collect()
+}
+
 impl Scrubber {
     pub fn from_env(env: &[(OsString, OsString)]) -> Self {
+        Self::from_env_with_allowlist(env, std::iter::empty::<&str>())
+    }
+    pub fn from_env_with_allowlist<I, S>(env: &[(OsString, OsString)], allow_shas: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         static NUMBER: OnceLock<Regex> = OnceLock::new();
         let number = NUMBER.get_or_init(|| {
             Regex::new(r"^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$").unwrap()
@@ -48,14 +132,22 @@ impl Scrubber {
         // Longest first by character count, as Python's sorted(key=len); ties by bytes.
         values.sort_by_key(|v| (std::cmp::Reverse(v.chars().count()), v.clone()));
         values.dedup();
-        Self(values)
+        let allow_shas = allow_shas
+            .into_iter()
+            .map(|s| s.as_ref().to_ascii_lowercase())
+            .filter(|s| is_hex_sha(s))
+            .collect();
+        Self {
+            env_values: values,
+            allow_shas,
+        }
     }
     pub fn scrub(&self, text: &str) -> String {
         let mut text = text.to_owned();
-        for value in &self.0 {
+        for value in &self.env_values {
             text = text.replace(value, REDACTED);
         }
-        redact(&text)
+        redact_with_allowlist(&text, &self.allow_shas)
     }
 }
 #[cfg(test)]
@@ -82,6 +174,54 @@ mod tests {
         assert!(
             !out.contains('b') && out.starts_with(&"é".repeat(7)),
             "{out}"
+        );
+    }
+    #[test]
+    fn allowlist_resolution_and_scrubbing() {
+        let dir = tempfile::tempdir().unwrap();
+        let git = |args: &[&str]| -> String {
+            let out = crate::git_test_support::command(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            String::from_utf8_lossy(&out.stdout).trim().to_owned()
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.path().join("f.txt"), "hello\n").unwrap();
+        git(&["add", "f.txt"]);
+        git(&[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "-qm",
+            "init",
+        ]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let tree = git(&["rev-parse", "HEAD^{tree}"]);
+        let missing = "deadbeef".repeat(5);
+        assert_eq!(
+            super::resolve_commit_sha(dir.path(), "HEAD"),
+            Some(head.clone())
+        );
+        assert_eq!(super::resolve_commit_sha(dir.path(), &tree), None);
+        let found = super::collect_prompt_commit_shas(
+            dir.path(),
+            &format!("commit {head} tree {tree} missing {missing}"),
+        );
+        assert_eq!(found, std::collections::BTreeSet::from([head.clone()]));
+        // Env secrets still win over allowlist, while normal commit output stays readable.
+        let s = Scrubber::from_env_with_allowlist(
+            &[("MY_TOKEN".into(), missing.clone().into())],
+            [&head],
+        );
+        assert_eq!(
+            s.scrub(&format!(
+                "HEAD: {head}\nother: {missing}\nlong: 0000{head}0000"
+            )),
+            format!("HEAD: {head}\nother: [REDACTED]\nlong: [REDACTED]")
         );
     }
 }

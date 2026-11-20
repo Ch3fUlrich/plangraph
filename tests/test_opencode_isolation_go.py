@@ -29,7 +29,7 @@ def source_store(path, active=1):
 @pytest.mark.usefixtures('fake_ownership')
 @pytest.mark.parametrize('present,active', [(True, 1), (True, None), (True, 0), (False, None)],
                          ids=['active', 'null', 'inactive', 'missing'])
-@pytest.mark.parametrize('model', ['opencode-go/gemini-4-argon', 'opencode-go-gemini-4-argon',
+@pytest.mark.parametrize('model', ['opencode-go/glm-5.3-flash', 'opencode-go-glm-5.3-flash',
                                    'go-test-combo', 'aliases/go-test-combo'])
 def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, model):
     source = tmp_path / 'source.db'
@@ -41,7 +41,7 @@ def test_review_provider_only(tmp_path, monkeypatch, caplog, present, active, mo
     monkeypatch.setattr(resolver, 'host_skip_reason_async', probe)
     if model in ('go-test-combo', 'aliases/go-test-combo'):
         monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-            {'id': 'opencode-go/gemini-4-argon', 'combos': [model]}])
+            {'id': 'opencode-go/glm-5.3-flash', 'combos': [model]}])
         monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
     seen = []
     async def factory(*args, **kwargs):
@@ -228,10 +228,10 @@ def test_integration_is_opt_in():
 def test_resolution_preserves_harness(monkeypatch):
     from plangraph.spawner.target import resolve_target
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [
-        {'id': 'omniroute/cx-gpt-6.1-sol', 'combos': ['gpt-test']}])
+        {'id': 'omniroute/cx-gpt-6.2-sol', 'combos': ['gpt-test']}])
     monkeypatch.setattr(resolver, 'catalog_row_admitted', lambda row: True)
     target, leg = resolve_target('gpt-test')
-    assert target == leg.model == 'omniroute/cx-gpt-6.1-sol'
+    assert target == leg.model == 'omniroute/cx-gpt-6.2-sol'
     assert leg.harness == 'opencode'
 
 
@@ -256,14 +256,11 @@ def test_disabled_and_fallback_routes():
     plans = [plan_spawn(card, role=role, writer_families=('claude',))
              for role in ('review', 'implement')]
     for leg in DEFAULT_LEGS:
-        if leg.model.startswith('opencode/') and leg.model.endswith('-free'):
-            assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
+        if leg.model == 'opencode/glm-5.3-flash-free':
+            assert leg.disabled and 'D-6310' in leg.disabled
             for plan in plans:
                 assert leg.id not in [l.id for l in plan.legs]
-                if 'implement' in leg.roles or plan is plans[0]:
-                    assert any(s['leg'] == leg.id and 'D-4196' in s['reason'] for s in plan.skipped)
-                else:
-                    assert not any(s['leg'] == leg.id for s in plan.skipped)
+                assert any(s['leg'] == leg.id and 'D-6310' in s['reason'] for s in plan.skipped)
     assert 'omniroute-gemini-4-argon-high' not in [l.id for l in plans[0].legs]
     assert 'omniroute-gemini-4-argon-high' not in [l.id for l in plans[1].legs]
 
@@ -323,7 +320,7 @@ def test_real_models_probe(tmp_path):
         # Never include raw command output in assertion failures: it may contain secrets.
         assert result.returncode == 0
         models = set(result.stdout.splitlines())
-        assert {'opencode-go/glm-5.2', 'opencode-go/deepseek-v4.1-flash',
+        assert {'opencode-go/glm-5.3-flash', 'opencode-go/deepseek-v4.1-flash',
                 'opencode-go/qwen3.8-max'} <= models
         with sqlite3.connect(job / 'opencode' / 'opencode.db') as db:
             values = db.execute('SELECT value FROM credential').fetchall()

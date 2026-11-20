@@ -39,8 +39,10 @@ def implement_key(leg, tier_idx, pos):
 
     Remaining subscription legs precede pay-as-you-go; table order breaks ties.
     """
-    from .legs import LEAD_WRITER, WRITER_ORDER
+    from .legs import CODEX_FALLBACK_WRITERS, LEAD_WRITER, WRITER_ORDER
     index = WRITER_ORDER.index(leg.id) if leg.id in WRITER_ORDER else len(WRITER_ORDER)
+    if leg.id in CODEX_FALLBACK_WRITERS:   # directly behind the Codex legs
+        index = max(i for i, id in enumerate(WRITER_ORDER) if id.startswith("cx-gpt-")) + 0.5
     return (leg.id != LEAD_WRITER, index, tier_idx, pos)
 
 
@@ -55,12 +57,14 @@ def implement_model_family(value):
 def implement_family_excluded(leg):
     """No Claude identity or unidentified family may write automatically, even renamed."""
     from plangraph.routing_support.resolver import MODEL_FAMILIES
-    from .legs import spawnable_legs
+    from .legs import CODEX_FALLBACK_WRITERS, spawnable_legs
+    if leg.id in CODEX_FALLBACK_WRITERS:
+        return False
     registered = {l.family for l in spawnable_legs() if l.model == leg.model}
     identities = {implement_model_family(value) for value in
                   (leg.id, leg.family, leg.model, leg.harness, *registered)}
     return (leg.claude_family or "claude" in identities
-            or not identities.intersection(MODEL_FAMILIES | {"grok", "openrouter"}))
+            or not identities.intersection(MODEL_FAMILIES | {"grok", "openrouter", "flint", "beam", "pickle"}))
 
 
 @dataclass(frozen=True)

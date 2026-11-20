@@ -12,7 +12,7 @@ from plangraph.spawner.service import SpawnService
 
 
 def test_live_skip_precedes_typed_disabled_entries():
-    live = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.1-sol-xhigh')
+    live = next(l for l in DEFAULT_LEGS if l.id == 'cx-gpt-6.2-sol-medium')
     disabled_writer = replace(live, id='disabled-test-writer', disabled='synthetic disable')
     evidence = {'status': 429}
     plan = plan_spawn({'estimate_tokens': 1000}, role='implement', legs=(live, disabled_writer), leg_reader=lambda model, **kw: {
@@ -33,7 +33,7 @@ def test_disabled_models_still_validated():
 def test_explicit_client_mismatch_refused(tmp_path):
     runner = SpawnerRunner(default_cwd=str(tmp_path))
     with pytest.raises(SpawnRefused, match='client.*harness'):
-        asyncio.run(runner.spawn('review', model_or_combo='opencode-go-gemini-4-argon',
+        asyncio.run(runner.spawn('review', model_or_combo='opencode-go-glm-5.3-flash',
                                  client='claude', dry_run=True))
 
 

@@ -44,7 +44,7 @@ EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
 
 # (regex on the lowercased model name without any "vendor/" prefix, family)
 FAMILIES = (
-    (r"gpt|^o\d", "openai"), (r"mimo", "xiaomi"), (r"llama|muse", "meta"),
+    (r"gpt|codex|^o\d", "openai"), (r"mimo", "xiaomi"), (r"llama|muse", "meta"),
     (r"deepseek", "deepseek"), (r"qwen", "alibaba"), (r"gemini", "google"),
     (r"claude|sonnet|opus|haiku", "anthropic"),
     (r"glm|zhipu", "zhipu"),

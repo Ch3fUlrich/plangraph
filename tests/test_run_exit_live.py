@@ -123,7 +123,7 @@ def test_real_exit_http_marker_retry(tmp_path, monkeypatch, script, rc):
     service = spawn_service(runner=SpawnerRunner(default_cwd=str(tmp_path)), state=tmp_path)
 
     async def run():
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='tiny', model='omniroute/cx-gpt-6.1-sol',
+        record = await service.spawn(card={'estimate_tokens': 1000}, prompt='tiny', model='omniroute/cx-gpt-6.2-sol-medium',
                                      override_reason='HTTP completion regression', wait_seconds=5)
         assert record['exit_code'] == rc, record
         marker = service._path(record['run_id']).parent / 'keeper.delivered'
