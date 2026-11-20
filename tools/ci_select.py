@@ -53,6 +53,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_support/resolver.py",
     "configuration/opencode/providers.json",
     ".github/workflows/**",
+    # rust/pg-spawnd/tests/ci_step_timeout.rs reads the bounded-step run script.
+    ".github/actions/bounded-step/action.yml",
     "rust-toolchain.toml",
     ".docs-map",
     ".gitignore",
