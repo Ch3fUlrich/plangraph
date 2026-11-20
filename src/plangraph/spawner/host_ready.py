@@ -259,40 +259,64 @@ def fresh(record, now=None):
         return False
 
 
-PROBE_PYTHON = r'''cd {repo} || exit 1
-py=./.venv/bin/python
-if [ ! -f "$py" ]; then
-  cfg=${{PREFLIGHT_PYTHON:-}}
-  case "$cfg" in "~") cfg=$HOME;; "~/"*) cfg=$HOME/${{cfg#"~/"}};; esac
-  case "$cfg" in "") cfg=$(command -v python3 || echo python3);; /*) ;; *) cfg=$PWD/$cfg;; esac
-  py=$cfg
-fi
-for m in pytest xdist; do "$py" -c "import $m" 2>/dev/null || echo "missing $m"; done
-echo "umask $(umask)"
-echo "unit_$(systemctl --user show -p UMask 2>/dev/null)"
-'''
+VENV_PYTHONS = ('.venv/bin/python', '.venv/Scripts/python.exe')
 
 
-def python_test_tools(command, fail, repo):
-    """Report what a pre-push run needs from the host: pytest, xdist and a safe umask.
+def pre_push_report(repo, unit=None, environ=None):
+    """What a pre-push run needs from this host, for `host_ready --test-tools` on the target.
 
-    The interpreter is the hook's choice: the checkout venv, else PREFLIGHT_PYTHON
-    (home- and cwd-relative like the hook), else python3. Files created under a umask
-    that leaves group or other write set fail the record-permission checks, so the
-    probe shell's umask and the user manager's unit UMask must keep both bits.
+    The interpreter is the hook's choice (tools/hooks/pre-push): the checkout venv, else
+    PREFLIGHT_PYTHON (home-expanded, relative to the checkout), else python3. Files created
+    under a umask that leaves group or other write set fail the record-permission checks,
+    so this process's umask and the user service's UMask must keep both bits.
     """
-    output = command('python', PROBE_PYTHON.format(repo=shlex.quote(repo)))
-    if output is None:
+    environ = os.environ if environ is None else environ
+    root = Path(repo)
+    venv = next((root / rel for rel in VENV_PYTHONS if (root / rel).is_file()), None)
+    configured = environ.get('PREFLIGHT_PYTHON')
+    if venv is not None:
+        interpreter = str(venv.absolute())
+    elif configured:
+        path = Path(configured).expanduser()
+        interpreter = str(path if path.is_absolute() else root / path)
+    else:
+        interpreter = shutil.which('python3') or 'python3'
+    missing = []
+    for module in ('pytest', 'xdist'):
+        try:
+            found = subprocess.run([interpreter, '-c', 'import ' + module], capture_output=True,
+                                   timeout=30, cwd=root).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            found = False
+        if not found:
+            missing.append(module)
+    mask = os.umask(0)
+    os.umask(mask)
+    report = dict(missing=missing, umask=format(mask, '04o'), unit_umask=None)
+    if unit:
+        try:
+            shown = subprocess.run(['systemctl', '--user', 'show', '--property=UMask', '--value', unit],
+                                   capture_output=True, text=True, timeout=10).stdout.strip()
+            report['unit_umask'] = shown if re.fullmatch(r'[0-7]+', shown) else None
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return report
+
+
+def python_test_tools(measure, fail, prefix, repo, unit=None):
+    """Run pre_push_report on the host and report missing pytest/xdist or a writable umask."""
+    command = prefix + 'host_ready --test-tools ' + shlex.quote(repo)
+    if unit:
+        command += ' --unit ' + shlex.quote(unit)
+    report = measure('python', command, json.loads)
+    if report is None:
         return False
-    missing = [line.split()[1] for line in output.splitlines()
-               if re.fullmatch(r'missing (pytest|xdist)', line.strip())]
+    missing = [m for m in report['missing'] if m in ('pytest', 'xdist')]
     if missing:
         fail('python', 'missing ' + ' '.join(missing))
-    for label, pattern in (('umask', r'umask ([0-7]+)'), ('unit umask', r'unit_UMask=([0-7]+)')):
-        for line in output.splitlines():
-            found = re.fullmatch(pattern, line.strip())
-            if found and int(found[1], 8) & 0o022 != 0o022:
-                fail('umask', f'{label} {found[1]} leaves new files group- or other-writable')
+    for label, value in (('umask', report['umask']), ('unit umask', report['unit_umask'])):
+        if value is not None and int(value, 8) & 0o022 != 0o022:
+            fail('umask', f'{label} {value} leaves new files group- or other-writable')
     return not missing
 
 
@@ -348,7 +372,6 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             record['src_ok'] = check_sources(name, config, command, fail)
             if config.get('registry'):
                 record['tools_ok'] = command('tools', 'command -v git && command -v python3 && command -v codex') is not None
-                record['python_ok'] = python_test_tools(command, fail, config['repo'])
                 record['tokens_ok'] = command('tokens', 'codex login status') is not None
                 record['trust_ok'] = command(
                     'trust', 'pg-host-readiness --project ' + shlex.quote(config['repo'])) is not None
@@ -359,6 +382,11 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             if config.get('state_dir'):
                 prefix += 'PLANGRAPH_SPAWN_STATE=' + shlex.quote(config['state_dir']) + ' '
             prefix += 'PYTHONPATH=src python3 -m plangraph.spawner.'
+            if config.get('registry'):
+                session = config.get('session_unit') or ''
+                record['python_ok'] = python_test_tools(
+                    measure, fail, prefix, config['repo'],
+                    session if session.endswith('.service') else None)
             record['mem_available_mb'] = measure('memory', 'cat /proc/meminfo',
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
             record['disk_free_gb'] = measure('disk', 'df -Pk -- ' + repo,
@@ -447,7 +475,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host')
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--test-tools', metavar='REPO')
+    parser.add_argument('--unit')
     args = parser.parse_args(argv)
+    if args.test_tools:
+        print(json.dumps(pre_push_report(args.test_tools, args.unit)))
+        return 0
     from .overflow import host_config, placement_config, readiness_dir, registry_caps
     registry = registry_caps()
     hosts = placement_config(registry).get('hosts', {})

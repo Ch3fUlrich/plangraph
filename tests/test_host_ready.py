@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -358,81 +359,99 @@ def test_registry_host_reports_missing_pytest_and_xdist(tmp_path, missing):
     def fake(argv, **kwargs):
         script = argv[-1]
         scripts.append(script)
-        if 'import $m' in script:
-            return SimpleNamespace(returncode=0, stdout=''.join(
-                f'missing {module}\n' for module in missing))
+        if '--test-tools' in script:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                dict(missing=missing, umask='0022', unit_umask=None)))
         if 'remote_ps' in script:
             return SimpleNamespace(returncode=0, stdout=json.dumps(dict(runs=[])))
         return runner(argv, **kwargs)
 
     result = h.check_host('fiction', dict(CONFIG, registry=True), tmp_path, fake)
-    probe = next(s for s in scripts if 'import $m' in s)
-    assert 'cd /invented/repo' in probe and '.venv/bin/python' in probe and 'PREFLIGHT_PYTHON' in probe
+    probe = next(s for s in scripts if '--test-tools' in s)
+    assert 'plangraph.spawner.host_ready --test-tools /invented/repo' in probe and '--unit' not in probe
     assert result['python_ok'] is (not missing)
     assert result['ok'] is (not missing), result['failures']
     assert [f for f in result['failures'] if f.startswith('python:')] == (
         [f'python: missing {" ".join(missing)}'] if missing else [])
 
 
-@pytest.mark.parametrize('preflight_python,missing', [('fails-pytest', 'pytest'), ('passes', None)])
-def test_readiness_probe_honours_preflight_python_like_the_hook(tmp_path, monkeypatch, preflight_python, missing):
-    """Run the probe script for real: no checkout .venv, so PREFLIGHT_PYTHON picks the interpreter."""
-    shim = tmp_path / 'preflight-python'
-    shim.write_text('#!/bin/sh\n[ "$2" = "import pytest" ] && [ "%s" = fails-pytest ] && exit 1\nexit 0\n' % preflight_python)
-    shim.chmod(0o755)
-    monkeypatch.setenv('PREFLIGHT_PYTHON', str(shim))
+@pytest.mark.parametrize('session,queried', [('spawner.service', True), ('spawner.pid', False), ('', False)])
+def test_registry_host_queries_the_unit_umask_of_its_service_by_name(tmp_path, session, queried):
+    scripts = []
+
+    def fake(argv, **kwargs):
+        scripts.append(argv[-1])
+        if '--test-tools' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                dict(missing=[], umask='0022', unit_umask='0002' if queried else None)))
+        if 'remote_ps' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(runs=[])))
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', dict(CONFIG, registry=True, session_unit=session), tmp_path, fake)
+    probe = next(s for s in scripts if '--test-tools' in s)
+    assert ('--unit spawner.service' in probe) is queried
+    assert ('umask: unit umask 0002 leaves new files group- or other-writable' in result['failures']) is queried
+
+
+def shim(directory, name='shim'):
+    path = directory / name
+    path.write_text('#!/bin/sh\n[ "$2" = "import xdist" ] && exit 1\nexit 0\n')
+    path.chmod(0o755)
+    return path
+
+
+def test_report_follows_the_hook_interpreter_choice(tmp_path):
+    repo = tmp_path / 'repo'
+    (repo / '.venv/bin').mkdir(parents=True)
+    shim(repo / '.venv/bin', 'python')
+    other = shim(tmp_path, 'configured')
+    # The checkout venv wins over PREFLIGHT_PYTHON.
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(other)})['missing'] == ['xdist']
+    (repo / '.venv/bin/python').unlink()
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(other)})['missing'] == ['xdist']
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(tmp_path / 'absent')})['missing'] == [
+        'pytest', 'xdist']
+
+
+@pytest.mark.parametrize('value', ['./shim', 'shim'])
+def test_report_resolves_relative_preflight_python_in_the_checkout(tmp_path, value):
     repo = tmp_path / 'repo'
     repo.mkdir()
-    failures = []
-    ok = h.python_test_tools(
-        lambda check, script: subprocess.run(['sh', '-c', script], capture_output=True, text=True).stdout,
-        lambda check, reason: failures.append(f'{check}: {reason}'), str(repo))
-    assert ok is (missing is None)
-    assert failures == ([f'python: missing {missing}'] if missing else [])
+    shim(repo)
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': value})['missing'] == ['xdist']
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': 'not-there'})['missing'] == [
+        'pytest', 'xdist']
 
 
-def run_probe(tmp_path, monkeypatch, preflight_python, shim_name='shim', home=None, umask='022', unit_umask='0022'):
-    repo = tmp_path / 'repo'
-    repo.mkdir(exist_ok=True)
-    shim = (home or repo) / shim_name
-    shim.write_text('#!/bin/sh\n[ "$2" = "import xdist" ] && exit 1\nexit 0\n')
-    shim.chmod(0o755)
-    monkeypatch.setenv('HOME', str(home or tmp_path))
-    if preflight_python is None:
-        monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
-    else:
-        monkeypatch.setenv('PREFLIGHT_PYTHON', preflight_python)
-    failures = []
-    def run(check, script):
-        return subprocess.run(['sh', '-c', f'umask {umask}; systemctl() {{ echo UMask={unit_umask}; }}; {script}'],
-                              capture_output=True, text=True).stdout
-    ok = h.python_test_tools(run, lambda check, reason: failures.append(f'{check}: {reason}'), str(repo))
-    return ok, failures
-
-
-@pytest.mark.parametrize('value', ['./shim', 'shim', '~/hook-python'])
-def test_relative_and_home_relative_preflight_python_resolve_like_the_hook(tmp_path, monkeypatch, value):
+@pytest.mark.parametrize('form', ['~/hook-python', '~someone/hook-python'])
+def test_report_expands_home_and_named_user_preflight_python(tmp_path, monkeypatch, form):
+    import pwd
     home = tmp_path / 'home'
     home.mkdir()
-    name = 'hook-python' if value.startswith('~') else 'shim'
-    ok, failures = run_probe(tmp_path, monkeypatch, value, name, home=home if value.startswith('~') else None)
-    # The shim answers import pytest and fails import xdist: it was found and used.
-    assert failures == ['python: missing xdist']
+    shim(home, 'hook-python')
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setattr(pwd, 'getpwnam', lambda name: SimpleNamespace(pw_dir=str(home)))
+    assert h.pre_push_report(str(tmp_path), environ={'PREFLIGHT_PYTHON': form})['missing'] == ['xdist']
 
 
-def test_relative_preflight_python_missing_in_checkout_reports_both_modules_missing(tmp_path, monkeypatch):
-    ok, failures = run_probe(tmp_path, monkeypatch, 'not-there')
-    assert not ok and failures == ['python: missing pytest xdist']
+@pytest.mark.parametrize('mask', [0o022, 0o002, 0o020])
+def test_report_carries_this_processes_umask(tmp_path, mask):
+    old = os.umask(mask)
+    try:
+        report = h.pre_push_report(str(tmp_path), environ={})
+    finally:
+        os.umask(old)
+    assert report['umask'] == format(mask, '04o') and report['unit_umask'] is None
 
 
-@pytest.mark.parametrize('umask,reported', [('022', False), ('002', True), ('020', True)])
-def test_readiness_reports_a_group_or_other_writable_umask(tmp_path, monkeypatch, umask, reported):
-    ok, failures = run_probe(tmp_path, monkeypatch, './shim', umask=umask)
-    assert [f for f in failures if f.startswith('umask:')] == (
-        [f'umask: umask {umask.zfill(4)} leaves new files group- or other-writable'] if reported else [])
-
-
-def test_readiness_reports_a_group_writable_user_unit_umask(tmp_path, monkeypatch):
-    ok, failures = run_probe(tmp_path, monkeypatch, './shim', unit_umask='0002')
-    assert [f for f in failures if f.startswith('umask:')] == [
-        'umask: unit umask 0002 leaves new files group- or other-writable']
+def test_report_asks_systemd_for_the_named_user_unit(tmp_path, monkeypatch):
+    seen = []
+    def fake_run(argv, **kwargs):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0, stdout='0002\n') if argv[0] == 'systemctl' else real_run(argv, **kwargs)
+    real_run = subprocess.run
+    monkeypatch.setattr(h.subprocess, 'run', fake_run)
+    report = h.pre_push_report(str(tmp_path), unit='spawner.service', environ={})
+    assert report['unit_umask'] == '0002'
+    assert ['systemctl', '--user', 'show', '--property=UMask', '--value', 'spawner.service'] in seen
