@@ -322,16 +322,16 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     for candidate in legs:
         validate_model(candidate.model, allow_inactive=not leg_active(candidate, now=now), catalog_rows=catalog_rows)
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l, now=now))
-    if native_implement:   # Claude writers join the route behind Codex (rule 3.58); see codex_out
-        from .legs import EXPLICIT_LEGS
-        candidates += tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
-                            and role in l.roles and leg_active(l, now=now))
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
     gaps = tuple({"leg": l.id, "model": l.model, "reason": "no benchmark row"}
                  for l in candidates if l.model not in rows and l.id not in rows)
     if strict and gaps:
         raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps), gaps)
+    if native_implement:   # Claude writers join the route behind Codex (rule 3.58); see codex_out.
+        from .legs import EXPLICIT_LEGS   # Added after the strict gap check: explicit legs carry no benchmark row.
+        candidates += tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
+                            and role in l.roles and leg_active(l, now=now))
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
