@@ -39,13 +39,16 @@ TEST_WORKER_GIB = 2
 MAX_TEST_WORKERS = 16
 
 
-def affected_workers(env=None, cores=None, memory_mb=available_memory_mb):
+def affected_workers(env=None, cores=None, memory_mb=None):
     configured = (env if env is not None else os.environ).get("PREFLIGHT_TEST_WORKERS", "")
-    if configured.isdigit() and int(configured) > 0:
-        return int(configured)
+    try:
+        if int(configured) > 0:
+            return int(configured)
+    except ValueError:
+        pass
     cores = cores if cores is not None else (os.cpu_count() or 2)
     try:
-        by_mem = int(memory_mb() // (TEST_WORKER_GIB * 1024))
+        by_mem = int((memory_mb or available_memory_mb)() // (TEST_WORKER_GIB * 1024))
     except (OSError, ValueError):
         by_mem = cores
     return max(2, min(cores // 2, by_mem, MAX_TEST_WORKERS))

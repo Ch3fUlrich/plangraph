@@ -72,4 +72,18 @@ def test_affected_workers_follow_cores_and_memory_never_fixed_at_two(cores, memo
 
 def test_affected_workers_override():
     assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': '6'}, cores=32, memory_mb=_memory(110 * 1024)) == 6
-    assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': 'x'}, cores=32, memory_mb=_memory(110 * 1024)) == 16
+    for bad in ('x', '0', '-3', '\u00b2', ''):
+        assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': bad}, cores=32, memory_mb=_memory(110 * 1024)) == 16
+
+
+def test_memavailable_line_without_value_raises_valueerror(tmp_path, monkeypatch):
+    """The shared probe answers ValueError for a malformed line, so preflight falls back to cores."""
+    from plangraph.spawner import overflow
+    meminfo = tmp_path / 'meminfo'
+    meminfo.write_text('MemTotal: 1 kB\nMemAvailable:\n')
+    real = overflow.Path
+    monkeypatch.setattr(overflow, 'Path', lambda p: real(meminfo) if str(p) == '/proc/meminfo' else real(p))
+    monkeypatch.setattr(overflow.os, 'name', 'posix')
+    with pytest.raises(ValueError):
+        overflow.available_memory_mb()
+    assert preflight.affected_workers({}, cores=12, memory_mb=overflow.available_memory_mb) == 6
