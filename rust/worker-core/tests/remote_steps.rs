@@ -142,3 +142,20 @@ fn unknown_plan_fields_and_an_action_less_step_are_refused() {
     assert!(execute(r#"{"steps":[],"shell":"x"}"#.as_bytes(), &mut out).is_err());
     assert_eq!(run(json!({"steps": [{}]})).0, 1);
 }
+
+#[test]
+fn fail_code_replaces_a_failing_steps_code_and_a_leading_tilde_means_home() {
+    let (code, _) = run(
+        json!({"steps": [{"argv": ["test", "-d", "/nonexistent-for-steps"], "fail_code": 44}]}),
+    );
+    assert_eq!(code, 44);
+    let (code, _) = run(json!({"steps": [{"argv": ["true"], "fail_code": 44}]}));
+    assert_eq!(code, 0);
+    let home = tempfile::tempdir().unwrap();
+    fs::write(home.path().join("marker"), "").unwrap();
+    std::env::set_var("HOME", home.path());
+    let (code, out) = run(json!({"cwd": "~/", "steps": [
+        {"argv": ["test", "-f", "~/marker"]}, {"argv": ["printenv", "X"], "env": {"X": "~/marker"}}]}));
+    assert_eq!(code, 0);
+    assert_eq!(out, format!("{}/marker\n", home.path().display()));
+}

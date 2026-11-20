@@ -45,6 +45,9 @@ pub struct Step {
     pub ensure_commit: Option<EnsureCommit>,
     #[serde(default)]
     pub receipt: Option<Receipt>,
+    /// Exit code reported when this step fails, in place of the step's own.
+    #[serde(default)]
+    pub fail_code: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,7 +100,7 @@ pub fn parse_env_file(text: &str) -> Result<Vec<(String, String)>, String> {
 }
 
 fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Err("hex content has odd length".into());
     }
     (0..text.len())
@@ -106,14 +109,25 @@ fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
+/// `~/x` means `$HOME/x`, as a login shell would have read it; any other text is unchanged.
+pub fn expand_home(text: &str) -> String {
+    match (text.strip_prefix("~/"), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) if !home.is_empty() => {
+            format!("{}/{rest}", home.trim_end_matches('/'))
+        }
+        _ => text.to_owned(),
+    }
+}
+
 fn command(
     argv: &[String],
     env: &[(String, String)],
     cwd: Option<&Path>,
 ) -> Result<Command, String> {
     let (program, args) = argv.split_first().ok_or("empty argv")?;
-    let mut cmd = Command::new(program);
-    cmd.args(args).envs(env.iter().map(|(k, v)| (k, v)));
+    let mut cmd = Command::new(expand_home(program));
+    cmd.args(args.iter().map(|a| expand_home(a)))
+        .envs(env.iter().map(|(k, v)| (k, expand_home(v))));
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
@@ -180,6 +194,20 @@ fn run_step(
 ) -> Result<i32, String> {
     let mut env = env.to_vec();
     env.extend(step.env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let code = run_action(step, &env, cwd, out)?;
+    Ok(match step.fail_code {
+        Some(replacement) if code != 0 => replacement,
+        _ => code,
+    })
+}
+
+fn run_action(
+    step: &Step,
+    env: &[(String, String)],
+    cwd: Option<&Path>,
+    out: &mut dyn Write,
+) -> Result<i32, String> {
+    let env = env.to_vec();
     let content = match (&step.stdin_text, &step.stdin_hex) {
         (_, Some(hex)) => Some(decode_hex(hex)?),
         (Some(text), None) => Some(text.clone().into_bytes()),
@@ -223,7 +251,7 @@ fn run_step(
 /// A step that cannot start or a bad env file counts as code 1 and is reported on stderr.
 pub fn run(plan: &Plan, out: &mut dyn Write) -> i32 {
     let env = match &plan.env_file {
-        Some(path) => match fs::read_to_string(path)
+        Some(path) => match fs::read_to_string(expand_home(path))
             .map_err(|e| e.to_string())
             .and_then(|text| parse_env_file(&text))
         {
@@ -235,7 +263,8 @@ pub fn run(plan: &Plan, out: &mut dyn Write) -> i32 {
         },
         None => Vec::new(),
     };
-    let cwd = plan.cwd.as_deref().map(Path::new);
+    let cwd_text = plan.cwd.as_deref().map(expand_home);
+    let cwd = cwd_text.as_deref().map(Path::new);
     if let Some(dir) = cwd {
         if !dir.is_dir() {
             eprintln!("cwd is not a directory");
