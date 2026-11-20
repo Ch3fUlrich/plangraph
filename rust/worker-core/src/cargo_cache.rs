@@ -80,7 +80,8 @@ fn user_home(_: &str) -> io::Result<PathBuf> {
 }
 
 #[cfg(unix)]
-pub(crate) struct ExclusiveLease(File);
+#[derive(Debug)]
+pub struct ExclusiveLease(File);
 #[cfg(unix)]
 impl Drop for ExclusiveLease {
     fn drop(&mut self) {
@@ -92,12 +93,12 @@ impl Drop for ExclusiveLease {
     }
 }
 #[cfg(not(unix))]
-pub(crate) type ExclusiveLease = File;
+pub type ExclusiveLease = File;
 
 /// Nonblocking exclusive flock on <target>.plangraph-lock, also used by Python.
 /// Keep the returned guard alive for the entire reclaim; never unlink the lock.
 #[cfg(unix)]
-pub(crate) fn try_exclusive_lease(target: &Path) -> io::Result<Option<ExclusiveLease>> {
+pub fn try_exclusive_lease(target: &Path) -> io::Result<Option<ExclusiveLease>> {
     use std::os::fd::AsRawFd;
     let mut name = target
         .components()
@@ -129,7 +130,7 @@ pub(crate) fn try_exclusive_lease(target: &Path) -> io::Result<Option<ExclusiveL
     }
 }
 #[cfg(not(unix))]
-pub(crate) fn try_exclusive_lease(_: &Path) -> io::Result<Option<ExclusiveLease>> {
+pub fn try_exclusive_lease(_: &Path) -> io::Result<Option<ExclusiveLease>> {
     Err(io::Error::other("disk hygiene requires a Unix host"))
 }
 

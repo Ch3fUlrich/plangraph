@@ -1,0 +1,1 @@
+- `CARGO-TARGET-POOL`: Add leased Cargo target directory pool (`cargo_pool`) with stale-lease reaping, per-slot/N×cap enforcement, and lock-wait telemetry.

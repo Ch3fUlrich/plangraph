@@ -108,3 +108,4 @@ mod test_repo_guard;
 pub mod git_test_support;
 
 pub mod cargo_cache;
+pub mod cargo_pool;

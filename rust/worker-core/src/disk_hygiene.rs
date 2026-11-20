@@ -122,7 +122,7 @@ impl Guards {
         })
     }
 }
-pub(crate) fn scan(path: &Path) -> io::Result<(u64, SystemTime)> {
+pub fn scan(path: &Path) -> io::Result<(u64, SystemTime)> {
     let meta = fs::symlink_metadata(path)?;
     let mut newest = meta.modified()?;
     let mut bytes = if meta.is_file() { meta.len() } else { 0 };
