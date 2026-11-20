@@ -352,7 +352,7 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let mut completed = 0;
+    let mut completed = Vec::new();
     for entry in fs::read_dir(dir.join("state/runs")).unwrap() {
         let path = entry.unwrap().path().join("ledger.jsonl");
         if !path.exists() {
@@ -361,13 +361,16 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         let row: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
         if row["exit_code"] == 0 {
-            completed += 1;
-            assert_eq!(row["tokens"], 2468); // Two CLI executions, each logs 1,234.
-            assert_eq!(row["changed_lines"], 2); // writer.txt and writer-path, one line each.
+            // Two counted CLI executions per completed run, each logs 1,234.
+            assert_eq!(row["tokens"], 2468);
             assert_eq!(row["review_rounds"], 1);
             assert!(row["wall_minutes"].as_f64().unwrap() > 0.0);
+            completed.push(row["changed_lines"].as_u64().unwrap());
         }
     }
-    assert_eq!(completed, 1);
+    // The plain and missing-marker runs commit writer.txt and writer-path, one line
+    // each; the kill-marker relaunch also keeps the killed attempt's partial.txt.
+    completed.sort_unstable();
+    assert_eq!(completed, [2, 2, 3]);
     fs::remove_dir_all(dir).unwrap();
 }
