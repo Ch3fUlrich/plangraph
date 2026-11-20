@@ -2,7 +2,7 @@
 use crate::base_fresh::{check_ref, python_command};
 use pg_worker_core::review_split::valid_diff_path;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedRange {

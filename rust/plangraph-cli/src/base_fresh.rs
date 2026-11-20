@@ -1,7 +1,7 @@
 //! CLI adapter to the existing admission gate, pending its Rust port.
 use serde_json::Value;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 // Only invoke the canonical helper here: no Git checks or policy belong in this
 // adapter. The Python package must be installed, as for pg-spawnd's adapter.
