@@ -48,7 +48,7 @@ pub fn valid_diff_path(path: &str) -> bool {
     use std::path::Component;
     let drive = path.as_bytes().get(1) == Some(&b':') && path.as_bytes()[0].is_ascii_alphabetic();
     !path.is_empty()
-        && !path.contains('\0')
+        && !path.chars().any(char::is_control)
         && !path.starts_with(['-', '/', '\\', ':'])
         && !drive
         && !path.split(['/', '\\']).any(|c| c == "..")
@@ -135,7 +135,7 @@ pub fn top_level_dir(path: &str) -> &str {
 pub fn group_banner(index: usize, total: usize, paths: &[String]) -> String {
     format!(
         "Review group {index}/{total} (paths: {})\n\n",
-        paths.join(", ")
+        escape_payload(paths.join(", ").as_bytes())
     )
 }
 
@@ -504,5 +504,33 @@ mod tests {
             extract_review_text_from_live_log(&log).as_deref(),
             Some("No findings.\nVERDICT: PASS")
         );
+    }
+
+    #[test]
+    fn diff_paths_refuse_control_characters_and_the_banner_escapes_markup() {
+        for bad in [
+            "x\ny",
+            "x\ry",
+            "x\ty",
+            "x\u{1b}[2J",
+            "x\u{7f}",
+            "x\0y",
+            "-x",
+            "../x",
+            "/x",
+            "C:x",
+            "a\\b/../c",
+        ] {
+            assert!(!valid_diff_path(bad), "{bad:?}");
+        }
+        for good in ["a/b.rs", "a[b].txt", "dir/with space/f", "ünï/x"] {
+            assert!(valid_diff_path(good), "{good:?}");
+        }
+        let banner = group_banner(1, 2, &["a/<!--x.rs".into(), "b/```.rs".into()]);
+        assert!(
+            !banner.contains("<!--") && !banner.contains("```"),
+            "{banner}"
+        );
+        assert_eq!(banner.lines().count(), 2, "{banner:?}");
     }
 }

@@ -17,6 +17,7 @@ pub struct ResolvedRange {
 
 fn git_stdout(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let out = Command::new("git")
+        .arg("--literal-pathspecs")
         .arg("-C")
         .arg(repo)
         .args(args)
@@ -286,8 +287,7 @@ fn changed_names(repo: &Path, base_sha: &str, head_sha: &str) -> Result<Vec<u8>,
             "--no-renames",
             "--name-only",
             "-z",
-            base_sha,
-            head_sha,
+            &format!("{base_sha}...{head_sha}"),
             "--",
         ],
     )
@@ -308,7 +308,8 @@ pub fn measure_diff_files(
             return Err(format!("refused: invalid diff path: {path}"));
         }
         let mut args: Vec<&str> = DIFF_FLAGS.to_vec();
-        args.extend([base_sha, head_sha, "--", &path]);
+        let range = format!("{base_sha}...{head_sha}");
+        args.extend([range.as_str(), "--", &path]);
         let bytes = git_stdout(repo, &args)?;
         out.push((path, bytes));
     }
