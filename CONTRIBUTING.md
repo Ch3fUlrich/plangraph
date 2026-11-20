@@ -86,6 +86,11 @@ SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
 protect host state and cleanup errors never fail land. See [pg-reap](docs/pg-reap.md)
 for idle thresholds, run records, restore TSVs and remote SHA leases.
 
+CI runs the full suite once, on the merge candidate: a `batch/*` head, a merge queue
+event, or a head a router GO row labels `ci-full` (push to main, dispatch and schedule also run it).
+Every other pull request, draft or ready, runs the affected selection
+(`tools/ci_select.py`, `full_run_required`); ci-gate refuses a candidate whose selection was not full.
+
 Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
 key, including subitems of a larger item. `ci_commit_gate.py check --base BASE
 --head HEAD --item-text PART.txt` warns for uncovered keys; GitHub CI reads the
