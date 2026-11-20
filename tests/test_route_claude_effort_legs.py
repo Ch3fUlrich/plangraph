@@ -90,7 +90,6 @@ def test_spawnable_legs_follow_a_rebound_default_table(monkeypatch):
 
 
 @pytest.mark.parametrize('role,listed', [('review', {**CLAUDE, **GEMINI, **LUNA,
-                                                    'claude-sonnet-5-5-high': 'claude-sonnet-5-5-high',
                                                     'console-deepseek-flash': 'console-deepseek/deepseek-flash'}),
                                          ('implement', (set(CLAUDE) | set(SOL) | {'cx-gpt-6.2-sol'}) - {LEAD_WRITER})])
 def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
