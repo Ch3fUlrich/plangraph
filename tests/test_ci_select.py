@@ -401,8 +401,7 @@ def test_gate_cancelled_selected_suite_is_a_problem():
 full_run_required = ci_select.full_run_required
 
 
-@pytest.mark.parametrize("event", ["opened", "ready_for_review", "synchronize"])
-def test_ready_or_draft_lane_pr_to_main_gets_the_selection(event):
+def test_ready_or_draft_lane_pr_to_main_gets_the_selection():
     assert not full_run_required("pull_request", "main", "lane/some-item", [])
 
 

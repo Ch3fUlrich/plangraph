@@ -64,7 +64,7 @@ pub(crate) trait Landing {
     fn land(&self, row: &GoRow) -> Result<String, String>;
     /// One line to routing.
     fn post(&self, line: &str) -> Result<(), String>;
-    /// `close-merged KEY D-ID --from-open` without `--apply`; its first output line.
+    /// `close-merged KEY D-ID --from-open` without `--apply`; its result line (the line after the TSV header).
     fn close_merged_dry_run(&self, key: &str, decision: &str) -> Result<String, String>;
 }
 
@@ -115,7 +115,7 @@ pub(crate) fn handle(row: &GoRow, landing: &dyn Landing) -> (String, Vec<String>
     }
     for key in &row.keys {
         lines.push(match landing.close_merged_dry_run(key, &row.decision) {
-            Ok(first) => format!("close-merged dry run {key} {}: {first}", row.decision),
+            Ok(result) => format!("close-merged dry run {key} {}: {result}", row.decision),
             Err(e) => format!("close-merged dry run {key} {} refused: {e}", row.decision),
         });
     }
@@ -138,8 +138,12 @@ pub(crate) fn pass(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(e) => return Err(format!("cannot read {}: {e}", rows.display())),
     };
-    let seen: BTreeSet<String> = std::fs::read_to_string(done)
-        .unwrap_or_default()
+    let done_text = match std::fs::read_to_string(done) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("cannot read {}: {e}", done.display())),
+    };
+    let mut seen: BTreeSet<String> = done_text
         .lines()
         .filter_map(|l| {
             let mut t = l.split_whitespace();
@@ -148,7 +152,7 @@ pub(crate) fn pass(
         .collect();
     let mut handled = 0;
     for row in text.lines().filter_map(parse_row) {
-        if seen.contains(&format!("{} {}", row.decision, row.head)) {
+        if !seen.insert(format!("{} {}", row.decision, row.head)) {
             continue;
         }
         let (outcome, lines) = handle(&row, landing);
