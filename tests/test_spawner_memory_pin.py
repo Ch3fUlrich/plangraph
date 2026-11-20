@@ -37,11 +37,10 @@ def test_default_reading_is_the_pinned_value():
 def spawn_admission(tmp_path, monkeypatch):
     """seat_spawn.admit for a local implement spawn, with only /proc/meminfo left to the test."""
     from types import SimpleNamespace
-    from conftest import use_projected_overflow_config
     from plangraph.spawner import host_ready
     monkeypatch.setattr(host_ready, 'disk_free_gb', lambda path: 100)
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
-    use_projected_overflow_config(monkeypatch, tmp_path / 'absent')
+    monkeypatch.setattr(overflow, 'placement_config', lambda registry, role=None: {})
     service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path / 'checkout')),
                               ps=lambda: {'runs': []})
     return lambda: seat_spawn.admit(service, {})
