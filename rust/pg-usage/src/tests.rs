@@ -114,7 +114,7 @@ fn fleet_names_map_to_roles_and_unknowns_are_counted() {
     let names = [
         "plangraph-replan-12",
         "routing-0042",
-        "workst-L1-build-3",
+        "build-L1-3",
         "plan-order-1",
         "plan-order-2",
         "x y!",
