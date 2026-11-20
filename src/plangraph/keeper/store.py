@@ -265,11 +265,16 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         if principal.role not in roles:
             raise Refused("forbidden", f"role {principal.role!r} may not do this")
 
-    @staticmethod
-    def _may_manage(principal, project):
-        """Router manages every project; an L1/oversight only its own."""
+    def _may_manage(self, principal, project):
+        """Router manages every project; a granted batch manages its granted projects."""
         if principal.role == "router":
             return True
+        batch = getattr(self, "_batch", None)
+        granted = getattr(batch, "granted_projects", None) if batch is not None else None
+        if principal.role == "l1" and granted is not None:
+            if project in granted:
+                return True
+            raise Refused("forbidden", f"not allowed to manage project {project!r}")
         if principal.role in ("l1", "oversight") \
                 and project in (principal.projects or []):
             return True

@@ -228,3 +228,74 @@ class TokensMixin:
         self.conn.execute(
             f"UPDATE run_tokens SET revoked_at=? WHERE {where}"
             " AND revoked_at IS NULL", (self._iso(now),) + args)
+
+    # ---------------------------------------------- project-scoped apply grants
+    def _l1_apply_grants(self, principal):
+        """Return sorted project names currently granted to *principal*."""
+        rows = self.conn.execute(
+            "SELECT project FROM apply_grants WHERE principal=? ORDER BY project",
+            (principal.name,)).fetchall()
+        return [row["project"] for row in rows]
+
+    @staticmethod
+    def _check_grant_arg(value, label):
+        if not isinstance(value, str) or not value.strip() or len(value) > 128:
+            raise Refused("validation", f"{label} must be a non-empty string")
+        return value.strip()
+
+    def grant_apply(self, principal, target_principal, project):
+        """Router only: grant an l1 principal apply_ops access on *project*."""
+        def work(now):
+            self._require_role(principal, "router")
+            target = self._check_grant_arg(target_principal, "principal")
+            proj = self._check_grant_arg(project, "project")
+            with self._write():
+                self.conn.execute(
+                    "INSERT INTO apply_grants(principal, project, granted_by, granted_at)"
+                    " VALUES(?, ?, ?, ?)"
+                    " ON CONFLICT(principal, project) DO NOTHING",
+                    (target, proj, principal.name, self._iso(now)))
+                projects = [
+                    r["project"] for r in self.conn.execute(
+                        "SELECT project FROM apply_grants WHERE principal=?"
+                        " ORDER BY project", (target,)).fetchall()]
+            return {"principal": target, "project": proj, "projects": projects}
+        return self._run(principal, "grant_apply", None, work)
+
+    def revoke_apply(self, principal, target_principal, project):
+        """Router only: revoke an l1 principal's apply_ops grant on *project*."""
+        def work(_now):
+            self._require_role(principal, "router")
+            target = self._check_grant_arg(target_principal, "principal")
+            proj = self._check_grant_arg(project, "project")
+            with self._write():
+                self.conn.execute(
+                    "DELETE FROM apply_grants WHERE principal=? AND project=?",
+                    (target, proj))
+                projects = [
+                    r["project"] for r in self.conn.execute(
+                        "SELECT project FROM apply_grants WHERE principal=?"
+                        " ORDER BY project", (target,)).fetchall()]
+            return {"principal": target, "project": proj, "projects": projects}
+        return self._run(principal, "revoke_apply", None, work)
+
+    def apply_grants(self, principal, target_principal=None):
+        """Return apply grants for *target_principal* (l1 may read own only)."""
+        self._require_role(principal, "router", "l1")
+        if principal.role == "l1":
+            if target_principal is not None and target_principal != principal.name:
+                raise Refused("forbidden", "l1 may only read its own apply grants")
+            return {"principal": principal.name,
+                    "projects": self._l1_apply_grants(principal)}
+        if target_principal is not None:
+            target = self._check_grant_arg(target_principal, "principal")
+            rows = self.conn.execute(
+                "SELECT project FROM apply_grants WHERE principal=?"
+                " ORDER BY project", (target,)).fetchall()
+            return {"principal": target, "projects": [r["project"] for r in rows]}
+        grouped = {}
+        for row in self.conn.execute(
+                "SELECT principal, project FROM apply_grants"
+                " ORDER BY principal, project").fetchall():
+            grouped.setdefault(row["principal"], []).append(row["project"])
+        return {"grants": grouped}

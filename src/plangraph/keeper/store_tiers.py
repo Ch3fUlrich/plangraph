@@ -96,16 +96,18 @@ def decision_tier_conflict(tier, evidence_kinds):
     return tier != _DECISION_TIER and frozenset(evidence_kinds or []) == {'decision'}
 
 
-def validate_decision_edit(item, fields, principal):
+def validate_decision_edit(item, fields, principal, *, acting_router=None):
     """Unrelated edits preserve legacy data; tier/evidence declarations validate."""
     return validated_decision_tier(
         fields.get("review_tier", item.get("review_tier") or "standard"),
         fields.get("evidence_kinds", item["evidence_kinds"]), principal=principal,
-        previous_evidence=item["evidence_kinds"], stored=not _TIER_FIELDS.intersection(fields))
+        previous_evidence=item["evidence_kinds"], stored=not _TIER_FIELDS.intersection(fields),
+        acting_router=acting_router)
 
 
 def validated_decision_tier(tier: str, evidence_kinds: Any, *, principal=None,
-                            previous_evidence=None, stored=False) -> str:
+                            previous_evidence=None, stored=False,
+                            acting_router=None) -> str:
     """Return *tier*; a ``none`` item must have evidence_kinds == ['decision']
     or ['decision', 'commit'] (order-insensitive), or it is refused.
     Stored imports and unrelated edits may retain a pre-existing reviewed
@@ -116,7 +118,9 @@ def validated_decision_tier(tier: str, evidence_kinds: Any, *, principal=None,
     if not stored and decision_tier_conflict(tier, kinds_list):
         raise Refused('validation', "decision-only evidence requires review_tier='none'; "
                       "set review_tier='none' or add the implementation evidence kinds")
-    if (principal is not None and principal.role != 'router'
+    is_router = (acting_router if acting_router is not None
+                 else (principal is not None and principal.role == 'router'))
+    if (principal is not None and not is_router
             and kinds_list == ['decision'] and list(previous_evidence or []) != ['decision']):
         raise Refused('forbidden', 'only the router may declare decision-only evidence')
     if tier == _DECISION_TIER and (

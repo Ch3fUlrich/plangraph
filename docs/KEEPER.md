@@ -143,7 +143,7 @@ worker that is not the recorded owner, a card whose observed state fails the liv
 | `submit(p, key, epoch)` | claimant or delegate | `claimed`→`in_review` iff every kind in `evidence_kinds` has verified evidence; lease frozen (cleared) |
 | `request_changes` / `pass_review` as `verdict(p, key, ok, reason)` | reviewer | `in_review`: ok → records `review_verdict` and re-verifies ALL evidence; on a `standard` item this one cross-family verdict → `done` (event `review_passed`, locks), on a `high` item a second distinct reviewer (two distinct resolved families unless waived) is required; not ok → `claimed` (same epoch; 2nd time in a row → `open` + audit_finding). Refused: reviewer == claimant/delegate (`same_principal`); reviewer.family == delegate-or-claimant family (`same_family`); either family NULL (`family_unknown`, fail closed) |
 | `waive_second_family(p, key, D-NNN)` | router | **`high` items only (D-228)** — `claimed`/`in_review`: runs the `decision` verifier on `{id: D-NNN}` **and** requires that D-row to contain the whole token `Waives: <key>` (X6c3); on success emits `waiver_set` and sets `items.review_waiver`. An active D-id waiver permits one passing verdict to close, with writer independence and single-seat sensitive coverage intact (D-5658), **except cards tagged `auth` or `secrets` still require two distinct non-Anthropic families (`need=2`)**. Refused: non-router (`forbidden`), unverified decision or a D-row that does not name the key (`evidence_unverified`), `standard` or `none` tiers (`bad_state`), DONE (`locked`), other states (`bad_state`) |
-| `apply_ops(p, ops, batch_ref=None)` | router only | B1: BATCH.md ops in one transaction, all or nothing (`store_ops.py`; paragraph below) |
+| `apply_ops(p, ops, batch_ref=None)` | router, granted L1 or oversight | B1: BATCH.md ops in one transaction, all or nothing (`store_ops.py`; paragraph below) |
 | `close_on_decision(p, key, batch_ref)` | router only | **`review_tier='none'` items only (X7b)** — see "Legacy and decision closes" |
 | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
 | `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
@@ -350,6 +350,17 @@ verified before the lock and its state/epoch re-checked in the lock (`conflict`
 otherwise); evidence for an item an earlier op creates or moves is verified in
 the lock, and `close_on_decision` re-reads its batch and decision files in the
 lock as it always did.
+
+The router manages L1 apply grants with `POST /v1/grant_apply` and
+`POST /v1/revoke_apply` (both take `principal` and `project`). Set up site grants
+after deployment; nothing is granted by default. Grants apply only inside this
+atomic verb, to `create`, `edit`, `cancel`, `priority`, `add_evidence`,
+`close_on_decision`, and `legacy_state`. A foreign key, including an alias or
+reference, rolls back the batch. An L1 decision close requires a decision that
+names the item. A successful L1 batch writes one durable message addressed to
+`routing` in the same transaction. File clients submit `batch_meta` with the batch
+name, file SHA-256 and source plan; inline calls without a file report an ops
+digest instead. These report fields identify the submission, not decision proof.
 
 `add_dep {op, key, dep}` / `remove_dep {op, key, dep}` (PG-LE-DEPS-OPS) change ONE entry of `key`'s
 `depends_on`: they read the item's current edges inside the transaction (later ops see earlier ones) and delegate to the very same `edit_definition` write, so auth, `open`-state, cycle/unknown-dep/`_MAX_DEPS` validation and the `item_defined` event are the edit's. A dep `add_dep` already has or `remove_dep` lacks writes nothing, appends no event and answers `{"key", "warnings": [...]}`; a dep naming an item whose state is `cancelled` is dropped from the resulting list with `warnings ["dropped cancelled dependency <key>"]` (a full `edit` of `depends_on` drops it the same way, so `views.validate`'s `depends_on_cancelled` no longer refuses the write), an unknown dep key is still `validation`. The result keeps `{"key": ...}` alone unless something was dropped or skipped.

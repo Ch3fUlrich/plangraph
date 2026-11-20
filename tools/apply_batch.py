@@ -82,12 +82,13 @@ def resolve_source(batch_file, source):
     if not os.path.isabs(source):
         source = os.path.join(base, source)
     return os.path.realpath(source)
-def load_batch(path):
-    with open(path, "r", encoding="utf-8") as handle:
-        try:
-            data = yaml.load(handle, Loader=_DupLoader)
-        except yaml.YAMLError as exc:
-            raise BatchError(f"batch is not valid YAML: {exc}") from None
+def load_batch(path, *, with_digest=False):
+    with open(path, "rb") as handle:
+        content = handle.read()
+    try:
+        data = yaml.load(content.decode("utf-8"), Loader=_DupLoader)
+    except (UnicodeDecodeError, yaml.YAMLError) as exc:
+        raise BatchError(f"batch is not valid UTF-8 YAML: {exc}") from None
     if not isinstance(data, dict):
         raise BatchError("batch must be a YAML mapping")
     for key in data:
@@ -103,7 +104,7 @@ def load_batch(path):
         base_seq = data["base_seq"]
         if isinstance(base_seq, bool) or not isinstance(base_seq, int) or base_seq < 0:
             raise BatchError("base_seq must be a non-negative integer")
-    return data
+    return (data, hashlib.sha256(content).hexdigest()) if with_digest else data
 def op_key(op):
     """Display key: a create lists every item key."""
     if op.get("op") == "create":
@@ -341,7 +342,7 @@ def main(argv=None, out=None, err=None):
             err.write(f"error: {exc}\n")
             line(f"error: {exc}", refusal=True)
             return _done(2)
-        data = load_batch(opts.batch_file)
+        data, batch_sha = load_batch(opts.batch_file, with_digest=True)
         base_seq = data.get("base_seq")
         if opts.per_op and base_seq is not None:
             err.write("error: base_seq needs the atomic mode (drop --per-op)\n")
@@ -415,8 +416,6 @@ def main(argv=None, out=None, err=None):
                                           for name in sorted(counts))
                                  or "no ops") + " (no calls made)")
             return _done(0)
-        atomic_body = atomic.payload(ops, start, source, digest, base_seq, opts.preview)
-        identity = transport.operation_identity(data["principal"], "apply_ops", atomic_body, digest, f"slice {start}-{total}")
         session = Session(url, token)
         session.mutation_timeout = mutation_timeout
     except (BatchError, OSError) as exc:
@@ -424,16 +423,23 @@ def main(argv=None, out=None, err=None):
         if queue_mode:
             line(f"error: {exc}", refusal=True)
         return _done(1)
+    batch_meta = None
     try:
         who = session.get("whoami")
         who_name, who_role = who.get("name"), who.get("role")
         line(f"acting as {who_name} ({who_role})")
-        if who_name != data["principal"] or who_role != "router":
+        if who_name != data["principal"] or who_role not in ("router", "l1"):
             line(f"error: principal mismatch: batch wants "
-                 f"{data['principal']!r} (router), token acts as "
+                 f"{data['principal']!r} (router or granted l1), token acts as "
                  f"{who_name!r} ({who_role}) (refusing before any call)",
                  refusal=True)
             return _done(1)
+        if who_role == "l1":
+            if opts.per_op or start != 1:
+                line("error: l1 must submit the entire batch atomically", refusal=True)
+                return _done(1)
+            batch_meta = {"batch": data["batch"], "source": data["source"],
+                          "batch_sha256": batch_sha}
     except ApiError as exc:
         if opts.allow_no_whoami:
             msg = f" ({exc.msg})" if exc.msg else ""
@@ -448,6 +454,8 @@ def main(argv=None, out=None, err=None):
     done = 0
     if not opts.per_op:
         submitted = f"slice {start}-{total}"
+        atomic_body = atomic.payload(ops, start, source, digest, base_seq, opts.preview, batch_meta)
+        identity = transport.operation_identity(data["principal"], "apply_ops", atomic_body, digest, submitted)
         line(f"operation {identity}; {submitted} (reconciliation fingerprint, not an idempotency key)")
         try:
             code, report = atomic.send(session, ops, start, source, digest,
@@ -455,7 +463,7 @@ def main(argv=None, out=None, err=None):
                                        base_seq=base_seq,
                                        dry_run=opts.preview,
                                        batch_label=data.get("batch"),
-                                       identity=identity, submitted=submitted)
+                                        identity=identity, submitted=submitted, batch_meta=batch_meta)
         except Exception as exc:
             if not queue_mode:
                 raise

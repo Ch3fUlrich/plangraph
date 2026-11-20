@@ -309,7 +309,8 @@ class CloseMixin:
         return commit_rows
 
     def _close_on_decision(self, principal, key, batch_ref, now):
-        self._require_role(principal, "router")
+        if not self._batch_acts_as_router(principal):
+            self._require_role(principal, "router")
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
         if item["state"] not in ("claimed", "in_review"):
@@ -323,8 +324,8 @@ class CloseMixin:
                           " only 'none' closes on a decision")
         # An operator_task above ``none`` is never agent-reviewed, so the router
         # may close it -- but only when the decision names this key; the batch
-        # file alone is enough at ``none`` only.
-        require_named = tier != "none"
+        # file alone is enough at ``none`` for the router only.
+        require_named = tier != "none" or principal.role == "l1"
         rows, named = self._decision_evidence(key, item, now,
                                               require_named=require_named)
         tok = self._closes_token_sha(key, rows, item, now)

@@ -22,7 +22,8 @@ import re
 from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
-from .schema import EXIT_CLASSES, JEV_KINDS, JEV_STATUSES, WINDOW_CLASSES
+from .schema import (APPLY_GRANTS_DDL, EXIT_CLASSES, JEV_KINDS, JEV_STATUSES,
+                     WINDOW_CLASSES)
 from .messages_schema import PG as MESSAGES_DDL
 from .schema_pg_spawner import PG as SPAWNER_DDL
 from .schema_pg_baseline import BASELINE as _V1
@@ -320,7 +321,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(9, "bus: durable messages", MESSAGES_DDL), Migration(10, "federation jobs", SPAWNER_DDL),
               Migration(11, "placement rules", PLACEMENT_RULES_DDL),
               Migration(12, "host samples", HOST_SAMPLES_DDL),
-              Migration(13, "alerts table", _V13))
+              Migration(13, "alerts table", _V13),
+              Migration(14, "apply grants", APPLY_GRANTS_DDL))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
