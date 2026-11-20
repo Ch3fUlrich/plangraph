@@ -36,6 +36,7 @@ fn fixture() -> (std::path::PathBuf, RepoEntry, DiffRef) {
         repo_id: "repo".into(),
         base_sha: base,
         head_sha: head,
+        paths: None,
     };
     (root, repo, diff)
 }
@@ -135,7 +136,9 @@ fn check_redaction_before_persist(root: &Path, launch: &mut crate::launch::Launc
     let raw = format!("{}\nPASSWORD=fixture\n", launch.prompt.as_ref().unwrap());
     launch.prompt = Some(raw.clone());
     launch.stdin = Some(raw.clone());
-    assert!(crate::runs::store_prompt(root, &id, launch, &mut base, false, &Default::default()).is_ok());
+    assert!(
+        crate::runs::store_prompt(root, &id, launch, &mut base, false, &Default::default()).is_ok()
+    );
     let path = pg_worker_core::run::record::run_dir(root, &id)
         .unwrap()
         .join("prompt.txt");
@@ -185,6 +188,7 @@ fn ref_option_path_traversal_refused() {
             repo_id: "repo".into(),
             base_sha: sha.into(),
             head_sha: sha.into(),
+            paths: None,
         };
         assert_eq!(
             read_diff(&repo, &diff, 10),
@@ -392,6 +396,50 @@ fn inline_only_tool_mode_inlines_without_env_and_refuses_oversized_with_reason()
         );
         assert_eq!(oversized.prompt.as_deref(), Some("review"));
         assert_eq!(oversized.stdin.as_deref(), Some("review"));
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn read_diff_with_paths_inlines_only_selected_paths_and_refuses_invalid_paths() {
+    let (root, repo, diff) = fixture();
+    std::fs::create_dir_all(root.join("sub")).unwrap();
+    std::fs::write(root.join("sub/only.txt"), b"included-change\n").unwrap();
+    std::fs::write(root.join("other.txt"), b"excluded-change\n").unwrap();
+    git(&root, &["add", "sub/only.txt", "other.txt"]);
+    git(&root, &["commit", "-qm", "two-files"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+
+    let scoped = DiffRef {
+        paths: Some(vec!["sub/only.txt".into()]),
+        head_sha: head.clone(),
+        ..diff.clone()
+    };
+    let bytes = read_diff(&repo, &scoped, 262144).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.contains("included-change"), "{text}");
+    assert!(!text.contains("excluded-change"), "{text}");
+    assert!(!text.contains("after"), "{text}");
+
+    for bad in [
+        vec!["/etc/passwd".into()],
+        vec!["../escape".into()],
+        vec!["sub/../escape".into()],
+        vec!["--output=/tmp/evil".into()],
+        vec!["-n".into()],
+        vec!["".into()],
+        vec![],
+    ] {
+        let invalid = DiffRef {
+            paths: Some(bad.clone()),
+            head_sha: head.clone(),
+            ..diff.clone()
+        };
+        assert_eq!(
+            read_diff(&repo, &invalid, 262144),
+            Err(InlineDiffError::InvalidDiffRef),
+            "expected InvalidDiffRef for {bad:?}"
+        );
     }
     std::fs::remove_dir_all(root).unwrap();
 }

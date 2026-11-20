@@ -93,6 +93,33 @@ def test_tools_invalid_diff_ref_refused(diff_ref):
         prompt(dict(diff_ref, base='nonexistent-revision'))
 
 
+def test_diff_ref_paths_inlines_only_selected_paths(tmp_path, monkeypatch):
+    monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', '/dev/null')
+    def git(*args):
+        return subprocess.run(['git', '-C', str(tmp_path), *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    git('init', '-q')
+    (tmp_path / 'keep.txt').write_text('before\n')
+    (tmp_path / 'skip.txt').write_text('before\n')
+    git('add', 'keep.txt', 'skip.txt')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'base')
+    base = git('rev-parse', 'HEAD')
+    (tmp_path / 'keep.txt').write_text('keep-after\n')
+    (tmp_path / 'skip.txt').write_text('skip-after\n')
+    git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qam', 'head')
+    ref = {'repo': str(tmp_path), 'base': base, 'head': git('rev-parse', 'HEAD'), 'paths': ['keep.txt']}
+    out = inline_diff_prompt('review this', ref, max_chars=100_000)
+    assert 'keep-after' in out
+    assert 'skip-after' not in out
+
+
+@pytest.mark.parametrize('bad_paths', [[], [''], ['/etc/passwd'], ['../secret'], ['a/../b'], ['--output=/tmp/x'], [':(glob)*']])
+def test_diff_ref_invalid_paths_refused(diff_ref, bad_paths):
+    with pytest.raises(InlineDiffError, match='diff_ref paths'):
+        inline_diff_prompt('review this', dict(diff_ref, paths=bad_paths), max_chars=100_000)
+
+
 @pytest.mark.parametrize('dispatch', ['routed', 'explicit', 'base'])
 @pytest.mark.parametrize('scenario, launches, terminal', [
     ('verdict', 2, False), ('twice', 2, True), ('error', 2, True),

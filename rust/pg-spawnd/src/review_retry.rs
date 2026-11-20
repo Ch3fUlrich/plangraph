@@ -7,12 +7,13 @@ use pg_worker_core::run::{
 use serde_json::{json, Value};
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
-pub(crate) fn hook(
+pub(crate) fn hook_with_group(
     args: Args,
     leg: Value,
     attempt: u32,
     checkout: Option<tempfile::TempDir>,
     allow_shas: BTreeSet<String>,
+    group: Option<(usize, usize, Vec<String>)>,
 ) -> FinishHook {
     Box::new(move |record, status| {
         let _checkout = checkout;
@@ -46,7 +47,7 @@ pub(crate) fn hook(
         {
             return None;
         }
-        match next(record, args, &leg, attempt) {
+        match next(record, args, &leg, attempt, group) {
             Ok(next) => next,
             Err(error) => {
                 record.set("error", json!(error.into_error_data().message));
@@ -60,6 +61,7 @@ fn next(
     args: Args,
     previous: &Value,
     attempt: u32,
+    group: Option<(usize, usize, Vec<String>)>,
 ) -> Result<Option<RunSpec>, crate::errors::ToolError> {
     let value = record.to_value();
     let legs = value["plan"]["legs"].as_array();
@@ -79,10 +81,24 @@ fn next(
         if record.path().with_file_name("cancelled").exists() {
             return Ok(None);
         }
-        match prepare(record, &args, leg) {
+        match prepare(
+            record,
+            &args,
+            leg,
+            group.as_ref().map(|(i, t, p)| (*i, *t, p.as_slice())),
+        ) {
             Ok(_) if record.path().with_file_name("cancelled").exists() => return Ok(None),
             Ok(prepared) => {
-                return advance(record, args, previous, attempt, leg.clone(), prepared).map(Some)
+                return advance(
+                    record,
+                    args,
+                    previous,
+                    attempt,
+                    leg.clone(),
+                    prepared,
+                    group,
+                )
+                .map(Some)
             }
             Err(error) => {
                 let mut attempts = record.get("attempts").cloned().unwrap_or(json!([]));
@@ -102,6 +118,7 @@ fn prepare(
     record: &RunRecord,
     args: &Args,
     leg: &Value,
+    group: Option<(usize, usize, &[String])>,
 ) -> Result<Prepared, crate::errors::ToolError> {
     let value = record.to_value();
     let state = record
@@ -127,7 +144,7 @@ fn prepare(
         }),
         Duration::from_secs(30),
     )?;
-    let head = crate::prompt::prepare_launch(args, leg, &mut launch, false)?;
+    let head = crate::prompt::prepare_launch_group(args, leg, &mut launch, false, group)?;
     if head.is_some()
         && value["head_sha"]
             .as_str()
@@ -147,6 +164,7 @@ fn advance(
     attempt: u32,
     leg: Value,
     prepared: Prepared,
+    group: Option<(usize, usize, Vec<String>)>,
 ) -> Result<RunSpec, crate::errors::ToolError> {
     let value = record.to_value();
     let state = record
@@ -168,8 +186,20 @@ fn advance(
     } else {
         Value::Null
     };
-    let allow_shas = runs::allow_shas(&args, &launch, &pre_isolate_cwd, metadata["head_sha"].as_str());
-    runs::store_prompt(state, run_id, &mut launch, &mut metadata, false, &allow_shas)?;
+    let allow_shas = runs::allow_shas(
+        &args,
+        &launch,
+        &pre_isolate_cwd,
+        metadata["head_sha"].as_str(),
+    );
+    runs::store_prompt(
+        state,
+        run_id,
+        &mut launch,
+        &mut metadata,
+        false,
+        &allow_shas,
+    )?;
     let log = record.path().with_file_name("live.log");
     let archive = record
         .path()
@@ -234,7 +264,14 @@ fn advance(
         stdin: launch.stdin.map(String::into_bytes),
         base: Default::default(),
         events: vec![],
-        finish: Some(hook(args, leg, next_attempt, checkout, allow_shas.clone())),
+        finish: Some(hook_with_group(
+            args,
+            leg,
+            next_attempt,
+            checkout,
+            allow_shas.clone(),
+            group,
+        )),
         allow_shas,
     })
 }

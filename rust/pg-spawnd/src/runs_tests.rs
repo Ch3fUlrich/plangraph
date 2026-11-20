@@ -128,7 +128,15 @@ fn embedded_prompt_and_distinct_stdin() {
             events: None,
         };
         let id = new_run_id();
-        assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false, &Default::default()).is_err());
+        assert!(store_prompt(
+            &dir,
+            &id,
+            &mut launch,
+            &mut json!({}),
+            false,
+            &Default::default()
+        )
+        .is_err());
         assert!(!dir.join("runs").join(id).join("prompt.txt").exists());
     }
     assert!(!dir.exists());
@@ -153,14 +161,38 @@ fn short_prompt_substrings_are_not_carriers() {
             events: None,
         };
         assert!(
-            store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false, &Default::default()).is_ok(),
+            store_prompt(
+                &dir.0,
+                &new_run_id(),
+                &mut launch,
+                &mut json!({}),
+                false,
+                &Default::default()
+            )
+            .is_ok(),
             "short incidental substring was treated as a prompt carrier"
         );
         launch.argv.push(raw.into());
-        assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false, &Default::default()).is_err());
+        assert!(store_prompt(
+            &dir.0,
+            &new_run_id(),
+            &mut launch,
+            &mut json!({}),
+            false,
+            &Default::default()
+        )
+        .is_err());
         launch.argv.pop();
         launch.env.insert("TASK".into(), raw.into());
-        assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut json!({}), false, &Default::default()).is_err());
+        assert!(store_prompt(
+            &dir.0,
+            &new_run_id(),
+            &mut launch,
+            &mut json!({}),
+            false,
+            &Default::default()
+        )
+        .is_err());
     }
 }
 
@@ -179,7 +211,15 @@ fn stream_prompt_snapshot_is_text_not_transport() {
         events: None,
     };
     let id = new_run_id();
-    assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false, &Default::default()).is_ok());
+    assert!(store_prompt(
+        &dir,
+        &id,
+        &mut launch,
+        &mut json!({}),
+        false,
+        &Default::default()
+    )
+    .is_ok());
     assert_eq!(launch.stdin.as_deref(), Some((transport + "\n").as_str()));
     assert_eq!(
         std::fs::read_to_string(dir.join("runs").join(id).join("prompt.txt")).unwrap(),
@@ -204,7 +244,15 @@ fn prompt_snapshot_before_dispatch() {
         events: None,
     };
     let mut base = json!({});
-    assert!(store_prompt(&dir, &id, &mut launch, &mut base, false, &Default::default()).is_ok());
+    assert!(store_prompt(
+        &dir,
+        &id,
+        &mut launch,
+        &mut base,
+        false,
+        &Default::default()
+    )
+    .is_ok());
     let path = dir.join("runs").join(&id).join("prompt.txt");
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(bytes, launch.stdin.as_ref().unwrap().as_bytes());
@@ -224,7 +272,15 @@ fn prompt_snapshot_before_dispatch() {
     let old = std::fs::File::open(&path).unwrap();
     launch.prompt = Some("replacement".into());
     launch.stdin = Some("replacement".into());
-    assert!(store_prompt(&dir, &id, &mut launch, &mut base, false, &Default::default()).is_ok());
+    assert!(store_prompt(
+        &dir,
+        &id,
+        &mut launch,
+        &mut base,
+        false,
+        &Default::default()
+    )
+    .is_ok());
     use std::io::Read;
     let mut previous = Vec::new();
     (&old).read_to_end(&mut previous).unwrap();
@@ -232,9 +288,25 @@ fn prompt_snapshot_before_dispatch() {
     assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
     std::fs::remove_file(&path).unwrap();
     std::fs::create_dir(&path).unwrap();
-    assert!(store_prompt(&dir, &id, &mut launch, &mut base, false, &Default::default()).is_err());
+    assert!(store_prompt(
+        &dir,
+        &id,
+        &mut launch,
+        &mut base,
+        false,
+        &Default::default()
+    )
+    .is_err());
     launch.prompt = None;
-    assert!(store_prompt(&dir, &id, &mut launch, &mut base, false, &Default::default()).is_err());
+    assert!(store_prompt(
+        &dir,
+        &id,
+        &mut launch,
+        &mut base,
+        false,
+        &Default::default()
+    )
+    .is_err());
     std::fs::remove_dir_all(dir).unwrap();
 }
 use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
@@ -367,23 +439,46 @@ fn env_prompt_and_missing_carrier() {
     };
     let id = new_run_id();
     let mut base = json!({});
-    assert!(store_prompt(&dir.0, &id, &mut launch, &mut base, false, &Default::default()).is_err());
+    assert!(store_prompt(
+        &dir.0,
+        &id,
+        &mut launch,
+        &mut base,
+        false,
+        &Default::default()
+    )
+    .is_err());
     assert!(!dir.0.join("runs").join(id).join("prompt.txt").exists());
     assert!(!base.to_string().contains(&raw));
     // A valid stdin carrier must not hide a second, unsafe env carrier.
     launch.stdin = Some(raw.clone());
     for key in ["PROMPT", "OTHER_TASK_ENV"] {
         launch.env = BTreeMap::from([(key.into(), raw.clone())]);
-        let error = store_prompt(&dir.0, &new_run_id(), &mut launch, &mut base, false, &Default::default())
-            .err()
-            .unwrap()
-            .into_error_data();
+        let error = store_prompt(
+            &dir.0,
+            &new_run_id(),
+            &mut launch,
+            &mut base,
+            false,
+            &Default::default(),
+        )
+        .err()
+        .unwrap()
+        .into_error_data();
         assert_eq!(error.message, "launch prompt must not be in argv or env");
     }
     launch.env.clear();
     launch.stdin = None;
     launch.prompt = Some("absent".into());
-    assert!(store_prompt(&dir.0, &new_run_id(), &mut launch, &mut base, false, &Default::default()).is_err());
+    assert!(store_prompt(
+        &dir.0,
+        &new_run_id(),
+        &mut launch,
+        &mut base,
+        false,
+        &Default::default()
+    )
+    .is_err());
 }
 
 #[test]
@@ -476,7 +571,7 @@ fn review_seat_keeps_allowlisted_shas_and_masks_others() {
             json!({"first_leg": {"family": "f"}}),
             |_, _| {
                 Ok(crate::launch::LaunchSpec {
-                    argv: vec!["/bin/sh".into(), "-c".into(), output_script],
+                    argv: vec!["/bin/sh".into(), "-c".into(), output_script.clone()],
                     cwd: repo.clone(),
                     env: BTreeMap::new(),
                     stdin: Some(prompt_text.clone()),
@@ -492,7 +587,8 @@ fn review_seat_keeps_allowlisted_shas_and_masks_others() {
     let saved = crate::records::read_record(&dir.0, &json!(run_id))
         .unwrap_or_else(|e| panic!("missing record: {}", e.into_error_data().message));
     let stdout_tail = saved["stdout_tail"].as_str().unwrap();
-    let live_log = std::fs::read_to_string(dir.0.join("runs").join(run_id).join("live.log")).unwrap();
+    let live_log =
+        std::fs::read_to_string(dir.0.join("runs").join(run_id).join("live.log")).unwrap();
     for text in [stdout_tail, live_log.as_str()] {
         assert!(text.contains(&format!("HEAD: {head}")), "{text}");
         assert!(text.contains(&format!("base: {base}")), "{text}");

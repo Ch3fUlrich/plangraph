@@ -3,12 +3,7 @@
 use crate::redact::{redact_with_allowlist, REDACTED};
 use regex::Regex;
 use std::{
-    collections::BTreeSet,
-    ffi::OsString,
-    io::Write,
-    path::Path,
-    process::Stdio,
-    sync::OnceLock,
+    collections::BTreeSet, ffi::OsString, io::Write, path::Path, process::Stdio, sync::OnceLock,
 };
 
 pub struct Scrubber {
@@ -39,7 +34,10 @@ pub fn resolve_commit_sha(repo: &Path, rev: &str) -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    let sha = std::str::from_utf8(&out.stdout).ok()?.trim().to_ascii_lowercase();
+    let sha = std::str::from_utf8(&out.stdout)
+        .ok()?
+        .trim()
+        .to_ascii_lowercase();
     is_hex_sha(&sha).then_some(sha)
 }
 
@@ -220,7 +218,9 @@ mod tests {
             [&head],
         );
         assert_eq!(
-            s.scrub(&format!("HEAD: {head}\nother: {missing}\nlong: 0000{head}0000")),
+            s.scrub(&format!(
+                "HEAD: {head}\nother: {missing}\nlong: 0000{head}0000"
+            )),
             format!("HEAD: {head}\nother: [REDACTED]\nlong: [REDACTED]")
         );
     }

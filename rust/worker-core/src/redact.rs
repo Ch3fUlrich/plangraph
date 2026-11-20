@@ -115,7 +115,12 @@ fn redact_inner(text: &str, assignments: bool, allow_shas: &BTreeSet<String>) ->
     // 8. Long blobs must mix digits and letters; plain words and paths survive.
     rs[8]
         .replace_all(&out, |m: &regex::Captures| {
-            super::redact_tokens::redact_blob(m.get(0).unwrap().as_str(), &rs[8], &rs[7], allow_shas)
+            super::redact_tokens::redact_blob(
+                m.get(0).unwrap().as_str(),
+                &rs[8],
+                &rs[7],
+                allow_shas,
+            )
         })
         .into_owned()
 }
