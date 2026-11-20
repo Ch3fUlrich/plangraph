@@ -1,5 +1,6 @@
 """Shared dispatch outcome policy for base and routed launches."""
 import atexit
+import contextlib
 import json
 import os
 import shutil
@@ -541,35 +542,80 @@ def _review_leg_id(run) -> str | None:
 
 
 def _read_silent(state) -> dict:
+    """The streak file: ``{"streaks": {leg: {"count", "last"}}, "seen": [run ids]}``; {} when absent."""
     try:
         data = json.loads((state / _SILENT_FILE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    return data if isinstance(data, dict) else {}
+    return data if isinstance(data, dict) and isinstance(data.get("streaks"), dict) else {}
+
+
+def _apply_outcome(data, record) -> bool:
+    """Add one finished review run to ``data`` (once per run id); True when it counted."""
+    leg_id = _review_leg_id(record)
+    run_id = record.get("run_id")
+    seen = data.setdefault("seen", [])
+    silent = record.get("reason") == "no_verdict"
+    if (record.get("role") != "review" or not isinstance(record.get("ended"), (int, float)) or not leg_id
+            or run_id in seen or not (silent or record.get("status") == "completed")):
+        return False
+    row = data["streaks"].get(leg_id) if isinstance(data["streaks"].get(leg_id), dict) else {}
+    data["streaks"][leg_id] = {"count": int(row.get("count", 0)) + 1 if silent else 0, "last": record["ended"]}
+    if run_id is not None:
+        seen.append(run_id)
+        del seen[:-200]
+    return True
+
+
+@contextlib.contextmanager
+def _silent_lock(state):
+    """Serialise read-modify-write of the streak file across processes (POSIX; elsewhere best effort)."""
+    state.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl
+    except ImportError:
+        yield
+        return
+    with open(state / (_SILENT_FILE + ".lock"), "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def _write_silent(state, data) -> None:
+    from .private_io import atomic_write_private
+    atomic_write_private(state / _SILENT_FILE, json.dumps(data))
 
 
 def count_review_outcome(state, record) -> None:
     """Count one finished review run once: ``no_verdict`` adds to its leg's streak, a completed review with a
-    verdict resets it, other endings (quota, cancel) leave it."""
-    if record.get("role") != "review" or record.get("ended") is None or record.get("no_verdict_counted"):
+    verdict resets it, other endings (quota, cancel) leave it.  Safe for concurrent saves and re-saves."""
+    if record.get("role") != "review" or record.get("ended") is None:
         return
-    leg_id = _review_leg_id(record)
-    silent = record.get("reason") == "no_verdict"
-    if not leg_id or not (silent or record.get("status") == "completed"):
-        return
-    from .private_io import atomic_write_private
-    streaks = _read_silent(state)
-    row = streaks.get(leg_id) if isinstance(streaks.get(leg_id), dict) else {}
-    streaks[leg_id] = {"count": int(row.get("count", 0)) + 1 if silent else 0, "last": record["ended"]}
-    state.mkdir(parents=True, exist_ok=True)
-    atomic_write_private(state / _SILENT_FILE, json.dumps(streaks))
-    record["no_verdict_counted"] = True
+    with _silent_lock(state):
+        data = _read_silent(state) or {"streaks": {}}
+        if _apply_outcome(data, record):
+            _write_silent(state, data)
 
 
 def silent_review_legs(state, *, now: float | None = None, limit: int = NO_VERDICT_LIMIT,
-                       ttl: float = NO_VERDICT_TTL_S) -> set[str]:
-    """Review legs whose last ``limit`` counted runs all ended without a VERDICT line, for ``ttl`` seconds."""
+                       ttl: float = NO_VERDICT_TTL_S, seed=()) -> set[str]:
+    """Review legs whose last ``limit`` counted runs all ended without a VERDICT line, for ``ttl`` seconds.
+    While the streak file does not exist yet it is created from ``seed`` (the run records already read
+    inside the cooldown window), so records from before the file keep counting."""
     now = time.time() if now is None else now
-    return {leg_id for leg_id, row in _read_silent(state).items() if isinstance(row, dict)
+    data = _read_silent(state)
+    if not data:
+        with _silent_lock(state):
+            data = _read_silent(state)
+            if not data:
+                data = {"streaks": {}}
+                for record in sorted((r for r in seed if isinstance(r, dict) and isinstance(r.get("ended"), (int, float))),
+                                     key=lambda r: r["ended"]):
+                    _apply_outcome(data, record)
+                _write_silent(state, data)
+    return {leg_id for leg_id, row in data["streaks"].items() if isinstance(row, dict)
             and row.get("count", 0) >= limit and isinstance(row.get("last"), (int, float))
             and 0 <= now - row["last"] < ttl}

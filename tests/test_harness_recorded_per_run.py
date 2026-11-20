@@ -103,11 +103,51 @@ def test_three_silent_reviews_in_a_row_put_a_leg_out_and_a_verdict_resets(tmp_pa
 def test_a_run_counts_once_and_other_endings_do_not_count(tmp_path):
     record = review("x", 100.0, "gpt-6.2-sol-medium", "no_verdict")
     for _ in range(5):
-        hr.count_review_outcome(tmp_path, record)
-    assert record["no_verdict_counted"] is True
+        hr.count_review_outcome(tmp_path, dict(record))   # an interrupted save retried: the same run id
     hr.count_review_outcome(tmp_path, review("q", 101.0, "gpt-6.2-sol-medium", "harness_limit"))
     hr.count_review_outcome(tmp_path, dict(review("w", 102.0, "gpt-6.2-sol-medium", "no_verdict"), role="implement"))
-    assert json.loads((tmp_path / "review-silent.json").read_text())["gpt-6.2-sol-medium"]["count"] == 1
+    assert json.loads((tmp_path / "review-silent.json").read_text())["streaks"]["gpt-6.2-sol-medium"]["count"] == 1
+
+
+def test_concurrent_saves_lose_no_silent_outcome(tmp_path):
+    import threading
+    records = [review(f"run-{i}", 100.0 + i, "gpt-6.2-sol-medium", "no_verdict") for i in range(12)]
+    barrier = threading.Barrier(len(records))
+
+    def count(record):
+        barrier.wait()
+        hr.count_review_outcome(tmp_path, record)
+    threads = [threading.Thread(target=count, args=(r,)) for r in records]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert json.loads((tmp_path / "review-silent.json").read_text())["streaks"]["gpt-6.2-sol-medium"]["count"] == 12
+
+
+def test_missing_streak_file_is_seeded_from_the_records_already_read(tmp_path):
+    now = 1_000_000.0
+    seed = [review(f"run-{i}", now - 60 + i, "gpt-6.2-sol-medium", "no_verdict") for i in range(3)]
+    assert hr.silent_review_legs(tmp_path, now=now, seed=seed) == {"gpt-6.2-sol-medium"}
+    assert hr.silent_review_legs(tmp_path, now=now) == {"gpt-6.2-sol-medium"}   # persisted, not re-read
+    hr.count_review_outcome(tmp_path, seed[0])   # a re-save of a seeded record does not count again
+    assert json.loads((tmp_path / "review-silent.json").read_text())["streaks"]["gpt-6.2-sol-medium"]["count"] == 3
+
+
+def test_route_seeds_the_streak_from_existing_terminal_records(tmp_path):
+    from pathlib import Path
+
+    from plangraph.spawner.private_io import atomic_write_private
+    service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
+                           state=tmp_path / "state")
+    for i in range(3):   # written by an older version: no streak file yet
+        record = review(f"run-{i}x", time.time() - 30 + i, "gpt-6.2-sol-medium", "no_verdict")
+        record.update(started=time.time() - 40, host=hr._host_name())
+        path = service._path(record["run_id"])
+        path.parent.mkdir(parents=True)
+        atomic_write_private(path, json.dumps(record))
+    assert not (service.state / "review-silent.json").exists()
+    card = {"estimate_tokens": 1000, "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
+    plan = service.route(card, "review", ("claude",))
+    assert "gpt-6.2-sol-medium" not in [leg.id for leg in plan.legs]
 
 
 def silent_service(tmp_path):

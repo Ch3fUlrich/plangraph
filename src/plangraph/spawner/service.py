@@ -193,12 +193,13 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.measured_down import measured_down
         from plangraph.planner.legs import leg_active, service_probe
         from .exit_outcome import silent_review_legs
-        down = measured_down(self.state)
+        records = []   # the cooldown pass reads the run records once; a missing streak file is seeded from the same reads
+        down = measured_down(self.state, on_record=records.append)
         extra = {}
         probe = service_probe(self)
         if probe is not None:
             extra['installed'] = probe
-        if role == 'review' and (silent := silent_review_legs(self.state)):   # a leg that never answers leaves the order
+        if role == 'review' and (silent := silent_review_legs(self.state, seed=records)):   # a leg that never answers leaves the order
             extra['silent_legs'] = silent
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench, **extra)
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
