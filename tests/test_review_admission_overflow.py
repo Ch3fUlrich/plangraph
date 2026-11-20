@@ -7,15 +7,15 @@ import pytest
 
 from plangraph.spawner import overflow, seat_spawn
 
-REGISTRY = {'self': 'coding.vm', 'hosts': [
-    {'id': 'coding.vm', 'caps': {'mem_floor_mb': 3000},
+REGISTRY = {'self': 'home-host', 'hosts': [
+    {'id': 'home-host', 'caps': {'mem_floor_mb': 3000},
      'warmup': {'ramp_mb': {'implement': 2048, 'review': 512, 'research': 512}}},
-    {'id': 'dell-build', 'caps': {'mem_floor_mb': 4096}, 'warmup': {'ramp_mb': {'implement': 256, 'review': 256}}}]}
+    {'id': 'build-host', 'caps': {'mem_floor_mb': 4096}, 'warmup': {'ramp_mb': {'implement': 256, 'review': 256}}}]}
 
 
 @pytest.fixture
 def host(tmp_path, monkeypatch):
-    monkeypatch.setenv('PLANGRAPH_HOST_NAME', 'coding.vm')
+    monkeypatch.setenv('PLANGRAPH_HOST_NAME', 'home-host')
     monkeypatch.setattr(overflow, 'registry_caps', lambda: REGISTRY)
     service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path)), _save=Mock(), state=tmp_path)
     return service, tmp_path
@@ -24,7 +24,7 @@ def host(tmp_path, monkeypatch):
 def config(tmp_path, monkeypatch, hosts=True):
     path = tmp_path / 'hosts.json'
     path.write_text(json.dumps({'public_repos': [str(tmp_path)],
-                                'hosts': {'dell-build': {'ssh': 'dell-build'}} if hosts else {}}))
+                                'hosts': {'build-host': {'ssh': 'build-host'}} if hosts else {}}))
     monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
 
 
@@ -46,12 +46,12 @@ def test_review_refused_locally_is_placed_on_a_ready_overflow_host(host, monkeyp
     service, tmp_path = host
     config(tmp_path, monkeypatch)
     monkeypatch.setattr(seat_spawn, 'resources', lambda svc: (0, 3300))   # 3300 - 512 < 3000
-    monkeypatch.setattr(overflow, 'ready_records', lambda cfg, role: {'dell-build': dict(
-        ssh='dell-build', ok=True, fresh=True, live_runs=1, mem_available_mb=12000, role_mb=256, floor_mb=4096)})
+    monkeypatch.setattr(overflow, 'ready_records', lambda cfg, role: {'build-host': dict(
+        ssh='build-host', ok=True, fresh=True, live_runs=1, mem_available_mb=12000, role_mb=256, floor_mb=4096)})
     remote = Mock(return_value={'run_id': 'run-remote', 'status': 'running'})
     monkeypatch.setattr(overflow, 'remote_spawn', remote)
     record = seat_spawn.admit(service, {'role': 'review'}, card={'diff_ref': {'repo': str(tmp_path)}})
-    assert record['host'] == 'dell-build' and record['overflow_remote']
+    assert record['host'] == 'build-host' and record['overflow_remote']
     remote.assert_called_once()
 
 
