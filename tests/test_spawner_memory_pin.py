@@ -11,6 +11,15 @@ def test_unpinned_real_reader_fails_the_test():
         overflow.available_memory_mb()
 
 
+def test_partly_patched_read_text_does_not_hide_the_real_reader(monkeypatch):
+    """A test that patches Path.read_text for other files still fails when /proc/meminfo is read for real."""
+    original = Path.read_text
+    monkeypatch.setattr(Path, 'read_text', lambda self, *a, **kw:
+                        'unrelated' if str(self) == '/elsewhere' else original(self, *a, **kw))
+    with pytest.raises(AssertionError, match='real host memory reader'):
+        overflow.available_memory_mb()
+
+
 def test_fixture_value_decides_not_the_host(admission_memory, monkeypatch):
     original = Path.read_text
     monkeypatch.setattr(Path, 'read_text', lambda self, *a, **kw:
