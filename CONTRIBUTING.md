@@ -68,11 +68,12 @@ batch helper reports a label as added only when the returned label list contains
 its name; missing labels or malformed responses leave `labeled` false and warn.
 
 `tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
-batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions
-also appear as deviations). Record every included part with `review --name NAME
---pr N --file PATH`: evidence must end in `HEAD: <full part sha>` then
-`VERDICT: ACCEPT` (or `REQUEST_CHANGES` / `REJECT`, which replace an earlier
-ACCEPT and block the request). `push --name NAME --ci-run ID` records the full batch CI run's
+batch PLAN key. `--deviations TEXT` records nonconformance, including forced
+build exceptions. Record a keeper-bound spawner review for each included
+Plan-Item with `review --name NAME --pr N --run-id RUN_ID`. Both `go-req` and
+`land` recheck the recorded item key, head, and verdict. Use `--file PATH` to
+record a supplementary review with a full `HEAD` and final `VERDICT`.
+`push --name NAME --ci-run ID` records the full batch CI run's
 head, status and conclusion; repeat push after CI completes. A push without an ID
 refreshes an existing run only on the same head; a new head clears it.
 `go-req --name NAME` prints one batch GO-REQ with PR, full head, diff stat, part
