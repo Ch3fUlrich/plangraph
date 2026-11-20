@@ -338,7 +338,11 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
         &["update-ref", "refs/plangraph/native/run-host/base", &base],
     );
     fs::create_dir_all(cwd.join("src")).unwrap();
-    fs::write(cwd.join("src/lib.rs"), "// writer uses fixture_symbol\n").unwrap();
+    fs::write(
+        cwd.join("src/lib.rs"),
+        "// fixture_symbol is documented here\nfn caller() {\n    fixture_symbol();\n}\n",
+    )
+    .unwrap();
     git(&cwd, &["add", "src/lib.rs"]);
     git(
         &cwd,
@@ -404,11 +408,12 @@ assert 'Invariants named by the item: never push\n' in prompt, prompt
 assert 'Exact base SHA: ' + card['diff_ref']['base'] + '\n' in prompt, prompt
 assert 'Exact head SHA: ' + head + '\n' in prompt, prompt
 assert 'Changed public symbols: fixture_symbol\n' in prompt, prompt
-assert 'fixture_symbol: src/lib.rs:1, src/more.rs:1' in prompt, prompt
+assert 'fixture_symbol: src/lib.rs:3\n' in prompt, prompt  # the code use, not the comment or the definition
 import re
 log = re.search(r'fast checks \(exact head\): ([^;\s]+)', prompt).group(1)
 assert log.endswith('/fast-checks/' + head + '.log') and '== ci_commit_gate.py' in pathlib.Path(log).read_text(), prompt
-assert 'writer session with its cargo runs: ' in prompt and 'native.log' in prompt, prompt
+assert 'the turn that produced this head ends at byte ' in prompt and 'native.log' in prompt, prompt
+assert '== ci_commit_gate.py (exit status: 0)' in pathlib.Path(log).read_text(), prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'

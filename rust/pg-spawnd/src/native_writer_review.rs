@@ -48,14 +48,25 @@ impl Host {
             if !path.is_file() {
                 continue;
             }
-            let out = output(
-                self.command(if cfg!(windows) { "python" } else { "python3" })
-                    .arg(path)
-                    .args(args)
-                    .current_dir(&self.cwd),
-            )
-            .map_err(|e| format!("{gate}: {e}"))?;
-            log.push_str(&format!("== {gate}\n{out}\n"));
+            let mut command = self.command(if cfg!(windows) { "python" } else { "python3" });
+            command.arg(path).args(args).current_dir(&self.cwd);
+            // Both streams of a passing gate are evidence too (a skipped check is reported
+            // on stderr).
+            let result = command.output().map_err(|e| format!("{gate}: {e}"))?;
+            let both = format!(
+                "{}{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            if !result.status.success() {
+                return Err(format!(
+                    "{gate}: command failed ({}):\nstdout: {}\nstderr: {}",
+                    result.status,
+                    String::from_utf8_lossy(&result.stdout).trim(),
+                    String::from_utf8_lossy(&result.stderr).trim()
+                ));
+            }
+            log.push_str(&format!("== {gate} ({})\n{both}\n", result.status));
         }
         Ok(log)
     }
@@ -75,14 +86,16 @@ impl Host {
             context["invariants"] = json!(invariants);
         }
         let diff = self.git(&["diff", "-U0", base, head]).unwrap_or_default();
-        let symbols = context::changed_symbols(&diff);
+        let symbols = context::changed_symbols(&diff, &|path| {
+            self.git(&["show", &format!("{head}:{path}")]).ok()
+        });
         if !symbols.is_empty() {
             context["public_symbols"] = json!(symbols.join(", "));
             let callers: Vec<String> = symbols
                 .iter()
                 .filter_map(|symbol| {
                     let grep = self
-                        .git(&["grep", "-n", "-w", "--", symbol])
+                        .git(&["grep", "-n", "-w", "--", symbol, "--", "*.rs", "*.py"])
                         .unwrap_or_default();
                     context::callers_line(symbol, &grep)
                 })
@@ -99,9 +112,12 @@ impl Host {
             ));
         }
         if let Some(directory) = self.record_path.parent() {
+            // The session log holds every writer turn: this head's turn ended at its current end.
+            let session = directory.join("native.log");
+            let end = fs::metadata(&session).map_or(0, |m| m.len());
             logs.push(format!(
-                "writer session with its cargo runs: {}",
-                directory.join("native.log").display()
+                "writer session log with its cargo runs, the turn that produced this head ends at byte {end}: {}",
+                session.display()
             ));
         }
         if !logs.is_empty() {

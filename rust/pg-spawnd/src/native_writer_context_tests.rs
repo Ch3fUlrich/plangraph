@@ -33,27 +33,30 @@ fn invariants_come_from_an_invariants_section_or_the_how_text() {
     let named = "Invariants:\nnever push\nnever merge\n\nDone criteria: x\n";
     assert_eq!(invariants(named).unwrap(), "never push\nnever merge");
 }
+const RUST_AT_HEAD: &str = "use x;\n\n/// Doc.\npub fn writer_families(a: u8) {\n    let b = 1;\n    fn private() {\n        let c = 2;\n    }\n}\n\nfn hidden() {\n    let d = 3;\n}\n\npub struct Budget;\n";
+const PY_AT_HEAD: &str = "def _hidden():\n    return 1\n\nclass ProbeBudget:\n    def timeout(self):\n        return 2\n\nasync def admit_base(a):\n    return 3\n";
+
 #[test]
-fn changed_symbols_are_the_public_names_a_diff_adds() {
-    let diff = "+pub fn writer_families(a: u8) {\n+    fn private() {}\n+pub(crate) fn stop_reason() {}\n+pub struct Budget;\n+def admission_timeout():\n+def _hidden():\n+class ProbeBudget:\n-pub fn removed() {}\n+    pub const MAX: u8 = 1;\n";
+fn changed_symbols_are_the_enclosing_public_definitions_of_every_changed_line() {
+    let read = |path: &str| match path {
+        "a.rs" => Some(RUST_AT_HEAD.to_owned()),
+        "b.py" => Some(PY_AT_HEAD.to_owned()),
+        _ => None,
+    };
+    // A changed body counts, as does an added declaration; private scopes and non-source files do not.
+    let diff = "+++ b/a.rs\n@@ -5,0 +5,1 @@ x\n+    let b = 1;\n@@ -7,1 +7,1 @@\n-old\n+        let c = 2;\n@@ -12,1 +12,1 @@\n+    let d = 3;\n@@ -15,0 +15,1 @@\n+pub struct Budget;\n+++ b/b.py\n@@ -2,1 +2,1 @@\n+    return 1\n@@ -6,1 +6,1 @@\n+        return 2\n@@ -9,1 +9,1 @@\n+    return 3\n+++ b/notes.md\n@@ -1,1 +1,1 @@\n+text\n";
     assert_eq!(
-        changed_symbols(diff),
-        [
-            "Budget",
-            "MAX",
-            "ProbeBudget",
-            "admission_timeout",
-            "stop_reason",
-            "writer_families"
-        ]
+        changed_symbols(diff, &read),
+        ["Budget", "admit_base", "timeout", "writer_families"]
     );
+    assert!(changed_symbols("+++ b/gone.rs\n@@ -1,1 +1,1 @@\n+x\n", &read).is_empty());
 }
 #[test]
-fn callers_are_file_and_line_of_the_first_uses() {
-    let grep = "a.rs:10:fn x() { sym() }\nb.rs:3:sym();\nc.rs:7:sym();\nd.rs:9:sym();\n";
+fn callers_are_code_uses_not_definitions_or_comments() {
+    let grep = "docs.md:1:sym is documented\na.rs:2:/// sym docs\na.rs:3:// sym comment\na.rs:4:pub fn sym() {}\nb.py:5:def sym(a):\nb.py:6:# sym again\nc.rs:7:    sym();\nd.py:8:x = sym(1)\ne.rs:9:let a = sym();\nf.rs:10:sym();\n";
     assert_eq!(
         callers_line("sym", grep).unwrap(),
-        "sym: a.rs:10, b.rs:3, c.rs:7"
+        "sym: c.rs:7, d.py:8, e.rs:9"
     );
-    assert_eq!(callers_line("sym", ""), None);
+    assert_eq!(callers_line("sym", "a.rs:4:pub fn sym() {}\n"), None);
 }

@@ -2,7 +2,6 @@
 //! brief (feeder or batch layout) and the exact diff.
 use std::collections::BTreeSet;
 
-const MAX_FIELD: usize = 6000;
 const MAX_CALLERS_PER_SYMBOL: usize = 3;
 
 fn heading(line: &str) -> bool {
@@ -57,8 +56,9 @@ fn sections(brief: &str, labels: &[&str]) -> Vec<String> {
 }
 
 fn joined(sections: Vec<String>) -> Option<String> {
+    // Whole, never truncated: a later item's criteria must not be dropped.
     let text = sections.join("\n---\n");
-    (!text.is_empty()).then(|| text.chars().take(MAX_FIELD).collect())
+    (!text.is_empty()).then_some(text)
 }
 
 /// The plan-item keys named by the writer brief.
@@ -79,28 +79,129 @@ pub(super) fn invariants(brief: &str) -> Option<String> {
     joined(sections(brief, &["invariants:", "invariant:", "how:"]))
 }
 
-/// Public symbols a unified diff adds: Rust `pub fn|struct|enum|trait|const|type` and Python
-/// top-level `def`/`class` without a leading underscore.
-pub(super) fn changed_symbols(diff: &str) -> Vec<String> {
-    let rust = regex::Regex::new(
-        r"^\+\s*pub(?:\([a-z]+\))?\s+(?:async\s+|const\s+|unsafe\s+)*(?:fn|struct|enum|trait|const|type)\s+([A-Za-z][A-Za-z0-9_]*)",
-    );
-    let python = regex::Regex::new(r"^\+(?:async\s+)?(?:def|class)\s+([A-Za-z][A-Za-z0-9_]*)");
+/// A definition line: its indent, name and whether it is public (Rust `pub ...`, Python
+/// names without a leading underscore).
+fn definition(line: &str, python: bool) -> Option<(usize, String, bool)> {
+    let indent = line.len() - line.trim_start().len();
+    let rest = line.trim_start();
+    if python {
+        let rest = rest.strip_prefix("async ").unwrap_or(rest);
+        let name = rest
+            .strip_prefix("def ")
+            .or_else(|| rest.strip_prefix("class "))?;
+        let name: String = name
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        return (!name.is_empty()).then(|| (indent, name.clone(), !name.starts_with('_')));
+    }
+    let (public, mut rest) = match rest.strip_prefix("pub") {
+        Some(after) if after.starts_with([' ', '(']) => {
+            let after = after
+                .strip_prefix(|c| c == '(')
+                .map_or(after, |a| a.split_once(')').map_or(a, |(_, r)| r));
+            (true, after.trim_start())
+        }
+        _ => (false, rest),
+    };
+    for word in ["async ", "const ", "unsafe "] {
+        if let Some(r) = rest.strip_prefix(word) {
+            if !r.starts_with(|c: char| c.is_ascii_uppercase()) || word != "const " {
+                rest = r;
+            }
+        }
+    }
+    let name = ["fn ", "struct ", "enum ", "trait ", "const ", "type "]
+        .iter()
+        .find_map(|kw| rest.strip_prefix(kw))?;
+    let name: String = name
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    (!name.is_empty()).then_some((indent, name, public))
+}
+
+/// The nearest enclosing public definition of line `at` (1-based) of `source`.
+fn enclosing_public(source: &str, at: usize, python: bool) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let line = *lines.get(at.checked_sub(1)?)?;
+    let mut scope = line.len() - line.trim_start().len() + 1;
+    if let Some((_, name, public)) = definition(line, python) {
+        if public {
+            return Some(name);
+        }
+    }
+    for earlier in lines[..at - 1].iter().rev() {
+        if let Some((indent, name, public)) = definition(earlier, python) {
+            if indent < scope {
+                if public {
+                    return Some(name);
+                }
+                scope = indent;
+            }
+        }
+    }
+    None
+}
+
+/// Public symbols a unified diff (`-U0`) touches: the nearest enclosing public Rust or
+/// Python definition of every changed line of a `.rs`/`.py` file, so a changed body counts
+/// as well as an added declaration. `read(path)` returns that file's text at the reviewed head.
+pub(super) fn changed_symbols(diff: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+    let hunk = regex::Regex::new(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@");
     let mut found = BTreeSet::new();
+    let (mut path, mut source): (Option<String>, Option<String>) = (None, None);
     for line in diff.lines() {
-        for re in [&rust, &python].into_iter().flatten() {
-            if let Some(caps) = re.captures(line) {
-                found.insert(caps[1].to_owned());
+        if let Some(file) = line.strip_prefix("+++ b/") {
+            let supported = file.ends_with(".rs") || file.ends_with(".py");
+            source = supported.then(|| read(file)).flatten();
+            path = supported.then(|| file.to_owned());
+        } else if let (Some(caps), Some(text), Some(file)) = (
+            hunk.as_ref().ok().and_then(|re| re.captures(line)),
+            source.as_deref(),
+            path.as_deref(),
+        ) {
+            let start: usize = caps[1].parse().unwrap_or(0);
+            let count: usize = caps.get(2).map_or(1, |m| m.as_str().parse().unwrap_or(1));
+            for at in start..start + count.max(1) {
+                found.extend(enclosing_public(text, at, file.ends_with(".py")));
             }
         }
     }
     found.into_iter().collect()
 }
 
-/// `symbol: file:line, ...` for the first few uses of each symbol, from `git grep -n -w` lines.
+/// Whether a `git grep -n` line is a use of `symbol` worth naming: a `.rs`/`.py` code line
+/// that is neither a comment nor the symbol's own definition.
+fn is_caller(symbol: &str, line: &str) -> bool {
+    let mut parts = line.splitn(3, ':');
+    let (Some(path), Some(_), Some(code)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let code = code.trim_start();
+    let defined = [
+        "fn ", "def ", "class ", "struct ", "enum ", "trait ", "const ", "type ",
+    ]
+    .iter()
+    .any(|kw| {
+        code.split(kw).skip(1).any(|after| {
+            after
+                .strip_prefix(symbol)
+                .is_some_and(|r| !r.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+        })
+    });
+    (path.ends_with(".rs") || path.ends_with(".py"))
+        && !code.starts_with("//")
+        && !code.starts_with('#')
+        && !code.starts_with('*')
+        && !defined
+}
+
+/// `symbol: file:line, ...` for the first few real uses of each symbol, from `git grep -n -w`.
 pub(super) fn callers_line(symbol: &str, grep: &str) -> Option<String> {
     let hits: Vec<String> = grep
         .lines()
+        .filter(|line| is_caller(symbol, line))
         .filter_map(|line| {
             let mut parts = line.splitn(3, ':');
             Some(format!("{}:{}", parts.next()?, parts.next()?))

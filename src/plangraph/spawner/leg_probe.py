@@ -337,8 +337,12 @@ class ProbeBudget:
     """
     def __init__(self, window=None, started=None):
         from .base_fresh import ADMISSION_TIMEOUT
+        from .base_fresh import ADMISSION_STARTED
         window = ADMISSION_TIMEOUT if window is None else window
-        elapsed = max(time.time() - started, 0) if started else 0  # admission time already spent
+        # Admission time already spent: since the wait began (routing and record creation
+        # included) or, failing that, since the run record was created.
+        began = [at for at in (started, ADMISSION_STARTED.get()) if at]
+        elapsed = max(time.time() - min(began), 0) if began else 0
         self.each = window / 3
         # Half the window in all, and always leaving a sixth for the worktree and the launch.
         self.left = min(window / 2, window - window / 6 - elapsed)

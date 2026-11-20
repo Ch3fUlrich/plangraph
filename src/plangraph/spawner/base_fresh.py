@@ -4,8 +4,11 @@ import os
 import re
 import subprocess
 import time
+from contextvars import ContextVar
 
 ADMISSION_TIMEOUT = 180
+#: Wall-clock start of the admission wait of the current spawn (set by admitted_spawn).
+ADMISSION_STARTED = ContextVar('admission_started', default=None)
 def _git_env():
     from .prompt_input import checkout_env
     return checkout_env()
@@ -202,6 +205,7 @@ def spawn_exit_code(record):
 async def admitted_spawn(service, payload):
     """The detached handshake acknowledges admission, not mere task creation."""
     prior_tasks = set(service.tasks)
+    ADMISSION_STARTED.set(time.time())  # routing and record creation count against the window
     async def wait():
         record = await service.spawn(**payload, wait_seconds=0)
         runs = spawn_runs(record)
