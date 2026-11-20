@@ -1,7 +1,8 @@
 '''CI commit gate: Writer attribution, hand-edit, gate-edit, test-removal, open_pr_merged reasons.
 
-Trailer checks use ``git log --no-merges base..head``. Merge parents are checked
-separately when open PR heads are supplied. Exempt commits skip only trailer rules;
+Trailer checks use ``git log --no-merges base..head``. A merge commit is checked only for
+its own gate-file edits (combined diff: a conflict resolution in a workflow needs its own
+Gate-Edit trailer); merge parents are checked separately when open PR heads are supplied. Exempt commits skip only trailer rules;
 an exempt entry does not waive open_pr_merged. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
 cannot exempt the commits it introduces.
@@ -185,6 +186,30 @@ def _iter_commits(base: str, head: str, cwd: str | Path | None = None) -> list[t
         sha, _, message = record.partition('\n')
         commits.append((sha.strip(), message))
     return commits
+
+
+def _iter_merges(base: str, head: str, cwd: str | Path | None = None) -> list[tuple[str, str]]:
+    '''Return (sha, message) for git log --merges base..head (newest first).'''
+    out = _git_text(['log', '--merges', '-z', '--format=%H%n%B', f'{base}..{head}'], cwd=cwd)
+    merges: list[tuple[str, str]] = []
+    for record in out.split('\0'):
+        if record.strip():
+            sha, _, message = record.partition('\n')
+            merges.append((sha.strip(), message))
+    return merges
+
+
+def _merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
+    '''Paths a merge changes against every parent (conflict resolutions, evil merges).
+
+    The combined diff omits a clean integration of an authorized parent, so a plain
+    main-into-lane merge stays free of trailers.
+    '''
+    out = _git_text(
+        ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--cc', '--no-renames', sha],
+        cwd=cwd,
+    )
+    return [path for path in out.split('\0') if path]
 
 
 def _trailer_block_lines(message: str) -> list[str]:
@@ -459,6 +484,18 @@ def check(
             sha, base, head, cwd=cwd, paths=touched
         ):
             violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
+
+    for sha, message in _iter_merges(base, head, cwd=cwd):
+        if sha.lower() in exempt_set:
+            continue
+        # A merge that resolves a gate-file conflict edits the gate: the same trailer rule as
+        # a plain commit (the batch land refuses it otherwise, after the frozen push).
+        if (
+            any(fnmatch.fnmatchcase(path, pattern)
+                for path in _merge_edited_paths(sha, cwd=cwd) for pattern in GATE_PATHS)
+            and not _has_trailer(_trailer_block_lines(message), GATE_EDIT_RE)
+        ):
+            violations.append(f'{sha}: {GATE_EDIT_VIOLATION}')
 
     return violations
 

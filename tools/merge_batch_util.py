@@ -331,11 +331,10 @@ def part_review(path, head):
 
 
 
-def batch_workflow_gate(st):
-    """Reuse the gate trailer parser for every workflow and every touching commit."""
+def workflow_gate(wt, base, head):
+    """Reuse the gate trailer parser for every workflow and every touching commit, merges included."""
     from gate_wiring_check import GateError, commits_missing_gate_edit
 
-    wt, base, head = st["worktree"], st["base_head"], st["head"]
     # Log rather than endpoint diff: reverted edits and deleted/renamed workflows count too.
     paths = git("log", "--full-history", "--cc", "--format=", "--name-only", "--no-renames", "-z", f"{base}..{head}",
                 "--", ".github/workflows/", cwd=wt).stdout
@@ -346,3 +345,7 @@ def batch_workflow_gate(st):
             raise MergeBatchError(f"workflow Gate-Edit check failed: {exc}") from None
         if missing:
             raise MergeBatchError(f"workflow {path} needs Gate-Edit: D-id on touching commit(s): " + " ".join(missing))
+
+
+def batch_workflow_gate(st):
+    workflow_gate(st["worktree"], st["base_head"], st["head"])
