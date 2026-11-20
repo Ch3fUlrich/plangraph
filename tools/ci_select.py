@@ -66,6 +66,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "docs/rust-hooks.md",
     "docs/spawner-reliability.md",
     "docs/workspace-resolver.md",
+    "skills/router-core/SKILL.md",
     "changelog.d/FLEET-WINDOW-CATALOG.md",
     "changelog.d/PLACEMENT-RULES-AUDIT.md",
     "changelog.d/SPAWNER-RL12-B1.md",
