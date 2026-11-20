@@ -61,7 +61,7 @@ already ship. When a port lands and enforces the rule, replace its procedure wit
 
 | Rules | Keeper item / existing code |
 | --- | --- |
-| R-batch-01..04, 06 | BATCH-PORT-WRITER-DRIVER, LE-BATCH-DRIVER-SINGLE-AGENT |
+| R-batch-01..04, 06 | BATCH-PORT-WRITER-DRIVER (native-codex runs: `rust/pg-spawnd/src/native_writer.rs`), LE-BATCH-DRIVER-SINGLE-AGENT |
 | R-batch-05 | REVIEW-CMD, ROUTE-ORDER-D6310, MIMO-BATCH-CAPACITY-D6357 |
 | R-batch-07 | LE-WORKTREE-CARGO-TARGET-FILLS-DISK, HOSTS-RUST-S5-DISK-HYGIENE |
 | R-batch-08 | LE-PLAN-ORDER-WRITERS-BYPASS-HOST-PLACEMENT |

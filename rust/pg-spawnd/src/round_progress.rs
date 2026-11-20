@@ -12,7 +12,7 @@ mod tests;
 fn refused(reason: &str) -> ToolError {
     crate::placement::parameter(format!("{reason}: writer round admission refused"))
 }
-fn stop_reason(counts: &[u64], next: u64, used_exception: bool) -> Option<&'static str> {
+pub(crate) fn stop_reason(counts: &[u64], next: u64, used_exception: bool) -> Option<&'static str> {
     if next > 5 || used_exception {
         return Some("round_cap");
     }
