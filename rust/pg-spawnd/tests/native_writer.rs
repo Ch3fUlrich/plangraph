@@ -90,8 +90,18 @@ fn hook_git_environment_fixture_child() {
 }
 
 #[test]
-fn native_writer_final_gates_use_recorded_tool_path() {
-    let dir = std::env::temp_dir().join(format!("native-writer-e2e-{}", std::process::id()));
+fn native_writer_pushed_base_handshake_review_resume_and_record() {
+    native_writer_fixture(false);
+}
+#[test]
+fn native_writer_ignores_host_admission_policy() {
+    native_writer_fixture(true);
+}
+fn native_writer_fixture(hostile_policy: bool) {
+    let dir = std::env::temp_dir().join(format!(
+        "native-writer-e2e-{}-{hostile_policy}",
+        std::process::id()
+    ));
     fs::create_dir_all(&dir).unwrap();
     let remote = dir.join("remote.git");
     let repo = dir.join("checkout");
@@ -203,9 +213,44 @@ print(json.dumps({'type':'turn.completed'}))
     fs::write(&cargo, "#!/bin/sh\necho 'fixture cargo'\n").unwrap();
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut command = Command::new("python3");
-    pg_worker_core::git_test_support::configure(&mut command, &dir);
-    let out = command.current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let home = dir.join("home");
+    let runtime = home.join("runtime");
+    fs::create_dir_all(&runtime).unwrap();
+    let mut python = Command::new("python3");
+    // Drop caller Git redirects first; the fixture HOME and Git config below override its paths.
+    pg_worker_core::git_test_support::configure(&mut python, &dir);
+    for (key, _) in std::env::vars_os() {
+        let name = key.to_string_lossy();
+        if name.starts_with("AUTOOS_")
+            || name.starts_with("PLANGRAPH_")
+            || name.starts_with("XDG_")
+            || name.starts_with("GIT_CONFIG")
+            || matches!(
+                name.as_ref(),
+                "PYTHONHOME" | "PYTHONUSERBASE" | "PYTHONSTARTUP"
+            )
+        {
+            python.env_remove(&key);
+        }
+    }
+    if hostile_policy {
+        // Host disk policy must not divert this local lifecycle fixture into a queue.
+        let config = dir.join("overflow-hosts.json");
+        fs::write(
+            &config,
+            r#"{"hosts":{"fixture":{"orchestration_only":true}}}"#,
+        )
+        .unwrap();
+        python
+            .env("PLANGRAPH_DISK_FLOOR_GB", "1000000000")
+            .env("PLANGRAPH_HOST_NAME", "fixture")
+            .env("PLANGRAPH_OVERFLOW_HOSTS", config);
+    }
+    let out = python.current_dir(&root).env("PYTHONPATH", root.join("src"))
+        .env("HOME", &home).env("XDG_CONFIG_HOME", home.join(".config"))
+        .env("XDG_STATE_HOME", home.join(".local/state")).env("XDG_DATA_HOME", home.join(".local/share"))
+        .env("XDG_CACHE_HOME", home.join(".cache")).env("XDG_RUNTIME_DIR", &runtime)
+        .env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", home.join(".gitconfig")).env("FIXTURE_HOME", &home)
         .env("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap()))
         .env("GIT_AUTHOR_NAME", "Fixture").env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
         .env("GIT_COMMITTER_NAME", "Fixture").env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
@@ -223,12 +268,20 @@ async def different_supervisor_path(*args, **kwargs):
     if len(args) > 1 and args[1] == 'native-writer':
         kwargs['env'] = dict(kwargs.get('env', os.environ), PATH=str(root/'supervisor-bin') + ':/usr/bin:/bin')
     return await original_exec(*args, **kwargs)
+# Isolation: no host config, state or credentials can be reached through HOME or XDG.
+assert pathlib.Path.home() == pathlib.Path(os.environ['FIXTURE_HOME']), pathlib.Path.home()
+for name in ('HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR'):
+    assert os.path.realpath(os.environ[name]).startswith(os.path.realpath(root) + os.sep), (name, os.environ[name])
+# Keys the fixture sets itself (isolation paths and, in the hostile-policy variant, host policy).
+FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR', 'PLANGRAPH_DISK_FLOOR_GB', 'PLANGRAPH_HOST_NAME', 'PLANGRAPH_OVERFLOW_HOSTS'}
+assert not [k for k in os.environ if k.startswith(('AUTOOS_', 'PLANGRAPH_', 'XDG_', 'GIT_CONFIG')) and k not in FIXTURE_KEYS], sorted(os.environ)
 async def check():
     service = SpawnService(state=root/'state')
     card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         run = await admitted_spawn(service, dict(card=card, prompt='brief marker'))
         assert run.get('base_admitted') or run['status'] != 'running', run
+        assert run['run_id'] in service.tasks, run
         await service.tasks[run['run_id']]
     record = service.result(run['run_id'])
     assert record['status'] == 'completed', record
@@ -287,7 +340,9 @@ async def check():
             import signal
             try: os.killpg(codex_pid, signal.SIGKILL)
             except ProcessLookupError: pass
-with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_path), patch('plangraph.spawner.host_ready.disk_free_gb', return_value=10):
+# Exercise admission with fixed local policy; installed host policy may queue or
+# remotely place the run, neither of which has a local supervisor task.
+with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_path), patch('plangraph.spawner.host_ready.disk_free_gb', return_value=10), patch.object(overflow, 'placement_policy', return_value=('fixture', False)), patch.object(overflow, 'local_limits', return_value=(2048, 3000)), patch('plangraph.spawner.host_ready.local_disk_refusal', return_value=None):
     asyncio.run(check())
 "#]).output().unwrap();
     assert!(

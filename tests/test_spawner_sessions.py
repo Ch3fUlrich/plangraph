@@ -42,6 +42,7 @@ def test_dry_run_writes_nothing(site):
     assert all(isinstance(a, str) for a in res["argv"])
     assert "FLEET_SESSION_NAME" in res["env_keys"]
     assert "CLAUDE_CODE_AUTO_COMPACT_WINDOW" in res["env_keys"]
+    assert "PLANGRAPH_FLEET_LAUNCH" not in res["env_keys"]
     assert res["cwd"] == str(site.proj.resolve())
     assert run.calls == []
     sessions_dir = site.state / "sessions"
@@ -334,3 +335,24 @@ def test_session_launch_base_admission(site, repository, monkeypatch, via_mcp, b
         audit = json.loads((site.state / 'sessions' / 'audit.log').read_text())
         assert audit['reason'] == expected['reason'] and audit['ok'] is False
     assert git(repo, 'worktree', 'list', '--porcelain').count('worktree ') == 1
+
+
+def test_launch_sets_fleet_launch_marker_env(site, monkeypatch):
+    # Sessions runs claude via Python subprocess, so no PLANGRAPH_FLEET_LAUNCH
+    # marker is injected into the child environment.
+    monkeypatch.delenv("PLANGRAPH_FLEET_LAUNCH", raising=False)
+    run = FakeRun(stdout="session " + UUID1)
+    s = make(site, run)
+    go(site, s)
+    launch_kws = [kw for argv, kw in run.calls if argv[:2] == ["claude", "--bg"]]
+    assert len(launch_kws) == 1
+    assert "PLANGRAPH_FLEET_LAUNCH" not in launch_kws[0]["env"]
+    assert launch_kws[0]["env"]["FLEET_SESSION_NAME"] == "alpha"
+    hf = site.tmp_path / "handoff.md"
+    hf.write_text("carry on")
+    run.stdout = "session " + UUID2
+    s.relaunch("alpha", handoff=str(hf))
+    launch_kws = [kw for argv, kw in run.calls if argv[:2] == ["claude", "--bg"]]
+    assert len(launch_kws) == 2
+    assert "PLANGRAPH_FLEET_LAUNCH" not in launch_kws[1]["env"]
+    assert launch_kws[1]["env"]["FLEET_SESSION_NAME"] == "alpha"

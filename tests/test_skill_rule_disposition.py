@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "skills" / "rule-disposition.md"
 CARD_RE = re.compile(r"role card: (planner|orchestrator|worker|batch)")
 REF_RE = re.compile(r"^(\S+\.py)::(test_\w+)$")
+RUST_REF_RE = re.compile(r"^(\S+\.rs)::(\w+)$")
 
 
 def _rows():
@@ -28,15 +29,15 @@ def _gaps():
     return set(re.findall(r"\bR-[a-z]+-\d+\b", section))
 
 
-def test_table_has_86_unique_ids():
+def test_table_has_88_unique_ids():
     ids = [row[0] for row in _rows()]
-    assert len(ids) == 86
-    assert len(set(ids)) == 86
+    assert len(ids) == 88
+    assert len(set(ids)) == 88
 
 
 def test_disposition_counts():
     counts = Counter(row[1] for row in _rows())
-    assert counts == {"delete": 28, "code": 22, "card": 36}
+    assert counts == {"delete": 28, "code": 23, "card": 37}
 
 
 def test_every_row_has_a_why():
@@ -63,6 +64,14 @@ def test_code_rows_are_gaps_or_named_existing_tests():
             continue
         if enf == "none (gap)":
             assert rid in gaps, rid
+            continue
+        rust = RUST_REF_RE.match(enf)
+        if rust:
+            path, name = rust.groups()
+            target = ROOT / path
+            assert target.is_file(), (rid, path)
+            text = target.read_text(encoding="utf-8")
+            assert re.search(rf"\bfn {name}\s*\(", text), (rid, name)
             continue
         match = REF_RE.match(enf)
         assert match, (rid, enf)

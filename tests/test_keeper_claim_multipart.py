@@ -16,6 +16,11 @@ def multipart(scenario, monkeypatch):
     monkeypatch.setattr(context_sources, "plan_item_commits", lambda *a, **kw: [
         {"sha": "abcdef123456", "date": "2026-11-06", "merge": {"pr": 42}}])
     monkeypatch.setattr(context_sources, "open_lanes", lambda *a: [])
+    # Claim now consumes the shared index; retain the same injected facts and
+    # every refusal/override assertion while show keeps its per-item adapter.
+    monkeypatch.setattr(context_sources, "indexed_work", lambda index, key: {
+        "commits": context_sources.plan_item_commits(None, "demo", key),
+        "lanes": context_sources.open_lanes(None, "demo", key), "prs": []})
     return world, path
 
 

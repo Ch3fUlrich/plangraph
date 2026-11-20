@@ -29,7 +29,8 @@
             no FAIL/CHANGES verdict line anywhere. Then per included PR whose recorded head is an ancestor of the
             merge commit (else a problem, no MERGED line): MERGED -> `MERGED <pr> <sha> <item>`; open but in the merge -> closed as `merged via batch PR #N` (after its head is
             read once more), same line; a head that moved after the build -> `NOT-MERGED <pr> head
-            moved`, not closed, needs-update.
+            moved`, not closed, needs-update. Cleanup then sweeps exact landed worktrees and
+            SHA-leased branches; cleanup failures are printed without failing land.
   status    batches in progress, interrupted ones and orphans.  abort: drop a batch (worktree,
             branch, state; without a state file by branch name).
 

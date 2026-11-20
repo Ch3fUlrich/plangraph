@@ -25,7 +25,12 @@ MAX_COMMAND_BYTES = 1024 * 1024  # 1 MiB
 _MAX_C_DEPTH = 3  # `shell -c` / `eval` strings nested inside each other
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\+?=")
-_CLAUDE_BG_OR_PRINT_FLAGS = ("--bg", "-p", "--print")
+_CLAUDE_BG_FLAGS = ("--bg", "--background")
+_CLAUDE_BG_OR_PRINT_FLAGS = (*_CLAUDE_BG_FLAGS, "-p", "--print")
+# UUID or 8..64 hex char short session id accepted by `claude --bg --resume`.
+_RESUME_ID_RE = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{8,64})$"
+)
 # getopt(3)-style short-flag metadata: a cluster letter listed here takes
 # an option-argument and so swallows the rest of the cluster. `-m` is the
 # short spelling of claude's `--model`: `-mp` is `-m p`, not `-m -p`.
@@ -48,6 +53,10 @@ _CLAUDE_MSG = (
     "containing a backtick or $(...) command substitution; the CALLING "
     "shell expands that before claude ever sees the prompt. Use single "
     "quotes, or pass the prompt from a file, instead.")
+_CLAUDE_BG_LAUNCHER_MSG = (
+    "bash-guard: DENIED - sessions are launched only by the fleet launcher "
+    "(spawner session_launch / fleet-launch), which allocates the name counter; "
+    "send the launch request to routing (D-158).")
 _DEPTH_MSG = (
     "bash-guard: DENIED - shell -c / eval strings nested more than %d levels "
     "deep; the guard cannot scan that far and fails closed. Flatten the "
@@ -85,6 +94,22 @@ def _basename(token):
     return token.replace("\\", "/").rsplit("/", 1)[-1]
 
 
+def _is_short_cluster_with(word, target):
+    """True if word is a single-dash alphabetic short-flag cluster carrying
+    `target` before any flag in `_CLAUDE_SHORT_FLAGS_WITH_ARG` swallows the rest."""
+    if not word.startswith("-") or word.startswith("--"):
+        return False
+    cluster = word[1:]
+    if not cluster or not cluster.isascii() or not cluster.isalpha():
+        return False
+    for ch in cluster:
+        if ch in _CLAUDE_SHORT_FLAGS_WITH_ARG:
+            return False
+        if ch == target:
+            return True
+    return False
+
+
 def _is_short_p_cluster(word):
     """True if word is a single-dash short-flag cluster that carries a
     literal ``-p`` once expanded getopt(3)-style (``-pq`` is ``-p -q``).
@@ -96,17 +121,18 @@ def _is_short_p_cluster(word):
     claude short flag is treated as value-less: ``-pz`` still carries
     ``-p`` (over-deny on an unknown flag is harmless), and ``-print`` is
     ``-p -r -i -n -t``, carrying ``-p`` as its first flag."""
-    if not word.startswith("-") or word.startswith("--"):
-        return False
-    cluster = word[1:]
-    if not cluster or not cluster.isascii() or not cluster.isalpha():
-        return False
-    for ch in cluster:
-        if ch in _CLAUDE_SHORT_FLAGS_WITH_ARG:
-            return False
-        if ch == "p":
-            return True
-    return False
+    return _is_short_cluster_with(word, "p")
+
+
+def _is_name_flag(word):
+    """True if word sets claude's session name (`-n`, `--name`, `--name=...`,
+    `-n<val>`, or a short-flag cluster carrying `n`)."""
+    flag_part = word.partition("=")[0]
+    if flag_part in ("-n", "--name"):
+        return True
+    if word.startswith("-n") and not word.startswith("--"):
+        return True
+    return _is_short_cluster_with(flag_part, "n")
 
 
 def _extract_flag_hit(word):
@@ -130,6 +156,37 @@ def _suffix(pos, extra):
         flags[k] = _extract_flag_hit(pos[k].text) or flags[k + 1]
         live[k] = live[k + 1] | pos[k].live
     return flags, live
+
+
+def _has_bg_flag(words):
+    """True if any word carries a claude background flag (`--bg` or
+    `--background`, bare or `=<value>`). Any `=...` value (including
+    `--bg=0` / `--background=0`) is denied (fail closed)."""
+    return any(_extract_flag_hit(w.text) in _CLAUDE_BG_FLAGS for w in words)
+
+
+def _has_resume_arg(words):
+    """True if words include `--resume <id>`, `--resume=<id>`, `-r <id>`, or
+    `-r=<id>` with a UUID/hex id, no malformed `--resume`/`-r`, and no `-n`/`--name`."""
+    found = False
+    i = 0
+    n = len(words)
+    while i < n:
+        text = words[i].text
+        if _is_name_flag(text):
+            return False
+        if text in ("--resume", "-r"):
+            if i + 1 >= n or not _RESUME_ID_RE.fullmatch(words[i + 1].text):
+                return False
+            found = True
+            i += 2
+            continue
+        if text.startswith(("--resume=", "-r=")):
+            if not _RESUME_ID_RE.fullmatch(text.partition("=")[2]):
+                return False
+            found = True
+        i += 1
+    return found
 
 
 # ─── shell -c scanner ─────────────────────────────────────────────────
@@ -186,13 +243,15 @@ def _check_simple(cmd, depth, placement_required):
     for j in (range(i, len(pos)) if wrapped else (i,)):
         word = pos[j]
         name = _basename(word.text)
-        if name == "claude" or (word.live and "claude" in word.text
-                                and not _ENV_ASSIGN_RE.match(word.text)):
+        if name in ("claude", "claude.exe") or (
+                word.live and "claude" in word.text and not _ENV_ASSIGN_RE.match(word.text)):
             if sfx is None:
                 sfx = _suffix(pos, max([w.live for w in cmd if w.redir], default=0))
             flag, live = sfx[0][j + 1], sfx[1][j + 1]
             if flag and live:
                 return _CLAUDE_MSG % (flag, "a double-quoted" if live & 1 else "an unquoted")
+            if _has_bg_flag(pos[j + 1:]) and not _has_resume_arg(pos[j + 1:]):
+                return _CLAUDE_BG_LAUNCHER_MSG
         elif name in _SHELLS:
             for string in _shell_strings(pos, j + 1):
                 reason = check_command(string, depth + 1, placement_required)

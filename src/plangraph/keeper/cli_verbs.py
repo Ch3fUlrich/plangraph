@@ -30,6 +30,7 @@ EXIT_OK = 0
 EXIT_REFUSED = 2
 EXIT_UNREACHABLE = 3
 TIMEOUT = 15.0
+SLOW_TIMEOUT = 120.0  # close_merged reads git and the decisions log before it commits
 NOTICE = "READ-ONLY fallback (keeper unreachable)"
 
 
@@ -107,7 +108,7 @@ class Session:
         return self._token
 
     # ---------------------------------------------------------------- HTTP
-    def call(self, method, verb, params=None, body=None):
+    def call(self, method, verb, params=None, body=None, timeout=None):
         query = dict(params or {})
         query.setdefault("fmt", "json")
         query = {k: v for k, v in query.items() if v is not None}
@@ -118,7 +119,7 @@ class Session:
         if data is not None:
             request.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT) as resp:
+            with urllib.request.urlopen(request, timeout=timeout or TIMEOUT) as resp:
                 raw = resp.read()
         except urllib.error.HTTPError as exc:
             code, msg = _parse_error(exc.read(), exc.code)
@@ -227,12 +228,29 @@ def cmd_ready(args, session):
         return _emit(session, session.local_items(),
                      lambda items: fmt.ready_text(items, args.project, n,
                                                   owner=owner, agent=agent))
+    if getattr(args, "needs_reconcile", False):
+        try:
+            result = session.call("GET", "ready", {"project": args.project, "n": n,
+                "owner": owner, "mine": 1 if mine else None,
+                "agent": 1 if agent else None})
+            return _emit(session, {"needs_reconcile": result["needs_reconcile"]},
+                         lambda r: fmt.ready_text([], server_items=True,
+                             needs_reconcile=r["needs_reconcile"]))
+        except RefusedCli as exc:
+            return _refuse(exc)
+        except Unreachable as exc:
+            print(f"keeper unreachable: {exc}", file=sys.stderr)
+            return EXIT_UNREACHABLE
     return read(session, "ready", {"project": args.project, "n": n,
                                    "all": 1 if args.all else None,
                                    "owner": owner, "mine": 1 if mine else None,
                                    "agent": 1 if agent else None},
                 lambda r: fmt.ready_text(r["items"], unblocks=r.get("unblocks"),
-                                         server_items=True), local)
+                                         server_items=True,
+                                         needs_reconcile=r.get("needs_reconcile"),
+                                         in_progress=r.get("in_progress"),
+                                         unknown=r.get("unknown"),
+                                         warnings=r.get("warnings")), local)
 
 
 def cmd_show(args, session):
@@ -303,6 +321,107 @@ def cmd_snapshot(args, session):
     def local():
         return _emit(session, session.local_snapshot(), fmt.snapshot_text)
     return read(session, "snapshot", {}, lambda r: fmt.snapshot_text(r), local)
+
+
+def _sweep_claim_paths(card, state):
+    """Keeper run_ids bind local spawner metadata to an authoritative active claim."""
+    metadata = [card.get("claim"), card.get("claim_metadata")]
+    ids = card.get("run_ids")
+    if not isinstance(ids, list):
+        raise ValueError("claim run metadata unavailable")
+    for rid in ids:
+        if not isinstance(rid, str) or rid in (".", "..") or Path(rid).name != rid or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", rid):
+            raise ValueError("invalid claim run id")
+        record = state / "runs" / rid / "record.json"
+        try:
+            row = json.loads(record.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            if record.parent.exists():
+                raise ValueError("claim run record unavailable") from None
+            continue  # Runs belonging to another host have no local metadata.
+        if not isinstance(row, dict) or not isinstance(row.get("status"), str):
+            raise ValueError("invalid claim run record")
+        metadata.append(row)
+        worktree = row.get("run_worktree")
+        if worktree is not None:
+            if not isinstance(worktree, dict) or not isinstance(worktree.get("path"), str):
+                raise ValueError("incomplete claim worktree metadata")
+            metadata.append(worktree)
+        attempts = row.get("worktree_attempts")
+        if attempts is None:
+            attempts = []
+        if not isinstance(attempts, list) or any(not isinstance(a, dict) or not isinstance(a.get("path"), str) for a in attempts):
+            raise ValueError("invalid claim worktree attempts")
+        metadata.extend(attempts)
+    paths = set()
+    for meta in metadata:
+        if meta is None:
+            continue
+        if not isinstance(meta, dict):
+            raise ValueError("invalid claim metadata")
+        for field in ("path", "worktree", "checkout", "cwd"):
+            value = meta.get(field)
+            if isinstance(value, dict) and field in ("worktree", "checkout"):
+                if not isinstance(value.get("path"), str):
+                    raise ValueError("incomplete claim checkout metadata")
+                value = value["path"]
+            if value is not None:
+                if not isinstance(value, str) or not Path(value).is_absolute():
+                    raise ValueError("invalid claim path")
+                paths.add(value)
+    return paths
+
+
+def cmd_sweep_claims(args, session):
+    """Fresh all-project protection authority; never use the offline fallback."""
+    from .schema import STATES
+    try:
+        state_value = getattr(args, "state", None)
+        if state_value is None:
+            state_value = os.environ.get("PG_SWEEP_STATE", str(Path.home() / ".local/state/plangraph"))
+        if not state_value:
+            raise ValueError("empty sweep state path")
+        state = Path(state_value)
+        who = session.call("GET", "whoami")
+        if who.get("role") != "router" or who.get("projects") != []:
+            raise ValueError("sweep claims needs an unscoped router token")
+        snap = session.call("GET", "snapshot")
+        if not isinstance(snap.get("items"), list) or "filter" in snap or type(snap.get("head_seq")) is not int:
+            raise ValueError("incomplete snapshot")
+        paths, branches = set(), set()
+        for item in snap["items"]:
+            if (not isinstance(item, dict) or item.get("state") not in STATES
+                    or not isinstance(item.get("key"), str) or not item["key"]):
+                raise ValueError("incomplete item")
+            if item["state"] not in ("claimed", "in_review"):
+                continue
+            card = session.call("GET", "show", {"key": item["key"]})
+            if not isinstance(card, dict) or card.get("key") != item["key"] or card.get("state") not in ("claimed", "in_review"):
+                raise ValueError("incomplete active claim response")
+            lanes = card.get("work_exists", {}).get("lanes")
+            if not isinstance(lanes, list) or len(lanes) >= 5:
+                raise ValueError("open lanes unavailable or truncated")
+            for lane in lanes:
+                if not isinstance(lane, str) or not lane:
+                    raise ValueError("invalid lane")
+                branches.add(lane)
+                # Open lanes may include a remote prefix; export its local name too.
+                if not lane.startswith("refs/") and "/" in lane:
+                    branches.add(lane.split("/", 1)[1])
+            claim_paths = _sweep_claim_paths({**item, **card}, state)
+            if not claim_paths and not lanes:
+                raise ValueError("active claim has no resolved path or lane")
+            paths.update(claim_paths)
+        # Refuse a claim set that changed while per-item authority was collected.
+        if session.call("GET", "snapshot").get("head_seq") != snap.get("head_seq") or "head_seq" not in snap:
+            raise ValueError("keeper changed during claims read")
+        print(json.dumps({"paths": sorted(paths), "branches": sorted(branches)}, separators=(",", ":")))
+        return EXIT_OK
+    except RefusedCli as exc:
+        return _refuse(exc)
+    except (Unreachable, ValueError, TypeError, AttributeError, OSError) as exc:
+        print(f"sweep claims unavailable: {exc}", file=sys.stderr)
+        return EXIT_UNREACHABLE
 
 
 def cmd_whoami(args, session):

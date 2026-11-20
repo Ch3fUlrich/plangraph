@@ -1,0 +1,1 @@
+- **LE-KEEPER-GO-PROOF-OLD-UNDATED-ROW-WINS:** close-merged prefers a dated accepted GO row over an older undated one for the same merged head, so the operator seat waiver no longer refuses `go_date_ineligible` because of an old undated row.
