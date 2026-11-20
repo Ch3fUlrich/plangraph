@@ -7,28 +7,7 @@ use std::process::{Command, Stdio};
 // adapter. The Python package must be installed, as for pg-spawnd's adapter.
 const CHECK: &str = "import json, sys; from plangraph.spawner.base_fresh import base_fresh; print(json.dumps(base_fresh(sys.argv[1], ref=sys.argv[2], fetch=sys.argv[3] == '1')))";
 
-/// Python interpreter command shared by every adapter to the Python helpers.
-/// `src_root` (a checkout holding `src/plangraph`) is put on `PYTHONPATH` when it exists.
-pub fn python_command(src_root: Option<&Path>) -> Command {
-    let mut cmd = Command::new(
-        std::env::var_os("PG_SPAWND_PYTHON")
-            .unwrap_or_else(|| if cfg!(windows) { "python" } else { "python3" }.into()),
-    );
-    if let Some(src) = src_root
-        .map(|root| root.join("src"))
-        .filter(|s| s.join("plangraph").is_dir())
-    {
-        let sep = if cfg!(windows) { ";" } else { ":" };
-        let existing = std::env::var("PYTHONPATH").unwrap_or_default();
-        let joined = if existing.is_empty() {
-            src.display().to_string()
-        } else {
-            format!("{}{sep}{existing}", src.display())
-        };
-        cmd.env("PYTHONPATH", joined);
-    }
-    cmd
-}
+pub use pg_worker_core::writer_families::python_command;
 
 /// Run the canonical D-5661 gate on `git_ref` of `repo`; Err carries its one-line reason.
 pub fn check_ref(

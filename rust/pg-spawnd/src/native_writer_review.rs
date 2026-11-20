@@ -68,7 +68,7 @@ impl Host {
         prompt.push_str(&format!("Name each finding as file:line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
         prompt
     }
-    /// One review run through the spawner, role review with the writer family excluded,
+    /// One review run through the spawner, role review with every writer family of the range excluded,
     /// in a disposable no-push clone at `head`; the verdict comes from that run's record.
     pub(super) fn review_run(
         &mut self,
@@ -117,6 +117,18 @@ impl Host {
                 self.git(&["merge-base", "--is-ancestor", prev, head])
                     .is_ok()
             });
+        // Every writer family of base..head (trailers, plus the served writer model) is excluded.
+        let families = pg_worker_core::writer_families::writer_families(
+            &self.cwd,
+            base,
+            head,
+            &[super::WRITER_MODEL],
+            &|| {
+                let mut python = pg_worker_core::writer_families::python_command(Some(&self.cwd));
+                python.env("PATH", &self.tool_path);
+                python
+            },
+        )?;
         let prompt = self.review_prompt(base, head, prev);
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
@@ -128,7 +140,8 @@ impl Host {
             .arg("--state")
             .arg(&self.state)
             .args(["spawn", "--card", &card.to_string(), "--role", "review"])
-            .args(["--writer-family", "openai", "--prompt-file"])
+            .args(families.iter().flat_map(|f| ["--writer-family", f]))
+            .arg("--prompt-file")
             .arg(&prompt_path)
             .args(["--wait", "3300", "--json"])
             .current_dir(clone)

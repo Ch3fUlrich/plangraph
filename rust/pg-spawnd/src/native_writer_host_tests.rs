@@ -293,6 +293,7 @@ fn writer_effort_is_medium_unless_a_decision_names_a_higher_one() {
     assert_eq!(model_args("high")[3], "model_reasoning_effort=high");
 }
 
+#[cfg(unix)]
 #[test]
 fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     let dir = tempfile::tempdir().unwrap();
@@ -335,8 +336,33 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     fs::create_dir_all(cwd.join("src")).unwrap();
     fs::write(cwd.join("src/lib.rs"), "// writer\n").unwrap();
     git(&cwd, &["add", "src/lib.rs"]);
-    git(&cwd, &["commit", "-q", "-m", "writer"]);
+    git(
+        &cwd,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "writer\n\nWriter: gemini-4-hydrogen-high run-6f00f4b3",
+        ],
+    );
+    fs::write(cwd.join("src/more.rs"), "// second writer\n").unwrap();
+    git(&cwd, &["add", "src/more.rs"]);
+    git(
+        &cwd,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "claude\n\nWriter: claude-opus-5-5 session_abc",
+        ],
+    );
     let head = git(&cwd, &["rev-parse", "HEAD"]);
+    // The family table is read from the checkout's own plangraph sources.
+    std::os::unix::fs::symlink(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/plangraph"),
+        cwd.join("src/plangraph"),
+    )
+    .unwrap();
     let state = dir.path().join("state");
     let cli = dir.path().join("review-cli.py");
     fs::write(
@@ -346,7 +372,10 @@ argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
 assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
-assert value('--writer-family') == 'openai' and 'cwd' in card
+families = [argv[i + 1] for i, a in enumerate(argv) if a == '--writer-family']
+# The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
+assert sorted(families) == ['anthropic', 'google', 'openai'], families
+assert 'cwd' in card
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 head = card['diff_ref']['head']
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
