@@ -12,23 +12,39 @@ mod tests;
 fn refused(reason: &str) -> ToolError {
     crate::placement::parameter(format!("{reason}: writer round admission refused"))
 }
+/// The one owner of the writer review-round stop rule (the Python setting, the batch-writer
+/// skill and the batch card quote it): the loop ends when `STALL_ROUNDS` rounds in a row bring
+/// the HIGH+MED count no lower than the best count so far, when from round `STALL_ROUNDS`
+/// on the count is still above half of the round-1 count, and never runs past `MAX_ROUNDS`.
+pub(crate) const MAX_ROUNDS: u64 = 8;
+pub(crate) const STALL_ROUNDS: u64 = 3;
+
+/// Why the next writer round (`next`) must not start, given the confirmed HIGH+MED count of
+/// every round so far.
 fn stop_reason(counts: &[u64], next: u64, used_exception: bool) -> Option<&'static str> {
-    if next > 5 || used_exception {
+    if next > MAX_ROUNDS || used_exception {
         return Some("round_cap");
     }
-    let (mut best, mut misses) = (u64::MAX, 0);
+    // Round 1 has no earlier count to beat: it is a miss until a later round is strictly lower.
+    let (mut best, mut misses) = (None, 0);
     for &count in counts {
-        if count < best {
-            best = count;
-            misses = 0;
-        } else {
-            misses += 1;
+        match best {
+            Some(b) if count < b => (best, misses) = (Some(count), 0),
+            _ => {
+                best = best.or(Some(count));
+                misses += 1;
+            }
         }
-        if misses == 2 {
+        if misses >= STALL_ROUNDS {
             return Some("no_progress");
         }
     }
-    (next >= 5).then_some("round_cap")
+    match (counts.first(), counts.last()) {
+        (Some(&first), Some(&last)) if counts.len() as u64 >= STALL_ROUNDS && last * 2 > first => {
+            Some("slow_progress")
+        }
+        _ => None,
+    }
 }
 fn summarize(value: &Value, run: &str, item: &str, pr: &Value) -> Result<Value, ToolError> {
     let invalid = || refused("round_verdict_invalid");
@@ -194,7 +210,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
         .iter()
         .map(|s| s["confirmed_blockers"].as_u64().unwrap())
         .collect();
-    if next > 5 {
+    if next > MAX_ROUNDS {
         return Err(refused("round_cap"));
     }
     if summaries

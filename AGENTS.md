@@ -59,6 +59,16 @@ skill text names the role in its first lines: follow that role's skill.
 - `skills/mcp-servers-setup/SKILL.md`: when an MCP server is missing or misbehaves.
 - `skills/routing-registry/SKILL.md`: before you change a combo, provider, model or route.
 
+Router skills (site values come from the router config keys named in each skill):
+
+- `skills/router-core/SKILL.md`: the router's per-input checklist and hard rules.
+- `skills/router-heartbeat/SKILL.md`: the hourly status digest and read-only verification.
+- `skills/router-launch/SKILL.md`: launch, stop and recycle fleet sessions.
+- `skills/router-handoff/SKILL.md`: router card, handoff and changelog before a restart.
+- `skills/router-accept-record/SKILL.md`: seat record acceptance and the GO-REQ plan block.
+- `skills/route-question/SKILL.md`: research, default and operator question routing.
+- `skills/fleet-handoff/SKILL.md`: L1/L2 handoff file and card.
+
 Instructions for reaching hosts are not a plangraph skill: they live in the repository
 that owns those hosts.
 

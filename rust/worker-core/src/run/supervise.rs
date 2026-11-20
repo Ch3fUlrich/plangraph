@@ -6,6 +6,7 @@ use super::{
 };
 use serde_json::{json, Map, Value};
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     io,
     path::PathBuf,
@@ -28,6 +29,7 @@ pub struct RunSpec {
     pub base: Map<String, Value>,
     pub events: Vec<Value>,
     pub finish: Option<FinishHook>,
+    pub allow_shas: BTreeSet<String>,
 }
 pub struct Config {
     pub state_dir: PathBuf,

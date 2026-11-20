@@ -11,13 +11,32 @@ from plangraph.routing_errors import SpawnRefused
 _REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]{0,199}$")
 
 
+def _valid_diff_path(path):
+    """Repo-relative diff pathspec with no option injection or traversal."""
+    if not isinstance(path, str) or not path or any(ord(c) < 32 or 127 <= ord(c) < 160 for c in path):
+        return False
+    if path[0] in ("-", "/", "\\", ":") or (len(path) >= 2 and path[1] == ":" and path[0].isalpha()):
+        return False
+    if os.path.isabs(path):
+        return False
+    parts = re.split(r"[/\\]", path)
+    return ".." not in parts
+
+
 def _check_diff_ref(ref):
-    """``card["diff_ref"]`` = ``{"repo": <absolute path>, "base": <rev>, "head": <rev>}``."""
-    if (not isinstance(ref, Mapping) or set(ref) != {"repo", "base", "head"}
-            or not all(isinstance(ref[k], str) for k in ref)
+    """``card["diff_ref"]`` = ``{"repo": <absolute path>, "base": <rev>, "head": <rev>, ["paths": [...]]}``."""
+    if (not isinstance(ref, Mapping)
+            or not {"repo", "base", "head"} <= set(ref)
+            or not set(ref) <= {"repo", "base", "head", "paths"}
+            or not all(isinstance(ref[k], str) for k in ("repo", "base", "head"))
             or not os.path.isabs(ref["repo"])
             or not _REF_RE.match(ref["base"]) or not _REF_RE.match(ref["head"])):
         raise SpawnRefused('diff_ref must be {"repo": absolute path, "base": rev, "head": rev}')
+    if "paths" in ref:
+        paths = ref["paths"]
+        if (not isinstance(paths, (list, tuple)) or not paths
+                or not all(_valid_diff_path(p) for p in paths)):
+            raise SpawnRefused("diff_ref paths must be a non-empty list of repo-relative paths")
 
 
 def seat_family(family):

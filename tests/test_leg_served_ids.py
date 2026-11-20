@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.legs import CX_EFFORTS, DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan
 from plangraph.routing_support import opencode_overlay, resolver
 
@@ -14,10 +14,10 @@ from plangraph.routing_support import opencode_overlay, resolver
 # Measured with `opencode models` on 2026-11-06 (D-3952).
 SERVED_OPENCODE_GO_IDS = frozenset({
     "opencode-go/deepseek-v4.1-flash",
-    "opencode-go/gemini-4-argon",
-    "opencode-go/glm-5.2",
+    "opencode-go/glm-5.3-flash",
     "opencode-go/qwen3.8-max",
     "opencode-go/muse-spark-1.3-contributor",
+    "opencode-go/beam-free",
 })
 
 
@@ -133,3 +133,24 @@ def test_split_deepseek_provider_declaration_is_reported():
     changelog = (root / 'changelog.d/DEEPSEEK-REVIEW-LEG-SERVED.md').read_text()
     assert 'no provider settings' not in changelog
     assert 'shipped provider config' in changelog
+
+
+def test_cx_leg_windows_match_provider_context():
+    import json
+    from pathlib import Path
+    from plangraph.planner.legs import EXPLICIT_LEGS
+    root = Path(__file__).resolve().parents[1]
+    models = json.loads((root / 'configuration/opencode/providers.json').read_text())['providers']['omniroute']['models']
+    checked = 0
+    for leg in list(DEFAULT_LEGS) + list(EXPLICIT_LEGS):
+        base = leg.model.removeprefix('omniroute/')
+        if not base.startswith('cx-gpt-'):
+            continue
+        for key in sorted(models, key=len, reverse=True):
+            if base == key or (base.startswith(key + '-') and base[len(key) + 1:] in CX_EFFORTS):
+                context = models[key]['limit']['context']
+                assert leg.max_request_tokens <= context, leg.id
+                assert ('1m' in leg.windows) == (context >= 1048576), leg.id
+                checked += 1
+                break
+    assert checked >= 12

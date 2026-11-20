@@ -121,7 +121,7 @@ def _declare_cx_effort_model(providers: dict[str, Any], model: str) -> None:
 
     Spawned opencode runs see only OPENCODE_CONFIG_CONTENT (opencode_isolation
     closes the global layer), and the AutoOS root config declares only the base
-    cx models (``cx-gpt-6.1-sol`` -> ``cx/gpt-6.1-sol``).  opencode refuses an
+    cx models (``cx-gpt-6.2-sol`` -> ``cx/gpt-6.2-sol``).  opencode refuses an
     undeclared model ("provider.no-route", measured 2026-11-09).  The variant
     takes its base model's limit; an existing entry is kept as is.
     """

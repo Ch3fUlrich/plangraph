@@ -1,0 +1,1 @@
+`close-merged` binds a GO row to the merged PR it names (PR head = GO-HEAD, merged on the default branch, item named) before the trailer search, reads a single numbered GO ruling, honours a `Merge-Repo:` line of the item, and names both heads in a head mismatch.

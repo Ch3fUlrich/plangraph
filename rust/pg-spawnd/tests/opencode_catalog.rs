@@ -62,12 +62,13 @@ print(json.dumps(rows))
 // Grok's missing declaration remains owned by PG-OMNIROUTE-CONFIG-HOME.
 const EXCLUDED: &[&str] = &[
     "openrouter-free",
+    "opencode-flint-40b-free",
     "opencode-big-pickle",
-    "opencode-gemini-4-argon",
-    "opencode-go-gemini-4-argon",
+    "opencode-go-qwen3.8-max",
     "opencode-go-muse-spark",
     "opencode-console-muse-spark",
     "opencode-go-deepseek-v4-flash",
+    "opencode-go-glm-5.3-flash",
     "console-deepseek-flash",
     "opencode-go-beam-free",
     "omniroute-grok-4.7",

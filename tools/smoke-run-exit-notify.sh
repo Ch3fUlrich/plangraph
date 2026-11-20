@@ -40,7 +40,7 @@ async def main():
                              'from pathlib import Path; Path("notify-smoke.txt").write_text("OK\\n"); print("notify smoke OK")']):
         record = await service.spawn(
             card={'estimate_tokens': 1000},
-            prompt='Reply OK only', model='omniroute/cx-gpt-6.1-sol',
+            prompt='Reply OK only', model='omniroute/cx-gpt-6.2-sol-medium',
             override_reason='build-L1 cheap local harness notification smoke', wait_seconds=0)
         record = await service.wait(record['run_id'], timeout=30)
     if record['exit_code'] != 0:

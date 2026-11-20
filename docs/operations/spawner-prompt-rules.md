@@ -7,7 +7,7 @@ section for terminal `not done:` items. Run affected tests only
 (`python3 tools/affected_tests.py --base origin/main --run`); COMMIT before finishing.
 
 Retry bounds are not multiplied:
-`src/plangraph/settings.py:ReviewMethod.max_rounds` (3) is advisory, not an enforced
+`src/plangraph/settings.py:ReviewMethod.max_rounds` (8, the ceiling of the stop rule in `rust/pg-spawnd/src/round_progress.rs`) is advisory, not an enforced
 run cap; `src/plangraph/planner/routing.py:ATTEMPT_BUDGET` (3) feeds
 `next_after_failure`'s per-tier retry/promotion policy, but the spawner's
 `src/plangraph/spawner/service.py:_spawn` walks `plan.legs` once (no numeric

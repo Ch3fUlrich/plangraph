@@ -26,7 +26,7 @@ from .evidence_decisions import DecisionsAdapter, _decision_cell
 from .evidence_git import valid_ref
 from .evidence_types import valid_commit_ref
 
-__all__ = ["plan_item_commits", "open_lanes", "decision_ids", "decision_book", "decision_texts",
+__all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
            "decisions_naming", "superseded_map", "COMMIT_LIMIT"]
 
 COMMIT_LIMIT = 5
@@ -329,6 +329,22 @@ def _merge_of(git, repo, ref, sha):
     match = _PR_RE.search(subject)
     return {"sha": found[-1], "subject": subject,
             "pr": int(match.group(1)) if match else None}
+
+
+def pr_merge_of(git, project, head):
+    """``{pr, merge, head}`` when *head* is the second parent of the first-parent merge
+    on the default ref that introduced it, else ``None`` (also when git cannot answer)."""
+    repo, ref = _repo_ref(git, project)
+    if repo is None or not valid_commit_ref(head):
+        return None
+    merge = _merge_of(git, repo, ref, head)
+    if not merge or merge["pr"] is None:
+        return None
+    parents = (_ok(git, repo, ["show", "-s", "--format=%P", "--end-of-options",
+                               merge["sha"]]) or "").split()
+    if len(parents) != 2 or parents[1] != head:
+        return None
+    return {"pr": merge["pr"], "merge": merge["sha"], "head": head}
 
 
 _REFS_LOCK = threading.Lock()

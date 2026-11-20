@@ -1,6 +1,8 @@
 """Value-based child credential scrubbing, before any output truncation."""
 import json
+import os
 import re
+import subprocess
 from decimal import Decimal
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
 from .redact_tokens import redact_wide_assignments
@@ -45,17 +47,100 @@ def redact_source(value):
     return _redact(value, source=True)
 
 
-def redact_output(text):
+_HEX_RUN = re.compile(r'\b[0-9a-fA-F]{32,}\b')
+_BLOB_RUN = re.compile(r'[A-Za-z0-9+/_-]{40,}={0,2}')
+
+
+def _redact_blob_plain(text):
+    return _BLOB_RUN.sub(lambda m: '[REDACTED]'
+                         if re.search(r'[0-9]', m[0]) and re.search(r'[A-Za-z]', m[0])
+                         else m[0], text)
+
+
+def _hex_shaped(text):
+    """True when text holds a run of 8 or more hex digits."""
+    return re.search(r'[0-9a-fA-F]{8}', text) is not None
+
+
+def redact_output(text, allow_shas=()):
     """Child-produced free text only, never prompts or structured records."""
     if not isinstance(text, str):
         raise TypeError('redact_output requires text, not a record')
     try:
-        text = re.sub(r'\b[0-9a-fA-F]{32,}\b', '[REDACTED]', redact(text))
-        return re.sub(r'[A-Za-z0-9+/_-]{40,}={0,2}', lambda m: '[REDACTED]'
-                      if re.search(r'[0-9]', m[0]) and re.search(r'[A-Za-z]', m[0])
-                      else m[0], text)
+        allow = frozenset(s.lower() for s in allow_shas
+                          if isinstance(s, str) and re.fullmatch(r'[0-9a-fA-F]{40}', s))
+        text = redact(text)
+        if not allow:
+            return _redact_blob_plain(_HEX_RUN.sub('[REDACTED]', text))
+        text = _HEX_RUN.sub(lambda m: m[0] if len(m[0]) == 40 and m[0].lower() in allow
+                            else '[REDACTED]', text)
+        def _blob(m):
+            t = m[0]
+            if not (re.search(r'[0-9]', t) and re.search(r'[A-Za-z]', t)):
+                return t
+            if len(t) == 40 and t.lower() in allow:
+                return t
+            out, copied, kept = [], 0, False
+            for hm in _HEX_RUN.finditer(t):
+                if not (len(hm[0]) == 40 and hm[0].lower() in allow):
+                    continue
+                flank = t[copied:hm.start()]
+                before = t[hm.start() - 1] if hm.start() else '/'
+                after = t[hm.end()] if hm.end() < len(t) else '/'
+                if before != '/' or after != '/' or _hex_shaped(flank):
+                    return '[REDACTED]'
+                out.append(_redact_blob_plain(flank))
+                out.append(hm[0])
+                copied, kept = hm.end(), True
+            if not kept or _hex_shaped(t[copied:]):
+                return '[REDACTED]'
+            out.append(_redact_blob_plain(t[copied:]))
+            return ''.join(out)
+        return _BLOB_RUN.sub(_blob, text)
     except Exception:
         return '[autoos:redaction failed; output withheld]\n'
+
+
+def allow_shas_for_run(cwd, prompt='', card=None):
+    """Exact lowercase 40-hex commit shas named by diff_ref or resolved in run cwd."""
+    from .prompt_input import checkout_env
+    env = {**checkout_env(), 'GIT_TERMINAL_PROMPT': '0'}
+    shas = set()
+    diff_ref = card.get('diff_ref') if isinstance(card, dict) else None
+    if isinstance(diff_ref, dict):
+        repo = diff_ref.get('repo')
+        diff_repo = repo if isinstance(repo, str) and os.path.isdir(repo) else cwd
+        if isinstance(diff_repo, str) and os.path.isdir(diff_repo):
+            for key in ('head', 'head_sha', 'base', 'base_sha'):
+                rev = diff_ref.get(key)
+                if not isinstance(rev, str) or not rev.strip():
+                    continue
+                try:
+                    run = subprocess.run(
+                        ['git', '-C', diff_repo, 'rev-parse', '--verify', '--end-of-options', f'{rev.strip()}^{{commit}}'],
+                        capture_output=True, text=True, encoding='utf-8', errors='replace',
+                        timeout=10, env=env, stdin=subprocess.DEVNULL)
+                except (OSError, subprocess.SubprocessError):
+                    continue
+                out = run.stdout.strip().lower()
+                if run.returncode == 0 and re.fullmatch(r'[0-9a-f]{40}', out):
+                    shas.add(out)
+    candidates = sorted({m.lower() for m in re.findall(r'\b[0-9a-fA-F]{40}\b', prompt or '')} - shas)
+    if candidates and isinstance(cwd, str) and os.path.isdir(cwd):
+        try:
+            run = subprocess.run(
+                ['git', '-C', cwd, 'cat-file', '--batch-check'],
+                input=''.join(f'{s}^{{commit}}\n' for s in candidates),
+                capture_output=True, text=True, encoding='utf-8', errors='replace',
+                timeout=10, env=env)
+            if run.returncode == 0:
+                for cand, line in zip(candidates, run.stdout.splitlines()):
+                    parts = line.split()
+                    if len(parts) >= 2 and parts[1] == 'commit':
+                        shas.add(cand)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return frozenset(shas)
 
 
 def _redact(value, *, source):
@@ -141,8 +226,8 @@ def _redact_prompt(prompt, scrub):
 
 class OutputLines:
     """Child streams only: hold incomplete lines and scrub before logs/tail cuts."""
-    def __init__(self, scrub):
-        self.scrub, self.pending, self.discarding = scrub, '', False
+    def __init__(self, scrub, allow_shas=()):
+        self.scrub, self.allow_shas, self.pending, self.discarding = scrub, frozenset(allow_shas), '', False
 
     def feed(self, text, final=False):
         self.pending += text
@@ -161,7 +246,7 @@ class OutputLines:
         try:
             # run_watchdog's callback removes env values; broad output-only
             # rules belong here, not in its shared prompt/record scrubber.
-            return redact_output(self.scrub(text))
+            return redact_output(self.scrub(text), allow_shas=self.allow_shas)
         except Exception:
             return '[autoos:redaction failed; output withheld]\n'
 

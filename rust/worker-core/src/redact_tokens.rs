@@ -82,6 +82,92 @@ pub(crate) fn redact_url_userinfo(text: &str) -> String {
     .into_owned()
 }
 
+pub(crate) fn is_allowlisted_sha(
+    token: &str,
+    allow_shas: &std::collections::BTreeSet<String>,
+) -> bool {
+    token.len() == 40 && allow_shas.contains(&token.to_ascii_lowercase())
+}
+
+pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
+    blob_re
+        .replace_all(text, |m: &regex::Captures| {
+            let t = m.get(0).unwrap().as_str();
+            let has_digit = t.bytes().any(|b| b.is_ascii_digit());
+            let has_alpha = t.bytes().any(|b| b.is_ascii_alphabetic());
+            if has_digit && has_alpha {
+                crate::redact::REDACTED.to_string()
+            } else {
+                t.to_string()
+            }
+        })
+        .into_owned()
+}
+
+pub(crate) fn redact_blob(
+    token: &str,
+    blob_re: &regex::Regex,
+    hex_re: &regex::Regex,
+    allow_shas: &std::collections::BTreeSet<String>,
+) -> String {
+    let has_digit = token.bytes().any(|b| b.is_ascii_digit());
+    let has_alpha = token.bytes().any(|b| b.is_ascii_alphabetic());
+    if !(has_digit && has_alpha) {
+        return token.to_string();
+    }
+    if allow_shas.is_empty() {
+        return crate::redact::REDACTED.to_string();
+    }
+    if is_allowlisted_sha(token, allow_shas) {
+        return token.to_string();
+    }
+    let mut out = String::new();
+    let mut copied = 0;
+    let mut kept = false;
+    for m in hex_re.find_iter(token) {
+        if !is_allowlisted_sha(m.as_str(), allow_shas) {
+            continue;
+        }
+        let flank = &token[copied..m.start()];
+        if !path_flank_ok(token[..m.start()].chars().next_back(), flank)
+            || !path_flank_ok(token[m.end()..].chars().next(), "")
+        {
+            return crate::redact::REDACTED.to_string();
+        }
+        out.push_str(&redact_blob_plain(flank, blob_re));
+        out.push_str(m.as_str());
+        copied = m.end();
+        kept = true;
+    }
+    if !kept {
+        return crate::redact::REDACTED.to_string();
+    }
+    let tail = &token[copied..];
+    if hex_shaped(tail) {
+        return crate::redact::REDACTED.to_string();
+    }
+    out.push_str(&redact_blob_plain(tail, blob_re));
+    out
+}
+
+/// A kept sha may only sit in path context: the neighbour is the token edge or `/`,
+/// and the text before it holds no hex-shaped fragment.
+fn path_flank_ok(neighbour: Option<char>, flank: &str) -> bool {
+    matches!(neighbour, None | Some('/')) && !hex_shaped(flank)
+}
+
+/// True when `text` holds a run of 8 or more hex digits.
+fn hex_shaped(text: &str) -> bool {
+    let mut run = 0;
+    for b in text.bytes() {
+        run = if b.is_ascii_hexdigit() { run + 1 } else { 0 };
+        if run >= 8 {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

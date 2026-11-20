@@ -16,13 +16,14 @@ R-batch-03: Run fast checks on the exact head before review; require its fast-ch
   (why: review and CI must not find gate failures first; source: plan-order/bin/fast-checks.sh and review.sh)
 R-batch-04: Start an other-family review with repository access on the exact head, fix confirmed HIGH/MED findings and repeat while progress permits.
   Native admission: `rust/pg-spawnd/src/round_progress.rs` records confirmed HIGH+MED per writer round.
-  Two consecutive counts not below the earlier best refuse the next writer with `no_progress`.
-  Round 5 refuses with `round_cap`, and round 6 always refuses.
+  Stop rule (one owner): 3 rounds in a row that bring the count no lower than the best so far refuse the next writer with `no_progress`;
+  from round 3 on a count still above half of the round-1 count refuses with `slow_progress`; round 9 always refuses with `round_cap`.
   See `docs/SPAWNER.md` for verdict-file binding and the single narrow fix exception.
   At the cap, close the PR unmerged and have the strongest available planner define slices <=800 changed lines (excluding Cargo.lock and generated files) with all open findings verbatim.
   Exception: one or two confirmed MED findings with clear fixes permit one narrow fix round. A HIGH, three or more MED, or a second miss closes and replans.
   (why: an in-session fix loop avoids relaunch cost; source: routing DECISIONS 3.35, D-5909, D-5927, D-5964)
-R-batch-05: Reviews never wait; the first served leg wins, in this order: agy Gemini Argon (low effort), then mimo-v2.6-pro, then OpenCode DeepSeek flash.
+R-batch-05: Reviews run first on agy gemini-4-argon (argon-low when the leg exists, else argon-medium), then mimo-v2.6-pro, then OpenCode DeepSeek (deepseek-v4.1-flash), without waiting.
+  The reviewer's family always differs from the writer's (a gemini writer skips argon).
   The reviewer's family differs from every writer family of the diff, so a Claude-written change never gets a Claude seat.
   Run them with the agent-neutral review command: today plan-order `bin/review.sh TAG BASE HEAD PROMPT` with WRITER_FAMILY and REVIEW_WORKTREE set.
   It spawns role review with the writer's family excluded in a no-remote checkout; long term `plangraph review` (plangraph:REVIEW-CMD).

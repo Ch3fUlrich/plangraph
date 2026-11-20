@@ -1,6 +1,6 @@
 """Per-host card dispatch and private run records shared by CLI and MCP."""
 from __future__ import annotations
-from .env_redact import first_reason, harness_limit_line, redact, unavailable_reason
+from .env_redact import allow_shas_for_run, first_reason, harness_limit_line, redact, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
 from .exit_outcome import failure_reason, fallthrough_reason, refusal_record, release_attempts, terminal_reason
 from .git_guard import annotate_tree, prepare_worktree, selected_checkout, writer_launch, run_tree
@@ -374,6 +374,7 @@ class SpawnService(SeatSpawnMixin):
                     if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
+                        allow_shas=await asyncio.to_thread(allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card),
                         prompt_record=(self._path(record['run_id']).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                     if record.get('reason') == 'reasoning_output_limit':
                         break

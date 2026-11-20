@@ -25,8 +25,9 @@ GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 #: Environment variable naming the provider-level gateway base URL override.
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
-#: agy review legs that run in plan mode: every Hydrogen effort level, Argon low and medium.
-AGY_PLAN_REVIEW_MODELS: tuple[str, ...] = ("gemini-4-hydrogen-", "gemini-4-argon-low", "gemini-4-argon-medium")
+#: agy review legs that run in plan mode: every Hydrogen effort level, Neon, Argon low and medium.
+AGY_PLAN_REVIEW_MODELS: tuple[str, ...] = (
+    "gemini-4-hydrogen-", "gemini-4-neon-", "gemini-4-argon-low", "gemini-4-argon-medium")
 
 #: Session-only agy settings of a plan-mode review. Headless agy cannot prompt, so a tool
 #: without an allow rule is denied and the run ends with an empty answer: a reviewer that

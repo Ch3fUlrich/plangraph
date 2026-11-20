@@ -76,16 +76,16 @@ except ImportError:
 
 DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
     {
-        "id": "opencode-go/gemini-4-argon",
-        "family": "gemini",
-        "aa_intelligence": 53.0,
-        "verified_tok_per_s": 115.0,
-        "cost_per_task_usd": 0.50,
+        "id": "opencode-go/glm-5.3-flash",
+        "family": "glm",
+        "aa_intelligence": 45.0,
+        "verified_tok_per_s": 90.0,
+        "cost_per_task_usd": 0.18,
         "pool_burn_weight": 1.0,
         "tier": "subscription",
         "available": 1,
         "context_window": 1000000,
-        "combos": ["l1-orchestrator", "l2-worker", "l2-reviewer", "l3-driver"],
+        "combos": ["l1-orchestrator", "l2-worker", "l2-reviewer"],
     },
     {
         "id": "mimo/mimo-v2.6-pro",
@@ -193,7 +193,7 @@ DEFAULT_FALLBACK_MODELS: list[dict[str, Any]] = [
         "pool_burn_weight": 1.0,
         "tier": "subscription",
         "available": 1,
-        "context_window": 128000,
+        "context_window": 1000000,
         "combos": ["l2-worker", "l3-driver"],
     },
     {
@@ -345,7 +345,7 @@ def detect_model_family(model_id: str) -> str:
     mid = (model_id or "").lower()
     if any(tok in mid for tok in ("claude", "sonnet", "haiku", "opus")):
         return "claude"
-    if any(tok in mid for tok in ("gemini", "argon")):
+    if any(tok in mid for tok in ("gemini", "argon", "neon", "hydrogen")):
         return "gemini"
     if any(tok in mid for tok in ("luna", "astra", "sol", "gpt", "openai", "codex")):
         return "gpt"
@@ -1163,7 +1163,8 @@ def resolve_model_for_task(
         envelope_candidates = [
             c
             for c in candidates
-            if _validated_metric(c, "aa_intelligence") >= envelope_intelligence
+            if c.get("aa_intelligence") is not None
+            and _validated_metric(c, "aa_intelligence") >= envelope_intelligence
         ]
         if envelope_candidates:
             candidates = envelope_candidates
@@ -1172,7 +1173,7 @@ def resolve_model_for_task(
 
     qualifying: list[dict[str, Any]] = []
     for c in candidates:
-        if _validated_metric(c, "aa_intelligence") >= min_intelligence:
+        if c.get("aa_intelligence") is not None and _validated_metric(c, "aa_intelligence") >= min_intelligence:
             qualifying.append(c)
 
     relaxed = False
@@ -1189,10 +1190,11 @@ def resolve_model_for_task(
         # For explicit high/critical relaxation, and for low/normal floor misses,
         # keep the highest-intelligence slice.  This preserves risk-monotone
         # intelligence even when the floor cannot be met.
-        max_intel = max(_validated_metric(c, "aa_intelligence") for c in candidates)
+        measured_candidates = [c for c in candidates if c.get("aa_intelligence") is not None] or candidates
+        max_intel = max(_validated_metric(c, "aa_intelligence") for c in measured_candidates)
         candidates = [
             c
-            for c in candidates
+            for c in measured_candidates
             if abs(_validated_metric(c, "aa_intelligence") - max_intel) <= 1e-12
         ]
 

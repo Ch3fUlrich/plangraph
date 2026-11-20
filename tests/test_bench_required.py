@@ -81,8 +81,8 @@ def test_absent_explicit_operator_order():
 
 @pytest.mark.parametrize("data", [None, rows(WRITERS[1:])])
 def test_strict_names_missing(data):
-    # D-5206/D-5212: the missing first writer is now effort-qualified Sol.
-    with pytest.raises(routing.SpawnRefused, match=r"benchmark rows missing: .*cx-gpt-6\.1-sol-xhigh") as exc:
+    # D-6310: the missing first writer is effort-qualified Sol medium.
+    with pytest.raises(routing.SpawnRefused, match=r"benchmark rows missing: .*cx-gpt-6\.2-sol-medium") as exc:
         plan(benchmark=data, strict=True)
     assert {g["leg"] for g in exc.value.gaps} == {
         l.id for l in POLICY if 'implement' in l.roles and not l.disabled
@@ -107,8 +107,8 @@ def test_read_only_loader(tmp_path, table):
 
 def test_provider_qualified_rows_reach_legs_and_missing_stays_eligible(tmp_path):
     from plangraph.planner.benchmarks import benchmark_rows_from_db
-    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-argon')
-    missing = next(l for l in DEFAULT_LEGS if l.id == 'opencode-big-pickle')
+    measured = next(l for l in DEFAULT_LEGS if l.id == 'agy-gemini-4-neon-medium')
+    missing = next(l for l in DEFAULT_LEGS if l.id == 'opencode-go-glm-5.3-flash')
     path = database(tmp_path / 'bench.db', [f'{measured.harness}/{measured.model}'])
     before = path.read_bytes()
     data, errors = benchmark_rows_from_db(path)

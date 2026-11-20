@@ -26,8 +26,10 @@ def catalog_tiers(legs, rows):
 
 
 #: Legs whose model name differs from the catalog row that carries their score.
-LEG_CATALOG_IDS = {'cx-gpt-6.1-sol-xhigh': 'cxa/gpt-6-sol-xhigh',
-                   'agy-gemini-4-argon': 'gemini/gemini-4-argon-high'}
+LEG_CATALOG_IDS = {'cx-gpt-6.2-sol-medium': 'cxa/gpt-6-sol-xhigh',
+                   'cx-gpt-6.2-astra': 'cxa/gpt-6-sol-xhigh',
+                   'agy-gemini-4-argon-low': 'gemini/gemini-4-argon-high',
+                   'agy-gemini-4-argon-medium': 'gemini/gemini-4-argon-high'}
 
 
 def catalog_score(leg, rows):

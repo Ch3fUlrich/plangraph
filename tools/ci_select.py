@@ -52,6 +52,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_support/opencode_render.py",
     "src/plangraph/routing_support/resolver.py",
     "configuration/opencode/providers.json",
+    # rust/pg-spawnd/src/round_progress_tests.rs reads the max_rounds setting (one stop rule).
+    "src/plangraph/settings.py",
     ".github/workflows/**",
     # rust/pg-spawnd/tests/ci_step_timeout.rs reads the bounded-step run script.
     ".github/actions/bounded-step/action.yml",

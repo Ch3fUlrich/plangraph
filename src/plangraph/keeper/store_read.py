@@ -17,6 +17,7 @@ from .item_fields import MODEL_FIELDS, parse_choices, parse_kg_refs
 
 _DONE = "done"
 _ACTIVE = ("claimed", "in_review")
+_OPEN_STATES = ("open", "claimed", "in_review")
 _MERGED_KINDS = ("commit+ci", "commit")
 _TS_TYPES = ("review_passed", "closed_on_decision", "answered", "item_created")
 
@@ -306,19 +307,48 @@ class ReadMixin:
                 since = self._parse_iso(item["updated_at"])
                 if since is not None and now - since.timestamp() > self.review_overdue_s:
                     review_overdue.append(item["key"])
-        findings = [dict(row) for row in self.conn.execute(
-            "SELECT ts,key,code,msg FROM audit_findings ORDER BY id")
-            if row["key"] is None or row["key"] in keys]
-        refusals = [{"key": row["key"], "count": row["n"]}
-                    for row in self.conn.execute(
-                        "SELECT key, COUNT(*) AS n FROM audit_log"
-                        " WHERE ok=0 AND key IS NOT NULL"
-                        " GROUP BY key HAVING COUNT(*) >= 2 ORDER BY key")
-                    if row["key"] in keys]
+        findings, refusals, history = self._alert_rows(now, scope)
         return {"lease_expiring": sorted(lease_expiring, key=lambda x: x["key"]),
                 "review_overdue": sorted(review_overdue),
-                "findings": findings, "refusals": refusals, "stalled": stalled,
-                "warnings": views.warnings(scope)}
+                "findings": findings, "refusals": refusals, "history": history,
+                "stalled": stalled, "warnings": views.warnings(scope)}
+
+    def _alert_rows(self, now, scope):
+        """Findings and refusals that are wrong now, plus counts of what was left out.
+
+        A row counts only when its item is open, claimed or in_review and it is
+        younger than ``alert_window_s``; nothing is deleted from the database.
+        """
+        state = {it["key"]: it["state"] for it in scope}
+        cutoff = now - self.alert_window_s
+        findings, hidden_findings = [], 0
+        for row in self.conn.execute(
+                "SELECT ts,key,code,msg FROM audit_findings ORDER BY id"):
+            if row["key"] is not None and row["key"] not in state:
+                continue
+            when = self._parse_iso(row["ts"])
+            current = (state.get(row["key"], "open") in _OPEN_STATES
+                       and (when is None or when.timestamp() >= cutoff))
+            if current:
+                findings.append(dict(row))
+            else:
+                hidden_findings += 1
+        refusals, hidden_refusals = [], 0
+        for row in self.conn.execute(
+                "SELECT key, COUNT(*) AS n,"
+                " SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS recent"
+                " FROM audit_log WHERE ok=0 AND key IS NOT NULL"
+                " GROUP BY key HAVING COUNT(*) >= 2 ORDER BY key",
+                (self._iso(cutoff),)):
+            if row["key"] not in state:
+                continue
+            if state[row["key"]] in _OPEN_STATES and (row["recent"] or 0) >= 2:
+                refusals.append({"key": row["key"], "count": row["recent"]})
+            else:
+                hidden_refusals += 1
+        return findings, refusals, {
+            "window_s": self.alert_window_s,
+            "findings": hidden_findings, "refusal_keys": hidden_refusals}
 
     # --------------------------------------------------------------- digest
     def digest(self, principal):

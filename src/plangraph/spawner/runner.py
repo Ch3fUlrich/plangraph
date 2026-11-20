@@ -129,6 +129,7 @@ class JobInfo:
     cwd: str | None = None
     last_activity_ts: float | None = None
     survivors: list = field(default_factory=list)   # pids that outlived the kill (kill_incomplete)
+    allow_shas: frozenset[str] = field(default_factory=frozenset)
 
     def to_dict(self) -> dict[str, Any]:
         return mismatch_flag(asdict(self))
@@ -239,7 +240,7 @@ class SpawnerRunner:
         gateway_online: bool = True,
         wait_seconds: float = 0.0,
         client: str | None = None, reasoning_cap=False, chosen=None,
-        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial',  # REMOVE-AT-R10
+        watchdog=None, live_log=None, prompt_record=None, prepare_launch=False, wake_variant='initial', allow_shas=None,  # REMOVE-AT-R10
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
@@ -456,6 +457,7 @@ class SpawnerRunner:
                 dry_run=False,
                 cwd=work_dir,
                 writer_email=child_env.get('GIT_AUTHOR_EMAIL'),
+                allow_shas=frozenset(allow_shas) if allow_shas is not None else await asyncio.to_thread(env_redact.allow_shas_for_run, work_dir, prompt),
             )
             from .probe_cleanup import register
             self.jobs[job_id] = job; register(job_id)
@@ -688,8 +690,9 @@ class SpawnerRunner:
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
             record_steps(job, stdout_text, stderr_text, env)
             decoded, stderr_text, exit_code = native_answer(job, answer_text(stdout_text) if is_opencode(job) else stdout_text, stderr_text, exit_code)
-            job.stdout = redact_output(env_redact.redact_env_values(decoded, env))
-            job.stderr = redact_output(env_redact.redact_env_values(stderr_text, env))
+            allow_shas = getattr(job, 'allow_shas', ())
+            job.stdout = redact_output(env_redact.redact_env_values(decoded, env), allow_shas=allow_shas)
+            job.stderr = redact_output(env_redact.redact_env_values(stderr_text, env), allow_shas=allow_shas)
             job.exit_code = exit_code
             job.end_time = time.time()
             if job.status not in ('stalled', 'timeout', 'cancelled'):
@@ -746,7 +749,7 @@ class SpawnerRunner:
                     job.witness_kind = 'request-side-claude-stream'
                 # D-3649: the review text (VERDICT line) is the stream's final result, not the raw stream.
                 await asyncio.to_thread(render_review_output, job, stdout_text,
-                                        lambda text: redact_output(env_redact.redact_env_values(text, env)))
+                                        lambda text: redact_output(env_redact.redact_env_values(text, env), allow_shas=getattr(job, 'allow_shas', ())))
 
             await witness_native(self, job_id, job, stdout_text, requested_model)
             # Free text (even provider-like headers) is child-controlled; no adapter witness stays explicit.
@@ -868,7 +871,7 @@ def spawn_service(*args, **kwargs):
         def _save(self, record, *, retry=False):
             import socket
             record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
-            from .notify import completion_event, CommandSink, KeeperNotConfigured, KeeperSink
+            from .notify import completion_event, CommandSink, KeeperNotConfigured, KeeperRefused, KeeperSink, settle_refusal
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
                 record['last_activity_ts'] = getattr(job, 'last_activity_ts', None)
@@ -904,6 +907,8 @@ def spawn_service(*args, **kwargs):
                             sink.deliver(recipient, record['completion'])
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'not-applicable: no item\n' if no_keeper_item else 'delivered\n')
+                    except KeeperRefused as refusal:
+                        settle_refusal(marker, recipient, refusal)
                     except KeeperNotConfigured:
                         global _keeper_unconfigured_last_warned
                         now = time.monotonic()
@@ -1039,6 +1044,7 @@ def spawn_service(*args, **kwargs):
                             self._save(record); return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
+                            allow_shas=await asyncio.to_thread(env_redact.allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card),
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         if record.get('reason') == 'reasoning_output_limit':
                             return

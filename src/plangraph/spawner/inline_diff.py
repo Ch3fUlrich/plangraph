@@ -40,10 +40,11 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     except SpawnRefused as exc:
         raise InlineDiffError(str(exc)) from None
     base, head = diff_ref["base"], diff_ref["head"]
+    paths = tuple(diff_ref.get("paths") or ())
     try:
         proc = subprocess.run(
-            ["git", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
-             "--no-textconv", f"{base}...{head}", "--"],
+            ["git", "--literal-pathspecs", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
+             "--no-textconv", f"{base}...{head}", "--", *paths],
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout, check=False,
             **background_process_options())

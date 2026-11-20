@@ -131,7 +131,7 @@ def test_silent_gateway_leg_ends_on_logged_quota_refusal_without_waiting_for_sta
     asyncio.run(run())
 
 
-SOL = 'omniroute/cx-gpt-6.1-sol-xhigh'
+SOL = 'omniroute/cx-gpt-6.2-sol-medium'
 OK = {'state': 'ok', 'evidence': None}
 
 
@@ -190,9 +190,27 @@ def test_pool_at_zero_percent_is_skipped_until_its_reset_and_routes_again_after(
     assert plan_spawn(card, role='implement', leg_reader=store.leg_status, now=now).legs[0].model == SOL
     during = plan_spawn(card, role='implement', leg_reader=reader, now=now + 60)
     assert SOL not in [leg.model for leg in during.legs]
-    assert any(s['leg'] == 'cx-gpt-6.1-sol-xhigh' and s['reason'] == 'limited' for s in during.skipped)
+    assert any(s['leg'] == 'cx-gpt-6.2-sol-medium' and s['reason'] == 'quota_until ' + stamp for s in during.skipped)
     after = plan_spawn(card, role='implement', leg_reader=reader, now=reset + 1)
     assert after.legs[0].model == SOL
+
+
+def test_exhausted_codex_pool_skips_every_cx_leg_with_quota_until_and_first_leg_is_next(tmp_path):
+    from plangraph.planner.routing import plan_spawn
+    now = time.time()
+    stamp = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + 7200))
+    gate = QuotaGate(lambda: [_row(0, stamp)], clock=lambda: now)
+    store = LegStateStore(tmp_path / 'legs.sqlite')
+    reader = lambda model, **scope: gate.apply(model, store.leg_status(model, **scope), scope.get('now'))
+    plan = plan_spawn({'estimate_tokens': 1000}, role='implement', leg_reader=reader, now=now + 60)
+    cx = [leg for leg in plan.legs if leg.id.startswith('cx-gpt-')]
+    assert not cx and plan.first_leg is not None and not plan.first_leg.id.startswith('cx-gpt-')
+    skips = {s['leg']: s['reason'] for s in plan.skipped if s['leg'].startswith('cx-gpt-')}
+    assert 'cx-gpt-6.2-sol-medium' in skips and 'cx-gpt-6.2-astra' in skips
+    assert set(skips.values()) == {'quota_until ' + stamp}
+    past = plan_spawn({'estimate_tokens': 1000}, role='implement', leg_reader=reader, now=now + 7201)
+    assert past.first_leg.id == 'cx-gpt-6.2-sol-medium'
+    assert not any(s['reason'].startswith('quota_until') for s in past.skipped)
 
 
 def test_pool_stays_up_while_any_account_can_serve_and_other_pools_are_untouched():
@@ -200,7 +218,7 @@ def test_pool_stays_up_while_any_account_can_serve_and_other_pools_are_untouched
     future = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(now + 600))
     gate = QuotaGate(lambda: [_row(0, future, account='a1'), _row(55, None, account='a2'), _row(0, future, provider='claude')])
     assert gate.apply(SOL, OK, now) == OK
-    assert gate.apply('omniroute/cx-gpt-6.1-sol', OK, now) == OK
+    assert gate.apply('omniroute/cx-gpt-6.2-sol', OK, now) == OK
     assert gate.apply('openrouter/free', OK, now) == OK
     assert gate.apply('omniroute/cc-claude-x', OK, now)['state'] == 'limited'
     assert pool_of('omniroute/gc/grok-4.7') == 'grok-cli' and pool_of('omniroute/muse-spark-1.3') is None

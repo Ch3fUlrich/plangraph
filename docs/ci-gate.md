@@ -37,3 +37,25 @@ fail the check. The policy runs in Rust (`pg-policy --plan-item-trailers BASE HE
 and requires Cargo. Use a trailer per fixed key, including subitems of a parent;
 legacy `Closes:` tokens and merge-only trailers do not count. Named references
 that the PR does not fix can also warn and should be checked by the reviewer.
+
+## Job display names and redundancy audit
+
+Job ids in `tests.yml` stay fixed (`needs`, `tools/ci_select.py` outputs and `tools/dell_ci_jobs.py` use them). The `name:` of each job is what a pull request lists and what the check-run API reports; `ci-gate` keeps its name because branch protection uses that context. `tests/test_ci_job_names.py` fails when a job has no display name, two jobs share one, or `tools/merge_batch_land.py` (`JOB_DISPLAY`, `SHARD_DISPLAY`) disagrees with the workflow. Shard numbers in the names count from 1.
+
+Audit of what a full run executes (no job was merged or re-wired; that needs a router row). A test is marked duplicate only when it runs twice on the same store, platform and toolchain.
+
+| Job id | Display name | Runs | Same-store/platform duplicate |
+| --- | --- | --- | --- |
+| `select` | Select suites for this change | `tools/ci_select.py` | none |
+| `scrub` | Public scrub: no private names or secrets | scrub tool | none |
+| `file-size` | File size limit (400 lines) | `tools/check_file_size.py` | none |
+| `new-code-lang` | New code is Rust | `tools/check_new_code_lang.py` | none |
+| `changelog-docs` | Changelog fragment and docs | `tools/check_changelog_docs.py`, commit gate | none |
+| `pytest` | Python tests, SQLite keeper (shard N of M) | `tests` (sharded), minus `tests/browser`, on the SQLite keeper | none: shards are disjoint; `tests/contract` also runs on Postgres, a different store |
+| `pytest-postgres` | Python tests, Postgres keeper: contract and storage (shard N of 3) | `tests/contract`, `test_keeper_pg_*`, `test_projector_ddl`, `test_worker_claim`, `test_claim_parity_dispatch`, keeper tests that do not name sqlite3 | none: same files as `pytest` run on a different store on purpose |
+| `browser` | UI tests in headless Chromium | `tests/browser` (excluded from `pytest`) | none |
+| `rust` | Rust workspace on Linux: fmt, clippy, tests | fmt, clippy, windows-gnu check, workspace `cargo test`, `native_writer` again under Python 3.14 | `pg-spawnd --test native_writer` runs in the workspace test (Python 3.12) and again (Python 3.14): different toolchain, kept |
+| `rust-windows` | Rust spawner and worker core tests on Windows | `cargo test -p pg-spawnd`, `-p pg-worker-core` | runs crates also tested by `rust`, on Windows: different platform |
+| `rust-worker` | Rust worker crate: fmt, clippy, tests | standalone `rust/worker` crate (not in the workspace) | none |
+| `rust-spike` | Rust replay spike tests | `rust/spikes/temporal-spike` replay test | none |
+| `ci-gate` | ci-gate | aggregates the jobs above | none |
