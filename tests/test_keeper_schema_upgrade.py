@@ -366,7 +366,7 @@ def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
         assert set(EXEC_COLUMNS) <= columns()
         assert "jev_shadow" in jev_tables()
         assert [row[0] for row in raw.execute(
-            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 13))
+            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 14))
         conn = kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         conn.close()
     finally:
@@ -441,7 +441,7 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
     try:
         full = schema_pg.MIGRATIONS
         assert schema_pg.LATEST == 12
-        assert db_pg.migrate(raw, fresh) == list(range(1, 13))
+        assert db_pg.migrate(raw, fresh) == list(range(1, 14))
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
 
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full[:8])

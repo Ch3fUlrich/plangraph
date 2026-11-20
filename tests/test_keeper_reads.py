@@ -139,6 +139,80 @@ def test_alerts_drop_findings_and_refusals_of_done_items(w):
     assert rows >= 1
 
 
+# ----------------------------------------- alerts table (raise/clear, no history scan)
+
+def _telemetry(w, action):
+    return [tuple(r) for r in w.conn.execute(
+        "SELECT key, code FROM alert_log WHERE action=? ORDER BY id", (action,))]
+
+
+def _alert_rows(w):
+    return [tuple(r) for r in w.conn.execute(
+        "SELECT kind, key, code, state, n FROM alerts ORDER BY id")]
+
+
+def test_alert_raise_and_clear_write_one_row_and_one_telemetry_row_each(w):
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    assert _alert_rows(w) == [("finding", "demo:A", "late", "open", 1)]
+    assert _telemetry(w, "alert_raised") == [("demo:A", "late")]
+    assert _telemetry(w, "alert_cleared") == []
+    to_done(w, "demo:A")
+    assert _alert_rows(w) == [("finding", "demo:A", "late", "resolved", 1)]
+    assert _telemetry(w, "alert_cleared") == [("demo:A", "late")]
+    assert _telemetry(w, "alert_raised") == [("demo:A", "late")]
+
+
+def test_repeated_finding_updates_its_row_without_a_second_raise(w):
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    w.store._finding("demo:A", "late", "y", w.store.now())
+    assert _alert_rows(w) == [("finding", "demo:A", "late", "open", 2)]
+    assert len(_telemetry(w, "alert_raised")) == 1
+
+
+def test_refusal_alert_raises_at_the_second_refusal_and_clears_with_the_item(w):
+    _refuse_twice(w)
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 2)]
+    assert _telemetry(w, "alert_raised") == [("demo:A", "refused")]
+    to_done(w, "demo:A")
+    assert _alert_rows(w)[0][3] == "resolved"
+    assert _telemetry(w, "alert_cleared") == [("demo:A", "refused")]
+
+
+def test_the_reaper_clears_alerts_older_than_the_window(w):
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    w.clock.advance(w.store.alert_window_s + 60)
+    w.store.reap(w.p("system"))
+    assert _alert_rows(w)[0][3] == "resolved"
+    assert _telemetry(w, "alert_cleared") == [("demo:A", "late")]
+
+
+def test_alerts_call_reads_only_the_alerts_table(w):
+    _refuse_twice(w)
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    statements = []
+    w.conn.set_trace_callback(statements.append)
+    alerts = w.store.alerts(w.p("reader"))
+    w.conn.set_trace_callback(None)
+    assert [f["code"] for f in alerts["findings"]] == ["late"]
+    assert {r["key"] for r in alerts["refusals"]} == {"demo:A"}
+    reads = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+    assert not [s for s in reads if "audit_log" in s or "audit_findings" in s]
+
+
+def test_backfill_builds_the_table_from_history_and_is_idempotent(w):
+    _refuse_twice(w)
+    w.store._finding("demo:A", "old_code", "old", w.store.now())
+    live = _alert_rows(w)
+    # A keeper that predates the table: history rows only.
+    w.conn.execute("DELETE FROM alerts")
+    first = w.store.backfill_alerts()
+    again = w.store.backfill_alerts()
+    assert first["skipped"] is False and again["skipped"] is True
+    assert sorted(_alert_rows(w)) == sorted(live)
+    assert len(_telemetry(w, "alerts_backfill")) == 1
+    assert [f["code"] for f in w.store.alerts(w.p("reader"))["findings"]] == ["old_code"]
+
+
 # ------------------------------------------------------------------ digest
 
 def test_digest_router_only(w):

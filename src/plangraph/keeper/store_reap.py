@@ -41,4 +41,5 @@ class ReapMixin:
                             self._finding(item["key"], "review_overdue",
                                           "in review for over 4h", now)
                         overdue.append(item["key"])
+            self._alerts_expire(now)
         return {"expired": expired, "overdue": overdue}
