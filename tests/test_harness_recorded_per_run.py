@@ -81,38 +81,55 @@ def test_report_lists_failed_runs_of_24h_by_harness():
     assert report["runs"] == {"codex": 2, "opencode": 1, "unknown": 1, "agy": 1}
 
 
-def review(id, ended, leg, reason):
-    return {"run_id": id, "role": "review", "ended": ended, "reason": reason,
+def review(id, ended, leg, reason, status="failed"):
+    return {"run_id": id, "role": "review", "ended": ended, "reason": reason, "status": status,
             "attempts": [{"status": "failed", "leg": {"id": leg}}]}
 
 
-def test_leg_with_three_silent_reviews_in_a_row_is_listed():
-    runs = [review(str(i), 100 + i, "gpt-6.2-sol-medium", "no_verdict") for i in range(3)]
-    runs += [review("m1", 100, "mimo-v2.6-pro", "no_verdict"), review("m2", 101, "mimo-v2.6-pro", None),
-             review("m3", 102, "mimo-v2.6-pro", "no_verdict")]
-    runs += [review("a1", 1, "agy-gemini-4-argon-low", "no_verdict"), review("a2", 2, "agy-gemini-4-argon-low", "no_verdict")]
-    assert hr.no_verdict_legs(runs) == {"gpt-6.2-sol-medium"}
-    runs.append(review("ok", 200, "gpt-6.2-sol-medium", None))
-    assert hr.no_verdict_legs(runs) == set()
+def test_three_silent_reviews_in_a_row_put_a_leg_out_and_a_verdict_resets(tmp_path):
+    now = 1_000_000.0
+    for i in range(3):
+        hr.count_review_outcome(tmp_path, review(str(i), now - 7200 + i, "gpt-6.2-sol-medium", "no_verdict"))
+    hr.count_review_outcome(tmp_path, review("m1", now - 100, "mimo-v2.6-pro", "no_verdict"))
+    hr.count_review_outcome(tmp_path, review("m2", now - 90, "mimo-v2.6-pro", None, status="completed"))
+    for i in range(2):
+        hr.count_review_outcome(tmp_path, review(f"a{i}", now - 80 + i, "agy-gemini-4-argon-low", "no_verdict"))
+    assert hr.silent_review_legs(tmp_path, now=now) == {"gpt-6.2-sol-medium"}   # two hours later: still out
+    assert hr.silent_review_legs(tmp_path, now=now + 86400) == set()   # retried after the ttl
+    hr.count_review_outcome(tmp_path, review("ok", now, "gpt-6.2-sol-medium", None, status="completed"))
+    assert hr.silent_review_legs(tmp_path, now=now) == set()
 
 
-def test_route_drops_a_silent_review_leg(tmp_path):
-    from pathlib import Path
+def test_a_run_counts_once_and_other_endings_do_not_count(tmp_path):
+    record = review("x", 100.0, "gpt-6.2-sol-medium", "no_verdict")
+    for _ in range(5):
+        hr.count_review_outcome(tmp_path, record)
+    assert record["no_verdict_counted"] is True
+    hr.count_review_outcome(tmp_path, review("q", 101.0, "gpt-6.2-sol-medium", "harness_limit"))
+    hr.count_review_outcome(tmp_path, dict(review("w", 102.0, "gpt-6.2-sol-medium", "no_verdict"), role="implement"))
+    assert json.loads((tmp_path / "review-silent.json").read_text())["gpt-6.2-sol-medium"]["count"] == 1
 
-    from plangraph.spawner.private_io import atomic_write_private
+
+def silent_service(tmp_path):
     service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
                            state=tmp_path / "state")
-    service.client_probe = lambda name: True
-    for i in range(3):
-        record = review(f"{i}", time.time() - 10 + i, "gpt-6.2-sol-medium", "no_verdict")
-        record.update(run_id=f"run-{i}x", status="failed", started=time.time() - 20)
-        path = service._path(record["run_id"])
-        path.parent.mkdir(parents=True)
-        atomic_write_private(path, json.dumps(record))
+    now = time.time()
+    for i in range(3):   # a persisted review record counts through the service save path
+        record = review(f"run-{i}x", now - 7200 + i, "gpt-6.2-sol-medium", "no_verdict")
+        record.update(started=now - 7300, host=hr._host_name())
+        service._save(record)
+    return service
+
+
+def test_route_drops_a_silent_review_leg_even_after_the_cooldown_window(tmp_path):
+    from pathlib import Path
+    service = silent_service(tmp_path)
     card = {"estimate_tokens": 1000, "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
     plan = service.route(card, "review", ("claude",))
     assert "gpt-6.2-sol-medium" not in [leg.id for leg in plan.legs]
     assert any(s["leg"] == "gpt-6.2-sol-medium" and s["reason"] == "no_verdict_leg" for s in plan.skipped)
+    assert [leg.id for leg in plan.review_seats] == ["mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free"]
+    assert [row["leg"] for row in plan.seat_coverage] == [leg.id for leg in plan.review_seats]
 
 
 def test_cli_harness_report_lists_failed_runs_by_harness(tmp_path, capsys):
@@ -136,21 +153,3 @@ def test_stamp_keeps_the_recorded_host_and_names_the_cooldown_host_otherwise(mon
     bare = {}
     hr.stamp_harness(bare, CATALOG["agy-claude-sonnet-5-5-high"])
     assert bare["host"] == "cooldown-host"
-
-
-def test_route_after_silent_leg_recomputes_seats(tmp_path):
-    from pathlib import Path
-
-    from plangraph.spawner.private_io import atomic_write_private
-    service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
-                           state=tmp_path / "state")
-    for i in range(3):
-        record = review(f"{i}", time.time() - 10 + i, "gpt-6.2-sol-medium", "no_verdict")
-        record.update(run_id=f"run-{i}x", status="failed", started=time.time() - 20, host=hr._host_name())
-        path = service._path(record["run_id"])
-        path.parent.mkdir(parents=True)
-        atomic_write_private(path, json.dumps(record))
-    card = {"estimate_tokens": 1000, "diff_ref": {"repo": str(Path.cwd()), "base": "HEAD~1", "head": "HEAD"}}
-    plan = service.route(card, "review", ("claude",))
-    assert [leg.id for leg in plan.review_seats] == ["mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free"]
-    assert [row["leg"] for row in plan.seat_coverage] == [leg.id for leg in plan.review_seats]

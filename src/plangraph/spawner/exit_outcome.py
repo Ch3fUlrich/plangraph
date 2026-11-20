@@ -527,8 +527,11 @@ def harness_report(runs, *, now: float | None = None, hours: float = 24) -> dict
     return {"hours": hours, "runs": counts, "failed": failed, "no_verdict": no_verdict}
 
 
-#: Consecutive no-verdict review runs after which a leg leaves the review route.
+#: Consecutive no-verdict review runs after which a leg leaves the review route, and how long it stays out
+#: (the counter lives beside the run records, so a leg that never answers is not retried after an hour).
 NO_VERDICT_LIMIT = 3
+NO_VERDICT_TTL_S = 24 * 3600
+_SILENT_FILE = "review-silent.json"
 
 
 def _review_leg_id(run) -> str | None:
@@ -537,13 +540,36 @@ def _review_leg_id(run) -> str | None:
     return leg.get("id") if isinstance(leg, dict) else None
 
 
-def no_verdict_legs(runs, limit: int = NO_VERDICT_LIMIT) -> set[str]:
-    """Review legs whose last ``limit`` finished runs all ended without a VERDICT line."""
-    recent: dict[str, list[bool]] = {}
-    finished = [r for r in runs if isinstance(r, dict) and r.get("role") == "review"
-                and isinstance(r.get("ended"), (int, float))]
-    for run in sorted(finished, key=lambda r: r["ended"], reverse=True):
-        leg_id = _review_leg_id(run)
-        if leg_id and len(recent.setdefault(leg_id, [])) < limit:
-            recent[leg_id].append(run.get("reason") == "no_verdict")
-    return {leg_id for leg_id, outcomes in recent.items() if len(outcomes) == limit and all(outcomes)}
+def _read_silent(state) -> dict:
+    try:
+        data = json.loads((state / _SILENT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def count_review_outcome(state, record) -> None:
+    """Count one finished review run once: ``no_verdict`` adds to its leg's streak, a completed review with a
+    verdict resets it, other endings (quota, cancel) leave it."""
+    if record.get("role") != "review" or record.get("ended") is None or record.get("no_verdict_counted"):
+        return
+    leg_id = _review_leg_id(record)
+    silent = record.get("reason") == "no_verdict"
+    if not leg_id or not (silent or record.get("status") == "completed"):
+        return
+    from .private_io import atomic_write_private
+    streaks = _read_silent(state)
+    row = streaks.get(leg_id) if isinstance(streaks.get(leg_id), dict) else {}
+    streaks[leg_id] = {"count": int(row.get("count", 0)) + 1 if silent else 0, "last": record["ended"]}
+    state.mkdir(parents=True, exist_ok=True)
+    atomic_write_private(state / _SILENT_FILE, json.dumps(streaks))
+    record["no_verdict_counted"] = True
+
+
+def silent_review_legs(state, *, now: float | None = None, limit: int = NO_VERDICT_LIMIT,
+                       ttl: float = NO_VERDICT_TTL_S) -> set[str]:
+    """Review legs whose last ``limit`` counted runs all ended without a VERDICT line, for ``ttl`` seconds."""
+    now = time.time() if now is None else now
+    return {leg_id for leg_id, row in _read_silent(state).items() if isinstance(row, dict)
+            and row.get("count", 0) >= limit and isinstance(row.get("last"), (int, float))
+            and 0 <= now - row["last"] < ttl}

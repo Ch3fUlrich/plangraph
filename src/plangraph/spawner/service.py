@@ -2,7 +2,7 @@
 from __future__ import annotations
 from .env_redact import allow_shas_for_run, first_reason, harness_limit_line, redact, unavailable_reason
 from .gateway_witness import witness_order, witness_gate_legs
-from .exit_outcome import failure_reason, fallthrough_reason, refusal_record, release_attempts, terminal_reason
+from .exit_outcome import count_review_outcome, failure_reason, fallthrough_reason, refusal_record, release_attempts, terminal_reason
 from .git_guard import annotate_tree, prepare_worktree, selected_checkout, writer_launch, run_tree
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
@@ -112,6 +112,7 @@ class SpawnService(SeatSpawnMixin):
         host, item_key = record.get('host'), record.get('item_key')
         if record.get('ended') is not None:
             terminal_reason(record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
+            count_review_outcome(self.state, record)   # one finished review run counts once toward its leg's streak
         record.update(clean(record))
         if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
         if host is not None:
@@ -191,14 +192,13 @@ class SpawnService(SeatSpawnMixin):
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
         from plangraph.planner.measured_down import measured_down
         from plangraph.planner.legs import leg_active, service_probe
-        from .exit_outcome import no_verdict_legs
-        records = []   # the cooldown pass reads the run records once; silent review legs come from the same reads
-        down = measured_down(self.state, on_record=records.append)
+        from .exit_outcome import silent_review_legs
+        down = measured_down(self.state)
         extra = {}
         probe = service_probe(self)
         if probe is not None:
             extra['installed'] = probe
-        if role == 'review' and (silent := no_verdict_legs(records)):   # a leg that never answers leaves the order
+        if role == 'review' and (silent := silent_review_legs(self.state)):   # a leg that never answers leaves the order
             extra['silent_legs'] = silent
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench, **extra)
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))

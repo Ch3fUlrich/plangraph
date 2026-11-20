@@ -26,11 +26,17 @@ def test_claude_written_diff_routes_gpt_first_in_codex():
     assert "codex" in HARNESSES
     assert ids == ["gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free",
                    "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "agy-gemini-4-neon-medium",
-                   "mimo-v2.6-flash", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium",
-                   "cx-gpt-6-luna", "agy-gpt-oss-120b"]   # argon last of the operator order
+                   "mimo-v2.6-flash", "cx-gpt-6-luna", "agy-gpt-oss-120b",
+                   "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]   # argon last
 
 
 def test_gpt_written_diff_skips_the_gpt_leg():
     for writer in ("gpt", "openai"):
         ids = route(writer)
         assert "gpt-6.2-sol-medium" not in ids and ids[0] == "mimo-v2.6-pro"
+
+
+def test_argon_is_the_end_of_the_whole_eligible_route():
+    ids = route("claude")
+    assert ids[-2:] == ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
+    assert ids.index("cx-gpt-6-luna") < ids.index("agy-gemini-4-argon-low")

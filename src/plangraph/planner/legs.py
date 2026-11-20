@@ -26,7 +26,7 @@ from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
 __all__ = ["OWN_HARNESS", "CLIENT_MISSING", "HarnessChoice", "client_installed", "resolve_harness",
-           "own_harness_legs", "harness_skips", "refuse_foreign_pin", "own_harness_enabled", "service_probe",
+           "resolve_legs", "own_harness_legs", "harness_skips", "refuse_foreign_pin", "own_harness_enabled", "service_probe",
            "TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
            "load_legs", "with_measured", "EXPLICIT_LEGS", "EXPLICIT_WRITERS", "spawnable_legs",
            "CX_EFFORTS"]
@@ -506,16 +506,29 @@ def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_i
     return HarnessChoice(harness, CLIENT_MISSING, dataclasses.replace(leg, harness_fallback=CLIENT_MISSING))
 
 
+def resolve_legs(legs: Iterable[Leg], installed: Callable[[str], bool] | None = client_installed
+                 ) -> tuple[tuple[Leg, ...], tuple[dict, ...]]:
+    """One resolution per leg: the legs moved into their own harness (or onto their OpenCode fallback),
+    and the `route` skip rows of the legs with no usable harness on this host."""
+    kept, skips = [], []
+    for leg in legs:
+        choice = resolve_harness(leg, installed)
+        if choice.leg is not None:
+            kept.append(choice.leg)
+        else:
+            skips.append({"leg": leg.id, "reason": CLIENT_MISSING, "evidence": {
+                "kind": CLIENT_MISSING, "harness": leg.harness}})
+    return tuple(kept), tuple(skips)
+
+
 def own_harness_legs(legs: Iterable[Leg], installed: Callable[[str], bool] | None = client_installed) -> tuple[Leg, ...]:
-    """Each leg moved into its own harness or onto its OpenCode fallback; legs with neither are left out."""
-    choices = (resolve_harness(leg, installed) for leg in legs)
-    return tuple(choice.leg for choice in choices if choice.leg is not None)
+    """The legs of :func:`resolve_legs`."""
+    return resolve_legs(legs, installed)[0]
 
 
 def harness_skips(legs: Iterable[Leg], installed: Callable[[str], bool] | None = client_installed) -> tuple[dict, ...]:
-    """`route` skip rows of the legs :func:`own_harness_legs` leaves out."""
-    return tuple({"leg": leg.id, "reason": CLIENT_MISSING, "evidence": {
-        "kind": CLIENT_MISSING, "harness": leg.harness}} for leg in legs if resolve_harness(leg, installed).leg is None)
+    """The skip rows of :func:`resolve_legs`."""
+    return resolve_legs(legs, installed)[1]
 
 
 def refuse_foreign_pin(leg: Leg, override_reason, installed: Callable[[str], bool] | None = client_installed) -> None:

@@ -206,8 +206,9 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high"],
-                   "cx-gpt-6-luna", "agy-gpt-oss-120b"]
+    argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
+    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high" and id not in argon],
+                   "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
 
@@ -226,7 +227,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
     assert [leg.id for leg in rev.legs] == [
         "gpt-6.2-sol-medium", REVIEW_MIMO_PRO, REVIEW_NEON, REVIEW_MIMO_FLASH,
-        "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium", "cx-gpt-6-luna", "agy-gpt-oss-120b"]
+        "cx-gpt-6-luna", "agy-gpt-oss-120b", "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
     assert reasons[FREE[0]] == "banned_family"
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
     assert reasons["opencode-go-glm-5.3-flash"] == "off_family"
@@ -254,8 +255,9 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high"],
-                   "cx-gpt-6-luna", "agy-gpt-oss-120b"]
+    argon = ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]
+    assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high" and id not in argon],
+                   "cx-gpt-6-luna", "agy-gpt-oss-120b", *argon]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ids[:3] == ["gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free"]
 

@@ -272,14 +272,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_SONNET
+    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET
     if native_review:
         legs = review_route_pool(legs)
     harness_skipped = []
     if installed is not None:
-        from .legs import harness_skips, own_harness_legs
-        harness_skipped = list(harness_skips(legs, installed))
-        legs = own_harness_legs(legs, installed)
+        from .legs import resolve_legs
+        legs, skips = resolve_legs(legs, installed)
+        harness_skipped = list(skips)
     if role == "review" and silent_legs:
         harness_skipped.extend({"leg": l.id, "reason": "no_verdict_leg", "evidence": {
             "kind": "no_verdict_leg", "runs": 3}} for l in legs if l.id in silent_legs)
@@ -347,8 +347,13 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps), gaps)
     if native_implement:   # Claude writers join the route behind Codex (rule 3.58); see codex_out.
         from .legs import EXPLICIT_LEGS   # Added after the strict gap check: explicit legs carry no benchmark row.
-        candidates += tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
-                            and role in l.roles and leg_active(l, now=now))
+        fallbacks = tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
+                          and role in l.roles and leg_active(l, now=now))
+        if installed is not None:   # the Claude fallback writers need their client too
+            from .legs import resolve_legs
+            fallbacks, skips = resolve_legs(fallbacks, installed)
+            harness_skipped.extend(skips)
+        candidates += fallbacks
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
@@ -473,7 +478,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     if native_review:
-        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
+        # Argon is last of the whole route (rule 3.61), behind the non-order extras too.
+        ordered.sort(key=lambda leg: len(REVIEW_ORDER) + 2 + REVIEW_ORDER.index(leg.id) if leg.id in (REVIEW_ARGON_LOW, REVIEW_ARGON)
+                     else REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
                      else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
         source = "operator-order"
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last

@@ -182,3 +182,31 @@ def test_paused_codex_harness_removes_the_converted_leg(tmp_path, monkeypatch):
     plan = routed(tmp_path, ALL)
     assert all(leg.harness != "codex" for leg in plan.legs)
     assert any(row["reason"] == "paused_harness" and row["leg"] == "cx-gpt-6.2-sol-medium" for row in plan.skipped)
+
+
+def codex_limited(model, **kwargs):
+    limited = model.startswith("omniroute/cx-gpt-")
+    return {"state": "limited" if limited else "available", "evidence": {"status": 429} if limited else None}
+
+
+def test_agy_claude_fallback_writer_needs_its_client_when_codex_is_limited():
+    from plangraph.planner.routing import plan_spawn
+    card = {"estimate_tokens": 20000, "risk_tags": []}
+    served = plan_spawn(card, role="implement", leg_reader=codex_limited, installed=ALL)
+    assert served.first_leg.id == "agy-claude-sonnet-5-5-high" and served.first_leg.harness == "agy"
+    missing = plan_spawn(card, role="implement", leg_reader=codex_limited, installed=NONE)
+    assert "agy-claude-sonnet-5-5-high" not in [leg.id for leg in missing.legs]
+    assert any(row["leg"] == "agy-claude-sonnet-5-5-high" and row["reason"] == "client_missing"
+               for row in missing.skipped)
+
+
+def test_each_leg_is_probed_once_so_legs_and_skips_never_overlap():
+    calls = []
+
+    def flaky(name):
+        calls.append(name)
+        return len(calls) % 2 == 0   # a probe whose answer changes between calls
+    from plangraph.planner.legs import resolve_legs
+    legs, skips = resolve_legs([CATALOG["agy-gemini-4-hydrogen-high"], CATALOG["agy-gemini-4-hydrogen-medium"]], flaky)
+    assert len(calls) == 2
+    assert not {leg.id for leg in legs} & {row["leg"] for row in skips}
