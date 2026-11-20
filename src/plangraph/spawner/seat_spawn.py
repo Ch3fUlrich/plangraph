@@ -193,6 +193,13 @@ def admission_poll():
     """Seconds between re-checks (at most 60: a queued run is never left unchecked longer)."""
     return min(max(_seconds(ADMISSION_POLL_ENV, 15.0), 0.01), 60.0)
 
+def _no_hosts_hint(config):
+    """Why a refusal had nowhere to overflow to, when the overflow config names no host."""
+    if config.get('hosts'):
+        return {}
+    return {'hint': 'overflow-hosts.json is absent or lists no host: run `python3 -m plangraph.fleet_sync genconfig write` '
+                    'so a review without local room can be placed on another host'}
+
 def _open_queue(service, role, decision, window):
     """The queued record of a spawn waiting for room; its owner is this process."""
     from .proc_kill import _stat
@@ -313,12 +320,12 @@ def admit(service, options, *, card=None, preview=False):
                         return None
                     continue
                 return _close_queue(service, queued, status='refused', reason=decision.reason,
-                                    overflow_reason=decision.reason, exit_code=2,
+                                    overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
                                     error=f'{decision.reason} (admission window {window:g}s elapsed)')
             record = {'run_id': 'run-' + uuid.uuid4().hex,
                       'status': 'refused',
                       'reason': decision.reason, 'overflow_reason': decision.reason,
-                      'exit_code': 2}
+                      'exit_code': 2, **_no_hosts_hint(config)}
             break
         name = decision.host
         try:

@@ -167,6 +167,9 @@ admitting overflow host, or ends it `refused` (exit code 2) with the admission r
 of a queued run writes `cancelled` and ends the wait. `ps` and `status` mark a `queued` record whose
 owner process is gone (or that has none, as records written before this change) with `stale: true` and
 `stale_reason`; the stall watchdog sweep ends such a record `refused` / `queue_owner_gone`.
+A review reserves its role's registry ramp (`warmup.ramp_mb.review`), not the implement reservation, and a
+refusal with no overflow host configured carries a `hint` naming `fleet_sync genconfig write`
+(LE-REVIEW-RUNS-QUEUE-ON-CODING-VM-DEFAULT-CAPS).
 
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
