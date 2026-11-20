@@ -15,6 +15,7 @@ struct Fake {
     refresh_error: bool,
     prompts: Vec<String>,
     rejected: bool,
+    skill: Option<String>,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
@@ -65,6 +66,9 @@ impl Driver for Fake {
     }
     fn save(&mut self, _: &serde_json::Value) -> Result<(), String> {
         Ok(())
+    }
+    fn skill(&mut self, _: &str) -> Result<String, String> {
+        self.skill.clone().ok_or_else(|| "skill unavailable".into())
     }
 }
 fn fake() -> Fake {
@@ -466,4 +470,16 @@ fn native_relaunch_merge_failure_blocks_without_discarding_work() {
     assert_eq!(record["result"], "BLOCKED");
     assert_eq!(record["reason"], "merge conflict");
     assert_eq!(driver.calls.len(), 1);
+}
+#[test]
+fn native_prompt_starts_with_header_then_role_skill() {
+    let skill = "---\nname: implement\n---\nskill body\n";
+    let mut driver = Fake {
+        skill: Some(skill.into()),
+        ..fake()
+    };
+    run(&mut driver, json!({}), "the brief");
+    let header = crate::role_header::header("codex", "implement");
+    assert!(driver.prompts[0].starts_with(&format!("{header}\n\n{skill}\nthe brief")));
+    assert!(!driver.prompts[0].contains("AutoOS"));
 }

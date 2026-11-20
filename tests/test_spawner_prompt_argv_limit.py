@@ -47,7 +47,10 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         return plan
     monkeypatch.setattr(resolver, 'plan_for_launch_async', fixed_plan)
     leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'agy-gemini-4-neon-medium')
-    prompt = 'review this change\n' + 'x' * (size - 20) + '\n\n'
+    from plangraph.spawner import prompt_input
+    monkeypatch.setattr(prompt_input, 'read_skill', lambda *a: '---\nname: review\n---\nskill\n')
+    brief = 'review this change\n' + 'x' * (size - 20) + '\n\n'
+    prompt = prompt_input.compose(brief, 'review', 'agy', None, leg.id)
 
     async def run():
         # Default process factory executes the real Python OOM child entry point.
@@ -56,7 +59,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         service = spawn_service(runner, state=tmp_path / 'state', completion_sink=sink, keeper_sink=sink)
         monkeypatch.setattr(service, 'admit_spawn', lambda *a, **kw: None)
         monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((leg,), (), 'test', (), ()))
-        record = await service.spawn(card={'estimate_tokens': 1000}, prompt=prompt,
+        record = await service.spawn(card={'estimate_tokens': 1000}, prompt=brief,
             role='review', writer_families=['gpt'], wait_seconds=None)
         assert record['status'] == 'completed', record.get('error')
         # Keep every digest bit, separated so output redaction cannot mistake it for a secret.

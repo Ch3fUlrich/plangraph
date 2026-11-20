@@ -9,6 +9,10 @@ pub(crate) trait Driver {
     fn review(&mut self, head: &str) -> Result<Option<Value>, String>;
     fn gates(&mut self) -> Result<(), String>;
     fn save(&mut self, record: &Value) -> Result<(), String>;
+    /// Skill text from origin/main of the run checkout; absent when unreadable.
+    fn skill(&mut self, _name: &str) -> Result<String, String> {
+        Err("skill unavailable".into())
+    }
 }
 pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> Value {
     record["manifest"] = json!({
@@ -61,6 +65,8 @@ fn lifecycle(
     admit_disk(driver)?;
     record["base_admitted"] = json!(true);
     driver.save(record).map_err(|e| (6, e))?;
+    let skill = driver.skill(crate::role_header::skill_name(brief)).ok();
+    let brief = crate::role_header::compose("codex", brief, skill.as_deref());
     let prompt = format!("{brief}\nNative writer rules: new code is Rust with Rust tests. No new Python, shell or Node source files or additions to tools/new_code_allowlist.txt without an operator D-id; fixes inside existing Python files remain allowed until their port. Do not push. Before finishing, commit your work, run the repository's fast gates, and obtain a repository-access review for the final HEAD. Store the review in the configured review directory with the HEAD's eight-character SHA in its filename and a VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES line. Review routing must use role review and writer_families [\"openai\"].\n");
     let prompt = format!("{prompt}\nUse the inherited shared CARGO_TARGET_DIR for every Cargo command, including reviews and preflight. Never override it with a private /tmp or worktree target, --target-dir, or Cargo configuration.\n");
     for attempt in 1..=3 {

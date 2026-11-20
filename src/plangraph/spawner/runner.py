@@ -40,9 +40,6 @@ from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.
 from plangraph.routing_support import background_process_options
 
 _KEEPER_UNCONFIGURED_WARN_S = 600
-# D-2966: writers commit in their clone; AutoOS leaf-agent profiles they may read must not fence that.
-IMPLEMENT_HEADER = ("You run as the opencode build agent: git commit is allowed and required per your brief; "
-                    "AutoOS leaf-agent profiles do not apply to you.")
 _keeper_unconfigured_last_warned = None
 
 
@@ -254,12 +251,12 @@ class SpawnerRunner:
                 raise SpawnRefused('client disagrees with leg harness: ' + leg.id)
             client = leg.harness
         validate_model(model_or_combo)
-        if role == "implement" and not prompt.startswith(IMPLEMENT_HEADER):
-            prompt = IMPLEMENT_HEADER + "\n\n" + prompt
         # REMOVE-AT-R10: capture the final prompt before command construction.
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
+        from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
+        prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None)
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record

@@ -333,6 +333,8 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     env = dict(PATH=str(binary_dir), HOME=str(tmp_path), AUTOOS_ROOT=str(tmp_path),
                XDG_STATE_HOME=str(tmp_path / 'state'), PLANGRAPH_OMNIROUTE_LEG_STATE='0',
                PLANGRAPH_ROUTE_POLICY=str(policy))
+    from plangraph.spawner.prompt_input import compose
+    sent = compose(prompt, 'review', 'agy', str(repo), 'agy-gemini-4-argon')  # before subprocess.run is faked
     real_run = subprocess.run
     source = o.Path(__file__).resolve().parents[1] / 'src'
     # A source-only interpreter cannot fall back to an ambient site installation.
@@ -368,7 +370,7 @@ def test_remote_prompt_bytes(tmp_path, monkeypatch, prompt):
     record = o.remote_spawn('invented', host, {'estimate_tokens': 1000}, prompt, options)
     assert received == [record]
     assert record['status'] == 'dry_run'
-    assert record['prompt_sha256'] == hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+    assert record['prompt_sha256'] == hashlib.sha256(sent.encode('utf-8')).hexdigest()
 
 
 @pytest.mark.parametrize('receipt', ['unreadable', '{}', '[]', '{"status":"running"}'])

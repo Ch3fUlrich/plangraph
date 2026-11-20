@@ -60,7 +60,7 @@ def test_runner_agy_stream_result(monkeypatch, status, error):
         assert prompt not in factory.call_args.args
         assert factory.call_args.kwargs['stdin'] == asyncio.subprocess.PIPE
         payload = proc.communicate.call_args.kwargs['input']
-        assert json.loads(payload)['message']['content'] == prompt
+        assert json.loads(payload)['message']['content'].endswith(prompt)
     asyncio.run(run())
 
 
@@ -103,7 +103,7 @@ def test_runner_long_qoder_uses_existing_stdin_path(monkeypatch):
         assert job.status == 'completed'
         assert prompt not in factory.call_args.args
         assert factory.call_args.kwargs['stdin'] == asyncio.subprocess.PIPE
-        proc.communicate.assert_awaited_once_with(input=prompt.encode())
+        assert proc.communicate.await_args.kwargs['input'].endswith(prompt.encode())
         assert job.stdout == 'VERDICT: ACCEPT'
     asyncio.run(run())
 
