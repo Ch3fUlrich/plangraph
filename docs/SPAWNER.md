@@ -278,7 +278,7 @@ and retains ordered creation evidence in `worktree_attempts`; `base_sha` is the
 attempt's starting commit (main head or continuation tip). A failed fixer creation
 records no worktree and a null cwd, never its parent's path. Runner `JobInfo.cwd`,
 process cwd and child PWD use that path. With the flag off, cwd is unchanged;
-dry runs create nothing. Admission fetches origin's default branch (an `origin/HEAD` that names a branch the remote lacks, as in a clone of a lane checkout, is unknown and the default is `main`) and refuses stale workers, continuations and seats (`base_stale`); a card `base_decision` needs scoped operator proof from the configured decision authority to waive known lag; cleanup removes only unadmitted attempts created by this run and never continuations; detached CLI waits for admission (180-second timeout: `base_admission_timeout`, exit 1); no pg-reap lock sharing is
+dry runs create nothing. Admission fetches origin's default branch (an `origin/HEAD` that names a branch the remote lacks, as in a clone of a lane checkout, is unknown and the default is `main`) and refuses stale workers, continuations and seats (`base_stale`); a card `base_decision` needs scoped operator proof from the configured decision authority to waive known lag; cleanup removes only unadmitted attempts created by this run and never continuations; detached CLI waits for admission (180-second timeout: `base_admission_timeout`, exit 1); the pre-launch leg probe inside that wait is capped at a third of the timeout, so a hung probe books a probe failure and the spawn fails over to the next leg; no pg-reap lock sharing is
 implemented, and enabling by default and the Rust port remain later slices.
 
 Session `launch` uses the same fetched-base admission before preparing launch
@@ -726,3 +726,7 @@ stress test. Windows CI and recorded reruns provide platform evidence.
 Native writer progress admission: [run contract](native-writer-progress-admission.md).
 
 [Per-item checkpoint and status notes](checkpoints/), e.g. [keeper-refused completion deliveries](checkpoints/LE-KEEPER-REFUSED-CALL-LOOPS.md). Add new notes there, one file per item, rather than appending here.
+
+## Agent shell
+
+Claude sessions (`sessions launch`) and Claude harness runs get `CLAUDE_CODE_SHELL=/bin/bash` on POSIX hosts (`claude_env.with_agent_shell`; the child-env allowlist carries the name), so the Bash tool never runs zsh word-splitting, nomatch or `=` expansion. `spawner doctor` reports `claude_shell: fail` on a host whose sessions still run zsh; the operator's own settings env block is not written by the repository.

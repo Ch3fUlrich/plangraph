@@ -31,7 +31,7 @@ from plangraph.spawner.clients import (
     build_command,
     build_routing_envelope_headers,
 )
-from plangraph.spawner.claude_env import claude_child_env
+from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import is_mimo_id
@@ -324,7 +324,7 @@ class SpawnerRunner:
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
         if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
-            child_env = claude_child_env(child_env)
+            child_env = with_agent_shell(claude_child_env(child_env))
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
