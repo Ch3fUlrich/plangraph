@@ -123,8 +123,15 @@ def cargo_run_busy(record):
     return not run_pids_dead(record)
 
 
-def local_disk_refusal(worktree, service):
-    """Check the worktree filesystem and bound the host's shared build cache."""
+#: Roles that build nothing, so the shared build cache's size cap does not bind them.
+NO_BUILD_ROLES = ('review',)
+
+
+def local_disk_refusal(worktree, service, role='implement'):
+    """Check the worktree filesystem and bound the host's shared build cache.
+
+    A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap.
+    """
     # SettingsError derives from ValueError: validate before measurement's catch.
     from plangraph.settings import _policy_data, SettingsError, as_spawn_refused
     try:
@@ -142,18 +149,18 @@ def local_disk_refusal(worktree, service):
                 cache.is_relative_to(checkout) or cache == Path.home().resolve()):
             raise ValueError('unsafe cache directory')
         size = cargo_target_size_gb(target)
-        if size >= cap:
+        if size >= cap and role not in NO_BUILD_ROLES:
             if any(cargo_run_busy(r) for r in service.ps()['runs']):
-                return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy'
+                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
             try:
                 wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
                 with cargo_lease(exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
                     if target.exists():
                         shutil.rmtree(target)
             except OSError:
-                return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
-        if cap == 0:
-            return 'cargo_target_cap: cap 0 GB; no build capacity'
+                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
+        if cap == 0 and role not in NO_BUILD_ROLES:
+            return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
         paths = [worktree, target]
         if getattr(service, 'state', None) is not None:
             paths.append(policy.get('worktree_root') or service.state / 'worktrees')
@@ -181,7 +188,7 @@ async def collect_with_disk_guard(runner, job_id, proc):
         try:
             while True:
                 await asyncio.sleep(1)
-                reason = await asyncio.to_thread(running_disk_refusal, job.cwd or runner.default_cwd)
+                reason = await asyncio.to_thread(running_disk_refusal, job.cwd or runner.default_cwd, job.role)
                 if reason and job.status not in ('cancelled', 'timeout', 'stalled'):
                     job.refusal = reason
                     job.status, job.exit_code = 'failed', 7
@@ -217,8 +224,8 @@ async def collect_with_disk_guard(runner, job_id, proc):
             raise result
 
 
-def running_disk_refusal(worktree):
-    """Rule 7.1: stop below 2 GiB; cap the shared cache throughout a run."""
+def running_disk_refusal(worktree, role='implement'):
+    """Rule 7.1: stop below 2 GiB; cap the shared cache throughout a run of a building role."""
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
@@ -233,8 +240,8 @@ def running_disk_refusal(worktree):
         if not math.isfinite(cap) or cap < 0:
             raise ValueError('invalid cache cap')
         size = cargo_target_size_gb(target)
-        if size >= cap:
-            return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB'
+        if size >= cap and role not in NO_BUILD_ROLES:
+            return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB'
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: runtime measurement or configuration unavailable'
     return None
