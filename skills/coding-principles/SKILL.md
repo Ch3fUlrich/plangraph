@@ -1,6 +1,6 @@
 ---
 name: coding-principles
-description: Apply core software-engineering discipline to any coding task in this and downstream repositories — DRY / single source of truth, test-driven development, single responsibility, documenting the why, backtracking via changelogs and ADRs, MCP-first code navigation, and developing on small data batches before running the full dataset once. Use at the start of any implementation, refactor, bugfix or data investigation, before launching any job over a full dataset, and whenever deciding how to structure code, tests, docs, or commits. Do not use for pure prose writing or non-code tasks.
+description: Apply core software-engineering discipline to any coding task in this and downstream repositories — DRY / single source of truth, test-driven development, single responsibility, documenting the why, backtracking via changelogs and ADRs, MCP-first code navigation, developing on small data batches before running the full dataset once, and telemetry: every path leaves a record that explains what happened. Use at the start of any implementation, refactor, bugfix or data investigation, before launching any job over a full dataset, and whenever deciding how to structure code, tests, docs, or commits. Do not use for pure prose writing or non-code tasks.
 ---
 
 # Coding Principles
@@ -218,6 +218,37 @@ arrived after the method had already changed again.
 | "It is read-only, so a full pass is harmless" | It still costs hours of a shared machine and stalls every iteration behind it. |
 | "Let me compute the corpus-wide distribution" | Is it already stored? Read it. |
 
+## Principle 11 — Telemetry: every path leaves a record that explains it (rigid)
+
+Work that fails, waits or is refused without a record cannot be found, only
+stumbled upon. Every command, job, unit and gate you add writes what an
+investigator needs to see **what happened, when, for which item and why**, and
+something reads it. Measured 2026-11-20: three finished batches waited 80 minutes
+for reviews that could not start and no record said so; the alert list was
+rebuilt from every row since October on each call and held 1,191 rows, eight of
+them current.
+
+1. **One structured record per run**: what ran, the ids to join on (item key, run
+   id, head sha), start, end, duration, outcome, and the reason whenever the
+   outcome is not success.
+2. **A wait or a queue records since when and why**, and a rule or a digest
+   reads it. A stall nobody is told about is a defect of the code that waits.
+3. **Store what is asked often; update it on the event that changes it.** A
+   count, a status or an alert lives in a table or a state file. A read never
+   rebuilds it from the full history.
+4. **A refusal names what it looked for and what it found**, so the next step is
+   visible without a debugger.
+5. **Done includes visible**: the done criteria of an item that adds a job, a
+   gate or a unit say how its failure shows up, and a test or a live readback
+   proves that it does.
+
+| Red flag | Reality |
+|---|---|
+| "It logs to the journal" | Free text nobody queries. Write the record with its ids and outcome. |
+| "We can recompute it when someone asks" | That is a full pass per question, and the answer comes after the incident. Store it. |
+| "It exits non-zero, that is enough" | The caller sees a number. Name the reason and what was expected. |
+| "Monitoring is a later item" | Then the first failure is found by a person asking why nothing moved. |
+
 ## Checklist
 
 At the start of any implementation, refactor, or bugfix:
@@ -233,3 +264,4 @@ At the start of any implementation, refactor, or bugfix:
 - [ ] Selected by the condition that makes records wrong, not by the symptom already seen (Principle 8).
 - [ ] Verified through the branch production actually takes, not a convenient fallback (Principle 9).
 - [ ] Iterated on synthetic data and a small, varied real batch; ran the full data at most once, at the end (Principle 10).
+- [ ] Every new path writes its run record, a wait says since when and why, and stored state is not rebuilt per read (Principle 11).
