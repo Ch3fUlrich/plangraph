@@ -19,6 +19,7 @@ import tomllib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, disk_free_gb,
                                           running_disk_refusal, shared_cargo_target)
+from plangraph.spawner.overflow import available_memory_mb
 
 CHECK_TIMEOUT = 60
 # Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
@@ -32,28 +33,21 @@ TEST_TIMEOUT = 240
 TEST_PER_PATH_TIMEOUT = 2
 MAX_TEST_TIMEOUT = 1200
 # pytest-xdist workers of the affected-test step: half the cores, at most one per
-# TEST_WORKER_GIB of MemAvailable, between 2 and MAX_TEST_WORKERS; PREFLIGHT_TEST_WORKERS overrides.
-# A fixed 2 ran ~600 selected paths in about 1400 s, over the 1200 s cap on every host.
+# TEST_WORKER_GIB of available memory (the spawner's probe, Linux and Windows), between 2 and
+# MAX_TEST_WORKERS; cores only when memory cannot be read; PREFLIGHT_TEST_WORKERS overrides.
 TEST_WORKER_GIB = 2
 MAX_TEST_WORKERS = 16
 
 
-def mem_available_gib(meminfo="/proc/meminfo"):
-    try:
-        text = Path(meminfo).read_text()
-    except OSError:
-        return None
-    found = re.search(r"^MemAvailable:\s+(\d+) kB$", text, re.M)
-    return int(found[1]) / (1024 * 1024) if found else None
-
-
-def affected_workers(env=None, cores=None, mem_gib=None):
+def affected_workers(env=None, cores=None, memory_mb=available_memory_mb):
     configured = (env if env is not None else os.environ).get("PREFLIGHT_TEST_WORKERS", "")
     if configured.isdigit() and int(configured) > 0:
         return int(configured)
     cores = cores if cores is not None else (os.cpu_count() or 2)
-    mem_gib = mem_gib if mem_gib is not None else mem_available_gib()
-    by_mem = int(mem_gib // TEST_WORKER_GIB) if mem_gib is not None else cores
+    try:
+        by_mem = int(memory_mb() // (TEST_WORKER_GIB * 1024))
+    except (OSError, ValueError):
+        by_mem = cores
     return max(2, min(cores // 2, by_mem, MAX_TEST_WORKERS))
 
 
