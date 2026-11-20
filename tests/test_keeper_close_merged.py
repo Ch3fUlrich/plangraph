@@ -375,6 +375,11 @@ def test_close_merged_with_only_claude_seat(unseated_w, tmp_path, monkeypatch, f
     record = mirror / "fixture-host/run-writer/record.json"
     record.parent.mkdir(parents=True)
     record.write_text(json.dumps({"role": "implement"}))
+    # Both verifiers refuse group/other-writable paths; stay independent of the umask.
+    for path in (review, transcript, record):
+        path.chmod(0o600)
+    for path in (mirror, record.parent.parent, record.parent):
+        path.chmod(0o700)
     w.store.ctx["spawner_records"] = SpawnerRecordAdapter(mirror)
     w.store.record_run(w.p("spawner"), KEY,
                        {"run_id": "run-writer", "phase": "finished", "rc": 0})
