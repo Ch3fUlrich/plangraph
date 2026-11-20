@@ -55,8 +55,8 @@ class SpawnService(SeatSpawnMixin):
             from .remote_ps import native_result
             record = await asyncio.to_thread(native_result, record)
             self._save(record)
-        from .exit_outcome import with_stale_queue
-        return with_stale_queue(record)
+        from .exit_outcome import with_stale
+        return with_stale(record)
 
     def _save(self, record):
         native_receipt(record); self._sync_seat(record)
@@ -161,8 +161,8 @@ class SpawnService(SeatSpawnMixin):
 
     def ps(self):
         from .stall_watchdog import read_runs
-        from .exit_outcome import with_stale_queue
-        runs = [with_stale_queue(record) for record in read_runs(self.state)]
+        from .exit_outcome import with_stale
+        runs = [with_stale(record) for record in read_runs(self.state)]
         return {'runs': sorted(runs, key=lambda r: r.get('started', 0), reverse=True)}
 
     def route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):

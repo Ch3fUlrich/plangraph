@@ -12,7 +12,12 @@ from `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`).
 Caller and per-worktree target overrides are replaced; children also receive
 `CARGO_INCREMENTAL=0`. The cache cap is
 `PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB). Over-cap busy hosts refuse with
-`cargo_target_cap`; idle hosts clear the cache before checking free space.
+`cargo_target_cap`; idle hosts clear the cache before checking free space. A run keeps the
+host busy only while a recorded child or supervisor pid is alive (or it has survivors): ended,
+`timed_out`, `stalled` and `queued` records, and `running` records whose recorded pids are all gone, do
+not (ps marks the latter `stale`). Cleanup takes the exclusive cargo lease and waits up to
+`PLANGRAPH_CARGO_CLEANUP_WAIT_S` (default 30) for live builds before it refuses with `busy or cleanup
+unavailable`; it never deletes under a held lease.
 An independent one-second runtime sample reaps runs at the shared cap or below
 2 GiB free (rule 7.1). Sampling permits transient overshoot between measurements;
 it is not a filesystem quota. Building artifacts are never deleted; idle admission

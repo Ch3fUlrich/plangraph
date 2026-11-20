@@ -413,7 +413,44 @@ def queue_stale_reason(record, *, ownerless=True):
     return f'queue owner pid {pid} is gone; the run will never be re-admitted'
 
 
-def with_stale_queue(record):
-    """The record as shown by ps/status: an ownerless queued run is marked stale with the reason."""
-    reason = queue_stale_reason(record)
+def run_pids_dead(record):
+    """True when every recorded process (child, supervisor) of a run is gone; no recorded pid is no proof."""
+    import os
+    if os.name == 'nt':
+        return False
+    from .proc_kill import alive
+    proof = False
+    pid = record.get('pid')
+    if type(pid) is int:
+        if alive(pid, record.get('pid_start')):
+            return False
+        proof = True
+    path = record.get('supervisor_stderr_path')
+    if path:
+        try:
+            with open(str(path) + '.pid') as stream:
+                supervisor = int(stream.read())
+        except (OSError, ValueError):
+            supervisor = None
+        if supervisor is not None:
+            if alive(supervisor, record.get('supervisor_pid_start')):
+                return False
+            proof = True
+    return proof
+
+
+def run_stale_reason(record):
+    """Why a non-terminal record is dead weight (its processes are gone), else None."""
+    from .runner import is_terminal
+    status = record.get('status')
+    if (status in (None, 'queued', 'timed_out', 'stalled') or is_terminal(status) or record.get('ended') is not None
+            or record.get('overflow_remote') or record.get('survivors')):
+        return None
+    return 'recorded pid(s) of the run are gone; the record was never ended' if run_pids_dead(record) else None
+
+
+def with_stale(record):
+    """The record as shown by ps/status: a queued run without a live owner, or a running record whose
+    processes are gone, is marked stale with the reason."""
+    reason = queue_stale_reason(record) or run_stale_reason(record)
     return dict(record, stale=True, stale_reason=reason) if reason else record
