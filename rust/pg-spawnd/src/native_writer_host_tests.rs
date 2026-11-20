@@ -318,7 +318,15 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     );
     git(&cwd, &["init", "-q", "-b", "main"]);
     git(&cwd, &["remote", "add", "origin", remote.to_str().unwrap()]);
-    git(&cwd, &["commit", "-q", "--allow-empty", "-m", "base"]);
+    // The commit-trailer gate records its arguments and fails while gate-red exists.
+    fs::create_dir_all(cwd.join("tools")).unwrap();
+    fs::write(
+        cwd.join("tools/ci_commit_gate.py"),
+        "import pathlib, subprocess, sys\nhead = subprocess.check_output(['git', 'rev-parse', sys.argv[sys.argv.index('--head') + 1]], text=True).strip()\npathlib.Path('../gate-runs.txt').open('a').write(' '.join(sys.argv[1:]) + ' ' + head + '\\n')\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
+    )
+    .unwrap();
+    git(&cwd, &["add", "tools"]);
+    git(&cwd, &["commit", "-q", "-m", "base"]);
     let base = git(&cwd, &["rev-parse", "HEAD"]);
     git(
         &cwd,
@@ -369,9 +377,22 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
     };
     assert!(!host.stamped(&head));
+    // A red commit-trailer gate fails the fast checks without a stamp and blocks the final gates.
+    fs::write(dir.path().join("gate-red"), "").unwrap();
+    assert!(host
+        .fast_checks(&head)
+        .unwrap_err()
+        .starts_with("ci_commit_gate.py"));
+    assert!(!host.stamped(&head));
+    assert!(host.gates().unwrap_err().starts_with("ci_commit_gate.py"));
+    fs::remove_file(dir.path().join("gate-red")).unwrap();
     host.fast_checks(&head).unwrap();
     assert!(host.stamped(&head));
     assert!(!host.stamped(&base));
+    host.gates().unwrap();
+    let runs = fs::read_to_string(dir.path().join("gate-runs.txt")).unwrap();
+    let expected = format!("check --base refs/plangraph/native/run-host/base --head HEAD {head}");
+    assert_eq!(runs.lines().filter(|l| *l == expected).count(), 4, "{runs}");
     let review = host.review(&head, None).unwrap();
     assert_eq!(review["verdict"], "ACCEPT", "{review}");
     assert_eq!(review["head"], head.as_str());
@@ -396,4 +417,35 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         .review(&head, None)
         .unwrap_err()
         .starts_with("review run returned no record"));
+}
+
+#[cfg(unix)]
+#[test]
+fn card_refusals_exit_five_before_codex_starts() {
+    for (card, reason) in [
+        (json!({"effort":"high"}), "effort_needs_decision"),
+        (json!({"effort":"low"}), "effort_invalid"),
+        (json!({"push_ref":"main"}), "push_ref must name refs/heads/"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let record_path = dir.path().join("state/runs/run-card/record.json");
+        fs::create_dir_all(record_path.parent().unwrap()).unwrap();
+        let request = dir.path().join("request.json");
+        fs::write(
+            &request,
+            json!({"record":{"run_id":"run-card", "repo":dir.path(), "base_ref":"refs/heads/main",
+                "tool_path":"/nonexistent"}, "record_path":record_path, "card":card, "prompt":"brief"})
+            .to_string(),
+        )
+        .unwrap();
+        execute(vec![request.to_string_lossy().into_owned()]).unwrap();
+        let record: Value = serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+        assert_eq!(record["exit_code"], 5, "{record}");
+        assert_eq!(record["status"], "failed");
+        assert!(
+            record["reason"].as_str().unwrap().starts_with(reason),
+            "{record}"
+        );
+        assert!(!dir.path().join("state/runs/run-card/native.log").exists());
+    }
 }

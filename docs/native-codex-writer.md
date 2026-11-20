@@ -44,7 +44,8 @@ REQUEST_CHANGES resumes the same session with the review text; later rounds revi
 the delta from the previous head. The HIGH+MED count of each round goes to
 `round_counts`; `native_writer::round_stop` applies the round progress rule of
 `round_progress.rs` to the round just finished and caps the run at 5 rounds
-(exit 3 with `round_stop` `round_cap` or `no_progress`). ACCEPT runs the same
+(exit 3 with `round_stop` `round_cap` or `no_progress`; `no_session` when Codex
+reported no session ID to resume). ACCEPT runs the same
 gates on the clean final head, then pushes it once to the card's optional
 `push_ref` (`refs/heads/...`, no force) and records `status_line: DONE`.
 The card's `review_dir` selects a target-host directory; the default is
@@ -53,7 +54,8 @@ The card's `review_dir` selects a target-host directory; the default is
 Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
 final head, resume count, fast-check result, every review round, the last review
 path/text/verdict/run ID, pushed ref and exit code. Exits are 0 accepted, 3 review
-changes at the round stop, 4 no verdict, 5 base refusal, 6 writer failure,
+changes at the round stop, 4 no verdict, 5 base or card refusal (stale or unpushed base, `effort_invalid`,
+`effort_needs_decision`, a `push_ref` outside `refs/heads/`), 6 writer failure,
 7 final gate failure, 8 start disk refusal. Worktrees and logs remain for recovery.
 Exit 9 reports `result: BLOCKED` when writer relaunches are exhausted or their
 disk/base preparation fails.
