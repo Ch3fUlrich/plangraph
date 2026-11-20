@@ -39,6 +39,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         reviews: dir.path().join("reviews"),
         record_path: dir.path().join("record.json"),
         base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
     };
     output(Command::new("git").arg("init").arg(&host.cwd)).unwrap();
     fs::write(
@@ -135,6 +136,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         reviews: dir.path().join("reviews"),
         record_path: dir.path().join("record.json"),
         base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
     };
     host.git(&["init"]).unwrap();
     let commit = |message: &str| {

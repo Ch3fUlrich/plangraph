@@ -363,7 +363,7 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         if row["exit_code"] == 0 {
             completed += 1;
             assert_eq!(row["tokens"], 2468); // Two CLI executions, each logs 1,234.
-            assert_eq!(row["changed_lines"], 1);
+            assert_eq!(row["changed_lines"], 2); // writer.txt and writer-path, one line each.
             assert_eq!(row["review_rounds"], 1);
             assert!(row["wall_minutes"].as_f64().unwrap() > 0.0);
         }
