@@ -165,13 +165,15 @@ def test_route_and_refusal(tmp_path, capsys):
 
 
 def test_review_order_rule_350_mimo_pro_then_flash_then_326():
-    # Rule 3.58 / D-6366: agy argon first, then mimo-v2.6-pro, then the OpenCode
-    # DeepSeek legs and glm-5.3-flash; neon, Sonnet high and mimo flash follow.
+    # Rule 3.58 / D-6366: agy argon-low first (argon-medium as same-family fallback),
+    # then mimo-v2.6-pro, then the OpenCode DeepSeek legs and glm-5.3-flash; neon,
+    # Sonnet high and mimo flash follow.
     assert REVIEW_ORDER == (
+        "agy-gemini-4-argon-low",
         "agy-gemini-4-argon-medium",
         "mimo-v2.6-pro",
-        "opencode-deepseek-v4.1-flash-free",
         "opencode-go-deepseek-v4-flash",
+        "opencode-deepseek-v4.1-flash-free",
         "opencode-go-glm-5.3-flash",
         "agy-gemini-4-neon-medium",
         "claude-sonnet-5-5-high",
@@ -181,14 +183,15 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
                       leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
     # An OpenAI writer gets exactly the operator order.
     assert [leg.id for leg in plan.legs] == list(REVIEW_ORDER)
-    assert plan.legs[0].model == "gemini-4-argon-medium"
+    assert plan.legs[0].model == "gemini-4-argon-low"
+    assert plan.legs[0].family == "gemini" and plan.legs[0].effort == "low"
     # A Gemini writer skips argon and neon (same family) and starts on mimo-pro.
     gem_plan = plan_spawn(CARD, role="review", writer_families=("gemini",),
                           leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
     assert [leg.id for leg in gem_plan.legs] == [
         "mimo-v2.6-pro",
-        "opencode-deepseek-v4.1-flash-free",
         "opencode-go-deepseek-v4-flash",
+        "opencode-deepseek-v4.1-flash-free",
         "opencode-go-glm-5.3-flash",
         "claude-sonnet-5-5-high",
         "mimo-v2.6-flash",
@@ -219,7 +222,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons[FREE[1]].startswith("disabled: D-6310")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
     assert [leg.id for leg in rev.legs] == [
-        "agy-gemini-4-argon-medium", REVIEW_MIMO_PRO, REVIEW_NEON, REVIEW_MIMO_FLASH,
+        "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium", REVIEW_MIMO_PRO, REVIEW_NEON, REVIEW_MIMO_FLASH,
         "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert reasons[FREE[0]] == "banned_family"
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
@@ -251,7 +254,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert ids == [*[id for id in REVIEW_ORDER if id != "claude-sonnet-5-5-high"],
                    "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
-    assert ids[:2] == ["agy-gemini-4-argon-medium", "mimo-v2.6-pro"]
+    assert ids[:3] == ["agy-gemini-4-argon-low", "agy-gemini-4-argon-medium", "mimo-v2.6-pro"]
 
 
 def test_route_sol_unavailable_keeps_tier_writer_order():
@@ -420,7 +423,7 @@ def test_main_policy_gpt_first_and_retained_routes():
                             policy=policy, leg_reader=clear)
         assert not {leg.family for leg in review.legs} & set(writers)
         assert not {leg.family for leg in review.review_seats} & set(writers)
-        assert review.first_leg.id == ("mimo-v2.6-pro" if "gemini" in writers else "agy-gemini-4-argon-medium")
+        assert review.first_leg.id == ("mimo-v2.6-pro" if "gemini" in writers else "agy-gemini-4-argon-low")
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
@@ -483,10 +486,11 @@ def test_d6310_route_orders_low_risk_and_families():
 
     rev = plan_spawn(CARD, role='review', writer_families=('gpt',))
     assert [(l.id, l.effort) for l in rev.legs] == [
+        ('agy-gemini-4-argon-low', 'low'),
         ('agy-gemini-4-argon-medium', 'medium'),
         ('mimo-v2.6-pro', None),
-        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
@@ -495,8 +499,8 @@ def test_d6310_route_orders_low_risk_and_families():
     rev_diff = plan_spawn(CARD, role='review', writer_families=('gemini',))
     assert [(l.id, l.effort) for l in rev_diff.legs] == [
         ('mimo-v2.6-pro', None),
-        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-glm-5.3-flash', None),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
@@ -532,3 +536,35 @@ def test_d6310_route_orders_low_risk_and_families():
     assert detect_model_family('gpt-6.2-sol') == 'gpt' and 'gpt' in MODEL_FAMILIES
     assert detect_model_family('gpt-6.2-astra') == 'gpt'
     assert detect_model_family('gemini-4-neon-medium') == 'gemini' and 'gemini' in MODEL_FAMILIES
+
+
+def _codex_reader(codex_out):
+    def reader(model, **kwargs):
+        if codex_out and "cx-gpt" in model:
+            return {"state": "limited",
+                    "evidence": {"caller": "quota-snapshot", "reset_at": 2000000000}}
+        return {"state": "ok", "evidence": None}
+    return reader
+
+
+def test_claude_writer_fallback_only_while_codex_unavailable():
+    # Rule 3.58 / D-6366: Claude Sonnet writes only while every Codex leg is out.
+    served = plan_spawn(CARD, role="implement", leg_reader=_codex_reader(False))
+    assert [leg.id for leg in served.legs] == WRITERS
+    assert {s["leg"]: s["reason"] for s in served.skipped}["agy-claude-sonnet-5-5-high"] == "codex_available"
+    out = plan_spawn(CARD, role="implement", leg_reader=_codex_reader(True))
+    assert [leg.id for leg in out.legs][:2] == ["agy-claude-sonnet-5-5-high", "agy-gemini-4-hydrogen-high"]
+    assert out.first_leg.claude_family
+    reasons = {s["leg"]: s["reason"] for s in out.skipped}
+    assert reasons["cx-gpt-6.2-sol-medium"].startswith("quota_until ")
+    assert reasons["cx-gpt-6.2-astra"].startswith("quota_until ")
+    assert "agy-claude-sonnet-5-5-high" not in reasons
+
+
+def test_argon_low_review_leg_is_gemini_plan_mode():
+    from plangraph.routing_support.clients import build_standalone_fallback_command
+    from plangraph.planner.legs import spawnable_legs
+    leg = next(l for l in spawnable_legs() if l.id == "agy-gemini-4-argon-low")
+    assert (leg.family, leg.effort, leg.roles, leg.harness) == ("gemini", "low", ("review",), "agy")
+    cmd = build_standalone_fallback_command("agy", "review", leg.model, role="review", tool_mode="tools")
+    assert cmd[cmd.index("--mode") + 1] == "plan"

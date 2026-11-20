@@ -124,7 +124,7 @@ def test_review_route_ignores_ambient_catalog_tiers(tmp_path, capsys, monkeypatc
     ambient = route_json(tmp_path, capsys)
     assert reads == [1]
     assert next(c for c in ambient['candidates'] if c['leg'] == 'agy-gemini-4-neon-medium')['tier'] == 'paid'
-    assert ambient['first_leg']['id'] == 'agy-gemini-4-argon-medium'
+    assert ambient['first_leg']['id'] == 'agy-gemini-4-argon-low'
     test_review_route_uses_benchmark_p(tmp_path, capsys, monkeypatch)
     assert reads == [1]  # The exact-order probe must inject its own catalog input.
 

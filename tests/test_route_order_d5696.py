@@ -55,33 +55,35 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
 def test_standard_review_order_efforts_and_writer_fence(catalog):
     result = ordered(catalog.values(), 'review', writer_families=('gpt',), diff_tokens=99999)
     assert signature(result) == [
+        ('agy-gemini-4-argon-low', 'low'),
         ('agy-gemini-4-argon-medium', 'medium'),
         ('mimo-v2.6-pro', None),
-        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
     ]
     assert ordered(result, 'review', writer_families=('claude',),
-                   diff_tokens=99999) == result[:6] + result[7:]
+                   diff_tokens=99999) == result[:7] + result[8:]
 
 
 @pytest.mark.parametrize('order_class', ['high', 'complex'])
 def test_complex_review_sol_terra_hydrogen_and_efforts(catalog, order_class):
     from plangraph.routing_support.catalog_seed import OPERATOR_ROUTE_ORDERS
     assert OPERATOR_ROUTE_ORDERS['review'][order_class] == (
-        'agy-gemini-4-argon-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-        'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+        'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium', 'mimo-v2.6-pro',
+        'opencode-go-deepseek-v4-flash', 'opencode-deepseek-v4.1-flash-free', 'opencode-go-glm-5.3-flash',
         'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash')
     result = ordered(catalog.values(), 'review', order_class=order_class,
                      writer_families=('gpt',), diff_tokens=1000)
     assert signature(result) == [
+        ('agy-gemini-4-argon-low', 'low'),
         ('agy-gemini-4-argon-medium', 'medium'),
         ('mimo-v2.6-pro', None),
-        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
@@ -100,22 +102,23 @@ def test_planning_fable_high(catalog):
 @pytest.mark.parametrize('order_class,effort,hydrogen', [('high', 'medium', 'medium'), ('complex', 'xhigh', 'high')])
 def test_explicit_upstream_roles_keep_full_high_review_order(catalog, order_class, effort, hydrogen):
     """D-6366 review order applies across standard/high/complex classes."""
-    ids = ('agy-gemini-4-argon-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-           'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+    ids = ('agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium', 'mimo-v2.6-pro',
+           'opencode-go-deepseek-v4-flash', 'opencode-deepseek-v4.1-flash-free', 'opencode-go-glm-5.3-flash',
            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash')
     admitted = [replace(catalog[id], roles=('review',)) for id in ids]
     result = ordered(admitted, 'review', order_class=order_class, writer_families=('gpt',))
     assert signature(result) == [
+        ('agy-gemini-4-argon-low', 'low'),
         ('agy-gemini-4-argon-medium', 'medium'),
         ('mimo-v2.6-pro', None),
-        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-deepseek-v4-flash', None),
+        ('opencode-deepseek-v4.1-flash-free', None),
         ('opencode-go-glm-5.3-flash', None),
         ('agy-gemini-4-neon-medium', 'medium'),
         ('claude-sonnet-5-5-high', 'high'),
         ('mimo-v2.6-flash', None),
     ]
-    assert ordered(admitted, 'review', order_class=order_class, writer_families=('claude',)) == tuple(admitted[:6] + admitted[7:])
+    assert ordered(admitted, 'review', order_class=order_class, writer_families=('claude',)) == tuple(admitted[:7] + admitted[8:])
 
 
 def test_payment_order_unmodified_registry_names_every_drop(catalog):
@@ -136,11 +139,11 @@ def test_payment_order_unmodified_registry_names_every_drop(catalog):
             agy-claude-sonnet-5-5-medium agy-claude-sonnet-5-5-high agy-claude-opus-5-5-low
             agy-claude-opus-5-5-medium agy-claude-opus-5-5-high cx-gpt-6-luna-low
             cx-gpt-6-luna-medium cx-gpt-6-luna-high cx-gpt-6-luna-xhigh cx-gpt-6-luna-max''',
-        'writer_family': 'agy-gemini-4-neon-medium agy-gemini-4-argon-medium'}
+        'writer_family': 'agy-gemini-4-neon-medium agy-gemini-4-argon-low agy-gemini-4-argon-medium'}
     dropped = {id: reason for reason, ids in reasons.items() for id in ids.split()}
     assert signature(result) == [('mimo-v2.6-pro', None),
-                                 ('opencode-deepseek-v4.1-flash-free', None),
                                  ('opencode-go-deepseek-v4-flash', None),
+                                 ('opencode-deepseek-v4.1-flash-free', None),
                                  ('opencode-go-glm-5.3-flash', None),
                                  ('claude-sonnet-5-5-high', 'high'),
                                  ('mimo-v2.6-flash', None)]
