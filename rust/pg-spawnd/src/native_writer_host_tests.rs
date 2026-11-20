@@ -391,6 +391,11 @@ head = card['diff_ref']['head']
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
 assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
+assert prompt.index('Rules:') < prompt.index('=== ITEM CONTEXT'), prompt
+assert 'Item key: plangraph:HOST-TEST-ITEM' in prompt, prompt
+assert 'Done criteria: Done criteria: the host test is done' in prompt, prompt
+assert 'changed files: src/lib.rs, src/more.rs' in prompt, prompt
+assert '/fast-checks/' + head in prompt, prompt
 assert 'Exact head SHA: ' + head in prompt and 'Exact base SHA: ' in prompt, prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
@@ -413,7 +418,8 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         tool_path: std::env::var("PATH").unwrap(),
         effort: WRITER_EFFORT.into(),
         state: state.clone(),
-        brief: "the item brief".into(),
+        brief: "the item brief\nplangraph:HOST-TEST-ITEM\nDone criteria: the host test is done"
+            .into(),
         push_ref: None,
         reviews_started: 0,
         review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],

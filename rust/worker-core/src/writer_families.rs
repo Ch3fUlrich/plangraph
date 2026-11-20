@@ -68,15 +68,17 @@ fn run_python(
     Ok(out.stdout)
 }
 
-/// The versioned review brief (`plangraph.review.prompt.render_brief("review", context)`):
-/// its fixed prefix and the item-context block for the fields `context` names.
+/// The versioned review brief (`plangraph.review.prompt.render_brief("review", context,
+/// rules=rules)`): its fixed prefix, then `rules`, then the item-context block for the fields
+/// `context` names.
 pub fn render_review_brief(
     context: &Value,
+    rules: &str,
     python: &dyn Fn() -> Command,
 ) -> Result<String, String> {
-    const CODE: &str = "import json, sys; from plangraph.review.prompt import render_brief; sys.stdout.write(render_brief('review', json.load(sys.stdin)))";
-    let payload =
-        serde_json::to_vec(context).map_err(|e| format!("serialize brief context: {e}"))?;
+    const CODE: &str = "import json, sys; from plangraph.review.prompt import render_brief; a = json.load(sys.stdin); sys.stdout.write(render_brief('review', a['context'], rules=a['rules']))";
+    let payload = serde_json::to_vec(&serde_json::json!({"context": context, "rules": rules}))
+        .map_err(|e| format!("serialize brief context: {e}"))?;
     let out = run_python(python, CODE, payload, "review brief")?;
     String::from_utf8(out).map_err(|e| format!("refused: review brief output: {e}"))
 }

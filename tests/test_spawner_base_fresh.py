@@ -10,6 +10,8 @@ import time
 import pytest
 
 pytestmark = pytest.mark.real_base_fresh
+from plangraph.spawner import leg_probe as _leg_probe
+_REAL_BEFORE_LAUNCH = _leg_probe.before_launch  # the `dispatch` fixture replaces it
 GIT_ENV = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')
 
 
@@ -620,3 +622,29 @@ def test_same_checkout_review_reuses_the_resolved_default_branch(repository, tmp
     card = dict(diff_ref=dict(repo=str(clone), base='HEAD', head=head))
     assert asyncio.run(admit_base(service, record, card, launch=True)) is True
     assert record['base_sha'] == git(clone, 'rev-parse', 'origin/main')
+
+
+def test_stuck_initiating_probe_is_a_leg_skip_not_an_admission_timeout(repository, dispatch, monkeypatch):
+    """A probe stuck in its own setup fails the leg inside the admission window."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setattr(leg_probe, 'before_launch', _REAL_BEFORE_LAUNCH)
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.8)  # 0.6 s per probe, 0.9 s in all
+    async def stuck(runner, leg, **kwargs):
+        await asyncio.sleep(30)  # e.g. delayed log scanning before the probe's own deadline
+        return dict(ok=True, reason='', seconds=0)
+    monkeypatch.setattr(leg_probe, 'probe', stuck)
+    # The hardened service runs the leg loop that probes.
+    service, calls = dispatch[0](True), dispatch[1]
+    async def main():
+        started = time.monotonic()
+        record = await base_fresh.admitted_spawn(service, dict(
+            card=dict(estimate_tokens=100), prompt='Implement a tested change', role='implement'))
+        await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+        return record, time.monotonic() - started
+    record, elapsed = asyncio.run(main())
+    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+    assert 'base_admission_timeout' not in json.dumps(record), record
+    attempts = service.result(record['run_id'])['attempts']
+    assert [a['skip_reason'] for a in attempts] == ['probe_budget_exhausted'], attempts
+    assert not calls

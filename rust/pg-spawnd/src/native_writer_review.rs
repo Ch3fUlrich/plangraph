@@ -56,6 +56,39 @@ impl Host {
         }
         Ok(())
     }
+    /// Item-context evidence of the versioned review brief: the item keys and Done-when lines
+    /// of the writer brief, both SHAs, the changed files and the fast-checks stamp of `head`.
+    fn brief_context(&self, base: &str, head: &str) -> Value {
+        let keys: std::collections::BTreeSet<&str> = regex::Regex::new(r"plangraph:[A-Za-z0-9_-]+")
+            .map(|re| re.find_iter(&self.brief).map(|m| m.as_str()).collect())
+            .unwrap_or_default();
+        let done: Vec<&str> = self
+            .brief
+            .lines()
+            .filter(|line| {
+                let lower = line.to_ascii_lowercase();
+                lower.contains("done criteria") || lower.contains("done when")
+            })
+            .collect();
+        let files = self
+            .git(&["diff", "--name-only", base, head])
+            .unwrap_or_default()
+            .replace('\n', ", ");
+        let mut context = json!({"base_sha": base, "head_sha": head});
+        if !keys.is_empty() {
+            context["item_key"] = json!(keys.into_iter().collect::<Vec<_>>().join(", "));
+        }
+        if !done.is_empty() {
+            context["done_criteria"] = json!(done.join(" | "));
+        }
+        if !files.is_empty() {
+            context["public_symbols"] = json!(format!("changed files: {files}"));
+        }
+        if let Ok(stamp) = self.stamp(head) {
+            context["test_output_paths"] = json!(stamp.display().to_string());
+        }
+        context
+    }
     /// Review prompt for `head`: review skill, writer brief, diff range (the delta from the
     /// previous review's head when it is an ancestor) and the required closing lines.
     fn review_prompt(
@@ -66,8 +99,7 @@ impl Host {
         families: &[String],
         versioned: &str,
     ) -> String {
-        let skill = self.skill("review").unwrap_or_default();
-        let mut prompt = format!("{versioned}\n\n{skill}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let mut prompt = format!("{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
         match previous {
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),
@@ -124,6 +156,7 @@ impl Host {
                 self.git(&["merge-base", "--is-ancestor", prev, head])
                     .is_ok()
             });
+        let skill = self.skill("review").unwrap_or_default();
         let trusted_python = || {
             let mut python =
                 pg_worker_core::writer_families::python_command(self.python_src.as_deref());
@@ -138,11 +171,12 @@ impl Host {
             &[super::WRITER_MODEL],
             &trusted_python,
         )?;
-        // Fixed prefix and item context of the versioned review brief, from the one renderer.
+        // Fixed prefix, the review skill as rules and the item context of the versioned
+        // review brief, from the one renderer; the context carries the actual evidence.
+        let context = self.brief_context(base, head);
         let versioned = pg_worker_core::writer_families::render_review_brief(
-            &json!({"item_key":"the item keys of the writer brief below",
-                "done_criteria":"the Done-when lines of the writer brief below",
-                "base_sha":base, "head_sha":head}),
+            &context,
+            &skill,
             &trusted_python,
         )?;
         let prompt = self.review_prompt(base, head, prev, &families, &versioned);
