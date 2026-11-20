@@ -8,6 +8,6 @@ Environment=PYTHONPATH=%h/code/plangraph/src
 EnvironmentFile=-%h/.config/plangraph/watchdog.env
 NoNewPrivileges=yes
 ExecStartPre=-%h/.local/bin/pg-spawnd check-manage-key --state %S/plangraph --json
-# 9 review legs probed sequentially at 120s each = 1080s, inside the 20min (1200s) start timeout.
+# 9 review legs probed sequentially at 120s each plus ~30s overhead = 1110s, inside the 20min (1200s) start timeout.
 ExecStart=/usr/bin/python3 -m plangraph.spawner.cli --state %S/plangraph probe --all-reviewers --timeout 120 --json
 TimeoutStartSec=20min
