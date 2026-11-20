@@ -43,7 +43,7 @@ def test_implement_order_efforts_and_limited_fallthrough(catalog):
         'opencode-deepseek-v4.1-flash-free', 'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash')
     legs = [catalog[id] for id in OPERATOR_ROUTE_ORDERS['implement']]
     assert signature(ordered(legs, 'implement')) == [
-        ('cx-gpt-6.2-sol-medium', 'medium'), ('cx-gpt-6.2-astra', None),
+        ('cx-gpt-6.2-sol-medium', 'medium'), ('cx-gpt-6.2-astra', 'medium'),
         ('agy-gemini-4-hydrogen-high', 'high'),
         ('opencode-deepseek-v4.1-flash-free', None), ('opencode-go-deepseek-v4-flash', None),
         ('opencode-go-glm-5.3-flash', None)]
