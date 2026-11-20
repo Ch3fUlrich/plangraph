@@ -71,6 +71,9 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
         fn prepare(&mut self) -> Result<String, String> {
             Ok("base".into())
         }
+        fn refresh_base(&mut self) -> Result<String, String> {
+            panic!("weak review must not relaunch the writer")
+        }
         fn disk_gb(&mut self) -> Result<u64, String> {
             Ok(5)
         }
