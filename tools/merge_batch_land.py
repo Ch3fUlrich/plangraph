@@ -224,6 +224,21 @@ def require_full_run(repo, head, branch):
     return reruns
 
 
+def require_current_base(repo, head, base="main"):
+    """The green run of ``head`` was tested on a tree that contains main's current tip.
+
+    A head green on an older base can still turn main red when other pull requests landed in between
+    (two pull requests that grow the same file, each under the limit alone); GitHub's --match-head-commit
+    binds the head, not the base. ``behind_by`` of ``base...head`` must be 0."""
+    cmp = gh_json("api", f"repos/{repo}/compare/{base}...{head}")
+    behind = cmp.get("behind_by")
+    if not isinstance(behind, int) or isinstance(behind, bool):
+        raise MergeBatchError(f"stale_base: cannot read how far {short(head)} is behind {base}")
+    if behind:
+        raise MergeBatchError(f"stale_base: green run of {short(head)} was tested on an older {base} "
+                              f"(head is {behind} commit(s) behind it); update the head and let CI run again")
+
+
 def record_reruns(repo, number, reruns):
     if not reruns:
         return
@@ -326,6 +341,7 @@ def cmd_land(args):
         if pr.get("baseRefName") != "main":
             raise MergeBatchError("full_ci: batch PR must target main")
         reruns = require_full_run(repo, st["head"], st["branch"])
+        require_current_base(repo, st["head"])
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
