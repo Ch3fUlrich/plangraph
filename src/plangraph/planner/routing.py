@@ -366,6 +366,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
             reason = 'auth_refused'
+        if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('caller') == 'quota-snapshot':
+            reset = states[leg.id]['evidence'].get('reset_at')
+            reason = 'quota_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset)) if reset else reason
         if reason:
             pass
         elif leg.family in excluded:

@@ -12,8 +12,9 @@ def provider_exhausted(skipped):
     policy = {'banned_family', 'off_family', 'paused_harness', 'excluded_family',
               'inline_only_needs_diff', 'no_verdict_seat', 'explicit_only',
               'review_route_excluded', 'low_risk_only'}
-    return any(r in states for r in reasons) and all(
-        r in states | policy or r.startswith('disabled:') for r in reasons)
+    limited = lambda r: r in states or r.startswith('quota_until ')
+    return any(limited(r) for r in reasons) and all(
+        limited(r) or r in policy or r.startswith('disabled:') for r in reasons)
 
 
 def require_available(leg, reader, card):
