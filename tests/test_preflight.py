@@ -316,6 +316,25 @@ def test_check_output_is_not_infra(repo, monkeypatch, capsys, text):
     assert "INFRA" not in capsys.readouterr().out
 
 
+def test_affected_command_carries_host_sized_workers(repo, monkeypatch):
+    """LE-PREPUSH-TESTS-ON-BUSIEST-HOST (3): the submitted affected-tests command carries the derived count."""
+    seen = []
+
+    def run(command, cwd, env):
+        if Path(command[1]).name == "affected_tests.py":
+            seen.append(command)
+        return 0, ""
+
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "available_memory_mb", lambda: 20 * 1024)
+    monkeypatch.setattr(preflight.os, "cpu_count", lambda: 32)
+    monkeypatch.setattr(preflight.importlib.util, "find_spec",
+                        lambda name, *a: object() if name == "xdist" else importlib.util.find_spec(name, *a))
+    monkeypatch.delenv("PREFLIGHT_TEST_WORKERS", raising=False)
+    preflight.main(["--base", "HEAD", "--head", "HEAD"], repo)
+    assert seen and seen[0][seen[0].index("--workers") + 1] == "10"
+
+
 def test_real_affected_argv(repo, monkeypatch):
     original = preflight.run
     seen = []
