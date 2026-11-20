@@ -20,6 +20,7 @@ mod leg_ref;
 mod native_writer;
 mod native_writer_host;
 mod native_writer_tool;
+mod native_writer_tools;
 mod placement;
 mod pre_review;
 mod prompt;
