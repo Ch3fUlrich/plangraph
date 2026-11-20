@@ -327,6 +327,17 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
 
 _INFLIGHT = {}
 
+def admission_probe_timeout():
+    """Probe budget inside a spawn: a third of the admission window, never the whole of it.
+
+    The pre-launch probe runs inside the spawn's base admission wait; with the default 180 s
+    probe timeout a live probe consumed all of ADMISSION_TIMEOUT and the spawn was refused
+    base_admission_timeout. A probe that exceeds this budget is killed, booked as a probe
+    failure, and the spawn fails over to the next leg inside the window.
+    """
+    from .base_fresh import ADMISSION_TIMEOUT
+    return min(seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, positive=True), ADMISSION_TIMEOUT / 3)
+
 async def before_launch(runner, leg, role, dry_run):
     from .target import quota_paused
     from .env_redact import redact_output, redact_env_values
@@ -376,7 +387,8 @@ async def before_launch(runner, leg, role, dry_run):
         return skip  # Only ordinary admission may reuse pre-failure probe evidence.
     pending = _INFLIGHT.get(key(leg))  # Share concurrent probes, failures included.
     if pending is None:
-        pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
+        pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(
+            probe(runner, leg, store=state, timeout_s=admission_probe_timeout()))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
     result = await asyncio.shield(pending)
     reason = result.get('reason')

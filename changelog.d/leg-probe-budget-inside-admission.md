@@ -1,0 +1,1 @@
+- Pre-launch leg probe inside a spawn is capped at a third of ADMISSION_TIMEOUT, so a hung probe fails over to the next leg (`down: timeout`) inside the admission window instead of the spawn being refused `base_admission_timeout`.

@@ -541,3 +541,49 @@ def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkey
     assert roles[writer.id] is None
     assert all(roles[leg_id] == 'review' for leg_id in roles if leg_id != writer.id) and len(roles) > 1
     assert store.leg_status(leg_probe.key(writer))['state'] != 'down'
+
+
+def test_probe_budget_inside_a_spawn_is_below_the_admission_window(monkeypatch):
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.delenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', raising=False)
+    assert leg_probe.admission_probe_timeout() == base_fresh.ADMISSION_TIMEOUT / 3
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '5')
+    assert leg_probe.admission_probe_timeout() == 5
+
+
+def test_hung_probe_fails_over_inside_the_admission_window(monkeypatch):
+    """A probe that never answers is a leg failure within ADMISSION_TIMEOUT, not a refused spawn."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '180')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.5)  # probe budget 0.5 s
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/true')
+
+    class Runner:
+        def __init__(self):
+            self._tasks, self.jobs, self.cancelled = {}, {}, []
+
+        async def spawn(self, **kwargs):
+            job = SimpleNamespace(job_id='hung', status='running', exit_code=None)
+            self.jobs[job.job_id] = job
+            self._tasks[job.job_id] = asyncio.ensure_future(asyncio.sleep(3600))  # the harness hangs
+            return job
+
+        async def cancel(self, job_id):
+            self.cancelled.append(job_id)
+            self.jobs[job_id].status = 'cancelled'
+            self._tasks[job_id].cancel()
+
+    runner = Runner()
+
+    async def run():
+        started = time.monotonic()
+        skip = await asyncio.wait_for(
+            leg_probe.before_launch(runner, _leg(), 'implement', False),
+            base_fresh.ADMISSION_TIMEOUT)
+        return skip, time.monotonic() - started
+
+    skip, elapsed = asyncio.run(run())
+    assert skip == 'down: timeout'
+    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+    assert runner.cancelled == ['hung']  # the hung harness is killed, not orphaned

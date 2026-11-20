@@ -140,12 +140,12 @@ fn placeholder_git_identities_are_not_ready() {
         ("x", "x@example.invalid"),
         ("Test", "test@example.com"),
         ("Dev", "dev@localhost"),
-        ("", "dev@corp.example.org.test"),
+        ("", "dev@team.example.org.test"),
         ("Dev", ""),
     ] {
         assert!(identity_problem(name, email).is_some(), "{name} <{email}>");
     }
-    assert_eq!(identity_problem("Dev Eloper", "dev@corp.example.org"), None);
+    assert_eq!(identity_problem("Dev Eloper", "dev@team.example.org"), None);
 }
 #[test]
 fn identity_point_reads_the_hosts_git_config() {
@@ -166,7 +166,7 @@ fn identity_point_reads_the_hosts_git_config() {
     run(&["config", "user.name", "x"]);
     run(&["config", "user.email", "x@example.invalid"]);
     assert!(host.check("identity").unwrap_err().contains("placeholder"));
-    run(&["config", "user.email", "dev@corp.example.org"]);
+    run(&["config", "user.email", "dev@team.example.org"]);
     assert_eq!(host.check("identity"), Ok(()));
     // A read-only sandbox never commits, so its identity is not probed.
     run(&["config", "user.email", "x@example.invalid"]);
