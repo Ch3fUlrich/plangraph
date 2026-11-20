@@ -9,6 +9,10 @@ fn run() -> i32 {
     if args.first().map(String::as_str) == Some("fast-checks") {
         return plangraph_cli::fast_checks::run(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("host-sync") {
+        let rest: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
+        return plangraph_cli::host_sync::run_cli(&rest);
+    }
     if let Some(code) = plangraph_cli::watchers::cli(&args) {
         return code;
     }
@@ -85,7 +89,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | runner plan|install|check | feed --once [--dry-run] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | runner plan|install|check | feed --once [--dry-run] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | --version"
             );
             return 2;
         }
