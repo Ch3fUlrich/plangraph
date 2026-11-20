@@ -32,3 +32,15 @@ def test_fixture_value_decides_not_the_host(admission_memory, monkeypatch):
 def test_default_reading_is_the_pinned_value():
     """No fake meminfo and no pin: the autouse default answers, the host is not read."""
     assert seat_spawn.resources(None) == (0, 64000)
+
+
+def test_unpinned_spawn_admission_fails_when_it_reaches_the_real_reader(monkeypatch, admission_memory):
+    from types import SimpleNamespace
+    original = Path.read_text
+    monkeypatch.setattr(Path, 'read_text', lambda self, *a, **kw:
+                        'unrelated' if str(self) == '/elsewhere' else original(self, *a, **kw))
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd='.'), ps=lambda: {'runs': []})
+    with pytest.raises(AssertionError, match='real host memory reader'):
+        seat_spawn.resources(service)
+    admission_memory(64000)
+    assert seat_spawn.resources(service) == (0, 64000)
