@@ -25,6 +25,16 @@ GATEWAY_URL_ENV_VAR = "PLANGRAPH_GATEWAY_URL"
 #: Environment variable naming the provider-level gateway base URL override.
 OMNIROUTE_BASE_URL_ENV_VAR = "OMNIROUTE_BASE_URL"
 
+#: agy review legs that run in plan mode: every Hydrogen effort level, Argon low and medium.
+AGY_PLAN_REVIEW_MODELS: tuple[str, ...] = ("gemini-4-hydrogen-", "gemini-4-argon-low", "gemini-4-argon-medium")
+
+#: Session-only agy settings of a plan-mode review. Headless agy cannot prompt, so a tool
+#: without an allow rule is denied and the run ends with an empty answer: a reviewer that
+#: runs the tests or `git diff` needs the command rule. Reviews run in a checkout without
+#: a remote; plan mode keeps the edit tools off.
+AGY_REVIEW_SETTINGS = json.dumps({"permissions": {"allow": [
+    "command(*)", "read_file(*)", "list_dir(*)", "grep_search(*)", "find_by_name(*)"]}})
+
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
 STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
 
@@ -318,9 +328,9 @@ def build_standalone_fallback_command(
     check_retired(model)
     cname = client_name.lower()
     if cname == "agy":
-        plan = role == "review" and ((model or "").lower().removeprefix("agy/").startswith("gemini-4-hydrogen-")
-                                     or (model or "").lower().removeprefix("agy/") == "gemini-4-argon-medium")
-        cmd = ["agy", *(["--mode", "plan"] if plan else ["--dangerously-skip-permissions"])]
+        plan = role == "review" and (model or "").lower().removeprefix("agy/").startswith(AGY_PLAN_REVIEW_MODELS)
+        cmd = ["agy", *(["--mode", "plan", "--settings", AGY_REVIEW_SETTINGS] if plan
+                        else ["--dangerously-skip-permissions"])]
         if model:
             cmd.extend(["--model", model])
         cmd.extend(["-p", "", "--input-format", "stream-json", "--output-format", "stream-json"])
