@@ -280,7 +280,10 @@ def pre_push_report(repo, unit=None, environ=None):
         path = Path(configured).expanduser()
         interpreter = str(path if path.is_absolute() else root / path)
     else:
-        interpreter = shutil.which('python3') or 'python3'
+        # The hook runs in the checkout: a relative or empty PATH entry means a directory there.
+        entries = [entry if os.path.isabs(entry) else str(root / (entry or '.'))
+                   for entry in environ.get('PATH', os.defpath).split(os.pathsep)]
+        interpreter = shutil.which('python3', path=os.pathsep.join(entries)) or 'python3'
     missing = []
     for module in ('pytest', 'xdist'):
         try:
@@ -315,6 +318,8 @@ def python_test_tools(measure, fail, prefix, repo, unit=None):
     missing = [m for m in report['missing'] if m in ('pytest', 'xdist')]
     if missing:
         fail('python', 'missing ' + ' '.join(missing))
+    if unit and report['unit_umask'] is None:
+        fail('umask', f'unit umask of {unit} unavailable')
     for label, value in (('umask', report['umask']), ('unit umask', report['unit_umask'])):
         if value is not None and int(value, 8) & 0o022 != 0o022:
             fail('umask', f'{label} {value} leaves new files group- or other-writable')

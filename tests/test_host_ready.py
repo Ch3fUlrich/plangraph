@@ -394,9 +394,9 @@ def test_registry_host_queries_the_unit_umask_of_its_service_by_name(tmp_path, s
     assert ('umask: unit umask 0002 leaves new files group- or other-writable' in result['failures']) is queried
 
 
-def shim(directory, name='shim'):
+def shim(directory, name='shim', fails='xdist'):
     path = directory / name
-    path.write_text('#!/bin/sh\n[ "$2" = "import xdist" ] && exit 1\nexit 0\n')
+    path.write_text('#!/bin/sh\n[ "$2" = "import %s" ] && exit 1\nexit 0\n' % fails)
     path.chmod(0o755)
     return path
 
@@ -404,14 +404,21 @@ def shim(directory, name='shim'):
 def test_report_follows_the_hook_interpreter_choice(tmp_path):
     repo = tmp_path / 'repo'
     (repo / '.venv/bin').mkdir(parents=True)
-    shim(repo / '.venv/bin', 'python')
-    other = shim(tmp_path, 'configured')
-    # The checkout venv wins over PREFLIGHT_PYTHON.
+    shim(repo / '.venv/bin', 'python', fails='xdist')
+    other = shim(tmp_path, 'configured', fails='pytest')
+    # The checkout venv wins over PREFLIGHT_PYTHON: only the venv shim lacks xdist.
     assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(other)})['missing'] == ['xdist']
     (repo / '.venv/bin/python').unlink()
-    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(other)})['missing'] == ['xdist']
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(other)})['missing'] == ['pytest']
     assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(tmp_path / 'absent')})['missing'] == [
         'pytest', 'xdist']
+
+
+def test_report_searches_a_relative_path_entry_from_the_checkout(tmp_path):
+    repo = tmp_path / 'repo'
+    (repo / 'bin').mkdir(parents=True)
+    shim(repo / 'bin', 'python3')
+    assert h.pre_push_report(str(repo), environ={'PATH': 'bin:/nonexistent'})['missing'] == ['xdist']
 
 
 @pytest.mark.parametrize('value', ['./shim', 'shim'])
@@ -455,3 +462,18 @@ def test_report_asks_systemd_for_the_named_user_unit(tmp_path, monkeypatch):
     report = h.pre_push_report(str(tmp_path), unit='spawner.service', environ={})
     assert report['unit_umask'] == '0002'
     assert ['systemctl', '--user', 'show', '--property=UMask', '--value', 'spawner.service'] in seen
+
+
+@pytest.mark.parametrize('failure', [subprocess.TimeoutExpired('systemctl', 10), OSError('no systemctl')])
+def test_unit_umask_that_cannot_be_read_is_a_failure(tmp_path, monkeypatch, failure):
+    real_run = subprocess.run
+    def fake_run(argv, **kwargs):
+        if argv[0] == 'systemctl':
+            raise failure
+        return real_run(argv, **kwargs)
+    monkeypatch.setattr(h.subprocess, 'run', fake_run)
+    failures = []
+    ok = h.python_test_tools(
+        lambda check, command, parse: parse(json.dumps(h.pre_push_report(str(tmp_path), 'spawner.service', {}))),
+        lambda check, reason: failures.append(f'{check}: {reason}'), 'prefix ', str(tmp_path), 'spawner.service')
+    assert 'umask: unit umask of spawner.service unavailable' in failures
