@@ -4,12 +4,13 @@ Role: the batch-mode orchestrator and its writers. One strong writer takes sever
 cards, starts an independent reviewer on its head and fixes findings in the same session.
 The orchestrator combines accepted heads into one batch PR.
 
-R-batch-01: Give one strong writer a brief of related cards with disjoint write sets, in one worktree at the fetched origin default head.
-  (why: one context per change set avoids per-card handoffs; source: plangraph:WORK-MODE-S4-CONSUME, BATCH-PORT-WRITER-DRIVER)
+R-batch-01: Give one strong writer a brief of related cards with disjoint write sets, in one worktree at the fetched origin default head. Never one item per writer, for any agent type; when one leg is out of quota the batch goes to the next implement leg, not to per-item writers.
+  Launch with the agent-neutral writer driver (today plan-order `bin/writer.sh NAME WORKTREE BRIEF`: spawner implement route picks the leg, batch contract appended).
+  (why: one context per change set avoids per-card handoffs; a Codex-only driver split one batch into three cold writers on 2026-11-20; source: routing DECISIONS 3.56 (1) D-6357, plangraph:WORK-MODE-S4-CONSUME, BATCH-PORT-WRITER-DRIVER, LE-BATCH-DRIVER-SINGLE-AGENT)
 R-batch-02: Every brief names the goal, Plan-Item keys, scope files, checks, commit trailers, round cap and status file ending `<NAME> DONE`.
   (why: fixed fields let the driver check completion; source: briefs-0511/SKILLMODES-1.md, plangraph:BATCH-PORT-WRITER-DRIVER)
 R-batch-03: Run fast checks on the exact head before review; require its fast-checks stamp before starting the seat.
-  (why: review and CI must not find gate failures first; source: plan-order/bin/fast-checks.sh and agy-review.sh)
+  (why: review and CI must not find gate failures first; source: plan-order/bin/fast-checks.sh and review.sh)
 R-batch-04: Start an other-family review with repository access on the exact head, fix confirmed HIGH/MED findings and repeat while progress permits.
   Native admission: `rust/pg-spawnd/src/round_progress.rs` records confirmed HIGH+MED per writer round.
   Two consecutive counts not below the earlier best refuse the next writer with `no_progress`.
@@ -18,11 +19,11 @@ R-batch-04: Start an other-family review with repository access on the exact hea
   At the cap, close the PR unmerged and have the strongest available planner define slices <=800 changed lines (excluding Cargo.lock and generated files) with all open findings verbatim.
   Exception: one or two confirmed MED findings with clear fixes permit one narrow fix round. A HIGH, three or more MED, or a second miss closes and replans.
   (why: an in-session fix loop avoids relaunch cost; source: routing DECISIONS 3.35, D-5909, D-5927, D-5964)
-R-batch-05: Use Hydrogen high first; on quota try authorized free legs (deepseek-flash, mimo free, beam-free), Sonnet high last, without waiting.
+R-batch-05: Reviews run on Claude Sonnet or OpenCode DeepSeek (subscription legs), without waiting; mimo only after plangraph:MIMO-BATCH-CAPACITY-D6357 measures it on real batches.
+  Run them with the agent-neutral review command: today plan-order `WRITER_FAMILY=<writer family> REVIEW_WORKTREE=<worktree> bin/review.sh TAG BASE HEAD PROMPT` (spawner role review, the writer's family excluded, disposable no-remote checkout), long term `plangraph review` (plangraph:REVIEW-CMD).
   Credential, auth, access and secrets reviews require witnessed Sonnet high; every seat's family differs from all writers and its verdict names the exact head.
-  The current plan-order/bin/agy-review.sh and free-seat.sh wrappers provide repository access, including free-leg runs.
-  Inline-only spawner legs do not satisfy R-batch-04; the writer-driver port must preserve repository access.
-  (why: reviews must progress while preserving seat eligibility; source: routing DECISIONS 3.26, D-5924, D-5925, D-5952)
+  Scripts and rules name the role, never one agent (review.sh, writer.sh).
+  (why: reviews must progress cheaply while preserving seat eligibility; source: routing DECISIONS 3.56 (3)-(4) D-6357, 3.26, D-5924)
 R-batch-06: Use `VERDICT: ACCEPT` or `VERDICT: REQUEST_CHANGES` for writer reviews, naming the full head sha in the review.
   For the batch merge-delta approval, request `HEAD: <full sha>` then `VERDICT: PASS` as its last two non-empty lines, as required by merge_batch land.
   Never translate a reviewer's verdict yourself.
@@ -39,8 +40,8 @@ R-batch-09: Combine heads with accepted part reviews and green fast gates using 
 R-batch-10: Send one GO request per batch naming its PR, full head sha, each part's review file and CI result; include the rule 3.17 block.
   Its exact format is `PLAN <keeper key> conforms=yes|no deviations=<text|none>`; `conforms=no` requires stated deviations.
   Gate/workflow edits (GATE_PATHS in tools/ci_commit_gate.py) require a router Gate-Edit D-id. (why: routing compares one patch per GO; source: plangraph:BATCH-PORT-GO-REQ, docs/ci-gate.md)
-R-batch-11: Record every incident or workaround in the same beat against an existing or new p10 keeper LE item; name its writer run and start the fix.
-  (why: unrecorded lessons repeat; source: routing DECISIONS 2.12 D-5852, D-5939)
+R-batch-11: Record every incident or workaround in the same beat. Every session, the router and its sub-agents included, sends it to plan-order as one line `LESSON <what happened> <evidence>`; plan-order attaches it to an existing LE item or defines a new one, names its writer run and starts the fix.
+  (why: unrecorded lessons repeat; one converter keeps one item per root cause; source: routing DECISIONS 2.12 D-5852, D-5939, 3.56 (2) D-6357)
 R-batch-12: After merge, close merged items with GO and review evidence; sweep their branches and clean, idle worktrees using a restore list.
   Preserve dirty trees, unpushed work and live or unit-referenced worktrees.
   (why: stale worktrees waste disk and obscure live work; source: plangraph:MERGED-WORKTREE-BRANCH-SWEEP, LE-CLOSE-MERGED-AFTER-BATCH-MERGE)
@@ -54,8 +55,8 @@ already ship. When a port lands and enforces the rule, replace its procedure wit
 
 | Rules | Keeper item / existing code |
 | --- | --- |
-| R-batch-01..04, 06 | BATCH-PORT-WRITER-DRIVER |
-| R-batch-05 | LE-REVIEW-QUOTA-NO-WAIT |
+| R-batch-01..04, 06 | BATCH-PORT-WRITER-DRIVER, LE-BATCH-DRIVER-SINGLE-AGENT |
+| R-batch-05 | REVIEW-CMD, ROUTE-ORDER-D6310, MIMO-BATCH-CAPACITY-D6357 |
 | R-batch-07 | LE-WORKTREE-CARGO-TARGET-FILLS-DISK, HOSTS-RUST-S5-DISK-HYGIENE |
 | R-batch-08 | LE-PLAN-ORDER-WRITERS-BYPASS-HOST-PLACEMENT |
 | R-batch-09 | `tools/merge_batch.py` (existing code), WORK-MODE-S4-CONSUME |
