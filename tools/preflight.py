@@ -19,6 +19,7 @@ import tomllib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, disk_free_gb,
                                           running_disk_refusal, shared_cargo_target)
+from plangraph.spawner.overflow import available_memory_mb
 
 CHECK_TIMEOUT = 60
 # Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
@@ -31,6 +32,26 @@ TEST_TIMEOUT = 240
 # paths x PER_PATH seconds, never below TEST_TIMEOUT and capped at MAX_TEST_TIMEOUT.
 TEST_PER_PATH_TIMEOUT = 2
 MAX_TEST_TIMEOUT = 1200
+# pytest-xdist workers of the affected-test step: half the cores, at most one per
+# TEST_WORKER_GIB of available memory (the spawner's probe, Linux and Windows), between 2 and
+# MAX_TEST_WORKERS; cores only when memory cannot be read; PREFLIGHT_TEST_WORKERS overrides.
+TEST_WORKER_GIB = 2
+MAX_TEST_WORKERS = 16
+
+
+def affected_workers(env=None, cores=None, memory_mb=None):
+    configured = (env if env is not None else os.environ).get("PREFLIGHT_TEST_WORKERS", "")
+    try:
+        if int(configured) > 0:
+            return int(configured)
+    except ValueError:
+        pass
+    cores = cores if cores is not None else (os.cpu_count() or 2)
+    try:
+        by_mem = int((memory_mb or available_memory_mb)() // (TEST_WORKER_GIB * 1024))
+    except (OSError, ValueError):
+        by_mem = cores
+    return max(2, min(cores // 2, by_mem, MAX_TEST_WORKERS))
 
 
 def is_affected_step(command):
@@ -436,7 +457,7 @@ def _main(argv, root, cleanup):
     tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
                    "--root", str(root), "--files-only", "--local", "--run")
     if importlib.util.find_spec("xdist") is not None:
-        tests += ["--workers", "2"]
+        tests += ["--workers", str(affected_workers())]
     families = [("scrub", scrubs),
                 ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),
