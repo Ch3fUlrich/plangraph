@@ -433,3 +433,72 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
     w.conn.execute("UPDATE items SET description=? WHERE key='demo:H'", ("Merge-Repo: nowhere",))
     with pytest.raises(Refused, match="merge_repo_unknown"):
         w.store.close_merged(w.p("router"), "demo:H", "D-5504", ["google", "deepseek"])
+
+
+WAIVER = ("| D-6400 | demo | Waiver: merged-without-witnesses (operator order); Date: 2026-11-20T14:55:00Z; "
+          "Waives-seats: {keys} | {by} | 2026-11-20 |\n")
+
+
+def waiver_world(w, monkeypatch, tmp_path, parts, keys="demo:A", by="OPERATOR", text=None):
+    heads = real_git_world(w, monkeypatch, tmp_path, parts)
+    w.decision_path.write_text(HEADER + (text or WAIVER.format(keys=keys, by=by)))
+    return heads
+
+
+def waiver_close(w, key="demo:A", **kwargs):
+    return w.store.close_merged(w.p("router"), key, "D-6400", waive_seats="D-6400", **kwargs)
+
+
+def test_operator_waiver_row_alone_closes_merged_and_direct_commits(w, monkeypatch, tmp_path):
+    heads = waiver_world(w, monkeypatch, tmp_path, [(700, "demo:A", "2026-11-01T12:00:00Z"),
+                                                    (None, "demo:A", "2026-11-03T12:00:00Z")])
+    before = _evidence_count(w)
+    dry = waiver_close(w)                       # no --apply: a dry run for an in_review item
+    assert dry["would_close"] is True and dry["state"] == "in_review"
+    assert _evidence_count(w) == before and w.store._item("demo:A")["state"] == "in_review"
+    result = waiver_close(w, apply=True)
+    assert result["state"] == "done"
+    ref = w.store._evidence("demo:A")[-1]["ref"]
+    assert ref["waiver"] == {"class": "merged-without-witnesses", "decision_id": "D-6400"}
+    assert ref["seat_rule_waived_by"] == "D-6400" and ref["merged_head"] in {heads[700], heads[None][0]}
+    assert {p["head"] for p in ref["prs"]} == {heads[700], heads[None][0]}
+    assert {p["pr"] for p in ref["prs"]} == {700, None}
+    assert w.store.verify_integrity() == []
+
+
+def _evidence_count(w):
+    return w.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] + \
+        w.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+
+@pytest.mark.parametrize("case,reason", [
+    ("unlisted", "operator_seat_waiver_scope_mismatch"),
+    ("merged_at_cutoff", "operator_seat_waiver_merge_at_or_after_cutoff"),
+    ("direct_after_cutoff", "operator_seat_waiver_merge_at_or_after_cutoff"),
+    ("no_merge", "merged_on_default_missing"),
+    ("not_operator", "operator_seat_waiver_invalid_or_ineligible"),
+    ("no_prefix", "operator_seat_waiver_invalid_or_ineligible"),
+])
+def test_operator_waiver_row_refusals(w, monkeypatch, tmp_path, case, reason):
+    parts = {"merged_at_cutoff": [(700, "demo:A", "2026-11-13T00:00:00Z")],
+             "direct_after_cutoff": [(701, "demo:A", "2026-11-01T12:00:00Z"),
+                                     (None, "demo:A", "2026-11-14T12:00:00Z")],
+             "no_merge": [(702, "demo:OTHER", "2026-11-01T12:00:00Z")]}.get(
+        case, [(700, "demo:A", "2026-11-01T12:00:00Z")])
+    kwargs = {"unlisted": {"keys": "demo:H"}, "not_operator": {"by": "ROUTER"},
+              "no_prefix": {"text": "| D-6400 | demo | merged-without-witnesses; Waives-seats: demo:A "
+                                    "| OPERATOR | 2026-11-20 |\n"}}.get(case, {})
+    waiver_world(w, monkeypatch, tmp_path, parts, **kwargs)
+    with pytest.raises(Refused, match=reason):
+        waiver_close(w, apply=True)
+    assert w.store._item("demo:A")["state"] == "in_review"
+
+
+def test_operator_waiver_refuses_an_item_with_an_open_lane(w, monkeypatch, tmp_path):
+    waiver_world(w, monkeypatch, tmp_path, [(700, "demo:A", "2026-11-01T12:00:00Z")])
+    _git(tmp_path / "repo", "branch", "lane/a-pending")
+    _git(tmp_path / "repo", "checkout", "-q", "lane/a-pending")
+    _git(tmp_path / "repo", "commit", "-q", "--allow-empty", "-m", "pending")
+    _git(tmp_path / "repo", "checkout", "-q", "main")
+    with pytest.raises(Refused, match="unmerged_work_or_lanes_unknown"):
+        waiver_close(w, apply=True)

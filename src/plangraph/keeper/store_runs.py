@@ -191,7 +191,8 @@ class RunsMixin:
                     raise Refused("evidence_unverified", "operator_seat_waiver_merge_at_or_after_cutoff")
                 if go_date is None or go_date >= cutoff:
                     raise Refused("evidence_unverified", "operator_seat_waiver_go_date_ineligible")
-            return {"class": "merged-without-witnesses", "decision_id": waiver_id, "scope": tokens}
+            return {"class": "merged-without-witnesses", "decision_id": waiver_id, "scope": tokens,
+                    "cutoff": cutoff}
         except Refused:
             raise
         except Exception:
