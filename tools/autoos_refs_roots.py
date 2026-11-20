@@ -99,7 +99,16 @@ def _jsonc_loads(text: str) -> object:
         else:
             out.append(c)
             i += 1
-    return json.loads(re.sub(r",(\s*[\]}])", r"\1", "".join(out)))
+    # Drop a comma only as a token (string contents are single tokens, never touched)
+    # when the next non-space token closes the array or object.
+    kept = []
+    for k, tok in enumerate(out):
+        if tok == ",":
+            nxt = next((t for t in out[k + 1:] if not t.isspace()), "")
+            if nxt in ("]", "}"):
+                continue
+        kept.append(tok)
+    return json.loads("".join(kept))
 
 
 def scan_opencode_instructions(home: Path, config_dir: Path) -> list[Hit]:

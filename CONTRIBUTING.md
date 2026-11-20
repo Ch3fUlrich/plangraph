@@ -91,6 +91,8 @@ key, including subitems of a larger item. `ci_commit_gate.py check --base BASE
 --head HEAD --item-text PART.txt` warns for uncovered keys; GitHub CI reads the
 matching PR event automatically. See [the commit gate](docs/ci-gate.md).
 
+CI job ids stay fixed; each job's display name and the per-job audit are in [the CI gate page](docs/ci-gate.md).
+
 plangraph is public; the plans it tracks usually are not. Keep that difference clean.
 
 The feeder's `deploy/feeder/house-rules.md` and policy are repository inputs to
@@ -176,8 +178,6 @@ and fixes the new lints, without weakening `-D warnings`. Run every Rust CI job
 (`rust`, `rust-windows`, `rust-worker`, `rust-spike`) and require green before
 merging. Do not duplicate the version in workflows. The regression check is
 `python3 -m pytest -q -n 2 tests/test_ci_rust_toolchain.py`.
-
-CI job ids stay fixed; each job's display name and the per-job audit are in `docs/ci-gate.md`. `python3 tools/autoos_refs_check.py --only opencode` scans the OpenCode config root alone for AutoOS paths in `instructions` entries and skill links.
 The Rust integration test `toolchain_pin` checks `rustc --version` from the root
 and `rust/` against that channel, without inherited `RUSTUP_TOOLCHAIN` overrides.
 The Python guard scans every workflow and local composite action, rejecting case-insensitive
@@ -272,6 +272,10 @@ New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for
 example the keeper's host-sample store stays Python because the keeper is Python (D-5038).
 The `spawner/gateway_models.py` entry covers a responsibility-only extraction of existing Python model admission and row parsing; `gateway_witness.py` keeps compatible re-exports.
+
+## AutoOS references
+
+`python3 tools/autoos_refs_check.py --only opencode` scans the OpenCode config root alone for AutoOS paths in `instructions` entries and skill links.
 
 ## Changelog and documentation
 

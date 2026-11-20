@@ -259,6 +259,7 @@ def test_opencode_instructions_naming_the_removed_tree_are_hits(ar, tmp_path: Pa
     assert all(h[1].endswith("opencode.json") for h in hits)
 
 
+@windows_skip
 def test_opencode_instructions_through_a_link_are_hits(ar, tmp_path: Path) -> None:
     """An entry whose own text is clean but whose link resolves into the tree."""
     home = opencode_home(tmp_path, '{"instructions": ["rules/base.md", "{file:./rules/other.md}"]}\n')
@@ -309,3 +310,8 @@ def test_only_opencode_skips_every_other_root(ar, tmp_path: Path) -> None:
     kinds = {line.split("\t")[0] for line in proc.stdout.splitlines()}
     assert kinds == {"opencode", "opencode-instructions"}
     assert {h[0] for h in ar.scan_all(home)} > kinds
+
+
+def test_jsonc_trailing_comma_strip_leaves_string_contents_alone(ar) -> None:
+    assert __import__("autoos_refs_roots")._jsonc_loads('{"instructions": ["~/rules,]x.md", "a,}b",\n],}') == {
+        "instructions": ["~/rules,]x.md", "a,}b"]}
