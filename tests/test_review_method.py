@@ -322,7 +322,7 @@ def test_plan_phase_carries_method(tmp_path, monkeypatch):
             defn('GOAL', ['P'], kind='goal')])
         plan = plan_phase(world.store, world.p('router'), 'demo:P', repo_root=tmp_path)
         assert plan['review_method']['mode'] == 'batch'
-        assert plan['review_method']['max_rounds'] == 3
+        assert plan['review_method']['max_rounds'] == 8
     finally:
         world.close()
 

@@ -31,7 +31,7 @@ class ReviewMethod:
     seats: dict[str, int] = field(default_factory=lambda: {'standard': 1, 'high': 2})
     distinct_families: bool = True
     family_source: str = 'D-1704'
-    max_rounds: int = 3
+    max_rounds: int = 8  # the ceiling of the one stop rule in rust/pg-spawnd/src/round_progress.rs
     fixer_split_threshold: int = 10
     source: str = 'default'
 

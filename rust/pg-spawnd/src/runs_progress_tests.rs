@@ -44,12 +44,12 @@ fn round_refusal_is_saved_before_launch_and_does_not_consume_a_round() {
             .ok()
             .unwrap();
         assert_eq!(result["status"], "refused");
-        assert_eq!(result["reason"], "round_cap");
+        assert_eq!(result["reason"], "no_progress");
         assert_eq!(result["item_key"], "p:I");
         assert!(result["writer_round"].is_null());
         let saved = crate::records::read_record(dir.path(), &result["run_id"])
             .ok()
             .unwrap();
-        assert_eq!(saved["reason"], "round_cap");
+        assert_eq!(saved["reason"], "no_progress");
     }
 }
