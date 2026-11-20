@@ -43,7 +43,6 @@ def _known_family(value):
 # The statement may name a pull request (``GO #12``, ``GO <project> PR #12``, ``GO <project>
 # PR 12``) and one full ``GO-HEAD`` token; both bind the verdict to one merged PR head.
 _GO_PREFIX = re.compile(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z(?:, date -u)?\)\s+")
-_REVIEW_RUN = re.compile(r"Review-Run:[ \t]+(\S+)[ \t]+(run-[0-9a-f]+)[ \t]+([0-9a-f]{40})[ \t]*")
 _GO_RULING = re.compile(r"(?:(?<=\s)|^)\((\d{1,2})\)\s+")
 _GO_HEAD = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
 
@@ -147,7 +146,7 @@ class WaiverMixin:
         """Projects to read for the item's merge: its own first, then every scanned repository."""
         scan = getattr(self._adapter("git"), "scan_projects", None)
         names = list(scan()) if callable(scan) else []
-        return [item["project"], *[n for n in names if n != item["project"]]] if names else []
+        return [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
 
     def _with_merge_repo(self, item):
         """The item tagged with the one scanned repository that holds its Plan-Item commits.
@@ -387,6 +386,20 @@ class WaiverMixin:
             raise Refused("coverage", "seat_family_not_recorded")
         return seats
 
+    def _landed_writer_families(self, item):
+        """Families named by the ``Writer`` trailers of the commits that landed the item's Plan-Item work."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        families = []
+        try:
+            repo, ref = git.repo_path(project), git.repo_ref(project)
+            for commit in context_sources.plan_item_commits(git, project, item["key"], fetch=False, limit=None) or ():
+                for trailer in git.writer_trailers(repo, commit["sha"], ref):
+                    model = str(trailer.get("Writer") or "").split()[:1]
+                    families.append(model_family(model[0]) if model else None)
+        except Exception:  # noqa: BLE001 - an unreadable commit names no writer; the recorded ones still count
+            pass
+        return families
+
     def _merged_writer_families(self, item, now):
         writers = writer_families(self, item, self._ctx(item, now))
         writers.append(item.get("owner_family"))
@@ -406,6 +419,7 @@ class WaiverMixin:
                 raise Refused("writer_unknown", "recorded run writer family unknown")
             writers.append(family)
             writers.append(model)
+        writers.extend(self._landed_writer_families(item))
         if not any(writers):
             # No writer is on record: the claimant and delegate stand for it (fail closed).
             # With a recorded writer they are the orchestrating principals, not the diff's authors.
@@ -414,34 +428,6 @@ class WaiverMixin:
                 if peer is not None:
                     writers.append(peer.family)
         return {model_family(w) or auth.norm_family(w) for w in writers if w}
-
-    def _merged_cited_parts(self, item, heads):
-        """``{part head: [run ids]}`` a landed batch cites for the item.
-
-        The merge commit that landed a head lists ``Review-Run: <key> <run-id> <part head>``
-        per keeper-bound part review. A part head counts when it is inside that merge's
-        range and its own commits name the item; the record itself is still verified
-        by the witness adapter, so a citation only points at it.
-        """
-        git, project = self._adapter("git"), self._merge_project(item)
-        repo, ref, key = git.repo_path(project), git.repo_ref(project), item["key"]
-        bare = re.escape(key.split(":", 1)[-1])
-        cited = {}
-        for head in heads:
-            merge = git.merge_commit_of(repo, head, ref)
-            if not merge or not valid_commit_ref(merge[0]):
-                continue
-            body = git._run(repo, ["show", "-s", "--format=%B", "--end-of-options", merge[0]]).stdout
-            for line in body.splitlines():
-                found = _REVIEW_RUN.fullmatch(line)
-                if not found or found[1] != key:
-                    continue
-                part = found[3]
-                named = git._run(repo, ["log", "-E", f"--grep=^Plan-Item:[[:space:]]*({re.escape(item['project'])}:)?{bare}[[:space:]]*$",
-                                        "--format=%H", "--end-of-options", part, f"^{merge[0]}^1"])
-                if named.returncode == 0 and named.stdout.split():
-                    cited.setdefault(part, []).append(found[2])
-        return cited
 
     def _merged_backfill(self, item, decision_id, head, now, prs=()):
         try:
@@ -457,9 +443,10 @@ class WaiverMixin:
                 parts = self._merged_cited_parts(item, heads)
             except Exception:  # noqa: BLE001 - an unreadable citation never adds a witness
                 parts = {}
-            if parts:  # a batch landed these parts: their seats bind the part heads
-                heads = list(parts)
-                text += " Review-Runs: " + ", ".join(r for runs in parts.values() for r in runs)
+            if parts:  # a batch landed these parts: their seats bind the part heads, other heads keep theirs
+                heads = [part for h in heads for part in parts.get(h, {h: ()})]
+                text += " Review-Runs: " + ", ".join(
+                    r for by_part in parts.values() for runs in by_part.values() for r in runs)
             claude = [e for e in self._evidence(item["key"])
                       if e["epoch"] == item["epoch"] and e["kind"] == "claude-seat"]
             if claude and not prs:
@@ -659,6 +646,8 @@ class WaiverMixin:
             try:
                 hinted, revision = self._merge_repository(item)
                 hinted = None if (hinted, revision) == (item["project"], None) else hinted
+                if hinted and repos and hinted not in repos:
+                    raise Refused("evidence_unverified", f"merge_repo_not_scanned: {hinted}")
                 found = [hinted] if hinted else [
                     p for p in self._scan_projects(item)
                     if index_of(p) is not None and context_sources.indexed_work(index_of(p), key)["commits"]]
@@ -716,16 +705,10 @@ class WaiverMixin:
 
     def _merged_auto_proofs(self, item):
         """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
-        git, (project, revision) = self._adapter("git"), self._merge_repository(item)
-        named = self._named_merge_proof(item)
-        proofs = [{"pr": named["pr"], "head": named["head"], "decision_id": None}] if named else []
-        try:
-            commits = self._merged_work_commits(item)
-        except Refused:
-            if not proofs:
-                raise
-            commits = []
-        for commit in commits:
+        git, project = self._adapter("git"), self._merge_project(item)
+        proofs = []
+        # A Merge-Repo hint only names the repository: the item's own trailers and lanes decide.
+        for commit in self._merged_work_commits(item):
             pr, head, _ = self._merged_commit_proof(git, project, commit)
             if all(p["head"] != head for p in proofs):
                 proofs.append({"pr": pr, "head": head, "decision_id": None})

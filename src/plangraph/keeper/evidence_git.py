@@ -23,7 +23,8 @@ from typing import Any, Callable, Mapping
 
 from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
-__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "valid_ref", "resolve_commit"]
+__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "plan_items", "valid_ref",
+           "resolve_commit"]
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+\Z")
 _SHA_ARG_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
@@ -43,6 +44,33 @@ def valid_ref(ref: Any) -> bool:
     if ref.startswith("-") or ".." in ref:
         return False
     return bool(_REF_RE.fullmatch(ref))
+
+
+_TRAILER_LINE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*:[ \t]+\S")
+
+
+def trailer_lines(message: str) -> list[str]:
+    """The trailer lines of a commit message: its trailing paragraphs made only of ``Key: value`` lines.
+
+    Git reads only the last paragraph, so a ``Plan-Item`` and ``Writer`` paragraph followed by a
+    ``Co-Authored-By`` paragraph of its own would read as no trailers at all; both count here.
+    The subject paragraph and any prose paragraph end the block.
+    """
+    paragraphs = re.split(r"\n[ \t]*\n", (message or "").strip("\n"))
+    block: list[str] = []
+    for paragraph in reversed(paragraphs[1:]):
+        lines = paragraph.splitlines()
+        if not lines or not all(_TRAILER_LINE.match(line) or (n and line[:1] in " \t")
+                                for n, line in enumerate(lines)):
+            break
+        block[:0] = lines
+    return block
+
+
+def plan_items(message: str) -> list[str]:
+    """The ``Plan-Item`` values among :func:`trailer_lines` of *message*."""
+    return [line.partition(":")[2].strip() for line in trailer_lines(message)
+            if line.partition(":")[0].strip().lower() == "plan-item"]
 
 
 def parse_trailers(text: str) -> dict[str, str | list[str]]:
@@ -430,12 +458,10 @@ class GitAdapter:
     def trailers(self, repo: str, sha: str) -> dict[str, str]:
         if not valid_commit_ref(sha) or not self._commit_object(repo, sha):
             return {}
-        proc = self._run(
-            repo, ["show", "-s", "--format=%(trailers)", "--end-of-options", sha]
-        )
+        proc = self._run(repo, ["show", "-s", "--format=%B", "--end-of-options", sha])
         if proc.returncode != 0:
             return {}
-        return parse_trailers(proc.stdout)
+        return parse_trailers("\n".join(trailer_lines(proc.stdout)))
 
     def changed_paths(self, repo: str, sha: str) -> list[str]:
         """Exact changed paths (including both sides of renames); raise on error."""
@@ -470,6 +496,22 @@ class GitAdapter:
         if trailers.get("Hand-Edit") and not trailers.get("Writer"):
             trailers = dict(trailers, _writer_commit=sha)
         return trailers
+
+    def merge_plan_items(self, repo: str, sha: str) -> list[str]:
+        """``Plan-Item`` values of every commit *sha* introduced (first parent excluded), nested merges included.
+
+        Only a two-parent merge answers; anything else, or a git failure, answers nothing.
+        """
+        if not valid_commit_ref(sha) or not self._commit_object(repo, sha):
+            return []
+        parents = self._run(repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha])
+        if parents.returncode != 0 or len(_stdout(parents).split()) != 3:
+            return []
+        first = _stdout(parents).split()[1]
+        proc = self._run(repo, ["log", "--format=%B%x1d", "--end-of-options", sha, f"^{first}"])
+        if proc.returncode != 0:
+            return []
+        return [v for record in _stdout(proc).split("\x1d") for v in plan_items(record)]
 
     def writer_trailers(self, repo: str, sha: str, ref: str | None = None) -> list[dict[str, str]]:
         """Trailer dicts of the commits that authored the change behind *sha*.

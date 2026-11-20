@@ -256,3 +256,56 @@ def test_the_config_names_the_scanned_repositories_in_one_place(tmp_path):
     assert Config({"repos": repos}, tmp_path).merge_scan is None
     with pytest.raises(ConfigError):
         Config({"repos": repos, "merge_scan": ["elsewhere"]}, tmp_path)
+
+
+def test_a_seat_of_the_family_that_wrote_the_landed_commit_does_not_close_it(env):
+    set_states(env)
+    head = env.repo.land("c", "Plan-Item: demo:C\nWriter: gemini-test session_abc123", 81)
+    seat(env, "demo:C", head)      # a google seat reviews a google-written commit
+    result = auto(env)
+    assert state(env, "demo:C")["state"] == "in_review"
+    assert "writer_seat_family" in result["listed"][0]["reason"]
+
+
+def test_a_merge_repo_note_naming_another_items_merge_does_not_close_the_item(env):
+    set_states(env)
+    other = env.repo.land("x", "Plan-Item: demo:N", 91)
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:C'", (f"Merge-Repo: demo {merge}",))
+    git(env.repo.root, "branch", "c-lane", other)  # C's own lane is still open
+    result = auto(env, require_seats=False)
+    assert "demo:C" not in {c["key"] for c in result["closed"]}
+    assert state(env, "demo:C")["state"] == "in_review"
+
+
+def test_a_merge_that_exists_only_on_origin_is_listed_with_the_configured_ref_named(env, tmp_path):
+    set_states(env)
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", str(env.repo.root), str(clone))
+    env.store.ctx["git"] = GitAdapter({"demo": str(clone)})
+    env.repo.land("c", "Plan-Item: demo:C", 71)   # lands after the clone: only origin/main has it
+    result = auto(env, require_seats=False)
+    assert result["closed"] == [] and state(env, "demo:C")["state"] == "in_review"
+    assert [r["key"] for r in result["listed"]] == ["demo:C"]
+    assert "merged_on_default_missing" in result["listed"][0]["reason"]
+
+
+def test_a_scan_list_without_the_items_repository_closes_nothing_from_it(env):
+    set_states(env)
+    two_repos(env, scan=["data"])
+    env.repo.land("c", "Plan-Item: demo:C", 11)
+    result = auto(env, require_seats=False)
+    assert result["repos"] == ["data"] and result["closed"] == []
+    assert state(env, "demo:C")["state"] == "in_review"
+
+
+def test_items_whose_commits_end_in_a_separate_coauthor_paragraph_close_from_a_merge_without_trailers(env):
+    """The shape of #1077 and #1080: Plan-Item and Writer in one paragraph, Co-Authored-By in the last."""
+    set_states(env)
+    two_repos(env)
+    shape = "Plan-Item: demo:{key}\nWriter: gpt-test session_abc\n\nCo-Authored-By: A <a@example.invalid>"
+    env.repo.land("w1", shape.format(key="C"), 1080)
+    env.data_repo.land("w2", shape.format(key="B"), 400)
+    result = auto(env, require_seats=False, apply=False)
+    assert sorted(c["key"] for c in result["would_close"]) == ["demo:B", "demo:C"]
+    assert result["listed"] == []

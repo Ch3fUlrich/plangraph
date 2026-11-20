@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell
-from .evidence_git import valid_ref
+from .evidence_git import plan_items, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
@@ -164,7 +164,7 @@ def work_index(git, project, *, fresh=False):
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
     out = _ok(git, repo, ["log", "--all", "--no-show-signature",
-                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d"])
+                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
     if refs_out is None or target is None or out is None:
         if not origin:
             return None
@@ -176,7 +176,7 @@ def work_index(git, project, *, fresh=False):
         if len(fields) == 5 and valid_commit_ref(fields[0]):
             sha, parents, date, subject, trailers = fields
             records[sha] = (parents.split(), {"sha": sha, "date": date,
-                            "subject": subject}, trailers.split("\x1e"))
+                            "subject": subject}, plan_items(trailers))
 
     def ancestors(head):
         seen, todo = set(), [head]
@@ -282,7 +282,7 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
         "log", "--no-show-signature", "-E", "--grep",
         f"^Plan-Item:[[:space:]]*{prefix}{_ere(bare)}[[:space:]]*$",
         *(["-n", str(_GREP_WINDOW)] if limit is not None else []),
-        "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d",
+        "--format=%H%x1f%cI%x1f%s%x1f%B%x1d",
         "--end-of-options", ref])
     if out is None:
         return None
@@ -293,7 +293,7 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
             continue
         seen += 1
         sha, date, subject, trailers = fields
-        names = {value.strip() for value in trailers.split("\x1e") if value.strip()}
+        names = set(plan_items(trailers))
         if (key in names or bare in names) and valid_commit_ref(sha.strip()):
             commits.append({"sha": sha.strip(), "date": date, "subject": subject})
         if limit is not None and len(commits) >= limit:

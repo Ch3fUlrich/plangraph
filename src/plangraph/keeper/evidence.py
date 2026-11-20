@@ -365,8 +365,7 @@ class CommitCiVerifier:
             # A merge made without trailers (the hosted UI merge) stands for the
             # commits of its branch range: any of them naming the item binds it.
             try:
-                for branch in ctx.git.writer_trailers(repo, commit, target_ref):
-                    values += _plan_items(branch)
+                values = values + list(ctx.git.merge_plan_items(repo, commit))
             except Exception:  # noqa: BLE001 - an unreadable range never binds
                 pass
         if not any(value in wanted for value in values):

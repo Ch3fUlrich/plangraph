@@ -62,8 +62,8 @@ def batch(tmp_path):
 def land(w, cited=("A", "B"), body_keys=("A", "B", "C", "BATCH")):
     lines = [f"Plan-Item: demo:{key}" for key in body_keys]
     for key in cited:
-        seat_record(w.mirror, f"run-{key.lower()}0", f"demo:{key}", w.parts[key])
-        lines.append(f"Review-Run: demo:{key} run-{key.lower()}0 {w.parts[key]}")
+        seat_record(w.mirror, f"run-part-{key.lower()}-0", f"demo:{key}", w.parts[key])
+        lines.append(f"Review-Run: demo:{key} run-part-{key.lower()}-0 {w.parts[key]}")
     git(w.repo.root, "merge", "--no-ff", "-q", "-m", "Merge pull request #100 from x/batch\n\n" + "\n".join(lines),
         "batch")
 
@@ -92,7 +92,7 @@ def test_a_citation_for_another_part_head_is_not_a_seat(batch):
     land(batch, cited=("A",))
     # the merge cites A's run with B's head: the head is no head of A's work
     git(batch.repo.root, "commit", "--amend", "-q", "-m", "Merge pull request #100\n\nPlan-Item: demo:A\n"
-        f"Review-Run: demo:A run-a0 {batch.parts['B']}")
+        f"Review-Run: demo:A run-part-a-0 {batch.parts['B']}")
     result = batch.store.close_merged_auto(batch.p("system"))
     assert "demo:A" not in {c["key"] for c in result["closed"]}
 
@@ -118,3 +118,25 @@ def test_a_merge_commit_carrying_the_trailer_binds_its_own_second_parent_after_l
     assert [c["merge"]["pr"] for c in commits] == [100]
     merge = commits[0]["merge"]["sha"]
     assert git(batch.repo.root, "rev-parse", f"{merge}^2") == batch.batch_head
+
+
+def test_a_later_unreviewed_merge_of_the_same_item_keeps_it_open(batch):
+    land(batch)
+    git(batch.repo.root, "checkout", "-q", "-b", "follow", "main")
+    git(batch.repo.root, "commit", "--allow-empty", "-q", "-m", "follow up\n\nPlan-Item: demo:A\n")
+    git(batch.repo.root, "checkout", "-q", "main")
+    git(batch.repo.root, "merge", "--no-ff", "-q", "-m", "Merge pull request #101 from x/follow", "follow")
+    result = batch.store.close_merged_auto(batch.p("system"))
+    assert "demo:A" not in {c["key"] for c in result["closed"]}
+    assert any(r["key"] == "demo:A" and "insufficient_seat_families" in r["reason"] for r in result["listed"])
+
+
+def test_a_cited_head_that_never_landed_is_not_a_seat(batch):
+    git(batch.repo.root, "checkout", "-q", "-b", "orphan", "main")
+    git(batch.repo.root, "commit", "--allow-empty", "-q", "-m", "orphan\n\nPlan-Item: demo:A\n")
+    orphan = git(batch.repo.root, "rev-parse", "HEAD")
+    git(batch.repo.root, "checkout", "-q", "main")
+    batch.parts["A"] = orphan          # the seat record and the citation name a branch that is no part of the merge
+    land(batch, cited=("A",), body_keys=("A",))
+    result = batch.store.close_merged_auto(batch.p("system"))
+    assert "demo:A" not in {c["key"] for c in result["closed"]}

@@ -476,9 +476,10 @@ def part_items(st, rec):
     wt, merge, head = st["worktree"], rec["merge"], rec["head"]
     if git("rev-parse", f"{merge}^2", cwd=wt).stdout.strip() != head:
         raise MergeBatchError(f"part #{rec['pr']} merge does not bind its head")
-    trailers = git("log", "--format=%(trailers:key=Plan-Item,valueonly)", f"{merge}^1..{head}",
-                   cwd=wt).stdout.splitlines()
-    keys = {line.strip() for line in trailers if line.strip()}
+    from plangraph.keeper.evidence_git import plan_items  # the keeper's reading of a commit's trailers
+
+    messages = git("log", "--format=%B%x1d", f"{merge}^1..{head}", cwd=wt).stdout.split("\x1d")
+    keys = {key for message in messages for key in plan_items(message)}
     if not keys or any(not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", key) for key in keys):
         raise MergeBatchError(f"part #{rec['pr']} needs a Plan-Item for its keeper-bound review")
     return keys
