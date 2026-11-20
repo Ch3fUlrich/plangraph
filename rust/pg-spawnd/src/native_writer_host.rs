@@ -66,14 +66,10 @@ struct Host {
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
     if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        let stdout = String::from_utf8_lossy(&result.stdout);
-        let detail = if stderr.trim().is_empty() {
-            stdout.trim()
-        } else {
-            stderr.trim()
-        };
-        return Err(format!("command failed ({}): {detail}", result.status));
+        return Err(format!(
+            "command failed: {}",
+            String::from_utf8_lossy(&result.stderr)
+        ));
     }
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())
 }

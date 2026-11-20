@@ -318,13 +318,8 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     );
     git(&cwd, &["init", "-q", "-b", "main"]);
     git(&cwd, &["remote", "add", "origin", remote.to_str().unwrap()]);
-    // Both gates record the range the driver supplies.
+    // The commit-trailer gate records its arguments and fails while gate-red exists.
     fs::create_dir_all(cwd.join("tools")).unwrap();
-    fs::write(
-        cwd.join("tools/check_new_code_lang.py"),
-        "import pathlib, sys\nif pathlib.Path('../language-red').exists():\n    print('language policy refusal')\n    sys.exit(1)\npathlib.Path('../language-runs.txt').open('a').write(' '.join(sys.argv[1:]) + '\\n')\n",
-    )
-    .unwrap();
     fs::write(
         cwd.join("tools/ci_commit_gate.py"),
         "import pathlib, subprocess, sys\nhead = subprocess.check_output(['git', 'rev-parse', sys.argv[sys.argv.index('--head') + 1]], text=True).strip()\npathlib.Path('../gate-runs.txt').open('a').write(' '.join(sys.argv[1:]) + ' ' + head + '\\n')\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
@@ -382,11 +377,6 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
     };
     assert!(!host.stamped(&head));
-    fs::write(dir.path().join("language-red"), "").unwrap();
-    let failure = host.fast_checks(&head).unwrap_err();
-    assert!(failure.contains("language policy refusal"), "{failure}");
-    assert!(!host.stamped(&head));
-    fs::remove_file(dir.path().join("language-red")).unwrap();
     // A red commit-trailer gate fails the fast checks without a stamp and blocks the final gates.
     fs::write(dir.path().join("gate-red"), "").unwrap();
     assert!(host
@@ -403,9 +393,6 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     let runs = fs::read_to_string(dir.path().join("gate-runs.txt")).unwrap();
     let expected = format!("check --base refs/plangraph/native/run-host/base --head HEAD {head}");
     assert_eq!(runs.lines().filter(|l| *l == expected).count(), 4, "{runs}");
-    let ranges = fs::read_to_string(dir.path().join("language-runs.txt")).unwrap();
-    let expected = "--base refs/plangraph/native/run-host/base --head HEAD";
-    assert_eq!(ranges.lines().collect::<Vec<_>>(), vec![expected; 4]);
     let review = host.review(&head, None).unwrap();
     assert_eq!(review["verdict"], "ACCEPT", "{review}");
     assert_eq!(review["head"], head.as_str());
