@@ -252,7 +252,8 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             refused = Refused("conflict", "keeper database is busy")
             deny(refused)
             raise refused from exc
-        self._audit(principal, action, key, True, "", success_message, now)
+        if success_message is not None:
+            self._audit(principal, action, key, True, "", success_message, now)
         return result
 
     # ---------------------------------------------------- authorisation

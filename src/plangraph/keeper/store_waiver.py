@@ -94,12 +94,13 @@ def _names_item(statement, key):
 class WaiverMixin:
     """Router decision verbs for reviews: waive a family or close merged work."""
 
-    def close_merged(self, principal, key, decision_id, families=None, *, from_open=False, apply=False, waive_seats=None):
+    def close_merged(self, principal, key, decision_id, families=None, *, from_open=False, apply=False,
+                     waive_seats=None, dry_run=False):
         audit_key = key if isinstance(key, str) else None
         return self._run(principal, "close_merged", audit_key,
                          lambda now: self._close_merged(principal, key, decision_id,
-                                                       families, now, from_open, apply, waive_seats),
-                         success_message="merged_on_default")
+                                                       families, now, from_open, apply, waive_seats, dry_run),
+                         success_message=None if dry_run is True else "merged_on_default")
 
     @staticmethod
     def _merged_review_state(item, from_open=False):
@@ -417,10 +418,13 @@ class WaiverMixin:
                 raise Refused("validation", "card_risk_tags_invalid")
         return bool({"auth", "secrets"}.intersection(tags))
 
-    def _close_merged(self, principal, key, decision_id, families, now, from_open=False, apply=False, waive_seats=None):
+    def _close_merged(self, principal, key, decision_id, families, now, from_open=False, apply=False,
+                      waive_seats=None, dry_run=False):
         self._require_role(principal, "router")
-        if type(from_open) is not bool or type(apply) is not bool:
-            raise Refused("validation", "from_open and apply must be booleans")
+        if any(type(value) is not bool for value in (from_open, apply, dry_run)):
+            raise Refused("validation", "from_open, apply and dry_run must be booleans")
+        if dry_run:
+            return {"dry_run": True, "route": "close_merged"}
         if not isinstance(key, str) or not key.strip():
             raise Refused("validation", "key must be a nonblank string")
         if families is not None and waive_seats is not None:
