@@ -871,7 +871,7 @@ def spawn_service(*args, **kwargs):
         def _save(self, record, *, retry=False):
             import socket
             record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
-            from .notify import completion_event, CommandSink, KeeperNotConfigured, KeeperSink
+            from .notify import completion_event, CommandSink, KeeperNotConfigured, KeeperRefused, KeeperSink, settle_refusal
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
                 record['last_activity_ts'] = getattr(job, 'last_activity_ts', None)
@@ -907,6 +907,8 @@ def spawn_service(*args, **kwargs):
                             sink.deliver(recipient, record['completion'])
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'not-applicable: no item\n' if no_keeper_item else 'delivered\n')
+                    except KeeperRefused as refusal:
+                        settle_refusal(marker, recipient, refusal)
                     except KeeperNotConfigured:
                         global _keeper_unconfigured_last_warned
                         now = time.monotonic()

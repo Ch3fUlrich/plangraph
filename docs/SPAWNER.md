@@ -725,4 +725,4 @@ stress test. Windows CI and recorded reruns provide platform evidence.
 
 Native writer progress admission: [run contract](native-writer-progress-admission.md).
 
-[Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
+[Per-item checkpoint and status notes](checkpoints/), e.g. [keeper-refused completion deliveries](checkpoints/LE-KEEPER-REFUSED-CALL-LOOPS.md). Add new notes there, one file per item, rather than appending here.

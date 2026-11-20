@@ -8,7 +8,7 @@
   {
     "id": "phase-batch-checkpoint-review",
     "prompt": "A checkpoint review found several problems. Plan the fix and handoff.",
-    "must": ["One fix brief with every finding", "One re-review of the delta", "Writer rounds end at the round cap"],
+    "must": ["One fix brief with every finding", "One re-review of the delta", "Writer rounds end by the one stop rule"],
     "must_not": ["restart an unlimited review loop", "merge without a GO"]
   }
 ]

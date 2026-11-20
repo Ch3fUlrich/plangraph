@@ -27,7 +27,7 @@ import re
 from . import auth, context_sources
 from .coverage import writer_families
 from .errors import Refused
-from .evidence_types import Result, valid_commit_ref
+from .evidence_types import Result, as_epoch, valid_commit_ref
 from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
 
@@ -35,6 +35,60 @@ from ..review.family import FAMILIES, model_family
 def _known_family(value):
     family = auth.norm_family(value)
     return family if family in {f for _, f in FAMILIES} else model_family(family)
+
+
+# --- reading the GO verdict of a decision row (pure text, no I/O) ---
+# A row is a GO when its decision cell starts with ``GO`` (after the router's timestamp
+# prefix) or is a ``RULINGS`` row with exactly one numbered ruling that starts with ``GO``.
+# The statement may name a pull request (``GO #12``, ``GO <project> PR #12``, ``GO <project>
+# PR 12``) and one full ``GO-HEAD`` token; both bind the verdict to one merged PR head.
+_GO_PREFIX = re.compile(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z(?:, date -u)?\)\s+")
+_GO_RULING = re.compile(r"(?:(?<=\s)|^)\((\d{1,2})\)\s+")
+_GO_HEAD = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
+
+
+def _strip_prefix(text):
+    return _GO_PREFIX.sub("", text) if isinstance(text, str) else text
+
+
+def _go_statement(text):
+    """The text of the GO verdict, or ``None`` when the row holds no single GO."""
+    text = _strip_prefix(text)
+    if not isinstance(text, str):
+        return None
+    if re.match(r"^GO(?=$|\s)", text):
+        return text
+    if not re.match(r"^RULINGS\b", text):
+        return None
+    marks = list(_GO_RULING.finditer(text))
+    goes = [i for i, m in enumerate(marks)
+            if re.match(r"GO(?=$|\s)", text[m.end():])]
+    if len(goes) != 1:
+        return None
+    start = marks[goes[0]].end()
+    end = marks[goes[0] + 1].start() if goes[0] + 1 < len(marks) else len(text)
+    return text[start:end].strip()
+
+
+def _go_binding(statement, project):
+    """``(pr, head)`` of a GO that names one PR and one full GO-HEAD, else ``(None, None)``."""
+    if not isinstance(statement, str):
+        return None, None
+    end = r"(?=$|[\s,;:.])"
+    named = (re.match(rf"^GO\s+(?:{re.escape(project)}\s+PR\s+(?:#|`#)?|(?:`#|#))([0-9]+)`?{end}", statement))
+    if named and statement[:named.end()].count("`") % 2:
+        named = None
+    heads = _GO_HEAD.findall(statement)
+    if not named or len(set(h.lower() for h in heads)) != 1:
+        return None, None
+    return int(named[1]), heads[0].lower()
+
+
+def _names_item(statement, key):
+    """True when the statement names the item by full key or bare id (whole token)."""
+    bare = key.split(":", 1)[-1]
+    return any(re.search(rf"(?<![\w:-]){re.escape(name)}(?![\w:-])", statement)
+               for name in (key, bare))
 
 
 class WaiverMixin:
@@ -53,11 +107,26 @@ class WaiverMixin:
         if item.get("review_tier") not in ("standard", "high"):
             raise Refused("bad_state", "close_merged requires review_tier=standard or high")
 
-    def _merged_go_proof(self, item, decision_id, now, *, all_work=False):
-        git = self._adapter("git")
+    def _merge_project(self, item):
+        """The project whose registered repository holds the item's merge.
+
+        An item names another repository with a ``Merge-Repo: <project>`` line in
+        its description or note; the name must be registered with the git adapter.
+        """
+        text = f"{item.get('description') or ''}\n{item.get('note') or ''}"
+        hint = re.findall(r"(?m)^[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)[ \t]*$", text)
+        if not hint:
+            return item["project"]
+        if len(set(hint)) != 1 or not self._adapter("git").repo_path(hint[0]):
+            raise Refused("evidence_unverified", f"merge_repo_unknown: {hint[0]}")
+        return hint[0]
+
+    def _merged_heads(self, item, all_work=False):
+        """Heads of the merges that introduced the item's Plan-Item commits."""
+        git, project = self._adapter("git"), self._merge_project(item)
         try:
             commits = context_sources.plan_item_commits(
-                git, item["project"], item["key"], fetch=False,
+                git, project, item["key"], fetch=False,
                 **({"limit": None} if all_work else {}))
         except Exception:  # noqa: BLE001 - an unreadable git proof never authorizes
             commits = None
@@ -69,7 +138,7 @@ class WaiverMixin:
             if not valid_commit_ref(sha):
                 continue
             try:
-                repo, ref = git.repo_path(item["project"]), git.repo_ref(item["project"])
+                repo, ref = git.repo_path(project), git.repo_ref(project)
                 merge = git.merge_commit_of(repo, sha, ref)
                 if not merge or not valid_commit_ref(merge[0]):
                     continue
@@ -80,6 +149,11 @@ class WaiverMixin:
                     heads.add(parents[1])
             except Exception:  # noqa: BLE001 - an unknown merge never authorizes
                 continue
+        return heads
+
+    def _merged_go_proof(self, item, decision_id, now, *, all_work=False):
+        heads = self._merged_heads(item, all_work)
+        looked = ", ".join(sorted(h[:12] for h in heads)) or "none"
         if not heads:
             raise Refused("evidence_unverified", "merged_on_default_missing")
         result = self._verify_evidence(item, "decision", {"id": decision_id}, now)
@@ -91,27 +165,96 @@ class WaiverMixin:
             text = None
         # DecisionsAdapter.text returns ONLY the DECISION cell (D-276).
         # Only the router's timestamp prefix may precede the GO verdict.
-        if isinstance(text, str):
-            text = re.sub(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z"
-                          r"(?:, date -u)?\)\s+", "", text)
-        if not isinstance(text, str) or not re.match(r"^GO(?=$|\s)", text):
-            raise Refused("evidence_unverified", "go_row_not_go")
+        text = _strip_prefix(text)
+        statement = _go_statement(text)
+        if statement is None:
+            raise Refused("evidence_unverified",
+                          f"go_row_not_go: no GO verdict in {decision_id} (merged heads {looked})")
+        text = statement
         pr = r"(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])"
         if (re.match(rf"^GO\s+{pr}", text)
-                or re.match(rf"^GO\s+{re.escape(item['project'])}\s+PR\s+{pr}", text)):
+                or re.match(rf"^GO\s+{re.escape(item['project'])}\s+PR\s+{pr}", text)
+                or _go_binding(text, item["project"])[0]):
             # Review prose may itself discuss a NO GO; authority is the leading
             # GO verdict and its one explicit, full-length GO-HEAD token.
             bounds = re.findall(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])", text)
         else:
             if re.search(r"(?i)\b(?:no|not)\b.*\bgo\b", text):
-                raise Refused("evidence_unverified", "go_row_not_go")
+                raise Refused("evidence_unverified",
+                              f"go_row_not_go: {decision_id} discusses a NO GO (merged heads {looked})")
             bound = re.match(r"^GO\s+`?([0-9a-fA-F]{8,64})(?![\w])", text)
             bounds = [bound[1]] if bound else []
         matched = {head for head in heads if len(bounds) == 1
                    and head.startswith(bounds[0].lower())}
         if len(matched) != 1:
-            raise Refused("evidence_unverified", "go_row_head_mismatch")
+            matched = self._merged_pr_bound_head(item, text, now)
+        if len(matched) != 1:
+            raise Refused("evidence_unverified",
+                          f"go_row_head_mismatch: {decision_id} names "
+                          f"{', '.join(b[:12] for b in bounds) or 'no head'}, merged heads {looked}")
         return matched.pop(), result
+
+    def _merged_pr_bound_head(self, item, text, now):
+        """The GO-HEAD of a row that names a merged PR and this item, as a one-head set.
+
+        The PR the row names must have merged on the default branch with exactly
+        that head, and the row must name the item; the trailer search is not asked.
+        """
+        pr, head = _go_binding(text, item["project"])
+        if pr is None or not _names_item(text, item["key"]):
+            return set()
+        try:
+            merged = context_sources.pr_merge_of(
+                self._adapter("git"), self._merge_project(item), head)
+        except Refused:
+            raise
+        except Exception:  # noqa: BLE001 - an unreadable merge never authorizes
+            return set()
+        return {head} if merged and merged["pr"] == pr else set()
+
+    def _merged_waiver_only(self, item, waiver_id, now, *, all_work=False):
+        """Close proof on the operator waiver row alone (no GO row, no PR number asked).
+
+        The row must be an OPERATOR ``Waiver: merged-without-witnesses`` row that lists
+        the key; every Plan-Item commit of the item is on the default branch and merged
+        before the row's cutoff, and no open lane remains.  Returns
+        ``(head, proofs, waiver, verification)``.
+        """
+        git, project = self._adapter("git"), self._merge_project(item)
+        if not self._refresh_merged_default_ref(git, project):
+            raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
+        if context_sources.open_lanes(git, project, item["key"]) != []:
+            raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
+        commits = context_sources.plan_item_commits(
+            git, project, item["key"], fetch=False, limit=None)
+        if not commits:
+            raise Refused("evidence_unverified", "merged_on_default_missing")
+        waiver = self._merged_seat_waiver(item, waiver_id, waiver_id, [], now)
+        repo, proofs = git.repo_path(project), []
+        for commit in commits:
+            merge = commit.get("merge") or {}
+            if merge.get("sha"):
+                landed = valid_commit_ref(merge["sha"])
+                proc = git._run(repo, ["show", "-s", "--format=%P%x20%cI",
+                                       "--end-of-options", merge["sha"]]) if landed else None
+                fields = proc.stdout.split() if proc and proc.returncode == 0 else []
+                if len(fields) != 3 or not all(valid_commit_ref(p) for p in fields[:2]):
+                    raise Refused("evidence_unverified", "merged_pr_head_missing")
+                head, date = fields[1], fields[2]
+            else:  # a direct commit on the default branch
+                head, date = commit.get("sha"), commit.get("date")
+            merged_at = as_epoch(date)
+            if not valid_commit_ref(head) or merged_at is None:
+                raise Refused("evidence_unverified", "operator_seat_waiver_merge_date_missing")
+            if merged_at >= waiver["cutoff"]:
+                raise Refused("evidence_unverified", "operator_seat_waiver_merge_at_or_after_cutoff")
+            pr = merge.get("pr") if type(merge.get("pr")) is int else None
+            if all(p["head"] != head for p in proofs):
+                proofs.append({"pr": pr, "head": head, "decision_id": waiver_id})
+        result = self._verify_evidence(item, "decision", {"id": waiver_id}, now)
+        if not result.ok:
+            raise Refused("evidence_unverified", result.detail)
+        return proofs[0]["head"], proofs, waiver, result
 
     def _merged_seats(self, item, families, now, witnessed=()):
         if not isinstance(families, list):
@@ -244,15 +387,20 @@ class WaiverMixin:
         self._assert_unlocked(item)
         if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
             raise Refused("validation", "decision_id must look like D-NNN")
+        # The operator waiver row itself as the decision: no GO row is read.
+        waiver_only = waive_seats is not None and waive_seats == decision_id
         with self._decisions_snapshot(item, now):
-            head, _ = self._merged_go_proof(item, decision_id, now, all_work=from_open)
-            prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
-            waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
+            if waiver_only:
+                head, prs, waiver, _ = self._merged_waiver_only(item, decision_id, now, all_work=from_open)
+            else:
+                head, _ = self._merged_go_proof(item, decision_id, now, all_work=from_open)
+                prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
+                waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
             backfill = families is None and waiver is None
             witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
             families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
             seats = self._merged_seats(item, families, now, witnessed) if waiver is None else []
-            if from_open and not apply:
+            if (from_open or waiver_only) and not apply:
                 return {"key": key, "state": item["state"], "would_close": True, "prs": prs}
         with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock
             fresh = self._get_or_refuse(key)
@@ -264,13 +412,23 @@ class WaiverMixin:
                                   if k not in ("updated_at", "lease_until")}
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
-            current_head, result = self._merged_go_proof(fresh, decision_id, now, all_work=from_open)
-            if current_head != head:
-                raise Refused("conflict", "merged_on_default_changed")
-            if (from_open or waiver) and self._merged_open_prs(fresh, decision_id, head, now) != prs:
-                raise Refused("conflict", "merged_pr_proofs_changed")
-            if waiver and self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now) != waiver:
-                raise Refused("conflict", "merged_seat_waiver_changed")
+            if waiver_only:
+                current_head, current_prs, current_waiver, result = self._merged_waiver_only(
+                    fresh, decision_id, now, all_work=from_open)
+                if current_head != head:
+                    raise Refused("conflict", "merged_on_default_changed")
+                if current_prs != prs:
+                    raise Refused("conflict", "merged_pr_proofs_changed")
+                if current_waiver != waiver:
+                    raise Refused("conflict", "merged_seat_waiver_changed")
+            else:
+                current_head, result = self._merged_go_proof(fresh, decision_id, now, all_work=from_open)
+                if current_head != head:
+                    raise Refused("conflict", "merged_on_default_changed")
+                if (from_open or waiver) and self._merged_open_prs(fresh, decision_id, head, now) != prs:
+                    raise Refused("conflict", "merged_pr_proofs_changed")
+                if waiver and self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now) != waiver:
+                    raise Refused("conflict", "merged_seat_waiver_changed")
             if backfill:
                 current = self._merged_backfill(fresh, decision_id, head, now, prs)
                 if current != witnessed:
@@ -288,7 +446,7 @@ class WaiverMixin:
             if waiver:
                 self._card_requires_non_anthropic_seats(fresh)  # validate the recorded risk tags
                 card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?", (key,)).fetchone()
-                ref.update(waiver={k: v for k, v in waiver.items() if k != "scope"}, prs=prs, review_tier=fresh["review_tier"],
+                ref.update(waiver={k: v for k, v in waiver.items() if k not in ("scope", "cutoff")}, prs=prs, review_tier=fresh["review_tier"],
                            risk_tags=json.loads(card["risk_tags"]) if card else [],
                            seat_rule_waived_by=waive_seats)
             if from_open:

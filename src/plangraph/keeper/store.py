@@ -60,6 +60,7 @@ __all__ = ["Store", "Refused", "iso", "parse_iso"]
 DEFAULT_LEASE_S = 7200
 REVIEW_OVERDUE_S = 4 * 3600
 LEASE_WARN_S = 15 * 60
+ALERT_WINDOW_S = 7 * 86400
 
 _LEASE_MIN, _LEASE_MAX = 60, 86400
 
@@ -98,6 +99,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         self.default_lease = DEFAULT_LEASE_S
         self.review_overdue_s = REVIEW_OVERDUE_S
         self.lease_warn_s = LEASE_WARN_S
+        self.alert_window_s = ALERT_WINDOW_S
 
     # ------------------------------------------------------------ time
     def now(self):

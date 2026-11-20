@@ -151,3 +151,69 @@ def test_real_child_exit(tmp_path, monkeypatch, script, rc):
             assert len(events) == 1
             assert json.loads(events[0])['rc'] == rc
     asyncio.run(run())
+
+
+class _Refusing:
+    """A keeper sink double that answers every delivery with one HTTP status."""
+
+    def __init__(self, status):
+        self.status = status
+        self.calls = 0
+
+    def deliver(self, recipient, event):
+        from plangraph.spawner.notify import KeeperRefused
+        self.calls += 1
+        raise KeeperRefused(self.status)
+
+
+def _terminal(service, run_id='run-refused'):
+    record = dict(run_id=run_id, status='completed', exit_code=0, started=1, ended=2, item='p:item')
+    service._save(record)
+    return service._path(run_id).parent
+
+
+def test_conflict_refused_completion_is_not_sent_again(tmp_path, monkeypatch):
+    monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
+    sink = _Refusing(409)
+    service = spawn_service(state=tmp_path, keeper_sink=sink)
+    folder = _terminal(service)
+    assert (folder / 'keeper.delivered').read_text() == 'refused: HTTP 409\n'
+    for _ in range(3):
+        service.retry_completions()
+    assert sink.calls == 1
+
+
+def test_same_other_refusal_twice_is_final_and_transient_refusals_retry(tmp_path, monkeypatch):
+    monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
+    sink = _Refusing(422)
+    service = spawn_service(state=tmp_path / 'a', keeper_sink=sink)
+    folder = _terminal(service)
+    assert not (folder / 'keeper.delivered').exists()
+    service.retry_completions()
+    assert (folder / 'keeper.delivered').read_text() == 'refused: HTTP 422\n'
+    service.retry_completions()
+    assert sink.calls == 2
+    auth = _Refusing(403)
+    service = spawn_service(state=tmp_path / 'b', keeper_sink=auth)
+    folder = _terminal(service)
+    for _ in range(3):
+        service.retry_completions()
+    assert auth.calls == 4 and not (folder / 'keeper.delivered').exists()
+
+
+def test_keeper_sink_maps_4xx_to_a_refusal(monkeypatch, tmp_path):
+    import io
+    import urllib.error
+    from plangraph.spawner.notify import KeeperRefused, KeeperSink
+    token = tmp_path / 'token'
+    token.write_text('t')
+    sink = KeeperSink(url='https://keeper.invalid', token_file=str(token))
+
+    class Opener:
+        def open(self, request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 409, 'conflict', {}, io.BytesIO(b''))
+
+    monkeypatch.setattr('urllib.request.build_opener', lambda *a: Opener())
+    with pytest.raises(KeeperRefused) as exc:
+        sink.deliver('keeper', {'item': 'p:i', 'run_id': 'r', 'rc': 0})
+    assert exc.value.status == 409

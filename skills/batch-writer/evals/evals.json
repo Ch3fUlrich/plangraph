@@ -8,7 +8,7 @@
   {
     "id": "batch-writer-fix-loop",
     "prompt": "The review of your head returned REQUEST_CHANGES with two HIGH findings.",
-    "must": ["fix every confirmed HIGH and MED finding", "Stop after ROUND_CAP rounds", "After ACCEPT make no further commit"],
+    "must": ["fix every confirmed HIGH and MED finding", "Stop by the one stop rule", "After ACCEPT make no further commit"],
     "must_not": ["wait for the orchestrator to review", "choose your own reviewer leg"]
   }
 ]

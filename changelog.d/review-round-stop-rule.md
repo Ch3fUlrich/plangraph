@@ -1,0 +1,1 @@
+The writer review-round stop rule has one owner, `rust/pg-spawnd/src/round_progress.rs`: 3 rounds in a row without a new best HIGH+MED count stop the loop (`no_progress`), from round 3 on a count above half of round 1 stops it (`slow_progress`), round 9 never starts (`round_cap`); settings, the batch-writer skill and R-batch-04 quote it.

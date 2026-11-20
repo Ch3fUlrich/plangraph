@@ -42,6 +42,10 @@ _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id"
              "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
+
+
+def _blank(value):
+    return not (isinstance(value, str) and value.strip())
 _MAX_DEPS = 200
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
@@ -204,6 +208,12 @@ class CreateMixin:
             if existing is not None:
                 self._assert_unlocked(existing)
                 raise Refused("conflict", f"{definition['key']} already exists")
+        if not legacy:
+            for definition in defs:
+                if definition["kind"] == "lane" and _blank(definition.get("done_criteria")):
+                    raise Refused("done_criteria_missing",
+                                  f"{definition['key']}: a lane needs done_criteria "
+                                  "(a 'Done when:' sentence in the description is not enough)")
         if not legacy and (error := creation_error(
                 [d for d in defs if d["kind"] == "decision"])):
             raise Refused(*error.split(": ", 1))
@@ -448,6 +458,10 @@ class CreateMixin:
             if effective_h is None:
                 raise Refused("validation", "estimate_src needs an estimate_h")
         check_model_fields(edit_fields, item["kind"], key)
+        if (item["kind"] == "lane" and "done_criteria" in edit_fields
+                and _blank(edit_fields["done_criteria"])):
+            raise Refused("done_criteria_missing",
+                          f"{key}: an edit may not empty done_criteria of a lane")
         if "review_tier" in edit_fields:
             validated_review_tier(edit_fields["review_tier"])
             if (item["review_tier"] == "high"
