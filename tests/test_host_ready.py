@@ -367,7 +367,7 @@ def test_registry_host_reports_missing_pytest_and_xdist(tmp_path, missing):
 
     result = h.check_host('fiction', dict(CONFIG, registry=True), tmp_path, fake)
     probe = next(s for s in scripts if 'import $m' in s)
-    assert '/invented/repo/.venv/bin/python' in probe and 'python3' in probe
+    assert 'cd /invented/repo' in probe and '.venv/bin/python' in probe and 'PREFLIGHT_PYTHON' in probe
     assert result['python_ok'] is (not missing)
     assert result['ok'] is (not missing), result['failures']
     assert [f for f in result['failures'] if f.startswith('python:')] == (
@@ -389,3 +389,50 @@ def test_readiness_probe_honours_preflight_python_like_the_hook(tmp_path, monkey
         lambda check, reason: failures.append(f'{check}: {reason}'), str(repo))
     assert ok is (missing is None)
     assert failures == ([f'python: missing {missing}'] if missing else [])
+
+
+def run_probe(tmp_path, monkeypatch, preflight_python, shim_name='shim', home=None, umask='022', unit_umask='0022'):
+    repo = tmp_path / 'repo'
+    repo.mkdir(exist_ok=True)
+    shim = (home or repo) / shim_name
+    shim.write_text('#!/bin/sh\n[ "$2" = "import xdist" ] && exit 1\nexit 0\n')
+    shim.chmod(0o755)
+    monkeypatch.setenv('HOME', str(home or tmp_path))
+    if preflight_python is None:
+        monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
+    else:
+        monkeypatch.setenv('PREFLIGHT_PYTHON', preflight_python)
+    failures = []
+    def run(check, script):
+        return subprocess.run(['sh', '-c', f'umask {umask}; systemctl() {{ echo UMask={unit_umask}; }}; {script}'],
+                              capture_output=True, text=True).stdout
+    ok = h.python_test_tools(run, lambda check, reason: failures.append(f'{check}: {reason}'), str(repo))
+    return ok, failures
+
+
+@pytest.mark.parametrize('value', ['./shim', 'shim', '~/hook-python'])
+def test_relative_and_home_relative_preflight_python_resolve_like_the_hook(tmp_path, monkeypatch, value):
+    home = tmp_path / 'home'
+    home.mkdir()
+    name = 'hook-python' if value.startswith('~') else 'shim'
+    ok, failures = run_probe(tmp_path, monkeypatch, value, name, home=home if value.startswith('~') else None)
+    # The shim answers import pytest and fails import xdist: it was found and used.
+    assert failures == ['python: missing xdist']
+
+
+def test_relative_preflight_python_missing_in_checkout_reports_both_modules_missing(tmp_path, monkeypatch):
+    ok, failures = run_probe(tmp_path, monkeypatch, 'not-there')
+    assert not ok and failures == ['python: missing pytest xdist']
+
+
+@pytest.mark.parametrize('umask,reported', [('022', False), ('002', True), ('020', True)])
+def test_readiness_reports_a_group_or_other_writable_umask(tmp_path, monkeypatch, umask, reported):
+    ok, failures = run_probe(tmp_path, monkeypatch, './shim', umask=umask)
+    assert [f for f in failures if f.startswith('umask:')] == (
+        [f'umask: umask {umask.zfill(4)} leaves new files group- or other-writable'] if reported else [])
+
+
+def test_readiness_reports_a_group_writable_user_unit_umask(tmp_path, monkeypatch):
+    ok, failures = run_probe(tmp_path, monkeypatch, './shim', unit_umask='0002')
+    assert [f for f in failures if f.startswith('umask:')] == [
+        'umask: unit umask 0002 leaves new files group- or other-writable']

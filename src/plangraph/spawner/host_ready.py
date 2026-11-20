@@ -259,20 +259,40 @@ def fresh(record, now=None):
         return False
 
 
-def python_test_tools(command, fail, repo):
-    """Report the pre-push interpreter lacking pytest or xdist.
+PROBE_PYTHON = r'''cd {repo} || exit 1
+py=$PWD/.venv/bin/python
+if [ ! -f "$py" ]; then
+  cfg=${{PREFLIGHT_PYTHON:-}}
+  case "$cfg" in "~") cfg=$HOME;; "~/"*) cfg=$HOME/${{cfg#"~/"}};; esac
+  case "$cfg" in "") cfg=$(command -v python3 || echo python3);; /*) ;; *) cfg=$PWD/$cfg;; esac
+  py=$cfg
+fi
+for m in pytest xdist; do "$py" -c "import $m" 2>/dev/null || echo "missing $m"; done
+echo "umask $(umask)"
+echo "unit_$(systemctl --user show -p UMask 2>/dev/null)"
+'''
 
-    Same choice as the hook: the checkout venv, else PREFLIGHT_PYTHON, else python3.
+
+def python_test_tools(command, fail, repo):
+    """Report what a pre-push run needs from the host: pytest, xdist and a safe umask.
+
+    The interpreter is the hook's choice: the checkout venv, else PREFLIGHT_PYTHON
+    (home- and cwd-relative like the hook), else python3. Files created under a umask
+    that leaves group or other write set fail the record-permission checks, so the
+    probe shell's umask and the user manager's unit UMask must keep both bits.
     """
-    quoted = shlex.quote(repo.rstrip('/') + '/.venv/bin/python')
-    output = command('python', f'py={quoted}; [ -x "$py" ] || py="${{PREFLIGHT_PYTHON:-python3}}"; '
-                     'for m in pytest xdist; do "$py" -c "import $m" 2>/dev/null || echo "missing $m"; done')
+    output = command('python', PROBE_PYTHON.format(repo=shlex.quote(repo)))
     if output is None:
         return False
     missing = [line.split()[1] for line in output.splitlines()
                if re.fullmatch(r'missing (pytest|xdist)', line.strip())]
     if missing:
         fail('python', 'missing ' + ' '.join(missing))
+    for label, pattern in (('umask', r'umask ([0-7]+)'), ('unit umask', r'unit_UMask=([0-7]+)')):
+        for line in output.splitlines():
+            found = re.fullmatch(pattern, line.strip())
+            if found and int(found[1], 8) & 0o022 != 0o022:
+                fail('umask', f'{label} {found[1]} leaves new files group- or other-writable')
     return not missing
 
 

@@ -194,7 +194,8 @@ then restart the affected spawner units. Run
 `python3 -m plangraph.spawner.host_ready --json` on each placement origin.
 Confirm each host reports a trusted checkout, matching main SHA, working
 tools and login, a pre-push test interpreter (the checkout's `.venv`, else
-`PREFLIGHT_PYTHON`, else `python3`) with `pytest` and `xdist`, and no failures. Refresh the `host_ready` readiness record before its
+`PREFLIGHT_PYTHON`, else `python3`, resolved as the hook does) with `pytest` and `xdist`, a probe-shell and
+user-unit `UMask` that keep the group and other write bits clear, and no failures. Refresh the `host_ready` readiness record before its
 ten-minute freshness window expires, and the `package-readiness` record before
 its 120-second window expires.
 
