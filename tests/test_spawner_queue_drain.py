@@ -142,3 +142,43 @@ def test_cancel_during_the_poll_sleep_is_never_overwritten_or_started(room, monk
     record = seat_spawn.admit(service, {'role': 'review'})
     assert record is not None and record['status'] == 'cancelled'
     assert service.result(record['run_id'])['status'] == 'cancelled'
+
+
+@pytest.mark.parametrize('outcome', ['remote', 'exception'])
+def test_queue_closes_when_wait_leaves_local_admission(room, monkeypatch, tmp_path, outcome):
+    service, readings = room
+    readings[:] = [4000]
+    config = tmp_path / 'overflow.json'
+    config.write_text(json.dumps({'hosts': {'fixture': {}}}))
+    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    monkeypatch.setenv(seat_spawn.ADMISSION_WAIT_ENV, '30')
+    monkeypatch.setattr(overflow, 'repos_public', lambda *a: True)
+    ready = {}
+
+    def load(*args):
+        return ready
+
+    monkeypatch.setattr(overflow, 'ready_records', load)
+    monkeypatch.setattr(overflow, 'remote_spawn',
+                        lambda *a: {'run_id': 'run-remote', 'status': 'running'})
+
+    queued = []
+
+    def wait(_seconds):
+        queued.extend(queued_records(service))
+        if outcome == 'exception':
+            raise RuntimeError('fixture admission failure')
+        ready.update(fixture=dict(ssh='fixture', ok=True, fresh=True, live_runs=0,
+                                  mem_available_mb=9000, role_mb=2048, floor_mb=3000))
+
+    monkeypatch.setattr(seat_spawn, '_sleep', wait)
+    if outcome == 'exception':
+        with pytest.raises(RuntimeError, match='fixture admission failure'):
+            seat_spawn.admit(service, {'role': 'review'})
+        assert service.result(queued[0]['run_id'])['status'] == 'failed'
+    else:
+        result = seat_spawn.admit(service, {'role': 'review'})
+        assert result['run_id'] == 'run-remote'
+        assert not service._path(queued[0]['run_id']).exists()
+    assert len(queued) == 1
+    assert not queued_records(service)

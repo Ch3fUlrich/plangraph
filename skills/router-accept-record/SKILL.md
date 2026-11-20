@@ -3,7 +3,9 @@ name: router-accept-record
 description: Use when an L1 sends a seat record or "propose ACCEPTED / merge-ready" for a lane. Checks seat countability and evidence by sampling, then accepts, redirects or grants a waiver.
 ---
 
-Site keys (file `router/config` in the router data checkout; source it): `ROUTER_HOME` is the router directory; `bin/` below is relative to it. Also used here: `ROUTER_PGK` and `ROUTER_CI_EVIDENCE` (the keeper and CI-evidence wrappers, exported to the gate as `PG_PGK` and `PG_CI_EVIDENCE`).
+Source `router/config` in the router data checkout and resolve `bin/` under
+`ROUTER_HOME`. The gate reads `PG_PGK` and `PG_CI_EVIDENCE` from its
+environment when set, or resolves the installed wrappers on PATH.
 
 # Accept a seat record
 
@@ -49,4 +51,4 @@ Put `PLAN <item-key> conforms=yes|no deviations=<text, or none>` last in every G
 - `conforms=yes` has any deviations value other than exactly `none`;
 - `conforms=no` has an empty, punctuation-only or `none`-led value (a first token exactly `none` describes no departure);
 - the keeper wrapper is unavailable or times out (10 s): `STOP: keeper wrapper unavailable`, `STOP: no keeper item KEY`, `STOP: keeper timed out KEY`; missing evidence gives `STOP: evidence wrapper unavailable` (exit 6).
-Deviations end at the cell end, a pipe, or the next ` word=` or `; word=` field; quoted prose keeps its text, and a quote-wrapped block is still a declaration. `bin/merge-part` shares the gate's helpers (`bin/merge_paths.py`): `ROUTER_PGK` and `ROUTER_CI_EVIDENCE` must be absolute existing files, else the wrappers are found on PATH (absolute entries only, no cwd search, no dated host default). Hosts without them refuse every GO and merge on purpose: install the wrappers before enabling the check. Successful output names the item key, conformance and deviations so the GO record exposes departures.
+Deviations end at the cell end, a pipe, or the next ` word=` or `; word=` field; quoted prose keeps its text, and a quote-wrapped block is still a declaration. `bin/merge-part` shares the gate's helpers (`bin/merge_paths.py`): `PG_PGK` and `PG_CI_EVIDENCE` must be absolute existing files, else the wrappers are found on PATH (absolute entries only, no cwd search, no dated host default). Hosts without them refuse every GO and merge on purpose: install the wrappers before enabling the check. Successful output names the item key, conformance and deviations so the GO record exposes departures.

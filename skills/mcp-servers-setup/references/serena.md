@@ -115,7 +115,7 @@ data-format problem above. Two traps:
 > `claude` process per worktree gives each its own Serena and its own `_active_project`.
 > Subagents stay in their own session's worktree,
 > sharing one correctly-activated Serena. *Worktrees get sessions; subagents share the session's
-> worktree.* (`herdr-orchestration` panes are how you run one session per worktree.)
+> worktree.* (The [plangraph spawner](../../plangraph-spawn/SKILL.md) can launch the separate sessions.)
 >
 > Two artifacts must reach the worktree; both fail identically, by being untracked:
 >

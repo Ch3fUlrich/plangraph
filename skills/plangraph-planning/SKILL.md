@@ -238,9 +238,8 @@ Each layer reads only the artifacts from the layer directly below it.
 ## 10. Model-family diversity
 
 Native Claude Code subagents are all Claude, so they give lens and tier diversity but not family
-diversity. For genuine cross-family research and review use `herdr-orchestration` or the AutoOS
-fleet routes; where only Claude is available, state that in the review record rather than
-claiming cross-family coverage.
+diversity. Use the [plangraph spawner](../plangraph-spawn/SKILL.md) for cross-family
+research and review. If only Claude is available, record that coverage in the review.
 
 ## 11. Checklist
 
