@@ -35,6 +35,12 @@ the floor once and is removed); `relaunch` stops the old session (its record sta
 number (`previous_name` = old) and is refused ("superseded") while a later record of the role is live.
 `free` keeps free names and in-place relaunch.
 
+`list` rows carry `parent` for a session launched with `parent=<role>`, `children` (the live
+sessions whose parent is the row's role; only on a live row, so a handoff successor inherits them
+under its new number) and `orphaned: true` for a live child whose parent role has no live session
+(LE-CHILD-SESSIONS-LOST-AT-PARENT-HANDOFF). Work that outlives a turn is launched as such a child
+or as a spawner run, never as an in-session subagent.
+
 **Threat model.** The caller is the authenticated MCP principal. Other processes of the same OS
 account are trusted - they can already run `claude` themselves - so same-account file swaps are out
 of scope. The config is the trust anchor: on POSIX it must be a regular file (not a symlink) owned

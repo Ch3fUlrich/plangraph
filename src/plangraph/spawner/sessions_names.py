@@ -175,6 +175,32 @@ class _NamesMixin:
             role, digits = self._role_of(name, strict=True)
             self._reserve_number(role, int(digits))  # called under the role lock
 
+    def _family(self, records):
+        """Parent/child view of session records. A child names its parent by ROLE, so the successor
+        (the parent's next numbered session) inherits it at a handoff: nothing is lost with the old name.
+
+        Returns ``view(rec)``: ``parent``, the live ``children`` (names) of the record's role, and
+        ``orphaned`` when the record's own parent role has no live session. Absent keys mean none."""
+        def live(rec):
+            return _state(rec) in _LIVE
+
+        def role(rec):
+            return self._role_of(rec["name"], strict=False)[0]
+        live_roles = {role(rec) for rec in records if live(rec)}
+
+        def view(rec):
+            out, mine = {}, role(rec)
+            if rec.get("parent"):
+                out["parent"] = rec["parent"]
+                if live(rec) and rec["parent"] not in live_roles:
+                    out["orphaned"] = True
+            children = sorted(child["name"] for child in records
+                              if live(child) and child.get("parent") in (mine, rec["name"]) and child is not rec)
+            if children and live(rec):
+                out["children"] = children
+            return out
+        return view
+
     def _relaunch_name(self, cfg, name):
         """The relaunched name (reserved here): same in free mode, else the next number; refused if superseded."""
         if cfg.get("session_names", "role-counter") != "role-counter":

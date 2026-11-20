@@ -275,3 +275,24 @@ def test_stop_waits_for_a_launch_in_flight(rc):
         assert started.wait(5)
         assert (s.stop(name="alpha-0001")["session_id"], launch.result()["session_id"]) == (UUID1, UUID1)
     assert json.loads((rc.state / "sessions" / "alpha-0001.json").read_text())["state"] == "stopped"
+
+
+def _row(listing, name):
+    return next(r for r in listing["sessions"] if r["name"] == name)
+
+
+def test_children_pass_to_the_successor_of_their_parent_role(rc):
+    """A child started with --parent <role> stays the child of the role across the parent's relaunch."""
+    s = make(rc, FakeRun(stdout="session " + UUID1))
+    go(rc, s, "boss")
+    go(rc, s, "kid", parent="boss")
+    listing = s.list()
+    assert _row(listing, "boss-0001")["children"] == ["kid-0002"]
+    assert _row(listing, "kid-0002")["parent"] == "boss" and "orphaned" not in _row(listing, "kid-0002")
+    s.stop(name="boss-0001")
+    assert _row(s.list(), "kid-0002")["orphaned"] is True   # no live session of the parent role
+    go(rc, s, "boss")  # the successor
+    listing = s.list()
+    assert _row(listing, "boss-0003")["children"] == ["kid-0002"]
+    assert "orphaned" not in _row(listing, "kid-0002")
+    assert "children" not in _row(listing, "boss-0001")   # a stopped session carries none
