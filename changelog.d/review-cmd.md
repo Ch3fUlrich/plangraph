@@ -1,0 +1,1 @@
+- `plangraph review`: add `plangraph review` subcommand in `rust/plangraph-cli` to check head freshness, extract writer families from commit trailers, split oversized diffs via `pg-worker-core`, spawn spawner review seats, parse `VERDICT` / `TEST-GAMING` from run records, and write `merge_batch_land`-compatible approvals ending in the full `HEAD` SHA.

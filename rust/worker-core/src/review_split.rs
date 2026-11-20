@@ -355,6 +355,18 @@ pub fn parse_test_gaming_text(text: &str) -> TestGaming {
     }
 }
 
+/// Extract the trimmed value of the last unquoted, unfenced `HEAD:` line, if present.
+pub fn parse_head_line_text(text: &str) -> Option<String> {
+    let tail = last_unquoted_key_tail(text, &["HEAD"])?;
+    let token = tail
+        .trim()
+        .trim_end_matches(['*', '_', '`', '.', ',', ';'])
+        .split_whitespace()
+        .next()
+        .unwrap_or("");
+    (!token.is_empty()).then(|| token.to_owned())
+}
+
 /// Extract rendered review answer text from claude, agy, or opencode `live.log` NDJSON.
 pub fn extract_review_text_from_live_log(live_log: &str) -> Option<String> {
     let mut result: Option<String> = None;
@@ -364,6 +376,9 @@ pub fn extract_review_text_from_live_log(live_log: &str) -> Option<String> {
     let mut oc_stopped = false;
 
     for line in live_log.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
         let Ok(frame) = serde_json::from_str::<Value>(line) else {
             return None;
         };

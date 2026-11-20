@@ -114,7 +114,7 @@ def test_diff_ref_paths_inlines_only_selected_paths(tmp_path, monkeypatch):
     assert 'skip-after' not in out
 
 
-@pytest.mark.parametrize('bad_paths', [[], [''], ['/etc/passwd'], ['../secret'], ['a/../b'], ['--output=/tmp/x'], [':(glob)*']])
+@pytest.mark.parametrize('bad_paths', [[], [''], ['/abs/path'], ['../secret'], ['a/../b'], ['--output=/tmp/x'], [':(glob)*']])
 def test_diff_ref_invalid_paths_refused(diff_ref, bad_paths):
     with pytest.raises(InlineDiffError, match='diff_ref paths'):
         inline_diff_prompt('review this', dict(diff_ref, paths=bad_paths), max_chars=100_000)

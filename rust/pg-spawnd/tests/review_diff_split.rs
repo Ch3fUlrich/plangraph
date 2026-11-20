@@ -226,7 +226,7 @@ fn invalid_diff_ref_paths_are_refused_without_launching() {
     let head = f.git(&["rev-parse", "HEAD"]);
 
     for bad in [
-        json!(["/etc/passwd"]),
+        json!(["/abs/path"]),
         json!(["../secret"]),
         json!(["sub/../secret"]),
         json!(["--output=/tmp/evil"]),

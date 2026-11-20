@@ -422,7 +422,7 @@ fn read_diff_with_paths_inlines_only_selected_paths_and_refuses_invalid_paths() 
     assert!(!text.contains("after"), "{text}");
 
     for bad in [
-        vec!["/etc/passwd".into()],
+        vec!["/abs/path".into()],
         vec!["../escape".into()],
         vec!["sub/../escape".into()],
         vec!["--output=/tmp/evil".into()],
