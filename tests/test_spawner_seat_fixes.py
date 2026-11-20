@@ -83,7 +83,7 @@ def test_probe_cli_returns_structured_parameter_refusal(
     assert refusal['status'] == 'refused'
     assert refusal['refusal'] == 'ParameterRefused'
     assert refusal['exit_code'] == 2
-    expected_error = {'missing-leg': 'select --leg ID or --all-writers',
+    expected_error = {'missing-leg': 'select --leg ID, --all-writers or --all-reviewers',
                       'bad-leg': 'unknown legs: unknown-leg',
                       'bad-timeout': 'invalid --timeout'}.get(
                           case, 'invalid PLANGRAPH_LEG_PROBE_TIMEOUT_S')

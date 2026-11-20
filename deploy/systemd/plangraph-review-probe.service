@@ -7,6 +7,6 @@ WorkingDirectory=%h/code/plangraph
 Environment=PYTHONPATH=%h/code/plangraph/src
 EnvironmentFile=-%h/.config/plangraph/watchdog.env
 NoNewPrivileges=yes
-ExecStartPre=-%h/.local/bin/pg-spawnd check-manage-key
-ExecStart=/usr/bin/python3 -m plangraph.spawner.cli probe --all-reviewers --json
+ExecStartPre=-%h/.local/bin/pg-spawnd check-manage-key --state %S/plangraph --json
+ExecStart=/usr/bin/python3 -m plangraph.spawner.cli --state %S/plangraph probe --all-reviewers --json
 TimeoutStartSec=15min

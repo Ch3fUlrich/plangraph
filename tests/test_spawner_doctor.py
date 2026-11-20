@@ -429,9 +429,9 @@ def test_review_probe_systemd_units():
     svc.read_string(svc_path.read_text(encoding='utf-8'))
     assert svc.get('Service', 'Type') == 'oneshot'
     assert not svc.has_section('Install')
-    assert svc.get('Service', 'ExecStartPre') == '-%h/.local/bin/pg-spawnd check-manage-key'
+    assert svc.get('Service', 'ExecStartPre') == '-%h/.local/bin/pg-spawnd check-manage-key --state %S/plangraph --json'
     assert shlex.split(svc.get('Service', 'ExecStart')) == [
-        '/usr/bin/python3', '-m', 'plangraph.spawner.cli', 'probe', '--all-reviewers', '--json',
+        '/usr/bin/python3', '-m', 'plangraph.spawner.cli', '--state', '%S/plangraph', 'probe', '--all-reviewers', '--json',
     ]
     tim = configparser.ConfigParser(strict=False, interpolation=None)
     tim.optionxform = str

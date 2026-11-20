@@ -222,7 +222,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
                                        stderr=subprocess.DEVNULL).decode("utf-8", "replace").strip()
 
     try:
-        caller_before = {} if review_mode else await asyncio.to_thread(caller_heads)
+        caller_before = await asyncio.to_thread(caller_heads)
         ok = reason = None
         infra = False
         if not review_mode:
@@ -287,7 +287,7 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
                     ok = changed and 'ok.txt' in files
                     reason = '' if ok else f'exit {job.exit_code}' if job.exit_code else 'no commit'
         # Tripwire (D-3465): the writer must never touch the caller's repo.
-        caller_after = {} if review_mode else await asyncio.to_thread(caller_heads)
+        caller_after = await asyncio.to_thread(caller_heads)
         leaked = any(caller_after.get(label) != head for label, head in caller_before.items())
         if leaked:
             # Report the leak; NEVER auto-reset the caller's repo here.
@@ -415,8 +415,8 @@ def _check_manage_key(runner):
         if proc.returncode == 0:
             data = json.loads(proc.stdout)
             if data.get('emitted'):
-                logging.getLogger(__name__).warning(
-                    'missing_manage_key: key file missing at %s', data.get('key_path', ''))
+                logging.getLogger(__name__).warning('missing_manage_key')
+            data.pop('key_path', None)
             return data
     except (OSError, subprocess.SubprocessError, ValueError):
         pass
@@ -428,7 +428,7 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
     SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
     if not (ids or all_writers or all_reviewers):
-        raise ParameterRefused('select --leg ID or --all-writers')
+        raise ParameterRefused('select --leg ID, --all-writers or --all-reviewers')
     unknown = ids - {leg.id for leg in SPAWNABLE_LEGS}
     if unknown:
         raise ParameterRefused('unknown legs: ' + ', '.join(sorted(unknown)))

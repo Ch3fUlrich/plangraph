@@ -318,7 +318,7 @@ def test_probe_many_selection_errors():
     from plangraph.spawner.leg_probe import probe_many
     with pytest.raises(ParameterRefused) as nothing:
         asyncio.run(probe_many(None, (), False))
-    assert str(nothing.value) == 'select --leg ID or --all-writers'
+    assert str(nothing.value) == 'select --leg ID, --all-writers or --all-reviewers'
     with pytest.raises(ParameterRefused) as unknown:
         asyncio.run(probe_many(None, 'zz/nope', False))
     assert str(unknown.value) == 'unknown legs: zz/nope'
@@ -482,3 +482,27 @@ def test_cli_probe_all_reviewers(tmp_path, monkeypatch, capsys):
     assert cli.main(['--state', str(tmp_path), 'probe', '--all-reviewers', '--json']) == 0
     assert calls == [([], False, None, True)]
     assert json.loads(capsys.readouterr().out)['ok'] is True
+
+
+def test_review_probe_flags_caller_repo_leak(tmp_path, monkeypatch):
+    from plangraph.spawner import leg_probe
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/' + name)
+    heads = iter([{'cwd': 'a', 'env': 'a'}, {'cwd': 'b', 'env': 'a'}])
+    monkeypatch.setattr(leg_probe, 'caller_heads', lambda: next(heads))
+
+    class Runner:
+        state = tmp_path
+        leg_reader = LegStateStore(tmp_path / 'legs.sqlite')
+        _tasks = {}
+        jobs = {}
+
+        async def spawn(self, **kwargs):
+            return SimpleNamespace(job_id='j', status='completed', exit_code=0, stdout='OK', stderr='', events=[])
+
+        async def cancel(self, job_id):
+            pass
+
+    leg = SimpleNamespace(model='mimo/mimo-v2.6-pro', harness='opencode', roles=('review',))
+    out = asyncio.run(leg_probe.probe(Runner(), leg, timeout_s=5, role='review'))
+    assert out['ok'] is False
+    assert out['reason'] == 'probe leaked into caller repo'
