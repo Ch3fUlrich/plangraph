@@ -365,7 +365,16 @@ def push_main():
         return 1
     root = Path(git_out("rev-parse", "--show-toplevel"))
     preflight = root / "tools/preflight.py"
-    if os.environ.get("PREFLIGHT_SKIP") != "1" and preflight.is_file():
+    if os.environ.get("PREFLIGHT_SKIP") == "1":
+        if all(rec[2].startswith("refs/heads/phase/")
+               and len(rec[2]) > len("refs/heads/phase/") for rec in refs):
+            print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
+                  file=sys.stderr)
+        else:
+            print("pre-push: PREFLIGHT_SKIP=1 is allowed only for refs/heads/phase/* "
+                  "(D-5843): push refused", file=sys.stderr)
+            return 1
+    elif preflight.is_file():
         # Prune deleted heads too: stale tracking refs cannot vouch for parts.
         fetched = refresh_origin()
         for _, local_sha, _, remote_sha in refs:
@@ -382,9 +391,6 @@ def push_main():
             result = subprocess.run(command, env=env)
             if result.returncode:
                 return result.returncode
-    elif os.environ.get("PREFLIGHT_SKIP") == "1":
-        print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
-              file=sys.stderr)
     elif any(rec[2] == "refs/heads/main" for rec in refs):
         print("pre-push: tools/preflight.py missing: push refused", file=sys.stderr)
         return 1

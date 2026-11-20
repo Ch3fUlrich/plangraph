@@ -31,8 +31,10 @@ timeout or interruption, including nested worker sessions on Linux, then reaps
 git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
-`PREFLIGHT_FAST=1` for its fast mode or `PREFLIGHT_SKIP=1` to bypass only that hook
-invocation (not the existing scrub/ref/file-size gates or direct CLI runs). Private
+`PREFLIGHT_FAST=1` for its fast mode or, on `refs/heads/phase/*` pushes only
+(D-5843), `PREFLIGHT_SKIP=1` to bypass only that hook invocation (not the existing
+scrub/ref/file-size/commit gates or direct CLI runs; `PREFLIGHT_SKIP=1` on any
+other ref is refused). Private
 scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
 when neither is present, public rules still run but scrub reports SKIP with a reason.
 `PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.
@@ -489,7 +491,8 @@ Both pytest CI jobs validate collection once without `PYTEST_SHARD` on shard 0, 
 affected selection or the full push/nightly suite. Empty individual shards remain
 valid; a nonempty file selection that collects no tests fails the job. Local
 preflight timeouts terminate the selector and its pytest descendants. Missing
-`tools/preflight.py` refuses pushes to main unless `PREFLIGHT_SKIP=1` is explicit.
+`tools/preflight.py` refuses pushes to main; `PREFLIGHT_SKIP=1` is allowed only when
+every pushed ref is `refs/heads/phase/*` (D-5843) and is refused on all other refs.
 Topic and tag pushes without preflight still run the scrub, ref and file-size gates.
 
 The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy

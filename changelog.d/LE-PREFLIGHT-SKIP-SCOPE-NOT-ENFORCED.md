@@ -1,0 +1,1 @@
+- **LE-PREFLIGHT-SKIP-SCOPE-NOT-ENFORCED:** Restrict `PREFLIGHT_SKIP=1` in `tools/hooks/pre-push` to pushes where every ref is `refs/heads/phase/*`, refusing other refs with a message naming D-5843 while keeping all other gates active.
