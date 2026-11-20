@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.keeper.errors import Refused
-from test_keeper_close_merged import HEAD, MERGE, unseated_w  # noqa: F401
+from test_keeper_close_merged import HEAD, MERGE, unseated_w, w  # noqa: F401
 
 HEADER = ("| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n")
 
@@ -318,3 +318,118 @@ def test_overlapping_snapshots_on_two_threads_do_not_share_text(tmp_path):
     proceed.set()
     worker.join()
     assert "first" in seen["a1"] and "second" in seen["b"]
+
+
+# ---- LE-CLOSE-MERGED-REFUSES-VALID-GO-ROWS and KEEPER-CLOSE-MERGED-NO-GO-WAIVER ----
+
+def _git(repo, *args, date="2026-11-01T12:00:00Z"):
+    import os
+    import subprocess
+    env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+           "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+    return subprocess.run(["git", "-C", str(repo), *args], env=env, check=True,
+                          capture_output=True, text=True).stdout.strip()
+
+
+def merged_repo(path, parts):
+    """A repository whose main has one merged PR per ``(pr, key, date)``; ``pr`` None = direct commit.
+
+    Returns the PR head per number (``None`` keyed by the direct commit's sha list).
+    """
+    import subprocess
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    _git(path, "commit", "-q", "--allow-empty", "-m", "base")
+    heads = {}
+    for pr, key, date in parts:
+        message = "work" + (f"\n\nPlan-Item: {key}" if key else "")
+        if pr is None:
+            _git(path, "commit", "-q", "--allow-empty", "-m", message, date=date)
+            heads.setdefault(None, []).append(_git(path, "rev-parse", "HEAD"))
+            continue
+        _git(path, "checkout", "-q", "-b", f"pr{pr}")
+        _git(path, "commit", "-q", "--allow-empty", "-m", message, date=date)
+        heads[pr] = _git(path, "rev-parse", "HEAD")
+        _git(path, "checkout", "-q", "main")
+        _git(path, "merge", "-q", "--no-ff", "-m", f"Merge pull request #{pr} from x/pr{pr}",
+             f"pr{pr}", date=date)
+    return heads
+
+
+def real_git_world(world, monkeypatch, tmp_path, parts, projects=("demo",)):
+    from plangraph.keeper.evidence_git import GitAdapter
+    repo = tmp_path / "repo"
+    heads = merged_repo(repo, parts)
+    world.store.ctx["git"] = GitAdapter({p: {"path": str(repo), "ref": "main"} for p in projects})
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits",
+                        world.real_plan_item_commits)
+    return heads
+
+
+GO_FORMS = [
+    # the shapes of D-5826 and D-5802, D-5152 and D-5761 (project and item renamed to the fixture's)
+    "(17:22Z, date -u) GO demo PR #841 demo:A at GO-HEAD {head} (lane, merges): 8 files +329/-41, CI success",
+    "(15:46Z, date -u) GO demo PR #841 demo:A (D-5782 (1)) at GO-HEAD {head}: 2 files +3/-1, MERGEABLE CLEAN",
+    "(18:5xZ) GO #841 A slice 2 with --merge, merge only by replan, after #737; GO-HEAD {head}. Seat ACCEPT",
+    "(13:22Z, date -u) RULINGS. (1) GO demo PR 841 demo:A slice A, mark ready; GO-HEAD {head}; a moved head "
+    "voids this. (2) DEFINED X under Y. (3) #829 closed unmerged.",
+]
+
+
+@pytest.mark.parametrize("form", GO_FORMS)
+def test_go_row_binds_to_the_merged_pr_it_names(w, monkeypatch, tmp_path, form):
+    """The key's Plan-Item commit sits in another merge; the row names the PR that merged its own head."""
+    heads = real_git_world(w, monkeypatch, tmp_path, [(841, None, "2026-11-01T12:00:00Z"),
+                                                       (900, "demo:A", "2026-11-02T12:00:00Z")])
+    w.decision_path.write_text(HEADER + f"| D-5504 | demo | {form.format(head=heads[841])} | ROUTER | 2026-11-05 |\n")
+    assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
+    assert w.store._evidence("demo:A")[-1]["ref"]["merged_head"] == heads[841]
+
+
+@pytest.mark.parametrize("case", ["other_head", "pr_number", "not_named", "unmerged_head"])
+def test_go_row_binding_refusals_name_both_heads(w, monkeypatch, tmp_path, case):
+    heads = real_git_world(w, monkeypatch, tmp_path, [(841, None, "2026-11-01T12:00:00Z"),
+                                                       (900, "demo:A", "2026-11-02T12:00:00Z")])
+    _git(tmp_path / "repo", "checkout", "-q", "-b", "lane/loose")
+    _git(tmp_path / "repo", "commit", "-q", "--allow-empty", "-m", "loose")
+    loose = _git(tmp_path / "repo", "rev-parse", "HEAD")
+    _git(tmp_path / "repo", "checkout", "-q", "main")
+    row = {"other_head": f"GO demo PR #841 demo:A at GO-HEAD {'f' * 40}",
+           "pr_number": f"GO demo PR #999 demo:A at GO-HEAD {heads[841]}",
+           "not_named": f"GO demo PR #841 demo:OTHER at GO-HEAD {heads[841]}",
+           "unmerged_head": f"GO demo PR #841 demo:A at GO-HEAD {loose}"}[case]
+    w.decision_path.write_text(HEADER + f"| D-5504 | demo | {row} | ROUTER | 2026-11-05 |\n")
+    with pytest.raises(Refused) as exc:
+        w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert "go_row_head_mismatch" in exc.value.msg
+    named = {"other_head": "f" * 12, "unmerged_head": loose[:12]}.get(case, heads[841][:12])
+    assert named in exc.value.msg and heads[900][:12] in exc.value.msg
+    assert w.store._item("demo:A")["state"] == "in_review"
+
+
+def test_not_go_refusal_names_the_merged_heads(w, monkeypatch, tmp_path):
+    heads = real_git_world(w, monkeypatch, tmp_path, [(900, "demo:A", "2026-11-02T12:00:00Z")])
+    w.decision_path.write_text(HEADER + f"| D-5504 | demo | RULINGS. (1) HOLD {heads[900]} | ROUTER | 2026-11-05 |\n")
+    with pytest.raises(Refused) as exc:
+        w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert "go_row_not_go" in exc.value.msg and heads[900][:12] in exc.value.msg
+
+
+def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_path):
+    from plangraph.keeper.evidence_git import GitAdapter
+    repo = tmp_path / "other-repo"
+    heads = merged_repo(repo, [(165, "demo:A", "2026-11-01T12:00:00Z")])
+    empty = tmp_path / "demo-repo"
+    merged_repo(empty, [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
+                                     "other": {"path": str(repo), "ref": "main"}})
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    w.decision_path.write_text(HEADER + f"| D-5504 | demo | GO #165 demo:A; GO-HEAD {heads[165]} | ROUTER | 2026-11-05 |\n")
+    with pytest.raises(Refused, match="merged_on_default_missing"):
+        w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    w.conn.execute("UPDATE items SET description=? WHERE key='demo:A'",
+                   ("Why: x\nHow: y\nMerge-Repo: other\n",))
+    assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
+    w.conn.execute("UPDATE items SET description=? WHERE key='demo:H'", ("Merge-Repo: nowhere",))
+    with pytest.raises(Refused, match="merge_repo_unknown"):
+        w.store.close_merged(w.p("router"), "demo:H", "D-5504", ["google", "deepseek"])

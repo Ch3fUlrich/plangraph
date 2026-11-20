@@ -161,6 +161,7 @@ class RunsMixin:
             if self._card_requires_non_anthropic_seats(item):
                 raise Refused("coverage", "insufficient_non_anthropic_seat_families: need 2")
             git = self._adapter("git")
+            project = self._merge_project(item)
             check = "historical_cutoff"
             cutoffs = re.findall(r"(?:^|[;\s])Cutoff:", row.get("decision", ""))
             if cutoffs:
@@ -179,9 +180,9 @@ class RunsMixin:
                 raise ValueError("invalid historical cutoff")
             for proof in prs:
                 go_date = as_epoch(_decision_date(decisions.fields(proof["decision_id"])))
-                merge = git.merge_commit_of(git.repo_path(item["project"]), proof["head"],
-                                             git.repo_ref(item["project"]))
-                proc = git._run(git.repo_path(item["project"]),
+                merge = git.merge_commit_of(git.repo_path(project), proof["head"],
+                                             git.repo_ref(project))
+                proc = git._run(git.repo_path(project),
                                 ["show", "-s", "--format=%cI", "--end-of-options", merge[0]]) if merge else None
                 merge_date = as_epoch(proc.stdout.strip()) if proc and proc.returncode == 0 else None
                 if merge_date is None:
@@ -237,25 +238,32 @@ class RunsMixin:
         from . import context_sources
         from .evidence_types import valid_commit_ref
         git = self._adapter("git")
-        if not self._refresh_merged_default_ref(git, item["project"]):
+        project = self._merge_project(item)
+        if not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
-        if context_sources.open_lanes(git, item["project"], item["key"]) != []:
+        if context_sources.open_lanes(git, project, item["key"]) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
-            git, item["project"], item["key"], fetch=False, limit=None)
+            git, project, item["key"], fetch=False, limit=None)
         proofs = {}
         for commit in commits or ():
             merge = commit.get("merge") or {}
             if type(merge.get("pr")) is not int or merge["pr"] <= 0:
                 raise Refused("evidence_unverified", "merged_pr_missing")
-            merged = git.merge_commit_of(git.repo_path(item["project"]), commit["sha"],
-                                         git.repo_ref(item["project"]))
-            proc = git._run(git.repo_path(item["project"]),
+            merged = git.merge_commit_of(git.repo_path(project), commit["sha"],
+                                         git.repo_ref(project))
+            proc = git._run(git.repo_path(project),
                             ["show", "-s", "--format=%P", "--end-of-options", merged[0]]) if merged else None
             parents = proc.stdout.strip().split() if proc and proc.returncode == 0 else []
             if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
                 raise Refused("evidence_unverified", "merged_pr_head_missing")
             proofs[parents[1]] = {"pr": merge["pr"], "head": parents[1]}
+        if proofs and head not in proofs:
+            # A GO row bound to its own merged PR (merged_go_row) may name a head
+            # the trailer search did not reach; that PR is proof in its own right.
+            bound = context_sources.pr_merge_of(git, project, head)
+            if bound:
+                proofs[head] = {"pr": bound["pr"], "head": head}
         if not proofs or head not in proofs:
             raise Refused("evidence_unverified", "merged_pr_missing")
         with self._decisions_snapshot(item, now):
