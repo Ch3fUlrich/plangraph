@@ -153,6 +153,29 @@ fn allowlist_keeps_exact_word_boundary_shas_only() {
 }
 
 #[test]
+fn allowlist_ignores_entries_that_are_not_exact_shas() {
+    let word = "mysecretword".to_string();
+    let short = "a1b2c3d4".to_string();
+    let allow = std::collections::BTreeSet::from([word.clone(), short.clone()]);
+    let text = format!("{word}-{short}");
+    assert_eq!(redact_with_allowlist(&text, &allow), redact(&text));
+    let sha = "a1b2c3d4e5f60123456789abcdef0123456789ab";
+    let allow = std::collections::BTreeSet::from([sha.to_string()]);
+    for joined in [
+        format!("123456abcdef-{sha}-fedcba654321"),
+        format!("foo-{sha}-bar"),
+        format!("mysecretword-{sha}"),
+        format!("123456abcdef/{sha}"),
+    ] {
+        assert_eq!(
+            redact_with_allowlist(&joined, &allow),
+            super::REDACTED,
+            "{joined}"
+        );
+    }
+}
+
+#[test]
 fn redact_source_keeps_private_key_and_wrapped_rules() {
     let pem = ["-----BEGIN ", "TEST PRIVATE KEY-----\nfake\n"].concat();
     assert_eq!(redact_source(&pem), "[REDACTED]");

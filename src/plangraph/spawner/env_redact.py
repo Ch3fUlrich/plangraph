@@ -57,6 +57,11 @@ def _redact_blob_plain(text):
                          else m[0], text)
 
 
+def _hex_shaped(text):
+    """True when text holds a run of 8 or more hex digits."""
+    return re.search(r'[0-9a-fA-F]{8}', text) is not None
+
+
 def redact_output(text, allow_shas=()):
     """Child-produced free text only, never prompts or structured records."""
     if not isinstance(text, str):
@@ -77,11 +82,17 @@ def redact_output(text, allow_shas=()):
                 return t
             out, copied, kept = [], 0, False
             for hm in _HEX_RUN.finditer(t):
-                if len(hm[0]) == 40 and hm[0].lower() in allow:
-                    out.append(_redact_blob_plain(t[copied:hm.start()]))
-                    out.append(hm[0])
-                    copied, kept = hm.end(), True
-            if not kept:
+                if not (len(hm[0]) == 40 and hm[0].lower() in allow):
+                    continue
+                flank = t[copied:hm.start()]
+                before = t[hm.start() - 1] if hm.start() else '/'
+                after = t[hm.end()] if hm.end() < len(t) else '/'
+                if before != '/' or after != '/' or _hex_shaped(flank):
+                    return '[REDACTED]'
+                out.append(_redact_blob_plain(flank))
+                out.append(hm[0])
+                copied, kept = hm.end(), True
+            if not kept or _hex_shaped(t[copied:]):
                 return '[REDACTED]'
             out.append(_redact_blob_plain(t[copied:]))
             return ''.join(out)

@@ -125,18 +125,47 @@ pub(crate) fn redact_blob(
     let mut copied = 0;
     let mut kept = false;
     for m in hex_re.find_iter(token) {
-        if is_allowlisted_sha(m.as_str(), allow_shas) {
-            out.push_str(&redact_blob_plain(&token[copied..m.start()], blob_re));
-            out.push_str(m.as_str());
-            copied = m.end();
-            kept = true;
+        if !is_allowlisted_sha(m.as_str(), allow_shas) {
+            continue;
         }
+        let flank = &token[copied..m.start()];
+        if !path_flank_ok(token[..m.start()].chars().next_back(), flank)
+            || !path_flank_ok(token[m.end()..].chars().next(), "")
+        {
+            return crate::redact::REDACTED.to_string();
+        }
+        out.push_str(&redact_blob_plain(flank, blob_re));
+        out.push_str(m.as_str());
+        copied = m.end();
+        kept = true;
     }
     if !kept {
         return crate::redact::REDACTED.to_string();
     }
-    out.push_str(&redact_blob_plain(&token[copied..], blob_re));
+    let tail = &token[copied..];
+    if hex_shaped(tail) {
+        return crate::redact::REDACTED.to_string();
+    }
+    out.push_str(&redact_blob_plain(tail, blob_re));
     out
+}
+
+/// A kept sha may only sit in path context: the neighbour is the token edge or `/`,
+/// and the text before it holds no hex-shaped fragment.
+fn path_flank_ok(neighbour: Option<char>, flank: &str) -> bool {
+    matches!(neighbour, None | Some('/')) && !hex_shaped(flank)
+}
+
+/// True when `text` holds a run of 8 or more hex digits.
+fn hex_shaped(text: &str) -> bool {
+    let mut run = 0;
+    for b in text.bytes() {
+        run = if b.is_ascii_hexdigit() { run + 1 } else { 0 };
+        if run >= 8 {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]

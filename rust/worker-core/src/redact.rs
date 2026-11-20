@@ -74,8 +74,14 @@ pub fn redact(text: &str) -> String {
 }
 
 /// Replace secret-shaped text while preserving exact word-boundary 40-hex shas in `allow_shas`.
+/// Entries that are not exactly 40 hex digits are ignored, so no word can be allowlisted.
 pub fn redact_with_allowlist(text: &str, allow_shas: &BTreeSet<String>) -> String {
-    redact_inner(text, true, allow_shas)
+    let exact: BTreeSet<String> = allow_shas
+        .iter()
+        .filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+        .map(|s| s.to_ascii_lowercase())
+        .collect();
+    redact_inner(text, true, &exact)
 }
 
 /// Spawner-read source only: omit credential-name assignments, not token rules.
