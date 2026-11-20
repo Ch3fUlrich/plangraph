@@ -38,7 +38,6 @@ pub(crate) fn key_present(path: &Path) -> bool {
 pub(crate) fn check(state: &Path, key_path: &Path) -> Result<Value, String> {
     let alert_dir = state.join("alerts");
     let alert_path = alert_dir.join("manage-key.json");
-    let key_display = key_path.to_string_lossy();
     if key_present(key_path) {
         match fs::remove_file(&alert_path) {
             Ok(()) => {}
@@ -49,7 +48,6 @@ pub(crate) fn check(state: &Path, key_path: &Path) -> Result<Value, String> {
             "status": "ok",
             "emitted": false,
             "alert": null,
-            "key_path": key_display,
             "count": 0
         }));
     }
@@ -62,13 +60,11 @@ pub(crate) fn check(state: &Path, key_path: &Path) -> Result<Value, String> {
             "status": "alert",
             "emitted": false,
             "alert": "missing_manage_key",
-            "key_path": key_display,
             "count": 1
         }));
     }
     let payload = json!({
         "alert": "missing_manage_key",
-        "key_path": key_display,
         "count": 1
     });
     atomic_write_private(&alert_path, payload.to_string().as_bytes()).map_err(|e| e.to_string())?;
@@ -76,7 +72,6 @@ pub(crate) fn check(state: &Path, key_path: &Path) -> Result<Value, String> {
         "status": "alert",
         "emitted": true,
         "alert": "missing_manage_key",
-        "key_path": key_display,
         "count": 1
     }))
 }
@@ -111,12 +106,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
     if flags.contains_key("--json") {
         writeln!(out, "{result}").map_err(|e| e.to_string())?;
     } else if result["emitted"] == true {
-        writeln!(
-            out,
-            "ALERT missing_manage_key: key file missing at {}",
-            result["key_path"].as_str().unwrap_or("")
-        )
-        .map_err(|e| e.to_string())?;
+        writeln!(out, "ALERT missing_manage_key").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
