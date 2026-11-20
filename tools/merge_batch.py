@@ -136,6 +136,8 @@ def parser():
     cmd.add_argument("--go-row", metavar="PATH", help="recorded GO row; red-main exception must name this full head and EXCEPTION:main-red-fix")
     cmd.add_argument("--checks", metavar="NAME,..", help="check names to require instead of the required checks")
     cmd.add_argument("--wait", type=float, default=20.0, help="seconds to wait for GitHub to mark PRs merged")
+    cmd.add_argument("--subject", metavar="TEXT",
+                     help="merge commit subject (must end with '(#N)' for the batch PR)")
     add("status", land.cmd_status, "batches in progress").add_argument("--json", action="store_true")
     add("abort", build.cmd_abort, "drop a batch: worktree, branch and state").add_argument("--name", required=True)
     return top

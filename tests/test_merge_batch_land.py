@@ -143,9 +143,31 @@ def test_land_merges_closes_unmerged_and_reports(env):
     assert (prs["1"]["state"], prs["3"]["state"], prs["3"]["closed_with"]) == ("MERGED", "CLOSED",
                                                                                "merged via batch PR #100")
     assert env.calls("pr", "merge") == [["pr", "merge", "100", "--repo", "owner/proj", "--merge",
-                                         "--match-head-commit", head]]
+                                         "--match-head-commit", head, "--subject", "batch l1: #1 #2 #3 (#100)"]]
+    assert env.git("show", "-s", "--format=%s", merge, cwd=env.origin).endswith("(#100)")
     assert env.calls("pr", "checks") == [["pr", "checks", "100", "--repo", "owner/proj", "--required"]]
     assert not env.state_file("l1").exists() and env.git("for-each-ref", "refs/merge-batch") == ""
+
+
+@pytest.mark.parametrize("subject,ok", [
+    ("Custom batch subject", False),
+    ("Custom batch #100", False),
+    ("Custom batch (#99)", False),
+    ("Custom batch (#100) trailing", False),
+    ("", False),
+    ("(#100)", False),
+    ("Custom batch (#100)", True),
+])
+def test_land_custom_subject_requires_pr_suffix(env, subject, ok):
+    approval = pushed(env, prs=(1, 2))
+    res = land(env, approval, "--subject", subject)
+    if ok:
+        assert res.returncode == 0, res.stderr
+        merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
+        assert env.git("show", "-s", "--format=%s", merge, cwd=env.origin) == subject
+    else:
+        assert res.returncode == 1 and "(#100)" in res.stderr and res.stdout == ""
+        assert not env.calls("pr", "merge") and env.state_file("l1").exists()
 
 
 def test_land_named_checks(env):

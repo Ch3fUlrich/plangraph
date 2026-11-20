@@ -233,3 +233,78 @@ def test_host_binary_needs_installed_proof_and_other_diffs_close_as_before(w, mo
         "alpha:bin:pg-disk"]
     _ships(w, monkeypatch, ["src/plangraph/keeper/store.py", "docs/KEEPER.md"])
     assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
+
+
+# ----- LE-MERGE-SUBJECT-WITHOUT-PR-NUMBER: GO row PR fallback when merge subject lacks #N
+
+def _subjectless_repo(tmp_path, subject):
+    import os
+    import subprocess
+    env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    def git(repo, *args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                              capture_output=True, text=True, env=env).stdout.strip()
+    repo = tmp_path / "subj-repo"
+    repo.mkdir()
+    git(repo, "-c", "init.defaultBranch=main", "init", "-q")
+    git(repo, "commit", "--allow-empty", "-m", "seed")
+    git(repo, "checkout", "-q", "-b", "prior")
+    git(repo, "commit", "--allow-empty", "-m", "prior pr")
+    prior_head = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "-m", "prior (#10)", "prior")
+    git(repo, "checkout", "-q", "-b", "batch7")
+    git(repo, "commit", "--allow-empty", "-m", "work\n\nPlan-Item: demo:A")
+    anc_head = git(repo, "rev-parse", "HEAD")
+    git(repo, "commit", "--allow-empty", "-m", "batch tip")
+    tip_head = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "-q", "--no-ff", "-m", subject, "batch7")
+    git(repo, "checkout", "-q", "-b", "loose")
+    git(repo, "commit", "--allow-empty", "-m", "unmerged")
+    unmerged = git(repo, "rev-parse", "HEAD")
+    git(repo, "checkout", "-q", "main")
+    return repo, prior_head, anc_head, tip_head, unmerged
+
+
+@pytest.mark.parametrize("use_ancestor", [False, True])
+def test_subjectless_merge_closes_via_go_row_pr_and_head(w, tmp_path, monkeypatch, use_ancestor):
+    repo, _, anc_head, tip_head, _ = _subjectless_repo(
+        tmp_path, "Spawner admission window, session counter, prepush bound (Batch 7, GO D-6395)")
+    from plangraph.keeper.evidence_git import GitAdapter
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
+    chosen = anc_head if use_ancestor else tip_head
+    w.decision_path.write_text(f"| D-6395 | demo | GO #1078 demo:A; GO-HEAD {chosen} | ROUTER |\n")
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
+                               from_open=True, apply=True)
+    assert out["state"] == "done"
+    assert w.store._evidence("demo:A")[-1]["ref"]["prs"] == [
+        {"pr": 1078, "head": chosen, "decision_id": "D-6395"}]
+
+
+@pytest.mark.parametrize("case", ["no_pr_in_go", "prior_head", "unmerged_head", "other_pr_on_ancestor"])
+def test_subjectless_merge_refuses_bad_pr_or_head(w, tmp_path, monkeypatch, case):
+    subject = ("batch (#1078)" if case == "other_pr_on_ancestor"
+               else "Batch 7 without pr number")
+    repo, prior_head, anc_head, tip_head, unmerged = _subjectless_repo(tmp_path, subject)
+    from plangraph.keeper.evidence_git import GitAdapter
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
+    row = {
+        "no_pr_in_go": f"GO {tip_head}",
+        "prior_head": f"GO #1078 demo:A; GO-HEAD {prior_head}",
+        "unmerged_head": f"GO #1078 demo:A; GO-HEAD {unmerged}",
+        "other_pr_on_ancestor": f"GO #999 demo:A; GO-HEAD {anc_head}",
+    }[case]
+    w.decision_path.write_text(f"| D-6395 | demo | {row} | ROUTER |\n")
+    with pytest.raises(Refused):
+        w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
+                             from_open=True, apply=True)
+    assert w.store._item("demo:A")["state"] == "open"

@@ -237,7 +237,8 @@ class WaiverMixin:
             return set()
         try:
             merged = context_sources.pr_merge_of(
-                self._adapter("git"), self._merge_project(item), head)
+                self._adapter("git"), self._merge_project(item), head,
+                fallback_pr=pr)
         except Refused:
             raise
         except Exception:  # noqa: BLE001 - an unreadable merge never authorizes

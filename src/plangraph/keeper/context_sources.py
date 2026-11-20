@@ -331,20 +331,46 @@ def _merge_of(git, repo, ref, sha):
             "pr": int(match.group(1)) if match else None}
 
 
-def pr_merge_of(git, project, head):
-    """``{pr, merge, head}`` when *head* is the second parent of the first-parent merge
-    on the default ref that introduced it, else ``None`` (also when git cannot answer)."""
+def _head_introduced_by_merge(git, repo, parents, head):
+    """True when *head* entered via *parents[1]* of a two-parent merge, not *parents[0]*."""
+    if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents) or not valid_commit_ref(head):
+        return False
+    if parents[1] == head:
+        return True
+    p0_code, _ = _git(git, repo, ["merge-base", "--is-ancestor", "--end-of-options", head, parents[0]])
+    if p0_code != 1:
+        return False
+    p1_code, _ = _git(git, repo, ["merge-base", "--is-ancestor", "--end-of-options", head, parents[1]])
+    return p1_code == 0
+
+
+def pr_merge_of(git, project, head, *, fallback_pr=None):
+    """``{pr, merge, head}`` when *head* was introduced on the second parent of the
+    first-parent merge on the default ref, else ``None`` (also when git cannot answer).
+
+    When the merge subject carries no ``#N``, *fallback_pr* (from the GO row) supplies
+    the PR number and *head* may be any commit introduced on the merge's second parent;
+    otherwise the subject's ``#N`` is authoritative and *head* must equal the second parent.
+    """
     repo, ref = _repo_ref(git, project)
     if repo is None or not valid_commit_ref(head):
         return None
     merge = _merge_of(git, repo, ref, head)
-    if not merge or merge["pr"] is None:
+    if not merge:
         return None
     parents = (_ok(git, repo, ["show", "-s", "--format=%P", "--end-of-options",
                                merge["sha"]]) or "").split()
-    if len(parents) != 2 or parents[1] != head:
+    if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
         return None
-    return {"pr": merge["pr"], "merge": merge["sha"], "head": head}
+    if merge["pr"] is not None:
+        if parents[1] != head:
+            return None
+        return {"pr": merge["pr"], "merge": merge["sha"], "head": head}
+    if type(fallback_pr) is not int or fallback_pr <= 0:
+        return None
+    if not _head_introduced_by_merge(git, repo, parents, head):
+        return None
+    return {"pr": fallback_pr, "merge": merge["sha"], "head": head}
 
 
 _REFS_LOCK = threading.Lock()

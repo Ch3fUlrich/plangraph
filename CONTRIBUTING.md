@@ -79,7 +79,7 @@ refreshes an existing run only on the same head; a new head clears it.
 reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
 non-green or missing CI, and workflow edits whose touching commits lack a
 `Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution. The batch key is explicit; part Plan-Items do not
-stand in for the batch's PLAN key. After land reports included parts as merged,
+stand in for the batch's PLAN key. `tools/merge_batch.py land` always passes a merge commit `--subject` ending with `(#N)` for the batch PR and refuses a custom `--subject` without `(#N)`. After land reports included parts as merged,
 cleanup invokes `pg-worktree-sweep --apply --delete-remote` with exact saved
 SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
 `PG_PINS` and `PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"`; authority failures

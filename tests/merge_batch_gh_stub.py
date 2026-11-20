@@ -178,8 +178,9 @@ elif cmd == ["pr", "merge"]:
         die("head commit does not match --match-head-commit")
     head, base = pr["headRefOid"], f"refs/heads/{pr['baseRefName']}"
     tree = git("rev-parse", f"{head}^{{tree}}").stdout.strip()  # base has not moved in these tests
+    subject = opt("--subject") or f"Merge pull request #{pr['number']}"
     merge = git("commit-tree", tree, "-p", git("rev-parse", base).stdout.strip(), "-p", head,
-                "-m", f"Merge pull request #{pr['number']}").stdout.strip()
+                "-m", subject).stdout.strip()
     git("update-ref", base, merge)
     for other in S["prs"].values():  # GitHub marks a PR merged once its head is on the base
         if other["state"] == "OPEN" and other["number"] not in S["no_auto_merge"] \

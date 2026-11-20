@@ -338,14 +338,31 @@ def included_pr(repo, number, rec, view, merge):
     return "ok", ""
 
 
+def _merge_subject(number, title, custom):
+    """Return a single-line merge commit subject ending ``(#N)``, or raise."""
+    suffix = f"(#{number})"
+    if custom is not None:
+        if "\n" in custom or "\r" in custom:
+            raise MergeBatchError(f"merge subject must be a single line ending with '{suffix}'")
+        text = custom.strip()
+        if not re.search(rf"\S.*{re.escape(suffix)}\Z", text):
+            raise MergeBatchError(f"merge subject must end with '{suffix}'")
+        return text
+    base = re.sub(r"[\r\n]+", " ", (title or "")).strip() or f"batch #{number}"
+    return base if base.endswith(suffix) else f"{base} {suffix}"
+
+
 def cmd_land(args):
     st = load_state(args.name)
     repo, number = st["repo"], args.batch_pr
     if st["status"] != "pushed" or st.get("pr") != number:
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
+    custom_subject = getattr(args, "subject", None)
+    if custom_subject is not None:
+        _merge_subject(number, None, custom_subject)
     check_approval(args.approval, st["head"])
-    fields = "state,headRefOid,isDraft,mergeCommit,baseRefName"
+    fields = "state,headRefOid,isDraft,mergeCommit,baseRefName,title"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
     if pr["headRefOid"] != st["head"]:
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
@@ -359,7 +376,9 @@ def cmd_land(args):
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
-        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"])
+        subject = _merge_subject(number, pr.get("title") or f"batch {st['name']}", custom_subject)
+        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
+           "--subject", subject)
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
     for _ in range(10):  # the merge commit can lag the merge by a moment
