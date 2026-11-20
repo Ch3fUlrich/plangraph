@@ -296,7 +296,8 @@ def pre_push_report(repo, unit=None, environ=None):
     if unit:
         try:
             shown = subprocess.run(['systemctl', '--user', 'show', '--property=UMask', '--value', unit],
-                                   capture_output=True, text=True, timeout=10).stdout.strip()
+                                   capture_output=True, text=True, encoding='utf-8',
+                                   errors='replace', timeout=10).stdout.strip()
             report['unit_umask'] = shown if re.fullmatch(r'[0-7]+', shown) else None
         except (OSError, subprocess.SubprocessError):
             pass
