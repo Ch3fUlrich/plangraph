@@ -193,7 +193,8 @@ session projections with `python3 -m plangraph.fleet_sync genconfig write`,
 then restart the affected spawner units. Run
 `python3 -m plangraph.spawner.host_ready --json` on each placement origin.
 Confirm each host reports a trusted checkout, matching main SHA, working
-tools and login, and no failures. Refresh the `host_ready` readiness record before its
+tools and login, a pre-push test interpreter (the checkout's `.venv`, else
+`python3`) with `pytest` and `xdist`, and no failures. Refresh the `host_ready` readiness record before its
 ten-minute freshness window expires, and the `package-readiness` record before
 its 120-second window expires.
 

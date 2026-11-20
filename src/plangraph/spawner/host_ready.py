@@ -250,12 +250,26 @@ def fresh(record, now=None):
         return False
 
 
+def python_test_tools(command, fail, repo):
+    """Report the pre-push interpreter (checkout venv, else python3) lacking pytest or xdist."""
+    quoted = shlex.quote(repo.rstrip('/') + '/.venv/bin/python')
+    output = command('python', f'py={quoted}; [ -x "$py" ] || py=python3; '
+                     'for m in pytest xdist; do "$py" -c "import $m" 2>/dev/null || echo "missing $m"; done')
+    if output is None:
+        return False
+    missing = [line.split()[1] for line in output.splitlines()
+               if re.fullmatch(r'missing (pytest|xdist)', line.strip())]
+    if missing:
+        fail('python', 'missing ' + ' '.join(missing))
+    return not missing
+
+
 def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT):
     record = dict(host=name, ok=False, checked_at=None, failures=[], reachable=False,
                   mem_available_mb=None, disk_free_gb=None, checkout_sha=None,
                   main_sha=None, doctor_ok=None, keeper_ok=None,
                   spawner_session=None, live_runs=None, behind_main=None,
-                  src_ok=None, trust_ok=None, tools_ok=None, tokens_ok=None)
+                  src_ok=None, trust_ok=None, tools_ok=None, python_ok=None, tokens_ok=None)
     deadline = time.monotonic() + timeout
     reachability_failed = False
 
@@ -302,6 +316,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             record['src_ok'] = check_sources(name, config, command, fail)
             if config.get('registry'):
                 record['tools_ok'] = command('tools', 'command -v git && command -v python3 && command -v codex') is not None
+                record['python_ok'] = python_test_tools(command, fail, config['repo'])
                 record['tokens_ok'] = command('tokens', 'codex login status') is not None
                 record['trust_ok'] = command(
                     'trust', 'pg-host-readiness --project ' + shlex.quote(config['repo'])) is not None

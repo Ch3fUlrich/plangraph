@@ -349,3 +349,26 @@ def test_remote_disk_floor(tmp_path, floor, free, ok):
     assert result['ok'] is ok
     assert result['disk_free_gb'] == free
     assert result['failures'] == ([] if ok else [f'disk: disk_low: free {free} GB'])
+
+
+@pytest.mark.parametrize('missing', [[], ['pytest'], ['xdist'], ['pytest', 'xdist']])
+def test_registry_host_reports_missing_pytest_and_xdist(tmp_path, missing):
+    scripts = []
+
+    def fake(argv, **kwargs):
+        script = argv[-1]
+        scripts.append(script)
+        if 'import $m' in script:
+            return SimpleNamespace(returncode=0, stdout=''.join(
+                f'missing {module}\n' for module in missing))
+        if 'remote_ps' in script:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(runs=[])))
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', dict(CONFIG, registry=True), tmp_path, fake)
+    probe = next(s for s in scripts if 'import $m' in s)
+    assert '/invented/repo/.venv/bin/python' in probe and 'python3' in probe
+    assert result['python_ok'] is (not missing)
+    assert result['ok'] is (not missing), result['failures']
+    assert [f for f in result['failures'] if f.startswith('python:')] == (
+        [f'python: missing {" ".join(missing)}'] if missing else [])
