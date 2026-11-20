@@ -137,6 +137,16 @@ def test_plain_order_never_reveals_pieces_masked_by_old_order():
 
 @pytest.mark.parametrize('marker', ['\ue000', '\ue001', '\ue0000\ue001'])
 @pytest.mark.parametrize('nl', ['\n', '\r\n'])
+def test_shield_markers_skip_prepass_and_equal_main(pre_a1, marker, nl):
+    """Preserve the historical baseline for marker-bearing output."""
+    first, rest = 'A9' * 7, 'B8' * 8
+    text = marker + ' API_KEY=' + 'gh' + 'p_' + first + nl + rest + nl + 'next'
+    assert pre_a1.join_shielded_assignments(text, pre_a1._ASSIGNMENT) == text
+    assert pre_a1.redact(text) == main_order(text)
+
+
+@pytest.mark.parametrize('marker', ['\ue000', '\ue001', '\ue0000\ue001'])
+@pytest.mark.parametrize('nl', ['\n', '\r\n'])
 def test_shield_markers_preserve_literal_text_and_mask_continuations(marker, nl):
     first, rest = 'A9' * 7, 'B8' * 8
     text = marker + ' API_KEY=' + 'gh' + 'p_' + first + nl + rest + nl + 'next retained'
