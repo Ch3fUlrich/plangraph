@@ -25,7 +25,8 @@ from plangraph.keeper.evidence_types import Context, Result, as_epoch
 # registry / types
 # --------------------------------------------------------------------------- #
 
-def test_registry_has_exactly_the_supported_kinds():
+def test_registry_has_exactly_the_six_kinds():
+    """Pin the full set of currently supported evidence kinds."""
     assert set(ev.VERIFIERS) == {"commit+ci", "commit", "run-record",
                                  "semaphore-task", "decision", "error", "claude-seat", "deploy"}
 

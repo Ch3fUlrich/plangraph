@@ -87,7 +87,8 @@ def test_source_pin_mismatch_is_refused_before_any_call(kp, tmp_path):
     assert "sha256 mismatch" in run_batch(kp, good).stdout
 
 
-def test_principal_must_match_the_token_and_have_batch_access(kp, tmp_path):
+def test_principal_must_match_the_token_and_be_a_router(kp, tmp_path):
+    """A matching L1 token without a grant is refused, as is any mismatch."""
     tag = uid()
     ops = _plain_ops(tag)[:1]
     out = run_batch(kp, write_batch(tmp_path, ops, principal="lead"), who="lead")
