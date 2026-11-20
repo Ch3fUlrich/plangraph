@@ -40,6 +40,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         record_path: dir.path().join("record.json"),
         base_ref: "refs/heads/main".into(),
         tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
     };
     output(Command::new("git").arg("init").arg(&host.cwd)).unwrap();
     fs::write(
@@ -62,7 +63,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
     assert_eq!(row["host"], "fixture");
     assert_eq!(row["model"], WRITER_MODEL);
     assert_eq!(row["effort"], WRITER_EFFORT);
-    let args = model_args();
+    let args = model_args(&host.effort);
     assert_eq!(args[1], row["model"].as_str().unwrap());
     assert!(args[3].ends_with(row["effort"].as_str().unwrap()));
     assert_eq!(row["tokens"], 1290);
@@ -137,6 +138,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         record_path: dir.path().join("record.json"),
         base_ref: "refs/heads/main".into(),
         tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
     };
     host.git(&["init"]).unwrap();
     let commit = |message: &str| {
@@ -253,4 +255,31 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
     assert_eq!(record["exit_code"], 4);
     assert_eq!(record["reason"], "weak_verdict");
     assert_eq!(record["review"]["status"], "no_verdict");
+}
+
+#[test]
+fn writer_effort_is_medium_unless_a_decision_names_a_higher_one() {
+    assert_eq!(WRITER_MODEL, "gpt-6.2-sol");
+    assert_eq!(writer_effort(&json!({})).unwrap(), "medium");
+    assert_eq!(
+        writer_effort(&json!({"effort":"medium"})).unwrap(),
+        "medium"
+    );
+    assert_eq!(
+        writer_effort(&json!({"effort":"xhigh","effort_decision":"D-6397"})).unwrap(),
+        "xhigh"
+    );
+    for card in [
+        json!({"effort":"high"}),
+        json!({"effort":"high","effort_decision":"because"}),
+        json!({"effort":"high","effort_decision":"D-"}),
+    ] {
+        assert!(writer_effort(&card)
+            .unwrap_err()
+            .starts_with("effort_needs_decision"));
+    }
+    assert!(writer_effort(&json!({"effort":"low"}))
+        .unwrap_err()
+        .starts_with("effort_invalid"));
+    assert_eq!(model_args("high")[3], "model_reasoning_effort=high");
 }

@@ -10,15 +10,37 @@ use std::{
     time::Duration,
 };
 
-const WRITER_MODEL: &str = "gpt-6.1-sol";
+/// Lead writer leg cx-gpt-6.2-sol-medium (operator D-6397).
+const WRITER_MODEL: &str = "gpt-6.2-sol";
 const WRITER_EFFORT: &str = "medium";
-/// Model and effort flags for the codex invocation; the ledger row records the same constants.
-fn model_args() -> [String; 4] {
+/// Writer effort: medium unless the card names `effort` high or xhigh together with
+/// an `effort_decision` D-id that authorises it.
+pub(crate) fn writer_effort(card: &Value) -> Result<String, String> {
+    let Some(effort) = card.get("effort").filter(|v| !v.is_null()) else {
+        return Ok(WRITER_EFFORT.into());
+    };
+    let effort = effort
+        .as_str()
+        .filter(|e| ["medium", "high", "xhigh"].contains(e))
+        .ok_or("effort_invalid: card.effort must be medium, high or xhigh")?;
+    let decided = card["effort_decision"].as_str().is_some_and(|d| {
+        d.strip_prefix("D-")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    });
+    if effort != WRITER_EFFORT && !decided {
+        return Err(format!(
+            "effort_needs_decision: card.effort {effort} requires card.effort_decision D-<n>"
+        ));
+    }
+    Ok(effort.into())
+}
+/// Model and effort flags for the codex invocation; the ledger row records the same values.
+fn model_args(effort: &str) -> [String; 4] {
     [
         "-m".into(),
         WRITER_MODEL.into(),
         "-c".into(),
-        format!("model_reasoning_effort={WRITER_EFFORT}"),
+        format!("model_reasoning_effort={effort}"),
     ]
 }
 
@@ -30,6 +52,7 @@ struct Host {
     record_path: PathBuf,
     base_ref: String,
     tool_path: String,
+    effort: String,
 }
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
@@ -96,7 +119,7 @@ impl Host {
         let accepted = record["review"]["verdict"] == "ACCEPT";
         Ok(
             json!({"schema_version":1,"kind":"writer","run_id":record["run_id"],
-            "host":record["host"],"model":WRITER_MODEL,"effort":WRITER_EFFORT,
+            "host":record["host"],"model":WRITER_MODEL,"effort":self.effort,
             "started":record["started"],"ended":record["ended"],"exit_code":record["exit_code"],
             "item_key":record["item_key"],"items_given":item.map(|_| 1),"items_done":done,
             "changed_lines":lines,"wall_minutes":wall,"tokens":crate::writer_ledger::tokens(&log)?,
@@ -207,7 +230,7 @@ impl Driver for Host {
             )
             .env("CARGO_INCREMENTAL", "0")
             .args(["--json"])
-            .args(model_args())
+            .args(model_args(&self.effort))
             .args([
                 "-c",
                 "approval_policy=never",
@@ -447,7 +470,19 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             .as_str()
             .ok_or("tool PATH missing")?
             .into(),
+        effort: WRITER_EFFORT.into(),
     };
+    match writer_effort(&request["card"]) {
+        Ok(effort) => host.effort = effort,
+        Err(reason) => {
+            // Refused before Codex starts: the record names the reason.
+            record["status"] = json!("failed");
+            record["exit_code"] = json!(5);
+            record["reason"] = json!(reason);
+            return host.save(&record);
+        }
+    }
+    record["effort"] = json!(host.effort);
     record["cwd"] = json!(host.cwd);
     host.save(&record)?;
     native_writer::run(

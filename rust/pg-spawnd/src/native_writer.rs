@@ -17,7 +17,7 @@ pub(crate) trait Driver {
 pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> Value {
     record["manifest"] = json!({
         "name":record["run_id"], "host":record["host"], "worktree":record["cwd"],
-        "brief":brief, "effort":"medium", "try_count":0
+        "brief":brief, "effort":record["effort"].as_str().unwrap_or("medium"), "try_count":0
     });
     record["review_rounds"] = json!(0);
     let result = lifecycle(driver, &mut record, brief);

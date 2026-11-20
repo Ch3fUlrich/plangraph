@@ -21,8 +21,11 @@ PATH, including tools launched by gate scripts.
 
 The Rust worker fetches the pushed base into a per-run ref, refuses ancestry
 behind fetched origin/main, and creates a detached worktree in the
-run state directory under `runs/<run-id>/worktree`, outside the repository. It runs gpt-6.1-sol at medium
-reasoning with the brief on stdin. A review on the final HEAD is mandatory:
+run state directory under `runs/<run-id>/worktree`, outside the repository. It runs gpt-6.2-sol (lead writer leg, operator D-6397) at medium
+reasoning with the brief on stdin. A card may name `effort` `high` or `xhigh` only
+together with `effort_decision: "D-<n>"`; any other effort refuses with
+`effort_invalid` or `effort_needs_decision` before Codex starts, and the manifest
+and ledger row record the effort used. A review on the final HEAD is mandatory:
 missing reviews resume the same Codex thread at most three times. Review routes
 must use role `review`, writer_families `["openai"]`. The optional `review_dir`
 card field selects a target-host directory; the default is `<worktree>/reviews`.
