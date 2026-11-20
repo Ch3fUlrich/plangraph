@@ -9,14 +9,14 @@ from plangraph.spawner.clients import build_command
 
 
 def test_agy_harness_dispatch():
-    assert build_command('hello', 'gemini-4-argon-high', client='agy') == [
+    assert build_command('hello', 'gemini-4-neon-medium', client='agy') == [
         'agy', '--dangerously-skip-permissions', '--model',
-        'gemini-4-argon-high', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
+        'gemini-4-neon-medium', '-p', '', '--input-format', 'stream-json', '--output-format', 'stream-json']
 
 
 def test_opencode_harness_dispatch():
-    assert build_command('hello', 'omniroute/cx-gpt-6.1-sol', client='opencode') == [
-        'opencode', 'run', '--standalone', '--model', 'omniroute/cx-gpt-6.1-sol']
+    assert build_command('hello', 'omniroute/cx-gpt-6.2-sol', client='opencode') == [
+        'opencode', 'run', '--standalone', '--model', 'omniroute/cx-gpt-6.2-sol']
 
 
 def test_unknown_harness_rejected():
@@ -30,8 +30,8 @@ def test_qodercli_harness_dispatch():
 
 
 @pytest.mark.parametrize('harness,model,native_model', [
-    ('agy', 'gemini-4-argon-high', 'gemini-4-argon-high'),
-    ('opencode', 'omniroute/cx-gpt-6.1-sol', 'omniroute/cx-gpt-6.1-sol')])
+    ('agy', 'gemini-4-neon-medium', 'gemini-4-neon-medium'),
+    ('opencode', 'omniroute/cx-gpt-6.2-sol', 'omniroute/cx-gpt-6.2-sol')])
 def test_unmocked_harness_popen(tmp_path, harness, model, native_model):
     binary = tmp_path / harness
     binary.write_text('#!/bin/sh\nprintf "%s\\n" "$0" "$@"\ncat\n')

@@ -48,16 +48,21 @@ def test_tier_first_and_swap(monkeypatch, gemini_tier):
                      'cost_per_task_usd': 0, 'pool_burn_weight': 0}
             for i, l in enumerate(writers)}
     # Sol keeps its prefix; Hydrogen high follows Sol; remaining legs follow cost tiers.
-    catalog = () if gemini_tier == 'free' else ({'id': 'agy/gemini-4-argon-high', 'tier': gemini_tier},)
+    catalog = () if gemini_tier == 'free' else ({'id': 'agy/gemini-4-neon-medium', 'tier': gemini_tier},)
     plan = plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=catalog)
-    expected = ('cx-gpt-6.1-sol-xhigh', 'agy-gemini-4-hydrogen-high', 'opencode-big-pickle', 'openrouter-free',
-                'opencode-glm-5.3-flash-free', 'opencode-deepseek-v4.1-flash-free',
-                'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', 'mimo-v2.6-flash',
-                'agy-gemini-4-argon', 'deepseek')
+    free_head = ('openrouter-free', 'opencode-glm-5.3-flash-free')
+    sub_tail = ('mimo-v2.6-flash', 'agy-gemini-4-neon-medium')
+    expected = (
+        'cx-gpt-6.2-sol-medium', 'cx-gpt-6.2-astra', 'agy-gemini-4-hydrogen-high',
+        'opencode-deepseek-v4.1-flash-free', 'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
+        *free_head, 'omniroute-muse-spark', 'omniroute-deepseek-flash', 'mimo-v2.6-pro', *sub_tail, 'deepseek')
     assert tuple(l.id for l in plan.legs) == expected
-    data[writers[0].model], data[writers[7].model] = data[writers[7].model], data[writers[0].model]
+    data[writers[1].model], data[writers[2].model] = data[writers[2].model], data[writers[1].model]
     swapped = plan_spawn(CARD, role='implement', benchmark=data, catalog_rows=catalog)
-    assert tuple(l.id for l in swapped.legs) == (*expected[:2], expected[5], *expected[2:5], *expected[6:9], expected[10], expected[9], expected[11])
+    a, b = expected.index('openrouter-free'), expected.index('opencode-glm-5.3-flash-free')
+    reordered = list(expected)
+    reordered[a], reordered[b] = reordered[b], reordered[a]
+    assert tuple(l.id for l in swapped.legs) == tuple(reordered)
 
 
 def test_candidate_json_and_limit(monkeypatch):
@@ -108,6 +113,7 @@ def test_default_database_cli_mcp(tmp_path, monkeypatch, capsys):
     for result in (cli, mcp):
         assert result['first_leg']['id'] == LEAD_WRITER
         assert result['p_source'] == 'benchmark'
-        assert all(c['p_source'] == ('prior' if c.get('reason', '').startswith('disabled:') else 'measured')
+        assert all(c['p_source'] == ('prior' if c.get('reason', '').startswith('disabled:') or c.get('reason') == 'codex_available'
+                                           else 'measured')
                    and (c['u_core'] is None if c['p_source'] == 'prior' else isinstance(c['u_core'], float))
                    for c in result['candidates'])

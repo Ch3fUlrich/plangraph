@@ -298,11 +298,10 @@ def test_keeper_readiness_does_not_enable_implementation_fallbacks(w, repo, entr
         route = gate(w, repo, key).route
     else:
         route = service.route_for_card(w.store, w.p("router"), key, legs=DEFAULT_LEGS)
-    assert route.first_leg.id == "opencode-big-pickle"
-    # D-5206 replaces plain Sol with xhigh without lifting keeper-only admission.
-    assert {leg.id for leg in route.legs if leg.roles == ("implement",)} == {"cx-gpt-6.1-sol-xhigh"}
-    # D-5212 changes worker priority, not S5's registered free/paid fallbacks.
+    assert route.first_leg.id == "opencode-deepseek-v4.1-flash-free"
+    # D-6310 replaces Sol xhigh with Sol medium and Astra without lifting keeper-only admission.
+    assert {leg.id for leg in route.legs if leg.roles == ("implement",)} == {"cx-gpt-6.2-sol-medium"}
     worker = service.route_for_card(w.store, w.p("router"), key,
                                     legs=DEFAULT_LEGS, role="implement")
-    assert [leg.id for leg in worker.legs[:2]] == ["cx-gpt-6.1-sol-xhigh", "agy-gemini-4-hydrogen-high"]
+    assert [leg.id for leg in worker.legs[:3]] == ["cx-gpt-6.2-sol-medium", "cx-gpt-6.2-astra", "agy-gemini-4-hydrogen-high"]
     assert worker.legs[-1].id == "deepseek"

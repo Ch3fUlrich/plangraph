@@ -14,10 +14,10 @@ from plangraph.routing_support import opencode_overlay, resolver
 # Measured with `opencode models` on 2026-11-06 (D-3952).
 SERVED_OPENCODE_GO_IDS = frozenset({
     "opencode-go/deepseek-v4.1-flash",
-    "opencode-go/gemini-4-argon",
-    "opencode-go/glm-5.2",
+    "opencode-go/glm-5.3-flash",
     "opencode-go/qwen3.8-max",
     "opencode-go/muse-spark-1.3-contributor",
+    "opencode-go/beam-free",
 })
 
 

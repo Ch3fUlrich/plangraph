@@ -160,14 +160,35 @@ D-6082 / D-6143: `measured_down` extends its run-record scan window to cover the
 oldest active uncapped provider reset in `leg_state`, so legs with multi-day
 provider resets remain suppressed past 24 hours until their `reset_at` elapses.
 
-Review writer aliases (`codex`, `cx-gpt-6.1-sol`, `gpt`) share the registered
+Review writer aliases (`codex`, `cx-gpt-6.2-sol`, `gpt`) share the registered
 writer-family resolver used by spawn admission and review seats. The preferred
 Gemini/free review prefix remains first; eligible OpenAI legs outside that order
-stay in the fallback list before final Sonnet. Other legs outside the operator order,
-including the extra DeepSeek legs, stay excluded. Claude writers may use the
+stay in the fallback list. Other legs outside the operator order
+stay excluded. Claude writers may use the
 `cx-gpt-6-luna` Codex seat. Unknown names fail with accepted family names
 and aliases within native refusal limits; registered leg/model ids remain accepted.
 Verdict delivery uses the same resolver to forward canonical writer families.
+
+## Route order and family admission (D-6310 / rule 3.53)
+
+D-6310 retires `gpt-6.1-sol` (and `gemini-4-argon` for implement; D-6366 serves it as the first review leg), lists `opencode` as a provider,
+removes the `deepseek` and `glm` family bans, and leaves no `opencode-go` leg disabled.
+Implementation routes prioritize `cx-gpt-6.2-sol-medium` (with `cx-gpt-6.2-sol-{low,medium,high,xhigh,max}`
+explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
+`opencode/deepseek-v4.1-flash-free` (200k) > `opencode-go/deepseek-v4.1-flash` (1M) >
+`opencode-go/glm-5.3-flash` (1M) on `opencode` as implementation fallback.
+While every Codex leg is unavailable (quota_until, down), `agy-claude-sonnet-5-5-high`
+is served directly behind the Codex legs; with any Codex leg available it is skipped as
+`codex_available` (rule 3.58, D-6366).
+Review routes follow rule 3.58 (D-6366, overriding the D-6310 and D-6357 review lists):
+`agy-gemini-4-argon-low` first (agy plan mode; `agy-gemini-4-argon-medium` follows as
+same-family fallback; review only, never an implement leg), then `mimo/mimo-v2.6-pro`,
+`opencode-go/deepseek-v4.1-flash`, `opencode/deepseek-v4.1-flash-free` and
+`opencode-go/glm-5.3-flash`, with `agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high`
+and `mimo/mimo-v2.6-flash` as fallbacks. The reviewer's family differs from the writer's (a gemini writer skips argon).
+`opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
+to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
+stays disabled because it is not served by `opencode models`.
 
 ## Automatic work mode (D-5952 / rule 3.41)
 

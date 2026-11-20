@@ -91,18 +91,20 @@ DEFAULT_LEGS = (
     _replace(_legacy["qodercli-qwen3.8-flash"], roles=("review",),
              disabled="D-4744 operator disabled, not a route option"),
     Leg("opencode-deepseek-v4.1-flash-free", "free", "opencode",
-        "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 100000, True,
-        roles=("review", "implement"),
-        disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
+        "opencode/deepseek-v4.1-flash-free", "deepseek", ("128k",), 200000, True,
+        roles=("review", "implement")),
     Leg("opencode-glm-5.3-flash-free", "free", "opencode",
         "opencode/glm-5.3-flash-free", "glm", ("128k",), 100000, True,
         roles=("review", "implement"),
-        disabled="D-4196 opencode zen never worked, use opencode go; never remove (D-3828)"),
+        disabled="D-6310: opencode/glm-5.3-flash-free not served by opencode models (use opencode-go/glm-5.3-flash); never remove (D-3828)"),
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
-    Leg("cx-gpt-6.1-sol", "subscription", "opencode", "omniroute/cx-gpt-6.1-sol",
+    Leg("cx-gpt-6.2-sol", "subscription", "opencode", "omniroute/cx-gpt-6.2-sol",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",),
-        note="D-3605: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
+        note="D-6310: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
+    Leg("cx-gpt-6.2-astra", "subscription", "opencode", "omniroute/cx-gpt-6.2-astra",
+        "gpt", ("128k", "256k"), 272000, False, roles=("implement",),
+        note="D-6310: operator implement leg (GPT-6.2 Astra via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k", "1m"), 900000, False, roles=("review",),
         tool_mode="inline-only"),
@@ -117,8 +119,11 @@ DEFAULT_LEGS = (
                "Review plan mode reads the working tree with tools: plan-order file-marker probe 2026-11-14 09:5xZ. "
                "Seat unwitnessed: agy emits no served-model telemetry (rule 3.26).")
       for effort, role in (("high", "implement"), ("medium", "review"))),
-    Leg("agy-gemini-4-argon", "subscription", "agy", "gemini-4-argon-high",
-        "gemini", ("128k", "256k", "1m"), 900000, False, roles=("implement", "review")),
+    Leg("agy-gemini-4-neon-medium", "subscription", "agy", "gemini-4-neon-medium",
+        "gemini", ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium",
+        tool_mode="tools", note="D-6310: replaces retired gemini-4-argon for review"),
+    Leg("opencode-flint-40b-free", "free", "opencode", "opencode/flint-40b-free",
+        "flint", ("128k",), 100000, True, roles=("implement", "review")),
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
         "glm", ("128k",), 100000, True, roles=("implement", "review")),
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
@@ -140,17 +145,14 @@ DEFAULT_LEGS = (
         roles=("implement", "review", "orchestrate")),
     Leg("agy-opus", "subscription", "agy", "claude-opus-5-5-medium", "claude",
         ("128k",), 100000, False, claude_family=True, roles=("review", "orchestrate")),
-    Leg("opencode-gemini-4-argon", "free", "opencode", "opencode/gemini-4-argon",
-        "gemini", ("128k",), 100000, True, roles=("review", "orchestrate")),
-    Leg("opencode-go-gemini-4-argon", "subscription", "opencode",
-        "opencode-go/gemini-4-argon", "gemini", ("128k",), 100000,
-        False, roles=("review",)),
-    Leg("opencode-go-glm-5.2", "subscription", "opencode",
-        "opencode-go/glm-5.2", "glm", ("128k",), 100000, False,
-        roles=("review",), disabled="D-3605 operator: glm not acceptable"),
+    Leg("opencode-go-beam-free", "free", "opencode", "opencode-go/beam-free",
+        "beam", ("128k",), 100000, False, roles=("implement", "review")),
+    Leg("opencode-go-glm-5.3-flash", "subscription", "opencode",
+        "opencode-go/glm-5.3-flash", "glm", ("128k", "256k", "1m"), 900000, False,
+        roles=("review", "implement")),
     Leg("opencode-go-qwen3.8-max", "subscription", "opencode",
         "opencode-go/qwen3.8-max", "qwen", ("128k",), 100000, False,
-        roles=("review",), disabled="D-3605 operator: not acceptable"),
+        roles=("review",)),
     Leg("omniroute-grok-4.7", "subscription", "opencode", "omniroute/gc/grok-4.7",
         "grok", ("128k", "256k"), 120000, False, roles=("review",), tool_mode="tools",
         note="D-3701: grok review seat via OmniRoute gc"),
@@ -162,8 +164,8 @@ DEFAULT_LEGS = (
         False, roles=("review",),
         note="D-4280: explicit audited selection; scrubbed or public material only"),
     Leg("opencode-go-deepseek-v4-flash", "subscription", "opencode",
-        "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k",), 100000,
-        False, roles=("review",)),
+        "opencode-go/deepseek-v4.1-flash", "deepseek", ("128k", "256k", "1m"), 900000,
+        False, roles=("review", "implement")),
     _replace(_legacy["deepseek"], model="omniroute/deepseek-direct-flash", roles=("implement",)),
     Leg("claude-haiku-5.5", "subscription", "claude", "claude-haiku-5-5", "claude",
         ("128k", "256k"), 180000, False, claude_family=True, roles=("review",),
@@ -171,20 +173,26 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# Rule 3.50 (OPERATOR D-6028, 2026-11-15): reviews start on mimo-v2.6-pro, then mimo-v2.6-flash,
-# then the rule 3.26 order (D-5966: independent agy model quotas, free legs, Sonnet high last).
+# Rule 3.58 (OPERATOR D-6366, 2026-11-20; overrides the D-6310 and D-6357 review lists):
+# reviews run first on agy gemini-4-argon-low (argon-medium follows as same-family
+# fallback), then mimo-v2.6-pro, then the OpenCode DeepSeek legs, then glm-5.3-flash;
+# neon and Sonnet high follow as fallbacks.  The reviewer's family always differs from the writer's.
 REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH = "mimo-v2.6-pro", "mimo-v2.6-flash"
-REVIEW_HYDROGEN, REVIEW_ARGON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-argon-medium"
-REVIEW_DEEPSEEK, REVIEW_BEAM = "console-deepseek-flash", "opencode-go-beam-free"
+REVIEW_HYDROGEN, REVIEW_NEON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-neon-medium"
+REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"
+REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
 REVIEW_SONNET = "claude-sonnet-5-5-high"
-REVIEW_ORDER = (REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH, REVIEW_HYDROGEN, REVIEW_ARGON,
-                REVIEW_DEEPSEEK, REVIEW_BEAM, REVIEW_SONNET)
+REVIEW_ORDER = (REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_MIMO_PRO, "opencode-go-deepseek-v4-flash", REVIEW_DEEPSEEK,
+                "opencode-go-glm-5.3-flash", REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH)
+LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
+    Leg(REVIEW_ARGON_LOW, "subscription", "agy", "gemini-4-argon-low", "gemini",
+        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="low",
+        tool_mode="tools", note="D-6366 rule 3.58 (1): first review leg; retired for implement (D-6310)"),
     Leg(REVIEW_ARGON, "subscription", "agy", "gemini-4-argon-medium", "gemini",
-        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium"),
-    Leg(REVIEW_DEEPSEEK, "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
-        ("128k",), 100000, False, roles=("review",)),
-    Leg(REVIEW_BEAM, "free", "opencode", "opencode-go/beam-free", "beam",
+        ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium",
+        tool_mode="tools", note="D-6366: same-family fallback after argon-low; retired for implement (D-6310)"),
+    Leg("console-deepseek-flash", "free", "opencode", "console-deepseek/deepseek-flash", "deepseek",
         ("128k",), 100000, False, roles=("review",)),
     Leg(REVIEW_SONNET, "subscription", "claude", "claude-sonnet-5-5-high", "claude",
         ("128k", "256k", "1m"), 900000, False, claude_family=True,
@@ -196,12 +204,16 @@ READINESS_LEGS = tuple(_replace(leg, roles=tuple(r for r in leg.roles if r != 'i
                                disabled=leg.disabled or (
                                    'D-3828: writer disabled; no retained review or orchestrate role'
                                    if leg.roles == ('implement',) else None))
-                       if leg.id != 'cx-gpt-6.1-sol' else leg for leg in DEFAULT_LEGS)
+                       if leg.id != 'cx-gpt-6.2-sol' else leg for leg in DEFAULT_LEGS)
 
-# D-5206/D-5212 change writer priority, not the registered fallback roles.
+# Rule 3.53 (OPERATOR D-6310): implement legs priority and opencode implementation fallback.
 WRITER_ORDER: tuple[str, ...] = (
-    "cx-gpt-6.1-sol-xhigh",  # D-5206: effort-qualified default, then agy fallback
+    "cx-gpt-6.2-sol-medium",
+    "cx-gpt-6.2-astra",
     "agy-gemini-4-hydrogen-high",
+    "opencode-deepseek-v4.1-flash-free",
+    "opencode-go-deepseek-v4-flash",
+    "opencode-go-glm-5.3-flash",
 )
 LEAD_WRITER = WRITER_ORDER[0]
 
@@ -218,7 +230,7 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           "claude", ("128k", "256k", "1m"), 900000, False, claude_family=True,
           roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
-    *(Leg(f"cx-gpt-6.1-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.1-sol-{e}",
+    *(Leg(f"cx-gpt-6.2-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.2-sol-{e}",
           "gpt", ("128k", "256k", "1m"), 900000, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
@@ -229,12 +241,16 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
 EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS
 
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
-_plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.1-sol")
-_sol_xhigh = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
-DEFAULT_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
+_plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.2-sol")
+_sol_default = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
+DEFAULT_LEGS = tuple(_sol_default if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
 EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
 # Keeper readiness keeps its existing admission, but uses the current routed id.
-READINESS_LEGS = tuple(_sol_xhigh if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
+READINESS_LEGS = tuple(_sol_default if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
+#: Claude writers the implement route serves only while every Codex leg is
+#: unavailable (rule 3.58 / D-6366); with any Codex leg available they are skipped
+#: as ``codex_available`` and stay explicit-only picks.
+CODEX_FALLBACK_WRITERS: tuple[str, ...] = ("agy-claude-sonnet-5-5-high",)
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
     leg.id for leg in EXPLICIT_LEGS if "implement" in leg.roles)
@@ -264,7 +280,8 @@ def explicit_only_skips(role: str) -> tuple[dict, ...]:
     return tuple({"leg": leg.id, "reason": "explicit_only", "evidence": {
         "kind": "explicit_only", "reason": "spawn with --leg " + leg.id}}
         for leg in EXPLICIT_LEGS if role in leg.roles
-        and not (role == "review" and leg.id in REVIEW_ORDER))
+        and not (role == "review" and leg.id in REVIEW_ORDER)
+        and not (role == "implement" and leg.id in CODEX_FALLBACK_WRITERS))
 
 _FIELDS = tuple(f.name for f in dataclasses.fields(Leg))
 _REQUIRED = ("id", "tier", "harness", "model", "family", "windows",

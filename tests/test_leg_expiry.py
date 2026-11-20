@@ -15,15 +15,15 @@ pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 def test_d3605_sol_routes_implement_never_review():
     card = {"estimate_tokens": 20000, "risk_tags": []}
-    assert plan_spawn(card, role="implement").first_leg.id == "cx-gpt-6.1-sol-xhigh"
+    assert plan_spawn(card, role="implement").first_leg.id == "cx-gpt-6.2-sol-medium"
     review = plan_spawn(card, role="review", writer_families=("mimo",))
-    assert not {"cx-gpt-6.1-sol", "cx-gpt-6.1-sol-xhigh"} & {leg.id for leg in review.legs}
+    assert not {"cx-gpt-6.2-sol", "cx-gpt-6.2-sol-medium"} & {leg.id for leg in review.legs}
 
 
 @pytest.mark.parametrize("expires", ["2000-01-01", "invalid", None, 123, True,
                                     float("nan"), float("inf"), -float("inf")])
 def test_load_legs_ignores_legacy_expires(tmp_path, expires):
-    raw = dataclasses.asdict(next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol-xhigh"))
+    raw = dataclasses.asdict(next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.2-sol-medium"))
     raw["expires"] = expires
     path = tmp_path / "legs.json"
     path.write_text(json.dumps({"legs": [raw]}))
@@ -42,7 +42,7 @@ def test_disabled_leg_stays_inactive():
 
 
 def test_temporary_stop_uses_planner_clock_and_has_one_state():
-    sol = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol-xhigh")
+    sol = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.2-sol-medium")
     leg = dataclasses.replace(sol, disabled="temporary stop", expires=160)
     for now, expected in ((159, ()), (160, (leg,))):
         plan = plan_spawn({"estimate_tokens": 1000}, role="implement", legs=(leg,), now=now,
@@ -55,9 +55,9 @@ def test_registered_implement_override_is_not_a_legacy_writer_pin(tmp_path):
     import asyncio
     from plangraph.spawner.service import SpawnService
     result = asyncio.run(SpawnService(state=tmp_path).spawn(
-        card={"estimate_tokens": 1000}, role="implement", leg="opencode-big-pickle",
-        override_reason="D-5092 eligible free writer", dry_run=True))
-    assert result["chosen_leg"]["id"] == "opencode-big-pickle"
+        card={"estimate_tokens": 1000}, role="implement", leg="opencode-deepseek-v4.1-flash-free",
+        override_reason="D-6310 eligible free writer", dry_run=True))
+    assert result["chosen_leg"]["id"] == "opencode-deepseek-v4.1-flash-free"
 
 
 @pytest.mark.parametrize("state", ["expired", "down"])
@@ -67,7 +67,7 @@ def test_omniroute_expired_or_down_no_route_or_override(tmp_path, state):
     from plangraph.spawner.service import SpawnService
     from plangraph.spawner.runner import SpawnerRunner
 
-    leg = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.1-sol-xhigh")
+    leg = next(l for l in DEFAULT_LEGS if l.id == "cx-gpt-6.2-sol-medium")
     def reader(model, **kwargs):
         return {"state": state if model == leg.model else "ok", "evidence": None}
     card = {"estimate_tokens": 1000}

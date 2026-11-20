@@ -100,12 +100,9 @@ def test_legs_carry_tool_mode():
 
 def test_override_with_catalog_harness_spawns(tmp_path, monkeypatch):
     db = _seeded()
-    db.conn.execute("UPDATE catalog_models SET available=1, status='active' WHERE model_id=?",
-                    ("opencode-go/gemini-4-argon",))
-    db.conn.commit()
     svc = _service(tmp_path, monkeypatch, db)
     record = asyncio.run(svc.spawn(card=CARD, prompt="task", role="review", writer_families=("gpt",),
-                                   model="opencode-go/gemini-4-argon",
+                                   model="opencode-go/deepseek-v4.1-flash",
                                    override_reason="registry route test", dry_run=True))
     assert record["status"] == "dry_run"
     assert record["chosen_leg"]["harness"] == "opencode"
@@ -128,10 +125,10 @@ def test_override_without_catalog_harness_is_refused(tmp_path, monkeypatch):
 
 def test_default_policy_file():
     policy = load_route_policy()
-    assert {"kimi", "deepseek"} <= set(policy.banned_families)
-    assert "glm" in policy.off_families
-    # D-4779/D-3605: only deepseek is lifted; GLM remains off.
-    assert policy.review_allowed_families == ("deepseek",)
+    assert "kimi" in set(policy.banned_families)
+    assert "deepseek" not in set(policy.banned_families)
+    assert "glm" not in set(policy.off_families)
+    assert policy.review_allowed_families == ()
     assert "kimi" not in policy.review_allowed_families
     assert not policy.allows("qodercli", "review")
     assert not policy.allows("qodercli", "implement")
@@ -164,77 +161,74 @@ def test_route_skips_banned_and_off_families(role, tmp_path):
     assert "kimi" not in families
     reasons = {s["leg"]: s["reason"] for s in plan.skipped}
     if role == "review":
-        # D-4779/D-3605: deepseek is lifted, GLM is disabled and off.
         assert "deepseek" in families
-        assert "glm" not in families
-        assert reasons["opencode-go-glm-5.2"].startswith("disabled:")
+        assert "glm" in families
+        assert reasons["opencode-glm-5.3-flash-free"].startswith("disabled:")
         return
-    # implement/orchestrate stay banned/off (D-3552).
-    assert not families & {"deepseek", "glm"}
+    assert "deepseek" in families
+    if role == "implement":
+        assert "glm" in families
     policy = load_route_policy()
     by_id = {leg.id: leg for leg in DEFAULT_LEGS}
-    for leg_id, reason in (("opencode-deepseek-v4.1-flash-free", "banned_family"),
-                           ("opencode-glm-5.3-flash-free", "off_family")):
-        assert policy.skip_reason(by_id[leg_id], role) == reason
-        if role == "implement":
-            assert reasons["opencode-deepseek-v4.1-flash-free"] == "banned_family"
-            assert reasons["opencode-glm-5.3-flash-free"] == "off_family"
-            assert plan.first_leg.id == 'cx-gpt-6.1-sol-xhigh'
-            from plangraph.planner.routing import SpawnRefused
-            from plangraph.spawner.service import SpawnService
-            with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-4196"):
-                asyncio.run(SpawnService(state=tmp_path).spawn(
-                    card=CARD, leg=leg_id, override_reason="policy regression", dry_run=True))
-            assert not (tmp_path / "spawn-overrides.jsonl").exists()
+    assert policy.skip_reason(by_id["opencode-deepseek-v4.1-flash-free"], role) is None
+    assert policy.skip_reason(by_id["opencode-go-glm-5.3-flash"], role) is None
+    if role == "implement":
+        assert plan.first_leg.id == 'cx-gpt-6.2-sol-medium'
+        from plangraph.planner.routing import SpawnRefused
+        from plangraph.spawner.service import SpawnService
+        with pytest.raises(SpawnRefused, match=r"leg disabled: .*D-6310"):
+            asyncio.run(SpawnService(state=tmp_path).spawn(
+                card=CARD, leg="opencode-glm-5.3-flash-free",
+                override_reason="policy regression", dry_run=True))
+        assert not (tmp_path / "spawn-overrides.jsonl").exists()
 
 
 def test_route_skips_paused_harness_per_role():
     review = plan_spawn(CARD, role="review", writer_families=("mimo",))
     ids = [leg.id for leg in review.legs]
     assert "qodercli-qwen3.8-flash" not in ids
-    assert "agy-gemini-4-argon" in ids  # D-4699/D-4703: agy review pause lifted
+    assert "agy-gemini-4-neon-medium" in ids
     pause = RoutePolicy(paused_harnesses={"agy": ("implement",)})
     held = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=pause)
-    assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-4-argon"] == "paused_harness"
+    assert {s["leg"]: s["reason"] for s in held.skipped}["agy-gemini-4-neon-medium"] == "paused_harness"
     writer = plan_spawn(CARD, role="implement")
-    assert writer.first_leg.id == "cx-gpt-6.1-sol-xhigh"  # D-5206: eligible lead precedes free tier
+    assert writer.first_leg.id == "cx-gpt-6.2-sol-medium"
     # Sol also uses opencode: pausing that harness must exclude the lead,
     # not merely leave a first-leg assertion that passes without filtering.
     paused = plan_spawn(CARD, role="implement", policy=RoutePolicy(
         paused_harnesses={"opencode": ("review",)}),
         leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
     paused_ids = {leg.id for leg in DEFAULT_LEGS
-                  if leg.harness == "opencode" and "implement" in leg.roles}
+                  if leg.harness == "opencode" and "implement" in leg.roles and leg.disabled is None}
     assert paused_ids
     assert paused_ids.isdisjoint({leg.id for leg in paused.legs})
     reasons = {s["leg"]: s["reason"] for s in paused.skipped}
     assert {leg_id: reasons[leg_id] for leg_id in paused_ids} == dict.fromkeys(
         paused_ids, "paused_harness")
-    assert [leg.id for leg in paused.legs] == ['agy-gemini-4-hydrogen-high', 'agy-gemini-4-argon']
+    assert [leg.id for leg in paused.legs] == ['agy-gemini-4-hydrogen-high']
 
 
 def test_explicit_policy_argument_wins():
     open_policy = RoutePolicy(banned_families=(), off_families=(), paused_harnesses={})
     plan = plan_spawn(CARD, role="review", writer_families=("mimo",), policy=open_policy)
     assert "opencode-deepseek-v4.1-flash-free" in [leg.id for leg in plan.legs]
-    assert "opencode-glm-5.3-flash-free" in [leg.id for leg in plan.legs]
+    assert "opencode-glm-5.3-flash-free" not in [leg.id for leg in plan.legs]
 
 
 # --- 4. seats per writer part --------------------------------------------------
 
 def test_claude_written_high_gets_luna_and_qwen(pre_d3552_policy):
-    # Historical test name retained; D-3901 replaces Luna with Mimo.
-    # D-3901: seats follow the free-first review route, retaining coverage.
     plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
     assert plan.error is None
-    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "opencode-gemini-4-argon"}
+    assert {leg.id for leg in plan.review_seats} == {"qodercli-qwen3.8-flash", "mimo-v2.6-flash"}
 
 
 def test_default_policy_seats_deepseek_for_review():
-    # D-3552: with the live policy a deepseek leg may be a review seat.
-    plan = plan_spawn(HIGH, role="review", writer_families=("claude",))
+    # D-6310: deepseek is unbanned and leads free tier in custom tables before subscription mimo.
+    plan = plan_spawn(HIGH, role="review", writer_families=("claude",),
+                      leg_reader=lambda *a, **k: {"state": "available", "evidence": None})
     assert "deepseek" in {leg.family for leg in plan.legs}
-    assert _families(plan)[0] == "deepseek"  # Historical fixture lifts the free Zen leg.
+    assert _families(plan)[:2] == ["deepseek", "mimo"]
 
 
 def test_seat_never_shares_family_with_a_single_writer():
@@ -244,15 +238,13 @@ def test_seat_never_shares_family_with_a_single_writer():
 
 
 def test_seat_excludes_every_writer_family(pre_d3552_policy):
-    # D-3084 coverage survives D-3901 review-route seat ordering.
     from plangraph.keeper.coverage import uncovered
     plan = plan_spawn(RCARD, role="review", writer_families=("gpt", "qwen"))
     assert plan.error is None
-    assert set(_families(plan)) == {"gemini", "mimo"}  # Free personal Argon survives the agy pause.
+    assert set(_families(plan)) == {"mimo", "muse"}
     assert uncovered(["gpt", "qwen"], _families(plan), need=1) == []
-    # Coverage names the parts as the keeper does (gpt = openai, qwen = alibaba).
-    assert plan.seat_coverage == ({"leg": "opencode-gemini-4-argon", "covers": ["alibaba", "openai"]},
-                                  {"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]})
+    assert plan.seat_coverage == ({"leg": "mimo-v2.6-flash", "covers": ["alibaba", "openai"]},
+                                  {"leg": "omniroute-muse-spark", "covers": ["alibaba", "openai"]})
 
 
 def test_high_needs_two_families_per_part_incl_non_claude():
