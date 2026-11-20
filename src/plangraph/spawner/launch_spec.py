@@ -110,6 +110,12 @@ def build(request: dict) -> dict:
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     service = SpawnService(state=request['state'])
+    if leg.harness == 'agy':
+        from plangraph.routing_support.liveness import require_available
+        try:
+            require_available(leg, service.leg_reader, request['card'])
+        except SpawnRefused as exc:
+            raise LaunchRefused('leg_unavailable', str(exc)) from None
     headers = None
     if request['role'] == 'review':
         from plangraph.planner.seats import seat_family

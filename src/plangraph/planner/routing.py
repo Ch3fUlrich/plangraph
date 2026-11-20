@@ -347,14 +347,15 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
+    from plangraph.routing_support.leg_state import leg_key
     def _leg_status(leg_obj):
         # Sonnet's bare model is also the native Claude subscription identity.
         if leg_obj.harness == "agy" and leg_obj.model == REVIEW_SONNET:
             return reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
         st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
-        if leg_obj.harness == "agy" and not unavailable(st) and "/" not in leg_obj.model:
-            alt = reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
-            if unavailable(alt):
+        if leg_obj.harness == "agy" and "/" not in leg_obj.model:
+            alt = reader(leg_key(leg_obj), now=now, account=card.get("account"), combo=card.get("combo"))
+            if unavailable(alt) and (not unavailable(st) or (alt.get('evidence') or {}).get('quota_scope') == 'account'):
                 return alt
         return st
 
@@ -372,6 +373,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                for l in legs if role in l.roles and not leg_active(l, now=now)]
     skipped = []
     from plangraph.routing_support.resolver import score_model
+    from plangraph.routing_support.liveness import agy_limit_reason
     candidate_details = []
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
     for leg in candidates:
@@ -383,6 +385,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('caller') == 'quota-snapshot':
             reset = states[leg.id]['evidence'].get('reset_at')
             reason = 'quota_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset)) if reset else reason
+        if reason == 'limited':
+            reason = agy_limit_reason(leg_key(leg), states[leg.id]) or reason
         if reason:
             pass
         elif leg.family in excluded:
