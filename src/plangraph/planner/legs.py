@@ -30,7 +30,7 @@ __all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_OR
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
 #: Harness names a leg may run under.
-HARNESSES = ("qodercli", "opencode", "agy", "claude")
+HARNESSES = ("qodercli", "opencode", "agy", "claude", "codex")
 #: How a review leg reads the change: with its own tools, or only from a diff the
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
@@ -182,10 +182,17 @@ REVIEW_HYDROGEN, REVIEW_NEON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-neon-
 REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"
 REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
 REVIEW_SONNET = "claude-sonnet-5-5-high"
-REVIEW_ORDER = (REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_MIMO_PRO, "opencode-go-deepseek-v4-flash", REVIEW_DEEPSEEK,
-                "opencode-go-glm-5.3-flash", REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH)
+#: Rule 3.61 (D-6481, 2026-11-20): gpt-6.2-sol-medium reviews first, as a native Codex run
+#: with repository access; the OpenCode review child has no repository tools (D-4681).
+REVIEW_GPT = "gpt-6.2-sol-medium"
+REVIEW_ORDER = (REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK, "opencode-go-deepseek-v4-flash",
+                "opencode-go-glm-5.3-flash", REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_NEON, REVIEW_SONNET,
+                REVIEW_MIMO_FLASH)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
+    Leg(REVIEW_GPT, "subscription", "codex", "gpt-6.2-sol-medium", "gpt",
+        ("128k", "256k"), 475000, False, roles=("review",), effort="medium", tool_mode="tools",
+        note="D-6481 rule 3.61: native Codex review run with repository access; a gpt-written diff skips it"),
     Leg(REVIEW_ARGON_LOW, "subscription", "agy", "gemini-4-argon-low", "gemini",
         ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="low",
         tool_mode="tools", note="D-6366 rule 3.58 (1): first review leg; retired for implement (D-6310)"),

@@ -104,6 +104,7 @@ _HARNESS_DESCRIPTIONS = {
     "opencode": "opencode harness over free and subscription providers",
     "agy": "Antigravity harness, subscription quota",
     "claude": "Claude Code harness, Haiku leg on subscription quota",
+    "codex": "Codex harness, gpt models in their own client",
 }
 _WINDOW_DESCRIPTIONS = {
     "128k": "128k token context window class",
