@@ -72,7 +72,7 @@ class E2E:
     def _add_size_items(self):
         """Ten more ready lanes so ``ready`` has a full ten-item page."""
         items = [{"project": "size", "id": f"S{i}", "title": f"size lane {i}",
-                  "kind": "lane", "evidence_kinds": ["any"], "operator": False}
+                  "kind": "lane", "done_criteria": "c", "evidence_kinds": ["any"], "operator": False}
                  for i in range(1, 11)]
         items.append({"project": "size", "id": "SGOAL", "kind": "goal",
                       "depends_on": [f"S{i}" for i in range(1, 11)],

@@ -73,7 +73,7 @@ def test_snapshot_head_and_fields(w):
 def test_snapshot_annotates_corrected_by(w):
     to_done(w, "demo:A")
     items = [{"project": "demo", "id": "FIX", "title": "fix", "kind": "lane",
-              "state": "open", "depends_on": [], "corrects": "demo:A",
+              "state": "open", "depends_on": [], "corrects": "demo:A", "done_criteria": "c",
               "evidence_kinds": ["any"]},
              {"project": "demo", "id": "GOAL2", "kind": "goal", "state": "open",
               "depends_on": ["demo:FIX"], "evidence_kinds": ["any"]}]

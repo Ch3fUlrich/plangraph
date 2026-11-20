@@ -53,7 +53,14 @@ def _create(world, specs, project="demo", who="router"):
     items = [_clean(pid, project=project, **kw) for pid, kw in specs]
     items.append(_clean(goal, [pid for pid, _ in specs], project=project,
                         kind="goal"))
-    world.store.create_items(world.p(who), items)
+    # Lanes without done_criteria are legacy rows: create refuses them, import keeps them.
+    legacy = any(i["kind"] == "lane" and not i.get("done_criteria") for i in items)
+    if legacy:
+        for item in items:
+            item["state"] = "open"
+        world.store.import_items(world.p("router"), items)
+    else:
+        world.store.create_items(world.p(who), items)
     return [f"{project}:{pid}" for pid, _ in specs]
 
 
