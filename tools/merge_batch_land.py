@@ -173,7 +173,9 @@ def require_green(repo, number, names):
                               f"({first_line(proc.stderr)}): wait for CI or name the checks with --checks")
     bad = [f"{name}={bucket}" for name, bucket in rows if bucket not in GREEN]
     if bad:
-        raise MergeBatchError("required check(s) not green on the batch head: " + ", ".join(bad))
+        pending = [name for name, bucket in rows if bucket == "pending"]
+        tail = f" (pending: {', '.join(pending)}; land does not wait or retry, run it again when it ends)" if pending else ""
+        raise MergeBatchError("required check(s) not green on the batch head: " + ", ".join(bad) + tail)
     if not names and proc.returncode != 0:
         raise MergeBatchError(f"gh pr checks --required exits {proc.returncode} although every line reads green: "
                               "not trusting the output")

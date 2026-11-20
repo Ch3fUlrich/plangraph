@@ -4,7 +4,7 @@ name: tests
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, edited, labeled]
+    types: [opened, synchronize, reopened, edited, labeled]
   merge_group:
     types: [checks_requested]
   push:
@@ -16,11 +16,13 @@ on:
 # The full suite runs once, on the merge candidate: a batch/* head, a merge queue event, or a head a router GO row
 # labels ci-full (a push to main and a dispatch also run it). Every other pull request, draft or ready, runs the
 # affected selection (tools/ci_select.py full_run_required).
-# A newer push to the PR cancels the stale run,
-# but never a workflow_dispatch run (timing measurements must finish).
+# Marking a draft ready starts no run: the head already has its required ci-gate from the run its last push
+# started, and a second run would leave the required check pending for an hour (landing a draft part).
+# A newer push to the PR cancels the stale run, but never a workflow_dispatch run (timing measurements
+# must finish) and never a run a label started.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'pr' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' }}
 
 permissions:
   contents: read

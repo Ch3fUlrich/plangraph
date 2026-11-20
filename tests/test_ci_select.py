@@ -469,3 +469,13 @@ def test_workflow_routes_the_decision_through_ci_select():
     step = [s for s in wf["jobs"]["select"]["steps"] if s.get("id") == "sel"][0]
     assert "--event" in step["run"] and "draft" not in step["run"]
     assert "--event" in [s for s in wf["jobs"]["ci-gate"]["steps"] if s.get("name") == "Gate"][0]["run"]
+
+
+def test_undraft_starts_no_run_and_a_label_run_never_cancels_a_running_one():
+    import yaml
+    wf = yaml.safe_load((MODULE_PATH.parents[1] / ".github" / "workflows" / "tests.yml").read_text())
+    triggers = wf[True] if True in wf else wf["on"]
+    assert "ready_for_review" not in triggers["pull_request"]["types"]
+    assert "synchronize" in triggers["pull_request"]["types"]
+    cancel = wf["concurrency"]["cancel-in-progress"]
+    assert "github.event.action != 'labeled'" in cancel

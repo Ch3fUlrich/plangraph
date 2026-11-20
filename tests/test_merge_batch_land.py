@@ -414,3 +414,12 @@ def test_land_cleanup_metadata_failure_is_nonfatal(env):
     result = land(env, approval)
     assert result.returncode == 0 and "cleanup failed:" in result.stderr
     assert result.stdout.count("MERGED") == 2
+
+
+def test_land_names_the_pending_check_and_does_not_retry(env):
+    approval = pushed(env, prs=(1, 2))
+    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": "pending"}]
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and "pending: ci-gate" in res.stderr and "does not wait or retry" in res.stderr
+    assert not env.calls("pr", "merge")
