@@ -117,6 +117,47 @@ def test_open_lanes_is_unknown_when_the_ancestry_check_fails(w, repo, monkeypatc
     assert w.store.show(w.p("reader"), key)["work_exists"]["lanes"] is None
 
 
+@pytest.mark.parametrize("status,expected", [
+    ("CLOSED", []), ("OPEN", ["lane/lane-two"]), ("MOVED", ["lane/lane-two"]),
+    ("API_ERROR", None), ("GIT_ERROR", None),
+])
+def test_close_lane_requires_closed_pr_at_exact_head(w, repo, monkeypatch, status, expected):
+    import subprocess
+    key, = seed(w, [("LANE-TWO", [])])
+    branch = "lane/lane-two"
+    _git(repo, "checkout", "-qb", branch)
+    head = _commit(repo, "wip", "unmerged")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "remote", "add", "origin", "https://github.com/example/repo")
+    adapter = w.store.ctx["git"]
+    real_git, real_run = adapter._run, subprocess.run
+
+    def git(repo_path, args, **kwargs):
+        if args[0] == "fetch":
+            return _Proc(0)
+        if args[0] == "ls-remote":
+            return _Proc(1 if status == "GIT_ERROR" else 0,
+                         f"{head if status != 'MOVED' else 'a' * 40}\trefs/pull/7/head\n")
+        return real_git(repo_path, args, **kwargs)
+
+    def run(args, **kwargs):
+        if args[0] == "gh":
+            return _Proc(1 if status == "API_ERROR" else 0, json.dumps([
+                {"number": 7, "state": "OPEN" if status == "OPEN" else "CLOSED",
+                 "headRefOid": head, "isCrossRepository": False}]))
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(adapter, "_run", git)
+    monkeypatch.setattr(subprocess, "run", run)
+    work = w.store.show(w.p("reader"), key)["work_exists"]
+    assert work["lanes"] == expected
+    if status == "CLOSED":
+        assert work["closed_pr_lanes"] == [{"branch": branch, "pr": 7}]
+    with pytest.raises(Refused, match=("merged_on_default_missing" if status == "CLOSED"
+                                      else "unmerged_work_or_lanes_unknown")):
+        w.store._merged_waiver_only(w.store._item(key), "D-1", w.store.now())
+
+
 @pytest.mark.parametrize("reason", ["", "   ", "x" * 501])
 def test_force_stale_blank_or_too_long_is_a_validation_refusal(w, repo, reason):
     key, = seed(w, [("A", [])])

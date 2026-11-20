@@ -21,6 +21,7 @@ import re
 import subprocess
 import threading
 import time
+from urllib.parse import urlsplit
 
 from .evidence_decisions import DecisionsAdapter, _decision_cell
 from .evidence_git import valid_ref
@@ -134,9 +135,7 @@ def work_index(git, project, *, fresh=False):
         else:
             problems.append("origin target ref unavailable")
     origin_stale = bool(problems)
-    from urllib.parse import urlsplit
-    if (origin.startswith("git" + "@" + "github.com:")
-            or urlsplit(origin.strip()).hostname == "github.com"):
+    if _github_repo(origin.strip()):
         try:
             proc = subprocess.run(
                 ["gh", "pr", "list", "--state", "open", "--limit", "10000",
@@ -364,7 +363,7 @@ def _refs(git, repo, fresh=False):
         if not fresh and hit is not None and now - hit[0] < _REFS_TTL:
             return hit[1]
     out = _ok(git, repo, ["for-each-ref", f"--count={_REF_COUNT}",
-                          "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+                          "--format=%(refname)", "refs/heads", "refs/remotes"])
     remotes = _ok(git, repo, ["remote"])
     if out is None or remotes is None:
         return None
@@ -377,7 +376,53 @@ def _refs(git, repo, fresh=False):
     return snapshot
 
 
-def open_lanes(git, project, key, fresh=False):
+def _github_repo(origin):
+    ssh = "git" + "@" + "github.com:"
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return None
+    path = origin[len(ssh):] if origin.startswith(ssh) else (
+        parsed.path.strip("/") if parsed.hostname == "github.com" else "")
+    path = path.removesuffix(".git")
+    return path if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path) else None
+
+
+def _closed_lane_pr(git, repo, hosted, branch, head):
+    """Return the verified closed PR number, zero for open work, None on error."""
+    fields = "number,state,headRefOid,isCrossRepository"
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--repo", hosted, "--head", branch, "--state", "all",
+             "--limit", "100", "--json", fields], cwd=repo, capture_output=True,
+            text=True, timeout=20, check=False)
+        prs = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    if not isinstance(prs, list) or len(prs) >= 100 or any(
+            not isinstance(pr, dict) or type(pr.get("number")) is not int
+            or pr["number"] <= 0 or pr.get("state") not in ("OPEN", "CLOSED", "MERGED")
+            or not valid_commit_ref(pr.get("headRefOid"))
+            or type(pr.get("isCrossRepository")) is not bool for pr in prs):
+        return None
+    own = [pr for pr in prs if not pr["isCrossRepository"]]
+    if any(pr["state"] == "OPEN" for pr in own):
+        return 0
+    for pr in own:
+        if pr["state"] != "CLOSED" or pr["headRefOid"] != head:
+            continue
+        ref = f"refs/pull/{pr['number']}/head"
+        branch_ref = "refs/heads/" + branch
+        live = _ok(git, repo, ["ls-remote", "origin", ref, branch_ref])
+        if live is None:
+            return None
+        refs = dict(reversed(line.split()) for line in live.splitlines() if len(line.split()) == 2)
+        if refs.get(ref) == head and refs.get(branch_ref, head) == head:
+            return pr["number"]
+    return 0
+
+
+def open_lanes(git, project, key, fresh=False, *, closed=None):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -393,25 +438,47 @@ def open_lanes(git, project, key, fresh=False):
         return None
     names, remotes = snapshot
     slug = bare.lower()
-    lanes, seen = [], set()
-    for name in names:
-        if slug not in name.lower() or name == ref or not valid_ref(name):
+    lanes, closed_prs, verified = {}, set(), {}
+    origin = None
+    for full in names:
+        remote_ref = full.startswith("refs/remotes/")
+        name = full.removeprefix("refs/remotes/" if remote_ref else "refs/heads/")
+        if slug not in name.lower() or ref in (name, full) or not valid_ref(full):
             continue
         head, _, rest = name.partition("/")
-        short = rest if head in remotes and rest else name
-        if short in seen:
-            continue
+        short = rest if remote_ref and head in remotes and rest else name
         code, _ = _git(git, repo, ["merge-base", "--is-ancestor",
-                                   "--end-of-options", name, ref])
+                                   "--end-of-options", full, ref])
         if code == 0:            # already on the ref: finished, not open
             continue
         if code != 1:            # git error: the whole answer is unknown
             return None
-        seen.add(short)
-        lanes.append(name)
+        if not remote_ref or head == "origin":
+            if origin is None:
+                origin = _ok(git, repo, ["remote", "get-url", "origin"]) if "origin" in remotes else ""
+                if origin is None:
+                    return None
+            hosted = _github_repo(origin.strip())
+            if hosted:
+                tip = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", full])
+                if tip is None or not valid_commit_ref(tip.strip()):
+                    return None
+                identity = (short, tip.strip())
+                if identity not in verified:
+                    verified[identity] = _closed_lane_pr(git, repo, hosted, *identity)
+                pr = verified[identity]
+                if pr is None:
+                    return None
+                if pr:
+                    closed_prs.add((short, pr))
+                    continue
+        lanes.setdefault(short, name)
         if len(lanes) >= _LANE_LIMIT:
             break
-    return lanes
+    if closed is not None:
+        closed.extend({"branch": branch, "pr": pr} for branch, pr in sorted(closed_prs)
+                      if branch not in lanes)
+    return list(lanes.values())
 
 
 # ------------------------------------------------------------ decisions
