@@ -63,18 +63,17 @@ fn hook(root: &Path, heads: &[&str], preflight: bool) -> Output {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if !preflight {
+    // PREFLIGHT_SKIP is honoured only for refs/heads/phase/* (D-5843).
+    let target = if preflight {
+        "refs/heads/topic"
+    } else {
         command.env("PREFLIGHT_SKIP", "1");
-    }
+        "refs/heads/phase/topic"
+    };
     let mut child = command.spawn().unwrap();
     let mut stdin = child.stdin.take().unwrap();
     for head in heads {
-        writeln!(
-            stdin,
-            "refs/heads/topic {head} refs/heads/topic {}",
-            "0".repeat(40)
-        )
-        .unwrap();
+        writeln!(stdin, "refs/heads/topic {head} {target} {}", "0".repeat(40)).unwrap();
     }
     drop(stdin);
     child.wait_with_output().unwrap()
