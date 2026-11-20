@@ -7,9 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from plangraph.planner.harness import own_harness_legs
-from plangraph.planner.legs import spawnable_legs
-from plangraph.spawner import harness_record as hr
+from plangraph.planner.legs import own_harness_legs, spawnable_legs
+from plangraph.spawner import exit_outcome as hr
 from plangraph.spawner.service import SpawnService
 
 CATALOG = {leg.id: leg for leg in spawnable_legs()}
@@ -26,7 +25,7 @@ def versions(monkeypatch):
     ("agy-gemini-4-hydrogen-high", "agy"), ("claude-sonnet-5-5-high", "claude")])
 def test_launch_stamps_harness_version_host(leg_id, harness):
     record = {}
-    hr.stamp(record, CATALOG[leg_id], host="dell")
+    hr.stamp_harness(record, CATALOG[leg_id], host="dell")
     assert record == {"harness": harness, "harness_version": VERSIONS[harness],
                       "harness_fallback": None, "host": "dell"}
 
@@ -34,7 +33,7 @@ def test_launch_stamps_harness_version_host(leg_id, harness):
 def test_fallback_run_carries_the_reason():
     (leg,) = own_harness_legs((CATALOG["cx-gpt-6.2-sol-medium"],), lambda name: False)
     record = {}
-    hr.stamp(record, leg, host="dell")
+    hr.stamp_harness(record, leg, host="dell")
     assert (record["harness"], record["harness_fallback"]) == ("opencode", "client_missing")
 
 
@@ -44,12 +43,12 @@ def test_unreadable_version_is_unknown_never_guessed(monkeypatch):
     monkeypatch.setattr(hr.shutil, "which", lambda name: None)
     assert hr.client_version("codex") == "unknown"
     record = {}
-    hr.stamp(record, CATALOG["gpt-6.2-sol-medium"], host="dell")
+    hr.stamp_harness(record, CATALOG["gpt-6.2-sol-medium"], host="dell")
     assert record["harness_version"] == "unknown" and record["harness"] == "codex"
 
 
 def test_native_codex_record_fields():
-    assert hr.native_fields("dell") == {"harness": "codex", "harness_version": "codex-cli 0.9.1",
+    assert hr.native_harness_fields("dell") == {"harness": "codex", "harness_version": "codex-cli 0.9.1",
                                         "harness_fallback": None, "host": "dell"}
 
 
@@ -76,7 +75,7 @@ def test_report_lists_failed_runs_of_24h_by_harness():
             run("d", "opencode", "failed", now - 90000),            # older than 24 h
             {"run_id": "e", "status": "failed", "ended": now - 5},   # no harness recorded
             run("f", "agy", "completed", now - 10, role="review", reason="no_verdict")]
-    report = hr.report(runs, now=now, hours=24)
+    report = hr.harness_report(runs, now=now, hours=24)
     assert report["failed"] == {"codex": ["a"], "opencode": ["c"], "unknown": ["e"]}
     assert report["no_verdict"] == {"agy": ["f"]}
     assert report["runs"] == {"codex": 2, "opencode": 1, "unknown": 1, "agy": 1}

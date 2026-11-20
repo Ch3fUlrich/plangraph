@@ -426,8 +426,8 @@ raise SystemExit(code)
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
         elif args.verb == 'harness-report':
-            from .harness_record import report
-            result = report(service.ps()['runs'], hours=args.hours)
+            from .exit_outcome import harness_report
+            result = harness_report(service.ps()['runs'], hours=args.hours)
         elif args.verb == 'cancel':
             result = asyncio.run(service.cancel(args.run_id))
         elif args.verb == 'wait':

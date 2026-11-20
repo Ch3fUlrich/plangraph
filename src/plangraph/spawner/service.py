@@ -193,13 +193,13 @@ class SpawnService(SeatSpawnMixin):
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
         from plangraph.planner.legs import leg_active
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
-        from plangraph.planner.harness import own_harness_legs, service_probe
+        from plangraph.planner.legs import own_harness_legs, service_probe
         records = []   # the cooldown pass reads the run records once; silent review legs come from the same reads
         legs = own_harness_legs(witness_order(card, role, live(plan.legs), measured_down(self.state, on_record=records.append)), service_probe(self))
         seats = own_harness_legs(live(plan.review_seats), service_probe(self))
         extra = {}
         if role == 'review':   # a leg that never answers leaves the order (LE-REVIEW-LEG-PROBE-SCHEDULED)
-            from .harness_record import no_verdict_legs
+            from .exit_outcome import no_verdict_legs
             silent = no_verdict_legs(records)
             dropped = [leg.id for leg in legs if leg.id in silent]
             if dropped:
@@ -333,7 +333,7 @@ class SpawnService(SeatSpawnMixin):
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             require_available(chosen, self.leg_reader, card)
-            from plangraph.planner.harness import refuse_foreign_pin, service_probe
+            from plangraph.planner.legs import refuse_foreign_pin, service_probe
             refuse_foreign_pin(chosen, override_reason, service_probe(self))   # rule 3.53: a foreign-harness pin needs a reason
             if role == 'implement' and role not in chosen.roles:
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)

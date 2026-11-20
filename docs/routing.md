@@ -227,7 +227,7 @@ the leg cap.
 ## Own harness first (rule 3.53, D-6310)
 
 A model runs in the harness it is trained on: gpt in Codex (`codex`), gemini in agy, claude in
-Claude Code or agy (`agy-claude-*` legs count as own). `planner/harness.py` resolves each routed leg
+Claude Code or agy (`agy-claude-*` legs count as own). `planner/legs.py` (`resolve_harness`, `own_harness_legs`) resolves each routed leg
 at route time: with the family's client installed on the host (`shutil.which`) the leg's
 `harness` is the own client (a gpt OpenCode leg becomes `codex` with the plain model name);
 without it the OpenCode leg stays and carries `harness_fallback=client_missing`. Families

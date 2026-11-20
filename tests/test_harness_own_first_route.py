@@ -3,8 +3,8 @@ from dataclasses import replace
 
 import pytest
 
-from plangraph.planner.harness import OWN_HARNESS, own_harness_legs, refuse_foreign_pin, resolve_harness
-from plangraph.planner.legs import spawnable_legs
+from plangraph.planner.legs import (OWN_HARNESS, own_harness_legs, refuse_foreign_pin, resolve_harness,
+                                    spawnable_legs)
 from plangraph.routing_support.leg_state_flag import SpawnRefused
 
 CATALOG = {leg.id: leg for leg in spawnable_legs()}
@@ -115,9 +115,9 @@ def test_switch_off_keeps_registered_harness(tmp_path, monkeypatch):
     from plangraph.spawner.service import SpawnService
     service = SpawnService(SimpleNamespace(default_cwd=str(tmp_path), jobs={}, _tasks={}, _processes={}),
                            state=tmp_path / "state")
-    from plangraph.planner.harness import service_probe
+    from plangraph.planner.legs import service_probe
     assert service_probe(service) is None
     monkeypatch.delenv("PLANGRAPH_OWN_HARNESS")
-    from plangraph.planner.harness import client_installed, service_probe
+    from plangraph.planner.legs import client_installed, service_probe
     assert service_probe(service) is client_installed
     assert resolve_harness(CATALOG["cx-gpt-6.2-sol-medium"], None).harness == "opencode"
