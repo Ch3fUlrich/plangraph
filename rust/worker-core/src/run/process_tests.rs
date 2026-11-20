@@ -32,6 +32,7 @@ fn setup(script: &str) -> (tempfile::TempDir, Arc<Runtime>, RunSpec) {
         base: Default::default(),
         events: vec![],
         finish: None,
+        allow_shas: Default::default(),
     };
     (d, rt, s)
 }

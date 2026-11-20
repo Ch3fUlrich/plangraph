@@ -39,6 +39,7 @@ fn missing_seat_events(role: &str, dry: bool, capture_refused: bool) {
             base: Default::default(),
             events: vec![],
             finish: None,
+            allow_shas: Default::default(),
         })
         .unwrap();
     let args = json!({"prompt":"p","card":{"item_key":"invalid"},"dry_run":dry,
@@ -365,7 +366,7 @@ fn empty_prompt_and_metadata() {
         events: Some(vec![json!({"message":secret}).as_object().unwrap().clone()]),
     };
     let id = new_run_id();
-    assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false).is_ok());
+    assert!(store_prompt(&dir, &id, &mut launch, &mut json!({}), false, &Default::default()).is_ok());
     assert_eq!(launch.argv, ["fake"]);
     assert_eq!(launch.prompt.as_deref(), Some(""));
     assert_eq!(

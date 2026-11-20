@@ -135,7 +135,7 @@ fn check_redaction_before_persist(root: &Path, launch: &mut crate::launch::Launc
     let raw = format!("{}\nPASSWORD=fixture\n", launch.prompt.as_ref().unwrap());
     launch.prompt = Some(raw.clone());
     launch.stdin = Some(raw.clone());
-    assert!(crate::runs::store_prompt(root, &id, launch, &mut base, false).is_ok());
+    assert!(crate::runs::store_prompt(root, &id, launch, &mut base, false, &Default::default()).is_ok());
     let path = pg_worker_core::run::record::run_dir(root, &id)
         .unwrap()
         .join("prompt.txt");

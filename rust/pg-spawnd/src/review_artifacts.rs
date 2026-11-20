@@ -93,10 +93,19 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
         _ => diagnostic(&text),
     }
 }
+#[cfg(test)]
 pub(crate) fn write_review_artifacts(
     state: &Path,
     record: &Value,
     review: &str,
+) -> Result<(), EvidenceError> {
+    write_review_artifacts_with_allowlist(state, record, review, &Default::default())
+}
+pub(crate) fn write_review_artifacts_with_allowlist(
+    state: &Path,
+    record: &Value,
+    review: &str,
+    allow_shas: &std::collections::BTreeSet<String>,
 ) -> Result<(), EvidenceError> {
     let seat = directory(state, record)?.join("seat");
     regular(&seat, true)?;
@@ -143,7 +152,7 @@ pub(crate) fn write_review_artifacts(
     for (name, bytes) in [
         (
             "review.txt",
-            pg_worker_core::redact::redact(review).into_bytes(),
+            pg_worker_core::redact::redact_with_allowlist(review, allow_shas).into_bytes(),
         ),
         (
             "evidence.json",

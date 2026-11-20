@@ -8,8 +8,8 @@ use pg_worker_core::run::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
-    path::Path,
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -80,6 +80,7 @@ impl Runs {
         if let Some(head) = review_head {
             base["head_sha"] = json!(head);
         }
+        let pre_isolate_cwd = launch.cwd.clone();
         let checkout = crate::cli_review::isolate(&mut launch, &leg, base["head_sha"].as_str())?;
         if checkout.is_some() {
             base["review_checkout"] = json!(launch.cwd);
@@ -97,7 +98,8 @@ impl Runs {
         if !dry && base["writer_round"].is_u64() {
             base["round_work_before"] = json!(crate::round_progress::work_fingerprint(&launch.cwd));
         }
-        store_prompt(state, &run_id, &mut launch, &mut base, dry)?;
+        let allow_shas = allow_shas(args, &launch, &pre_isolate_cwd, base["head_sha"].as_str());
+        store_prompt(state, &run_id, &mut launch, &mut base, dry, &allow_shas)?;
         if let Some(warnings) = launch.warnings {
             base["warnings"] = json!(warnings);
         }
@@ -159,7 +161,9 @@ impl Runs {
                     leg,
                     attempt_id,
                     checkout,
+                    allow_shas.clone(),
                 )),
+                allow_shas,
             };
             match self.supervisor.start(spec) {
                 Ok(()) => {}
@@ -181,12 +185,57 @@ impl Runs {
         wait(state, &run_id, wait_duration(args.get("wait_seconds")))
     }
 }
+pub(crate) fn allow_shas(
+    args: &Args,
+    launch: &crate::launch::LaunchSpec,
+    pre_isolate_cwd: &Path,
+    review_head: Option<&str>,
+) -> BTreeSet<String> {
+    let mut shas = BTreeSet::new();
+    let diff_ref = args
+        .get("card")
+        .and_then(|c| c.get("diff_ref"))
+        .unwrap_or(&Value::Null);
+    let diff_repo = diff_ref
+        .get("repo")
+        .and_then(Value::as_str)
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(|| {
+            diff_ref
+                .get("repo_id")
+                .and_then(Value::as_str)
+                .and_then(|id| crate::prompt::repos().get(id).map(|e| PathBuf::from(&e.root)))
+                .filter(|p| p.is_dir())
+        })
+        .unwrap_or_else(|| pre_isolate_cwd.to_path_buf());
+    for key in ["head", "head_sha", "base", "base_sha"] {
+        if let Some(rev) = diff_ref.get(key).and_then(Value::as_str) {
+            if let Some(sha) = pg_worker_core::run::scrub::resolve_commit_sha(&diff_repo, rev) {
+                shas.insert(sha);
+            }
+        }
+    }
+    if let Some(head) = review_head {
+        if head.len() == 40 && head.bytes().all(|b| b.is_ascii_hexdigit()) {
+            shas.insert(head.to_ascii_lowercase());
+        }
+    }
+    if let Some(prompt) = launch.prompt.as_deref() {
+        shas.extend(pg_worker_core::run::scrub::collect_prompt_commit_shas(
+            &launch.cwd,
+            prompt,
+        ));
+    }
+    shas
+}
 pub(crate) fn store_prompt(
     state: &Path,
     id: &str,
     launch: &mut crate::launch::LaunchSpec,
     base: &mut Value,
     dry: bool,
+    allow_shas: &BTreeSet<String>,
 ) -> Result<(), ToolError> {
     use sha2::{Digest, Sha256};
     let missing = || internal("launch prompt missing");
@@ -198,7 +247,7 @@ pub(crate) fn store_prompt(
     if !raw.is_empty() && exposed {
         return Err(internal("launch prompt must not be in argv or env"));
     }
-    let prompt = pg_worker_core::redact::redact(raw);
+    let prompt = pg_worker_core::redact::redact_with_allowlist(raw, allow_shas);
     match launch.stdin.as_mut() {
         Some(stdin) if stdin == raw => *stdin = prompt.clone(),
         Some(stdin) => {
@@ -292,6 +341,15 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
     u32::try_from(attempts.len()).expect("attempt count fits u32")
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
+    finish_with_allowlist(record, status, leg, attempt_id, &BTreeSet::new());
+}
+pub(crate) fn finish_with_allowlist(
+    record: &mut RunRecord,
+    status: Status,
+    leg: &Value,
+    attempt_id: u32,
+    allow_shas: &BTreeSet<String>,
+) {
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
     crate::round_progress::finish_round(record, status);
@@ -366,7 +424,9 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attemp
         if value["role"] == "review" {
             let text = crate::review_artifacts::review_text(&state, &value)
                 .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
-            let result = crate::review_artifacts::write_review_artifacts(&state, &value, &text);
+            let result = crate::review_artifacts::write_review_artifacts_with_allowlist(
+                &state, &value, &text, allow_shas,
+            );
             if result.is_ok() {
                 record.set("seat_dir", json!(record.path().with_file_name("seat")));
             } else {

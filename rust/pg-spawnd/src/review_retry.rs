@@ -5,13 +5,14 @@ use pg_worker_core::run::{
     supervise::{FinishHook, RunSpec},
 };
 use serde_json::{json, Value};
-use std::{path::Path, time::Duration};
+use std::{collections::BTreeSet, path::Path, time::Duration};
 
 pub(crate) fn hook(
     args: Args,
     leg: Value,
     attempt: u32,
     checkout: Option<tempfile::TempDir>,
+    allow_shas: BTreeSet<String>,
 ) -> FinishHook {
     Box::new(move |record, status| {
         let _checkout = checkout;
@@ -35,7 +36,7 @@ pub(crate) fn hook(
         {
             record.set("reason", json!(reason));
         }
-        runs::finish(record, status, &leg, attempt);
+        runs::finish_with_allowlist(record, status, &leg, attempt, &allow_shas);
         if quota.is_none()
             || status == Status::Cancelled
             || record.path().with_file_name("cancelled").exists()
@@ -160,13 +161,15 @@ fn advance(
     if let Some(head) = head {
         metadata["head_sha"] = json!(head);
     }
+    let pre_isolate_cwd = launch.cwd.clone();
     let checkout = crate::cli_review::isolate(&mut launch, &leg, metadata["head_sha"].as_str())?;
     metadata["review_checkout"] = if checkout.is_some() {
         json!(launch.cwd)
     } else {
         Value::Null
     };
-    runs::store_prompt(state, run_id, &mut launch, &mut metadata, false)?;
+    let allow_shas = runs::allow_shas(&args, &launch, &pre_isolate_cwd, metadata["head_sha"].as_str());
+    runs::store_prompt(state, run_id, &mut launch, &mut metadata, false, &allow_shas)?;
     let log = record.path().with_file_name("live.log");
     let archive = record
         .path()
@@ -231,7 +234,8 @@ fn advance(
         stdin: launch.stdin.map(String::into_bytes),
         base: Default::default(),
         events: vec![],
-        finish: Some(hook(args, leg, next_attempt, checkout)),
+        finish: Some(hook(args, leg, next_attempt, checkout, allow_shas.clone())),
+        allow_shas,
     })
 }
 
