@@ -60,7 +60,8 @@ python3 tools/merge_batch.py build --name NAME --prs 899,904 --plan plangraph:IT
 
 Do not use `--force-set` or skip conflicts. Resolve a conflict and `continue`
 the same batch. Record a keeper-bound spawner review for each part's Plan-Item
-with `review --name NAME --pr NUMBER --run-id RUN_ID`. The command reads
+with `review --name NAME --pr NUMBER --run-id RUN_ID`. The seat must record
+an explicit `VERDICT: PASS` or `VERDICT: ACCEPT`. The command reads
 `spawner_records_dir` from the local keeper configuration. Use
 `--file PATH` to record a supplementary review. Run `push --name NAME` and
 persist the freeze manifest.

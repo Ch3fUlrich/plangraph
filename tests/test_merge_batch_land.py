@@ -313,6 +313,8 @@ def test_plain_review_cannot_authorize_go_or_land(env):
 @pytest.mark.parametrize("field,value", [
     ("role", "implement"), ("item_key", "plangraph:OTHER"),
     ("head_sha", "b" * 40), ("stdout_tail", "TEST_GAMING: no\n"),
+    ("stdout_tail", "TEST_GAMING: no\nVERDICT: REQUEST_CHANGES\n"),
+    ("stdout_tail", "TEST_GAMING: no\nVERDICT: FIX (LOW: typo)\n"),
 ])
 def test_go_req_revalidates_the_keeper_bound_review(env, field, value):
     st = go_ready(env)
@@ -327,6 +329,11 @@ def test_go_req_revalidates_the_keeper_bound_review(env, field, value):
 
 def test_go_req_from_recorded_evidence(env):
     st = go_ready(env)
+    run = next(iter(st["merged"][0]["review_runs"].values()))
+    path = env.tmp / "mirror" / "fixture" / run / "record.json"
+    record = json.loads(path.read_text())
+    record["stdout_tail"] = "TEST_GAMING: no\nVERDICT: ACCEPT\n"
+    path.write_text(json.dumps(record))
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 0, result.stderr
     assert len(result.stdout.splitlines()) == 1

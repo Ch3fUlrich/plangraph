@@ -13,13 +13,17 @@ from .evidence_types import Result
 MAX_RECORD_BYTES = 16 * 1024 * 1024
 
 
-def _passing_review(text):
-    from ..review.verdict import _VERDICT_LINE, parse_verdict
+def _passing_review(text, *, require_explicit_accept=False):
+    from ..review.verdict import _FIRST_WORD, _VERDICT_LINE, parse_verdict
     if not isinstance(text, str) or parse_verdict(text) != "pass":
         return False
     lines = text.splitlines()
     verdicts = [(i, m[1].strip().lower()) for i, line in enumerate(lines)
                 if (m := _VERDICT_LINE.match(line))]
+    if require_explicit_accept and verdicts:
+        word = _FIRST_WORD.match(verdicts[-1][1].lstrip("*_`"))
+        if word is None or word[1] not in ("pass", "accept"):
+            return False
     gaming = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I)
     answers = [m[1].strip().lower() for line in lines if (m := gaming.match(line))]
     return bool(verdicts and len({v for _, v in verdicts}) == 1 and len(answers) == 1
@@ -83,7 +87,7 @@ class SpawnerRecordAdapter:
             raise ValueError("record exceeds size limit")
 
     def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False,
-                     require_diff_head=False):
+                     require_diff_head=False, require_explicit_accept=False):
         """Read cited mirrored review witnesses, never infer a served model."""
         from ..review.family import model_family
         ids = json.loads(item.get("run_ids") or "[]")
@@ -146,7 +150,7 @@ class SpawnerRecordAdapter:
                     or finish not in ("stop", "end_turn")
                     or any(value not in ("stop", "end_turn") for value in finishes)
                     or not _one_serving_attempt(attempts, model)
-                    or not _passing_review(text)
+                    or not _passing_review(text, require_explicit_accept=require_explicit_accept)
                     or record.get("served_family", family) != family):
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")
             seats.append({"model": model, "verdict": "pass", "run_id": run_id,

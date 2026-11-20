@@ -471,8 +471,11 @@ def part_seat(run_id, key, head):
     try:
         config = load_config(config_dir / "keeper.json")
         adapter = SpawnerRecordAdapter(config.spawner_records_dir)
-        adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
-                             allow_cli_reported=True, require_diff_head=True)
+        seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
+                                     allow_cli_reported=True, require_diff_head=True,
+                                     require_explicit_accept=True)
+        if len(seats) != 1 or seats[0]["verdict"] != "pass":
+            raise ValueError(f"{run_id}: expected one passing review seat")
     except (ConfigError, OSError, ValueError) as exc:
         raise MergeBatchError(f"keeper-bound review for {key}: {exc}") from None
 
