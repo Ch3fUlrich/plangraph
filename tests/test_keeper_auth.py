@@ -56,3 +56,9 @@ def test_tokens_are_unique(w):
     first = auth.add_principal(w.conn, "dup1", "worker", [])
     second = auth.add_principal(w.conn, "dup2", "worker", [])
     assert first != second
+
+
+def test_scoped_sweep_principal_refused(w):
+    with pytest.raises(Refused) as exc:
+        auth.add_principal(w.conn, "sweep-scoped", "sweep", ["demo"])
+    assert exc.value.code == "validation"

@@ -275,6 +275,29 @@ print("ctx-watchdog: cannot fetch the router repo on this host; this host needs 
 }
 install_ctx_watchdog
 
+install_worktree_sweep() {
+  [[ "$OSTYPE" == linux* ]] || return 0
+  local config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/plangraph"
+  local state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/plangraph"
+  local token_file="${PG_SWEEP_TOKEN_FILE:-$config_dir/sweep.token}"
+  local env_file="$config_dir/disk-hygiene.env"
+  local pins_file="$config_dir/pins.json"
+  local example="$SCRIPT_DIR/systemd/disk-hygiene.env.example"
+  [[ -f "$token_file" && ! -L "$token_file" ]] || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY-RUN] worktree-sweep: would create $env_file from $example and $pins_file if missing"
+    return 0
+  fi
+  [[ -f "$example" ]] || { echo "worktree-sweep: missing $example" >&2; return 1; }
+  local repo_root
+  repo_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+  PYTHONPATH="${PYTHONPATH:+$PYTHONPATH:}$repo_root/src" "$PYTHON_CMD" -m plangraph.keeper.cli admin install-sweep \
+    --example "$example" --config-dir "$config_dir" --state-dir "$state_dir" \
+    --token-file "$token_file" --env-file "$env_file" --pins-file "$pins_file" \
+    --repo-root "$repo_root"
+}
+install_worktree_sweep
+
 # Omnigraph: site config, cache client, session environment, health verification.
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "Omnigraph dry-run: read site config; cache client; install session environment; verify health"

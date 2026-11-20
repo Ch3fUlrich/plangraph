@@ -167,6 +167,8 @@ def add_principal(conn, name, role, projects, family=None) -> str:
         raise Refused("validation", f"principal name may not start with {RUN_PREFIX!r}")
     family = validate_family(family)
     projects = _check_projects(projects)
+    if role == "sweep" and projects:
+        raise Refused("validation", "role 'sweep' requires unscoped projects")
     existing = conn.execute(
         "SELECT 1 FROM principals WHERE name=?", (name,)).fetchone()
     if existing is not None:
