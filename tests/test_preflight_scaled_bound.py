@@ -2,6 +2,7 @@
 import json
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -82,8 +83,9 @@ def test_memavailable_line_without_value_raises_valueerror(tmp_path, monkeypatch
     meminfo = tmp_path / 'meminfo'
     meminfo.write_text('MemTotal: 1 kB\nMemAvailable:\n')
     real = overflow.Path
-    monkeypatch.setattr(overflow, 'Path', lambda p: real(meminfo) if str(p) == '/proc/meminfo' else real(p))
-    monkeypatch.setattr(overflow.os, 'name', 'posix')
+    monkeypatch.setattr(overflow, 'Path', lambda p: meminfo if str(p) == '/proc/meminfo' else real(p))
+    # Only overflow sees a POSIX os.name; the global os module stays untouched, so pathlib works on Windows.
+    monkeypatch.setattr(overflow, 'os', types.SimpleNamespace(name='posix'))
     with pytest.raises(ValueError):
         overflow.available_memory_mb()
     assert preflight.affected_workers({}, cores=12, memory_mb=overflow.available_memory_mb) == 6
