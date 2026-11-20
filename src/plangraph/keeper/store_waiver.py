@@ -98,7 +98,8 @@ class WaiverMixin:
         audit_key = key if isinstance(key, str) else None
         return self._run(principal, "close_merged", audit_key,
                          lambda now: self._close_merged(principal, key, decision_id,
-                                                       families, now, from_open, apply, waive_seats))
+                                                       families, now, from_open, apply, waive_seats),
+                         success_message="merged_on_default")
 
     @staticmethod
     def _merged_review_state(item, from_open=False):
@@ -107,19 +108,53 @@ class WaiverMixin:
         if item.get("review_tier") not in ("standard", "high"):
             raise Refused("bad_state", "close_merged requires review_tier=standard or high")
 
-    def _merge_project(self, item):
+    @staticmethod
+    def _only_merge_repo_note_changed(old, new):
+        if not isinstance(new, str):
+            return False
+        pattern = context_sources.MERGE_REPO_LINE
+        old_lines, new_lines = (old or "").splitlines(), new.splitlines()
+        hints = [pattern.fullmatch(line) for line in new_lines]
+        return (sum(bool(hint) for hint in hints) == 1
+                and [line for line, hint in zip(new_lines, hints) if not hint]
+                == [line for line in old_lines if not pattern.fullmatch(line)])
+
+    def _merge_repository(self, item):
         """The project whose registered repository holds the item's merge.
 
         An item names another repository with a ``Merge-Repo: <project>`` line in
-        its description or note; the name must be registered with the git adapter.
+        its description or note. A note can also name the merge SHA or #PR.
         """
         text = f"{item.get('description') or ''}\n{item.get('note') or ''}"
-        hint = re.findall(r"(?m)^[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)[ \t]*$", text)
-        if not hint:
-            return item["project"]
-        if len(set(hint)) != 1 or not self._adapter("git").repo_path(hint[0]):
-            raise Refused("evidence_unverified", f"merge_repo_unknown: {hint[0]}")
-        return hint[0]
+        hints = [context_sources.MERGE_REPO_LINE.fullmatch(line) for line in text.splitlines()
+                 if line.lstrip().startswith("Merge-Repo:")]
+        if not hints:
+            return item["project"], None
+        if any(hint is None for hint in hints):
+            raise Refused("evidence_unverified", "merge_repo_note_invalid")
+        projects = {hint[1] for hint in hints}
+        revisions = {hint[2] for hint in hints if hint[2]}
+        project = hints[0][1]
+        if len(projects) != 1 or len(revisions) > 1:
+            raise Refused("evidence_unverified", "merge_repo_note_conflict")
+        if not self._adapter("git").repo_path(project):
+            raise Refused("evidence_unverified", f"merge_repo_unknown: {project}")
+        return project, next(iter(revisions), None)
+
+    def _merge_project(self, item):
+        return self._merge_repository(item)[0]
+
+    def _named_merge_proof(self, item):
+        project, revision = self._merge_repository(item)
+        if revision is None:
+            return None
+        git = self._adapter("git")
+        if not self._refresh_merged_default_ref(git, project):
+            raise Refused("evidence_unverified", f"merge_repo_default_refresh_failed: {project}")
+        proof = context_sources.named_merge(git, project, revision)
+        if proof is None:
+            raise Refused("evidence_unverified", f"merge_repo_commit_not_on_default: {project} {revision}")
+        return proof
 
     def _merged_heads(self, item, all_work=False):
         """Heads of the merges that introduced the item's Plan-Item commits."""
@@ -152,7 +187,10 @@ class WaiverMixin:
         return heads
 
     def _merged_go_proof(self, item, decision_id, now, *, all_work=False):
+        named = self._named_merge_proof(item)
         heads = self._merged_heads(item, all_work)
+        if named:
+            heads.add(named["head"])
         looked = ", ".join(sorted(h[:12] for h in heads)) or "none"
         if not heads:
             raise Refused("evidence_unverified", "merged_on_default_missing")
@@ -172,9 +210,12 @@ class WaiverMixin:
                           f"go_row_not_go: no GO verdict in {decision_id} (merged heads {looked})")
         text = statement
         pr = r"(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])"
-        if (re.match(rf"^GO\s+{pr}", text)
-                or re.match(rf"^GO\s+{re.escape(item['project'])}\s+PR\s+{pr}", text)
-                or _go_binding(text, item["project"])[0]):
+        project = self._merge_project(item)
+        projects = (item["project"], project)
+        bindings = [_go_binding(text, candidate)[0] for candidate in projects]
+        if (re.match(rf"^GO\s+{pr}", text) or any(bindings)
+                or any(re.match(rf"^GO\s+{re.escape(candidate)}\s+PR\s+{pr}", text)
+                       for candidate in projects)):
             # Review prose may itself discuss a NO GO; authority is the leading
             # GO verdict and its one explicit, full-length GO-HEAD token.
             bounds = re.findall(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])", text)
@@ -188,6 +229,10 @@ class WaiverMixin:
                    and head.startswith(bounds[0].lower())}
         if len(matched) != 1:
             matched = self._merged_pr_bound_head(item, text, now)
+        if named and (matched != {named["head"]} or not _names_item(text, item["key"])):
+            raise Refused("evidence_unverified", "merge_repo_go_scope_or_head_mismatch")
+        if named and named["pr"] and any(bindings) and named["pr"] not in bindings:
+            raise Refused("evidence_unverified", "merge_repo_go_pr_mismatch")
         if len(matched) != 1:
             raise Refused("evidence_unverified",
                           f"go_row_head_mismatch: {decision_id} names "

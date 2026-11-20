@@ -36,6 +36,9 @@ _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 _PR_RE = re.compile(r"#(\d+)")
+MERGE_REPO_LINE = re.compile(
+    r"[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)"
+    r"(?:[ \t]+([a-fA-F0-9]{40}|#[1-9][0-9]*))?[ \t]*")
 _DID_RE = re.compile(r"(?<![\w-])[Dd]-0*(\d{1,6})(?!\d)")
 # Row 40 "supersedes / corrects / withdraws / replaces D-12" retires D-12.
 _SUPERSEDES_RE = re.compile(
@@ -344,6 +347,57 @@ def pr_merge_of(git, project, head):
     if len(parents) != 2 or parents[1] != head:
         return None
     return {"pr": merge["pr"], "merge": merge["sha"], "head": head}
+
+
+def named_merge(git, project, revision):
+    """Resolve a named commit or merged PR and verify it against the default ref."""
+    repo, ref = _repo_ref(git, project)
+    if repo is None:
+        return None
+    pr = None
+    sha = revision.lower()
+    if revision.startswith("#"):
+        pr = int(revision[1:])
+        origin = _ok(git, repo, ["remote", "get-url", "origin"])
+        hosted = _github_repo((origin or "").strip())
+        if not hosted:
+            return None
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "view", str(pr), "--repo", hosted,
+                 "--json", "state,mergeCommit,headRefOid"], cwd=repo, capture_output=True,
+                text=True, timeout=20, check=True)
+            info = json.loads(result.stdout)
+            if info["state"] != "MERGED":
+                return None
+            sha = info["mergeCommit"]["oid"]
+            pr_head = info["headRefOid"]
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            return None
+        if not valid_commit_ref(pr_head):
+            return None
+    if not valid_commit_ref(sha) or _git(
+            git, repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, ref])[0] != 0:
+        return None
+    if pr is not None:
+        return {"head": pr_head, "pr": pr}
+    introduced = _merge_of(git, repo, ref, sha)
+    landed = introduced["sha"] if introduced else sha
+    shown = _ok(git, repo, ["show", "-s", "--format=%P%x1f%s", "--end-of-options", landed])
+    if shown is None:
+        return None
+    parent_text, _, subject = shown.partition("\x1f")
+    parents = parent_text.split()
+    if introduced and parents:
+        on_first_parent = _git(git, repo, ["merge-base", "--is-ancestor",
+                                          "--end-of-options", sha, parents[0]])[0]
+        if on_first_parent not in (0, 1):
+            return None
+        if on_first_parent == 0:
+            return {"head": sha, "pr": None}
+    match = _PR_RE.search(subject)
+    return {"head": parents[1] if len(parents) == 2 else sha,
+            "pr": int(match[1]) if match else None}
 
 
 _REFS_LOCK = threading.Lock()

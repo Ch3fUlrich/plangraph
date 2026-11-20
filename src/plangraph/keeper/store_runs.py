@@ -246,7 +246,8 @@ class RunsMixin:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
             git, project, item["key"], fetch=False, limit=None)
-        proofs = {}
+        named = self._named_merge_proof(item)
+        proofs = ({named["head"]: named} if named and named["pr"] else {})
         for commit in commits or ():
             merge = commit.get("merge") or {}
             if type(merge.get("pr")) is not int or merge["pr"] <= 0:

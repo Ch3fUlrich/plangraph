@@ -142,7 +142,7 @@ def test_router_closes_merged_review_with_evidence_and_one_audit(w, key, familie
     row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
     assert (row["actor"], row["role"], row["action"], row["key"], row["ok"]) == (
         "router", "router", "close_merged", key, 1)
-    assert row["code"] is None and row["msg"] is None
+    assert row["code"] is None and row["msg"] == "merged_on_default"
     assert events.verify_chain(w.conn) == [] and w.store.verify_integrity() == []
     _refused(w, "bad_state", "done", key=key, families=families)
 

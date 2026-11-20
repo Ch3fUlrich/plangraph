@@ -418,7 +418,7 @@ def test_not_go_refusal_names_the_merged_heads(w, monkeypatch, tmp_path):
 def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_path):
     from plangraph.keeper.evidence_git import GitAdapter
     repo = tmp_path / "other-repo"
-    heads = merged_repo(repo, [(165, "demo:A", "2026-11-01T12:00:00Z")])
+    heads = merged_repo(repo, [(165, None, "2026-11-01T12:00:00Z")])
     empty = tmp_path / "demo-repo"
     merged_repo(empty, [])
     w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
@@ -427,9 +427,26 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
     w.decision_path.write_text(HEADER + f"| D-5504 | demo | GO #165 demo:A; GO-HEAD {heads[165]} | ROUTER | 2026-11-05 |\n")
     with pytest.raises(Refused, match="merged_on_default_missing"):
         w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
-    w.conn.execute("UPDATE items SET description=? WHERE key='demo:A'",
-                   ("Why: x\nHow: y\nMerge-Repo: other\n",))
+    router = w.p("router")
+    before = w.store._item("demo:A")
+    _git(repo, "checkout", "-qb", "unmerged")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "unmerged")
+    loose = _git(repo, "rev-parse", "HEAD")
+    for project, commit, reason in [
+            ("nowhere", heads[165], "merge_repo_unknown"),
+            ("other", loose, "merge_repo_commit_not_on_default")]:
+        w.store.edit_definition(router, "demo:A", {"note": f"Merge-Repo: {project} {commit}"})
+        assert w.store._item("demo:A")["state"] == "in_review"
+        with pytest.raises(Refused, match=reason):
+            w.store.close_merged(router, "demo:A", "D-5504", ["google"])
+        audit = w.conn.execute("SELECT msg FROM audit_log WHERE action='close_merged' ORDER BY id DESC LIMIT 1").fetchone()
+        assert reason in audit["msg"]
+    w.store.edit_definition(router, "demo:A", {"note": f"Merge-Repo: other {_git(repo, 'rev-parse', 'main')}"})
+    edited = w.store._item("demo:A")
+    assert [edited[f] for f in ("state", "epoch", "round")] == [before[f] for f in ("state", "epoch", "round")]
     assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
+    audit = w.conn.execute("SELECT msg FROM audit_log WHERE action='close_merged' ORDER BY id DESC LIMIT 1").fetchone()
+    assert "merged_on_default" in audit["msg"]
     w.conn.execute("UPDATE items SET description=? WHERE key='demo:H'", ("Merge-Repo: nowhere",))
     with pytest.raises(Refused, match="merge_repo_unknown"):
         w.store.close_merged(w.p("router"), "demo:H", "D-5504", ["google", "deepseek"])
