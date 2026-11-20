@@ -28,8 +28,10 @@ carry its type and may not be `null`: `style_text` a non-empty string, `compact_
 string, `ctx_cap_tokens` a positive int. When unset, `ctx_cap_tokens` defaults to 300000 and
 `compact_window` to `400000`. Launch env does not reach a background session when the daemon is already running, so user settings env holds the real value.
 `session_names` is `role-counter` (default) or `free`: in
-`role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (next number, never
-reused); `relaunch` stops the old session (its record stays stopped), starts a new one under the next
+`role-counter` mode `launch` takes the role as `name` and starts `<role>-NNNN` (the next number of the host's one flock'd
+`session-seq` counter, the file fleet-launch also draws from, for every role; never reused; an explicit
+`<role>-NNNN` that is not the next host number is refused; the retired per-role `_counters.json` raises
+the floor once and is removed); `relaunch` stops the old session (its record stays stopped), starts a new one under the next
 number (`previous_name` = old) and is refused ("superseded") while a later record of the role is live.
 `free` keeps free names and in-place relaunch.
 

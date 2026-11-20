@@ -1,0 +1,1 @@
+The spawner session launcher numbers every role from the host's one `session-seq` counter (the file fleet-launch draws from) instead of a per-role counter: a new role no longer starts at 0001, an explicit `<role>-NNNN` that is not the next host number is refused, and the per-role `_counters.json` is folded in once and removed.

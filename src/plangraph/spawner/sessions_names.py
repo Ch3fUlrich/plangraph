@@ -1,6 +1,9 @@
 """Session names (D-3605). Config ``session_names``: "role-counter" (default) or "free" (legacy).
-Role-counter: launch(name=<role>) assigns ``<role>-NNNN`` = max(``_counters.json``, highest NNNN
-of the role's records) + 1, written before the start (never reused); relaunch starts a NEW one.
+Role-counter: launch(name=<role>) assigns ``<role>-NNNN`` with NNNN = the next number of the host's
+one session counter (the flock'd ``session-seq`` file fleet-launch also draws from), written before the
+start (never reused); relaunch starts a NEW one. The retired per-role ``_counters.json`` and the
+records' numbers only raise the floor; the first reservation folds them into the host counter and
+removes ``_counters.json``.
 """
 from __future__ import annotations
 
@@ -32,6 +35,50 @@ def _flock(fd):
             return msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
         except OSError:
             time.sleep(0.05)  # LK_LOCK gives up after ~10 s: keep waiting
+
+
+def host_counter_path():
+    """The host's session counter file, the one fleet-launch draws from (ROUTING_STATE_DIR overrides)."""
+    root = os.environ.get("ROUTING_STATE_DIR")
+    return (Path(root) if root else Path.home() / ".local/state/routing") / "session-seq"
+
+
+def _parse_counter(raw):
+    try:
+        return max(int(raw.strip() or 0), 0)
+    except ValueError:
+        return 0
+
+
+def read_host_counter():
+    """The last number issued on this host (0 when none), without locking."""
+    try:
+        return _parse_counter(host_counter_path().read_text(encoding="utf-8"))
+    except OSError:
+        return 0
+
+
+@contextlib.contextmanager
+def locked_host_counter():
+    """Exclusive lock on the host counter; yields (read, write) over the locked file."""
+    path = host_counter_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o664)
+    try:
+        _flock(fd)
+
+        def read():
+            os.lseek(fd, 0, os.SEEK_SET)
+            return _parse_counter(os.read(fd, 64).decode("utf-8", "replace"))
+
+        def write(number):
+            os.lseek(fd, 0, os.SEEK_SET)
+            os.ftruncate(fd, 0)
+            os.write(fd, str(number).encode())
+
+        yield read, write
+    finally:
+        os.close(fd)
 
 
 class _NamesMixin:
@@ -88,15 +135,30 @@ class _NamesMixin:
         tail = re.compile(re.escape(role) + r"-(\d{4})", re.IGNORECASE)
         return [(int(m.group(1)), rec) for rec in self._all_records() if (m := tail.fullmatch(rec["name"]))]
 
+    def _counter_floor(self):
+        """Numbers the launcher itself remembers: the retired per-role file and every record."""
+        numbers = list(self._counters().values())
+        numbers += [int(m.group(2)) for rec in self._all_records() if (m := _TAIL_RE.fullmatch(rec["name"]))
+                    and len(m.group(2)) == 4]
+        return max(numbers, default=0)
+
     def _next_number(self, role):
-        top = max([self._counters().get(role.casefold(), 0)] + [n for n, _ in self._role_records(role)])
+        top = max(read_host_counter(), self._counter_floor())
         if top >= 9999:
-            raise _refuse(f"role {role} has used all numbers up to 9999")
+            raise _refuse(f"the host session counter has used all numbers up to 9999 (role {role})")
         return top + 1
 
     def _reserve_number(self, role, number):
-        counters = {**self._counters(), role.casefold(): number}
-        atomic_write_private(self._sessions / COUNTERS_FILE, json.dumps(counters, sort_keys=True) + "\n")
+        """Take number from the host counter; refused when it is no longer the next one (a parallel launcher)."""
+        floor = self._counter_floor()
+        with locked_host_counter() as (read, write):
+            top = max(read(), floor)
+            if number != top + 1:
+                raise _refuse(f"session number {number:04d} for role {role} is not the next host number "
+                              f"({top + 1:04d}); launch again")
+            write(number)
+        with contextlib.suppress(FileNotFoundError):
+            (self._sessions / COUNTERS_FILE).unlink()
 
     def _launch_name(self, cfg, name):
         """Role-counter: the role's next name; an explicit <role>-NNNN must be exactly that."""

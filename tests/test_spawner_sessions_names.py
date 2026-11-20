@@ -36,14 +36,65 @@ def _names(site):
 
 
 def test_counter_starts_at_0001_and_increments(rc):
+    """One host counter numbers every role (INCIDENT 2026-11-19/20: writer-0001 while the fleet stood at 598)."""
+    from plangraph.spawner.sessions_names import host_counter_path
     s = make(rc, FakeRun(stdout="session " + UUID1))
     assert go(rc, s, "alpha")["name"] == "alpha-0001"
     assert go(rc, s, "alpha")["name"] == "alpha-0002"
-    assert go(rc, s, "beta")["name"] == "beta-0001"
-    assert _names(rc) == ["alpha-0001", "alpha-0002", "beta-0001"]
-    assert json.loads((rc.state / "sessions" / "_counters.json").read_text()) == {"alpha": 2, "beta": 1}
+    assert go(rc, s, "beta")["name"] == "beta-0003"
+    assert _names(rc) == ["alpha-0001", "alpha-0002", "beta-0003"]
+    assert host_counter_path().read_text() == "3"
+    assert not (rc.state / "sessions" / "_counters.json").exists()
     (rc.state / "sessions" / "counters.json").write_text('{"alpha": 9}')  # pre-rename data file: no phantom row
-    assert [x["name"] for x in s.list()["sessions"]] == ["alpha-0001", "alpha-0002", "beta-0001"]
+    assert [x["name"] for x in s.list()["sessions"]] == ["alpha-0001", "alpha-0002", "beta-0003"]
+
+
+def test_new_role_takes_the_next_host_number_not_0001(rc):
+    from plangraph.spawner.sessions_names import host_counter_path
+    host_counter_path().parent.mkdir(parents=True, exist_ok=True)
+    host_counter_path().write_text("598\n")  # fleet-launch's file: the fleet stands at 598
+    s = make(rc, FakeRun(stdout="session " + UUID1))
+    assert go(rc, s, "writer")["name"] == "writer-0599"
+    assert go(rc, s, "judge")["name"] == "judge-0600"
+    assert host_counter_path().read_text() == "600"
+
+
+def test_hand_picked_counter_is_refused(rc):
+    from plangraph.spawner.sessions_names import host_counter_path
+    host_counter_path().parent.mkdir(parents=True, exist_ok=True)
+    host_counter_path().write_text("598")
+    s = make(rc, FakeRun(stdout="session " + UUID1))
+    with pytest.raises(ParameterRefused, match="expected writer-0599"):
+        go(rc, s, "writer-0001")
+    assert _names(rc) == [] and host_counter_path().read_text() == "598"
+
+
+def test_retired_role_counters_raise_the_floor_once(rc):
+    from plangraph.spawner.sessions_names import host_counter_path
+    sessions = rc.state / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / "_counters.json").write_text('{"judge": 2, "writer": 6}')
+    s = make(rc, FakeRun(stdout="session " + UUID1))
+    assert go(rc, s, "writer")["name"] == "writer-0007"
+    assert not (sessions / "_counters.json").exists()  # read once as a floor, then retired
+    assert host_counter_path().read_text() == "7"
+
+
+def test_parallel_fleet_launch_draw_is_never_reused(rc, monkeypatch):
+    """A draw from the shared file between name choice and reservation refuses; it never duplicates."""
+    from plangraph.spawner import sessions_names
+    from plangraph.spawner.sessions_names import host_counter_path
+    s = make(rc, FakeRun(stdout="session " + UUID1))
+    real = sessions_names._NamesMixin._reserve_number
+
+    def drawn_first(self, role, number):
+        host_counter_path().parent.mkdir(parents=True, exist_ok=True)
+        host_counter_path().write_text(str(number))  # fleet-launch issued this number first
+        return real(self, role, number)
+    monkeypatch.setattr(sessions_names._NamesMixin, "_reserve_number", drawn_first)
+    with pytest.raises(ParameterRefused, match="not the next host number"):
+        go(rc, s, "alpha")
+    assert _names(rc) == []
 
 
 def test_number_never_reused_after_stop_or_record_loss(rc):
@@ -51,10 +102,8 @@ def test_number_never_reused_after_stop_or_record_loss(rc):
     go(rc, s, "alpha")
     s.stop(name="alpha-0001")
     assert go(rc, s, "alpha")["name"] == "alpha-0002"
-    (rc.state / "sessions" / "alpha-0002.json").unlink()  # the counter file still remembers it
+    (rc.state / "sessions" / "alpha-0002.json").unlink()  # the host counter still remembers it
     assert go(rc, s, "alpha")["name"] == "alpha-0003"
-    (rc.state / "sessions" / "_counters.json").unlink()  # the records still remember it
-    assert go(rc, s, "alpha")["name"] == "alpha-0004"
 
 
 def test_explicit_names(rc):

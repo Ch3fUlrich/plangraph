@@ -150,6 +150,13 @@ credential ID. This selection also applies to mixed legacy/v2 stores. A failed q
 
 Moved to [spawner doctor host source checks](operations/spawner-doctor.md).
 
+### Session names (LE-SESSION-NAME-COUNTER-NOT-ALLOCATED)
+
+Every session launched through the spawner takes `<role>-NNNN` from the host's one `session-seq`
+counter (the flock'd file fleet-launch also draws from; `ROUTING_STATE_DIR` overrides its directory), for
+every role. An explicit `<role>-NNNN` that is not the next host number is refused. See
+[spawner sessions](spawner-sessions.md).
+
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
 

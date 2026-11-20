@@ -278,6 +278,7 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(state / 'config'))
     monkeypatch.setenv('XDG_STATE_HOME', str(state))
     monkeypatch.setenv('PLANGRAPH_SPAWN_STATE', str(state / 'plangraph'))
+    monkeypatch.setenv('ROUTING_STATE_DIR', str(state / 'routing'))  # the host session counter, never the operator's
     monkeypatch.setenv('PLANGRAPH_CATALOG_DB', str(state / 'absent-catalog.db'))
     from plangraph.routing_support import catalog_db
     monkeypatch.setattr(catalog_db, 'DEFAULT_DB_PATH', state / 'absent-catalog.db')
