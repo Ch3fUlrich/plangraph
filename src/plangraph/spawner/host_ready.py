@@ -260,7 +260,7 @@ def fresh(record, now=None):
 
 
 PROBE_PYTHON = r'''cd {repo} || exit 1
-py=$PWD/.venv/bin/python
+py=./.venv/bin/python
 if [ ! -f "$py" ]; then
   cfg=${{PREFLIGHT_PYTHON:-}}
   case "$cfg" in "~") cfg=$HOME;; "~/"*) cfg=$HOME/${{cfg#"~/"}};; esac
