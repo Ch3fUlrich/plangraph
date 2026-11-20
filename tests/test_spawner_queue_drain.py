@@ -126,3 +126,19 @@ def test_cancel_of_an_ownerless_queued_record_sets_cancelled(tmp_path):
     run_id = write_record(service)
     assert asyncio.run(service.cancel(run_id))['status'] == 'cancelled'
     assert service.result(run_id)['status'] == 'cancelled'
+
+
+@pytest.mark.parametrize('room_opens', [True, False])
+def test_cancel_during_the_poll_sleep_is_never_overwritten_or_started(room, monkeypatch, room_opens):
+    service, readings = room
+    readings[:] = [4000, 9000] if room_opens else [4000]
+    monkeypatch.setenv(seat_spawn.ADMISSION_WAIT_ENV, '600' if room_opens else '0.3')
+    monkeypatch.setenv(seat_spawn.ADMISSION_POLL_ENV, '0.01')
+    def cancel_in_sleep(seconds):
+        [row] = queued_records(service)
+        asyncio.run(service.cancel(row['run_id']))
+        time.sleep(0.4 if not room_opens else 0)
+    monkeypatch.setattr(seat_spawn, '_sleep', cancel_in_sleep)
+    record = seat_spawn.admit(service, {'role': 'review'})
+    assert record is not None and record['status'] == 'cancelled'
+    assert service.result(record['run_id'])['status'] == 'cancelled'

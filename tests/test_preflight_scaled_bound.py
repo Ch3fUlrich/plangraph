@@ -33,7 +33,7 @@ def test_a_command_without_run_or_with_an_unreadable_plan_keeps_the_base_bound(t
 
 
 def test_a_slow_large_selection_passes_where_the_flat_bound_failed(tmp_path, monkeypatch):
-    """223 paths at ~1.1 s each run longer than the old flat bound but inside the scaled one."""
+    """A selection whose run outlasts the old flat bound still passes inside the scaled one."""
     monkeypatch.setattr(preflight, 'TEST_TIMEOUT', 0.5)
     monkeypatch.setattr(preflight, 'TEST_PER_PATH_TIMEOUT', 0.05)
     monkeypatch.setattr(preflight, 'MAX_TEST_TIMEOUT', 20)

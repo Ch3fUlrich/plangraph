@@ -218,7 +218,11 @@ def _queue_status(service, queued):
         return 'queued'
 
 def _close_queue(service, queued, **fields):
-    """End the wait: a run that found room leaves no record behind, any other end is saved."""
+    """End the wait: a run that found room leaves no record behind, any other end is saved.
+
+    A run someone else ended meanwhile (cancel) keeps its saved record, which is returned."""
+    if _queue_status(service, queued) != 'queued':
+        return service.result(queued['run_id'])
     if fields.get('status') is None:
         import shutil
         shutil.rmtree(service._path(queued['run_id']).parent, ignore_errors=True)
@@ -315,7 +319,9 @@ def admit(service, options, *, card=None, preview=False):
                     health = disk
                     rows = load_rows()
                     if not disk and not overflow.memory_refusal(memory, role_mb, floor):
-                        _close_queue(service, queued)
+                        taken = _close_queue(service, queued)
+                        if taken is not None:
+                            return taken
                         if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
                         return None
                     continue
