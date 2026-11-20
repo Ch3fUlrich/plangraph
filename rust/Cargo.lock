@@ -2178,7 +2178,9 @@ dependencies = [
 name = "pg-policy"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
  "regex",
+ "syn 2.0.119",
  "tempfile",
 ]
 
@@ -2204,6 +2206,8 @@ dependencies = [
 name = "pg-repo-sync"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 
@@ -2273,9 +2277,13 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "libc",
+ "regex",
  "serde",
+ "serde_json",
+ "sha2",
  "tempfile",
  "toml",
+ "ureq",
  "windows-sys 0.61.2",
 ]
 

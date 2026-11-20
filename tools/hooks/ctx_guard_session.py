@@ -1,9 +1,9 @@
 """Per-session thresholds for the AutoOS context guard (operator, 2026-10-30).
 
-Runs context_guard.py's PostToolUse hook in-process. When
+Runs context_guard.py's PreToolUse and PostToolUse hooks in-process. When
 <state>/claude-hooks/ctx-guard-session/<session_id>.json exists, its "handoff"
 and "hard" integers replace AUTOOS_CTX_HANDOFF / AUTOOS_CTX_HARD for that one
-session, and {"off": true} skips the guard. Every other session runs the guard
+session, and `{"off": true}` skips PostToolUse threshold guidance (PreToolUse ready-lock denial remains active). Every other session runs the guard
 unchanged. <state> is $XDG_STATE_HOME, else ~/.local/state (hook_common.state_home, as the guard).
 The AUTOOS_CTX_* names and the guard's autoos/ctx-guard state dir are kept on purpose: the live fleet guard and its
 per-session override files depend on them, so renaming them belongs to the cutover item G13.
@@ -249,37 +249,45 @@ def main() -> int:
     if state_home is None:
         print("ctx_guard_session: hook_common.py missing next to this hook; context guard is off", file=sys.stderr)
         return 0
+    too_large = False
     try:
         text = read_stdin_text()
-    except ValueError:  # over the cap: not a payload this hook handles
-        return 0
-    try:
-        cwd = json.loads(text).get("cwd")
-    except Exception:
-        cwd = None
-    os.environ.update(settings_thresholds(cwd))
-    doc = session_override(text)
-    if doc and doc.get("off") is True:
-        return 0
-    if session_attended(text, doc):
-        return 0
-    if doc:
-        # Launch-time, session-local private destination, alongside handoff/hard.
-        path = doc.get("handoff_path")
-        if HANDOFF_PATH_ENV and isinstance(path, str) and path and "\x00" not in path:
-            try:
-                os.environ[HANDOFF_PATH_ENV] = path
-            except (UnicodeEncodeError, ValueError):
-                pass  # An unusable destination must not suppress the guard.
-        thresholds = {key: doc[key] for key in ("handoff", "hard")
-                      if isinstance(doc.get(key), int) and not isinstance(doc[key], bool)}
-        if (any(val <= 0 for val in thresholds.values()) or
-                ("handoff" in thresholds and "hard" in thresholds and
-                 thresholds["hard"] <= thresholds["handoff"])):
-            thresholds = {}
-        for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
-            if key in thresholds:
-                os.environ[var] = str(thresholds[key])
+    except ValueError as exc:
+        too_large = True
+        text = getattr(exc, "prefix", "")
+    payload = None
+    if not too_large:
+        try:
+            payload = json.loads(text)
+        except Exception:
+            payload = None
+    is_dict = isinstance(payload, dict)
+    is_pre = is_dict and payload.get("hook_event_name") == "PreToolUse"
+    if is_dict and not is_pre:
+        cwd = payload.get("cwd")
+        os.environ.update(settings_thresholds(cwd))
+        doc = session_override(text)
+        if doc and doc.get("off") is True:
+            return 0
+        if session_attended(text, doc):
+            return 0
+        if doc:
+            # Launch-time, session-local private destination, alongside handoff/hard.
+            path = doc.get("handoff_path")
+            if HANDOFF_PATH_ENV and isinstance(path, str) and path and "\x00" not in path:
+                try:
+                    os.environ[HANDOFF_PATH_ENV] = path
+                except (UnicodeEncodeError, ValueError):
+                    pass  # An unusable destination must not suppress the guard.
+            thresholds = {key: doc[key] for key in ("handoff", "hard")
+                          if isinstance(doc.get(key), int) and not isinstance(doc[key], bool)}
+            if (any(val <= 0 for val in thresholds.values()) or
+                    ("handoff" in thresholds and "hard" in thresholds and
+                     thresholds["hard"] <= thresholds["handoff"])):
+                thresholds = {}
+            for key, var in (("handoff", "AUTOOS_CTX_HANDOFF"), ("hard", "AUTOOS_CTX_HARD")):
+                if key in thresholds:
+                    os.environ[var] = str(thresholds[key])
     try:
         spec = importlib.util.spec_from_file_location("context_guard", GUARD)
         guard = importlib.util.module_from_spec(spec)
@@ -288,7 +296,11 @@ def main() -> int:
         print("ctx_guard_session: context_guard.py missing or broken next to "
               "this hook; context guard is off", file=sys.stderr)
         return 0
+    if too_large or not is_dict:
+        return guard.deny_on_unusable_stdin(text)
     sys.stdin = io.StringIO(text)
+    if is_pre:
+        return guard.main([])
     buf, real = io.StringIO(), sys.stdout
     sys.stdout = buf
     try:

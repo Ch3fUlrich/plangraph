@@ -61,8 +61,8 @@ stopping at 2 GiB free. The spawner owns admission and runtime stopping;
 this timer reports pressure and reclaims idle rebuildable state.
 Live deployment is separate from repository validation.
 
-The same timer also invokes `pg-worktree-sweep --daily --apply`. Install that
-binary and configure `PG_SWEEP_CLAIMS_READER`; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)
+The separate hourly `pg-worktree-sweep.timer` invokes `pg-worktree-sweep --apply`.
+Install its service and timer, the binary, and configure `PG_SWEEP_CLAIMS_READER`; see [pg-reap](pg-reap.md#live-merged-worktree-sweep)
 for live protection authority, restore records, and remote-deletion opt-in.
 
 ## pg-repo-sync
@@ -92,3 +92,61 @@ No sync timer is installed or enabled by this change; deployment remains separat
 Systemd's optional-directory `!` marker is decoded; a missing optional directory
 cannot protect a checkout. User-manager `~` resolves to HOME; unresolved system
 manager homes fail closed. Unreadable unit protection also returns exit 1.
+
+For a dedicated orchestration checkout, add `--refresh-prs OWNER/REPO --notify
+/absolute/path/to/notifier` to a single explicit `--repo PATH` sync invocation.
+After each successful sync it sweeps all open `batch-ready` PRs, including drafts,
+so a main update refreshes their heads. Config-only inspection requires `--sync`.
+The existing sync protections still apply. Deployment must arrange invocation
+on main updates; this change does not install an event listener or timer.
+
+The same sweep is available as `pg-repo-sync refresh-prs --repo PATH --github
+OWNER/REPO --notify /absolute/path/to/notifier`. It fetches main once, validates
+listed PR heads against origin, and merges that main snapshot in disposable,
+detached worktrees. Origin and OWNER/REPO must identify the same repository.
+Forks are reported for operator handling. Git's checked-in merge attributes
+resolve union paths; other conflicts add `needs-update`, report their paths to
+the notifier's stdin, and never push. Each failed PR reports `ALERT #N ...` and
+makes the command exit 1 while other PRs are still processed. Successful changed
+heads use ordinary pushes with repository hooks active, triggering existing PR
+CI with the host's existing credentials. No-change sweeps do not push. The
+notifier is one executable, without shell evaluation; delivery failure exits 1.
+Git writes retain normal hook/runtime behavior, without the inspection helper's
+hook suppression or its query timeout. No credentials or Git config are changed.
+
+Hook discovery follows each selected checkout's effective `core.hooksPath`
+(including inherited and relative paths) and symlinked hook files into their
+owning checkout. Targets outside `$HOME/code`, such as a dedicated
+`plangraph-hooks` checkout, are included recursively and printed as `HOOK` lines.
+Running service WorkingDirectory, ExecStart executable and FragmentPath
+checkouts are also listed as `UNIT` lines; existing live-unit protection still prevents their automatic fast-forward.
+Pinned and excluded checkouts are not inspected for hook targets.
+
+Pre-push prints its own checkout HEAD before evaluating pushed refs. If its
+locally fetched `origin/main` contains a missing commit older than 24 hours,
+it refuses with a stale-checkout diagnostic and the `pg-repo-sync --repo PATH`
+repair command. A cached upstream tip older than a day is fetched before
+judging freshness;
+an unsuccessful refresh refuses the push. Missing commit ages follow main’s
+first-parent history, so recent merges of old topics do not cause false alarms.
+An old HEAD with no missing upstream commits is current. Gate changes in a topic
+branch take effect in the shared hook checkout after they merge into main and that checkout syncs.
+
+## Fleet series history (Rust core)
+
+`pg_worker_core::fleet_series` stores minute samples in
+`<state>/fleet/<host>.ndjson` and attributes lost sessions only across adjacent,
+reachable samples with an increasing OOM counter. Terminal run records receive a
+host-specific `oom_kill_delta`, or null when coverage is unavailable.
+
+Per host, append retains the newest 1,440 samples (24 hours at minute cadence),
+limited further to 4 MiB. Reads seek directly to that byte tail and parse only the
+newest complete retained rows, so legacy oversized histories do not cause an
+unbounded scan. Older rows are discarded; summaries cover only retained data and
+run attribution becomes unknown when its baseline has expired. An individual
+sample exceeding 4 MiB is rejected without replacing history. Appends take the
+existing nonblocking host lock and atomically replace the private history file.
+
+This first slice supplies storage, summaries and run attribution. The reference
+branch's collection module, sampler CLI and systemd service/timer remain open;
+no timer or live-host action is installed by this slice.

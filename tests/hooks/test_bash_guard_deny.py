@@ -173,6 +173,8 @@ CLAUDE_FORMS = [
     ("unquoted_substitution", "claude -p $(id)", "unquoted"),
     ("unquoted_backtick", "claude -p `id`", "unquoted"),
     ("unquoted_bg", "claude --bg $(id)", "unquoted"),
+    ("unquoted_background", "claude --background $(id)", "unquoted"),
+    ("double_quoted_background", 'claude --background "$(id)"', "double-quoted"),
     ("unquoted_prefix_inside_word", "claude -p prompt$(id)", "unquoted"),
     ("unquoted_default_expansion", "claude -p ${x:-$(id)}", "unquoted"),
     ("mixed_quotes_word", "claude -p 'a'\"$(id)\"", "double-quoted"),
@@ -214,7 +216,75 @@ def test_denied(guard, name, cmd, needle):
     assert needle in reason, (needle, reason)
 
 
+D158_MSG = (
+    "bash-guard: DENIED - sessions are launched only by the fleet launcher "
+    "(spawner session_launch / fleet-launch), which allocates the name counter; "
+    "send the launch request to routing (D-158)."
+)
+
+CLAUDE_BG_LAUNCHER = [
+    ("bg_named_short", 'claude --bg -n x-0001 "prompt"', "D-158"),
+    ("bg_named_long", 'claude --bg --name x-0001 "prompt"', "D-158"),
+    ("remote_control_then_bg", 'claude --remote-control --bg -n x-0001 "prompt"', "D-158"),
+    ("incident_shape_plan_order_0572", 'claude --bg --remote-control -n plan-roadmap-0001 "prompt"', "D-158"),
+    ("bg_plain_prompt", 'claude --bg "plain text"', "D-158"),
+    ("bg_equals_flag", 'claude --bg=1 "prompt"', "D-158"),
+    ("bg_equals_zero_fail_closed", 'claude --bg=0 "prompt"', "D-158"),
+    ("background_named_short", 'claude --background -n x-0001 "prompt"', "D-158"),
+    ("background_plain_prompt", 'claude --background "plain text"', "D-158"),
+    ("background_equals_flag", 'claude --background=1 "prompt"', "D-158"),
+    ("background_equals_zero_fail_closed", 'claude --background=0 "prompt"', "D-158"),
+    ("bg_after_print_flag", 'claude -p "plain" --bg', "D-158"),
+    ("bg_quoted_cmd_and_flag", '\'claude\' "--bg" -n x-0001 "prompt"', "D-158"),
+    ("bg_escaped_cmd_and_quoted_flag", 'cl\\aude --\'bg\' "prompt"', "D-158"),
+    ("bg_ansi_c_cmd_and_flag", "$'claude' $'--bg' \"prompt\"", "D-158"),
+    ("bg_wrapped_sudo", 'sudo claude --bg "plain text"', "D-158"),
+    ("bg_wrapped_bash_c", 'bash -c \'claude --bg -n x-0001 "prompt"\'', "D-158"),
+    ("bg_wrapped_eval", 'eval \'claude --bg -n x-0001 "prompt"\'', "D-158"),
+    ("bg_resume_missing_id", "claude --bg --resume", "D-158"),
+    ("bg_resume_empty_equals", 'claude --bg --resume=""', "D-158"),
+    ("bg_resume_flag_as_id", "claude --bg --resume -n x-0001", "D-158"),
+    ("bg_resume_non_hex_token", 'claude --bg --resume foo -n x-0002 "p"', "D-158"),
+    ("bg_resume_non_hex_only", 'claude --bg --resume foo "p"', "D-158"),
+    ("bg_resume_short_hex_too_short", "claude --bg --resume dead", "D-158"),
+    ("bg_resume_equals_non_hex", "claude --bg --resume=foo", "D-158"),
+    ("bg_short_r_non_hex", "claude --bg -r foo", "D-158"),
+    ("bg_resume_uuid_with_short_name", 'claude --bg --resume 12345678-1234-1234-1234-123456789abc -n x-0002 "p"', "D-158"),
+    ("bg_resume_uuid_with_long_name", 'claude --bg --resume 12345678-1234-1234-1234-123456789abc --name x-0002 "p"', "D-158"),
+    ("bg_resume_uuid_with_name_equals", 'claude --bg --resume 12345678-1234-1234-1234-123456789abc --name=x-0002 "p"', "D-158"),
+    ("bg_name_before_resume_uuid", "claude --bg -n x-0002 --resume 12345678-1234-1234-1234-123456789abc", "D-158"),
+    ("bg_forged_env_marker", 'env PLANGRAPH_FLEET_LAUNCH=1 claude --bg -n x-0001 "prompt"', "D-158"),
+    ("bg_forged_leading_marker", 'PLANGRAPH_FLEET_LAUNCH=1 claude --bg --remote-control -n x-0001 "prompt"', "D-158"),
+    ("bg_marker_wrong_value", 'env PLANGRAPH_FLEET_LAUNCH=0 claude --bg "prompt"', "D-158"),
+    ("bg_marker_after_claude", 'claude --bg "PLANGRAPH_FLEET_LAUNCH=1"', "D-158"),
+    ("bg_marker_prior_command", 'echo PLANGRAPH_FLEET_LAUNCH=1; claude --bg "prompt"', "D-158"),
+    ("bg_marker_sudo_option_arg", 'sudo -u PLANGRAPH_FLEET_LAUNCH=1 claude --bg "prompt"', "D-158"),
+]
+
+
+@cases(CLAUDE_BG_LAUNCHER)
+def test_claude_bg_requires_fleet_launcher_denied(guard, name, cmd, needle):
+    reason = guard.check(cmd)
+    assert reason == D158_MSG, (name, reason)
+    assert needle in reason
+
+
+def test_claude_bg_marker_prefix_denied(guard):
+    from bash_guard_support import run_bash
+
+    for cmd in (
+        'PLANGRAPH_FLEET_LAUNCH=1 claude --bg -n x-0001 "prompt"',
+        'env PLANGRAPH_FLEET_LAUNCH=1 claude --bg -n x-0001 "prompt"',
+        'PLANGRAPH_FLEET_LAUNCH=1 claude --background -n x-0001 "prompt"',
+    ):
+        assert guard.check(cmd) == D158_MSG, cmd
+        proc = run_bash(cmd)
+        assert proc.returncode == 2, (cmd, proc.stderr)
+        assert b"D-158" in proc.stderr, (cmd, proc.stderr)
+
+
 def test_tables_have_unique_ids():
-    rows = QUOTE_STATE + POSITIONS + WRAPPERS + SHELL_C + CLAUDE_FORMS + CLOSED
+    rows = (QUOTE_STATE + POSITIONS + WRAPPERS + SHELL_C + CLAUDE_FORMS
+            + CLOSED + CLAUDE_BG_LAUNCHER)
     names = [row[0] for row in rows]
     assert len(names) == len(set(names))

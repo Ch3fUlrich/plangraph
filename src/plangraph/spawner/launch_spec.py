@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 import os
 from pathlib import Path
 import re
@@ -170,6 +171,53 @@ class WindowsEnvIncomplete(Exception):
     pass
 
 
+def _run_group(argv, text, cwd, env, timeout=60):
+    """Run the tree CLI in its own process group; a timeout kills the whole group."""
+    import signal, subprocess
+    child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, cwd=cwd, env=env,
+                             text=True, encoding='utf-8', errors='replace', start_new_session=os.name != 'nt')
+    try:
+        out, _ = child.communicate(text, timeout=timeout)
+    except BaseException:
+        try: os.killpg(child.pid, signal.SIGKILL)
+        except (AttributeError, OSError): child.kill()
+        child.communicate()
+        raise
+    return SimpleNamespace(returncode=child.returncode, stdout=out)
+
+
+def fresh_main():
+    """Import launch construction in the fetched SHA tree, not the daemon's package."""
+    import subprocess, sys
+    from .git_guard import run_tree
+    try:
+        raw = sys.stdin.read(16 * 1024 * 1024 + 1)
+        if len(raw) > 16 * 1024 * 1024: raise InvalidRequest('json')
+        try: request = json.loads(raw)
+        except (ValueError, UnicodeError): raise InvalidRequest('json') from None
+        _validate(request)
+    except InvalidRequest as exc:
+        sys.stderr.write(f'launch-spec failed: invalid request ({exc})\n')
+        return 1
+    try:
+        with run_tree(request['state']) as tree:
+            env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(Path(tree['tree_path']) / 'src'), os.environ.get('PYTHONPATH')])),
+                       PYTHONDONTWRITEBYTECODE='1')
+            result = _run_group([sys.executable, '-m', 'plangraph.spawner.cli',
+                '--state', request['state'], 'launch-spec'], json.dumps(request), tree['tree_path'], env)
+            if result.returncode == 0:
+                try: spec = json.loads(result.stdout)
+                except ValueError:
+                    sys.stderr.write('launch-spec failed: tree CLI wrote non-JSON stdout\n')
+                    return 1
+                spec['events'] = [*(spec.get('events') or []), dict(event='run_tree', **tree)]
+                print(json.dumps(spec))
+            return result.returncode
+    except Exception as exc:
+        sys.stderr.write(f'launch-spec failed: {type(exc).__name__}\n')
+        return 1
+
+
 def main(stdin, stdout, stderr) -> int:
     try:
         try:
@@ -196,3 +244,7 @@ def main(stdin, stdout, stderr) -> int:
     except Exception as exc:
         stderr.write(f'launch-spec failed: {type(exc).__name__}\n')
         return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(fresh_main())

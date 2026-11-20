@@ -206,3 +206,16 @@ def test_decision_book_file_read_failure(tmp_path, monkeypatch, failure):
 
     monkeypatch.setattr(Path, "read_text", failed_read)
     assert context_sources.decision_texts(DecisionsAdapter(path), ["D-1"]) == {}
+
+
+def test_snapshot_never_serves_a_best_effort_read_to_a_strict_caller(tmp_path):
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+
+    adapter = DecisionsAdapter(tmp_path / "missing.md")
+    with adapter.snapshot():
+        assert adapter._document() == ""
+        with pytest.raises(OSError):
+            adapter._document(_strict=True)
+        (tmp_path / "missing.md").write_text("| D-1 | demo | x | ROUTER | 2026-11-12 |\n")
+        assert adapter._document(_strict=True).startswith("| D-1")
+        assert adapter._document().startswith("| D-1")

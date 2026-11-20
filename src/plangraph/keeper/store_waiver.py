@@ -96,7 +96,9 @@ class WaiverMixin:
                           r"(?:, date -u)?\)\s+", "", text)
         if not isinstance(text, str) or not re.match(r"^GO(?=$|\s)", text):
             raise Refused("evidence_unverified", "go_row_not_go")
-        if re.match(r"^GO\s+(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])", text):
+        pr = r"(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])"
+        if (re.match(rf"^GO\s+{pr}", text)
+                or re.match(rf"^GO\s+{re.escape(item['project'])}\s+PR\s+{pr}", text)):
             # Review prose may itself discuss a NO GO; authority is the leading
             # GO verdict and its one explicit, full-length GO-HEAD token.
             bounds = re.findall(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])", text)
@@ -242,16 +244,17 @@ class WaiverMixin:
         self._assert_unlocked(item)
         if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
             raise Refused("validation", "decision_id must look like D-NNN")
-        head, _ = self._merged_go_proof(item, decision_id, now, all_work=from_open)
-        prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
-        waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
-        backfill = families is None and waiver is None
-        witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
-        families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
-        seats = self._merged_seats(item, families, now, witnessed) if waiver is None else []
-        if from_open and not apply:
-            return {"key": key, "state": item["state"], "would_close": True, "prs": prs}
-        with self._write():
+        with self._decisions_snapshot(item, now):
+            head, _ = self._merged_go_proof(item, decision_id, now, all_work=from_open)
+            prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
+            waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
+            backfill = families is None and waiver is None
+            witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
+            families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
+            seats = self._merged_seats(item, families, now, witnessed) if waiver is None else []
+            if from_open and not apply:
+                return {"key": key, "state": item["state"], "would_close": True, "prs": prs}
+        with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock
             fresh = self._get_or_refuse(key)
             self._merged_review_state(fresh, from_open)
             self._assert_unlocked(fresh)
@@ -266,8 +269,8 @@ class WaiverMixin:
                 raise Refused("conflict", "merged_on_default_changed")
             if (from_open or waiver) and self._merged_open_prs(fresh, decision_id, head, now) != prs:
                 raise Refused("conflict", "merged_pr_proofs_changed")
-            if waiver:
-                self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now)
+            if waiver and self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now) != waiver:
+                raise Refused("conflict", "merged_seat_waiver_changed")
             if backfill:
                 current = self._merged_backfill(fresh, decision_id, head, now, prs)
                 if current != witnessed:
@@ -285,7 +288,7 @@ class WaiverMixin:
             if waiver:
                 self._card_requires_non_anthropic_seats(fresh)  # validate the recorded risk tags
                 card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?", (key,)).fetchone()
-                ref.update(waiver=waiver, prs=prs, review_tier=fresh["review_tier"],
+                ref.update(waiver={k: v for k, v in waiver.items() if k != "scope"}, prs=prs, review_tier=fresh["review_tier"],
                            risk_tags=json.loads(card["risk_tags"]) if card else [],
                            seat_rule_waived_by=waive_seats)
             if from_open:

@@ -259,7 +259,7 @@ def test_management_urls_preserve_authority(endpoint, management, monkeypatch):
     assert seen == [management + '/api/usage/call-logs?sessionTag=test&limit=200']
     state = omniroute_state.from_env(secrets, key_resolver=lambda _: 'synthetic')
     assert state.base_url == management
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda _: 'synthetic')
+    monkeypatch.setattr(quota_snapshots, 'load_token', lambda _: 'synthetic')
     def fetch(url, headers, timeout):
         assert url == management + quota_snapshots.URL_PATH
         return 200, '[]'

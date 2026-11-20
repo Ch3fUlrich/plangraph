@@ -4,6 +4,58 @@ import subprocess
 import pytest
 from test_affected_tests import selector
 
+
+@pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])
+def test_pytest_matrix_finishes_sibling_shards(job):
+    import yaml
+
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[1]
+                              / '.github/workflows/tests.yml').read_text())
+    assert workflow['jobs'][job]['strategy']['fail-fast'] is False
+    gate = workflow['jobs']['ci-gate']
+    assert job in gate['needs']
+    assert gate['if'] == '${{ always() }}'
+    assert any('tools/ci_select.py gate' in step.get('run', '') for step in gate['steps'])
+
+
+@pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])
+def test_ci_gate_rejects_failed_pytest_matrix(job):
+    import json
+    import sys
+
+    root = Path(__file__).resolve().parents[1]
+    needs = {name: {'result': 'success'} for name in (
+        'select', 'scrub', 'file-size', 'new-code-lang', 'changelog-docs', job)}
+    needs['select']['outputs'] = {job: 'true'}
+    needs[job]['result'] = 'failure'  # GitHub aggregates any failing shard as failure.
+    result = subprocess.run([sys.executable, str(root / 'tools/ci_select.py'),
+                             'gate', '--needs', json.dumps(needs)],
+                            capture_output=True, text=True)
+    assert result.returncode == 1
+    assert f'{job}: failure' in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('changed', ['src/pkg/core.py', 'docs/x.md',
+                                   '.github/workflows/tests.yml'])
+def test_local_selection_always_includes_repository_policy_tests(tmp_path, changed):
+    policies = {'tests/test_spawner_utf8.py', 'tests/test_check_file_size.py',
+                'tests/test_check_new_code_lang.py', 'tests/test_check_changelog_docs.py'}
+    files = {'src/pkg/core.py': 'VALUE = 1',
+             **{f'tests/test_core_{index}.py': 'from pkg.core import VALUE' for index in range(45)},
+             **{path: '' for path in policies}}
+    for name, text in files.items():
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    module = selector()
+    plan = module.select_tests(tmp_path, [changed], local=True, files_only=True)
+    assert policies <= set(plan['tests'])
+    if changed == 'src/pkg/core.py':
+        assert len(plan['tests']) == 45 + len(policies)
+    # Explicit shard/suite restrictions still apply to local selections.
+    assert module.select_tests(tmp_path, [changed], local=True, files_only=True,
+                               within=['tests/test_spawner_utf8.py'])['tests'] == ['tests/test_spawner_utf8.py']
+
 def test_ci_pr_uses_affected_and_nightly_keeps_full():
     import yaml
 

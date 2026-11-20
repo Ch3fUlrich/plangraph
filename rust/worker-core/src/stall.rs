@@ -200,8 +200,9 @@ const SPAWN_TRIES: u32 = 6;
 /// `cmd.spawn()`, retried with a short growing pause while it fails with
 /// ETXTBSY. That condition clears in milliseconds once the writer closes its
 /// fd; any other error is returned at once. The one spawn point for every
-/// supervised child, so user scripts need no retry of their own.
-pub(crate) fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
+/// supervised child and the pg-spawnd adapters, so user scripts need no retry
+/// of their own.
+pub fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
     let mut tries = 1;
     loop {
         match cmd.spawn() {

@@ -7,20 +7,24 @@ from datetime import datetime, timezone
 
 import pytest
 
-from plangraph.routing_support import host_keys
+from plangraph.routing_support import host_keys, omniroute_state
 from plangraph.routing_support.omniroute_state import (
-    OmniRouteState, OmniRouteUnreachable, from_env,
+    OmniRouteAuthRefused, OmniRouteState, OmniRouteUnreachable, from_env,
 )
+from plangraph.spawner import gateway_witness
 
 
 @pytest.fixture(autouse=True)
-def deny_external(monkeypatch):
+def deny_external(monkeypatch, tmp_path):
     def denied(*args, **kwargs):
         pytest.fail("external access forbidden")
     monkeypatch.setattr(socket, "create_connection", denied)
     monkeypatch.setattr(socket.socket, "connect", denied)
     monkeypatch.setattr(subprocess, "run", denied)
     monkeypatch.setattr(host_keys, "_keys_path", denied)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("PLANGRAPH_GATEWAY_LOG_TOKEN", raising=False)
+    monkeypatch.delenv("PLANGRAPH_GATEWAY_LOG_TOKEN_FILE", raising=False)
 
 
 def payload(*rows):
@@ -94,6 +98,23 @@ def test_ttl_stale_expiration_recovery():
     assert len(h.calls) == 5
 
 
+@pytest.mark.parametrize('status', [401, 403])
+def test_auth_refused_never_uses_stale_health(status):
+    from plangraph.routing_support.omniroute_state import OmniRouteAuthRefused
+    h = Harness(payload(row()), (status, 'sensitive-body'), RuntimeError(), payload(row()),
+                principal='reviewer')
+    h.reader.snapshot()
+    h.now = 10
+    with pytest.raises(OmniRouteAuthRefused, match='auth_refused') as error:
+        h.reader.snapshot()
+    assert 'synthetic' not in str(error.value)
+    assert 'sensitive-body' not in str(error.value)
+    with pytest.raises(OmniRouteUnreachable, match='transport_error'):
+        h.reader.snapshot()
+    assert not h.reader.snapshot()['p'].stale
+    assert len(h.calls) == 4
+
+
 @pytest.mark.parametrize("ttl", [0, -1, float("inf"), float("nan"), "bad"])
 def test_invalid_ttl(ttl):
     with pytest.raises(ValueError):
@@ -144,3 +165,94 @@ def test_from_env_injected_resolution():
     assert reader.base_url == "https://gw.example"
     with pytest.raises(OmniRouteUnreachable, match="no_key"):
         reader.snapshot()
+
+
+def test_from_env_uses_management_credential_not_client_key(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    key_file = home / ".config" / "plangraph" / "omniroute-mgmt.key"
+    key_file.parent.mkdir(parents=True)
+    key_file.write_text("mgmt-from-home\n", encoding="utf-8")
+    key_file.chmod(0o600)
+
+    monkeypatch.setattr(host_keys, "_gateway_key", lambda env: "client-secret")
+    monkeypatch.setattr(omniroute_state, "_gateway_key", lambda env: "client-secret", raising=False)
+
+    calls = []
+
+    def fetch(url, headers, timeout):
+        calls.append((url, headers, timeout))
+        return payload(row())
+
+    reader = from_env({"OMNIROUTE_BASE_URL": "https://gw.example/v1", "HOME": str(home)},
+                      fetch=fetch)
+    assert reader.snapshot()["p"].available
+    assert calls == [("https://gw.example/api/providers",
+                      {"Authorization": "Bearer mgmt-from-home"}, 8.0)]
+
+    # Env token and explicit token file also route through load_token, never client key.
+    calls.clear()
+    reader = from_env({"OMNIROUTE_BASE_URL": "https://gw.example/v1",
+                       gateway_witness.TOKEN_ENV: "mgmt-from-env"},
+                      fetch=fetch)
+    assert reader.snapshot()["p"].available
+    assert calls[0][1] == {"Authorization": "Bearer mgmt-from-env"}
+
+    explicit_file = tmp_path / "explicit.key"
+    explicit_file.write_text("mgmt-from-file\n", encoding="utf-8")
+    explicit_file.chmod(0o600)
+    calls.clear()
+    reader = from_env({"OMNIROUTE_BASE_URL": "https://gw.example/v1",
+                       gateway_witness.TOKEN_FILE_ENV: str(explicit_file)},
+                      fetch=fetch)
+    assert reader.snapshot()["p"].available
+    assert calls[0][1] == {"Authorization": "Bearer mgmt-from-file"}
+
+    # Injected management resolver + injected client resolver: management value wins.
+    calls.clear()
+    reader = from_env({"OMNIROUTE_BASE_URL": "https://gw.example/v1"},
+                      key_resolver=lambda env: "mgmt-injected", fetch=fetch)
+    assert reader.snapshot()["p"].available
+    assert calls[0][1] == {"Authorization": "Bearer mgmt-injected"}
+
+
+def test_from_env_no_management_credential_never_sends_client_key(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(host_keys, "_gateway_key", lambda env: "client-secret")
+    monkeypatch.setattr(omniroute_state, "_gateway_key", lambda env: "client-secret", raising=False)
+
+    calls = []
+
+    def fetch(*args):
+        calls.append(args)
+        pytest.fail("client key must never be sent to /api/providers")
+
+    reader = from_env({"OMNIROUTE_BASE_URL": "https://gw.example/v1", "HOME": str(home)},
+                      fetch=fetch)
+    with pytest.raises(OmniRouteUnreachable, match="^no_key$"):
+        reader.snapshot()
+    assert not calls
+
+    # Insecure permissions on omniroute-mgmt.key are rejected without falling back to client key.
+    bad_key = home / ".config" / "plangraph" / "omniroute-mgmt.key"
+    bad_key.parent.mkdir(parents=True)
+    bad_key.write_text("mgmt-world-readable\n", encoding="utf-8")
+    bad_key.chmod(0o644)
+    reader = from_env({"OMNIROUTE_BASE_URL": "https://gw.example/v1", "HOME": str(home)},
+                      fetch=fetch)
+    with pytest.raises(OmniRouteUnreachable, match="^no_key$"):
+        reader.snapshot()
+    assert not calls
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_from_env_management_401_403_raises_auth_refused(status):
+    reader = from_env(
+        {"OMNIROUTE_BASE_URL": "https://gw.example/v1",
+         gateway_witness.TOKEN_ENV: "mgmt-secret",
+         "PLANGRAPH_PRINCIPAL": "implement"},
+        fetch=lambda *args: (status, "unauthorized"),
+    )
+    with pytest.raises(OmniRouteAuthRefused, match="auth_refused") as error:
+        reader.snapshot()
+    assert "mgmt-secret" not in str(error.value)

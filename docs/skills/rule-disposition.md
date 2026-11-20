@@ -81,6 +81,8 @@ role card.
 | R-batch-10 | card | role card: batch | D-5952 one GO per batch, Gate-Edit D-id |
 | R-batch-11 | card | role card: batch | D-5852 lessons become LE items same beat |
 | R-batch-12 | card | role card: batch | D-5952 close merged items, sweep worktrees |
+| R-batch-14 | code | rust/pg-policy/tests/plan_item_trailers.rs::part_description_flags_every_key_missing_a_commit_trailer | D-6054 warn for every named key without a writer trailer |
+| R-batch-15 | card | role card: batch | D-6054 plan-order dry-run proof before DONE |
 | R-worker-01 | card | role card: worker | derive cells from registry render |
 | R-worker-02 | card | role card: worker | portable failing-first tests |
 | R-worker-03 | card | role card: worker | keep runs cheap |
@@ -112,3 +114,10 @@ later slice before its enforcement cell can name a `path::test_name`:
 - R-worker-06: needs a named test that leaf roles never spawn.
 - R-worker-07: needs a named test forbidding local shellcheck of run-tests.sh.
 - R-worker-09: needs a named test forbidding activate_project from a worktree.
+
+## Detached watcher recovery
+
+D-6054: wait continuations use transient user services and durable job results.
+Enforcement: `rust/plangraph-cli/src/watchers.rs::tests::watcher_service_is_detached_and_executes_durable_runner`
+and `rust/plangraph-cli/tests/watchers.rs::resume_digest_keeps_pending_and_completed_watcher_outcomes`.
+Protocol and startup recovery: `skills/plangraph-spawn/SKILL.md`.

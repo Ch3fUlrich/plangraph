@@ -15,10 +15,10 @@ MAX_OUTPUT = 1024 * 1024
 MAX_WORKERS = 16
 
 TIMEOUT = 3
-FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code')
+FIELDS = ('run_id', 'host', 'status', 'role', 'started', 'ended', 'pid', 'exit_code', 'item_key')
 FIELD_TYPES = dict(run_id=(str,), host=(str,), status=(str,), role=(str,),
                    started=(int, float), ended=(int, float, type(None)),
-                   pid=(int, type(None)), exit_code=(int, type(None)))
+                   pid=(int, type(None)), exit_code=(int, type(None)), item_key=(str, type(None)))
 
 
 class HostQueryError(ValueError):

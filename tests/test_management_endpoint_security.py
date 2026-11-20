@@ -7,6 +7,64 @@ import pytest
 from plangraph.routing_support import omniroute_state, quota_snapshots
 
 
+@pytest.mark.parametrize('status', [401, 403])
+def test_snapshot_auth_refused_gateway(monkeypatch, tmp_path, status):
+    from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
+
+    seen = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            seen.append(self.path)
+            self.send_response(status)
+            self.end_headers()
+            self.wfile.write(b'fixture-key must never appear')
+
+        def log_message(self, *args):
+            pass
+
+    server = HTTPServer(('localhost', 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    gateway = f'http://localhost:{server.server_port}'
+    env = {'OMNIROUTE_BASE_URL': gateway + '/v1', 'PLANGRAPH_PRINCIPAL': 'reviewer'}
+    try:
+        provider = omniroute_state.from_env(env, key_resolver=lambda _: 'fixture-key')
+        with pytest.raises(RuntimeError) as error:
+            provider.snapshot()
+        assert not isinstance(error.value, omniroute_state.OmniRouteUnreachable)
+        assert 'auth_refused' in str(error.value)
+        assert gateway in str(error.value) and 'reviewer' in str(error.value)
+        assert 'fixture-key' not in str(error.value)
+        reader = LegAdapter(LegStateStore(tmp_path / 'state'), provider,
+                            ['opencode-go/sample'], enabled=True)
+        state = reader('opencode-go/sample')
+        assert state['state'] == 'limited'
+        assert state['reason'].startswith('auth_refused:')
+        assert state['evidence'] == dict(kind='auth_refused', gateway_url=gateway,
+                                         principal='reviewer', http_status=status)
+        import asyncio
+        from types import SimpleNamespace
+        from plangraph.spawner import leg_probe
+
+        def forbidden(*args, **kwargs):
+            pytest.fail('auth refusal must not retry or probe')
+
+        monkeypatch.setattr(leg_probe, 'probe', forbidden)
+        monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+        for role in ('review', 'implement', 'fix'):
+            skip = asyncio.run(leg_probe.before_launch(
+                SimpleNamespace(leg_reader=reader),
+                SimpleNamespace(model='opencode-go/sample', harness='opencode'), role, False))
+            assert skip == state['reason']
+        assert seen == ['/api/providers', '/api/providers']
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+
 @pytest.mark.parametrize('reader', ['state', 'quota'])
 @pytest.mark.parametrize('endpoint', ['http://gw.example:8080/v1',
                                      'ftp://gw.example/v1',
@@ -17,8 +75,8 @@ def test_invalid_endpoint_refused_before_key_read(monkeypatch, reader, endpoint)
         pytest.fail('refused endpoint read key or fetched')
 
     env = {'OMNIROUTE_BASE_URL': endpoint}
-    monkeypatch.setattr(omniroute_state, '_gateway_key', forbidden)
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', forbidden)
+    monkeypatch.setattr(omniroute_state, 'load_token', forbidden)
+    monkeypatch.setattr(quota_snapshots, 'load_token', forbidden)
     if reader == 'state':
         state = omniroute_state.from_env(env, fetch=forbidden)
         with pytest.raises(omniroute_state.OmniRouteUnreachable, match='^no_endpoint$'):
@@ -52,7 +110,7 @@ def test_management_redirect_never_forwards_key(monkeypatch, reader, status):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     env = {'OMNIROUTE_BASE_URL': f'http://localhost:{server.server_port}/v1'}
-    monkeypatch.setattr(quota_snapshots, '_gateway_key', lambda _: 'fixture-key')
+    monkeypatch.setattr(quota_snapshots, 'load_token', lambda _: 'fixture-key')
     try:
         if reader == 'state':
             state = omniroute_state.from_env(env, key_resolver=lambda _: 'fixture-key')

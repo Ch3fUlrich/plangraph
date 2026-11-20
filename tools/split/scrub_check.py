@@ -1,28 +1,17 @@
 #!/usr/bin/env python3
-"""Scan a tree for leaks before it goes public (M2c split).
-
-Rules: hostname, ipv4, ipv6, email, token-shape, high-entropy, credential-shape,
-home-path, private-word, symlink.  Output is ``path:line: rule`` only; the matched
-value is never printed.  Exit 0 clean, 1 on any hit, 2 on a usage/config error.
-    scrub_check.py TREE [--rules rules.toml] [--words private_words.txt] [--hash-hits]
-Use --base BASE --head TIP to scan changed committed blobs instead of the worktree.
-Rules files extend defaults; per-path and per-value allowances remain supported.
-A value allowance suppresses a hit only when *path*, *rule* and the sha256 of the
-matched text (the whole regex match, tree-relative line context) all match.  A missing or empty key, a glob in *path*, an unknown rule or a
-malformed hash is a ``ValueError`` naming the entry number only -- neither path
-nor value is echoed.  ``--hash-hits`` appends `` sha256=<hex>`` to every hit line, so an
-allowance can be written without seeing the value.  Symlink hits are never allow-listable
-(path-wide or per value) and carry no hash.
-The private word list (one word per line, ``#`` comments, ``re:`` prefix for a
-regex) is kept private by the caller; only its path is passed in.
-A path that itself contains a private word (and every ``private-word`` hit on a
-path, and every "binary file not scanned" note) is printed as
-``<path-hash:sha256(path)[:12]>`` so the word never reaches the output;
-``--resolve HASH`` prints the real relative path on the operator's own terminal.
+"""Public leak scan: hostname, IP, email, token and credential shapes, entropy,
+home-path, private-word and symlink. Output is path:line:rule, never a value.
+Exit 0 clean, 1 hits, 2 config error. --base BASE --head TIP scans committed blobs.
+Rules extend defaults; value allowances match exact path/rule/sha256 (--hash-hits).
+Invalid allowances fail closed; symlinks cannot be allowed.
+Private words stay in the caller's file (one word per line, # comments, re: regex).
+Paths containing private words and binary notes use <path-hash:sha256(path)[:12]>;
+--resolve HASH prints their paths on the operator's terminal.
 """
 from __future__ import annotations
 
 import argparse
+import difflib
 import hashlib
 import math
 import re
@@ -238,7 +227,6 @@ def scan_line_values(line, cfg, find_shapes):
 
 
 def scan_line(line, cfg, find_shapes):
-    """The rules that fire on one line (a set; values are not retained)."""
     return set(scan_line_values(line, cfg, find_shapes))
 
 
@@ -299,11 +287,37 @@ def _tracked(root):  # index plus HEAD names; None (scan everything) when git ca
     return names if names and all(r.returncode == 0 for r in runs) else None
 
 
-def scan_tree(root, cfg, with_skipped=False):
-    """Hits for *root* files (``.git`` skipped, no symlinks followed; tracked only in a checkout).
+def scan_content(rel, data, cfg, find_shapes, *, symlink=False, baselines=()):
+    """Shared tree/hook/fast-check scan; baselines exclude inherited line occurrences."""
+    skip, hits = _allowed(rel, cfg), []
+    if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:
+        pending = pending_value_shas(rel, "private-word", [rel], cfg)
+        if pending:
+            hits.append(Hit(rel, 0, "private-word", pending[0]))
+    if symlink:  # never allow-listable
+        return hits + [Hit(rel, 0, "symlink")], []
+    if b"\0" in data[:8192]:
+        return hits, [rel]
+    lines = data.decode("utf-8", "replace").splitlines()
+    added = set(range(len(lines)))
+    for old in baselines:
+        matcher = difflib.SequenceMatcher(
+            None, old.decode("utf-8", "replace").splitlines(), lines, autojunk=False)
+        for block in matcher.get_matching_blocks():
+            added.difference_update(range(block.b, block.b + block.size))
+    for n, line in enumerate(lines, 1):
+        if n - 1 not in added:
+            continue
+        for rule, vals in sorted(scan_line_values(line, cfg, find_shapes).items()):
+            if rule not in skip:
+                pending = pending_value_shas(rel, rule, vals, cfg)
+                if pending:
+                    hits.append(Hit(rel, n, rule, pending[0]))
+    return hits, []
 
-    A rule that is not path-wide allowed still drops its hit only when *every*
-    value it matched on the line is allowed by ``[[scrub.allow_value]]``."""
+
+def scan_tree(root, cfg, with_skipped=False):
+    """Tracked files only in a checkout; skip .git and never follow symlinks."""
     root = Path(root)
     find_shapes, hits, skipped = _shape_finder(), [], []
     tracked = _tracked(root) if (root / ".git").exists() else None
@@ -311,27 +325,11 @@ def scan_tree(root, cfg, with_skipped=False):
         rel = p.relative_to(root).as_posix()
         if ".git" in p.relative_to(root).parts or (tracked is not None and rel not in tracked and not p.is_dir()):
             continue
-        skip = _allowed(rel, cfg)
-        if any(w.search(rel) for w in cfg["_words"]) and "private-word" not in skip:
-            digest = _sha(rel)
-            if digest not in _allowed_shas(rel, "private-word", cfg):
-                hits.append(Hit(rel, 0, "private-word", digest))
-        if p.is_symlink():  # never allow-listable: a link target is a path leak
-            hits.append(Hit(rel, 0, "symlink"))
-            continue
-        if not p.is_file():
-            continue
-        data = p.read_bytes()
-        if b"\x00" in data[:8192]:
-            skipped.append(rel)
-            continue
-        for n, line in enumerate(data.decode("utf-8", "replace").splitlines(), 1):
-            for rule, vals in sorted(scan_line_values(line, cfg, find_shapes).items()):
-                if rule in skip:
-                    continue
-                pending = pending_value_shas(rel, rule, vals, cfg)
-                if pending:
-                    hits.append(Hit(rel, n, rule, pending[0]))
+        data = p.read_bytes() if p.is_file() and not p.is_symlink() else b""
+        found, binary = scan_content(rel, data,
+                                     cfg, find_shapes, symlink=p.is_symlink())
+        hits.extend(found)
+        skipped.extend(binary)
     return (hits, skipped) if with_skipped else hits
 
 
@@ -392,7 +390,10 @@ def main(argv=None):
         return 0 if found else 1
     try:
         if args.base is not None or args.head is not None:
-            from make_public import scan_committed
+            if __package__:
+                from .make_public import scan_committed
+            else:
+                from make_public import scan_committed
             hits, skipped = scan_committed(args.tree, cfg, args.base, args.head)
         else:
             hits, skipped = scan_tree(args.tree, cfg, with_skipped=True)

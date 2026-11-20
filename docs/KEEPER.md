@@ -272,7 +272,9 @@ The `by` cell must contain the case-insensitive token `operator`, separated from
 other tokens by commas or plus signs. `Waives-seats:` lists exact, space-separated
 item keys. Optional `Cutoff:` in the decision cell replaces rule 3.37's cutoff
 for those keys only. It accepts an ISO UTC date or datetime (`Z` or `+00:00`),
-must occur once, and cannot be later than the waiver row's own date. Dates come
+must occur once, and cannot be later than the waiver row's own date. Malformed
+markers such as `Cutoff:2026-11-14` refuse as `historical_cutoff` instead of falling
+back to rule 3.37. Dates come
 from a `date` column or a unique `Date:` field in the decision cell; missing or
 ambiguous dates refuse. The GO date and merge timestamp must precede the cutoff.
 Without `Cutoff:`, rule 3.37 applies (default 2026-11-13 UTC). Auth/secrets risk
@@ -284,8 +286,10 @@ the trailer, claim-window and CI checks a migrated item can no longer satisfy.  
 it a weaker proof, so it is attachable **only by the router through
 `add_evidence_router`**; a claimant or delegate naming kind `commit` is refused `forbidden`
 and stores nothing.  Unknown project (no `repos` entry), missing repo and any git error all
-fail closed as unverified. Merged task context names the oldest later merge on the target ref’s first-parent chain containing the commit: nested batch parts name the batch PR, and PR branches refreshed from main retain their landing PR. Failed git walks or a full merge scan window leave the merge unknown.
+fail closed as unverified. Merged task context names the oldest later merge on the target ref’s first-parent chain containing the commit: nested batch parts name the batch PR, and PR branches refreshed from main retain their landing PR. Failed git walks leave the merge unknown.
 Origin-main `decision_ref` closes need no batch file; exactly `[decision]` evidence and tier `none` are required for every item kind; stored reviewed decision-only items close through review, while create/edit requires tier `none` and router authorization for a new decision-only declaration (also on an existing `none` item); router imports preserve stored reviewed decision-only definitions with a warning count, and unrelated edits preserve them; see [decision-close proof, usage and refusals](keeper/keeper-decision-close.md), also covering router-only `close_merged` for merged reviews and dry-run `--from-open` closes on head-bound GO decisions (D-5504/D-5506): timestamped (`(HH:MMZ)` or `(HH:MxZ)`, optionally `~` before HH and/or `, date -u` before `)`) `GO #PR ... GO-HEAD <sha40>` rows (including punctuated/backticked PR numbers) and recorded cross-writer-family seats (D-5529), with automatic backfill from cited witnessed mirrored reviews when families are omitted and opt-in historical `--waive-seats` requiring OPERATOR authority with a whole-token `Waives-seats:` list and rule 3.37 cutoff (default 2026-11-13 UTC), with auth/secrets cards always requiring two non-Anthropic families and refusing seat waivers; waived evidence records review tier, risk tags and the decision id overriding the seat rule, and invalid stored card tags refuse by name. Quota-refused attempts before a passing witnessed substitute count as one review on the head (D-5924; [details](review-quota-fallthrough.md)).
+
+`close_merged` reads the decisions log once per phase from a snapshot: a strict (authorization) parse is served only from a strict read, never from a best-effort fallback. The introducing merge is found by walking the whole first-parent chain of main (no merge-count window). Per merged head the dated GO row wins over an undated one, and a scanned row replaces the supplied decision id only when it is a later one. The locked phase recomputes the seat waiver from a fresh snapshot and refuses `conflict: merged_seat_waiver_changed` when it differs from the pre-lock read.
 ## API (stdlib `http.server`, threaded; one Store with a lock; bind 127.0.0.1 by default, `--host`)
 `POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}` plus
 `GET /v1/audit-meta?project=&stale_days=` (router/L1 only, and `GET /v1/changelog?since=`);
@@ -298,7 +302,7 @@ for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), 
 ## CLI `pg`
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,
 `evidence KEY --kind K --commit SHA | --run ID | --task N | --decision D-NNN`, `submit KEY`, `verdict KEY --pass|--changes "why"`,
-`waive KEY D-NNN`, `cancel KEY`, `priority KEY N`, `define …` (all new items, including decisions, require non-blank `Why:` and `How:` sections; missing sections report `missing_why_how`. MCP create and CLI define defer decision checks to storage, including `apply_ops`, after duplicate-key, conflict and locked refusals; legacy imports and existing-item edits remain exempt. `pg check` warns on open items without), `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
+`waive KEY D-NNN`, `cancel KEY`, `priority KEY N` (integer 0–10: 10 most important, 0 optional; define, import, edit and batch writes refuse other values with `validation`), `define …` (all new items, including decisions, require non-blank `Why:` and `How:` sections; missing sections report `missing_why_how`. MCP create and CLI define defer decision checks to storage, including `apply_ops`, after duplicate-key, conflict and locked refusals; legacy imports and existing-item edits remain exempt. `pg check` warns on open items without), `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,
 `render --out F [--cdn]`, `audit-meta [--project P] [--stale-days N] [--skeleton DIR]`; admin (local, on the keeper host): `pg admin init|add-principal|revoke|verify|import DIR|export DIR`.
 Env `PG_URL`, `PG_TOKEN_FILE` (path of a mode-600 file; never pass a token on argv). Default output = the smallest useful text; `--json` for full.
 Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads the local `plan.snapshot.json` read-only for read verbs and says so).
@@ -627,6 +631,46 @@ record bound to the merged head, with consistent attempt provenance. Auth/secret
 cards cannot use these low-trust seats; their existing two-seat gate remains.
 
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
+
+`ready` uses the claim guard's merged-work and newer-decision checks. Its JSON
+reply separates startable `items`, `needs_reconcile` rows (with `reason`), and
+`in_progress` rows (with `prs`, the open PR numbers), and `unknown` rows when
+remote facts cannot be verified. Text and CLI print startable rows first, then
+separate, indented Needs reconcile, In progress and Unknown sections; only
+startable rows retain the top-level `key | ...` line format. `-n` caps only
+startable work. `ready --needs-reconcile` prints only dropped rows and their
+reconciliation reasons (also available as JSON); it requires the keeper.
+Untouched age and superseded-premise context remain informational, matching claim.
+Merged trailers, branch topology and open PR heads share a per-repository cached
+index (10 seconds), refreshed from origin. All candidate rows are checked;
+ready performs no per-item git/gh calls. Failed origin fetches never classify
+items from stale local facts. Failed PR-head fetches, missing head commits and
+unavailable PR inventories remain unknown. A single visible text WARNING line
+and the JSON `warnings` list report each affected project's stale index, reason
+and `age_seconds` since the last successful origin fetch (null / age unknown
+if none was observed). Cached failures retain their warning and age; they are
+retried after 10 seconds. Independently verified decision/merge facts can still
+require reconciliation. Unconfigured or unavailable local adapters retain the
+existing best-effort behavior. Claim refreshes the index before enforcement;
+an unverified index refuses claim with `work index unverified` unless the caller
+uses the existing audited force-stale override. Its override, audit and
+authorization rules remain unchanged. Ready and claim share merge PR metadata
+computed from the refreshed target topology, even when local main lags origin.
+
+`PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims` prints exactly `{"paths":[...],"branches":[...]}` for active
+claimed/in_review items across every project, using a fresh snapshot and each
+item's open lanes. Claim metadata paths are included when present. It requires
+an unscoped router token and refuses unavailable or truncated lane inventories,
+malformed metadata, filtered snapshots, or a snapshot changed during collection;
+there is no offline fallback. Hosts can set
+`PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"` directly; see [pg-reap](pg-reap.md).
+
+The sweep reader uses the real `show.run_ids` association written by `record_run`
+to read local `runs/<id>/record.json` checkout/cwd/run_worktree metadata, including
+completed writer runs whose item is still in review. `sweep-claims --state DIR`
+overrides the local state directory; otherwise `PG_SWEEP_STATE` from the sweep is used before the HOME default. Optional direct claim metadata is also
+accepted. An active claim with neither a resolved local path nor open lanes is
+incomplete and refuses cleanup. Unreadable existing local records also refuse.
 
 ### Cancelled dependencies and new children
 

@@ -1,1 +1,1 @@
-Optimize Rust dependency builds and scanner edge coverage, shard pytest across three jobs, fail fast on PRs, and remove redundant setup from slow offline tests.
+Optimize Rust dependency builds and scanner edge coverage, shard pytest across three jobs, fail fast on PR stages, and remove redundant setup from slow offline tests. CI-FAST-PATH fail fast applies to stages, not sibling pytest shards: every shard finishes so one run reports all failures, and any failed shard still fails ci-gate.

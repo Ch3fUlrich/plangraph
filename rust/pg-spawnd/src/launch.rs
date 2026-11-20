@@ -114,9 +114,8 @@ impl LaunchAdapter {
             use std::os::unix::process::CommandExt;
             cmd.process_group(0);
         }
-        let mut child = cmd
-            .spawn()
-            .map_err(|_| internal("launch adapter could not start"))?;
+        let mut child = pg_worker_core::stall::spawn_retrying(&mut cmd)
+            .map_err(|e| internal(&format!("launch adapter could not start: {e}")))?;
         let mut stdin = child.stdin.take().unwrap();
         let bytes = serde_json::to_vec(request).map_err(|_| invalid())?;
         std::thread::spawn(move || {

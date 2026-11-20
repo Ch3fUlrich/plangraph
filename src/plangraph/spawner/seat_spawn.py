@@ -15,6 +15,160 @@ from pathlib import Path
 
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
 
+def live_runner(runner):
+    """Default-equivalent runners use fresh code; injected transports stay local."""
+    from .runner import SpawnerRunner
+    from .proc_kill import oom_process_factory
+    from .git_guard import CODE_TREE
+    return (type(runner) is SpawnerRunner and runner.process_factory is oom_process_factory
+            and bool(os.environ.get('PLANGRAPH_SPAWNER_REPO') or (CODE_TREE / '.git').exists()))
+async def fresh_spawn(service, options, *, admission_passed=False):
+    """Hand off to a durable Popen supervisor; detach once the admission reply arrives.
+
+    The child skips admission, so the caller must state that admission passed.
+    """
+    if admission_passed is not True:
+        raise RuntimeError('fresh_spawn_requires_parent_admission')
+    import signal, subprocess, sys
+    from contextlib import ExitStack
+    from . import cli
+    from .cli import _drain_chunks, _prune_supervisor_logs
+    from plangraph.routing_support import background_process_options
+    state = service.state.resolve()
+    context = ExitStack()
+    acquiring = asyncio.create_task(asyncio.to_thread(context.enter_context, service.code_tree(state)))
+    tree, child, task, handshaking = None, None, None, None
+    release = context.close
+    try:
+        try:
+            tree = await asyncio.shield(acquiring)
+        except asyncio.CancelledError:
+            while not acquiring.done():
+                try: await asyncio.wait([acquiring])
+                except asyncio.CancelledError: pass
+            raise
+        src = str(Path(tree['tree_path']) / 'src')
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [src, os.environ.get('PYTHONPATH')])),
+                   PYTHONDONTWRITEBYTECODE='1')
+        state.mkdir(parents=True, exist_ok=True)
+        _prune_supervisor_logs(state)
+        log = state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
+        bootstrap = '''import io, json, logging, os, pathlib, sys, threading, traceback
+from logging.handlers import RotatingFileHandler
+from plangraph.spawner import cli as supervisor
+payload = json.loads(sys.stdin.readline())
+tree, admitted, cwd = payload.pop('_tree'), payload.pop('_admitted', False), payload.pop('_cwd')
+sys.stdin = io.StringIO(json.dumps(payload) + '\\n')
+path = sys.argv[1]
+pathlib.Path(path + '.pid').write_text(str(os.getpid()))
+if sys.platform.startswith('linux'):
+    from plangraph.spawner.proc_kill import _stat
+    tree['supervisor_pid_start'] = (_stat(os.getpid()) or (None,) * 5)[4]
+tree['supervisor_stderr_path'] = path
+read_fd, write_fd = os.pipe()
+os.dup2(write_fd, 2)
+os.close(write_fd)
+class PrivateLog(RotatingFileHandler):
+    def _open(self): return os.fdopen(os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'a', encoding='utf-8', newline='')
+    def shouldRollover(self, record): return self.stream.tell() + len(self.format(record).encode('utf-8')) + 1 > self.maxBytes
+logging.raiseExceptions = False
+handler = PrivateLog(path, maxBytes=1024 * 1024, backupCount=1)
+handler.terminator = ''
+def drain():
+    try:
+        supervisor._drain_chunks(iter(lambda: os.read(read_fd, 8192), b''), lambda data:
+            handler.emit(logging.makeLogRecord(dict(msg=data[-(1024 * 1024 - 16):].decode('utf-8', errors='replace'), args=()))))
+    finally:
+        handler.close(); os.close(read_fd)
+thread = threading.Thread(target=drain, daemon=True); thread.start()
+factory = supervisor.SpawnService
+def service_with_tree(*args, **kwargs):
+    service = factory(*args, **kwargs)
+    service.fresh_tree = False
+    service._parent_admitted = admitted
+    service.runner.default_cwd = cwd
+    save = service._save
+    def save_tree(record):
+        record.pop('tree_absent', None)
+        record.update(tree)
+        return save(record)
+    service._save = save_tree
+    return service
+supervisor.SpawnService = service_with_tree
+try:
+    code = supervisor.main(['--supervise'])
+except Exception:
+    traceback.print_exc()
+    code = 1
+finally:
+    sys.stderr.flush()
+    os.close(2)
+    thread.join(timeout=5)
+raise SystemExit(code)
+'''
+        payload = {k: v for k, v in options.items() if k != 'wait_seconds'}
+        payload.update(state=str(state), _tree=tree, _admitted=True,
+                       _cwd=getattr(service.runner, 'default_cwd', None) or os.getcwd())
+        with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
+            child = cli._start_supervisor([sys.executable, '-c', bootstrap, str(log)],
+                cwd=tree['tree_path'], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=errors, **background_process_options(new_session=True, platform=os.name))
+        def handshake():
+            child.stdin.write((json.dumps(payload) + '\n').encode()); child.stdin.close()
+            return child.stdout.readline()
+        from .base_fresh import ADMISSION_TIMEOUT, spawn_runs
+        handshaking = asyncio.ensure_future(asyncio.to_thread(handshake))
+        line = await asyncio.wait_for(asyncio.shield(handshaking), ADMISSION_TIMEOUT + 5)
+        if not line:
+            tail = []
+            _drain_chunks([log.read_bytes()], tail.append)
+            raise ValueError('run_tree_worker_failed\n' + b''.join(tail).decode('utf-8', errors='replace')[-4096:])
+        result = json.loads(line)
+        async def finish():
+            try:
+                while child.poll() is None:
+                    await asyncio.sleep(.05)
+            finally:
+                release()
+        task = asyncio.create_task(finish())
+        task.add_done_callback(lambda done: release())
+        for record in spawn_runs(result):
+            if 'run_id' in record:
+                service.tasks[record['run_id']] = task
+        if (wait := options.get('wait_seconds', 0)) is None:
+            await asyncio.shield(task)
+        elif wait > 0:
+            try:
+                await asyncio.wait_for(asyncio.shield(task), wait)
+            except asyncio.TimeoutError:
+                pass
+        for record in spawn_runs(result):
+            if 'run_id' in record: record.update(service.result(record['run_id']))
+        return result
+    except BaseException:
+        try:
+            if task is None and child is not None:
+                if child.poll() is None:
+                    try: os.killpg(child.pid, signal.SIGKILL)
+                    except (AttributeError, OSError): child.kill()
+                await asyncio.to_thread(child.wait)
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        finally:
+            release()
+        raise
+    finally:
+        if child is not None:
+            if handshaking is not None:
+                # The group is dead or detached; the pipe ends unblock the thread before the close.
+                if child.poll() is not None or not handshaking.done():
+                    try: child.stdin.close()
+                    except OSError: pass
+                try: await asyncio.wait_for(asyncio.shield(handshaking), 5)
+                except BaseException: pass
+            child.stdout.close()
+
 def resources(service):
     from .overflow import available_memory_mb
     return 0, available_memory_mb()
@@ -112,6 +266,12 @@ def admit(service, options, *, card=None, preview=False):
         rows[name]['refusal'] = refusal
     if remote_first:
         record.update(host=placement['host'], placement=placement)
+    record.setdefault('role', role or 'implement')
+    record.setdefault('started', time.time())
+    if placement.get('host'):
+        record.setdefault('host', placement['host'])
+    from .item_key import annotate_item
+    annotate_item(record, card)
     return record
 
 
@@ -175,12 +335,16 @@ class SeatSpawnMixin:
             from plangraph.planner.routing import SpawnRefused
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
-            admitted = await asyncio.to_thread(self.admit_spawn, options, card=card)
+            parent_admitted = getattr(self, '_parent_admitted', False)
+            self._parent_admitted = False
+            admitted = None if parent_admitted else await asyncio.to_thread(self.admit_spawn, options, card=card)
             if admitted is not None:
                 return admitted
             if (card or {}).get('run_kind') == 'native-codex':
                 from .overflow import native_spawn
                 return await native_spawn(self, card, options)
+            if getattr(self, 'fresh_tree', False) and not options.get('dry_run'):
+                return await fresh_spawn(self, options, admission_passed=admitted is None)
             if card and card.get('findings') and options.get('role', 'implement') == 'implement':
                 from .fixer import split_findings, render_fixer_brief
                 from plangraph.settings import admit_fixer_threshold

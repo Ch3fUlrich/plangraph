@@ -14,6 +14,16 @@ from .runner import spawn_service as SpawnService, redact_output
 from plangraph.planner.routing import BenchmarkError, SpawnRefused
 from plangraph.routing_support import background_process_options
 from .base_fresh import admitted_spawn, spawn_runs, spawn_exit_code
+from .seat_spawn import live_runner
+
+def _wait_runs(service, result, wait):
+    """Poll running leaf records until `wait` seconds pass; exit codes derive from the updated leaves."""
+    deadline = time.monotonic() + max(0, wait)
+    runs = spawn_runs(result)
+    while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
+        time.sleep(min(.02, max(0, deadline - time.monotonic())))
+        for run in runs:
+            if run.get('status') == 'running': run.update(_read_result(service, run['run_id']))
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
@@ -134,6 +144,7 @@ def main(argv=None):
     commands.add_parser('catalog')
     p = commands.add_parser('quota-result')
     p.add_argument('--model', required=True)
+    p.add_argument('--harness', choices=('agy', 'claude'), default='agy')
     p.add_argument('--error', required=True)
     p.add_argument('--reset-at', type=float)
     commands.add_parser('launch-spec')
@@ -151,11 +162,14 @@ def main(argv=None):
     if args.verb == 'quota-result':
         from .env_redact import harness_limit_line
         from .leg_state import record_harness_limit
+        from .leg_probe import key
+        from types import SimpleNamespace
         line = harness_limit_line(1, '', args.error)
         if line:
             if args.reset_at is not None and args.reset_at > time.time():
                 line += f' Resets in {args.reset_at - time.time()}s.'
-            record_harness_limit('agy/' + args.model, line, 'pg-spawnd:cli-result')
+            record_harness_limit(key(SimpleNamespace(model=args.model, harness=args.harness)),
+                                 line, 'pg-spawnd:cli-result')
         print('{}')
         return 0
     if args.verb == 'catalog':
@@ -227,12 +241,26 @@ def main(argv=None):
                 service.save_refusal(exc, args.role)
                 raise
             # Explicit model/leg overrides intentionally bypass routing, not admission.
-            if not args.model and not args.leg and args.card.get('run_kind') != 'native-codex':
+            if not args.model and not args.leg and (args.card or {}).get('run_kind') != 'native-codex':
                 # service.route saves the refusal record itself (one record per route error).
                 service.route(args.card, args.role, args.writer_family, args.review_of, **options)
             if args.dry_run:
                 result = asyncio.run(service.spawn(**payload, wait_seconds=None))
+            elif (live_runner(getattr(service, 'runner', None)) and _start_supervisor is subprocess.Popen
+                  and (args.card or {}).get('run_kind') != 'native-codex'):
+                service.fresh_tree = True
+                async def fresh():
+                    result = await admitted_spawn(service, payload)
+                    await asyncio.to_thread(_wait_runs, service, result, args.wait)
+                    for task in set(service.tasks.values()): task.cancel()
+                    await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+                    return result
+                result = asyncio.run(fresh())
             else:
+                if (live_runner(getattr(service, 'runner', None)) and (args.card or {}).get('run_kind') != 'native-codex'
+                        and _start_supervisor is not subprocess.Popen):
+                    print('warning: fresh-tree handoff skipped (supervisor starter replaced); records carry process-load tree identity',
+                          file=sys.stderr)
                 import plangraph
                 env = os.environ.copy()
                 root = str(Path(plangraph.__file__).resolve().parent.parent)
@@ -371,12 +399,7 @@ raise SystemExit(code)
                         raise ValueError('spawn supervisor failed; check card and override reason' +
                                          ('\n' + tail if tail else ''))
                 result = json.loads(line)
-                deadline = time.monotonic() + max(0, args.wait)
-                runs = spawn_runs(result)
-                while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
-                    time.sleep(min(.02, max(0, deadline - time.monotonic())))
-                    for run in runs:
-                        if run.get('status') == 'running': run.update(_read_result(service, run['run_id']))
+                _wait_runs(service, result, args.wait)
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
@@ -412,7 +435,7 @@ raise SystemExit(code)
             code = result.get('exit_code')
             return code if code is not None else (0 if result.get('status') == 'running' else 1)
         return 0
-    except (ValueError, KeyError, OSError, SpawnRefused) as exc:
+    except (ValueError, KeyError, OSError, RuntimeError, subprocess.SubprocessError, SpawnRefused) as exc:
         print(((f'{args.run_id}: ' if hasattr(args, 'run_id') else '') + type(exc).__name__) if isinstance(exc, PermissionError) else str(exc), file=sys.stderr)
         return 3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1
 

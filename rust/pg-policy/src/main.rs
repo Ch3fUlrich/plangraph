@@ -1,4 +1,7 @@
 //! New-code language policy. All authority is read from committed revisions.
+mod plan_items;
+mod test_sources;
+
 use regex::Regex;
 use std::{collections::HashMap, env, path::Path, process::Command};
 
@@ -127,6 +130,10 @@ fn entries(text: &str) -> impl Iterator<Item = (usize, &str)> {
 }
 
 fn run() -> Result<Vec<String>, String> {
+    if env::args().nth(1).as_deref() == Some("--test-sources") {
+        let root = env::args().nth(2).unwrap_or_else(|| ".".into());
+        return test_sources::check(Path::new(&root));
+    }
     let mut base = env::var("NEWCODE_BASE").unwrap_or_else(|_| "origin/main".into());
     let mut head = String::from("HEAD");
     let mut args = env::args().skip(1);
@@ -218,12 +225,24 @@ fn run() -> Result<Vec<String>, String> {
 }
 
 fn main() {
-    match run() {
+    let args: Vec<_> = env::args().skip(1).collect();
+    let result = if args
+        .first()
+        .is_some_and(|arg| arg == "--plan-item-trailers")
+    {
+        plan_items::run(&args[1..])
+    } else {
+        run()
+    };
+    let advisory = args
+        .first()
+        .is_some_and(|arg| arg == "--plan-item-trailers");
+    match result {
         Ok(errors) => {
             for error in &errors {
                 println!("{error}");
             }
-            std::process::exit(i32::from(!errors.is_empty()));
+            std::process::exit(i32::from(!advisory && !errors.is_empty()));
         }
         Err(error) => {
             println!("check-new-code-lang: {error}");

@@ -1,5 +1,9 @@
 # Implement route defaults (D-5206)
 
+Gateway snapshot HTTP 401/403 exclusions appear as `auth_refused` in candidate
+and skipped-leg details, carrying gateway URL, principal, and HTTP status as
+evidence. They do not claim gateway unreachability.
+
 The declared writer order uses `cx-gpt-6.1-sol-xhigh` (model `omniroute/cx-gpt-6.1-sol-xhigh`,
 effort `xhigh`), then `agy-gemini-4-hydrogen-high` (agy harness, D-5903). Hydrogen is enabled,
 with an unwitnessed seat because AGY emits no served-model telemetry. Quota, cooldown, or a
@@ -143,4 +147,10 @@ The shipped provider config and the pending benchmark inventory use the same `om
 
 Reviews (rule 3.50, D-6028) start on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so
 the card needs a diff_ref), then the D-5966 order: agy Hydrogen high, agy Argon medium, DeepSeek
-flash and Beam free legs, then Sonnet high. Each agy model has an independent quota reset.
+flash and Beam free legs, then native Claude Sonnet high. Each agy model has an independent quota reset; the native Sonnet subscription uses its own quota key.
+
+D-6054: the OmniRoute Muse leg uses `omniroute/spark-1.3-contributor`, declared in the
+shipped provider config. The Rust `opencode_catalog` integration tests check enabled
+default, explicit and review fallback OpenCode legs against the launch renderer and
+`host_skip_reason` on a fixture host. Named exclusions cover external catalogs and
+the existing Grok declaration gap; an unknown model fails with its leg name.

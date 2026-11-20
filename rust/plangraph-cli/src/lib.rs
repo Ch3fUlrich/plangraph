@@ -1,4 +1,12 @@
 pub mod atomic;
+pub mod base_fresh;
+pub mod batch_merge;
+pub mod ci_watch;
 pub mod env;
+mod fast_check_packages;
+pub mod fast_checks;
+pub mod feeder;
 pub mod paths;
+pub mod runner;
 pub mod setup;
+pub mod watchers;

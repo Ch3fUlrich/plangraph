@@ -7,8 +7,14 @@ use pg_worker_core::run::{
 use serde_json::{json, Value};
 use std::{path::Path, time::Duration};
 
-pub(crate) fn hook(args: Args, leg: Value, attempt: u32) -> FinishHook {
+pub(crate) fn hook(
+    args: Args,
+    leg: Value,
+    attempt: u32,
+    checkout: Option<tempfile::TempDir>,
+) -> FinishHook {
     Box::new(move |record, status| {
+        let _checkout = checkout;
         let quota = if record.get("role") == Some(&json!("review")) {
             pg_worker_core::run::review_quota::reason(
                 record
@@ -167,6 +173,12 @@ fn advance(
     if let Some(head) = head {
         metadata["head_sha"] = json!(head);
     }
+    let checkout = crate::cli_review::isolate(&mut launch, &leg, metadata["head_sha"].as_str())?;
+    metadata["review_checkout"] = if checkout.is_some() {
+        json!(launch.cwd)
+    } else {
+        Value::Null
+    };
     runs::store_prompt(state, run_id, &mut launch, &mut metadata, false)?;
     let log = record.path().with_file_name("live.log");
     let archive = record
@@ -232,7 +244,7 @@ fn advance(
         stdin: launch.stdin.map(String::into_bytes),
         base: Default::default(),
         events: vec![],
-        finish: Some(hook(args, leg, next_attempt)),
+        finish: Some(hook(args, leg, next_attempt, checkout)),
     })
 }
 

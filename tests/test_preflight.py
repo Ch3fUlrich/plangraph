@@ -1,10 +1,12 @@
 """Hermetic preflight orchestration, without real policy tools or cargo."""
 import importlib.util
 from pathlib import Path
+import os
 import re
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -249,8 +251,8 @@ def test_words_and_tools_override(repo, monkeypatch):
     monkeypatch.setenv("PLANGRAPH_SCRUB_WORDS", str(repo / "private"))
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
     assert calls[0][0][1] == str(repo / "fake/split/scrub_check.py")
-    assert '--words' not in calls[0][0]
-    assert calls[1][0][-2:] == ["--words", str(repo / "private")]
+    assert calls[0][0][-2:] == ["--words", str(repo / "private")]
+    assert all('preflight_private_scrub.py' not in command for command, *_ in calls)
 
 
 def test_fail_fast(repo, monkeypatch, capsys):
@@ -339,3 +341,239 @@ def test_timeout_is_failure(monkeypatch, repo):
 
     monkeypatch.setattr(preflight.subprocess, "run", timeout)
     assert preflight.run(["hung"], repo, {}) == (1, "check exceeded 60 second timeout\n")
+
+
+def _rust_main(repo, monkeypatch, fail=False):
+    seen = []
+
+    def run(command, cwd, env):
+        if command[0] == "cargo":
+            seen.append(env)
+            return (1, "boom\n") if fail else (0, "")
+        return 0, ""
+
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt", "--check"]])
+    monkeypatch.setattr(preflight, "cargo_lease", lambda: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(preflight, "running_disk_refusal", lambda root: None)
+    monkeypatch.setenv("PLANGRAPH_PREFLIGHT_RUN_DIR", str(repo / "runs"))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(repo / "shared"))
+    code = preflight.main(["--base", "HEAD", "--fast"], repo)
+    return code, seen
+
+
+def _fake_sccache(repo, monkeypatch):
+    bindir = repo / "bin"
+    bindir.mkdir(exist_ok=True)
+    tool = bindir / "sccache"
+    tool.write_text("#!/bin/sh\n")
+    tool.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir))
+    monkeypatch.delenv("RUSTC_WRAPPER", raising=False)
+    monkeypatch.delenv("SCCACHE_CACHE_SIZE", raising=False)
+    monkeypatch.delenv("PLANGRAPH_SCCACHE_CACHE_SIZE", raising=False)
+    return tool
+
+
+def test_private_target_with_sccache_and_removed(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    tool = _fake_sccache(repo, monkeypatch)
+    code, seen = _rust_main(repo, monkeypatch)
+    target = Path(seen[0]["CARGO_TARGET_DIR"])
+    assert code == 0 and target.parent == repo / "runs" and target != repo / "shared"
+    assert not target.exists() and seen[0]["RUSTC_WRAPPER"] == str(tool)
+
+
+def test_shared_target_without_sccache(repo, monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    monkeypatch.setenv("PATH", str(repo / "nobin"))
+    monkeypatch.delenv("RUSTC_WRAPPER", raising=False)
+    code, seen = _rust_main(repo, monkeypatch)
+    assert code == 0 and seen[0]["CARGO_TARGET_DIR"] == str(repo / "shared")
+    assert "RUSTC_WRAPPER" not in seen[0] and not (repo / "runs").exists()
+    assert "no sccache" in capsys.readouterr().out
+
+
+def test_private_target_removed_on_failure(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+    code, seen = _rust_main(repo, monkeypatch, fail=True)
+    assert code == 1 and not Path(seen[0]["CARGO_TARGET_DIR"]).exists()
+
+
+def test_private_target_removed_on_system_exit(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+    seen = []
+
+    def run(command, cwd, env):
+        if command[0] == "cargo":
+            seen.append(env["CARGO_TARGET_DIR"])
+            assert Path(env["CARGO_TARGET_DIR"]).is_dir()
+            raise SystemExit(2)
+        return 0, ""
+
+    monkeypatch.setattr(preflight, "run", run)
+    monkeypatch.setattr(preflight, "rust_commands", lambda *a: [["cargo", "fmt", "--check"]])
+    monkeypatch.setattr(preflight, "cargo_lease", lambda: __import__("contextlib").nullcontext())
+    monkeypatch.setattr(preflight, "running_disk_refusal", lambda root: None)
+    monkeypatch.setenv("PLANGRAPH_PREFLIGHT_RUN_DIR", str(repo / "runs"))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(repo / "shared"))
+    with pytest.raises(SystemExit):
+        preflight.main(["--base", "HEAD", "--fast"], repo)
+    assert len(seen) == 1 and str(repo / "runs") in seen[0] and not Path(seen[0]).exists()
+
+
+def test_stale_private_targets_pruned(repo, monkeypatch):
+    runs = repo / "runs"
+    old, fresh, other = runs / "preflight-cargo-old", runs / "preflight-cargo-new", runs / "keep"
+    for d in (old, fresh, other):
+        (d / "x").mkdir(parents=True)
+    past = time.time() - preflight.STALE_TARGET_SECONDS - 60
+    for d in (old, other):
+        os.utime(d, (past, past))
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+    _rust_main(repo, monkeypatch)
+    assert not old.exists() and fresh.exists() and other.exists()
+
+
+def test_shared_target_when_disk_low(repo, monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 1)
+    _fake_sccache(repo, monkeypatch)
+    code, seen = _rust_main(repo, monkeypatch)
+    assert code == 0 and seen[0]["CARGO_TARGET_DIR"] == str(repo / "shared")
+    assert "rust: shared CARGO_TARGET_DIR (free 1.0 GB < 20 GB)" in capsys.readouterr().out
+    assert not (repo / "runs").exists() or not list((repo / "runs").iterdir())
+
+
+def test_invalid_min_free_says_so(repo, monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+    monkeypatch.setenv("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", "lots")
+    code, seen = _rust_main(repo, monkeypatch)
+    assert code == 0 and seen[0]["CARGO_TARGET_DIR"] == str(repo / "shared")
+    assert "invalid PLANGRAPH_PREFLIGHT_MIN_FREE_GB='lots'" in capsys.readouterr().out
+
+
+def test_disk_free_none_falls_back(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: None)
+    _fake_sccache(repo, monkeypatch)
+    code, seen = _rust_main(repo, monkeypatch)
+    assert code == 0 and seen[0]["CARGO_TARGET_DIR"] == str(repo / "shared")
+
+
+def test_min_free_threshold_from_env(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 5)
+    _fake_sccache(repo, monkeypatch)
+    monkeypatch.setenv("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", "3")
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0]["CARGO_TARGET_DIR"] != str(repo / "shared")
+
+
+def test_sccache_size_from_plangraph_var_wins(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+    monkeypatch.setenv("SCCACHE_CACHE_SIZE", "1G")
+    monkeypatch.setenv("PLANGRAPH_SCCACHE_CACHE_SIZE", "7G")
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0]["SCCACHE_CACHE_SIZE"] == "7G"
+
+
+def test_inherited_wrapper_kept_with_sccache(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+    monkeypatch.setenv("RUSTC_WRAPPER", "/opt/wrap")
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0]["RUSTC_WRAPPER"] == "/opt/wrap"
+    assert seen[0].get("CARGO_TARGET_DIR") == str(repo / "shared")
+
+
+def test_inherited_sccache_wrapper_uses_private_target(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    tool = _fake_sccache(repo, monkeypatch)
+    monkeypatch.setenv("RUSTC_WRAPPER", str(tool))
+    _, seen = _rust_main(repo, monkeypatch)
+    assert str(repo / "runs") in seen[0]["CARGO_TARGET_DIR"]
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-1", "abc"])
+def test_invalid_min_free_gb_uses_shared_target(repo, monkeypatch, capsys, raw):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+    monkeypatch.setenv("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", raw)
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0].get("CARGO_TARGET_DIR") == str(repo / "shared")
+    assert "invalid PLANGRAPH_PREFLIGHT_MIN_FREE_GB" in capsys.readouterr().out
+
+
+def test_unknown_free_disk_message(repo, monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: None)
+    _fake_sccache(repo, monkeypatch)
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0].get("CARGO_TARGET_DIR") == str(repo / "shared")
+    assert "free disk unknown" in capsys.readouterr().out
+
+
+def test_inherited_wrapper_kept_without_sccache(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    monkeypatch.setenv("PATH", str(repo / "nobin"))
+    monkeypatch.setenv("RUSTC_WRAPPER", "/opt/wrap")
+    _, seen = _rust_main(repo, monkeypatch)
+    assert seen[0]["RUSTC_WRAPPER"] == "/opt/wrap"
+
+
+def test_missing_named_sccache_is_ignored(repo, monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    monkeypatch.setenv("PATH", str(repo / "nobin"))
+    monkeypatch.delenv("RUSTC_WRAPPER", raising=False)
+    monkeypatch.setenv("PLANGRAPH_SCCACHE", str(repo / "typo-sccache"))
+    _, seen = _rust_main(repo, monkeypatch)
+    assert "RUSTC_WRAPPER" not in seen[0]
+    assert "not found, no sccache" in capsys.readouterr().out
+
+
+def test_disk_probe_uses_existing_ancestor(repo, monkeypatch):
+    probed = []
+
+    def free(path):
+        assert Path(path).exists()
+        probed.append(Path(path))
+        return 100
+
+    monkeypatch.setattr(preflight, "disk_free_gb", free)
+    _fake_sccache(repo, monkeypatch)
+    _, seen = _rust_main(repo, monkeypatch)
+    assert probed == [repo] and Path(seen[0]["CARGO_TARGET_DIR"]).parent == repo / "runs"
+
+
+def test_private_target_failure_falls_back_to_shared(repo, monkeypatch, capsys):
+    monkeypatch.setattr(preflight, "disk_free_gb", lambda path: 100)
+    _fake_sccache(repo, monkeypatch)
+
+    def broken(**kwargs):
+        raise OSError("mkdtemp failed")
+
+    monkeypatch.setattr(preflight.tempfile, "mkdtemp", broken)
+    code, seen = _rust_main(repo, monkeypatch)
+    assert code == 0 and seen[0]["CARGO_TARGET_DIR"] == str(repo / "shared")
+    assert "rust: shared CARGO_TARGET_DIR (mkdtemp failed)" in capsys.readouterr().out
+
+
+def test_cargo_lease_is_shared_between_runs(tmp_path, monkeypatch):
+    import threading
+    from plangraph.spawner.host_ready import cargo_lease
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(tmp_path / "shared"))
+    first = cargo_lease()
+    got = []
+    worker = threading.Thread(target=lambda: got.append(cargo_lease()), daemon=True)
+    try:
+        worker.start()
+        worker.join(5)
+        assert not worker.is_alive() and got, "second shared lease blocked"
+        with pytest.raises(BlockingIOError):
+            cargo_lease(exclusive=True)
+    finally:
+        first.close()
+        for lease in got:
+            lease.close()
