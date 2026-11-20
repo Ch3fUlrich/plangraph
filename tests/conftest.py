@@ -429,6 +429,12 @@ def isolated_build_cache(tmp_path, monkeypatch):
         return 0, (64000 if overflow.available_memory_mb is guarded_memory and Path.read_text is default_read else overflow.available_memory_mb())
     monkeypatch.setattr(seat_spawn, 'resources', resources)
 
+@pytest.fixture(autouse=True)
+def own_harness_off(monkeypatch):
+    """Route tests see each leg's registered harness, not the host's installed clients; tests of
+    own-harness routing set ``SpawnService.client_probe`` or unset this variable."""
+    monkeypatch.setenv('PLANGRAPH_OWN_HARNESS', 'off')
+
 @pytest.fixture
 def admission_memory(monkeypatch):
     """Pin the MemAvailable reading that spawner admission sees; the fixture value decides, never the host."""

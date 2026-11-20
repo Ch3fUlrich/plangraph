@@ -75,7 +75,7 @@ def test_route_gateway_first(monkeypatch, tmp_path):
     direct = SimpleNamespace(id='direct', model='direct/model', disabled=None)
     gateway = SimpleNamespace(id='gateway', model='omniroute/model', disabled=None)
     monkeypatch.setattr(routing, 'service_plan', lambda *a, **k: Plan((direct, gateway)))
-    monkeypatch.setattr(measured, 'measured_down', lambda *a: set())
+    monkeypatch.setattr(measured, 'measured_down', lambda *a, **k: set())
     service = SimpleNamespace(state=tmp_path)
     plan = SpawnService._route(service, {'witness_required': True}, role='review', writer_families=['writer'])
     assert plan.legs == (gateway, direct)

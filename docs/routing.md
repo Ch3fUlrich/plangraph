@@ -180,12 +180,15 @@ explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 While every Codex leg is unavailable (quota_until, down), `agy-claude-sonnet-5-5-high`
 is served directly behind the Codex legs; with any Codex leg available it is skipped as
 `codex_available` (rule 3.58, D-6366).
-Review routes follow rule 3.58 (D-6366, overriding the D-6310 and D-6357 review lists):
-`agy-gemini-4-argon-low` first (agy plan mode; `agy-gemini-4-argon-medium` follows as
-same-family fallback; review only, never an implement leg), then `mimo/mimo-v2.6-pro`,
-`opencode-go/deepseek-v4.1-flash`, `opencode/deepseek-v4.1-flash-free` and
-`opencode-go/glm-5.3-flash`, with `agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high`
-and `mimo/mimo-v2.6-flash` as fallbacks. The reviewer's family differs from the writer's (a gemini writer skips argon).
+Review routes follow rule 3.61 (D-6481, amending rule 3.58 / D-6366):
+`gpt-6.2-sol-medium` first, as a native Codex run (harness `codex`) with repository
+access, then `mimo/mimo-v2.6-pro`, `opencode/deepseek-v4.1-flash-free`,
+`opencode-go/deepseek-v4.1-flash` and `opencode-go/glm-5.3-flash`, then the agy argon legs
+(`agy-gemini-4-argon-low`, `agy-gemini-4-argon-medium`; plan mode, review only, never an
+implement leg), with `agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high`
+and `mimo/mimo-v2.6-flash` as fallbacks. A review run that ends without a VERDICT line is
+recorded `failed` with reason `no_verdict`; a leg whose last three review runs all ended so
+is skipped as `no_verdict_leg` until a later run answers. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.
@@ -221,3 +224,12 @@ over the same `base` and `head`, passing each group in `diff_ref.paths` and
 failing the review if any group returns `REQUEST_CHANGES` or a single file exceeds
 the leg cap.
 
+## Own harness first (rule 3.53, D-6310)
+
+A model runs in the harness it is trained on: gpt in Codex (`codex`), gemini in agy, claude in
+Claude Code or agy (`agy-claude-*` legs count as own). `planner/harness.py` resolves each routed leg
+at route time: with the family's client installed on the host (`shutil.which`) the leg's
+`harness` is the own client (a gpt OpenCode leg becomes `codex` with the plain model name);
+without it the OpenCode leg stays and carries `harness_fallback=client_missing`. Families
+without an own client (deepseek, glm, mimo, free legs) stay on OpenCode. Pinning a model's
+OpenCode leg with `--leg` while its own client is installed needs `--override-reason`.

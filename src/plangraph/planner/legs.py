@@ -63,6 +63,8 @@ class Leg:
     disabled: str | None = None
     expires: float | None = None
     effort: str | None = None
+    #: Why the model's own harness was not used (``client_missing``); None when it was.
+    harness_fallback: str | None = None
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
