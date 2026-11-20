@@ -35,9 +35,11 @@ These are performance goals, not assertions to weaken when a host is overloaded.
 
 ## Preflight Rust target and sccache
 
-`tools/preflight.py` runs its Rust family with a private `CARGO_TARGET_DIR`
+The pre-push hook uses the spawner's capped shared Cargo cache, regardless of
+sccache. Run `tools/preflight.py` directly to use the optional private-cache mode.
+In that mode the Rust family can use a private `CARGO_TARGET_DIR`
 (`preflight-cargo-*` under `PLANGRAPH_PREFLIGHT_RUN_DIR`, default the parent of
-the shared target) so concurrent pushes do not wait on one cargo lock, but only
+the shared target) so concurrent local checks do not wait on one cargo lock, but only
 when `sccache` is on PATH (or `PLANGRAPH_SCCACHE` names it) and the effective `RUSTC_WRAPPER` is sccache (an inherited other wrapper keeps the shared target): a fresh target
 without sccache is always cold and exceeds the Rust timeout. Without sccache
 preflight prints `rust: shared CARGO_TARGET_DIR (no sccache; ...)` and uses the

@@ -1,0 +1,1 @@
+Push preflight uses the spawner's capped Cargo cache and cleans an idle over-cap target before building instead of selecting a private target. Disk hygiene retains the three newest checkout-specific CLI test caches under an idle target.
