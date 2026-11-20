@@ -190,13 +190,13 @@ fn writer_attempt(
     record: &mut Value,
     prompt: &str,
 ) -> Result<i32, (i32, String)> {
+    // HEAD before the turn: a relaunch keeps the commits of the earlier attempts.
+    let mut turn_start = driver.head().map_err(|e| (6, e))?;
     let session = driver.execute(None, prompt).map_err(|e| (6, e))?;
     record["session_id"] = json!(session);
     record["resumes"] = json!(0);
     let mut fixes = 0;
     let mut idle = 0;
-    // HEAD when the last turn began: a turn that leaves it unchanged committed nothing.
-    let mut turn_start = record["base_sha"].as_str().unwrap_or_default().to_owned();
     loop {
         let head = driver.head().map_err(|e| (6, e))?;
         record["final_head"] = json!(head);

@@ -20,6 +20,8 @@ struct Fake {
     review_head: Option<&'static str>,
     /// Fast-check runs that fail before the first green one.
     fast_failures: usize,
+    /// HEAD seen at each call count (indexed by calls so far, the last entry repeats); overrides the default.
+    head_script: Vec<&'static str>,
     /// Turns after which HEAD is still the base (no commit yet).
     uncommitted_turns: usize,
     /// When false, green fast checks leave no stamp.
@@ -59,16 +61,23 @@ impl Driver for Fake {
     }
     fn head(&mut self) -> Result<String, String> {
         self.heads += 1;
+        if let Some(head) = self
+            .head_script
+            .get(self.calls.len())
+            .or(self.head_script.last())
+        {
+            return Ok((*head).into());
+        }
         // Every writer turn after the uncommitted ones commits: the head changes per turn.
-        Ok(
-            if self.uncommitted_turns > 0 && self.calls.len() <= self.uncommitted_turns {
-                "base".into()
-            } else if self.calls.len() <= self.uncommitted_turns + 1 {
-                "final-head".into()
-            } else {
-                format!("final-head-{}", self.calls.len())
-            },
-        )
+        Ok(if self.calls.is_empty() {
+            "base".into()
+        } else if self.uncommitted_turns > 0 && self.calls.len() <= self.uncommitted_turns {
+            "base".into()
+        } else if self.calls.len() <= self.uncommitted_turns + 1 {
+            "final-head".into()
+        } else {
+            format!("final-head-{}", self.calls.len())
+        })
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         if self.fast_failures > 0 {
@@ -607,11 +616,11 @@ fn a_fix_turn_without_a_commit_is_resumed_not_reviewed_again() {
             self.0.execute(session, prompt)
         }
         fn head(&mut self) -> Result<String, String> {
-            // The second fix attempt finally commits.
-            Ok(if self.0.calls.len() >= 4 {
-                "fixed-head"
-            } else {
-                "final-head"
+            // The first turn commits; the fix turns commit nothing until the second resume.
+            Ok(match self.0.calls.len() {
+                0 => "base",
+                1..=3 => "final-head",
+                _ => "fixed-head",
             }
             .into())
         }
@@ -646,6 +655,26 @@ fn a_fix_turn_without_a_commit_is_resumed_not_reviewed_again() {
     assert!(driver.0.prompts[2].contains("No commit yet"));
     // Two reviews only: the unchanged head was never reviewed twice.
     assert_eq!(driver.0.reviews.len(), 2);
+}
+#[test]
+fn a_relaunch_turn_without_a_commit_compares_against_the_head_before_it() {
+    // Attempt 1 commits h1 and its fix turn crashes; the relaunch keeps h1 and its first turn
+    // changes nothing: it is resumed on its items, h1 is not reviewed a second time.
+    let mut driver = Fake {
+        verdicts: vec![("REQUEST_CHANGES", 2)],
+        head_script: vec!["base", "h1", "h1", "h1", "h2"],
+        ..fake()
+    };
+    let record = {
+        let mut wrapped = CrashOnSecond { inner: &mut driver };
+        run(&mut wrapped, json!({}), "brief")
+    };
+    assert_eq!(record["exit_code"], 0, "{record}");
+    assert_eq!(driver.calls.len(), 4);
+    assert!(driver.prompts[2].contains("Open findings of the last review"));
+    assert!(driver.prompts[3].contains("No commit yet"));
+    assert_eq!(driver.reviews.len(), 2);
+    assert_eq!(record["final_head"], "h2");
 }
 #[test]
 fn a_writer_that_never_commits_fails_without_running_a_gate() {

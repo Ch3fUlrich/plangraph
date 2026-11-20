@@ -612,7 +612,9 @@ def test_same_checkout_review_reuses_the_resolved_default_branch(repository, tmp
     from types import SimpleNamespace
     from plangraph.spawner.base_fresh import admit_base
     _, clone = lane_clone(repository, tmp_path)
-    head = git(clone, 'rev-parse', 'HEAD')
+    # Review the main tip while origin/HEAD stays on the lane: only the resolved default passes.
+    head = git(clone, 'rev-parse', 'origin/main')
+    assert head != git(clone, 'rev-parse', 'origin/lane/x')
     record = dict(role='review', cwd=str(clone))
     service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(clone)), _save=lambda r: None)
     card = dict(diff_ref=dict(repo=str(clone), base='HEAD', head=head))

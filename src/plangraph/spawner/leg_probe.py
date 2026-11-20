@@ -396,16 +396,24 @@ async def before_launch(runner, leg, role, dry_run, budget=None):
     ts = None if snapshot_error else state.last_probe_ts(key(leg))
     if ts is not None and time.time() - ts < ttl:
         return skip  # Only ordinary admission may reuse pre-failure probe evidence.
+    budget = budget or ProbeBudget()
+    timeout = budget.timeout()
+    if timeout <= 0:
+        return 'probe_budget_exhausted'
+    started = time.monotonic()
     pending = _INFLIGHT.get(key(leg))  # Share concurrent probes, failures included.
+    joined = pending is not None
     if pending is None:
-        budget = budget or ProbeBudget()
-        timeout = budget.timeout()
-        if timeout <= 0:
-            return 'probe_budget_exhausted'
-        started = time.monotonic()
         pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state, timeout_s=timeout))
-        pending.add_done_callback(lambda _: (_INFLIGHT.pop(key(leg), None), budget.spend(started)))
-    result = await asyncio.shield(pending)
+        pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
+    try:
+        # The probe bounds itself to `timeout`; a spawn that joins another's probe waits only
+        # as long as its own budget allows, and every spawn is charged for the time it waited.
+        result = await asyncio.wait_for(asyncio.shield(pending), timeout) if joined else await asyncio.shield(pending)
+    except asyncio.TimeoutError:
+        return 'probe_budget_exhausted'
+    finally:
+        budget.spend(started)
     reason = result.get('reason')
     if not reason or reason.strip().lower() == 'unknown':
         reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'

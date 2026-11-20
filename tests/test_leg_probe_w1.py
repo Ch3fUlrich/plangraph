@@ -594,3 +594,30 @@ def test_hung_probes_fail_over_leg_by_leg_inside_the_admission_window(monkeypatc
     assert skips == ['down: timeout', 'down: timeout', 'probe_budget_exhausted']
     assert elapsed < base_fresh.ADMISSION_TIMEOUT
     assert runner.cancelled == ['hung0', 'hung1']  # hung harnesses are killed, not orphaned
+
+
+def test_a_spawn_joining_an_inflight_probe_is_bounded_and_charged(monkeypatch):
+    """The joining spawn waits at most its own remaining budget, and that wait is charged."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 0.9)  # 0.3 s per probe, 0.45 s in all
+
+    async def slow(runner, leg, **kwargs):
+        await asyncio.sleep(5)  # another spawn's probe, still running
+        return dict(ok=True, reason='', seconds=0)
+
+    monkeypatch.setattr(leg_probe, 'probe', slow)
+
+    async def run():
+        owner = asyncio.ensure_future(leg_probe.before_launch(None, _leg(), 'implement', False))
+        await asyncio.sleep(0.05)  # the owner's probe is in flight
+        budget, started, skips = leg_probe.ProbeBudget(), time.monotonic(), []
+        for _ in range(3):  # three legs joining the same in-flight probe
+            skips.append(await leg_probe.before_launch(None, _leg(), 'implement', False, budget))
+        waited = time.monotonic() - started
+        owner.cancel()
+        return skips, waited
+
+    skips, waited = asyncio.run(run())
+    assert skips == ['probe_budget_exhausted'] * 3
+    assert waited < 0.6  # 0.3 + 0.15 of budget, then nothing: not 3 x 0.3

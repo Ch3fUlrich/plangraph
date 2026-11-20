@@ -225,7 +225,8 @@ fn stored_accept_with_changed_path_or_file_line_is_accepted() {
 
 #[test]
 fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
-    struct Weak;
+    /// The writer commits during its first turn: HEAD is the base until `execute` ran.
+    struct Weak(bool);
     impl crate::native_writer::Driver for Weak {
         fn prepare(&mut self) -> Result<String, String> {
             Ok("base".into())
@@ -238,10 +239,11 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
         }
         fn execute(&mut self, session: Option<&str>, _: &str) -> Result<String, String> {
             assert!(session.is_none(), "weak review must not resume the writer");
+            self.0 = true;
             Ok("session".into())
         }
         fn head(&mut self) -> Result<String, String> {
-            Ok("head".into())
+            Ok(if self.0 { "head" } else { "base" }.into())
         }
         fn fast_checks(&mut self, _: &str) -> Result<(), String> {
             Ok(())
@@ -261,7 +263,7 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
             Ok(())
         }
     }
-    let record = crate::native_writer::run(&mut Weak, json!({}), "brief");
+    let record = crate::native_writer::run(&mut Weak(false), json!({}), "brief");
     assert_eq!(record["exit_code"], 4);
     let reason = record["reason"].as_str().unwrap();
     assert!(reason.starts_with("weak_verdict") && reason.ends_with(": weak_verdict"));
