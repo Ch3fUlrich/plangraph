@@ -47,7 +47,8 @@ class VerbsMixin:
             if subject not in {merge_subject(gate) for gate in gates}:
                 raise Refused("forbidden", "system evidence requires a two-parent phase merge")
         self._assert_unlocked(item)
-        if item["state"] not in ("claimed", "in_review"):
+        states = ("claimed", "in_review") + (("open",) if kind == "deploy" else ())
+        if item["state"] not in states:
             raise Refused("bad_state", f"{key} is {item['state']}")
         # Slow verification (git/gh/http) happens before the write lock.
         result = self._verify_evidence(item, kind, ref, now)
@@ -60,11 +61,10 @@ class VerbsMixin:
                 if subject not in {merge_subject(gate) for gate in gates}:
                     raise Refused("forbidden", "phase merge no longer matches the card's gate")
             self._assert_unlocked(fresh)
-            if fresh["state"] not in ("claimed", "in_review"):
+            if fresh["state"] not in states:
                 raise Refused("conflict",
                               f"{fresh['key']} is {fresh['state']}")
-            self._guarded_touch(fresh["key"], ("claimed", "in_review"),
-                                fresh["epoch"])
+            self._guarded_touch(fresh["key"], states, fresh["epoch"])
             return self._record_evidence(principal, fresh, kind, ref, now,
                                          result)
 

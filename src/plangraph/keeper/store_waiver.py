@@ -27,6 +27,7 @@ import re
 from . import auth, context_sources
 from .coverage import writer_families
 from .errors import Refused
+from .evidence import deploy_hosts, deploy_missing, deploy_targets
 from .evidence_types import Result, as_epoch, valid_commit_ref
 from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
@@ -150,6 +151,37 @@ class WaiverMixin:
             except Exception:  # noqa: BLE001 - an unknown merge never authorizes
                 continue
         return heads
+
+    def _deploy_pending(self, item):
+        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for.
+
+        An item whose merged commits touch ``deploy/systemd`` or add a host binary
+        is not done until every host it names reports the unit active.
+        """
+        git, project = self._adapter("git"), self._merge_project(item)
+        try:
+            commits = context_sources.plan_item_commits(
+                git, project, item["key"], fetch=False, limit=None)
+            repo = git.repo_path(project)
+            paths = {p for c in commits or () if valid_commit_ref(c.get("sha"))
+                     for p in git.changed_paths(repo, c["sha"])}
+        except Exception:  # noqa: BLE001 - an unreadable diff never blocks the close
+            return []
+        targets = deploy_targets(paths)
+        if not targets:
+            return []
+        return deploy_missing(targets, deploy_hosts(item), self._evidence(item["key"]))
+
+    def _deploy_pending_result(self, item, pending, now):
+        """Leave the item open: record the reason as an alert and report it."""
+        msg = "deploy_pending: " + ", ".join(pending)
+        with self._write():
+            if self._has_finding(item["key"], "deploy_pending"):
+                self._alerts_raise_finding(item["key"], "deploy_pending", msg, now)
+            else:
+                self._finding(item["key"], "deploy_pending", msg, now)
+        return {"key": item["key"], "state": item["state"], "closed": False,
+                "reason": "deploy_pending", "missing": pending}
 
     def _merged_go_proof(self, item, decision_id, now, *, all_work=False):
         heads = self._merged_heads(item, all_work)
@@ -400,6 +432,9 @@ class WaiverMixin:
             witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
             families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
             seats = self._merged_seats(item, families, now, witnessed) if waiver is None else []
+            pending = self._deploy_pending(item)
+            if pending:
+                return self._deploy_pending_result(item, pending, now)
             if (from_open or waiver_only) and not apply:
                 return {"key": key, "state": item["state"], "would_close": True, "prs": prs}
         with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock

@@ -6,8 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.keeper.errors import Refused
+from plangraph.keeper.evidence import VERIFIERS
 from plangraph.keeper.evidence_git import GitAdapter
-from test_keeper_close_merged import HEAD, MERGE, unseated_w
+from test_keeper_close_merged import HEAD, MERGE, MergedGit, unseated_w, w
 from test_keeper_close_merged_router_path import mirrored_reviews
 from test_keeper_waiver_validation import historical_waiver_fixture
 
@@ -171,3 +172,64 @@ def test_selected_go_of_another_item_refuses(unseated_w, monkeypatch, project, k
     with pytest.raises(Refused, match="merged_pr_go_scope_mismatch"):
         world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
     assert world.store._item("demo:H")["state"] == "in_review"
+
+
+# ----- LE-MERGED-UNIT-NEVER-DEPLOYED: a merged unit is not done until active on every host
+
+def _ships(w, monkeypatch, paths, hosts="alpha, beta"):
+    git = MergedGit()
+    git.changed_paths = lambda repo, sha: list(paths)
+    w.store.ctx = {**w.store.ctx, "git": git}
+    w.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    w.conn.execute("UPDATE items SET description=? WHERE key='demo:A'",
+                   (f"Why: x\nHow: y\nDeploy-Hosts: {hosts}\n" if hosts else "Why: x\nHow: y\n",))
+
+
+def _deploy(w, host, unit, is_active="active"):
+    return w.store.add_evidence_router(w.p("router"), "demo:A", "deploy",
+                                       {"host": host, "unit": unit, "is_active": is_active})
+
+
+UNIT = ["deploy/systemd/pg-disk-hygiene.service", "deploy/systemd/pg-disk-hygiene.timer"]
+
+
+def test_shipped_unit_without_deploy_proof_stays_open_and_alerts(w, monkeypatch):
+    _ships(w, monkeypatch, UNIT)
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["closed"] is False and out["reason"] == "deploy_pending"
+    assert "alpha:pg-disk-hygiene.timer" in out["missing"]
+    assert w.store._item("demo:A")["state"] == "in_review"
+    alerts = w.store.alerts(w.p("reader"))
+    assert [f["code"] for f in alerts["findings"] if f["key"] == "demo:A"] == ["deploy_pending"]
+
+
+def test_unit_closes_once_every_named_host_reports_active(w, monkeypatch):
+    _ships(w, monkeypatch, UNIT)
+    for host in ("alpha", "beta"):
+        for unit in ("pg-disk-hygiene.service", "pg-disk-hygiene.timer"):
+            assert _deploy(w, host, unit)["verified"]
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["state"] == "done"
+
+
+def test_one_host_missing_keeps_the_item_open(w, monkeypatch):
+    _ships(w, monkeypatch, UNIT)
+    for unit in ("pg-disk-hygiene.service", "pg-disk-hygiene.timer"):
+        _deploy(w, "alpha", unit)
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["missing"] == ["beta:pg-disk-hygiene.service", "beta:pg-disk-hygiene.timer"]
+
+
+def test_inactive_report_is_not_proof_and_unnamed_hosts_stay_pending(w, monkeypatch):
+    _ships(w, monkeypatch, UNIT, hosts="")
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["missing"] == ["(hosts unnamed)"]
+    assert _deploy(w, "alpha", "x.service", "inactive")["verified"] is False
+
+
+def test_host_binary_needs_installed_proof_and_other_diffs_close_as_before(w, monkeypatch):
+    _ships(w, monkeypatch, ["rust/pg-disk/src/main.rs"], hosts="alpha")
+    assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["missing"] == [
+        "alpha:bin:pg-disk"]
+    _ships(w, monkeypatch, ["src/plangraph/keeper/store.py", "docs/KEEPER.md"])
+    assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
