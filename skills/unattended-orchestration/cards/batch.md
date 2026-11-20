@@ -5,7 +5,8 @@ cards, starts an independent reviewer on its head and fixes findings in the same
 The orchestrator combines accepted heads into one batch PR.
 
 R-batch-01: Give one strong writer a brief of related cards with disjoint write sets, in one worktree at the fetched origin default head.
-  Never one item per writer, for any agent type; when one leg is out of quota the batch goes to the next implement leg.
+  Never split related ready items across writers, for any agent type; a batch of one is right only when no related item is ready.
+  When one leg is out of quota the batch goes to the next implement leg; single-task (`piecewise`) runs follow the worker card.
   Launch with the agent-neutral writer driver (today plan-order `bin/writer.sh NAME WORKTREE BRIEF`; the spawner route picks the leg).
   (why: one context per change set avoids per-card handoffs and cold restarts; source: routing DECISIONS 3.56 (1) D-6357, plangraph:BATCH-PORT-WRITER-DRIVER, LE-BATCH-DRIVER-SINGLE-AGENT)
 R-batch-02: Every brief names the goal, Plan-Item keys, scope files, checks, commit trailers, round cap and status file ending `<NAME> DONE`.

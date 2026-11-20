@@ -12,7 +12,8 @@ A byte-identical fixed prefix lets the prompt cache reuse it across items.
 
 Use this when several plan items change one repository and can land together.
 The per-task way (one writer, one PR, one GO row per item) is only the
-alternative for a single isolated change. The plan lives in the keeper:
+alternative for a single isolated change; the unattended-orchestration skill
+(Work modes) names the brief and the review of each mode. The plan lives in the keeper:
 `plangraph:PHASE-BATCH-TRIAL` (goal, order, measures), one umbrella item per
 checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults).
 
