@@ -176,6 +176,8 @@ and fixes the new lints, without weakening `-D warnings`. Run every Rust CI job
 (`rust`, `rust-windows`, `rust-worker`, `rust-spike`) and require green before
 merging. Do not duplicate the version in workflows. The regression check is
 `python3 -m pytest -q -n 2 tests/test_ci_rust_toolchain.py`.
+
+CI job ids stay fixed; each job's display name and the per-job audit are in `docs/ci-gate.md`. `python3 tools/autoos_refs_check.py --only opencode` scans the OpenCode config root alone for AutoOS paths in `instructions` entries and skill links.
 The Rust integration test `toolchain_pin` checks `rustc --version` from the root
 and `rust/` against that channel, without inherited `RUSTUP_TOOLCHAIN` overrides.
 The Python guard scans every workflow and local composite action, rejecting case-insensitive
