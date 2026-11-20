@@ -258,14 +258,8 @@ class WaiverMixin:
             return set()
         return {head} if merged and merged["pr"] == pr else set()
 
-    def _merged_waiver_only(self, item, waiver_id, now, *, all_work=False):
-        """Close proof on the operator waiver row alone (no GO row, no PR number asked).
-
-        The row must be an OPERATOR ``Waiver: merged-without-witnesses`` row that lists
-        the key; every Plan-Item commit of the item is on the default branch and merged
-        before the row's cutoff, and no open lane remains.  Returns
-        ``(head, proofs, waiver, verification)``.
-        """
+    def _merged_work_commits(self, item):
+        """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown."""
         git, project = self._adapter("git"), self._merge_project(item)
         if not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
@@ -275,26 +269,50 @@ class WaiverMixin:
             git, project, item["key"], fetch=False, limit=None)
         if not commits:
             raise Refused("evidence_unverified", "merged_on_default_missing")
+        return commits
+
+    @staticmethod
+    def _merged_commit_proof(git, project, commit):
+        """``(pr, head, date)`` of one Plan-Item commit on the default ref.
+
+        A merged PR binds to its second parent and the merge date; a direct
+        commit on the default branch binds to itself.
+        """
+        merge = commit.get("merge") or {}
+        if merge.get("sha"):
+            repo = git.repo_path(project)
+            landed = valid_commit_ref(merge["sha"])
+            proc = git._run(repo, ["show", "-s", "--format=%P%x20%cI",
+                                   "--end-of-options", merge["sha"]]) if landed else None
+            fields = proc.stdout.split() if proc and proc.returncode == 0 else []
+            if len(fields) != 3 or not all(valid_commit_ref(p) for p in fields[:2]):
+                raise Refused("evidence_unverified", "merged_pr_head_missing")
+            head, date = fields[1], fields[2]
+        else:  # a direct commit on the default branch
+            head, date = commit.get("sha"), commit.get("date")
+        if not valid_commit_ref(head):
+            raise Refused("evidence_unverified", "operator_seat_waiver_merge_date_missing")
+        return (merge.get("pr") if type(merge.get("pr")) is int else None), head, date
+
+    def _merged_waiver_only(self, item, waiver_id, now, *, all_work=False):
+        """Close proof on the operator waiver row alone (no GO row, no PR number asked).
+
+        The row must be an OPERATOR ``Waiver: merged-without-witnesses`` row that lists
+        the key; every Plan-Item commit of the item is on the default branch and merged
+        before the row's cutoff, and no open lane remains.  Returns
+        ``(head, proofs, waiver, verification)``.
+        """
+        git, project = self._adapter("git"), self._merge_project(item)
+        commits = self._merged_work_commits(item)
         waiver = self._merged_seat_waiver(item, waiver_id, waiver_id, [], now)
-        repo, proofs = git.repo_path(project), []
+        proofs = []
         for commit in commits:
-            merge = commit.get("merge") or {}
-            if merge.get("sha"):
-                landed = valid_commit_ref(merge["sha"])
-                proc = git._run(repo, ["show", "-s", "--format=%P%x20%cI",
-                                       "--end-of-options", merge["sha"]]) if landed else None
-                fields = proc.stdout.split() if proc and proc.returncode == 0 else []
-                if len(fields) != 3 or not all(valid_commit_ref(p) for p in fields[:2]):
-                    raise Refused("evidence_unverified", "merged_pr_head_missing")
-                head, date = fields[1], fields[2]
-            else:  # a direct commit on the default branch
-                head, date = commit.get("sha"), commit.get("date")
+            pr, head, date = self._merged_commit_proof(git, project, commit)
             merged_at = as_epoch(date)
-            if not valid_commit_ref(head) or merged_at is None:
+            if merged_at is None:
                 raise Refused("evidence_unverified", "operator_seat_waiver_merge_date_missing")
             if merged_at >= waiver["cutoff"]:
                 raise Refused("evidence_unverified", "operator_seat_waiver_merge_at_or_after_cutoff")
-            pr = merge.get("pr") if type(merge.get("pr")) is int else None
             if all(p["head"] != head for p in proofs):
                 proofs.append({"pr": pr, "head": head, "decision_id": waiver_id})
         result = self._verify_evidence(item, "decision", {"id": waiver_id}, now)
@@ -367,15 +385,19 @@ class WaiverMixin:
 
     def _merged_backfill(self, item, decision_id, head, now, prs=()):
         try:
-            decisions = self._ctx(item, now).decisions
-            text = " ".join(decisions.text(p["decision_id"]) for p in prs) if prs else decisions.text(decision_id)
+            # No decision row (the automatic merge close): the merge is the proof,
+            # so the witnesses come from the item's own runs and seat evidence.
+            decisions = self._ctx(item, now).decisions if decision_id is not None else None
+            rows = ([""] if decision_id is None
+                    else [decisions.text(p["decision_id"]) for p in prs] if prs
+                    else [decisions.text(decision_id)])
+            text = " ".join(rows)
             heads = [p["head"] for p in prs] if prs else [head]
             claude = [e for e in self._evidence(item["key"])
                       if e["epoch"] == item["epoch"] and e["kind"] == "claude-seat"]
             if (claude and item.get("kind") == "lane"
                     and re.search(r"(?<![\w-])D-4504(?![\w-])",
                                   item.get("done_criteria", "") + " " + text)):
-                rows = [decisions.text(p["decision_id"]) for p in prs] if prs else [text]
                 if not all(re.search(r"(?:^|;)\s*Witness: claude-seat\s*(?=;|$)", row) for row in rows):
                     raise Refused("evidence_unverified", "claude_seat_lane_witness_rule")
             witnessed = []
@@ -483,13 +505,6 @@ class WaiverMixin:
                 if current != witnessed:
                     raise Refused("conflict", "review_witness_changed")
             seats = self._merged_seats(fresh, seats, now, witnessed) if waiver is None else []
-            if witnessed:
-                self._record_merged_seats(principal, fresh, decision_id, witnessed, now)
-                for family in seats:
-                    self._append(principal, key, "review_verdict", {
-                        "reviewer": principal.name, "family": family, "ok": True,
-                        "epoch": fresh["epoch"], "round": fresh["round"],
-                        "source": "cited-run-backfill"}, now)
             ref = {"id": decision_id, "families": seats,
                    "merged_head": head, "caller": principal.name}
             if waiver:
@@ -500,14 +515,138 @@ class WaiverMixin:
                            seat_rule_waived_by=waive_seats)
             if from_open:
                 ref["prs"] = prs
-                self.conn.execute("UPDATE items SET state='in_review', lease_until=NULL WHERE key=?", (key,))
-                # The item goes straight on to done: a run that still owns it is retired here.
-                self._exec_clear(self.conn, key, principal, now)
-                self._append(principal, key, "submitted", {"round": fresh["round"]}, now)
-            self._record_evidence(principal, fresh, "decision", ref, now,
-                                  Result(True, result.detail, ref))
-            return self._pass(principal, key, f"router GO {decision_id} merged {head}",
-                              fresh, now, reviews_passed=len(seats))
+            return self._land_merged(principal, fresh, head, seats, witnessed, decision_id, from_open,
+                                     ("decision", ref, result), f"router GO {decision_id} merged {head}", now)
+
+    def _land_merged(self, principal, fresh, head, seats, witnessed, label, from_open, evidence, reason, now,
+                     release=False):
+        """Write the merged close under the held write lock: seats, evidence, ``done``.
+
+        ``from_open`` first moves an open or claimed item through ``submitted``;
+        ``evidence`` is ``(kind, ref, result)``; ``release`` also clears the claim. Used by the router verb and the
+        automatic merge close, so both end an item the same way.
+        """
+        key = fresh["key"]
+        if witnessed:
+            self._record_merged_seats(principal, fresh, label, witnessed, now)
+            for family in seats:
+                self._append(principal, key, "review_verdict", {
+                    "reviewer": principal.name, "family": family, "ok": True,
+                    "epoch": fresh["epoch"], "round": fresh["round"],
+                    "source": "cited-run-backfill"}, now)
+        if from_open:
+            self.conn.execute("UPDATE items SET state='in_review', lease_until=NULL WHERE key=?", (key,))
+            # The item goes straight on to done: a run that still owns it is retired here.
+            self._exec_clear(self.conn, key, principal, now)
+            self._append(principal, key, "submitted", {"round": fresh["round"]}, now)
+        kind, ref, result = evidence
+        self._record_evidence(principal, fresh, kind, ref, now, Result(True, result.detail, ref))
+        return self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats), release=release)
+
+    # --- the automatic merge close (MERGE-CLOSES-ITEMS-NO-AGENT-CALL) ---
+    # Reads the default ref once per repository, takes every unfinished item a
+    # merge named by ``Plan-Item`` and closes it by the same proofs as the router
+    # verb minus the GO row: the merge itself is the authority. ``Plan-Item-Part``
+    # trailers name no item, so a part key stays open; an auth/secrets card and
+    # every refusal are returned in ``listed`` with their reason, never skipped.
+    AUTO_STATES = ("open", "claimed", "in_review")
+
+    def close_merged_auto(self, principal, project=None, require_seats=True, apply=True):
+        return self._run(principal, "close_merged_auto", None,
+                         lambda now: self._close_merged_auto(principal, project, require_seats, apply, now),
+                         success_message=None)
+
+    def _close_merged_auto(self, principal, project, require_seats, apply, now):
+        self._require_role(principal, "system", "router")
+        if any(type(value) is not bool for value in (require_seats, apply)):
+            raise Refused("validation", "require_seats and apply must be booleans")
+        if project is not None and not isinstance(project, str):
+            raise Refused("validation", "project must be a string")
+        git, by_repo = self._adapter("git"), {}
+        for item in self._all_items():
+            if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task") \
+                    and project in (None, item["project"]):
+                try:
+                    where = self._merge_repository(item)
+                except Refused as exc:
+                    by_repo.setdefault(None, []).append((item, exc))
+                    continue
+                by_repo.setdefault(where[0], []).append((item, where[1]))
+        closed, listed, pending = [], [], []
+        for repo_project, items in by_repo.items():
+            index = None
+            if repo_project is not None:
+                index = context_sources.work_index(git, repo_project, fresh=True)
+                if index is None:
+                    continue  # no repository is registered: nothing to read
+                if index.get("origin_stale"):
+                    raise Refused("evidence_unverified", f"merge_index_stale: {repo_project}: {index.get('reason')}")
+            for item, revision in items:
+                key = item["key"]
+                if repo_project is None:
+                    listed.append({"key": key, "state": item["state"], "reason": str(revision)})
+                    continue
+                if not (context_sources.indexed_work(index, key)["commits"] or revision):
+                    continue  # no merge names this item
+                try:
+                    result = self._auto_close_one(principal, item, require_seats, apply, now)
+                except Refused as exc:
+                    listed.append({"key": key, "state": item["state"], "reason": f"{exc.code}: {exc.msg}"})
+                    continue
+                (closed if apply else pending).append(result)
+        return {"closed": closed, "would_close": pending, "listed": listed,
+                "merged_not_done": len(pending) + len(listed), "require_seats": require_seats}
+
+    def _auto_close_one(self, principal, item, require_seats, apply, now):
+        key = item["key"]
+        tier = item.get("review_tier")
+        if tier not in ("standard", "high", "none"):
+            raise Refused("bad_state", "merge close requires review_tier=standard, high or none")
+        if self._card_requires_non_anthropic_seats(item):
+            raise Refused("forbidden", "sensitive_card_needs_router_close: auth/secrets risk tag")
+        self._assert_unlocked(item)
+        seated = require_seats and tier != "none"
+        proofs = self._merged_auto_proofs(item)
+        witnessed = self._merged_backfill(item, None, proofs[0]["head"], now, proofs) if seated else []
+        if not apply:
+            return {"key": key, "state": item["state"], "prs": proofs}
+        with self._write():
+            fresh = self._get_or_refuse(key)
+            self._assert_unlocked(fresh)
+            if fresh["state"] not in self.AUTO_STATES:
+                raise Refused("conflict", f"{key} is {fresh['state']}")
+            stable = lambda row: {k: v for k, v in row.items() if k not in ("updated_at", "lease_until")}
+            if stable(fresh) != stable(item):
+                raise Refused("conflict", f"{key} changed under the transaction")
+            if self._merged_auto_proofs(fresh) != proofs:
+                raise Refused("conflict", "merged_on_default_changed")
+            if seated and self._merged_backfill(fresh, None, proofs[0]["head"], now, proofs) != witnessed:
+                raise Refused("conflict", "review_witness_changed")
+            seats = list(dict.fromkeys(model_family(s["model"]) for s in witnessed))
+            head = proofs[0]["head"]
+            ref = {"sha": head, "merged_head": head, "prs": proofs, "families": seats,
+                   "caller": principal.name, "source": "merge-close", "require_seats": require_seats}
+            done = self._land_merged(principal, fresh, head, seats, witnessed, f"auto-{head[:12]}",
+                                     fresh["state"] != "in_review", ("commit", ref, Result(True, "merged on default")),
+                                     f"merge close: merged {head}", now, release=True)
+            return {"key": key, "state": done["state"], "prs": proofs, "seats": seats}
+
+    def _merged_auto_proofs(self, item):
+        """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
+        git, (project, revision) = self._adapter("git"), self._merge_repository(item)
+        named = self._named_merge_proof(item)
+        proofs = [{"pr": named["pr"], "head": named["head"], "decision_id": None}] if named else []
+        try:
+            commits = self._merged_work_commits(item)
+        except Refused:
+            if not proofs:
+                raise
+            commits = []
+        for commit in commits:
+            pr, head, _ = self._merged_commit_proof(git, project, commit)
+            if all(p["head"] != head for p in proofs):
+                proofs.append({"pr": pr, "head": head, "decision_id": None})
+        return proofs
 
     def waive_second_family(self, principal, key, decision_id):
         return self._run(principal, "waive_second_family", key,

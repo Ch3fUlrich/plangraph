@@ -1,0 +1,12 @@
+[Unit]
+Description=Backstop: close merged keeper items every ten minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=10s
+Persistent=true
+Unit=pg-merge-close.service
+
+[Install]
+WantedBy=timers.target

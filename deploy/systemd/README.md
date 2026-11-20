@@ -9,6 +9,7 @@ All units are user units (`systemctl --user`), not system units.
 | pg-snapshot-pull.service | reader-host local plan copy refresh every 5 min | reader host |
 | pg-snapshot-pull.timer | timer driving pg-snapshot-pull.service every 5 min | reader host |
 | pg-ci-watch.service + .timer | Rust CI failure scan and keeper fix tasks every 5 min; see [CI watch](../../docs/ci-watch.md) | CI watcher host |
+| pg-merge-close.service + .timer | `plangraph merge-close`: close every open, claimed or in-review keeper item a merge into main names by `Plan-Item`, every 10 min (the land step calls it too); needs `PG_URL` and a `PG_TOKEN_FILE` of role `system`; `plangraph merge-close --count` prints the merged-but-not-done count; see [Keeper](../../docs/KEEPER.md) | keeper host |
 | plangraph-keeper.service | persistent keeper daemon | keeper host |
 | plangraph-projector.service | continuous projector run loop (30 s poll): attempts reach the keeper | keeper host |
 | plangraph-projector-reconcile.service | one nightly run: reconcile open Temporal workflows vs keeper state | keeper host |

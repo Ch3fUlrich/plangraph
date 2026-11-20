@@ -394,7 +394,18 @@ def cmd_land(args):
         cleanup_landed(st, landed)
     except Exception as exc:  # Cleanup is strictly best effort after GitHub has landed.
         print(f"cleanup failed: {exc}", file=sys.stderr)
+    close_merged_items()
     return 0
+
+
+def close_merged_items():
+    """Run the keeper merge-close job once for the landed batch; its report goes to stderr, never fails the land."""
+    try:
+        proc = run(["plangraph", "merge-close"], ok=None, timeout=330)
+    except MergeBatchError as exc:
+        print(f"merge-close not run: {exc}", file=sys.stderr)
+        return
+    sys.stderr.write(proc.stdout + proc.stderr)
 
 
 def cleanup_landed(st, landed):

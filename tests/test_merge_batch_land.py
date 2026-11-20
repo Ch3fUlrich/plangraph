@@ -455,3 +455,27 @@ def test_land_cleanup_metadata_failure_is_nonfatal(env):
     result = land(env, approval)
     assert result.returncode == 0 and "cleanup failed:" in result.stderr
     assert result.stdout.count("MERGED") == 2
+
+
+def _merge_close_stub(env, exit_code):
+    """A `plangraph` on the hermetic PATH that records its argv and prints a report."""
+    stub = env.stubs / "plangraph"
+    stub.write_text(f'#!/bin/sh\necho "$@" >> "{env.tmp}/merge-close.args"\n'
+                    f'echo "listed demo:X in_review forbidden"\nexit {exit_code}\n')
+    stub.chmod(0o755)
+    return env.tmp / "merge-close.args"
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_land_runs_the_merge_close_job_once_and_never_fails_on_it(env, exit_code):
+    args = _merge_close_stub(env, exit_code)
+    res = land(env, pushed(env))
+    assert res.returncode == 0, res.stderr
+    assert args.read_text() == "merge-close\n"
+    assert "listed demo:X in_review forbidden" in res.stderr
+    assert "listed" not in res.stdout
+
+
+def test_land_without_the_job_binary_still_lands(env):
+    res = land(env, pushed(env))
+    assert res.returncode == 0 and "merge-close not run" in res.stderr
