@@ -340,3 +340,84 @@ def test_close_merged_is_not_a_batch_op(w):
         w.store.apply_ops(w.p("router"), [{"op": "close_merged", "key": KEY,
                                           "decision_id": "D-5504", "families": ["google"]}])
     assert w.store._item(KEY)["state"] == "in_review"
+
+
+@pytest.mark.parametrize("fault,reason", [
+    (None, None), ("lane-allowed", None), ("lane-nearby", None),
+    ("lane", "claude_seat_lane_witness_rule"),
+    ("model", "claude_seat_model"),
+    ("transcript", "claude_seat_transcript_missing"),
+    ("session", "claude_seat_session"), ("head", "claude_seat_head"),
+    ("verdict", "claude_seat_verdict"), ("file", "claude_seat_write_unwitnessed")])
+def test_close_merged_with_only_claude_seat(unseated_w, tmp_path, monkeypatch, fault, reason):
+    """The real Rust transcript verifier supplies the only witnessed review."""
+    import json
+    import os
+    from plangraph.keeper.evidence import VERIFIERS
+    w = unseated_w
+    w.store.verifiers["claude-seat"] = VERIFIERS.get("claude-seat")
+    root = tmp_path / "projects"
+    transcript = root / "project/session/subagents/agent-seat.jsonl"
+    transcript.parent.mkdir(parents=True)
+    review = tmp_path / "review.md"
+    text = f"Review complete.\nHEAD: {HEAD}\nVERDICT: ACCEPT\n"
+    review.write_text(text)
+    transcript.write_text("\n".join(json.dumps(e) for e in [
+        {"type": "assistant", "sessionId": "session", "agentId": "seat", "message": {
+            "model": "claude-sonnet-5-5", "content": [{"type": "tool_use", "id": "w",
+                "name": "Write", "input": {"file_path": str(review), "content": text}}]}},
+        {"type": "user", "sessionId": "session", "agentId": "seat", "message": {
+            "content": [{"type": "tool_result", "tool_use_id": "w", "content": "created"}]}}
+    ]))
+    w.store.ctx["claude_projects_dir"] = str(root)
+    from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
+    mirror = tmp_path / "mirror"
+    record = mirror / "fixture-host/run-writer/record.json"
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({"role": "implement"}))
+    # Both verifiers refuse group/other-writable paths; stay independent of the umask.
+    for path in (review, transcript, record):
+        path.chmod(0o600)
+    for path in (mirror, record.parent.parent, record.parent):
+        path.chmod(0o700)
+    w.store.ctx["spawner_records"] = SpawnerRecordAdapter(mirror)
+    w.store.record_run(w.p("spawner"), KEY,
+                       {"run_id": "run-writer", "phase": "finished", "rc": 0})
+    if "PG_CLAUDE_SEAT_BIN" not in os.environ:
+        import subprocess
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[1]
+        target = Path(os.environ.get("CARGO_TARGET_DIR", str(tmp_path / "target")))
+        subprocess.run(["cargo", "build", "--manifest-path", str(repo / "rust/Cargo.toml"),
+                        "-p", "pg-seat-evidence", "--target-dir", str(target)], check=True)
+        monkeypatch.setenv("PG_CLAUDE_SEAT_BIN", str(target / "debug/pg-seat-evidence"))
+    ref = {"transcript": str(transcript), "review_file": str(review), "head": HEAD}
+    added = w.store.add_evidence_router(w.p("router"), KEY, "claude-seat", ref)
+    assert added["verified"]
+    if fault in ("lane", "lane-allowed"):
+        w.conn.execute("UPDATE items SET kind='lane', done_criteria='D-4504 witness rule' WHERE key=?", (KEY,))
+        if fault == "lane-allowed":
+            w.decision_path.write_text(f"| D-5504 | demo | GO {HEAD[:8]}; Witness: claude-seat |\n")
+    if fault == "lane-nearby":
+        w.conn.execute("UPDATE items SET done_criteria='D-45040' WHERE key=?", (KEY,))
+    if fault == "transcript":
+        transcript.unlink()
+    elif fault in ("model", "session", "file"):
+        old, new = {"model": ("claude-sonnet-5-5", "claude-haiku-4-5"),
+                    "session": ('"sessionId": "session"', '"sessionId": "other"'),
+                    "file": (str(review), str(tmp_path / "other.md"))}[fault]
+        transcript.write_text(transcript.read_text().replace(old, new))
+    elif fault == "head":
+        review.write_text(text.replace(HEAD, "b" * 40))
+    elif fault == "verdict":
+        review.write_text(text.replace("ACCEPT", "REQUEST_CHANGES"))
+    if reason:
+        with pytest.raises(Refused, match=reason):
+            w.store.close_merged(w.p("router"), KEY, "D-5504")
+        assert w.store._item(KEY)["state"] == "in_review"
+    else:
+        result = w.store.close_merged(w.p("router"), KEY, "D-5504")
+        assert result["state"] == "done" and result["reviews_passed"] == 1
+        evidence = w.store._evidence(KEY)[-1]
+        assert evidence["ref"]["families"] == ["anthropic"]
+        assert "waiver" not in evidence["ref"]

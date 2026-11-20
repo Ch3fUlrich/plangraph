@@ -44,6 +44,13 @@ def test_workstation_runners_require_opt_in_and_trusted_pr_with_hosted_fallback(
     assert actual == expected
 
 
+def test_rust_windows_run_steps_use_bash():
+    workflow = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())
+    job = workflow['jobs']['rust-windows']
+    assert job['defaults']['run']['shell'] == 'bash'
+    assert all('shell' not in step for step in job['steps'])
+
+
 def test_workflows_and_tests_keep_runner_labels_in_repository_variables():
     workflows = list((ROOT / '.github/workflows').glob('*.y*ml'))
     generic = {'self-hosted', 'linux', 'windows', 'x64'}
@@ -85,6 +92,9 @@ def test_workstation_pytest_shard_matrix_matches_count_and_preserves_postgres():
 @pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])
 def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
     workflow = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())
+    for candidate in workflow['jobs'][job]['steps']:
+        if candidate.get('uses') == './.github/actions/bounded-step':
+            candidate['run'] = candidate['with']['command']
     step_name = 'Check nonempty selection' if job == 'pytest' else 'Check nonempty collection'
     step = next((s for s in workflow['jobs'][job]['steps']
                  if s.get('name') == step_name), None)
@@ -210,12 +220,13 @@ def test_missing_preflight_refuses_only_main(tmp_path, monkeypatch, capsys, ref,
         f"{ref} {'1' * 40} {ref} {'0' * 40}\n"))
     monkeypatch.delenv('PREFLIGHT_SKIP', raising=False)
     monkeypatch.setitem(scope, 'git_out', lambda *a: str(tmp_path) if a[0] == 'rev-parse' else '')
-    monkeypatch.setitem(scope, 'file_size_gate', lambda: 0)
+    monkeypatch.setitem(scope, 'file_size_gate', lambda head: 0)
+    monkeypatch.setitem(scope, 'preflight_checkout', lambda head: __import__('contextlib').nullcontext(tmp_path))
     monkeypatch.setitem(scope, 'commit_gate', lambda head: 0)
     monkeypatch.setitem(scope, 'base_commit', lambda *a: 'base')
     monkeypatch.setitem(scope, 'main_baselines', lambda *a: [])
     monkeypatch.setitem(scope, 'changelog_docs_warn', lambda *a: None)
-    monkeypatch.setitem(scope, 'git', lambda *a: SimpleNamespace(returncode=0))
+    monkeypatch.setitem(scope, 'git', lambda *a: SimpleNamespace(returncode=0, stdout=b''))
     assert hook['push_main']() == expected
     assert ('tools/preflight.py missing: push refused' in capsys.readouterr().err) == bool(expected)
 

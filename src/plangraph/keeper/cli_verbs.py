@@ -197,8 +197,9 @@ def read(session, verb, params, renderer, local=None) -> int:
 
 def write(session, verb, body, renderer=None) -> int:
     try:
-        return _emit(session, session.call("POST", verb, body=body),
-                     renderer or (lambda r: fmt.result_text(verb, r)))
+        result = session.call("POST", verb, body=body)
+        status = _emit(session, result, renderer or (lambda r: fmt.result_text(verb, r)))
+        return EXIT_REFUSED if isinstance(result, dict) and result.get("refused") else status
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:   # M2B-OUTBOX: a run token with PG_OUTBOX queues instead

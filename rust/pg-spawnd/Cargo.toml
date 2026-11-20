@@ -21,6 +21,7 @@ libc = "0.2"
 
 [dev-dependencies]
 pg-worker-core = { path = "../worker-core", features = ["test-support"] }
+saphyr = "0.3.4"
 syn = { version = "2", features = ["full", "visit"] }
 
 [target.'cfg(unix)'.dev-dependencies]

@@ -135,6 +135,23 @@ class WaiverMixin:
         if self._card_requires_non_anthropic_seats(item) \
                 and len(set(seats) - {"anthropic"}) < 2:
             raise Refused("coverage", "insufficient_non_anthropic_seat_families: need 2")
+        writers = self._merged_writer_families(item, now)
+        recorded_seats = {model_family(s["model"]) for s in witnessed}
+        for row in self.conn.execute(
+                "SELECT payload FROM events WHERE key=? AND type='run_recorded'",
+                (item["key"],)):
+            run = json.loads(row["payload"])
+            if run.get("phase") == "finished" and run.get("rc") == 0:
+                recorded_seats.update(model_family(s.get("model"))
+                                      for s in run.get("seats") or ()
+                                      if s.get("verdict") == "pass")
+        if writers.intersection(seats):
+            raise Refused("same_family", "writer_seat_family")
+        if not set(seats).issubset(recorded_seats - {None}):
+            raise Refused("coverage", "seat_family_not_recorded")
+        return seats
+
+    def _merged_writer_families(self, item, now):
         writers = writer_families(self, item, self._ctx(item, now))
         writers.append(item.get("owner_family"))
         if item.get("writer_model"):
@@ -146,7 +163,6 @@ class WaiverMixin:
             peer = auth.get_principal(self.conn, name)
             if peer is not None:
                 writers.append(peer.family)
-        recorded_seats = {model_family(s["model"]) for s in witnessed}
         for row in self.conn.execute(
                 "SELECT payload FROM events WHERE key=? AND type='run_recorded'",
                 (item["key"],)):
@@ -158,24 +174,36 @@ class WaiverMixin:
                 raise Refused("writer_unknown", "recorded run writer family unknown")
             writers.append(family)
             writers.append(model)
-            if run.get("phase") == "finished" and run.get("rc") == 0:
-                recorded_seats.update(model_family(s.get("model"))
-                                      for s in run.get("seats") or ()
-                                      if s.get("verdict") == "pass")
-        writers = {model_family(w) or auth.norm_family(w) for w in writers}
-        if writers.intersection(seats):
-            raise Refused("same_family", "writer_seat_family")
-        if not set(seats).issubset(recorded_seats - {None}):
-            raise Refused("coverage", "seat_family_not_recorded")
-        return seats
+        return {model_family(w) or auth.norm_family(w) for w in writers if w}
 
     def _merged_backfill(self, item, decision_id, head, now, prs=()):
         try:
             decisions = self._ctx(item, now).decisions
             text = " ".join(decisions.text(p["decision_id"]) for p in prs) if prs else decisions.text(decision_id)
             heads = [p["head"] for p in prs] if prs else [head]
-            witnessed = self._adapter("spawner_records").review_seats(
-                item, heads, text, allow_cli_reported=not self._card_requires_non_anthropic_seats(item))
+            claude = [e for e in self._evidence(item["key"])
+                      if e["epoch"] == item["epoch"] and e["kind"] == "claude-seat"]
+            if (claude and item.get("kind") == "lane"
+                    and re.search(r"(?<![\w-])D-4504(?![\w-])",
+                                  item.get("done_criteria", "") + " " + text)):
+                rows = [decisions.text(p["decision_id"]) for p in prs] if prs else [text]
+                if not all(re.search(r"(?:^|;)\s*Witness: claude-seat\s*(?=;|$)", row) for row in rows):
+                    raise Refused("evidence_unverified", "claude_seat_lane_witness_rule")
+            witnessed = []
+            for evidence in claude:
+                ref = evidence["ref"]
+                if ref.get("head") not in heads:
+                    raise Refused("evidence_unverified", "claude_seat_head")
+                result = self._verify_evidence(item, "claude-seat", ref, now)
+                if not result.ok:
+                    raise Refused("evidence_unverified", result.detail)
+                witnessed.append(result.ref["seat"])
+            # Existing spawner citations still fail closed; absence is allowed
+            # only when transcript evidence supplies the review witnesses.
+            if not claude or json.loads(item.get("run_ids") or "[]") or re.search(r"\brun-", text):
+                witnessed.extend(self._adapter("spawner_records").review_seats(
+                    item, heads, text, allow_cli_reported=not self._card_requires_non_anthropic_seats(item),
+                    **({"allow_empty": True} if claude else {})))
             for bound in heads:
                 group = [s for s in witnessed if s["head"] == bound]
                 families = list(dict.fromkeys(model_family(s["model"]) for s in group))

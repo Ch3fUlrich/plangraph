@@ -65,7 +65,7 @@ def test_ci_pr_uses_affected_and_nightly_keeps_full():
     pytest_steps = workflow["jobs"]["pytest"]["steps"]
     pytest_checkout = next(s for s in pytest_steps if s.get("uses") == "actions/checkout@v4")
     assert pytest_checkout["with"]["fetch-depth"] == 0
-    pytest_cmd = next(s["run"] for s in pytest_steps if s.get("name", "").startswith("pytest"))
+    pytest_cmd = next(s["with"]["command"] for s in pytest_steps if s.get("name", "").startswith("pytest"))
     assert 'pull_request' in pytest_cmd
     assert 'tools/affected_tests.py --base "$BASE_SHA" --run -n auto' in pytest_cmd
     assert 'python -m pytest -q -n auto' in pytest_cmd
@@ -74,7 +74,7 @@ def test_ci_pr_uses_affected_and_nightly_keeps_full():
     pg_steps = workflow["jobs"]["pytest-postgres"]["steps"]
     pg_checkout = next(s for s in pg_steps if s.get("uses") == "actions/checkout@v4")
     assert pg_checkout["with"]["fetch-depth"] == 0
-    pg_cmd = next(s["run"] for s in pg_steps if s.get("name", "").startswith("pytest"))
+    pg_cmd = next(s["with"]["command"] for s in pg_steps if s.get("name", "").startswith("pytest"))
     assert 'pull_request' in pg_cmd
     assert '--within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES' in pg_cmd
     assert 'tools/affected_tests.py --base "$BASE_SHA"' in pg_cmd

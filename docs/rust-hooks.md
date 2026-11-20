@@ -56,6 +56,7 @@ resolve Python before clearing the environment; override CLI tests select that a
 interpreter in place with no PATH. The default-interpreter import regression uses a
 temporary Unix PATH containing only a symlink to the resolved interpreter.
 Replay helpers use `-I`; CLI tests clear the environment and use temporary HOME/state.
+The commit-message fixture tests drop every inherited `GIT_*` variable so they cannot act on the hook's own repository.
 The isolated-interpreter CLI regression supplies `-I` through a test-only Unix shim,
 never through production arguments. Import regressions explicitly seed sibling and
 `PYTHONPATH` modules. Echo fixtures use binary streams. Windows corpus substitution
@@ -110,3 +111,19 @@ its line in the cleaned message. Value validation still runs, so misplaced keys
 cannot hide malformed attribution or skip reasons.
 
 Rust hook tests construct Git commands through `pg_worker_core::git_test_support` so pre-push repository redirects cannot affect fixture init, config or commits. Fixture commands refuse the source repository and its linked worktrees.
+
+## Pre-push tree isolation
+
+Pre-push measures every pushed head with `check_file_size.py --head`, including
+that tree's `.filesize-allow` and `.filesize-baseline`. Scrub reads committed
+blobs and the public rules from each pushed head; private word lists and explicit
+operator rules remain external configuration. The pushing checkout's files do
+not grant exemptions or create file-size failures for another branch.
+
+Preflight runs in a temporary detached worktree of each pushed head, including
+when the pushing checkout has dirty files at that same revision. Git's local
+hook environment is removed for the child so repository discovery selects the
+temporary worktree. Cleanup runs after successful checks and failures. The
+pushing checkout's Python interpreter remains available to launch preflight.
+Rust regressions in `pg-hook`'s `pushed_tree` integration target exercise these
+paths by feeding the real hook Git's ref records from isolated repositories.

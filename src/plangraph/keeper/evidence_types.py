@@ -70,6 +70,7 @@ class Context:
     bind_floor_required: bool = True
     skew: float = DEFAULT_SKEW_S
     spawner_records: Any = None
+    claude_projects_dir: str | None = None
 
 
 def as_epoch(value: Any) -> float | None:

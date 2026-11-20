@@ -196,6 +196,15 @@ One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `m
 The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
+Record-derived verdicts and backfill allow an operator-ordered override only when
+`override_reason` starts with `D-<n> operator` and that exact id appears once in
+`router/decisions-index.tsv` in the data repository named by `PG_DATA_DIR`.
+Unset or empty `PG_DATA_DIR` refuses with `PG_DATA_DIR_UNSET`; no path is guessed.
+The TSV's first two columns are decision id and source (`OPERATOR`, case insensitive);
+headers and extra columns are allowed. Missing or unreadable authority refuses the
+exception. Explicit pin flags still refuse, and the served model must be witnessed
+and the completion HEAD bound (D-5874). Rust regressions:
+`cargo test --manifest-path rust/Cargo.toml -p pg-policy --test seat_operator_order`.
 Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text. For an opencode seat, the review text is the text parts after the last step-start event of the JSON `live.log`, plain-text logs are used unchanged, and the `VERDICT` line must still be the last line (F8, D-3420). Lifecycle events decide event mode: at least one JSON object with `type` equal to `step_start` or `step_finish` and an object-valued `part` is required; `text`/`tool_use` lines, quoted JSON and other typed objects alone leave a plain-text log unchanged.
 The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
 When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
@@ -246,6 +255,12 @@ on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
 The file-size gate refuses malformed Git batch headers with a single reason line.
+Pre-push uses `--head` for each pushed ref, reading its blobs, `.filesize-allow`
+and `.filesize-baseline` from Git. Public scrub rules also come from that head.
+Preflight runs in a temporary detached worktree of the pushed head and removes
+it after success or failure; another checked-out branch or dirty files cannot
+change the policy inputs or tests. `--head` is read-only and cannot be combined
+with `--update-baseline`.
 
 New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for

@@ -73,6 +73,7 @@ class Config:
                 raise ConfigError(f"repo {proj!r} entry must be a path string or dict")
         self.db_options = self._db_options(data)
         self.runs_dir = data.get("runs_dir")
+        self.claude_projects_dir = data.get("claude_projects_dir")
         self.spawner_records_dir = data.get("spawner_records_dir")
         self.decisions_file = data.get("decisions_file")
         # M2B-SIGNED-SNAPSHOT: the keeper signs with signing_key; readers verify with snapshot_pubkey.
