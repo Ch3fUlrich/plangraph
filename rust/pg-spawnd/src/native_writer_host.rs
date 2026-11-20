@@ -345,10 +345,12 @@ impl Driver for Host {
         if self.git(&["rev-parse", "HEAD"])? != head {
             return Err(format!("worktree is not at {head}"));
         }
-        self.checks()?;
+        let log = self.checks()?;
         let stamp = self.stamp(head)?;
         fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
             .map_err(|e| e.to_string())?;
+        // The exact-head gate output, named in the review brief next to the stamp.
+        fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
         fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
             .map_err(|e| e.to_string())
     }
@@ -360,7 +362,7 @@ impl Driver for Host {
     }
     fn gates(&mut self) -> Result<(), String> {
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
-        self.checks()
+        self.checks().map(|_| ())
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         let Some(target) = self.push_ref.clone() else {
@@ -492,6 +494,8 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     );
     Ok(())
 }
+#[path = "native_writer_context.rs"]
+mod context;
 #[path = "native_writer_review.rs"]
 mod review;
 use review::review_cli;

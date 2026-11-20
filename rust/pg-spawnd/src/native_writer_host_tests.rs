@@ -338,7 +338,7 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
         &["update-ref", "refs/plangraph/native/run-host/base", &base],
     );
     fs::create_dir_all(cwd.join("src")).unwrap();
-    fs::write(cwd.join("src/lib.rs"), "// writer\n").unwrap();
+    fs::write(cwd.join("src/lib.rs"), "// writer uses fixture_symbol\n").unwrap();
     git(&cwd, &["add", "src/lib.rs"]);
     git(
         &cwd,
@@ -349,7 +349,7 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
             "writer\n\nWriter: gemini-4-hydrogen-high run-6f00f4b3",
         ],
     );
-    fs::write(cwd.join("src/more.rs"), "// second writer\n").unwrap();
+    fs::write(cwd.join("src/more.rs"), "pub fn fixture_symbol() {}\n").unwrap();
     git(&cwd, &["add", "src/more.rs"]);
     git(
         &cwd,
@@ -361,6 +361,13 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
         ],
     );
     let head = git(&cwd, &["rev-parse", "HEAD"]);
+    // The review skill of the checkout (the working-tree copy: this fixture has no origin/main).
+    fs::create_dir_all(cwd.join("skills/review")).unwrap();
+    fs::write(
+        cwd.join("skills/review/SKILL.md"),
+        "REVIEW-SKILL-FIXTURE-LINE\n",
+    )
+    .unwrap();
     // The writer's checkout carries a planted family table: it must never be imported.
     // (File names are assembled: they are fixtures, not Python inputs of the CI selector.)
     let py = |stem: &str| format!("{stem}.{}", "py");
@@ -391,12 +398,19 @@ head = card['diff_ref']['head']
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
 assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
-assert prompt.index('Rules:') < prompt.index('=== ITEM CONTEXT'), prompt
+skill, context = prompt.index('REVIEW-SKILL-FIXTURE-LINE'), prompt.index('=== ITEM CONTEXT')
+assert prompt.index('Rules:') < skill < context, prompt  # the review skill is a rule, ahead of the context
 assert 'Item key: plangraph:HOST-TEST-ITEM' in prompt, prompt
-assert 'Done criteria: Done criteria: the host test is done' in prompt, prompt
-assert 'changed files: src/lib.rs, src/more.rs' in prompt, prompt
-assert '/fast-checks/' + head in prompt, prompt
-assert 'Exact head SHA: ' + head in prompt and 'Exact base SHA: ' in prompt, prompt
+assert 'Done criteria: By test: first line\nsecond criteria line\n' in prompt, prompt  # multi-line, whole
+assert 'Invariants named by the item: never push\n' in prompt, prompt
+assert 'Exact base SHA: ' + card['diff_ref']['base'] + '\n' in prompt, prompt
+assert 'Exact head SHA: ' + head + '\n' in prompt, prompt
+assert 'Changed public symbols: fixture_symbol\n' in prompt, prompt
+assert 'fixture_symbol: src/lib.rs:1, src/more.rs:1' in prompt, prompt
+import re
+log = re.search(r'fast checks \(exact head\): ([^;\s]+)', prompt).group(1)
+assert log.endswith('/fast-checks/' + head + '.log') and '== ci_commit_gate.py' in pathlib.Path(log).read_text(), prompt
+assert 'writer session with its cargo runs: ' in prompt and 'native.log' in prompt, prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'
@@ -418,7 +432,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         tool_path: std::env::var("PATH").unwrap(),
         effort: WRITER_EFFORT.into(),
         state: state.clone(),
-        brief: "the item brief\nplangraph:HOST-TEST-ITEM\nDone criteria: the host test is done"
+        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n"
             .into(),
         push_ref: None,
         reviews_started: 0,

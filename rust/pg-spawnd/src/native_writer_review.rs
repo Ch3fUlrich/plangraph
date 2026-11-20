@@ -1,6 +1,6 @@
 //! Review rounds of the native writer: fast checks with a per-head stamp, then one
 //! spawner review run on the exact head, its verdict read from the run record.
-use super::{output, Host};
+use super::{context, output, Host};
 use crate::native_writer::Driver;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
@@ -19,8 +19,10 @@ impl Host {
         Ok(Path::new(&gitdir).join("fast-checks").join(head))
     }
     /// The repository's seconds-fast gates present in the checkout: file size, new-code
-    /// language, changelog/docs, commit trailers and, with a words file, the private scrub.
-    pub(super) fn checks(&self) -> Result<(), String> {
+    /// language, changelog/docs, commit trailers and, with a words file, the private scrub;
+    /// the result is their combined output.
+    pub(super) fn checks(&self) -> Result<String, String> {
+        let mut log = String::new();
         let pin = self.base_pin();
         let range = |extra: &[&str]| {
             let mut args: Vec<String> = extra.iter().map(|s| s.to_string()).collect();
@@ -46,46 +48,64 @@ impl Host {
             if !path.is_file() {
                 continue;
             }
-            output(
+            let out = output(
                 self.command(if cfg!(windows) { "python" } else { "python3" })
                     .arg(path)
                     .args(args)
                     .current_dir(&self.cwd),
             )
             .map_err(|e| format!("{gate}: {e}"))?;
+            log.push_str(&format!("== {gate}\n{out}\n"));
         }
-        Ok(())
+        Ok(log)
     }
-    /// Item-context evidence of the versioned review brief: the item keys and Done-when lines
-    /// of the writer brief, both SHAs, the changed files and the fast-checks stamp of `head`.
+    /// Item-context evidence of the versioned review brief, from the writer brief and the
+    /// exact diff: item keys, whole done criteria, invariants, both SHAs, the public symbols
+    /// the diff adds with their first callers, and the exact-head check and session logs.
     fn brief_context(&self, base: &str, head: &str) -> Value {
-        let keys: std::collections::BTreeSet<&str> = regex::Regex::new(r"plangraph:[A-Za-z0-9_-]+")
-            .map(|re| re.find_iter(&self.brief).map(|m| m.as_str()).collect())
-            .unwrap_or_default();
-        let done: Vec<&str> = self
-            .brief
-            .lines()
-            .filter(|line| {
-                let lower = line.to_ascii_lowercase();
-                lower.contains("done criteria") || lower.contains("done when")
-            })
-            .collect();
-        let files = self
-            .git(&["diff", "--name-only", base, head])
-            .unwrap_or_default()
-            .replace('\n', ", ");
         let mut context = json!({"base_sha": base, "head_sha": head});
+        let keys = context::item_keys(&self.brief);
         if !keys.is_empty() {
-            context["item_key"] = json!(keys.into_iter().collect::<Vec<_>>().join(", "));
+            context["item_key"] = json!(keys.join(", "));
         }
-        if !done.is_empty() {
-            context["done_criteria"] = json!(done.join(" | "));
+        if let Some(done) = context::done_criteria(&self.brief) {
+            context["done_criteria"] = json!(done);
         }
-        if !files.is_empty() {
-            context["public_symbols"] = json!(format!("changed files: {files}"));
+        if let Some(invariants) = context::invariants(&self.brief) {
+            context["invariants"] = json!(invariants);
         }
+        let diff = self.git(&["diff", "-U0", base, head]).unwrap_or_default();
+        let symbols = context::changed_symbols(&diff);
+        if !symbols.is_empty() {
+            context["public_symbols"] = json!(symbols.join(", "));
+            let callers: Vec<String> = symbols
+                .iter()
+                .filter_map(|symbol| {
+                    let grep = self
+                        .git(&["grep", "-n", "-w", "--", symbol])
+                        .unwrap_or_default();
+                    context::callers_line(symbol, &grep)
+                })
+                .collect();
+            if !callers.is_empty() {
+                context["callers"] = json!(callers.join("\n"));
+            }
+        }
+        let mut logs = Vec::new();
         if let Ok(stamp) = self.stamp(head) {
-            context["test_output_paths"] = json!(stamp.display().to_string());
+            logs.push(format!(
+                "fast checks (exact head): {}",
+                stamp.with_extension("log").display()
+            ));
+        }
+        if let Some(directory) = self.record_path.parent() {
+            logs.push(format!(
+                "writer session with its cargo runs: {}",
+                directory.join("native.log").display()
+            ));
+        }
+        if !logs.is_empty() {
+            context["test_output_paths"] = json!(logs.join("; "));
         }
         context
     }
