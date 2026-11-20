@@ -61,12 +61,12 @@ fn sweep_using(
         }
         let path = entry.path();
         if cargo_target(&path) {
-            targets.push(path);
+            targets.push((path, None));
         } else {
             for child in fs::read_dir(path)? {
                 let child = child?;
                 if child.file_type()?.is_dir() && cargo_target(&child.path()) {
-                    targets.push(child.path());
+                    targets.push((child.path(), None));
                 }
             }
         }
@@ -88,18 +88,17 @@ fn sweep_using(
             .trim()
                 == "rust/target/"
         {
-            targets.push(tree.join("rust/target"));
+            let last_commit = crate::disk_hygiene::git(tree, &["log", "-1", "--format=%ct"])
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .and_then(|seconds| {
+                    SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
+                });
+            targets.push((tree.join("rust/target"), last_commit));
         }
     }
-    for target in targets {
-        reclaim(
-            &target,
-            guards,
-            SystemTime::now(),
-            apply,
-            report,
-            &mut processes,
-        )?;
+    for (target, last_commit) in targets {
+        reclaim(&target, guards, last_commit, apply, report, &mut processes)?;
     }
     Ok(())
 }
@@ -107,7 +106,7 @@ fn sweep_using(
 fn reclaim(
     target: &Path,
     guards: &Guards,
-    now: SystemTime,
+    last_commit: Option<SystemTime>,
     apply: bool,
     report: &mut Report,
     mut processes: impl FnMut() -> io::Result<(Vec<std::path::PathBuf>, bool)>,
@@ -127,7 +126,9 @@ fn reclaim(
         return Ok(());
     };
     let (bytes, newest) = scan(target)?;
-    if now.duration_since(newest).unwrap_or_default() <= Duration::from_secs(1800) {
+    if last_commit.is_none_or(|commit| newest >= commit)
+        && SystemTime::now().duration_since(newest).unwrap_or_default() <= Duration::from_secs(1800)
+    {
         return Ok(());
     }
     let (cwds, building) = processes()?;
