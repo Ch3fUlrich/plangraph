@@ -63,8 +63,9 @@ fn command(h: &Value) -> Option<String> {
         {
             return None;
         }
+        // `wsl.exe --exec` runs no shell: the source test is a step plan on stdin.
         Some(format!(
-            "wsl.exe --distribution {} --exec sh -c \"{probe}\"",
+            "wsl.exe --distribution {} --exec pg-spawnd steps",
             distro.as_str()?
         ))
     } else {
@@ -72,7 +73,17 @@ fn command(h: &Value) -> Option<String> {
     }
 }
 
-fn ssh(target: &str, command: &str) -> io::Result<Option<i32>> {
+/// The stdin of a WSL host's command: a plan whose one step is the source test.
+fn plan(h: &Value) -> Option<String> {
+    h.get("wsl_distro")?;
+    Some(
+        serde_json::json!({"steps": [
+            {"argv": ["test", "-d", h["src"].as_str()?], "fail_code": 44}]})
+        .to_string(),
+    )
+}
+
+fn ssh(target: &str, command: &str, input: Option<&str>) -> io::Result<Option<i32>> {
     let mut child = Command::new("ssh")
         .args([
             "-o",
@@ -83,11 +94,23 @@ fn ssh(target: &str, command: &str) -> io::Result<Option<i32>> {
             target,
             command,
         ])
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
     let deadline = Instant::now() + TIMEOUT;
+    if let (Some(text), Some(mut pipe)) = (input, child.stdin.take()) {
+        // A stalled reader must not outlast the deadline: write from a thread.
+        let text = text.to_owned();
+        std::thread::spawn(move || {
+            use std::io::Write;
+            let _ = pipe.write_all(text.as_bytes());
+        });
+    }
     loop {
         match child.try_wait() {
             Ok(Some(status)) => return Ok(Some(status.code().unwrap_or(-1))),
@@ -101,10 +124,10 @@ fn ssh(target: &str, command: &str) -> io::Result<Option<i32>> {
     }
 }
 
-fn check(h: &Value, run: &impl Fn(&str, &str) -> io::Result<Option<i32>>) -> Value {
+fn check(h: &Value, run: &impl Fn(&str, &str, Option<&str>) -> io::Result<Option<i32>>) -> Value {
     let detail = match command(h).zip(h["target"].as_str()) {
         None => "invalid configuration",
-        Some((cmd, target)) => match run(target, &cmd) {
+        Some((cmd, target)) => match run(target, &cmd, plan(h).as_deref()) {
             Ok(Some(0)) => "ok",
             Ok(Some(44)) => "src missing",
             Ok(Some(255)) | Err(_) => "unreachable",
@@ -116,7 +139,7 @@ fn check(h: &Value, run: &impl Fn(&str, &str) -> io::Result<Option<i32>>) -> Val
 
 fn source_checks(
     data: io::Result<String>,
-    run: &(impl Fn(&str, &str) -> io::Result<Option<i32>> + Sync),
+    run: &(impl Fn(&str, &str, Option<&str>) -> io::Result<Option<i32>> + Sync),
 ) -> Vec<Value> {
     let data = match data {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return vec![],

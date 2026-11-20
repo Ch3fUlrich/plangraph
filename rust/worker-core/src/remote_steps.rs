@@ -103,12 +103,19 @@ pub fn parse_env_file(text: &str) -> Result<Vec<(String, String)>, String> {
 }
 
 fn decode_hex(text: &str) -> Result<Vec<u8>, String> {
-    if !text.len().is_multiple_of(2) {
+    fn nibble(byte: u8) -> Result<u8, String> {
+        char::from(byte)
+            .to_digit(16)
+            .map(|d| d as u8)
+            .ok_or_else(|| "hex content has a non-hex byte".to_owned())
+    }
+    let bytes = text.as_bytes();
+    if !bytes.len().is_multiple_of(2) {
         return Err("hex content has odd length".into());
     }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).map_err(|e| e.to_string()))
+    bytes
+        .chunks(2)
+        .map(|pair| Ok(nibble(pair[0])? << 4 | nibble(pair[1])?))
         .collect()
 }
 
@@ -169,19 +176,24 @@ fn run_argv(
 }
 
 #[cfg(not(unix))]
-fn write_file(_: &WriteFile, _: &[u8]) -> Result<(), String> {
+fn write_file(_: &WriteFile, _: Option<&Path>, _: &[u8]) -> Result<(), String> {
     Err("write_file needs a Unix host".into())
 }
 
 #[cfg(unix)]
-fn write_file(spec: &WriteFile, content: &[u8]) -> Result<(), String> {
+fn write_file(spec: &WriteFile, cwd: Option<&Path>, content: &[u8]) -> Result<(), String> {
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let path = Path::new(&expand_home(&spec.path)).to_path_buf();
+    let path = match cwd {
+        Some(cwd) if path.is_relative() => cwd.join(path),
+        _ => path,
+    };
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .mode(spec.mode)
-        .open(&spec.path)
+        .open(&path)
         .map_err(|e| e.to_string())?;
     // The creation mode is masked by the process umask; the plan's mode is exact.
     file.set_permissions(fs::Permissions::from_mode(spec.mode))
@@ -199,7 +211,10 @@ fn run_step(
     env.extend(step.env.iter().map(|(k, v)| (k.clone(), v.clone())));
     let step_cwd = step.cwd.as_deref().map(expand_home);
     let cwd = step_cwd.as_deref().map(Path::new).or(cwd);
-    let code = run_action(step, &env, cwd, out)?;
+    let code = run_action(step, &env, cwd, out).unwrap_or_else(|error| {
+        eprintln!("step failed: {error}");
+        1
+    });
     Ok(match step.fail_code {
         Some(replacement) if code != 0 => replacement,
         _ => code,
@@ -219,7 +234,7 @@ fn run_action(
         (None, None) => None,
     };
     if let Some(spec) = &step.write_file {
-        write_file(spec, content.as_deref().unwrap_or_default())?;
+        write_file(spec, cwd, content.as_deref().unwrap_or_default())?;
         return Ok(0);
     }
     if let Some(ensure) = &step.ensure_commit {

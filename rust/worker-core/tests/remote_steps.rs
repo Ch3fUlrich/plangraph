@@ -171,3 +171,36 @@ fn a_step_cwd_replaces_the_plan_cwd_for_that_step_only() {
         format!("/\n{}\n", fs::canonicalize(plan.path()).unwrap().display())
     );
 }
+
+#[test]
+fn write_file_resolves_a_relative_path_against_the_step_then_plan_cwd() {
+    let plan_dir = tempfile::tempdir().unwrap();
+    let step_dir = tempfile::tempdir().unwrap();
+    let (code, _) = run(json!({"cwd": plan_dir.path(), "steps": [
+        {"write_file": {"path": "a.txt", "mode": 0o600}, "stdin_text": "plan"},
+        {"cwd": step_dir.path(), "write_file": {"path": "b.txt", "mode": 0o600}, "stdin_text": "step"}]}));
+    assert_eq!(code, 0);
+    assert_eq!(
+        fs::read_to_string(plan_dir.path().join("a.txt")).unwrap(),
+        "plan"
+    );
+    assert_eq!(
+        fs::read_to_string(step_dir.path().join("b.txt")).unwrap(),
+        "step"
+    );
+}
+
+#[test]
+fn fail_code_also_covers_a_step_that_cannot_start() {
+    let (code, _) = run(json!({"steps": [
+        {"argv": ["/nonexistent-for-steps/python3", "-c", "pass"], "fail_code": 11}]}));
+    assert_eq!(code, 11);
+}
+
+#[test]
+fn non_ascii_hex_is_a_step_failure_not_a_panic() {
+    let dir = tempfile::tempdir().unwrap();
+    let (code, _) = run(json!({"steps": [
+        {"write_file": {"path": dir.path().join("f"), "mode": 0o600}, "stdin_hex": "aéx"}]}));
+    assert_eq!(code, 1);
+}

@@ -556,3 +556,25 @@ def test_wsl_registry_host_probes_travel_as_plans_over_ssh(tmp_path):
     assert seen and all(argv[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
                         and argv[-1] == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
                         and json.loads(body)['steps'] for argv, body in seen)
+
+
+@pytest.mark.parametrize('wsl', [False, True])
+def test_checkout_path_with_shell_characters_stays_literal_in_every_probe_plan(tmp_path, wsl):
+    repo = '/invented/check out (review)'
+    calls = []
+    if wsl:
+        (tmp_path / 'plangraph' / 'ps-hosts.json').write_text(json.dumps({'hosts': [
+            dict(name='fiction', target=CONFIG['ssh'], src='/invented/source', wsl_distro='Ubuntu')]}))
+        config = dict(CONFIG, registry=True, wsl_distro='Ubuntu', repo=repo)
+        def fake(argv, **kwargs):
+            return plan_runner(calls, **{})(argv, **kwargs)
+        runner_ = fake
+    else:
+        config = dict(CONFIG, local=True, registry=True, repo=repo)
+        runner_ = plan_runner(calls)
+    result = h.check_host('fiction', config, tmp_path, runner_)
+    assert result['ok'], result['failures']
+    git_plans = [plan for _, plan in calls if plan['steps'][0]['argv'][:2] == ['git', '-C']]
+    assert git_plans and all(plan['steps'][0]['argv'][2] == repo for plan in git_plans)
+    df = next(plan for _, plan in calls if plan['steps'][0]['argv'][:1] == ['df'])
+    assert df['steps'][0]['argv'][-1] == repo

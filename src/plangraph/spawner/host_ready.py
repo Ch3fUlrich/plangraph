@@ -368,6 +368,13 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             fail(check, 'command_failed')
         return None
 
+    def command_argv(check, *words):
+        """Run one argv: arguments with shell-special characters stay literal on every transport."""
+        return command(check, shlex.join(words), [{'argv': list(words)}])
+
+    def measure_argv(check, words, parse):
+        return measure(check, shlex.join(words), parse, steps=[{'argv': list(words)}])
+
     def measure(check, script, parse, **plan):
         output = command(check, script, **plan)
         if output is not None:
@@ -389,8 +396,8 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     'tools', 'command -v git && command -v python3 && command -v codex',
                     [{'argv': [tool, '--version']} for tool in ('git', 'python3', 'codex')]) is not None
                 record['tokens_ok'] = command('tokens', 'codex login status') is not None
-                record['trust_ok'] = command(
-                    'trust', 'pg-host-readiness --project ' + shlex.quote(config['repo'])) is not None
+                record['trust_ok'] = command_argv(
+                    'trust', 'pg-host-readiness', '--project', config['repo']) is not None
             repo = shlex.quote(config['repo'])
             prefix = 'cd ' + shlex.quote(config['spawner_src']) + ' && '
             if config.get('env_file'):
@@ -416,23 +423,23 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     session if session.endswith('.service') else None, spawner)
             record['mem_available_mb'] = measure('memory', 'cat /proc/meminfo',
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
-            record['disk_free_gb'] = measure('disk', 'df -Pk -- ' + repo,
+            record['disk_free_gb'] = measure_argv('disk', ['df', '-Pk', '--', config['repo']],
                 lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
             def sha(s):
                 value = s.strip()
                 if not re.fullmatch(r'[0-9a-f]{40,64}', value):
                     raise ValueError()
                 return value
-            record['checkout_sha'] = measure('checkout', 'git -C ' + repo + ' rev-parse HEAD', sha)
-            fetched = command('fetch', 'git -C ' + repo + ' fetch origin main')
+            record['checkout_sha'] = measure_argv('checkout', ['git', '-C', config['repo'], 'rev-parse', 'HEAD'], sha)
+            fetched = command_argv('fetch', 'git', '-C', config['repo'], 'fetch', 'origin', 'main')
             if fetched is not None:
-                record['main_sha'] = measure('main', 'git -C ' + repo + ' rev-parse origin/main', sha)
+                record['main_sha'] = measure_argv('main', ['git', '-C', config['repo'], 'rev-parse', 'origin/main'], sha)
                 def count(s):
                     if not re.fullmatch(r'\d+', s.strip()):
                         raise ValueError()
                     return int(s.strip())
-                record['behind_main'] = measure('behind_main', 'git -C ' + repo +
-                    ' rev-list --count HEAD..origin/main', count)
+                record['behind_main'] = measure_argv('behind_main', ['git', '-C', config['repo'], 'rev-list', '--count', 'HEAD..origin/main'],
+                    count)
                 if record['behind_main']:
                     fail('behind_main', str(record['behind_main']) + ' behind')
             if record['checkout_sha'] and record['main_sha'] and record['checkout_sha'] != record['main_sha']:
@@ -465,7 +472,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     '.service', '.scope', '.socket', '.target', '.timer', '.path', '.mount',
                     '.automount', '.swap', '.slice', '.device')) else
                     'plangraph wait-pid --check --pid-file ' if session.endswith('.pid') else 'pgrep -x -- ')
-                record['spawner_session'] = command('session', probe + shlex.quote(session)) is not None
+                record['spawner_session'] = command_argv('session', *shlex.split(probe), session) is not None
             elif not config.get('registry'):
                 fail('session', 'not_configured')
             run_probe = 'remote_ps' if config.get('registry') else 'cli ps'

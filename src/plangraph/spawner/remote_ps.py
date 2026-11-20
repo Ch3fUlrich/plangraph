@@ -8,6 +8,7 @@ import subprocess
 import selectors
 import secrets
 import shlex
+import threading
 import time
 from .runner import is_terminal
 
@@ -133,6 +134,14 @@ def exit_reason(code):
         code, 'host query failed')
 
 
+def feed_plan(pipe, plan):
+    try:
+        pipe.write(plan)
+        pipe.close()
+    except OSError:
+        pass  # The exit status names the failure; a killed reader ends the write.
+
+
 def query_host(host, timeout):
     command, plan = host_invocation(host, query=True)
     with subprocess.Popen(
@@ -142,11 +151,8 @@ def query_host(host, timeout):
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         ) as process:
         if plan is not None:
-            try:
-                process.stdin.write(plan)
-                process.stdin.close()
-            except OSError:
-                pass  # The exit status below names the failure.
+            # A reader that never drains stdin must not outlast the deadline below.
+            threading.Thread(target=feed_plan, args=(process.stdin, plan), daemon=True).start()
         deadline = time.monotonic() + timeout
         output = bytearray()
         try:

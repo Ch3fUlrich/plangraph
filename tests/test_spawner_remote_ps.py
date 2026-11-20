@@ -542,3 +542,19 @@ def test_native_result_over_a_wsl_guest_sends_a_receipt_plan_not_a_script(monkey
     step = plan['steps'][0]
     assert step['argv'][:3] == ['python3', '-m', 'plangraph.spawner.cli']
     assert step['argv'][-2:] == ['result', 'run-a'] and step['env'] == {'PYTHONPATH': '/s'}
+
+
+def test_wsl_query_deadline_holds_when_the_reader_never_drains_the_plan(monkeypatch):
+    import time
+    original = subprocess.Popen
+    host = dict(target='private-target', src='/opt/plangraph/src', wsl_distro='Ubuntu')
+    big = {'padding': 'x' * (4 * 1024 * 1024)}
+    monkeypatch.setattr(remote_ps, 'host_invocation',
+                        lambda host, query=False: ('wsl.exe', json.dumps(big).encode()))
+    def run(argv, **kwargs):
+        return original([sys.executable, '-c', 'import time; time.sleep(30)'], **kwargs)
+    monkeypatch.setattr(subprocess, 'Popen', run)
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        remote_ps.query_host(host, 0.3)
+    assert time.monotonic() - started < 5
