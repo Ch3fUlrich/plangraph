@@ -44,3 +44,14 @@ def test_missing_legs_registered_for_utility(lid, model):
         assert leg.disabled == 'D-4196 opencode zen never worked, use opencode go; never remove (D-3828)'
     row = next(row for row in DEFAULT_FALLBACK_MODELS if row['id'] == model)
     assert (row['active'], row['family'], row['harness']) == (True, leg.family, leg.harness)
+
+
+def test_writer_snapshot_scores_real_legs_from_seed_catalog():
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.review_order import catalog_score
+    rows = resolver.get_catalog_models()
+    scores = {leg.id: catalog_score(leg, rows) for leg in DEFAULT_LEGS if 'implement' in leg.roles}
+    assert scores['cx-gpt-6.1-sol-xhigh'] >= 50.0
+    assert scores['agy-gemini-4-argon'] >= 50.0
+    assert scores['mimo-v2.6-pro'] == 46.0
+    assert scores['agy-gemini-4-hydrogen-high'] is None

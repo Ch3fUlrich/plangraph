@@ -136,7 +136,7 @@ the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.
 
 Rust review record assertions run on every platform; keeper-backed assertions run only on Unix because the keeper imports POSIX `fcntl`.
-Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/measured_down.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well. `rust/plangraph-cli/src/runner/config.rs` tests parse `docs/operations/ci-runners.example.toml`, which is a `RUST_INPUTS` entry too.
+Rust review tests also execute keeper evidence and planner routing code; changes to `src/plangraph/keeper/errors.py`, `src/plangraph/planner/routing.py`, `src/plangraph/planner/measured_down.py`, `src/plangraph/planner/provider_stop.py` and `src/plangraph/routing_support/liveness.py` select Rust CI through `RUST_INPUTS`. `rust/pg-spawnd/tests/witness_job_identity.rs` reads `src/plangraph/config/prompt_transport_v1.json`, so that contract file is a `RUST_INPUTS` entry as well. `rust/plangraph-cli/src/runner/config.rs` tests parse `docs/operations/ci-runners.example.toml`, which is a `RUST_INPUTS` entry too. `rust/pg-spawnd/tests/ci_step_timeout.rs` reads `.github/actions/bounded-step/action.yml`, so that action file is a `RUST_INPUTS` entry as well.
 
 CI suite selection in `tools/ci_select.py` treats `docs/schemas/**` and its
 `RUST_INPUTS` list as Rust inputs even when they are documentation. These inputs
@@ -200,6 +200,15 @@ One branch per lane (`lane/<short-name>`, cut from `main`), one small PR into `m
 The RUN-WORKTREE Python regression exception (D-5062) retires with SPAWNER-RUST-PORT.
 Work that covers two plan items is two lanes.
 A finished review seat's verdict is forwarded to the keeper by the spawner (`tools/seat_verdict.py`) only for the item's latest verified head; interrupted sends are not blindly replayed.
+Record-derived verdicts and backfill allow an operator-ordered override only when
+`override_reason` starts with `D-<n> operator` and that exact id appears once in
+`router/decisions-index.tsv` in the data repository named by `PG_DATA_DIR`.
+Unset or empty `PG_DATA_DIR` refuses with `PG_DATA_DIR_UNSET`; no path is guessed.
+The TSV's first two columns are decision id and source (`OPERATOR`, case insensitive);
+headers and extra columns are allowed. Missing or unreadable authority refuses the
+exception. Explicit pin flags still refuse, and the served model must be witnessed
+and the completion HEAD bound (D-5874). Rust regressions:
+`cargo test --manifest-path rust/Cargo.toml -p pg-policy --test seat_operator_order`.
 Seat records bind manual `tools/seat_verdict.py --key` posting to their recorded `item_key`; a different key or an explicit null is refused before token reads or network I/O. Older records without the field remain usable through the manual CLI. Card/environment identity validation never infers a target from prompt text. For an opencode seat, the review text is the text parts after the last step-start event of the JSON `live.log`, plain-text logs are used unchanged, and the `VERDICT` line must still be the last line (F8, D-3420). Lifecycle events decide event mode: at least one JSON object with `type` equal to `step_start` or `step_finish` and an object-valued `part` is required; `text`/`tool_use` lines, quoted JSON and other typed objects alone leave a plain-text log unchanged.
 The `evidence.json` path applies the same refusal to every supplied `item_key` or `key`, including explicit nulls and conflicting aliases; evidence without either identity field retains the legacy manual path. Reviewer tokens belong to the seat's model family, not the `--writer-family` being reviewed.
 When evidence and a record coexist, the record's `item_key` remains binding even if evidence omits or replaces it; an unreadable or malformed companion record is refused. The record identity check also runs independently of evidence derivation on the record-only path. `--key` is required for all manual invocations, including legacy records; omitting it exits 2 before seat/token reads or network I/O.
@@ -250,6 +259,12 @@ on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
 (today only `CHANGELOG.md`, an append-only ledger).
 The file-size gate refuses malformed Git batch headers with a single reason line.
+Pre-push uses `--head` for each pushed ref, reading its blobs, `.filesize-allow`
+and `.filesize-baseline` from Git. Public scrub rules also come from that head.
+Preflight runs in a temporary detached worktree of the pushed head and removes
+it after success or failure; another checked-out branch or dirty files cannot
+change the policy inputs or tests. `--head` is read-only and cannot be combined
+with `--update-baseline`.
 
 New Python source outside tests needs a `path | reason (D-id)` line in
 `tools/new_code_allowlist.txt`, which `python3 tools/check_new_code_lang.py` reads; for
@@ -548,6 +563,10 @@ content follows it so different items reuse the same prompt cache prefix.
 
 Append-only ledger paths are declared once using `merge=union` in the root `.gitattributes` (currently the historical `CHANGELOG.md` ledger, retained for historical merges and releases; current PRs still need fragments). `tools/merge_batch.py build` reads these defaults from the fetched base and persists them for continue/recovery; `--union GLOB` adds extra paths. Union can preserve both old and reworded entries, so review its warnings. Do not apply union to reference docs: edit substantive documentation in place, and put checkpoint/status records in `docs/checkpoints/<ITEM>.md` without updating a central list. See the [append audit](docs/checkpoints/LE-APPEND-ONLY-DOCS-CONFLICT.md).
 
+The `pg-mainff` Rust regression checks the keeper launch inventory against
+`pyproject.toml`. Packaging metadata changes therefore select Rust CI through
+`tools/ci_select.py` as well as the ordinary packaging checks.
+
 The pre-push gate prints its hook checkout HEAD. A hook checkout missing commits
 older than one day from `origin/main` refuses pushes and
 prints a `pg-repo-sync --repo PATH` repair command. Sync discovers effective
@@ -589,6 +608,8 @@ required before claiming that host's five-minute done criterion.
 D-6054: OpenCode catalog integration tests use the shipped provider configuration
 and existing Python rendering helpers. Their inputs are listed in `RUST_INPUTS`
 so changes to catalog identities or rendering select the Rust CI suite.
+
+Claude transcript census: see [usage and classification limits](docs/claude-census.md).
 
 ## Bash guard rules (`tools/hooks/bash_guard.py`)
 

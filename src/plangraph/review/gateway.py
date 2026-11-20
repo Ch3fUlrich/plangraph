@@ -208,13 +208,13 @@ def _attempt_record(n: int, sent: int, result: CallResult) -> dict:
 
 
 def _post(model: str, prompt: str, base: str, key: str, tag: str, run_id: str,
-          digest: str, max_tokens: int, timeout: int) -> CallResult:
+          digest: str, max_tokens: int, timeout: int, routing_headers=None) -> CallResult:
     """POST one tool-less completion; HTTP/network errors become values."""
     started = utc_now()
     req = urllib.request.Request(base.rstrip("/") + "/chat/completions",
                                  data=json.dumps(request_body(model, prompt, max_tokens)
                                                  ).encode("utf-8"),
-                                 headers=request_headers(key, tag, run_id), method="POST")
+                                 headers=dict(request_headers(key, tag, run_id), **(routing_headers or {})), method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             status, resp_headers, raw_body = int(resp.status), resp.headers, resp.read()
@@ -253,6 +253,7 @@ def _post(model: str, prompt: str, base: str, key: str, tag: str, run_id: str,
 def call(model: str, prompt: str, *, url: str | None = None,
          key_env: str = "PLANGRAPH_REVIEW_KEY", max_tokens: int = DEFAULT_MAX_TOKENS,
          timeout: int = 1200, title: str | None = None, env: Any | None = None,
+         writer_family: str | None = None,
          ) -> CallResult:
     """POST one tool-less completion; HTTP/network errors become values.
 
@@ -266,6 +267,8 @@ def call(model: str, prompt: str, *, url: str | None = None,
     ``finish_reason == "length"`` and empty text -- otherwise the retry's
     own error stands. Every attempt is recorded in ``CallResult.attempts``.
     """
+    from .family import writer_headers
+    routing_headers = writer_headers([writer_family]) if writer_family is not None else None
     source = env if env is not None else os.environ
     key = (source.get(key_env) or "").strip() if source is not None else ""
     if not key:
@@ -280,10 +283,10 @@ def call(model: str, prompt: str, *, url: str | None = None,
     ceiling = model_ceiling(model, int(max_tokens))
     attempts: list[dict] = []
     sent = clamp_max_tokens(model, max_tokens)
-    result = _post(model, prompt, base, key, tag, run_id, digest, sent, timeout)
+    result = _post(model, prompt, base, key, tag, run_id, digest, sent, timeout, routing_headers)
     attempts.append(_attempt_record(1, sent, result))
     if result.finish_reason == "length" and not (result.text or "").strip():
-        result = _post(model, prompt, base, key, tag, run_id, digest, ceiling, timeout)
+        result = _post(model, prompt, base, key, tag, run_id, digest, ceiling, timeout, routing_headers)
         attempts.append(_attempt_record(2, ceiling, result))
         if (result.status == 200 and result.finish_reason == "length"
                 and not (result.text or "").strip()):

@@ -141,6 +141,12 @@ def dump_tables(w):
 #: kinds still hash to byte for byte.
 LEGACY_PREFIX = (11, "58618aa115472f589e7ee07531c557e36f5257f926792887f16401aa3458185d")
 LEGACY_HEAD = (14, "16badb7cba6b9e76f147a98c0a1aea17eefbfbd12f27eb0e71d6480b2d08845f")
+#: ``LE-KEEPER-GATE-CANCELLED-DEP-BLOCKS-CHILDREN``: the final ``cancel`` now also
+#: appends one ``item_defined`` on the goal that depended on the cancelled item (the
+#: dropped edge).  It is a new event *after* ``LEGACY_HEAD``, so every earlier hash,
+#: including the cancel's own, is unchanged and existing chains replay and verify as
+#: before; only the head of this replay moves, to ``LEGACY_TAIL``.
+LEGACY_TAIL = (15, "932662153bfea18f37f1233a906cae942b4d1a33c0783a45405d65101b682047")
 
 
 def test_replay_chain_verifies_on_sqlite(tmp_path):
@@ -160,7 +166,11 @@ def test_existing_event_kinds_hash_exactly_as_before(tmp_path):
     replay_legacy(w)
     rows, _ = dump(w)
     assert rows[LEGACY_PREFIX[0] - 1]["hash"] == LEGACY_PREFIX[1]
-    assert (len(rows), rows[-1]["hash"]) == LEGACY_HEAD
+    assert rows[LEGACY_HEAD[0] - 1]["hash"] == LEGACY_HEAD[1]      # the cancel itself
+    assert rows[LEGACY_HEAD[0] - 1]["type"] == "cancelled"
+    assert (len(rows), rows[-1]["hash"]) == LEGACY_TAIL
+    assert rows[-1]["type"] == "item_defined"
+    assert rows[-1]["payload"]["dropped_cancelled_dependency"] == rows[-2]["key"]
     assert "state_set" not in {r["type"] for r in rows}
 
 

@@ -425,7 +425,7 @@ providers.write_text('{"providers": {}}')
 os.environ['PLANGRAPH_PROVIDERS_FILE'] = str(providers)
 os.environ['OMNIROUTE_BASE_URL'] = 'https://gateway.invalid/v1'
 os.environ['OPENCODE_CONFIG_CONTENT'] = json.dumps(request['config'])
-result = build(dict(run_id='run-' + 'a' * 32, job_id='fixture', role='review', dry_run=True,
+result = build(dict(run_id='run-' + 'a' * 32, job_id='fixture', role='review', dry_run=True, writer_families=['gpt'],
     leg=dict(id='mimo-v2.6-flash', explicit=True), prompt='Review', card={},
     cwd=str(root), state=str(root / 'state')))
 print(json.dumps(result))

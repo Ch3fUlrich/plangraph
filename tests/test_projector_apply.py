@@ -173,14 +173,26 @@ def test_newer_run_may_restart_a_parked_item(world, projector):
     assert res.states_written == 1 and item_state(world) == "running"
 
 
-@pytest.mark.parametrize("to", [to_claimed, to_in_review])
-def test_items_the_keeper_owns_are_never_overwritten(world, projector, to):
-    to(world, KEY)
+def test_items_the_keeper_owns_are_never_overwritten(world, projector):
+    to_claimed(world, KEY)
+    held = dict(world.store._item(KEY))
+    res = projector.apply_run(proj(states=[state(3, "running")]), run_ord=0)
+    assert (res.states_skipped_state, res.states_written, res.states_existing) == (0, 0, 1)
+    item = world.store._item(KEY)
+    assert (item["exec_workflow_id"], item["exec_run_id"], item["exec_attempt"]) == (WF, "r1", 1)
+    assert all(item[k] == held[k] for k in ("state", "claimed_by", "delegate", "epoch", "lease_until"))
+    assert projector.apply_run(proj(states=[state(3, "running")]), run_ord=0).states_existing == 1
+
+
+def test_in_review_items_the_keeper_owns_are_never_overwritten(world, projector):
+    to_in_review(world, KEY)
     held = item_state(world)
     res = projector.apply_run(proj(states=[state(3, "running")]), run_ord=0)
-    assert (res.states_skipped_state, res.states_written) == (1, 0)
+    assert (res.states_skipped_state, res.states_written, res.states_existing) == (1, 0, 0)
     assert item_state(world) == held
     assert projector.apply_run(proj(states=[state(3, "running")]), run_ord=0).states_existing == 1
+    assert world.conn.execute(
+        "SELECT 1 FROM audit_log WHERE action='project_state' AND ok=0").fetchone() is not None
 
 
 def test_done_item_is_not_overwritten(world, projector):

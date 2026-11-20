@@ -21,7 +21,9 @@ mod manage_key_alert;
 mod native_writer;
 mod native_writer_host;
 mod native_writer_tool;
+mod native_writer_tools;
 mod placement;
+mod pre_review;
 mod prompt;
 mod prompt_git;
 mod pyjson;
@@ -55,8 +57,8 @@ mod tools;
 mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
-#[allow(dead_code)] // Setting consumed by later work-mode slices.
 mod work_mode_config;
+mod writer_ledger;
 
 use pg_worker_core::host_probe::probe;
 

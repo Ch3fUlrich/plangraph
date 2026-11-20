@@ -13,6 +13,8 @@ import time
 import uuid
 from pathlib import Path
 
+from plangraph.routing_errors import SpawnRefused
+
 from .seat_artifact import reserve_seat_families, seat_reasons, sync_seat, sync_seat_group
 
 def live_runner(runner):
@@ -395,6 +397,13 @@ class SeatSpawnMixin:
 
     async def _launch_leg(self, record, chosen, *, routed=False, **options):
         """One normal launch, at most one capped review retry; never recurse or reroute."""
+        if record.get('role') == 'review':
+            from plangraph.review.family import FamilyError, writer_headers
+            try:
+                options['headers'] = dict(options.get('headers') or {},
+                    **writer_headers(record.get('given_writer_families') or []))
+            except FamilyError as exc:
+                raise SpawnRefused(str(exc)) from None
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
         async def launch(prompt_record, **kwargs):

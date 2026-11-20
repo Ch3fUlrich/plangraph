@@ -6,6 +6,7 @@ edition = "2021"
 description = "Host capacity probe CLI"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 tempfile = "3"
 pg-worker-core = { path = "../worker-core" }
 rmcp = { version = "2.2", default-features = false, features = ["server", "transport-async-rw"] }
@@ -20,6 +21,7 @@ libc = "0.2"
 
 [dev-dependencies]
 pg-worker-core = { path = "../worker-core", features = ["test-support"] }
+saphyr = "0.3.4"
 syn = { version = "2", features = ["full", "visit"] }
 
 [target.'cfg(unix)'.dev-dependencies]

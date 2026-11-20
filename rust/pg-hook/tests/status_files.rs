@@ -4,8 +4,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn git(root: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .current_dir(root)
+    pg_worker_core::git_test_support::command(root)
         .args(args)
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.invalid")

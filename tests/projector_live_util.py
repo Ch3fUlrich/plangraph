@@ -24,7 +24,7 @@ from uuid import uuid4
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.common import RetryPolicy
-from temporalio.service import RPCError
+from temporalio.service import RPCError, RPCStatusCode
 from temporalio.worker import UnsandboxedWorkflowRunner, Worker
 
 # _run: runs the coroutine on a fresh loop (or on a helper thread when one is already running)
@@ -255,10 +255,21 @@ class LiveRig:
 
     def _start(self, name: str, queue: str, arg: dict, wid: str, plan_key: str) -> str:
         async def go() -> str:
-            handle = await self.client.start_workflow(
-                name, arg, id=wid, task_queue=queue, memo={"plan_key": plan_key},
-                execution_timeout=timedelta(minutes=2))
-            return handle.result_run_id
+            # A different task queue can still encounter a cold namespace cache
+            # after the server probe succeeded. Retry only that readiness race.
+            deadline = time.monotonic() + 20.0
+            while True:
+                try:
+                    handle = await self.client.start_workflow(
+                        name, arg, id=wid, task_queue=queue, memo={"plan_key": plan_key},
+                        execution_timeout=timedelta(minutes=2), rpc_timeout=timedelta(seconds=5))
+                    return handle.result_run_id
+                except RPCError as exc:
+                    if (exc.status != RPCStatusCode.NOT_FOUND
+                            or not str(exc).startswith("Namespace ") or "not found" not in str(exc)
+                            or time.monotonic() >= deadline):
+                        raise
+                    await asyncio.sleep(0.3)
 
         return self.run(go())
 

@@ -70,3 +70,28 @@ its text with `verdict` and `review_status` set to `no_verdict`, reason
 The CLI prompt forbids background commands and requires the reviewer to wait
 for commands to finish. Native writer review files apply the same citation rule
 to ACCEPT, recording review status `no_verdict` and reason `weak_verdict` (exit 4).
+
+Rust `pg-spawnd` cards carrying a nonempty `done_criteria` now receive a
+pre-review self-check prefix. It includes the complete criteria and all four
+finding classes, ordered by their counts in the last 30 days of `.txt`/`.md` verdict files in
+`card.review_dir` (relative to the launch checkout, default `reviews`). The scan
+is nonrecursive, uses file modification times, ignores symlinks and files over
+1 MiB, and requires a `VERDICT: ` line. HIGH/MED/P1/P2 finding lines are counted
+by test/coverage, documentation, contract/cross-language, and other keywords;
+ties use that order. Missing history contributes no finding classes.
+
+The writer copies each generated id into its status note as
+`SELF-CHECK <id>: <evidence>`. The review request must carry the same criteria,
+history directory and that note in `card.writer_status`. Before launching the
+reviewer, Rust refuses missing, blank, duplicate or stale criterion answers and
+includes the checklist and answers in the reviewer prompt; the error names the
+missing line text. Ids hash only the criteria and the fixed class lines. An answer is evidence
+for the reviewer to verify, not an automatic claim that a criterion is met.
+History changes between writer and review only reorder the classes, never the
+ids. Review seat lines such as `FINDING: MED path - text` and `1. **HIGH**` are
+counted; classes match the text after ` - `, not the path. Dry runs perform the same validation.
+
+This first slice covers standard Rust-spawner launches and their review quota
+fallbacks. Cards without criteria retain their behavior. Native-Codex lifecycle
+briefs, the Python spawner and the shared Python brief renderer still need this
+integration; they do not enforce this gate yet.

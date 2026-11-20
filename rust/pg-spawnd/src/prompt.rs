@@ -124,6 +124,7 @@ pub(crate) fn prepare_launch(
         .get("role")
         .and_then(Value::as_str)
         .unwrap_or("implement");
+    crate::pre_review::prepare(args, launch)?;
     if role != "review" {
         return Ok(None);
     }

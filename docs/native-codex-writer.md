@@ -8,7 +8,16 @@ remote forwarding rewrites `repo` to that host's configured repository. Public
 repository allowlisting, fresh readiness and RAM caps still apply. Native runs
 require at least 5 GiB free; the target checks again before starting and stops
 Codex under 2 GiB. Targets need the updated Python spawner and `pg-spawnd` binary
-on PATH (or built at `rust/target/release/pg-spawnd`), Git and native Codex auth.
+on PATH (or built at `rust/target/release/pg-spawnd`), Cargo, Git and native Codex auth.
+Before a run record is created, target-host admission resolves `cargo`, `git` and
+`codex` on the caller's effective PATH. Missing or non-executable tools refuse
+with `tool_missing: <tool>`. Configure the host's launch environment (the overflow
+host's `env_file` for remote launches) to include the Cargo and nvm Node bin
+paths where needed; admission does not source a login profile or guess paths.
+Records retain `tool_path` and `resolved_tools`. Relative PATH entries are made
+absolute against the caller's directory so they retain their meaning in the
+worktree. The writer, its resumed sessions and final gates all use that recorded
+PATH, including tools launched by gate scripts.
 
 The Rust worker fetches the pushed base into a per-run ref, refuses ancestry
 behind fetched origin/main, and creates a detached worktree in the
@@ -26,6 +35,25 @@ Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
 final head, resume count, review path/text/verdict and exit code. Exits are 0
 accepted, 3 review changes, 4 missing review, 5 base refusal, 6 writer failure,
 7 final gate failure, 8 start disk refusal. Worktrees and logs remain for recovery.
+Exit 9 reports `result: BLOCKED` when writer relaunches are exhausted or their
+disk/base preparation fails.
+
+The live Rust supervisor persists a `manifest` in the run record before launching
+Codex: name (run ID), host, worktree, original brief, effort and `try_count`.
+A killed/crashed CLI, failed CLI execution (including exit 127), or exit without a
+`turn.completed` result event starts a new Codex session with the same brief.
+Before relaunch it checks the existing disk floor, fetches and merges origin/main
+into the same worktree, preserving writer commits. Dirty-tree or merge failures
+stop with BLOCKED; no reset or cleanup discards work. There are at most three
+writer attempts (two relaunches), separate from missing-review session resumes.
+REQUEST_CHANGES is terminal, including when a review was saved before a crash.
+The last writer failure remains in the record for the orchestrator.
+
+This first relaunch slice covers failure of the writer child while the native
+supervisor survives. Recovery after supervisor death or a host restart, including
+startup manifest discovery and process-identity fencing, remains open. Persisted
+manifests retain the inputs needed for that recovery; they are not yet replayed
+by a replacement supervisor.
 This slice uses the existing POSIX SSH overflow transport; Windows readiness,
 worktree paths, disk probing and native process supervision need a later port.
 The plan-order launcher scripts remain until the migration slice.
@@ -63,8 +91,34 @@ covers the native writer path.
 ## Health check
 
 After a spawner move, each target must answer `pg-spawnd health --json` with exit 0;
-`pg-spawnd` has no `--version` verb (advertised verbs: `probe`, `serve`, `shim`, `health`, `agents-view`).
+`pg-spawnd` has no `--version` verb (advertised verbs: `probe`, `serve`, `shim`, `health`, `agents-view`, `ledger-report`).
 Route listings never show `native-codex`: it is a card `run_kind` that spawn sends past routing
 (`src/plangraph/spawner/cli.py`); native dry runs are refused (`src/plangraph/spawner/overflow.py`).
 Check routing with a review dry run from a fresh `python3 -m plangraph.spawner.cli` process.
 Make the first native-codex run after a move a small canary; check its run record for the exit code and review path before real writers use the spawner.
+
+## Writer statistics ledger
+
+Each terminal native run writes one immutable row in `runs/<run-id>/ledger.jsonl`.
+Repeated saves of the same row are idempotent; differing rows are refused. Atomic
+private writes and the existing nonblocking lock prevent partial or duplicate rows.
+A failure is printed and retained as `ledger_error` in `record.json`.
+`pg-spawnd ledger-report <state-directory>/runs` prints JSONL totals by UTC end day.
+Each metric also has an `<metric>_unknown` count; unknown data never means zero.
+Malformed rows refuse the report. Interrupted runs without an end record have no row.
+
+Rows include the host, requested model/effort, exit code, elapsed wall minutes,
+committed additions plus deletions from the admitted base to final head (binary
+files contribute no text lines), and tokens. Text `tokens used` summaries accept
+comma separators; native `turn.completed` usage sums input plus output across
+resumes. Cached input is already included in input. If both representations are
+present they must agree, and are counted once. Missing usage is null.
+
+This slice counts the single `item_key` supplied to the native wrapper as given;
+it counts done only after success with that key in a new commit's Plan-Item trailer.
+Missing item identity is unknown. `review_rounds` counts canonical reviews observed
+by the wrapper, excluding probes with no review; HIGH/MED held are zero on ACCEPT
+and unknown otherwise. These are wrapper measurements, not inferred counts of the
+writer's internal self-review rounds. Native launch failures before the Rust wrapper
+starts have no ledger row. Batch landing statistics and legacy wrappers remain open: this slice does not
+close plangraph:LEDGER-AUTO-FILL, whose land-row part needs its own keeper item.

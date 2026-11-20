@@ -159,3 +159,32 @@ the existing Grok declaration gap; an unknown model fails with its leg name.
 D-6082 / D-6143: `measured_down` extends its run-record scan window to cover the
 oldest active uncapped provider reset in `leg_state`, so legs with multi-day
 provider resets remain suppressed past 24 hours until their `reset_at` elapses.
+
+Review writer aliases (`codex`, `cx-gpt-6.1-sol`, `gpt`) share the registered
+writer-family resolver used by spawn admission and review seats. The preferred
+Gemini/free review prefix remains first; eligible OpenAI legs outside that order
+stay in the fallback list before final Sonnet. Other legs outside the operator order,
+including the extra DeepSeek legs, stay excluded. Claude writers may use the
+`cx-gpt-6-luna` Codex seat. Unknown names fail with accepted family names
+and aliases within native refusal limits; registered leg/model ids remain accepted.
+Verdict delivery uses the same resolver to forward canonical writer families.
+
+## Automatic work mode (D-5952 / rule 3.41)
+
+`pg-spawnd` route JSON, including the `plangraph_agent_route` MCP response,
+reports `work_mode` and `work_mode_reason`. The repository/user setting follows
+[work-mode configuration](work-mode.md); absent settings still default to batch.
+Manual `batch` and `piecewise` bypass auto and report `manual <mode>`.
+
+`pg_worker_core::work_mode_auto::resolve` selects `batch` in auto when at least
+one served implementation leg has catalog `aa_intelligence >= 50.0`, the
+strong-writer threshold. Served means admitted by the existing writer planner,
+including its quota, availability and policy filters; a registered strong leg
+with exhausted quota does not count. Otherwise auto selects `piecewise`.
+Missing/non-finite scores cannot qualify a strong writer. Reasons name the
+first deciding strong leg, unavailable strong leg, or lower-tier served leg;
+an empty snapshot explicitly reports no served writers. Review and orchestrate
+routes consult the implementation snapshot, so a strong review-only leg cannot
+select batch. This does not change route order or start orchestration.
+The config root comes from `card.repo`, `card.cwd`, `card.diff_ref.repo`, then
+the daemon working directory, in that order.

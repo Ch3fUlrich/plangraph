@@ -10,6 +10,11 @@ struct Fake {
     disk: u64,
     disk_after_prepare: Option<u64>,
     gates: bool,
+    failures: usize,
+    refreshes: usize,
+    refresh_error: bool,
+    prompts: Vec<String>,
+    rejected: bool,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
@@ -22,11 +27,22 @@ impl Driver for Fake {
             Ok("base".into())
         }
     }
+    fn refresh_base(&mut self) -> Result<String, String> {
+        self.refreshes += 1;
+        if self.refresh_error {
+            return Err("merge conflict".into());
+        }
+        Ok("fresh-base".into())
+    }
     fn disk_gb(&mut self) -> Result<u64, String> {
         Ok(self.disk)
     }
-    fn execute(&mut self, session: Option<&str>, _: &str) -> Result<String, String> {
+    fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
         self.calls.push(session.map(str::to_owned));
+        self.prompts.push(prompt.into());
+        if self.calls.len() <= self.failures {
+            return Err("codex killed: SIGKILL".into());
+        }
         Ok("same-session".into())
     }
     fn head(&mut self) -> Result<String, String> {
@@ -34,7 +50,11 @@ impl Driver for Fake {
         Ok("final-head".into())
     }
     fn review(&mut self, _: &str) -> Result<Option<serde_json::Value>, String> {
-        Ok((self.calls.len() > self.review_after).then(|| json!({"verdict":"ACCEPT"})))
+        Ok(
+            (self.calls.len() > self.review_after && self.calls.len() > self.failures).then(
+                || json!({"verdict":if self.rejected { "REQUEST_CHANGES" } else { "ACCEPT" }}),
+            ),
+        )
     }
     fn gates(&mut self) -> Result<(), String> {
         if self.gates {
@@ -395,4 +415,55 @@ asyncio.run(check())
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn native_killed_writer_relaunches_once_from_manifest() {
+    let mut driver = Fake {
+        failures: 1,
+        ..fake()
+    };
+    let record = run(
+        &mut driver,
+        json!({"host":"fixture", "run_id":"run-fixture"}),
+        "same brief",
+    );
+    assert_eq!(record["exit_code"], 0);
+    assert_eq!(driver.calls, vec![None, None]);
+    assert_eq!(driver.prompts[0], driver.prompts[1]);
+    assert_eq!(driver.refreshes, 1);
+    assert_eq!(record["base_sha"], "fresh-base");
+    assert_eq!(record["manifest"]["brief"], "same brief");
+    assert_eq!(record["manifest"]["try_count"], 2);
+}
+#[test]
+fn native_third_failure_is_blocked_and_review_rejection_is_terminal() {
+    let mut driver = Fake {
+        failures: 3,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(driver.calls.len(), 3);
+    assert_eq!(record["result"], "BLOCKED");
+    assert_eq!(record["manifest"]["try_count"], 3);
+    let mut driver = Fake {
+        rejected: true,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 3);
+    assert_eq!(driver.calls.len(), 1);
+}
+
+#[test]
+fn native_relaunch_merge_failure_blocks_without_discarding_work() {
+    let mut driver = Fake {
+        failures: 1,
+        refresh_error: true,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["result"], "BLOCKED");
+    assert_eq!(record["reason"], "merge conflict");
+    assert_eq!(driver.calls.len(), 1);
 }

@@ -174,12 +174,12 @@ def test_inline_only_plain_card_dry_run_path_parity(monkeypatch, tmp_path):
         for name, factory in (("service", SpawnService), ("wrapper", spawn_service)):
             runner = SpawnerRunner(default_cwd=str(tmp_path))
             service = factory(runner=runner, state=tmp_path / name)
-            preview = await service.spawn(card=card, prompt="Review this design", role="review",
+            preview = await service.spawn(card=card, prompt="Review this design", role="review", writer_families=["openai"],
                                           dry_run=True, wait_seconds=10)
             assert preview["status"] == "dry_run"
             assert preview["chosen_leg"]["id"] == chosen.id
             previews.append(preview["chosen_leg"])
-            live = await service.spawn(card=card, prompt="Review this design", role="review",
+            live = await service.spawn(card=card, prompt="Review this design", role="review", writer_families=["openai"],
                                        wait_seconds=10)
             assert live["chosen_leg"] is None
             assert len(live["attempts"]) == 1

@@ -7,8 +7,7 @@ use serde_json::{json, Value};
 use std::{os::unix::fs::PermissionsExt, path::Path, process::Command};
 
 fn git(dir: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .current_dir(dir)
+    let output = pg_worker_core::git_test_support::command(dir)
         .args(args)
         .output()
         .unwrap();

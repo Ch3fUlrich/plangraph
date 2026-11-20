@@ -1,7 +1,7 @@
 # Keeper contract (M2a) — store, state machine, evidence, API, CLI, MCP
 
 Store snapshot filters (S1): `open=1` / `closed=1`, UTC `since`, item `fields` (always `key`), and `blocks`; nonblank filters add selection/returned counts in `filter`. Activity uses only `since`; aliases and progress stay full; decision text follows selected evidence before field projection. No filters preserves legacy bytes; HTTP wiring is S2. Signed snapshots, serve and pull stay full.
-Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12 **stdlib only** (sqlite3, http.server, hashlib, secrets, json, graphlib, subprocess, urllib); PyYAML only in the importer. Package `src/plangraph/keeper/`. Every file ≤ 400 lines, tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests. M2a = per-principal tokens; M2b (later) adds run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not build them.
+Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12 **stdlib only** (sqlite3, http.server, hashlib, secrets, json, graphlib, subprocess, urllib); PyYAML only in the importer. Package `src/plangraph/keeper/`. Every file ≤ 400 lines, tests first (pytest), no network in tests (fakes), no secrets in code/logs/tests. M2a = per-principal tokens; M2b (later) adds run-bound tokens, signed snapshot, outbox, anchor — leave clean seams, do not build them. System-only `project_state` atomically projects execution ownership and lifecycle state; see [exec ownership](adr-exec-ownership.md) for supersession and stale-run retries.
 
 ## Modules
 | file | content |
@@ -673,3 +673,40 @@ completed writer runs whose item is still in review. `sweep-claims --state DIR`
 overrides the local state directory; otherwise `PG_SWEEP_STATE` from the sweep is used before the HOME default. Optional direct claim metadata is also
 accepted. An active claim with neither a resolved local path nor open lanes is
 incomplete and refuses cleanup. Unreadable existing local records also refuse.
+
+### Cancelled dependencies and new children
+
+Cancelling an item removes its incoming `depends_on` edges from live gates and
+goals in the same transaction, recording an `item_defined` event on each gate
+with `dropped_cancelled_dependency`. Claimed/in-review gates advance epoch and
+round so old evidence and verdicts cannot survive the dependency change.
+Ordinary work dependencies and frozen done/cancelled gates keep their history.
+An edge whose removal would leave live work without a path to a goal is kept
+(cancelling a gate with live children stays legal); `kp check` reports it as
+`CANCELLED-GATE-DEP` until that work is re-homed and the edge removed.
+
+`define` / `create_items` report `refused` entries for new children whose `under`
+gate still holds a cancelled dependency (for example, legacy data), while
+creating the independent valid items. Each entry names the child, gate,
+cancelled dependencies, and the `remove_dep` recovery. CLI text and JSON expose
+these refusals and exit 2. Other validation failures still refuse atomically;
+`apply_ops` always retains its atomic refusal behavior.
+
+`kp check` prints `CANCELLED-GATE-DEP <gate> -> <dependency>` for gates and goals,
+including frozen ones. JSON exposes `cancelled_gate_deps`; `--strict` exits 1.
+
+### Claude Code review witnesses
+
+Install the Rust `pg-seat-evidence` binary alongside the keeper. Attach evidence
+kind `claude-seat` through the router evidence API with `transcript`, `review_file`
+and full merged part `head` fields. `claude_projects_dir` optionally configures
+its trusted transcript root (default: the keeper account's Claude projects dir).
+The transcript must have the project/session/subagents/agent-ID.jsonl layout.
+Every assistant message must name a Sonnet model and the matching session/agent.
+A successful `Write` tool call must write the exact review file contents; end the
+file with `HEAD: <full head>` followed by `VERDICT: ACCEPT`. Shell write commands
+are not witnesses. Missing, changed or mismatched evidence gets a named refusal.
+`close-merged` rechecks current-epoch transcript evidence, including inside its
+transaction, and counts it with spawner seats. Existing writer-family, high-tier,
+sensitive-card and lane-specific witness requirements continue to apply.
+Lanes citing D-4504 retain their witness rule; a GO row must explicitly say `Witness: claude-seat` to use this kind.

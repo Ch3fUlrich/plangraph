@@ -1,7 +1,9 @@
 """``pg check`` (PLAN-HYGIENE): read-only checks over the local plan snapshot.
 
-Two findings, printed as one line each:
+Findings, printed as one line each:
 
+* ``CANCELLED-GATE-DEP <gate> -> <dep>`` — a gate/goal still depends on
+  cancelled work; remove that dependency before adding children.
 * ``ORDER-ONLY <src> -> <dst>`` — ``src`` waits on ``dst``, but nothing in
   ``dst``'s done criteria needs ``src``'s code and their declared ``paths``
   touch different trees, so the edge only orders the plan (it could be a
@@ -21,6 +23,7 @@ import sys
 
 from .cli_verbs import EXIT_OK, EXIT_UNREACHABLE, Unreachable
 from .brief import missing_why_how
+from ..views import cancelled_gate_dependencies
 
 #: A key or path-list mention is case-insensitive.
 _TRAILER = "Plan-Item"
@@ -155,26 +158,31 @@ def cmd_check(args, session):
         return EXIT_UNREACHABLE
     config = getattr(session, "config", None)
     order_only, merged_open = findings(items, getattr(config, "repos", None))
+    cancelled_deps = cancelled_gate_dependencies(items)
     missing = missing_why_how(items)
     if session.json_mode:
         print(json.dumps({
             "order_only": [{"src": src, "dst": dst} for src, dst in order_only],
             "merged_open": [{"key": key, "commit": sha} for key, sha in merged_open],
             "missing_why_how": missing,
+            "cancelled_gate_deps": [{"gate": gate, "dependency": dep}
+                                    for gate, dep in cancelled_deps],
         }))
     else:
         print(f"missing_why_how: {len(missing)} items" +
               (" " + ", ".join(missing[:20]) if missing else ""))
+        for gate, dep in cancelled_deps:
+            print(f"CANCELLED-GATE-DEP {gate} -> {dep}")
         for src, dst in order_only:
             print(f"ORDER-ONLY {src} -> {dst}")
         for key, sha in merged_open:
             print(f"MERGED-OPEN {key} {sha}")
-    if getattr(args, "strict", False) and (order_only or merged_open):
+    if getattr(args, "strict", False) and (order_only or merged_open or cancelled_deps):
         return 1
     return EXIT_OK
 
 
 def add_parser(sub, make):
-    p = make(sub, "check", help="plan hygiene: order-only edges, merged-but-open items")
+    p = make(sub, "check", help="plan hygiene: cancelled gate deps, order-only edges, merged-but-open items")
     p.add_argument("--strict", action="store_true",
                    help="exit 1 when anything is found")

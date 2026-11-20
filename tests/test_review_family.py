@@ -157,3 +157,27 @@ def test_gateway_qwen_refused():
     with pytest.raises(FamilyError):
         check_cross_family("anthropic", "OVH/Qwen-Max")
     assert leg_for("ovh/qwen3-8b") is None
+
+
+@pytest.mark.parametrize('name', ['codex', 'cx-gpt-6.1-sol', 'gpt', 'cx-gpt-6.1-sol-medium'])
+def test_writer_codex_aliases_share_seats(name):
+    from plangraph.review.family import writer_key
+    assert writer_key(name) == 'openai'
+    assert pick_legs(name, need=2) == pick_legs('gpt', need=2)
+
+
+def test_unknown_writer_lists_accepted_names():
+    from plangraph.review.family import writer_key
+    with pytest.raises(FamilyError, match='accepted names:') as exc:
+        writer_key('author')
+    assert all(name in str(exc.value) for name in ('codex', 'gpt', 'deepseek', 'anthropic'))
+
+
+def test_writer_uses_registered_served_family(monkeypatch):
+    from dataclasses import replace
+    from plangraph.planner import legs
+    from plangraph.review.family import writer_key
+    record = replace(legs.DEFAULT_LEGS[0], id='gpt-custom-leg',
+                     model='provider/gpt-custom-model', family='deepseek')
+    monkeypatch.setattr(legs, 'spawnable_legs', lambda: (record,))
+    assert writer_key(record.id) == writer_key(record.model) == 'deepseek'

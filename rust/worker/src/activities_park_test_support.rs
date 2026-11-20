@@ -27,4 +27,3 @@ pub(super) fn g3_live() -> Vec<String> {
         .map(|s| (*s).to_owned())
         .collect()
 }
-

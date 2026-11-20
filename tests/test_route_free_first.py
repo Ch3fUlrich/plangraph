@@ -168,7 +168,9 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
     assert REVIEW_ORDER == ("mimo-v2.6-pro", "mimo-v2.6-flash", "agy-gemini-4-hydrogen-high",
                             "agy-gemini-4-argon-medium", "console-deepseek-flash",
                             "opencode-go-beam-free", "claude-sonnet-5-5-high")
-    plan = plan_spawn(CARD, role="review", writer_families=("openai",))
+    plan = plan_spawn(CARD, role="review", writer_families=("openai",),
+                      leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
+    # An OpenAI writer gets exactly the operator order: no extra DeepSeek fallbacks.
     assert [leg.id for leg in plan.legs] == list(REVIEW_ORDER)
     assert plan.legs[0].model == "mimo/mimo-v2.6-pro"
 
@@ -176,7 +178,7 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids == list(REVIEW_ORDER[:-1])  # Claude writer excludes Sonnet.
+    assert ids == [*REVIEW_ORDER[:-1], "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
 
@@ -194,7 +196,7 @@ def test_policy_banned_free_legs_stay_skipped(tmp_path, monkeypatch):
     assert reasons[FREE[1]].startswith("disabled: D-4196 ")
     assert reasons["omniroute-deepseek-flash"] == "banned_family"
     assert [leg.id for leg in rev.legs] == [REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH, REVIEW_HYDROGEN,
-                                            REVIEW_ARGON, REVIEW_BEAM]
+                                            REVIEW_ARGON, REVIEW_BEAM, "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert reasons["opencode-big-pickle"] == "off_family"
     reasons = {s["leg"]: s["reason"] for s in rev.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "banned_family"
@@ -222,7 +224,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids == list(REVIEW_ORDER[:-1])  # Claude writer excludes Sonnet.
+    assert ids == [*REVIEW_ORDER[:-1], "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ids.index(REVIEW_MIMO_PRO) == 0 and ids.index(REVIEW_HYDROGEN) == 2  # D-6028
 
@@ -409,3 +411,17 @@ def test_main_policy_gpt_first_and_retained_routes():
         "opencode-go-muse-spark", "opencode-go-deepseek-v4-flash", "deepseek", "claude-haiku-5.5",
         "agy-gemini-4-argon", "opencode-big-pickle", "agy-claude-opus",
         "omniroute-deepseek-flash", "omniroute-muse-spark", "agy-gpt-oss-120b"}
+
+
+def test_codex_writer_aliases_and_cross_family_review_routes():
+    plans = [plan_spawn(CARD, role='review', writer_families=[name])
+             for name in ('codex', 'cx-gpt-6.1-sol', 'gpt')]
+    assert all(p.legs == plans[0].legs and p.review_seats == plans[0].review_seats for p in plans)
+    ids = {l.id for l in plans[0].legs}
+    assert not {'omniroute-deepseek-flash', 'opencode-go-deepseek-v4-flash'} & ids
+    assert any(l.family == 'gemini' for l in plans[0].legs)
+    assert any(l.family == 'claude' for l in plans[0].legs)
+    deepseek = plan_spawn(CARD, role='review', writer_families=['deepseek'])
+    assert all(l.family != 'deepseek' for l in deepseek.legs)
+    claude = plan_spawn(CARD, role='review', writer_families=['claude'])
+    assert any(l.id.startswith('cx-gpt-') for l in claude.legs)

@@ -122,7 +122,7 @@ def test_incident_capture_through_monitor_and_production_record(tmp_path, monkey
         runner.jobs[job.job_id] = job
         return job
     monkeypatch.setattr(service, '_launch_leg', launch)
-    result = asyncio.run(service._spawn(card={'title': 'incident replay'}, role='review', _plan=plan, wait_seconds=None))
+    result = asyncio.run(service._spawn(card={'title': 'incident replay'}, role='review', writer_families=['openai'], _plan=plan, wait_seconds=None))
     saved = json.loads(service._path(result['run_id']).read_text())
     assert saved['reason'].startswith('ECONNREFUSED:')
     assert all(a.get('skip_reason') for a in saved['attempts'])

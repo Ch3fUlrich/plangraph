@@ -37,6 +37,9 @@ fn run() -> i32 {
         println!("plangraph {}", env!("CARGO_PKG_VERSION"));
         return 0;
     }
+    if args.first().is_some_and(|s| s == "codex-host-readiness") {
+        return plangraph_cli::codex_readiness::run(&args[1..]);
+    }
     if let [command, repo] = args.as_slice() {
         if command == "base-fresh" {
             return base_fresh::run(repo);

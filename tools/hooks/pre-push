@@ -18,6 +18,7 @@ Install: git config core.hooksPath tools/hooks (see CONTRIBUTING.md).
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 import time
 import json
 import tempfile
@@ -143,9 +144,9 @@ def scan_blob(rel, local_sha, cfg, find_shapes, hits, baselines=()):
     hits.extend(found)
 
 
-def file_size_gate():
-    """tools/check_file_size.py on the pushing checkout: 0 clean, 1 refuse."""
-    r = subprocess.run([PYTHON, str(FILE_SIZE)], capture_output=True, text=True, timeout=60)
+def file_size_gate(head):
+    """Measure the pushed tree, including its allow-list and baseline."""
+    r = subprocess.run([PYTHON, str(FILE_SIZE), "--head", head], capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
         sys.stderr.write(r.stdout + r.stderr)
         print("pre-push: file-size gate failed: push refused (split the file, "
@@ -216,6 +217,22 @@ def python_interpreter(root):
             return str(candidate.absolute())
     configured = os.environ.get('PREFLIGHT_PYTHON')
     return str(Path(configured).expanduser().absolute()) if configured else shutil.which('python3') or 'python3'
+
+
+@contextmanager
+def preflight_checkout(head):
+    """Isolate tests from both other branches and dirty files at the same HEAD."""
+    with tempfile.TemporaryDirectory(prefix="plangraph-push-") as tmp:
+        checkout = Path(tmp) / "tree"
+        result = git("worktree", "add", "--detach", str(checkout), head)
+        if result.returncode:
+            raise SystemExit("pre-push: cannot create pushed-head worktree: push refused")
+        try:
+            yield checkout
+        finally:
+            result = git("worktree", "remove", "--force", str(checkout))
+            if result.returncode:
+                raise SystemExit("pre-push: cannot remove pushed-head worktree: push refused")
 
 
 def main():
@@ -305,17 +322,12 @@ def push_main():
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
     print(f"pre-push Python: {PYTHON}", flush=True)
     for _, local_sha, _, _ in refs:
-        if commit_gate(local_sha):
+        if commit_gate(local_sha) or file_size_gate(local_sha):
             return 1
-    if file_size_gate():
-        return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
     remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
     private = git_out("config", "--local", "--bool", f"remote.{remote}.plangraph-private") == "true"
-    rules_files = [str(SPLIT / name) for name in BASE_RULES if (SPLIT / name).is_file()]
-    if os.environ.get("PLANGRAPH_SCRUB_RULES"):
-        rules_files.append(os.environ["PLANGRAPH_SCRUB_RULES"])
     try:
         if explicit:
             path = Path(words)
@@ -339,7 +351,6 @@ def push_main():
                 words = str(path)
         if private:
             words = None
-        cfg = sc.build_config(words_file=words, rules_files=rules_files)
     except Exception as exc:  # fail closed; never echo the paths
         print(f"pre-push: bad scrub config: {type(exc).__name__}: push refused",
               file=sys.stderr)
@@ -350,6 +361,30 @@ def push_main():
     hits = []
     for rec in refs:
         _, local_sha, _, remote_sha = rec
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                rules_files = []
+                for name in BASE_RULES:
+                    rel = "tools/split/" + name
+                    entry = git("ls-tree", local_sha, "--", rel)
+                    if entry.returncode:
+                        raise ValueError("unavailable rules tree")
+                    if entry.stdout:
+                        blob = git("show", f"{local_sha}:{rel}")
+                        if blob.returncode:
+                            raise ValueError("unavailable rules blob")
+                        path = Path(tmp) / name
+                        path.write_bytes(blob.stdout)
+                        rules_files.append(str(path))
+                if os.environ.get("PLANGRAPH_SCRUB_RULES"):
+                    rules_files.append(os.environ["PLANGRAPH_SCRUB_RULES"])
+                cfg = sc.build_config(words_file=words, rules_files=rules_files)
+        except Exception as exc:
+            print(f"pre-push: bad scrub config: {type(exc).__name__}: push refused",
+                  file=sys.stderr)
+            if isinstance(exc, ValueError) and "word list line" in str(exc):
+                print(f"pre-push: {exc}", file=sys.stderr)
+            return 1
         base = base_commit(remote_sha, local_sha)
         baselines = main_baselines(local_sha)
         changelog_docs_warn(base, local_sha)
@@ -363,37 +398,41 @@ def push_main():
         print(f"pre-push: {len(hits)} scrub hit(s): push refused "
               "(rule ids above; matched values are never shown)", file=sys.stderr)
         return 1
-    root = Path(git_out("rev-parse", "--show-toplevel"))
-    preflight = root / "tools/preflight.py"
     if os.environ.get("PREFLIGHT_SKIP") == "1":
         if all(rec[2].startswith("refs/heads/phase/")
                and len(rec[2]) > len("refs/heads/phase/") for rec in refs):
             print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
                   file=sys.stderr)
-        else:
-            print("pre-push: PREFLIGHT_SKIP=1 is allowed only for refs/heads/phase/* "
-                  "(D-5843): push refused", file=sys.stderr)
-            return 1
-    elif preflight.is_file():
-        # Prune deleted heads too: stale tracking refs cannot vouch for parts.
-        fetched = refresh_origin()
-        for _, local_sha, _, remote_sha in refs:
-            batch_base = (base_commit(remote_sha, local_sha) if is_zero(remote_sha)
-                          else pushed_base_commit(remote_sha, local_sha))
-            env = dict(os.environ, PLANGRAPH_PUSH_RANGE=(
-                f"{batch_base}:{local_sha}" if fetched else ""))
+            return 0
+        print("pre-push: PREFLIGHT_SKIP=1 is allowed only for refs/heads/phase/* "
+              "(D-5843): push refused", file=sys.stderr)
+        return 1
+    # Prune deleted heads too: stale tracking refs cannot vouch for parts.
+    fetched = refresh_origin()
+    for _, local_sha, remote_ref, remote_sha in refs:
+        batch_base = (base_commit(remote_sha, local_sha) if is_zero(remote_sha)
+                      else pushed_base_commit(remote_sha, local_sha))
+        with preflight_checkout(local_sha) as root:
+            preflight = root / "tools/preflight.py"
+            if not preflight.is_file():
+                if remote_ref == "refs/heads/main":
+                    print("pre-push: tools/preflight.py missing: push refused", file=sys.stderr)
+                    return 1
+                continue
             command = [PYTHON, str(preflight),
                        "--base", affected_base_commit(remote_sha, local_sha),
                        "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
+            # Git's hook-local repository variables must not redirect the worktree.
+            local_env = set(git_out("rev-parse", "--local-env-vars").splitlines())
+            env = {key: value for key, value in os.environ.items() if key not in local_env}
+            env["PREFLIGHT_PYTHON"] = PYTHON
+            env["PLANGRAPH_PUSH_RANGE"] = f"{batch_base}:{local_sha}" if fetched else ""
             # Per-check deadlines govern, including the possible INFRA retry.
-            result = subprocess.run(command, env=env)
+            result = subprocess.run(command, cwd=root, env=env)
             if result.returncode:
                 return result.returncode
-    elif any(rec[2] == "refs/heads/main" for rec in refs):
-        print("pre-push: tools/preflight.py missing: push refused", file=sys.stderr)
-        return 1
     return 0
 
 

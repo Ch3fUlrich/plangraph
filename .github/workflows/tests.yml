@@ -113,9 +113,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 3
         with: {fetch-depth: 0}
       - uses: ./.github/actions/setup-rust
+        timeout-minutes: 3
       - uses: actions/cache@v4
+        timeout-minutes: 3
         with:
           path: |
             ~/.cargo/registry
@@ -123,27 +126,41 @@ jobs:
             rust/target
           key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: Build fleet projection helper
-        run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
+        timeout-minutes: 8
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 465
+          command: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
+        timeout-minutes: 3
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       # D-1393: pip wheel cache keyed on the requirements hash.
       - name: Restore pip cache
+        timeout-minutes: 3
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-py3.12-${{ hashFiles('requirements-ci.txt') }}
       - uses: actions/setup-node@v4
+        timeout-minutes: 3
         with: {node-version: "22"}
       - name: Install test deps
-        run: python -m pip install --quiet -r requirements-ci.txt
+        timeout-minutes: 5
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 285
+          command: python -m pip install --quiet -r requirements-ci.txt
       - uses: ./.github/actions/setup-temporal
+        timeout-minutes: 3
       - name: Git identity for tests that commit
+        timeout-minutes: 3
         run: |
           git config --global user.name "plangraph-ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
       - name: Restore verified gitleaks binary
+        timeout-minutes: 3
         id: gitleaks-cache
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
@@ -151,32 +168,37 @@ jobs:
           key: gitleaks-${{ runner.os }}-${{ runner.arch }}-8.30.1
       # D-2557: release checksums or Go sumdb; no hard-coded digest or curl | sh.
       - name: Install gitleaks 8.30.1
+        timeout-minutes: 8
         if: steps.gitleaks-cache.outputs.cache-hit != 'true'
-        run: |
-          set -euo pipefail
-          dir=$(mktemp -d)
-          trap 'rm -rf "$dir"' EXIT
-          if curl -fsSL -o "$dir/gitleaks_8.30.1_linux_x64.tar.gz" --retry 3 --retry-delay 5 \
-              --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
-              https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz && \
-            curl -fsSL -o "$dir/gitleaks_8.30.1_checksums.txt" --retry 3 --retry-delay 5 \
-              --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
-              https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt; then
-            # Missing checksum lines and mismatches fail closed, not into fallback.
-            grep -E "^[0-9a-f]{64}  gitleaks_8\.30\.1_linux_x64\.tar\.gz$" "$dir/gitleaks_8.30.1_checksums.txt" > "$dir/checks.sha256"
-            (cd "$dir" && sha256sum -c checks.sha256)
-            tar -xzf "$dir/gitleaks_8.30.1_linux_x64.tar.gz" -C "$dir" gitleaks
-            "$dir/gitleaks" version | grep -Fx 8.30.1
-          else
-            # Force proxy + public checksum database even if runner defaults differ.
-            GOBIN="$dir" GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
-              GOPRIVATE= GONOSUMDB= GONOPROXY= \
-              go install github.com/zricethezav/gitleaks/v8@v8.30.1
-            go version -m "$dir/gitleaks" | grep -F 'github.com/zricethezav/gitleaks/v8'
-          fi
-          mkdir -p ~/.local/bin
-          install -m 0755 "$dir/gitleaks" ~/.local/bin/gitleaks
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 465
+          command: |
+            set -euo pipefail
+            dir=$(mktemp -d)
+            trap 'rm -rf "$dir"' EXIT
+            if curl -fsSL -o "$dir/gitleaks_8.30.1_linux_x64.tar.gz" --retry 3 --retry-delay 5 \
+                --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
+                https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz && \
+              curl -fsSL -o "$dir/gitleaks_8.30.1_checksums.txt" --retry 3 --retry-delay 5 \
+                --retry-max-time 40 --retry-all-errors --connect-timeout 10 --max-time 20 \
+                https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_checksums.txt; then
+              # Missing checksum lines and mismatches fail closed, not into fallback.
+              grep -E "^[0-9a-f]{64}  gitleaks_8\.30\.1_linux_x64\.tar\.gz$" "$dir/gitleaks_8.30.1_checksums.txt" > "$dir/checks.sha256"
+              (cd "$dir" && sha256sum -c checks.sha256)
+              tar -xzf "$dir/gitleaks_8.30.1_linux_x64.tar.gz" -C "$dir" gitleaks
+              "$dir/gitleaks" version | grep -Fx 8.30.1
+            else
+              # Force proxy + public checksum database even if runner defaults differ.
+              GOBIN="$dir" GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org \
+                GOPRIVATE= GONOSUMDB= GONOPROXY= \
+                go install github.com/zricethezav/gitleaks/v8@v8.30.1
+              go version -m "$dir/gitleaks" | grep -F 'github.com/zricethezav/gitleaks/v8'
+            fi
+            mkdir -p ~/.local/bin
+            install -m 0755 "$dir/gitleaks" ~/.local/bin/gitleaks
       - name: Workflow archive policy
+        timeout-minutes: 3
         if: github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -186,25 +208,32 @@ jobs:
         timeout-minutes: 3
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" > "$RUNNER_TEMP/plan.json"
-          else
-            echo '{"tests": ["tests"]}' > "$RUNNER_TEMP/plan.json"
-          fi
-          python -c 'import json, sys; plan = json.load(open(sys.argv[1])); print(json.dumps(plan), flush=True); sys.exit(0 if plan["tests"] else (print("Empty test selection", file=sys.stderr) or 5))' "$RUNNER_TEMP/plan.json"
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 165
+          command: |
+            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+              python tools/affected_tests.py --base "$BASE_SHA" > "$RUNNER_TEMP/plan.json"
+            else
+              echo '{"tests": ["tests"]}' > "$RUNNER_TEMP/plan.json"
+            fi
+            python -c 'import json, sys; plan = json.load(open(sys.argv[1])); print(json.dumps(plan), flush=True); sys.exit(0 if plan["tests"] else (print("Empty test selection", file=sys.stderr) or 5))' "$RUNNER_TEMP/plan.json"
       - name: pytest
+        timeout-minutes: 15
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --run -n auto --maxfail 10
-          else
-            python -m pytest -q -n auto --dist loadgroup --durations=30 tests
-          fi
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 885
+          command: |
+            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+              python tools/affected_tests.py --base "$BASE_SHA" --run -n auto --maxfail 10
+            else
+              python -m pytest -q -n auto --dist loadgroup --durations=30 tests
+            fi
 
-  # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
-  # committed local assets, so the job never needs network access to a CDN.
+    # UI-BROWSER-TESTS W1: headless Chromium only; CDN scripts are served from
+    # committed local assets, so the job never needs network access to a CDN.
   browser:
     needs: select
     if: needs.select.outputs.browser == 'true'
@@ -212,21 +241,37 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 3
       - name: Set up Python 3.12
+        timeout-minutes: 3
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       - name: Install test deps
-        run: python -m pip install --quiet -r requirements-ci.txt
+        timeout-minutes: 5
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 285
+          command: python -m pip install --quiet -r requirements-ci.txt
       - name: Restore Playwright browser cache
+        timeout-minutes: 3
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('requirements-ci.txt') }}
       - name: Install Chromium
-        run: python -m playwright install --with-deps chromium
+        timeout-minutes: 5
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 285
+          command: python -m playwright install --with-deps chromium
       - name: browser tests
-        run: python -m pytest -q tests/browser -m browser
+        timeout-minutes: 10
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 585
+          command: python -m pytest -q tests/browser -m browser
       - name: Upload screenshots
+        timeout-minutes: 3
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -265,11 +310,15 @@ jobs:
       PG_CONTRACT_ABORT_ON_TIMEOUT: "1"
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 3
         with: {fetch-depth: 0}
       - name: Isolate contract latency output
+        timeout-minutes: 3
         run: echo "PG_CONTRACT_LATENCY_DIR=$(mktemp -d "$RUNNER_TEMP/pg-contract-latency.XXXXXX")" >> "$GITHUB_ENV"
       - uses: ./.github/actions/setup-rust
+        timeout-minutes: 3
       - uses: actions/cache@v4
+        timeout-minutes: 3
         with:
           path: |
             ~/.cargo/registry
@@ -277,55 +326,76 @@ jobs:
             rust/target
           key: rust-${{ runner.os }}-${{ hashFiles('rust/Cargo.lock', 'rust/Cargo.toml') }}
       - name: Build fleet projection helper
-        run: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
+        timeout-minutes: 8
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 465
+          command: cargo build -j 2 --release -p pg-spawnd --manifest-path rust/Cargo.toml
       - name: Set up Python 3.12
+        timeout-minutes: 3
         uses: actions/setup-python@v5
         with: {python-version: "3.12"}
       # D-1393: pip wheel cache keyed on the requirements hash.
       - name: Restore pip cache
+        timeout-minutes: 3
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-py3.12-${{ hashFiles('requirements-ci.txt') }}
       - name: Resolve Postgres service host
+        timeout-minutes: 3
         env:
           PG_PORT: ${{ job.services.postgres.ports['5432'] }}
         # On GitHub-hosted runners the service container is published on localhost.
         run: echo "PG_DSN=postgresql://postgres@localhost:$PG_PORT/keeper" >> "$GITHUB_ENV"
       - name: Install test deps
-        run: python -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
+        timeout-minutes: 5
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 285
+          command: python -m pip install --quiet -r requirements-ci.txt "psycopg[binary]"
       - uses: ./.github/actions/setup-temporal
+        timeout-minutes: 3
       - name: Git identity for tests that commit
+        timeout-minutes: 3
         run: |
           git config --global user.name "plangraph-ci"
           git config --global user.email "ci@example.invalid"
           git config --global init.defaultBranch main
       - name: Check nonempty collection
+        timeout-minutes: 10
         if: matrix.shard == 0
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
-                  | xargs grep -L sqlite3 | tr '\n' ' ')
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
-            PYTEST_SHARD= python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run --collect-only
-          else
-            PYTEST_SHARD= python -m pytest -q --collect-only tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
-          fi
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 585
+          command: |
+            FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
+                    | xargs grep -L sqlite3 | tr '\n' ' ')
+            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+              PYTEST_SHARD= python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run --collect-only
+            else
+              PYTEST_SHARD= python -m pytest -q --collect-only tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
+            fi
       - name: pytest (contract suite + keeper storage tests on Postgres)
+        timeout-minutes: 30
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          # keeper modules that never open the SQLite file directly
-          FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
-                  | xargs grep -L sqlite3 | tr '\n' ' ')
-          if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
-            python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto --maxfail 10
-            exit $?
-          fi
-          # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
-          python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
-            tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 1785
+          command: |
+            # keeper modules that never open the SQLite file directly
+            FILES=$(grep -lE "keeper_util|door_util|plangraph\.keeper|from plangraph import" tests/test_*.py \
+                    | xargs grep -L sqlite3 | tr '\n' ' ')
+            if [ "${{ github.event_name }}" = "pull_request" ] && [ "${{ needs.select.outputs.full }}" != "true" ]; then
+              python tools/affected_tests.py --base "$BASE_SHA" --within tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES --run -n auto --maxfail 10
+              exit $?
+            fi
+            # test_projector_ddl.py names sqlite3 (its SQLite cases) but also carries the Postgres cases
+            python -m pytest -q -n auto --dist loadgroup --durations=30 tests/contract tests/test_keeper_pg_unit.py tests/test_keeper_pg_parity.py tests/test_keeper_pg_copy.py \
+              tests/test_projector_ddl.py tests/test_worker_claim.py tests/test_claim_parity_dispatch.py $FILES
 
   rust:
     needs: select
@@ -406,6 +476,7 @@ jobs:
     defaults:
       run:
         working-directory: rust
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust

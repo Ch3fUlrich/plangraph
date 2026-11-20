@@ -65,10 +65,11 @@ The work mode decides how cards become merged code (routing DECISIONS 3.41, D-59
 `auto` or a manual choice of `piecewise` or `batch`; more modes may follow.
 Implementation is tracked by plangraph:WORK-MODE-S1-CONFIG, WORK-MODE-S2-AUTO,
 WORK-MODE-S3-UI and WORK-MODE-S4-CONSUME under plangraph:WORK-MODE-SETTING.
-The `auto` policy below is the planned WORK-MODE-S2-AUTO behavior, not a shipped selector.
+`pg_worker_core::work_mode_auto::resolve` implements the `auto` policy below;
+`pg-spawnd::placement::route` reports the resolved mode and deciding leg.
 A quota-exhausted strong writer leg does not count as served.
 
-| Mode | Who writes | Reviews | Planned `auto` choice |
+| Mode | Who writes | Reviews | `auto` choice |
 | --- | --- | --- | --- |
 | `piecewise` | low-tier workers, one card each | one or two per card by risk | no strong writer leg is served |
 | `batch` | one strong writer per brief of related cards | writer starts another-family review after fast checks, then fixes | a strong writer leg is served |

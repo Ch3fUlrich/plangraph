@@ -10,7 +10,7 @@ fn merged_review_seats_ignore_native_writers_and_origin_receipts() {
         .env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 import asyncio, json, pathlib, tempfile
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
 from plangraph.spawner.remote_ps import native_receipt
 from plangraph.spawner.overflow import native_spawn
@@ -54,7 +54,11 @@ with tempfile.TemporaryDirectory() as tmp:
     async def check_annotation():
         service = SpawnService(state=root / 'state')
         card = dict(run_kind='native-codex', repo=str(root), item='project:item')
-        with patch('asyncio.create_subprocess_exec', side_effect=OSError('fixture')):
+        probe = AsyncMock()
+        probe.returncode = 0
+        probe.communicate.return_value = (b'{"tool_path":"/fixture","resolved_tools":{}}', b'')
+        with patch('plangraph.fleet_snapshot._projection_binary', return_value='/fixture/pg-spawnd'), \
+             patch('asyncio.create_subprocess_exec', side_effect=[probe, OSError('fixture')]):
             record = await native_spawn(service, card, dict(prompt='brief'))
         assert record['item_key'] == 'project:item', record
         assert service.result(record['run_id'])['item_key'] == 'project:item'

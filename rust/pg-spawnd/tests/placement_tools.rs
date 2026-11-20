@@ -31,6 +31,7 @@ impl Fixture {
             .arg("--state")
             .arg(state.path())
             .env("PLANGRAPH_HOST", host)
+            .env("XDG_CONFIG_HOME", state.path().join("config"))
             .env("PG_SPAWND_ADAPTER", script)
             .env("PG_SPAWND_LAUNCH_CMD", launch)
             .spawn()
@@ -52,12 +53,64 @@ impl Fixture {
     }
 }
 #[test]
+fn unknown_writer_names_survive_the_real_route_adapter() {
+    let state = TempDir::new();
+    let socket = state.path().join("socket");
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+        .args(["serve", "--no-scope", "--socket"])
+        .arg(&socket)
+        .arg("--state")
+        .arg(state.path())
+        .env_remove("PG_SPAWND_ADAPTER")
+        .env("PG_SPAWND_PYTHON", "python3")
+        .env("PYTHONPATH", root.join("src"))
+        .spawn()
+        .unwrap();
+    let _guard = ChildGuard { child };
+    let mut client = McpClient::connect(&socket);
+    client.initialize();
+    let reply = client.request(
+        "tools/call",
+        json!({"name":"plangraph_agent_route", "arguments":{
+            "card":{"estimate_tokens":1000}, "role":"review", "writer_families":["author"]
+        }}),
+    );
+    assert_eq!(reply["error"]["code"], -32000, "{reply}");
+    let message = reply["error"]["message"].as_str().unwrap();
+    for name in ["accepted names:", "codex", "gpt", "deepseek", "anthropic"] {
+        assert!(message.contains(name), "{message}");
+    }
+    assert!(message.chars().count() <= 300);
+}
+#[test]
+fn route_reports_resolved_work_mode_and_reason() {
+    let mut f = Fixture::new(r#"{"legs":[],"work_mode_writer_legs":[]}"#, 0, "");
+    let r = f.call("route", json!({"card":{}}));
+    let row: Value =
+        serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(row["work_mode"], "batch");
+    assert_eq!(row["work_mode_reason"], "manual batch");
+}
+
+#[test]
 fn printed_object_is_unchanged() {
     let printed = r#"{"b":1,"a":2,"f":1e-07}"#;
     for (verb, code) in [("route", 0), ("probe", 0), ("probe", 1)] {
         let mut f = Fixture::new(&format!(" \n{printed}\n "), code, "");
         let r = f.call(verb, json!({"card":{}}));
-        assert_eq!(r["result"]["content"][0]["text"], printed);
+        if verb == "route" {
+            let mut expected: Value = serde_json::from_str(printed).unwrap();
+            expected["work_mode"] = json!("batch");
+            expected["work_mode_reason"] = json!("manual batch");
+            assert_eq!(
+                serde_json::from_str::<Value>(r["result"]["content"][0]["text"].as_str().unwrap())
+                    .unwrap(),
+                expected
+            );
+        } else {
+            assert_eq!(r["result"]["content"][0]["text"], printed);
+        }
     }
 }
 
@@ -91,7 +144,7 @@ fn argv_and_passthrough() {
     let r=f.call("route",json!({"card":{"x":1},"role":"review","writer_families":["a","b"],"review_of":"run-a","require_bench":true,"bench_db":"db"}));
     assert_eq!(
         serde_json::from_str::<Value>(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap(),
-        json!({"ok":false,"plan":1})
+        json!({"ok":false,"plan":1,"work_mode":"batch","work_mode_reason":"manual batch"})
     );
     assert_eq!(std::fs::read_to_string(f.state.path().join("argv")).unwrap(),format!("--state\n{}\nroute\n--card\n{{\"x\":1}}\n--role\nreview\n--writer-family\na\n--writer-family\nb\n--review-of\nrun-a\n--require-bench\n--bench-db\ndb\n--json\n",f.state.path().display()));
     f.call(
@@ -291,7 +344,7 @@ fn spawn_dry_run_and_no_launch() {
     assert_eq!(row, serde_json::from_str::<Value>(&file.unwrap()).unwrap());
     keys(&row, "attempts card_hash chosen_leg cwd ended events exit_code host item_key job_id pid plan prompt_sha256 request_side_model role run_id served_family served_model served_witness_reason started status stderr_tail stdout_tail wait_cmd wake_variant witness_kind writer_family");
     keys(&row["attempts"][0], "leg provider_response request_side_model served_family served_model served_witness_reason skip_reason status stderr_tail stdout_tail witness_kind");
-    keys(&row["plan"], "first_leg legs");
+    keys(&row["plan"], "first_leg legs work_mode work_mode_reason");
     for leg in [
         &row["chosen_leg"],
         &row["plan"]["first_leg"],
@@ -301,7 +354,10 @@ fn spawn_dry_run_and_no_launch() {
     }
     assert_eq!(row["status"], "dry_run");
     assert!(row["ended"].is_number());
-    assert_eq!(row["plan"], plan);
+    let mut expected_plan = plan.clone();
+    expected_plan["work_mode"] = json!("batch");
+    expected_plan["work_mode_reason"] = json!("manual batch");
+    assert_eq!(row["plan"], expected_plan);
     assert_eq!(row["chosen_leg"], plan["first_leg"]);
     assert_eq!(row["role"], "implement");
     assert_eq!(row["exit_code"], 0);
@@ -389,5 +445,50 @@ fn findings_python_truthiness() {
             json!({"prompt":"p","card":{"findings":findings},"role":role,"dry_run":true}),
         );
         assert_eq!(r.get("error").is_some(), refused, "{r}");
+    }
+}
+
+#[test]
+fn auto_route_uses_writer_snapshot_for_every_role_and_manual_bypasses_it() {
+    for (served, score, unavailable, expected) in [
+        (true, json!(50.0), Value::Null, "batch"),
+        (false, json!(60.0), json!("limited"), "piecewise"),
+        (true, json!(49.9), Value::Null, "piecewise"),
+    ] {
+        for role in ["implement", "review", "orchestrate"] {
+            let plan = json!({"legs":[{"id":"review-only-strong"}], "work_mode_writer_legs":[{
+                "id":"writer-decides", "aa_intelligence":score, "served":served, "unavailable_reason":unavailable
+            }]});
+            let mut f = Fixture::new(&plan.to_string(), 0, "");
+            let config = f.state.path().join(".plangraph");
+            std::fs::create_dir(&config).unwrap();
+            for mode in ["auto", "piecewise", "batch"] {
+                std::fs::write(
+                    config.join("work-mode.json"),
+                    json!({"work_mode":mode}).to_string(),
+                )
+                .unwrap();
+                let reply = f.call("route", json!({"role":role, "writer_families":["openai"], "card":{"repo":f.state.path()}}));
+                let row: Value =
+                    serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap())
+                        .unwrap();
+                assert_eq!(
+                    row["work_mode"],
+                    if mode == "auto" { expected } else { mode }
+                );
+                let reason = row["work_mode_reason"].as_str().unwrap();
+                assert!(
+                    reason.contains(if mode == "auto" {
+                        "writer-decides"
+                    } else {
+                        "manual"
+                    }),
+                    "{row}"
+                );
+                assert!(row.get("work_mode_writer_legs").is_none());
+                let argv = std::fs::read_to_string(f.state.path().join("argv")).unwrap();
+                assert_eq!(argv.contains("--writer-snapshot"), mode == "auto");
+            }
+        }
     }
 }

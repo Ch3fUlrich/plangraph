@@ -9,6 +9,7 @@ from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 import json
 import math
+import os
 from pathlib import Path
 import re
 import statistics
@@ -265,7 +266,12 @@ def parser():
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if "--census" in arguments:
+        manifest = Path(__file__).resolve().parents[1] / "rust/Cargo.toml"
+        os.execvp("cargo", ["cargo", "run", "--quiet", "--locked", "--manifest-path",
+                            str(manifest), "-p", "pg-usage", "--", *arguments])
+    args = parser().parse_args(arguments)
     stats = dict(malformed_lines=0, empty_files=0, unreadable_files=0)
     try:
         policy = load_json(Path(__file__).with_name("claude_usage_policy.json"))

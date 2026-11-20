@@ -11,8 +11,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 fn git(repo: &Path, args: &[&str]) -> String {
-    let out = Command::new("git")
-        .current_dir(repo)
+    let out = pg_worker_core::git_test_support::command(repo)
         .args([
             "-c",
             "user.name=Fixture",

@@ -33,3 +33,79 @@ impl std::ops::DerefMut for CardInput {
         &mut self.legacy
     }
 }
+
+/// Identity in the scheduled history, before any run-carrying worker verb.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProjectorInput {
+    #[serde(flatten)]
+    pub legacy: crate::attempt::AttemptInput,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+}
+
+impl std::ops::Deref for ProjectorInput {
+    type Target = crate::attempt::AttemptInput;
+    fn deref(&self) -> &Self::Target {
+        &self.legacy
+    }
+}
+
+pub(crate) fn projector_input(
+    ctx: &temporalio_sdk::WorkflowContext<crate::workflow::Card>,
+    legacy: crate::attempt::AttemptInput,
+) -> ProjectorInput {
+    projector_input_enabled(
+        ctx.patched("projector-run-ids-v1"),
+        legacy,
+        ctx.workflow_id(),
+        ctx.run_id(),
+    )
+}
+
+fn projector_input_enabled(
+    enabled: bool,
+    legacy: crate::attempt::AttemptInput,
+    workflow_id: &str,
+    run_id: &str,
+) -> ProjectorInput {
+    ProjectorInput {
+        workflow_id: enabled.then(|| workflow_id.to_owned()),
+        run_id: enabled.then(|| run_id.to_owned()),
+        attempt: enabled.then_some(legacy.n),
+        legacy,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn projector_input_roundtrips_identity_and_legacy_history() {
+        let json = serde_json::json!({"claim": {"card":"demo:A", "repo":"repo",
+            "base_sha":"abc", "check_cmd":"true", "allow":[], "forbid":[], "prompt":"work"},
+            "n":3, "leg":{"id":"leg", "tier":"free", "model":"model"},
+            "workroot":"work", "class":"128k"});
+        let mut input: ProjectorInput = serde_json::from_value(json).unwrap();
+        assert_eq!(input.workflow_id, None);
+        assert_eq!(input.run_id, None);
+        assert_eq!(input.attempt, None);
+        let disabled = projector_input_enabled(false, input.legacy.clone(), "card:demo:A", "R2");
+        assert_eq!(
+            serde_json::to_value(disabled).unwrap(),
+            serde_json::to_value(&input.legacy).unwrap()
+        );
+        input = projector_input_enabled(true, input.legacy, "card:demo:A", "R2");
+        let value = serde_json::to_value(&input).unwrap();
+        assert_eq!(value["workflow_id"], "card:demo:A");
+        assert_eq!(value["run_id"], "R2");
+        assert_eq!(value["attempt"], 3);
+        assert_eq!(
+            serde_json::from_value::<ProjectorInput>(value).unwrap(),
+            input
+        );
+    }
+}

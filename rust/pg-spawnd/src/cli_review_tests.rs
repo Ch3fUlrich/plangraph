@@ -3,8 +3,7 @@ use pg_worker_core::run::record::new_run_id;
 use std::process::Command;
 
 pub(super) fn git_ok(dir: &Path, args: &[&str]) {
-    assert!(Command::new("git")
-        .current_dir(dir)
+    assert!(pg_worker_core::git_test_support::command(dir)
         .args(args)
         .status()
         .unwrap()
@@ -310,7 +309,7 @@ fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind
     // CI may have no fetchable default branch in its detached source checkout.
     // Give the fixture its own local origin, pinned to the revision under test.
     let origin = dir.path().join("origin.git");
-    assert!(Command::new("git")
+    assert!(pg_worker_core::git_test_support::command(dir.path())
         .args(["clone", "-q", "--bare", "--shared"])
         .arg(&root)
         .arg(&origin)
@@ -320,7 +319,7 @@ fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind
     git_ok(&origin, &["update-ref", "refs/heads/main", "HEAD"]);
     git_ok(&origin, &["symbolic-ref", "HEAD", "refs/heads/main"]);
     let checkout = dir.path().join("checkout");
-    assert!(Command::new("git")
+    assert!(pg_worker_core::git_test_support::command(dir.path())
         .args(["clone", "-q", "--shared"])
         .arg(&origin)
         .arg(&checkout)
@@ -338,7 +337,7 @@ from plangraph.spawner.service import SpawnService
 from plangraph.spawner.mcp import MCPSpawnerServer, ParameterRefused, TOOLS_METADATA
 state = str(Path(sys.argv[1]).resolve())
 request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=True,
-    leg=dict(id='claude-sonnet-5-5-high'), prompt='review', card=dict(estimate_tokens=1000), cwd=str(Path.cwd()), state=state)
+    leg=dict(id='claude-sonnet-5-5-high'), prompt='review', writer_families=['openai'], card=dict(estimate_tokens=1000), cwd=str(Path.cwd()), state=state)
 argv = build(request)['argv']
 assert argv[0] == 'claude', argv
 assert argv[argv.index('--model')+1] == 'claude-sonnet-5-5', argv

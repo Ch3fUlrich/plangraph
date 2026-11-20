@@ -4,11 +4,23 @@ use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
+    io::{BufRead, BufReader, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     time::Duration,
 };
+
+const WRITER_MODEL: &str = "gpt-6.1-sol";
+const WRITER_EFFORT: &str = "medium";
+/// Model and effort flags for the codex invocation; the ledger row records the same constants.
+fn model_args() -> [String; 4] {
+    [
+        "-m".into(),
+        WRITER_MODEL.into(),
+        "-c".into(),
+        format!("model_reasoning_effort={WRITER_EFFORT}"),
+    ]
+}
 
 struct Host {
     repo: PathBuf,
@@ -17,6 +29,7 @@ struct Host {
     reviews: PathBuf,
     record_path: PathBuf,
     base_ref: String,
+    tool_path: String,
 }
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
@@ -29,8 +42,67 @@ fn output(command: &mut Command) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())
 }
 impl Host {
+    fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
+        let mut command = Command::new(program);
+        command.env("PATH", &self.tool_path);
+        command
+    }
     fn git(&self, args: &[&str]) -> Result<String, String> {
-        output(Command::new("git").arg("-C").arg(&self.cwd).args(args))
+        output(self.command("git").arg("-C").arg(&self.cwd).args(args))
+    }
+    fn ledger_row(&self, record: &Value) -> Result<Value, String> {
+        let directory = self
+            .record_path
+            .parent()
+            .ok_or("record directory missing")?;
+        let log = match fs::read_to_string(directory.join("native.log")) {
+            Ok(log) => log,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e.to_string()),
+        };
+        let item = record["item_key"].as_str();
+        let mut lines = Value::Null;
+        let mut done = item.map(|_| 0);
+        if let (Some(base), Some(head)) =
+            (record["base_sha"].as_str(), record["final_head"].as_str())
+        {
+            let stat = self.git(&["diff", "--numstat", base, head, "--"])?;
+            let mut total = 0u64;
+            for line in stat.lines() {
+                for count in line.split('\t').take(2) {
+                    if count != "-" {
+                        total = total
+                            .checked_add(count.parse::<u64>().map_err(|e| e.to_string())?)
+                            .ok_or("changed lines overflow")?;
+                    }
+                }
+            }
+            lines = json!(total);
+            if record["exit_code"] == 0 {
+                let trailers = self.git(&[
+                    "log",
+                    "--format=%(trailers:key=Plan-Item,valueonly)",
+                    &format!("{base}..{head}"),
+                    "--",
+                ])?;
+                done = item.map(|key| u64::from(trailers.lines().any(|line| line.trim() == key)));
+            }
+        }
+        let wall = record["ended"]
+            .as_f64()
+            .zip(record["started"].as_f64())
+            .filter(|(end, start)| end >= start)
+            .map(|(end, start)| (end - start) / 60.0);
+        let accepted = record["review"]["verdict"] == "ACCEPT";
+        Ok(
+            json!({"schema_version":1,"kind":"writer","run_id":record["run_id"],
+            "host":record["host"],"model":WRITER_MODEL,"effort":WRITER_EFFORT,
+            "started":record["started"],"ended":record["ended"],"exit_code":record["exit_code"],
+            "item_key":record["item_key"],"items_given":item.map(|_| 1),"items_done":done,
+            "changed_lines":lines,"wall_minutes":wall,"tokens":crate::writer_ledger::tokens(&log)?,
+            "review_rounds":record["review_rounds"],
+            "high_held":accepted.then_some(0),"med_held":accepted.then_some(0)}),
+        )
     }
     fn free(&self) -> Result<u64, String> {
         // State and repository may be on different filesystems. Probe the worktree's
@@ -39,7 +111,7 @@ impl Host {
         while !path.exists() {
             path = path.parent().ok_or("worktree filesystem unavailable")?;
         }
-        let text = output(Command::new("df").args(["-Pk", "--"]).arg(path))?;
+        let text = output(self.command("df").args(["-Pk", "--"]).arg(path))?;
         text.lines()
             .last()
             .and_then(|l| l.split_whitespace().nth(3))
@@ -57,14 +129,14 @@ impl Driver for Host {
             return Err("base_ref must name a pushed refs/heads/ or refs/tags/ ref".into());
         }
         output(
-            Command::new("git")
+            self.command("git")
                 .arg("-C")
                 .arg(&self.repo)
                 .args(["check-ref-format", &self.base_ref]),
         )?;
         // Pin the pushed ref in a per-run namespace: parallel fetches cannot change this base.
         let pin = format!("refs/plangraph/native/{}/base", self.run_id);
-        output(Command::new("git").arg("-C").arg(&self.repo).args([
+        output(self.command("git").arg("-C").arg(&self.repo).args([
             "fetch",
             "--no-write-fetch-head",
             "origin",
@@ -72,12 +144,12 @@ impl Driver for Host {
             "+refs/heads/main:refs/remotes/origin/main",
         ]))?;
         let base = output(
-            Command::new("git")
+            self.command("git")
                 .arg("-C")
                 .arg(&self.repo)
                 .args(["rev-parse", &format!("{pin}^{{commit}}")]),
         )?;
-        output(Command::new("git").arg("-C").arg(&self.repo).args([
+        output(self.command("git").arg("-C").arg(&self.repo).args([
             "merge-base",
             "--is-ancestor",
             "refs/remotes/origin/main",
@@ -87,7 +159,7 @@ impl Driver for Host {
         fs::create_dir_all(self.cwd.parent().ok_or("worktree parent missing")?)
             .map_err(|e| e.to_string())?;
         output(
-            Command::new("git")
+            self.command("git")
                 .arg("-C")
                 .arg(&self.repo)
                 .args(["worktree", "add", "--detach"])
@@ -97,11 +169,19 @@ impl Driver for Host {
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
         Ok(base)
     }
+    fn refresh_base(&mut self) -> Result<String, String> {
+        self.git(&[
+            "fetch",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ])?;
+        // Preserve writer commits and dirty files: conflicts fail closed for the orchestrator.
+        self.git(&["merge", "--no-edit", "origin/main"])?;
+        self.git(&["rev-parse", "origin/main"])
+    }
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
-        let codex = crate::native_writer_tool::resolve(
-            &std::env::var_os("PATH").unwrap_or_default(),
-            &self.cwd,
-        )?;
+        // The caller PATH recorded at admission selects Codex for every launch and resume.
+        let codex = crate::native_writer_tool::resolve(self.tool_path.as_ref(), &self.cwd)?;
         let directory = self
             .record_path
             .parent()
@@ -112,7 +192,8 @@ impl Driver for Host {
             .append(true)
             .open(&log_path)
             .map_err(|e| e.to_string())?;
-        let mut command = Command::new(codex);
+        let log_start = log.metadata().map_err(|e| e.to_string())?.len();
+        let mut command = self.command(codex);
         command.arg("exec");
         if let Some(id) = session {
             command.args(["resume", id]);
@@ -125,12 +206,9 @@ impl Driver for Host {
                     .remove(0),
             )
             .env("CARGO_INCREMENTAL", "0")
+            .args(["--json"])
+            .args(model_args())
             .args([
-                "--json",
-                "-m",
-                "gpt-6.1-sol",
-                "-c",
-                "model_reasoning_effort=medium",
                 "-c",
                 "approval_policy=never",
                 "-c",
@@ -169,17 +247,27 @@ impl Driver for Host {
                 }
                 std::thread::sleep(Duration::from_secs(1));
             }
-            if let Some(id) = session {
-                return Ok(id.into());
+            let mut log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
+            log.seek(SeekFrom::Start(log_start))
+                .map_err(|e| e.to_string())?;
+            let mut completed = false;
+            let mut thread_id = session.map(str::to_owned);
+            for line in BufReader::new(log).lines() {
+                let line = line.map_err(|e| e.to_string())?;
+                let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if event["type"] == "turn.completed" {
+                    completed = true;
+                }
+                if event["type"] == "thread.started" {
+                    thread_id = event["thread_id"].as_str().map(str::to_owned);
+                }
             }
-            let log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
-            BufReader::new(log.take(1024 * 1024))
-                .lines()
-                .map_while(Result::ok)
-                .filter_map(|line| serde_json::from_str::<Value>(&line).ok())
-                .find(|event| event["type"] == "thread.started")
-                .and_then(|event| event["thread_id"].as_str().map(str::to_owned))
-                .ok_or_else(|| "codex did not report a session id".into())
+            if !completed {
+                return Err("codex ended without a result line".into());
+            }
+            thread_id.ok_or_else(|| "codex did not report a session id".into())
         })();
         if result.is_err() {
             #[cfg(unix)]
@@ -214,7 +302,7 @@ impl Driver for Host {
         ] {
             let path = self.cwd.join("tools").join(gate);
             output(
-                Command::new(if cfg!(windows) { "python" } else { "python3" })
+                self.command(if cfg!(windows) { "python" } else { "python3" })
                     .arg(path)
                     .current_dir(&self.cwd),
             )?;
@@ -225,8 +313,24 @@ impl Driver for Host {
         let mut record = record.clone();
         record["cwd"] = json!(self.cwd);
         record["review_dir"] = json!(self.reviews);
+        let ledger = if record["ended"].is_number() {
+            self.ledger_row(&record).and_then(|row| {
+                crate::writer_ledger::append(
+                    self.record_path
+                        .parent()
+                        .ok_or("record directory missing")?,
+                    &row,
+                )
+            })
+        } else {
+            Ok(())
+        };
+        if let Err(error) = &ledger {
+            record["ledger_error"] = json!(error);
+        }
         atomic_write_private(&self.record_path, record.to_string().as_bytes())
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        ledger
     }
 }
 pub(crate) fn find_review(
@@ -322,7 +426,12 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         reviews,
         record_path,
         base_ref: record["base_ref"].as_str().unwrap_or("").into(),
+        tool_path: record["tool_path"]
+            .as_str()
+            .ok_or("tool PATH missing")?
+            .into(),
     };
+    record["cwd"] = json!(host.cwd);
     host.save(&record)?;
     native_writer::run(
         &mut host,

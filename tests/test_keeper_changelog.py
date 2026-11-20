@@ -7,6 +7,7 @@ accepted; a reader without a project scope refused; HTTP/CLI doors dropping the 
 """
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -55,7 +56,13 @@ def test_full_log_lists_every_kind_in_seq_order(w):
     assert types.count("created") == 4
     for kind in ("closed", "answered", "cancelled", "restart"):
         assert types.count(kind) == 1, kind
-    assert data["head_seq"] == seqs[-1]                  # the cancel is the last event
+    # The cancel is the last listed entry; it is followed by one unlisted
+    # ``item_defined`` on goal G recording the drop of its edge to X.
+    assert data["head_seq"] == seqs[-1] + 1
+    last = w.conn.execute("SELECT key,type,payload FROM events WHERE seq=?",
+                          (data["head_seq"],)).fetchone()
+    assert (last["key"], last["type"]) == ("demo:G", "item_defined")
+    assert json.loads(last["payload"])["dropped_cancelled_dependency"] == "demo:X"
 
 
 def test_text_is_stable_and_has_the_expected_lines(w):

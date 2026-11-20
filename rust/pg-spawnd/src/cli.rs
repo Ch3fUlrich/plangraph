@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|health|agents-view|check-manage-key> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|health|agents-view|ledger-report|check-manage-key> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -113,6 +113,10 @@ pub(crate) fn execute(
         return writeln!(out, "{}", crate::fleet_snapshot::run()?)
             .map_err(|_| "fleet output failed".into());
     }
+    if first.as_deref() == Some("native-tools") && args.len() == 0 {
+        return writeln!(out, "{}", crate::native_writer_tools::snapshot()?)
+            .map_err(|e| e.to_string());
+    }
     if first.as_deref() == Some("doctor-sources") && args.len() == 0 {
         return writeln!(
             out,
@@ -127,6 +131,9 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
+    if verb.as_deref() == Some("ledger-report") {
+        return crate::writer_ledger::report(rest, out);
+    }
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);
     }

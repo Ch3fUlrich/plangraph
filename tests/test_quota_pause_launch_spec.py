@@ -10,9 +10,9 @@ from plangraph.spawner import launch_spec as spec
 @pytest.fixture
 def build_case(tmp_path, monkeypatch):
     leg = SimpleNamespace(id='claude-test', model='claude-test', roles=('review',),
-                          disabled=None, valid_until=None, harness='test')
+                          disabled=None, valid_until=None, harness='test', family='anthropic')
     monkeypatch.setattr(spec, 'DEFAULT_LEGS', (leg,))
-    request = dict(run_id='run-' + 'a' * 32, job_id='test', role='review',
+    request = dict(run_id='run-' + 'a' * 32, job_id='test', role='review', writer_families=['openai'],
                    dry_run=True, leg={'id': leg.id}, prompt='test', card={},
                    cwd=str(tmp_path), state=str(tmp_path))
     service_calls = Mock()

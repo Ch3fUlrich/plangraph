@@ -25,10 +25,11 @@ def test_windows_native_command(tmp_path, monkeypatch, win_src):
     assert remote_ps.configured_hosts() == [host]
     original = subprocess.Popen
 
+    win_src = win_src.replace('/', chr(92))
     def run(argv, **kwargs):
         assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
                         '--', 'target',
-                        f'if not exist "{win_src}\\" exit /b 44 & '
+                        f'(if not exist "{win_src}\\" exit /b 44) & '
                         f'set "PYTHONPATH={win_src}"&& python -m plangraph.spawner.remote_ps']
         assert kwargs['stdin'] == subprocess.DEVNULL
         assert kwargs['stdout'] == subprocess.PIPE
@@ -65,3 +66,17 @@ def test_invalid_windows_source_never_reaches_ssh(tmp_path, monkeypatch, win_src
 def test_windows_source_excludes_posix_and_wsl(tmp_path, monkeypatch, other):
     configure(tmp_path, monkeypatch, win_src='C:/opt/plangraph/src', **other)
     assert remote_ps.configured_hosts() == [dict(name='invalid-config', invalid=True)]
+
+
+def test_ws_build_exact_windows_ssh_command(monkeypatch):
+    original = subprocess.Popen
+    def ssh(argv, **kwargs):
+        assert argv == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
+                        '--', 'ws-build',
+                        '(if not exist "C:\\source space\\plangraph\\src\\" exit /b 44) & '
+                        'set "PYTHONPATH=C:\\source space\\plangraph\\src"&& '
+                        'python -m plangraph.spawner.remote_ps']
+        return original([sys.executable, '-c', 'print(\'{"runs": []}\')'], **kwargs)
+    monkeypatch.setattr(subprocess, 'Popen', ssh)
+    assert json.loads(remote_ps.query_host(dict(target='ws-build',
+        win_src='C:/source space/plangraph/src'), 2)) == {'runs': []}

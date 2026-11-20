@@ -5,7 +5,10 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 fn python(source: &str) {
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let fixture = tempfile::tempdir().unwrap();
+    let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+    pg_worker_core::git_test_support::configure(&mut command, fixture.path());
+    let output = command
         .args(["-c", source])
         .current_dir(root())
         .output()

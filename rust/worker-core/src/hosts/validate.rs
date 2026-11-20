@@ -217,7 +217,7 @@ pub(super) fn outside(value: &str, base: &str, os: Os) -> bool {
 }
 
 /// Resolve symlinked ancestors even when the final path has not been created.
-fn canonicalize_prefix(path: &str) -> Option<std::path::PathBuf> {
+pub(crate) fn canonicalize_prefix(path: &str) -> Option<std::path::PathBuf> {
     let mut prefix = Path::new(path);
     let mut tail = Vec::new();
     loop {

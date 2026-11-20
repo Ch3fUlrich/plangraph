@@ -102,13 +102,14 @@ def full_path(root, rel):
     return os.path.join(root, *rel.split("/"))
 
 
-def read_allow(path):
+def read_allow(path, text=None):
     """``(allowed, errors)`` - `path reason` per line; a reason is mandatory."""
     allowed, errors = set(), []
-    if not os.path.isfile(path):
-        return allowed, errors
-    with open(path, encoding="utf-8", errors="replace") as handle:
-        text = handle.read()
+    if text is None:
+        if not os.path.isfile(path):
+            return allowed, errors
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -309,9 +310,30 @@ def main(argv=None):
     ap.add_argument("--head", help="measure this revision instead of the checkout")
     args = ap.parse_args(argv)
 
+    if args.head and args.update_baseline:
+        ap.error("--head cannot be combined with --update-baseline")
     root = git_toplevel()
-    allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME))
-    counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
+    if args.head:
+        # Resolve once so policy and measured blobs always belong to one tree.
+        revision = git(root, "rev-parse", "--verify", args.head + "^{tree}")
+        if revision.returncode:
+            ap.error("--head does not resolve to a tree")
+        tree = revision.stdout.strip()
+        def config_text(name):
+            entry = git(root, "ls-tree", tree, "--", name)
+            if entry.returncode:
+                raise SystemExit("check-file-size: cannot read tree config")
+            if not entry.stdout:
+                return ""
+            blob = git(root, "show", f"{tree}:{name}")
+            if blob.returncode:
+                raise SystemExit("check-file-size: cannot read config blob")
+            return blob.stdout
+        allowed, allow_errors = read_allow(None, text=config_text(ALLOW_NAME))
+        counts, base_errors = parse_baseline(config_text(BASELINE_NAME), BASELINE_NAME)
+    else:
+        allowed, allow_errors = read_allow(full_path(root, ALLOW_NAME))
+        counts, base_errors = read_baseline(full_path(root, BASELINE_NAME))
     measured, binaries = measure(root, allowed, args.head)
     required = os.environ.get(REQUIRE_BASE_ENV, "")
     if required:
@@ -327,7 +349,7 @@ def main(argv=None):
                   "compare the change with itself" % (REQUIRE_BASE_ENV, required))
             return 1
     ref_counts, ref_errors, ref_origin = reference_baseline(
-        root, (required,) if required else REFERENCE_REFS)
+        root, (required,) if required else ("origin/main", args.head or "HEAD"))
     if required and ref_origin is None and counts:
         print("check-file-size: %s=%s carries no %s - nothing to ratchet "
               "the checked-in one against" % (REQUIRE_BASE_ENV, required,

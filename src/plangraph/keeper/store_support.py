@@ -90,6 +90,7 @@ class SupportMixin:
             semaphore=self._adapter("semaphore"),
             decisions=self._adapter("decisions"),
             spawner_records=self._adapter("spawner_records"),
+            claude_projects_dir=self._adapter("claude_projects_dir"),
             now=now,
             claim_time=self._claim_time(item),
             bind_floor_sha=floor_sha,
@@ -231,7 +232,9 @@ class SupportMixin:
                 or not isinstance(ref.get("id"), str)
                 or not ref["id"].strip()):
             raise Refused("validation", "decision ref requires a non-empty string id")
-        if self._batch is not None:
+        if kind == "claude-seat":
+            item = dict(item, _seat_writer_families=sorted(self._merged_writer_families(item, now)))
+        if self._batch is not None and kind != "claude-seat":
             done = self._batch.verified(item, kind, ref)
             if done is not None:
                 return done

@@ -59,7 +59,7 @@ def test_recorded_refusal_books_and_runs_next_leg(tmp_path, monkeypatch, stream,
     service = SpawnService(runner, state=tmp_path, leg_reader=store)
     monkeypatch.setattr('plangraph.spawner.context_pack.annotate', lambda *a: None)
     monkeypatch.setattr(service, '_leg_prompt', lambda *a, **kw: 'review')
-    record = asyncio.run(service._spawn(card={'title': 'synthetic'}, role='review',
+    record = asyncio.run(service._spawn(card={'title': 'synthetic'}, role='review', writer_families=['openai'],
         wait_seconds=None, _plan=SpawnPlan(legs, (), 'test', (), ())))
     if terminal:
         assert calls == ['first']

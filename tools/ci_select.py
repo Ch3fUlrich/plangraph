@@ -33,6 +33,7 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
 RUST_INPUTS: tuple[str, ...] = (
+    "pyproject.toml",  # pg-mainff verifies the keeper console-entry inventory.
     "src/plangraph/catalog_data.py",
     "src/plangraph/routing_errors.py",
     "deploy/feeder/**",
@@ -52,6 +53,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_support/resolver.py",
     "configuration/opencode/providers.json",
     ".github/workflows/**",
+    # rust/pg-spawnd/tests/ci_step_timeout.rs reads the bounded-step run script.
+    ".github/actions/bounded-step/action.yml",
     "rust-toolchain.toml",
     ".docs-map",
     ".gitignore",
@@ -95,6 +98,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "tools/check_file_size.py",
     "tools/check_new_code_lang.py",
     "tools/ci_select.py",
+    "tools/claude_usage_policy.json",
     "tools/ci_commit_gate.py",
     "tools/check_push_gate.py",
     "tools/merge_batch_util.py",

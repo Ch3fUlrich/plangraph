@@ -1,0 +1,24 @@
+name: Bounded CI step
+description: Bound Linux commands without letting escaped descendants retain the step output pipe
+inputs:
+  command:
+    description: Bash commands, with the same fail-fast and pipefail behavior as a run step
+    required: true
+  seconds:
+    description: Command deadline, below the caller's step timeout
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        CI_STEP_COMMAND: ${{ inputs.command }}
+        CI_STEP_SECONDS: ${{ inputs.seconds }}
+      run: |
+        log=$(mktemp "$RUNNER_TEMP/ci-step.XXXXXX.log")
+        echo "CI step log: $log"
+        status=0
+        timeout -k 1s "$CI_STEP_SECONDS" bash -euo pipefail -c "$CI_STEP_COMMAND" > "$log" 2>&1 || status=$?
+        cat "$log"
+        echo "CI step exit status: $status"
+        exit "$status"

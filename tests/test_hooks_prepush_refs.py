@@ -476,9 +476,11 @@ def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref, allowe
 
 def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
     r, base = repo
-    clean_head = commit_file(r, "app/clean_change.py", "clean = 1\n")
     marker = tmp_path / "preflight-ran"
     env = _install_marker_preflight(r, marker)
+    # Preflight runs from each pushed head's tree, so the marker script is committed.
+    commit_file(r, "tools/preflight.py", (r / "tools/preflight.py").read_text())
+    clean_head = commit_file(r, "app/clean_change.py", "clean = 1\n")
     # Mixed batch (phase + non-phase) refuses PREFLIGHT_SKIP=1 with D-5843.
     mixed = run_hook(
         r,
