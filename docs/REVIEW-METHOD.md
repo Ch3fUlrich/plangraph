@@ -2,7 +2,7 @@
 
 Review policy lives in `plangraph.settings`, never in the keeper database.
 Defaults: `mode = "batch"`, seats `{standard: 1, high: 2}`,
-`distinct_families = true`, `family_source = "D-1704"`, `max_rounds = 3`
+`distinct_families = true`, `family_source = "D-1704"`, `max_rounds = 8` (the ceiling of the writer round stop rule, owned by `rust/pg-spawnd/src/round_progress.rs`)
 and `fixer_split_threshold = 10`.
 The threshold controls connected-finding splitting; indivisible components may
 exceed it. This setting does not add seat-count admission checks.

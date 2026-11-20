@@ -82,7 +82,7 @@ def test_event_count_per_verb(kp):
     need(kp, "decisions")
     tag = uid()
     start = head(kp)[0]
-    items = [{"project": "demo", "id": f"{n}-{tag}", "kind": k, "title": f"{n} {tag}",
+    items = [{"project": "demo", "id": f"{n}-{tag}", "kind": k, "title": f"{n} {tag}", "done_criteria": "c",
               "depends_on": [] if n == "A" else [f"A-{tag}"], "evidence_kinds": ["any"]}
              for n, k in (("A", "lane"), ("G", "goal"))]
     ok(kp.post("create_items", "router", {"items": items}))

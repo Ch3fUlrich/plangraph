@@ -252,6 +252,11 @@ def alerts_text(alerts: dict) -> str:
         lines.append(f"warning {row['code']} {row['key']}")
     if alerts.get("stalled"):
         lines.append("stalled true")
+    hist = alerts.get("history") or {}
+    if hist.get("findings") or hist.get("refusal_keys"):
+        lines.append(f"history findings {hist.get('findings', 0)} "
+                     f"refusal_keys {hist.get('refusal_keys', 0)} "
+                     f"(older than {hist.get('window_s')}s or on closed items)")
     return "\n".join(lines) if lines else "no alerts"
 
 

@@ -4,7 +4,7 @@ from contract_world import claim, err, make_plan, ok, show, uid
 
 def _item(tag, name="A", kind="lane", deps=(), project="demo", **extra):
     base = {"project": project, "id": f"{name}-{tag}", "kind": kind, "title": f"{name} {tag}",
-            "description": "d", "depends_on": list(deps)}
+            "description": "d", "done_criteria": "c", "depends_on": list(deps)}
     base.update(extra)
     return base
 

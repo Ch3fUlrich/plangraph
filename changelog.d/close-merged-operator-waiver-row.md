@@ -1,0 +1,1 @@
+`close-merged KEY D-W --waive-seats D-W` accepts an OPERATOR `Waiver: merged-without-witnesses` row as the decision for merged items without a GO row or a PR number per commit; it is a dry run until `--apply`.
