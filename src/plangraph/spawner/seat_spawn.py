@@ -200,14 +200,20 @@ def _no_hosts_hint(config):
     return {'hint': 'overflow-hosts.json is absent or lists no host: run `python3 -m plangraph.fleet_sync genconfig write` '
                     'so a review without local room can be placed on another host'}
 
-def _open_queue(service, role, decision, window):
-    """The queued record of a spawn waiting for room; its owner is this process."""
+def _open_queue(service, role, decision, window, host=None, card=None):
+    """The queued record of a spawn waiting for room; its owner is this process.
+
+    It carries the placing host and the card's item identity, as every other run record does."""
     from .proc_kill import _stat
     now = time.time()
     record = {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'queued', 'role': role or 'implement',
               'reason': decision.reason, 'overflow_reason': decision.reason, 'started': now,
               'queued_until': now + window, 'owner_pid': os.getpid(),
               'owner_pid_start': (_stat(os.getpid()) or (None,) * 5)[4]}
+    if host:
+        record['host'] = host
+    from .item_key import annotate_item
+    annotate_item(record, card)
     service._save(record)
     return record
 
@@ -307,7 +313,7 @@ def admit(service, options, *, card=None, preview=False):
                 return None
         if decision.host is None:
             if window > 0 and queued is None:
-                queued = _open_queue(service, role, decision, window)
+                queued = _open_queue(service, role, decision, window, local, card)
             if queued is not None:
                 outcome = _queue_status(service, queued)
                 if outcome != 'queued':   # cancelled (or ended) by someone else while it waited
