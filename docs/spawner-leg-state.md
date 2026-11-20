@@ -29,8 +29,13 @@ seconds/date, and body “resets in N seconds/minutes/hours” give an explicit 
 At that reset the leg is eligible automatically. Without reset information the
 leg is limited for ten minutes then eligible with `reprobe` evidence until a
 real successful provider response clears it. Queries never update the database.
-Failure evidence expires to `reprobe` after six hours, even when its booked reset is later;
-expired probe failures cannot complete a fresh down streak.
+Provider-stated resets (`reset_at` parsed from headers or response/stderr text)
+are booked and honoured uncapped until `reset_at` (including 49 h `opencode-go`
+and 97–135 h `agy` resets); flat `down_s` fallbacks remain capped at 24 hours,
+and liveness-probe or unparsed failure evidence still expires to `reprobe` after
+six hours (24 hours for `agy` probe failures). Expired probe failures cannot
+complete a fresh down streak, and a later probe failure never hides an active
+provider reset.
 
 Resolver results include state/evidence on every candidate (including excluded
 limited candidates) and the selected leg. MCP catalog queries retain limited
@@ -117,8 +122,8 @@ D-5966 agy quotas use agy:<model>, shared across effort variants of that model.
 Hydrogen, Argon and Sonnet limits are independent. Gateway aggregate antigravity
 quota snapshots do not suppress these native CLI models.
 Legacy agy/<model>-<effort> events remain readable under the canonical key.
-Explicit agy resets survive the generic six-hour evidence TTL, up to the existing
-24-hour booking cap.
+Explicit provider resets (including `agy` and `opencode-go`) survive the six-hour
+probe-failure TTL and the 24-hour flat `down_s` cap until their stated `reset_at`.
 The native Claude-harness Sonnet-high fallback reads and books its own
 claude-sonnet-5-5-high subscription key. It never shares agy:claude-sonnet-5-5
 quota evidence. CLI review quota results carry the serving harness, including

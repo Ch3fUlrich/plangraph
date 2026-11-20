@@ -1,0 +1,1 @@
+Booked and honoured provider-stated quota resets (such as 97–135 h `agy` and 49 h `opencode-go` resets) uncapped in `leg_state` and `measured_down`, rather than cutting them to 24 h or 6 h, while keeping flat fallback `down_s` windows capped at 24 h.
