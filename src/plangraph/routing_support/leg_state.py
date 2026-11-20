@@ -435,8 +435,9 @@ class LegAdapter:
                 state = 'ok' if provider.available else 'unavailable'
         if state == 'ok' and self.store is not None:
             stored = self.store.leg_status(leg, **kwargs)
-            if stored.get('state') in ('limited', 'down', 'expired'):
-                return dict(stored, reason=stored.get('reason') or stored['state'])
+            # Only a scheduled review-probe down booking overrides a healthy snapshot.
+            if stored.get('state') == 'down' and (stored.get('evidence') or {}).get('caller') == 'review-probe':
+                return dict(stored, reason=stored.get('reason') or 'down')
         # Legacy planner understands limited/down only; preserve explicit reason.
         return dict(state='ok' if state == 'ok' else 'limited',
                     reason=state, evidence=dict(self._auth_error) if self._auth_error else None)
