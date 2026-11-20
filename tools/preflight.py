@@ -31,6 +31,30 @@ TEST_TIMEOUT = 240
 # paths x PER_PATH seconds, never below TEST_TIMEOUT and capped at MAX_TEST_TIMEOUT.
 TEST_PER_PATH_TIMEOUT = 2
 MAX_TEST_TIMEOUT = 1200
+# pytest-xdist workers of the affected-test step: half the cores, at most one per
+# TEST_WORKER_GIB of MemAvailable, between 2 and MAX_TEST_WORKERS; PREFLIGHT_TEST_WORKERS overrides.
+# A fixed 2 ran ~600 selected paths in about 1400 s, over the 1200 s cap on every host.
+TEST_WORKER_GIB = 2
+MAX_TEST_WORKERS = 16
+
+
+def mem_available_gib(meminfo="/proc/meminfo"):
+    try:
+        text = Path(meminfo).read_text()
+    except OSError:
+        return None
+    found = re.search(r"^MemAvailable:\s+(\d+) kB$", text, re.M)
+    return int(found[1]) / (1024 * 1024) if found else None
+
+
+def affected_workers(env=None, cores=None, mem_gib=None):
+    configured = (env if env is not None else os.environ).get("PREFLIGHT_TEST_WORKERS", "")
+    if configured.isdigit() and int(configured) > 0:
+        return int(configured)
+    cores = cores if cores is not None else (os.cpu_count() or 2)
+    mem_gib = mem_gib if mem_gib is not None else mem_available_gib()
+    by_mem = int(mem_gib // TEST_WORKER_GIB) if mem_gib is not None else cores
+    return max(2, min(cores // 2, by_mem, MAX_TEST_WORKERS))
 
 
 def is_affected_step(command):
@@ -436,7 +460,7 @@ def _main(argv, root, cleanup):
     tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
                    "--root", str(root), "--files-only", "--local", "--run")
     if importlib.util.find_spec("xdist") is not None:
-        tests += ["--workers", "2"]
+        tests += ["--workers", str(affected_workers())]
     families = [("scrub", scrubs),
                 ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),

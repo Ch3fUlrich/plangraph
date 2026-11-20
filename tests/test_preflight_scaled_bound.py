@@ -50,3 +50,19 @@ def test_the_scaled_bound_is_named_when_it_is_exceeded(tmp_path, monkeypatch):
     code, text = preflight.run([sys.executable, str(script), '--run'], tmp_path, dict(__import__('os').environ))
     assert code == 1
     assert text == 'tests: affected-tests step exceeded its 2.0 second bound (40 selected test paths)\n'
+
+
+@pytest.mark.parametrize('cores,mem_gib,expected', [
+    (32, 110, 16), (32, 20, 10), (12, 3.8, 2), (2, 64, 2), (8, None, 4)])
+def test_affected_workers_follow_cores_and_memory_never_fixed_at_two(cores, mem_gib, expected):
+    """LE-PREPUSH-TESTS-ON-BUSIEST-HOST (3): the worker count comes from the host, between 2 and 16."""
+    assert preflight.affected_workers({}, cores=cores, mem_gib=mem_gib) == expected
+
+
+def test_affected_workers_override_and_meminfo(tmp_path):
+    assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': '6'}, cores=32, mem_gib=110) == 6
+    assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': 'x'}, cores=32, mem_gib=110) == 16
+    meminfo = tmp_path / 'meminfo'
+    meminfo.write_text('MemTotal:       33554432 kB\nMemAvailable:    8388608 kB\n')
+    assert preflight.mem_available_gib(str(meminfo)) == 8
+    assert preflight.mem_available_gib(str(tmp_path / 'missing')) is None
