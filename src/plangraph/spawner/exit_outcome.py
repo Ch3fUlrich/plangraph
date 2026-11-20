@@ -257,7 +257,7 @@ def fallthrough_reason(service, chosen, job, record):
     if reason is not None:
         # not_served_on_host is a fact about this host's environment (a detached unit without the
         # login opencode config), not provider evidence: never book it as a 429 down window.
-        if not reason.lstrip().startswith('not_served_on_host'):
+        if 'not_served_on_host' not in reason:
             _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
     stop = getattr(getattr(service, 'runner', None), 'provider_responses', {}).get(getattr(job, 'job_id', None))
