@@ -24,8 +24,10 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
   CI waits and reviews, sends one GO request, merges with its own keeper token.
 - **Package writer**: Codex `gpt-6.1-sol` high in its native CLI does the bulk;
   a Claude Sonnet subagent only small fixes.
-- **Reviewer**: at least one review per checkpoint. Codex reviews Claude-written
-  code; a cheap reviewer of another family or Claude Sonnet reviews Sol-written code.
+- **Reviewer**: every writer starts the review of its own head by another model
+  family and fixes the findings in its session (`skills/batch-writer/SKILL.md`,
+  `skills/review/SKILL.md`); the orchestrator adds one read of the merge delta at the
+  batch head ([batch card](../unattended-orchestration/cards/batch.md)).
 - **Router**: writes the GO row, logs operator decisions.
 
 ## Packages and branches
@@ -50,6 +52,10 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 
 ## Writer brief (fixed rules)
 
+Every writer brief starts with `skills/batch-writer/SKILL.md` verbatim (byte-identical
+in every brief), then the items, then the run values. Where a line below differs from
+that skill, the skill wins.
+
 - One commit per task; trailers `Plan-Item:`, `Writer:`, and `Changelog: skip (...)`
   when the commit adds no fragment.
 - A test that fails without the fix. Run targeted tests before committing, then
@@ -60,7 +66,8 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
   No file above 400 lines.
 - Blocked, or failing after two attempts: revert, write one sentence, next task.
 - One status line per task in an uncommitted status file; `ALL DONE` at the end.
-- Never wait, poll, push or fetch. Never set `GIT_DIR` to a real repository.
+- Never wait, poll, push or fetch; the review command of the batch-writer skill is the
+  one thing a writer waits for. Never set `GIT_DIR` to a real repository.
 
 ## Codex
 
@@ -108,7 +115,9 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
 2. Review the whole phase diff on that one head; the prompt names each folded
    item and its intent and forbids findings on unchanged code.
 3. One fix brief with every finding; the writer reproduces each with a test and
-   fixes or refutes it. One re-review of the delta. Never a fourth writer round.
+   fixes or refutes it. One re-review of the delta in the reviewer's resumed session.
+   Writer rounds end at the round cap of the batch card (five), or earlier when two
+   rounds in a row do not lower the HIGH+MED count.
 4. One GO request (PR, head, CI run, review ids, umbrella key, folded keys, weak
    points); merge at that head; close the folded items and superseded lane PRs.
 5. Every host pulls main, the hooks checkout and the installed binaries, and

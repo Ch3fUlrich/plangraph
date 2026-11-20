@@ -1,0 +1,14 @@
+[
+  {
+    "id": "batch-writer-one-session",
+    "prompt": "You received a brief with five related items. Carry it out.",
+    "must": ["One commit per item", "Never start another agent except through REVIEW_CMD", "Run REVIEW_CMD exactly as the Run values spell it"],
+    "must_not": ["push after each item", "one writer per item"]
+  },
+  {
+    "id": "batch-writer-fix-loop",
+    "prompt": "The review of your head returned REQUEST_CHANGES with two HIGH findings.",
+    "must": ["fix every confirmed HIGH and MED finding", "Stop after ROUND_CAP rounds", "After ACCEPT make no further commit"],
+    "must_not": ["wait for the orchestrator to review", "choose your own reviewer leg"]
+  }
+]

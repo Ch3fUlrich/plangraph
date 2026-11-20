@@ -84,11 +84,14 @@ def test_tail_standing_question(mode):
 
 
 def test_claude_skill_pointers():
-    text = (ROOT / 'CLAUDE.md').read_text()
+    assert (ROOT / 'CLAUDE.md').read_text().strip() == '@AGENTS.md'
+    text = (ROOT / 'AGENTS.md').read_text()
     pointers = re.findall(r'`(skills/[^`]+/SKILL\.md)`', text)
     assert pointers
     assert all((ROOT / pointer).is_file() for pointer in pointers)
-    assert 'AGENTS.md' not in text
+    named = {pointer.split('/')[1] for pointer in pointers}
+    assert named == {path.name for path in (ROOT / 'skills').iterdir() if path.is_dir()}
+    assert len(text.splitlines()) <= 200
     assert not re.search(r'(?:[\w.-]+/)+[\w.-]*DECISIONS[\w.-]*', text, re.I)
 
 
