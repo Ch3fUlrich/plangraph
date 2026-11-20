@@ -79,4 +79,4 @@ Progress tests use the shared isolated Rust Git fixture command; inherited hook 
 The native-codex worker's in-session review loop applies the same stop rule:
 `native_writer::round_stop` calls `round_progress::stop_reason` with the HIGH+MED
 counts of the REQUEST_CHANGES rounds so far, for the round just finished, and
-caps the run at 5 review rounds (see `docs/native-codex-writer.md`).
+caps the run at `round_progress::MAX_ROUNDS` review rounds (see `docs/native-codex-writer.md`).

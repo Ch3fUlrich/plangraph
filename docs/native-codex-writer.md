@@ -43,8 +43,9 @@ exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.
 REQUEST_CHANGES resumes the same session with the review text; later rounds review
 the delta from the previous head. The HIGH+MED count of each round goes to
 `round_counts`; `native_writer::round_stop` applies the round progress rule of
-`round_progress.rs` to the round just finished and caps the run at 5 rounds
-(exit 3 with `round_stop` `round_cap` or `no_progress`; `no_session` when Codex
+`round_progress.rs` to the round just finished and caps the run at that file's
+`MAX_ROUNDS` (exit 3 with `round_stop` `round_cap`, `no_progress` or
+`slow_progress`; `no_session` when Codex
 reported no session ID to resume). ACCEPT runs the same
 gates on the clean final head, then pushes it once to the card's optional
 `push_ref` (`refs/heads/...`, no force) and records `status_line: DONE`.
