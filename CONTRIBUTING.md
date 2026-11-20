@@ -259,7 +259,10 @@ and in the pre-push hook. Files that were larger when the gate landed are listed
 shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers counts or removes entries that fit the 800-line cap, and CI refuses an entry added or raised against the change's base (`origin/main`
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
-(today only `CHANGELOG.md`, an append-only ledger).
+(today only `CHANGELOG.md`, an append-only ledger). A doc with a lower cap is named in
+`DOC_CAPS` of `tools/check_file_size.py` (today `docs/SPAWNER.md`, 728 lines); the check refuses it
+over its cap, naming the file and the cap, and main keeps `DOC_HEADROOM` (60) lines under it: move a
+self-contained section into `docs/operations/` and link it.
 The file-size gate refuses malformed Git batch headers with a single reason line.
 Pre-push uses `--head` for each pushed ref, reading its blobs, `.filesize-allow`
 and `.filesize-baseline` from Git. Public scrub rules also come from that head.
