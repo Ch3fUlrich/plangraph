@@ -82,7 +82,7 @@ class SpawnerRecordAdapter:
         if not directory and info.st_size > MAX_RECORD_BYTES:
             raise ValueError("record exceeds size limit")
 
-    def review_seats(self, item, head, decision_text, *, allow_cli_reported=False):
+    def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False):
         """Read cited mirrored review witnesses, never infer a served model."""
         from ..review.family import model_family
         ids = json.loads(item.get("run_ids") or "[]")
@@ -148,7 +148,7 @@ class SpawnerRecordAdapter:
                 raise ValueError(f"{run_id}: review is not a passing witnessed seat")
             seats.append({"model": model, "verdict": "pass", "run_id": run_id,
                           "head": completion["head_sha"]})
-        if not seats:
+        if not seats and not allow_empty:
             raise ValueError("no cited review witnesses")
         return seats
 

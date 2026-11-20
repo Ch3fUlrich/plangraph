@@ -648,3 +648,19 @@ these refusals and exit 2. Other validation failures still refuse atomically;
 
 `kp check` prints `CANCELLED-GATE-DEP <gate> -> <dependency>` for gates and goals,
 including frozen ones. JSON exposes `cancelled_gate_deps`; `--strict` exits 1.
+
+### Claude Code review witnesses
+
+Install the Rust `pg-seat-evidence` binary alongside the keeper. Attach evidence
+kind `claude-seat` through the router evidence API with `transcript`, `review_file`
+and full merged part `head` fields. `claude_projects_dir` optionally configures
+its trusted transcript root (default: the keeper account's Claude projects dir).
+The transcript must have the project/session/subagents/agent-ID.jsonl layout.
+Every assistant message must name a Sonnet model and the matching session/agent.
+A successful `Write` tool call must write the exact review file contents; end the
+file with `HEAD: <full head>` followed by `VERDICT: ACCEPT`. Shell write commands
+are not witnesses. Missing, changed or mismatched evidence gets a named refusal.
+`close-merged` rechecks current-epoch transcript evidence, including inside its
+transaction, and counts it with spawner seats. Existing writer-family, high-tier,
+sensitive-card and lane-specific witness requirements continue to apply.
+Lanes citing D-4504 retain their witness rule; a GO row must explicitly say `Witness: claude-seat` to use this kind.

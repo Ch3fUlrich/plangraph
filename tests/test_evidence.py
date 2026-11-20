@@ -28,7 +28,7 @@ from plangraph.keeper.evidence_types import Context, Result, as_epoch
 def test_registry_has_exactly_the_six_kinds():
     # X7b adds the legacy router-only `commit` kind; MK-FIXES-ERROR the `error` record.
     assert set(ev.VERIFIERS) == {"commit+ci", "commit", "run-record",
-                                 "semaphore-task", "decision", "error"}
+                                 "semaphore-task", "decision", "error", "claude-seat"}
 
 
 def test_unknown_kind_fails_validation():

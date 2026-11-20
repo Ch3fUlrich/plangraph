@@ -2,9 +2,20 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
+// A git command isolated from GIT_* variables inherited from a running git hook.
+fn git_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    for (name, _) in std::env::vars_os() {
+        if name.to_string_lossy().starts_with("GIT_") {
+            command.env_remove(name);
+        }
+    }
+    command.current_dir(root);
+    command
+}
+
 fn git(root: &Path, args: &[&str]) -> Output {
-    Command::new("git")
-        .current_dir(root)
+    git_command(root)
         .args(args)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -124,8 +135,7 @@ fn editor_comments_do_not_hide_valid_trailers() {
             .success());
         std::fs::write(dir.path().join("staged.txt"), comment_char).unwrap();
         assert!(git(dir.path(), &["add", "staged.txt"]).status.success());
-        let output = Command::new("git")
-            .current_dir(dir.path())
+        let output = git_command(dir.path())
             .args([
                 "commit",
                 "--allow-empty",
@@ -218,8 +228,7 @@ fn automatic_comments_without_scissors_match_the_final_message() {
             false,
         ),
     ] {
-        let output = Command::new("git")
-            .current_dir(dir.path())
+        let output = git_command(dir.path())
             .args(["commit", "--allow-empty", "--edit", "-m", message])
             .env("GIT_EDITOR", "true")
             .env("GIT_CONFIG_NOSYSTEM", "1")
