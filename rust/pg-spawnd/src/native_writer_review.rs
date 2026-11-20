@@ -29,8 +29,8 @@ impl Host {
         };
         let mut gates: Vec<(&str, Vec<String>)> = vec![
             ("check_file_size.py", vec![]),
-            ("check_new_code_lang.py", vec![]),
-            ("check_changelog_docs.py", vec![]),
+            ("check_new_code_lang.py", range(&[])),
+            ("check_changelog_docs.py", range(&[])),
             ("ci_commit_gate.py", range(&["check"])),
         ];
         let words = std::env::var_os("HOME")
