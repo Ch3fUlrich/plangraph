@@ -124,7 +124,8 @@ def test_unreachable_does_not_log_secrets(caplog):
         raise OSError('private-address secret-token')
     assert remote_ps._fetch(dict(name='node-a'), fail)[0]['status'] == 'unknown'
     assert caplog.text == ''
-def test_overflow_counts_only_local_with_hosts(tmp_path, monkeypatch):
+def test_overflow_counts_only_local_with_hosts(tmp_path, monkeypatch, admission_memory):
+    admission_memory()
     from plangraph.spawner import cli, overflow, stall_watchdog
     from plangraph.spawner.service import SpawnService
     config(tmp_path, monkeypatch, [dict(name='node-a', target='private-target')])

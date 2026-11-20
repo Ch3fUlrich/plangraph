@@ -148,7 +148,7 @@ credential ID. This selection also applies to mixed legacy/v2 stores. A failed q
 `no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
-Moved to [spawner doctor host source checks](operations/spawner-doctor.md).
+Moved to [doctor checks](operations/spawner-doctor.md); session names, admission window: [queue](operations/spawner-admission-queue.md).
 
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.

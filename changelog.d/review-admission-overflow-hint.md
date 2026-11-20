@@ -1,0 +1,1 @@
+Local admission of a review reserves the registry's per-role ramp; a spawn that fits neither locally nor on an overflow host is refused with the admission reason, and with a `hint` to run `fleet_sync genconfig write` when no overflow host is configured.

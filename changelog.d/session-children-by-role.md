@@ -1,0 +1,1 @@
+Session `list` rows show `parent`, the live `children` of a live parent role (a handoff successor inherits them under its new number) and `orphaned` for a live child whose parent role has no live session.

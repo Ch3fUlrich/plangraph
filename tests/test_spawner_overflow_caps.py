@@ -108,9 +108,9 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, tmp_path):
     monkeypatch.setattr(o.cli.sys, 'stdout', output)
     monkeypatch.setattr(o.cli.sys, 'stdin', io.StringIO(json.dumps({
         'state': str(tmp_path / 'state'), 'card': {'task': 'test'}, 'prompt': 'prompt'}) + '\n'))
-    assert o.cli.main(['--supervise']) == 0
+    assert o.cli.main(['--supervise']) == 2
     result = json.loads(output.getvalue())
-    assert reason in result['reason'] and result['status'] == 'queued'
+    assert reason in result['reason'] and result['status'] == 'refused'
 
 
 @pytest.mark.parametrize('total,free,used', [(0, 0, 0), (1000, 100, 90), (1000, 99, 90.1)])
