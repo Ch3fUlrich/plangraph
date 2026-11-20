@@ -49,7 +49,7 @@ def test_file_only_url_is_shared_by_child_and_witness(isolated_config, monkeypat
     class Runner:
         def __init__(self):
             self._adapter_tokens = {'job': object()}
-        def served_witness(self, job_id, model, *, adapter_token):
+        def served_witness(self, job_id, model, *, adapter_token, finish_reason=None):
             assert adapter_token is self._adapter_tokens[job_id]
             witness.served_model = model
     def opener(request, timeout):
@@ -239,7 +239,7 @@ def test_required_witness_invalid_file_never_reads_key(isolated_config, monkeypa
     ('https://v1/prefix/', 'https://v1/prefix'),
 ])
 def test_management_urls_preserve_authority(endpoint, management, monkeypatch):
-    from plangraph.routing_support import omniroute_state, quota_snapshots
+    from plangraph.routing_support import quota_snapshots
     secrets = {'OMNIROUTE_BASE_URL': endpoint, gw.TOKEN_ENV: 'synthetic'}
     seen = []
 
@@ -257,7 +257,7 @@ def test_management_urls_preserve_authority(endpoint, management, monkeypatch):
 
     assert gw.fetch_rows('test', {}, secrets=secrets, opener=opener) == []
     assert seen == [management + '/api/usage/call-logs?sessionTag=test&limit=200']
-    state = omniroute_state.from_env(secrets, key_resolver=lambda _: 'synthetic')
+    state = quota_snapshots.from_env(secrets, key_resolver=lambda _: 'synthetic')
     assert state.base_url == management
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda _: 'synthetic')
     def fetch(url, headers, timeout):

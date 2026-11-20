@@ -19,7 +19,7 @@ class _Runner:
         self._adapter_tokens = {job_id: object()}
         self.calls = []
 
-    def served_witness(self, job_id, model, *, adapter_token):
+    def served_witness(self, job_id, model, *, adapter_token, finish_reason=None):
         if adapter_token is not self._adapter_tokens.get(job_id):
             raise ValueError('invalid adapter token')
         if '/' not in model:
@@ -359,3 +359,32 @@ def test_job_session_tags_keep_uuid_entropy(tmp_path, monkeypatch):
                                   client='opencode', dry_run=True) for _ in range(2)]
     jobs = asyncio.run(run())
     assert gw.session_tag(jobs[0].job_id) != gw.session_tag(jobs[1].job_id)
+
+
+@pytest.mark.parametrize(('reasons', 'finish'), [(['length', 'stop'], 'stop'),
+    (['stop', 'length'], 'length'), (['stop', None], None)])
+def test_gateway_witness_publishes_only_final_completed_response(tmp_path, reasons, finish):
+    from plangraph.spawner.runner import JobInfo, SpawnerRunner
+    from plangraph.spawner.seat_artifact import publish
+
+    runner = SpawnerRunner()
+    job_id = 'job-1'
+    model = 'omniroute/cx-gpt-6.2-sol-medium'
+    job = JobInfo(job_id, 'completed', 'fixture', model, role='review', exit_code=0)
+    job.prompt_sha256 = 'a' * 64
+    job.stdout = 'VERDICT: PASS\nTEST-GAMING: no - searched fixture diff: 0 hits\n'
+    runner.jobs[job_id] = job
+    runner._adapter_tokens[job_id] = object()
+    rows = [dict(sessionTag=gw.session_tag(job_id), status=200, model=model,
+                 id=i, finishReason=reason) for i, reason in enumerate(reasons, start=1)]
+    gw.witness(runner, job_id, job, _env(job_id), fetch=lambda *_: rows[::-1])
+
+    publish(tmp_path, dict(role='review', status='completed', exit_code=0, ended=1,
+                           job_id=job_id, run_id='run-1'), job)
+    assert getattr(job, 'response_finish_reason', None) == finish
+    if finish == 'stop':
+        assert (tmp_path / 'review.txt').read_text() == job.stdout
+        assert json.loads((tmp_path / 'evidence.json').read_text())['finish_reason'] == 'stop'
+    else:
+        assert not (tmp_path / 'review.txt').exists()
+        assert not (tmp_path / 'evidence.json').exists()

@@ -33,7 +33,8 @@ from plangraph.spawner.clients import (
 )
 from plangraph.spawner.claude_env import claude_child_env
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
-from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
+from plangraph.spawner.resolver import detect_model_family
+from plangraph.spawner.gateway_models import record_served_witness
 from plangraph.spawner.mimo_policy import is_mimo_id
 from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
@@ -171,30 +172,7 @@ class SpawnerRunner:
         self._git_guards = {}
         self._stdin_payloads = {}
 
-    def served_witness(self, job_id, model, *, adapter_token, finish_reason=None):
-        """Record transport telemetry authenticated by an in-process adapter.
-
-        Do not expose this capability to the child: even a child that knows its
-        run nonce cannot attest to its own serving identity. Only a real
-        admitted model id is attestable: a combo alias such as "l2-worker"
-        (no "/") or any id outside the canonical families would otherwise
-        publish the label itself as served_family. A refused witness leaves
-        the job unwitnessed.
-        """
-        if adapter_token is None or adapter_token is not self._adapter_tokens.get(job_id):
-            raise ValueError('invalid adapter token')
-        if not isinstance(model, str) or not model.strip():
-            raise ValueError('missing served model')
-        model = model.strip()
-        from .gateway_witness import served_family
-        family = served_family(model)
-        if '/' not in model or family not in MODEL_FAMILIES:
-            raise ValueError('served model is not an admitted model id: ' + model)
-        job = self.jobs[job_id]
-        job.served_model = model
-        job.served_family = family
-        job.served_witness_reason = 'authenticated gateway adapter telemetry'
-        job.response_finish_reason = finish_reason  # final witness telemetry, never inherited
+    served_witness = record_served_witness
 
     def provider_response(self, job_id, leg, status, body, headers, *, source=None,
                           nonce=None, adapter_token=None, account=None, combo=None, store=None):
@@ -655,6 +633,9 @@ class SpawnerRunner:
                                                         or self.jobs[job_id].survivors
                                                         or getattr(self.jobs[job_id], 'refusal', None)) else proc.returncode
             job = self.jobs[job_id]
+            stdin_failed = any(event.get('event') == 'stdin_delivery_failed' for event in job.events)
+            if stdin_failed and not exit_code:
+                exit_code = 1
             kept = []
             for line in stderr_text.splitlines(keepends=True):
                 telemetry = proc_kill.oom_envelope(line)
@@ -686,6 +667,8 @@ class SpawnerRunner:
                     self.provider_response(job_id, **response, source='stderr_envelope',
                                            nonce=self._nonces[job_id])
             stderr_text = ''.join(kept)
+            if stdin_failed and not stderr_text:
+                stderr_text = 'stdin_delivery_failed: pipe unavailable or closed'
             env = self._child_envs.get(job_id, os.environ)
             from .opencode_answer import answer_text, final_answer, terminated_after_answer, native_answer, record_steps
             record_steps(job, stdout_text, stderr_text, env)
@@ -700,12 +683,12 @@ class SpawnerRunner:
                 tails = [text.rstrip('\r\n').splitlines()
                          for text in (stdout_text, final_answer(stdout_text, allow_unfinished=True) or '')]
                 review_verdict = (
-                    exit_code == 1 and is_opencode(job) and job.role == 'review'
+                    not stdin_failed and exit_code == 1 and is_opencode(job) and job.role == 'review'
                     and any(event.get('event') == 'opencode_tools_denied' for event in job.events)
                     and any(lines and lines[-1] in ('VERDICT: ACCEPT', 'VERDICT: REQUEST_CHANGES') for lines in tails)
                 )
                 job.status = 'completed' if exit_code == 0 or review_verdict else 'failed'
-                if not review_verdict and terminated_after_answer(job, stdout_text, stderr_text, exit_code):
+                if not stdin_failed and not review_verdict and terminated_after_answer(job, stdout_text, stderr_text, exit_code):
                     job.status = 'terminated_after_answer'
                     job.events.append({'event': 'terminated_after_answer'})
             if job.status == 'failed' and is_opencode(job):
@@ -1011,11 +994,21 @@ def spawn_service(*args, **kwargs):
             async def execute():
                 tried = set()
                 current = plan
+                job = None
                 try:
                     limits = thresholds(card, role=role)
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
+                    cancel_marker = self._path(run_id).with_name('cancelled')
+                    def cancelled():
+                        if not cancel_marker.exists():
+                            return False
+                        record.update(status='cancelled', exit_code=1, reason='cancelled')
+                        return True
+
                     for _ in range(len(plan.legs) + 2):
+                        if cancelled():
+                            return
                         if (watchdog := leg_limits(record, limits)) is None:
                             self._save(record); return
                         chosen = next((l for l in current.legs if l.id not in tried), None)
@@ -1042,9 +1035,13 @@ def spawn_service(*args, **kwargs):
                         if not await admit_base(self, record, card, launch=True): return
                         if (watchdog := leg_limits(record, limits)) is None:
                             self._save(record); return
+                        allow_shas = await asyncio.to_thread(
+                            env_redact.allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card)
+                        if cancelled():
+                            return
                         job = await self._launch_leg(record, chosen, routed=True, prompt=leg_prompt, model_or_combo=chosen.model,
                             role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
-                            allow_shas=await asyncio.to_thread(env_redact.allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card),
+                            allow_shas=allow_shas,
                             prompt_record=(self._path(run_id).with_name('prompt.txt'), record, self._save))  # REMOVE-AT-R10
                         if record.get('reason') == 'reasoning_output_limit':
                             return
@@ -1053,7 +1050,7 @@ def spawn_service(*args, **kwargs):
                             record.update(status='failed', exit_code=1, reason='kill_incomplete', survivors=job.survivors,
                                 events=record.get('events', []) + job.events)
                             return
-                        if self._path(run_id).with_name('cancelled').exists():   # D-3505: a CLI cancel from
+                        if cancel_marker.exists():   # a CLI cancel from
                             job.status = 'cancelled'   # another process ends the run, never a fall-through leg
                         stop = redact(self.runner.provider_responses.get(job.job_id))
                         if job.status in ('stalled', 'timeout', 'cancelled'):   # Q14, Q15/M16: terminal, with its attempt row
@@ -1138,7 +1135,7 @@ def spawn_service(*args, **kwargs):
                     elif record['status'] == 'running':
                         record.update(status='cancelled', exit_code=1)
                     record['ended'] = time.time()
-                    terminal_reason(record, job if record.get('job_id') else None)
+                    terminal_reason(record, job)
                     release_attempts(self, record)
                     self._save(record)
             task = asyncio.create_task(execute())

@@ -426,7 +426,7 @@ class LegAdapter:
             return dict(state='unavailable', evidence=None)
         now = self.clock()
         if self._at is None or now - self._at >= self.ttl_s:
-            from .omniroute_state import OmniRouteAuthRefused
+            from .quota_snapshots import OmniRouteAuthRefused
             self._auth_error = None
             try:
                 states = self.provider.snapshot()

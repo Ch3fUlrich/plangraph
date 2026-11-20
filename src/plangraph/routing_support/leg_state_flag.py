@@ -9,16 +9,19 @@ def enabled():
     return os.environ.get('PLANGRAPH_OMNIROUTE_LEG_STATE') != '0'
 
 
+def _needs_fallback(reason):
+    return reason in ('unknown', 'unreachable', 'stale') or (reason or '').startswith('leg_state_snapshot_error:')
+
+
 @lru_cache(maxsize=1)
 def default_reader():
     from .leg_state import LegAdapter, _default_store
-    from .omniroute_state import from_env
-    from .quota_snapshots import QuotaGate
+    from .quota_snapshots import QuotaGate, from_env
     reader = LegAdapter(_default_store(), from_env(), enabled=enabled())
     original, gate = reader.leg_status, QuotaGate()
     def status(model, **scope):
         result = original(model, **scope)
-        if result.get('reason') in ('unknown', 'unreachable', 'stale') or (result.get('reason') or '').startswith('leg_state_snapshot_error:'):
+        if _needs_fallback(result.get('reason')):
             result = dict(reader.store.leg_status(model, **scope), reason=result['reason'])
         return gate.apply(model, result, scope.get('now'))   # pre-route omniroute quota_snapshots gate
     reader.leg_status = status
@@ -39,7 +42,7 @@ def service_plan(service, **kwargs):
     reasons = {}
     def read(model, **scope):
         status = reader.leg_status(model, **scope)
-        if status.get('reason') in ('unknown', 'unreachable', 'stale'):
+        if _needs_fallback(status.get('reason')):
             reasons[model] = status['reason']
             store = getattr(reader, 'store', None)
             return store.leg_status(model, **scope) if store is not None else status

@@ -97,10 +97,7 @@ def test_visible_positions_preserve_literal_masks():
         _visible_positions('x a a y', MASK + 'a' + MASK)
 
 
-@pytest.mark.parametrize('row_id,masked', [('a1-N19', ()), ('a1-A02', ()),
-                                         ('shield-marker-skips-prepass', (10, 28)),
-                                         ('shield-marker-skips-prepass-e001', (10, 28)),
-                                         ('shield-marker-skips-prepass-indexed', (12, 30))])
+@pytest.mark.parametrize('row_id,masked', [('a1-N19', ()), ('a1-A02', ())])
 def test_ruling_join_gaps_match_real_pre_a1(pre_a1, row_id, masked):
     parity = json.loads((Path(__file__).parent / 'fixtures/redact_parity.json').read_bytes())
     row = next(row for row in TABLE + parity if row.get('id') == row_id)

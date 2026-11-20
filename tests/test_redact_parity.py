@@ -137,11 +137,12 @@ def test_plain_order_never_reveals_pieces_masked_by_old_order():
 
 @pytest.mark.parametrize('marker', ['\ue000', '\ue001', '\ue0000\ue001'])
 @pytest.mark.parametrize('nl', ['\n', '\r\n'])
-def test_shield_markers_skip_prepass_and_equal_main(marker, nl):
+def test_shield_markers_preserve_literal_text_and_mask_continuations(marker, nl):
     first, rest = 'A9' * 7, 'B8' * 8
-    text = marker + ' API_KEY=' + 'gh' + 'p_' + first + nl + rest + nl + 'next'
-    assert env_redact.join_shielded_assignments(text, env_redact._ASSIGNMENT) == text
-    assert redact(text) == main_order(text)
+    text = marker + ' API_KEY=' + 'gh' + 'p_' + first + nl + rest + nl + 'next retained'
+    expected = marker + ' API_KEY=[REDACTED]' + nl + 'next retained'
+    assert env_redact.join_shielded_assignments(text, env_redact._ASSIGNMENT) == expected
+    assert redact(text) == expected
 
 
 def test_shielded_join_preserves_all_names_separators_and_values():
