@@ -338,7 +338,7 @@ def test_aggregate_exit_and_independence(isolated, monkeypatch, capsys, mode):
 def test_opt_in_probe(isolated, monkeypatch, capsys, answer):
     from plangraph.spawner import leg_probe
     calls = []
-    async def probe(runner, legs):
+    async def probe(runner, legs, *, role=None):
         calls.append(legs)
         return dict(probes=[dict(id=leg, ok=answer and i == 1,
             reason='Free usage limit reached' if i == 0 else 'Model unavailable')
@@ -431,7 +431,7 @@ def test_review_probe_systemd_units():
     assert not svc.has_section('Install')
     assert svc.get('Service', 'ExecStartPre') == '-%h/.local/bin/pg-spawnd check-manage-key --state %S/plangraph --json'
     assert shlex.split(svc.get('Service', 'ExecStart')) == [
-        '/usr/bin/python3', '-m', 'plangraph.spawner.cli', '--state', '%S/plangraph', 'probe', '--all-reviewers', '--json',
+        '/usr/bin/python3', '-m', 'plangraph.spawner.cli', '--state', '%S/plangraph', 'probe', '--all-reviewers', '--timeout', '120', '--json',
     ]
     tim = configparser.ConfigParser(strict=False, interpolation=None)
     tim.optionxform = str

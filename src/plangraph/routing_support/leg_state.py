@@ -192,14 +192,14 @@ class LegStateStore:
         with self._connect() as db:
             db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)", (leg, account, combo, 200, "", None, None, time.time() if now is None else now, caller, "provider-probe"))
 
-    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt='', book_down=False):
+    def record_probe_fail(self, leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):
         if not leg or not caller or not reason:
             raise LegStateError('requires leg, reason and caller')
         leg = quota_key(leg)
         now = time.time() if now is None else now
         down_s = None if serving else _down_seconds(down_s)  # capped at RESET_CAP_S
         source = ('probe_failed_leg_serving' if serving
-                  else 'review-liveness-probe' if (book_down or caller == 'review-probe')
+                  else 'review-liveness-probe' if caller == 'review-probe'
                   else 'liveness-probe')
         with self._connect() as db:
             db.execute('INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)',
