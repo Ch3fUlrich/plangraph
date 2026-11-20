@@ -7,6 +7,7 @@ The orchestrator combines accepted heads into one batch PR.
 R-batch-01: Give one strong writer a brief of related cards with disjoint write sets, in one worktree at the fetched origin default head.
   Never split related ready items across writers, for any agent type; a batch of one is right only when no related item is ready.
   When one leg is out of quota the batch goes to the next implement leg; single-task (`piecewise`) runs follow the worker card.
+  While Codex is not served, Claude Sonnet or Opus write batches, in Claude Code or through agy; no batch waits for a quota reset (routing DECISIONS 3.58 (2), D-6366).
   Launch with the agent-neutral writer driver (today plan-order `bin/writer.sh NAME WORKTREE BRIEF`; the spawner route picks the leg).
   (why: one context per change set avoids per-card handoffs and cold restarts; source: routing DECISIONS 3.56 (1) D-6357, plangraph:BATCH-PORT-WRITER-DRIVER, LE-BATCH-DRIVER-SINGLE-AGENT)
 R-batch-02: Every brief names the goal, Plan-Item keys, scope files, checks, commit trailers, round cap and status file ending `<NAME> DONE`.
@@ -21,12 +22,13 @@ R-batch-04: Start an other-family review with repository access on the exact hea
   At the cap, close the PR unmerged and have the strongest available planner define slices <=800 changed lines (excluding Cargo.lock and generated files) with all open findings verbatim.
   Exception: one or two confirmed MED findings with clear fixes permit one narrow fix round. A HIGH, three or more MED, or a second miss closes and replans.
   (why: an in-session fix loop avoids relaunch cost; source: routing DECISIONS 3.35, D-5909, D-5927, D-5964)
-R-batch-05: Reviews run on Claude Sonnet or OpenCode DeepSeek (subscription legs), without waiting; mimo only after plangraph:MIMO-BATCH-CAPACITY-D6357 measures it on real batches.
+R-batch-05: Reviews never wait; the first served leg wins, in this order: agy Gemini Argon (low effort), then mimo-v2.6-pro, then OpenCode DeepSeek flash.
+  The reviewer's family differs from every writer family of the diff, so a Claude-written change never gets a Claude seat.
   Run them with the agent-neutral review command: today plan-order `bin/review.sh TAG BASE HEAD PROMPT` with WRITER_FAMILY and REVIEW_WORKTREE set.
   It spawns role review with the writer's family excluded in a no-remote checkout; long term `plangraph review` (plangraph:REVIEW-CMD).
   Credential, auth, access and secrets reviews require witnessed Sonnet high; every seat's family differs from all writers and its verdict names the exact head.
   Scripts and rules name the role, never one agent (review.sh, writer.sh).
-  (why: reviews must progress cheaply while preserving seat eligibility; source: routing DECISIONS 3.56 (3)-(4) D-6357, 3.26)
+  (why: reviews must progress cheaply on limits the writers do not use; source: routing DECISIONS 3.58 (1) D-6366, 3.56 (4) D-6357)
 R-batch-06: Use `VERDICT: ACCEPT` or `VERDICT: REQUEST_CHANGES` for writer reviews, naming the full head sha in the review.
   For the batch merge-delta approval, request `HEAD: <full sha>` then `VERDICT: PASS` as its last two non-empty lines, as required by merge_batch land.
   Never translate a reviewer's verdict yourself.

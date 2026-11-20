@@ -80,10 +80,12 @@ In batch mode a card with no related ready card goes out as a batch of one, with
 writer review loop. A manual `piecewise` setting, or `auto` with no strong writer leg,
 sends single tasks to workers and keeps the reviews with the orchestrator.
 
-Review policy follows routing DECISIONS 3.26: currently one Hydrogen-high review per head
-on non-auth lanes, with the authorized free-leg fallbacks and Sonnet high last. Credential,
-auth, access and secrets lanes retain the witnessed-family condition and use witnessed
-Sonnet high. This temporary policy overrides the historical per-card review counts.
+Review policy (routing DECISIONS 3.58, D-6366): one review per head on the first served
+leg of agy Gemini Argon low, mimo-v2.6-pro, OpenCode DeepSeek flash, of another family
+than every writer of the diff. Credential, auth, access and secrets lanes keep the
+witnessed Sonnet-high seat. Writers: Codex first; while Codex is not served, Claude
+Sonnet or Opus write batches, in Claude Code or through agy, and no batch waits for a
+quota reset. This policy overrides the historical per-card review counts.
 
 In every mode:
 

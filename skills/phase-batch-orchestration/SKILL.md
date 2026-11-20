@@ -23,8 +23,9 @@ checkpoint, `plangraph:PHASE-BATCH-SIZE-EXPERIMENT` (ledger and current defaults
   HIGH survives a fix round, the same host or tooling failure twice in a shift,
   a replan, or an operator audit): cuts packages, briefs writers, folds, runs
   CI waits and reviews, sends one GO request, merges with its own keeper token.
-- **Package writer**: Codex `gpt-6.1-sol` high in its native CLI does the bulk;
-  a Claude Sonnet subagent only small fixes.
+- **Package writer**: the first implement leg the spawner route serves, Codex first.
+  While Codex is not served, Claude Sonnet or Opus write packages, in Claude Code or
+  through agy; a package never waits for a quota reset.
 - **Reviewer**: every writer starts the review of its own head by another model
   family and fixes the findings in its session (`skills/batch-writer/SKILL.md`,
   `skills/review/SKILL.md`); the orchestrator adds one read of the merge delta at the
