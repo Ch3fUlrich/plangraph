@@ -170,17 +170,15 @@ def test_review_order_rule_350_mimo_pro_then_flash_then_326():
                             "opencode-go-beam-free", "claude-sonnet-5-5-high")
     plan = plan_spawn(CARD, role="review", writer_families=("openai",),
                       leg_reader=lambda model, **kwargs: {"state": "available", "evidence": None})
-    # An OpenAI writer keeps the DeepSeek fallbacks ahead of the final Sonnet seat.
-    assert [leg.id for leg in plan.legs] == [*REVIEW_ORDER[:-1], "omniroute-deepseek-flash",
-                                             "opencode-go-deepseek-v4-flash", REVIEW_ORDER[-1]]
+    # An OpenAI writer gets exactly the operator order: no extra DeepSeek fallbacks.
+    assert [leg.id for leg in plan.legs] == list(REVIEW_ORDER)
     assert plan.legs[0].model == "mimo/mimo-v2.6-pro"
 
 
 def test_review_mimo_first():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",))
     ids = [leg.id for leg in plan.legs]
-    assert ids == [*REVIEW_ORDER[:-1], "cx-gpt-6-luna", "agy-gpt-oss-120b",
-                   "omniroute-deepseek-flash", "opencode-go-deepseek-v4-flash"]
+    assert ids == [*REVIEW_ORDER[:-1], "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ACTIVE_FREE == [leg.id for leg in DEFAULT_LEGS if leg.id in FREE and not leg.disabled]
 
@@ -226,8 +224,7 @@ def test_cli_route_review_mimo_first(tmp_path, capsys, monkeypatch):
     assert main(["--state", str(tmp_path), "route", "--card", json.dumps(CARD),
                  "--role", "review", "--writer-family", "claude", "--json"]) == 0
     ids = [leg["id"] for leg in json.loads(capsys.readouterr().out)["legs"]]
-    assert ids == [*REVIEW_ORDER[:-1], "cx-gpt-6-luna", "agy-gpt-oss-120b",
-                   "omniroute-deepseek-flash", "opencode-go-deepseek-v4-flash"]
+    assert ids == [*REVIEW_ORDER[:-1], "cx-gpt-6-luna", "agy-gpt-oss-120b"]
     assert DISABLED_FREE.isdisjoint(ids)
     assert ids.index(REVIEW_MIMO_PRO) == 0 and ids.index(REVIEW_HYDROGEN) == 2  # D-6028
 
@@ -421,7 +418,7 @@ def test_codex_writer_aliases_and_cross_family_review_routes():
              for name in ('codex', 'cx-gpt-6.1-sol', 'gpt')]
     assert all(p.legs == plans[0].legs and p.review_seats == plans[0].review_seats for p in plans)
     ids = {l.id for l in plans[0].legs}
-    assert {'omniroute-deepseek-flash', 'opencode-go-deepseek-v4-flash'} <= ids
+    assert not {'omniroute-deepseek-flash', 'opencode-go-deepseek-v4-flash'} & ids
     assert any(l.family == 'gemini' for l in plans[0].legs)
     assert any(l.family == 'claude' for l in plans[0].legs)
     deepseek = plan_spawn(CARD, role='review', writer_families=['deepseek'])

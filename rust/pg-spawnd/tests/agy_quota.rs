@@ -113,8 +113,6 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
             "gemini-4-argon-medium",
             "console-deepseek/deepseek-flash",
             "opencode-go/beam-free",
-            "omniroute/deepseek-v4.1-flash",
-            "opencode-go/deepseek-v4.1-flash",
             "claude-sonnet-5-5-high"
         ]
     );

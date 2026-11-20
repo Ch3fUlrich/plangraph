@@ -367,7 +367,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "excluded_family"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
             reason = "inline_only_needs_diff"
-        elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) not in ("openai", "deepseek"):
+        elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai":
             reason = "review_route_excluded"
         else:
             try:
