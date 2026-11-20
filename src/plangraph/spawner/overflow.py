@@ -372,6 +372,8 @@ async def native_spawn(self, card, options):
         status='running', started=time.time(), role='implement', writer_family='openai',
         base_ref=card.get('base_ref'), repo=str(repo))
     record.update(tool_environment)
+    from .harness_record import native_fields
+    record.update(native_fields(record['host']))
     from .item_key import annotate_item
     annotate_item(record, card)
     directory = self._path(record['run_id']).parent

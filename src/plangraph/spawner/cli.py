@@ -145,6 +145,8 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps').add_argument('--all-hosts', action='store_true',
                                            help='no-op alias: plain ps already includes configured SSH hosts')
+    p = commands.add_parser('harness-report', help='runs, failures and no-verdict reviews per harness')
+    p.add_argument('--hours', type=float, default=24)
     commands.add_parser('catalog')
     p = commands.add_parser('quota-result')
     p.add_argument('--model', required=True)
@@ -423,6 +425,9 @@ raise SystemExit(code)
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
+        elif args.verb == 'harness-report':
+            from .harness_record import report
+            result = report(service.ps()['runs'], hours=args.hours)
         elif args.verb == 'cancel':
             result = asyncio.run(service.cancel(args.run_id))
         elif args.verb == 'wait':

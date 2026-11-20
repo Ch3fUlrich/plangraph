@@ -488,6 +488,8 @@ class SeatSpawnMixin:
 
     async def _launch_leg(self, record, chosen, *, routed=False, **options):
         """One normal launch, at most one capped review retry; never recurse or reroute."""
+        from .harness_record import stamp
+        stamp(record, chosen)
         if record.get('role') == 'review':
             from plangraph.review.family import FamilyError, writer_headers
             try:
