@@ -255,7 +255,7 @@ class SpawnPlan:
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
-                catalog_rows=None, installed=None, silent_legs=frozenset()) -> SpawnPlan:
+                catalog_rows=None, installed=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
     Measured inputs rank within cost tiers; implement writer priority is final.
     ``exclude_families`` excludes the specified family names from candidate legs.
@@ -267,8 +267,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     ``installed`` (client name -> bool) puts each leg into its own harness before policy, seats and
-    ordering run (rule 3.53); None keeps the registered harnesses.  ``silent_legs`` are review leg ids
-    that ended without a verdict three times in a row: skipped as ``no_verdict_leg``.
+    ordering run (rule 3.53); None keeps the registered harnesses.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
@@ -280,10 +279,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         from .legs import resolve_legs
         legs, skips = resolve_legs(legs, installed)
         harness_skipped = list(skips)
-    if role == "review" and silent_legs:
-        harness_skipped.extend({"leg": l.id, "reason": "no_verdict_leg", "evidence": {
-            "kind": "no_verdict_leg", "runs": 3}} for l in legs if l.id in silent_legs)
-        legs = tuple(l for l in legs if l.id not in silent_legs)
     check_route_targets(card, legs)
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:

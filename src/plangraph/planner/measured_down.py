@@ -8,9 +8,8 @@ LEG_DOWN_WINDOW_S = 3600
 DOWN_REASONS = frozenset(('not_served_on_host', 'credit_limit', 'usage_limit'))
 
 
-def measured_down(state, *, now=None, on_record=None):
-    """Return leg -> reason/time; missing or malformed records carry no evidence.
-    ``on_record`` receives each record read inside the window, so a caller needing the same evidence reads once."""
+def measured_down(state, *, now=None):
+    """Return leg -> reason/time; missing or malformed records carry no evidence."""
     now = time.time() if now is None else now
     host = os.environ.get('PLANGRAPH_HOST') or socket.gethostname()
     down = {}
@@ -23,8 +22,6 @@ def measured_down(state, *, now=None, on_record=None):
             if not 0 <= now - path.stat().st_mtime < window:
                 continue
             record = json.loads(path.read_text())
-            if on_record is not None:
-                on_record(record)
             ended = record.get('ended')
             if record.get('host') != host or not 0 <= now - ended < window:
                 continue

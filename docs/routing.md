@@ -187,9 +187,7 @@ access, then `mimo/mimo-v2.6-pro`, `opencode/deepseek-v4.1-flash-free`,
 `agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high` and `mimo/mimo-v2.6-flash` as fallbacks and
 the agy argon legs (`agy-gemini-4-argon-low`, `agy-gemini-4-argon-medium`; plan mode, review only,
 never an implement leg) last of the whole route, behind the non-order extras. A review run that ends without a VERDICT line is
-recorded `failed` with reason `no_verdict`; a leg whose last three counted review runs all ended so
-is skipped as `no_verdict_leg` for 24 h (the streak is kept in `review-silent.json` beside the run records
-and a review with a verdict resets it). The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
+recorded `failed` with reason `no_verdict`. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.
