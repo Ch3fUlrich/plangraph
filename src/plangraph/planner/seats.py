@@ -13,7 +13,7 @@ _REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/~^@{}-]{0,199}$")
 
 def _valid_diff_path(path):
     """Repo-relative diff pathspec with no option injection or traversal."""
-    if not isinstance(path, str) or not path or "\0" in path:
+    if not isinstance(path, str) or not path or any(ord(c) < 32 or 127 <= ord(c) < 160 for c in path):
         return False
     if path[0] in ("-", "/", "\\", ":") or (len(path) >= 2 and path[1] == ":" and path[0].isalpha()):
         return False

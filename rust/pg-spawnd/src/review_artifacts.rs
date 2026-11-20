@@ -2,6 +2,10 @@
 use crate::evidence::{regular, EvidenceError};
 use pg_worker_core::run::{record::run_dir, record_io::atomic_write_private};
 use serde_json::{json, Value};
+
+/// Text of the review artifact when no rendered review exists; `seat_verdict` recognises it.
+pub(crate) const DIAGNOSTIC_REVIEW_TEXT: &str =
+    "Full rendered review unavailable or unsupported.\nVERDICT: HALT\n";
 use std::{
     fs,
     io::Read,
@@ -43,7 +47,7 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
                 .collect();
             Ok(format!("Agy review unavailable: empty, failed or unsupported output.\nDiagnostics (untrusted): {}\nVERDICT: FAIL\nTEST_GAMING: yes\n", json!({"log":detail, "stderr":stderr})))
         } else {
-            Ok("Full rendered review unavailable or unsupported.\nVERDICT: HALT\n".into())
+            Ok(DIAGNOSTIC_REVIEW_TEXT.into())
         }
     };
     if record["live_log"].as_str().map(Path::new) != Some(path.as_path()) {

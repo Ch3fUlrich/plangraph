@@ -93,7 +93,7 @@ pub(crate) fn seat_verdict(state: &Path, record: &Value) -> SeatVerdict {
         }
     }
     if let Ok(text) = crate::review_artifacts::review_text(state, record) {
-        if text == "Full rendered review unavailable or unsupported.\nVERDICT: HALT\n" {
+        if text == crate::review_artifacts::DIAGNOSTIC_REVIEW_TEXT {
             if let Some(tail) = record["stdout_tail"].as_str() {
                 if matches!(parse_verdict_text(tail), Some(SeatVerdict::RequestChanges)) {
                     return SeatVerdict::RequestChanges;
@@ -227,6 +227,13 @@ pub(crate) fn spawn_rust_split_groups(
     launch: &mut impl FnMut(&Path, &Value) -> Result<LaunchSpec, ToolError>,
 ) -> Result<Value, ToolError> {
     use pg_worker_core::run::record::{new_job_id, new_run_id};
+    if groups.is_empty() {
+        return Err(ToolError::Refused {
+            kind: crate::errors::RefusalKind::Spawn,
+            message: "review split: no changed files in the diff range".into(),
+            legs: vec![],
+        });
+    }
     let seat_group_id = format!("seats-{}", &new_run_id()["run-".len()..]);
     let total = groups.len();
     let mut run_ids = Vec::with_capacity(total);
@@ -336,6 +343,13 @@ pub(crate) fn spawn_adapter_split_groups(
         },
         other => ToolError::Internal(other.to_string()),
     })?;
+    if groups.is_empty() {
+        return Err(ToolError::Refused {
+            kind: crate::errors::RefusalKind::Spawn,
+            message: "review split: no changed files in the diff range".into(),
+            legs: vec![],
+        });
+    }
     let seat_group_id = format!("seats-{}", &new_run_id()["run-".len()..]);
     let total = groups.len();
     let mut run_ids = Vec::with_capacity(total);

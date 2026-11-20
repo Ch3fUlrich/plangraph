@@ -21,6 +21,7 @@ pub(crate) fn read_diff(
     }
     let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
     cmd.args([
+        "--literal-pathspecs",
         "-c",
         "core.hooksPath=",
         "-c",
@@ -29,8 +30,7 @@ pub(crate) fn read_diff(
         "--no-ext-diff",
         "--no-textconv",
         "--binary",
-        &diff.base_sha,
-        &diff.head_sha,
+        &format!("{}...{}", diff.base_sha, diff.head_sha),
         "--",
     ]);
     if let Some(paths) = &diff.paths {
@@ -60,6 +60,7 @@ pub(crate) fn list_changed_files(
     }
     let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
     cmd.args([
+        "--literal-pathspecs",
         "-c",
         "core.hooksPath=",
         "-c",
@@ -70,8 +71,7 @@ pub(crate) fn list_changed_files(
         "--no-renames",
         "--name-only",
         "-z",
-        &diff.base_sha,
-        &diff.head_sha,
+        &format!("{}...{}", diff.base_sha, diff.head_sha),
         "--",
     ]);
     if let Some(paths) = &diff.paths {

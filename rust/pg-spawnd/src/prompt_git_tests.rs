@@ -443,3 +443,63 @@ fn read_diff_with_paths_inlines_only_selected_paths_and_refuses_invalid_paths() 
     }
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn group_paths_are_literal_and_control_characters_are_refused() {
+    let (root, repo, diff) = fixture();
+    std::fs::write(root.join("a[b].txt"), b"bracket-change\n").unwrap();
+    std::fs::write(root.join("ab.txt"), b"wildcard-victim\n").unwrap();
+    git(&root, &["add", "a[b].txt", "ab.txt"]);
+    git(&root, &["commit", "-qm", "names"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+    let scoped = DiffRef {
+        paths: Some(vec!["a[b].txt".into()]),
+        head_sha: head.clone(),
+        ..diff.clone()
+    };
+    let text = String::from_utf8_lossy(&read_diff(&repo, &scoped, 262144).unwrap()).into_owned();
+    assert!(text.contains("bracket-change"), "{text}");
+    assert!(!text.contains("wildcard-victim"), "{text}");
+    assert_eq!(
+        list_changed_files(&repo, &scoped).unwrap(),
+        vec!["a[b].txt".to_string()]
+    );
+    for bad in ["x\ny", "x\ry", "x\u{1b}[2Jy", "x\u{7f}"] {
+        let invalid = DiffRef {
+            paths: Some(vec![bad.into()]),
+            head_sha: head.clone(),
+            ..diff.clone()
+        };
+        assert_eq!(
+            read_diff(&repo, &invalid, 262144),
+            Err(InlineDiffError::InvalidDiffRef),
+            "{bad:?}"
+        );
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn group_file_list_and_diff_use_the_merge_base_range_when_the_base_advanced() {
+    let (root, repo, diff) = fixture();
+    // `advanced` descends from the old base and touches a file the head never changes.
+    git(&root, &["checkout", "-q", "-b", "advanced", &diff.base_sha]);
+    std::fs::write(root.join("base-only.txt"), b"base-side-change\n").unwrap();
+    git(&root, &["add", "base-only.txt"]);
+    git(&root, &["commit", "-qm", "advance"]);
+    let advanced = git(&root, &["rev-parse", "HEAD"]);
+    let moved = DiffRef {
+        base_sha: advanced,
+        ..diff.clone()
+    };
+    assert_eq!(
+        list_changed_files(&repo, &moved).unwrap(),
+        vec!["file".to_string()]
+    );
+    let text = String::from_utf8_lossy(&read_diff(&repo, &moved, 262144).unwrap()).into_owned();
+    assert!(
+        text.contains("after") && !text.contains("base-side-change"),
+        "{text}"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
