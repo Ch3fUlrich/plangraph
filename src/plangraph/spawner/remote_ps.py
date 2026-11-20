@@ -8,7 +8,6 @@ import subprocess
 import selectors
 import secrets
 import shlex
-import threading
 import time
 from .runner import is_terminal
 
@@ -134,14 +133,6 @@ def exit_reason(code):
         code, 'host query failed')
 
 
-def feed_plan(pipe, plan):
-    try:
-        pipe.write(plan)
-        pipe.close()
-    except OSError:
-        pass  # The exit status names the failure; a killed reader ends the write.
-
-
 def query_host(host, timeout):
     command, plan = host_invocation(host, query=True)
     with subprocess.Popen(
@@ -150,20 +141,35 @@ def query_host(host, timeout):
         stdin=subprocess.DEVNULL if plan is None else subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         ) as process:
-        if plan is not None:
-            # A reader that never drains stdin must not outlast the deadline below.
-            threading.Thread(target=feed_plan, args=(process.stdin, plan), daemon=True).start()
         deadline = time.monotonic() + timeout
         output = bytearray()
+        pending = memoryview(plan or b'')
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
-                while selector.get_map():
+                if plan is not None:
+                    # Nonblocking writes in the same loop: a reader that never drains stdin,
+                    # even through a descendant that outlives the child, cannot pass the deadline.
+                    os.set_blocking(process.stdin.fileno(), False)
+                    selector.register(process.stdin, selectors.EVENT_WRITE)
+                reading = True
+                while reading:
                     remaining = deadline - time.monotonic()
                     events = selector.select(max(0, remaining))
                     if remaining <= 0 or not events:
                         raise TimeoutError('host query failed')
                     for key, _ in events:
+                        if key.fileobj is process.stdin:
+                            try:
+                                pending = pending[os.write(key.fd, pending[:65536]):]
+                            except BlockingIOError:
+                                continue
+                            except OSError:
+                                pending = pending[len(pending):]  # The exit status names the failure.
+                            if not pending:
+                                selector.unregister(process.stdin)
+                                process.stdin.close()
+                            continue
                         buffer = output
                         chunk = os.read(key.fd, min(65536, MAX_OUTPUT + 1 - len(buffer)))
                         buffer.extend(chunk)
@@ -171,6 +177,7 @@ def query_host(host, timeout):
                             raise ValueError('host query failed')
                         if not chunk:
                             selector.unregister(key.fileobj)
+                            reading = False
             code = process.wait(timeout=max(0, deadline - time.monotonic()))
             reason = exit_reason(code)
             if reason:

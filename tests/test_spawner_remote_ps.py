@@ -552,9 +552,28 @@ def test_wsl_query_deadline_holds_when_the_reader_never_drains_the_plan(monkeypa
     monkeypatch.setattr(remote_ps, 'host_invocation',
                         lambda host, query=False: ('wsl.exe', json.dumps(big).encode()))
     def run(argv, **kwargs):
-        return original([sys.executable, '-c', 'import time; time.sleep(30)'], **kwargs)
+        # A descendant inherits stdin and outlives the killed child, so the pipe stays full.
+        child = ('import subprocess, sys, time\n'
+                 'subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"], stdin=0)\n'
+                 'time.sleep(30)')
+        return original([sys.executable, '-c', child], **kwargs)
     monkeypatch.setattr(subprocess, 'Popen', run)
     started = time.monotonic()
     with pytest.raises(TimeoutError):
-        remote_ps.query_host(host, 0.3)
-    assert time.monotonic() - started < 5
+        remote_ps.query_host(host, 0.15)
+    assert time.monotonic() - started < 0.5
+
+
+def test_wsl_query_delivers_a_plan_larger_than_a_pipe_buffer(monkeypatch, tmp_path):
+    original = subprocess.Popen
+    host = dict(target='private-target', src='/opt/plangraph/src', wsl_distro='Ubuntu')
+    body = json.dumps({'padding': 'x' * (512 * 1024)}).encode()
+    monkeypatch.setattr(remote_ps, 'host_invocation', lambda host, query=False: ('wsl.exe', body))
+    received = tmp_path / 'plan.json'
+    def run(argv, **kwargs):
+        child = ('import sys,pathlib;pathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read());'
+                 'print(\'{"runs": []}\', end="")')
+        return original([sys.executable, '-c', child, str(received)], **kwargs)
+    monkeypatch.setattr(subprocess, 'Popen', run)
+    assert remote_ps.query_host(host, 10) == '{"runs": []}'
+    assert received.read_bytes() == body
