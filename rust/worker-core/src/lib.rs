@@ -44,6 +44,7 @@ pub mod health_rates;
 pub mod health_until;
 pub mod host_command;
 pub mod host_idle;
+pub mod host_launch;
 pub mod host_link;
 pub mod host_metrics;
 pub mod host_overflow;
