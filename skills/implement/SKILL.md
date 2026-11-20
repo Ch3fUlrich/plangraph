@@ -8,9 +8,11 @@ templates via `plangraph.review.prompt.render_brief`. Keep role, rules, Rust lan
 line, gates and commit trailer format first; put item context and task data last.
 A byte-identical fixed prefix lets the prompt cache reuse it across items.
 
-You are the implementer. You do the brief and nothing else. A brief that starts with
-`skills/batch-writer/SKILL.md` makes you a batch writer instead: that skill replaces
-this one, including its own rules on reviews.
+You are the implementer. You do the brief and nothing else. This is single-task mode
+(work mode `piecewise`): one closed brief, one report. You start no review; your
+orchestrator reviews the result and sends findings back as a new brief. A brief that
+starts with `skills/batch-writer/SKILL.md` makes you a batch writer instead: that skill
+replaces this one, including its own rules on reviews.
 
 ## Do
 
