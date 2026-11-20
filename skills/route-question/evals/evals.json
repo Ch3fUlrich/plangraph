@@ -1,0 +1,14 @@
+[
+  {
+    "id": "route-question-plan-first",
+    "prompt": "An agent asks which tool to use for a repo task. What do you do first?",
+    "must": ["Plan graph first", "ask only what the plan truly leaves open"],
+    "must_not": ["ask the operator first"]
+  },
+  {
+    "id": "route-question-deadline",
+    "prompt": "A reversible question is unanswered at its deadline.",
+    "must": ["if reversible, accept the default and log it"],
+    "must_not": ["drop the question"]
+  }
+]

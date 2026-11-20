@@ -632,3 +632,10 @@ denies:
   `claude agents`, and `claude stop <id>` stay allowed.
 - Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
   (see `docs/TESTING.md`).
+
+## Skill lint (`tools/skill-rules.py`)
+
+`python3 tools/skill-rules.py lint` fails when a skill markdown file passes 500
+lines, a `SKILL.md` lacks frontmatter, or any skill text names a path under the
+retired routing folder. Skills read site values from the router
+config keys they name, never from absolute paths.

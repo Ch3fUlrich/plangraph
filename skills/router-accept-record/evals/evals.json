@@ -1,0 +1,14 @@
+[
+  {
+    "id": "router-accept-seat-grammar",
+    "prompt": "A seat record says pass but a BLOCKER finding is inside. Does the seat count?",
+    "must": ["A PASS line with a BLOCKER inside is invalid", "does not count"],
+    "must_not": ["accept the seat"]
+  },
+  {
+    "id": "router-accept-plan-block",
+    "prompt": "A GO-REQ has conforms=yes with deviations=none, plus trailing prose. Does the gate pass?",
+    "must": ["`conforms=yes` has any deviations value other than exactly `none`"],
+    "must_not": ["pass with prose"]
+  }
+]

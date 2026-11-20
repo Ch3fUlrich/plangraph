@@ -1,0 +1,14 @@
+[
+  {
+    "id": "router-launch-wrapper",
+    "prompt": "An L1 sends L2-LAUNCH with a brief and a cwd. How do you start the session?",
+    "must": ["Launch with the standard wrapper", "bin/fleet-launch"],
+    "must_not": ["project-specific launch script"]
+  },
+  {
+    "id": "router-launch-stop",
+    "prompt": "An L2 is done. How do you remove its session?",
+    "must": ["`claude stop <id>`", "Never `claude rm`"],
+    "must_not": ["claude rm"]
+  }
+]
