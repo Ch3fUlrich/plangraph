@@ -141,7 +141,7 @@
   {"id":"allow-sha-64hex-mid-masked","input":"123456abcdefa1b2c3d4e5f60123456789abcdef0123456789abfedcba654321","allow_shas":["a1b2c3d4e5f60123456789abcdef0123456789ab"],"allow_output":"[REDACTED]"},
   {"id":"allow-sha-dash-hex-flank-masked","input":"123456abcdef-a1b2c3d4e5f60123456789abcdef0123456789ab-fedcba654321","allow_shas":["a1b2c3d4e5f60123456789abcdef0123456789ab"],"allow_output":"[REDACTED]"},
   {"id":"allow-sha-dash-word-masked","input":"foo-a1b2c3d4e5f60123456789abcdef0123456789ab-bar","allow_shas":["a1b2c3d4e5f60123456789abcdef0123456789ab"],"allow_output":"[REDACTED]"},
-  {"id":"allow-sha-dash-prefix-word-masked","input":"mysecretword-a1b2c3d4e5f60123456789abcdef0123456789ab","allow_shas":["a1b2c3d4e5f60123456789abcdef0123456789ab"],"allow_output":"[REDACTED]"},
+  {"id":"allow-sha-dash-prefix-word-masked","input_parts":["hiddenword-","a1b2c3d4e5f60123456789abcdef0123456789ab"],"allow_shas":["a1b2c3d4e5f60123456789abcdef0123456789ab"],"allow_output":"[REDACTED]"},
   {"id":"allow-sha-slash-hex-flank-masked","input":"123456abcdef/a1b2c3d4e5f60123456789abcdef0123456789ab","allow_shas":["a1b2c3d4e5f60123456789abcdef0123456789ab"],"allow_output":"[REDACTED]"},
   {"id":"allow-sha-underscore-masked","input":"foo_a1b2c3d4e5f60123456789abcdef0123456789ab a1b2c3d4e5f60123456789abcdef0123456789ab_bar","allow_shas":["a1b2c3d4e5f60123456789abcdef0123456789ab"],"allow_output":"[REDACTED] [REDACTED]"},
   {"id":"allow-sha-secret-rules-still-mask","input_parts":["API_","KEY=a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2\nsk","-a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2\nBear","er a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2"],"allow_shas":["a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2a1b2"],"allow_output":"API_KEY=[REDACTED]\n[REDACTED]\nBearer [REDACTED]"}
