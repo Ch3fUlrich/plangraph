@@ -1,0 +1,1 @@
+Spawned writer and reviewer prompts start with a header naming their own harness (no AutoOS text) followed by the role skill read byte-identical from origin/main; the native Codex writer uses the same header file; GEMINI.md links AGENTS.md.

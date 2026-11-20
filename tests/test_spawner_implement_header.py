@@ -1,21 +1,94 @@
-"""D-2966: implement prompts carry the commit-allowed header; review prompts never do."""
+"""Rule 3.57: spawned writers and reviewers start with their own harness header and role skill."""
 import asyncio
+from pathlib import Path
 
-from plangraph.spawner.runner import IMPLEMENT_HEADER, SpawnerRunner
+import pytest
+
+from plangraph.spawner.prompt_input import compose, header, read_skill
+from plangraph.spawner.runner import SpawnerRunner
+
+ROOT = Path(__file__).resolve().parents[1]
+BATCH_TAIL = '\n# Items\nitem {n}\n\n# Run values\nNAME: x\n'
 
 
-def _prompt(role, prompt='do the brief'):
-    job = asyncio.run(SpawnerRunner().spawn(prompt, model_or_combo='mimo/mimo-v2.6-flash', role=role, dry_run=True))
+def _prompt(role, prompt='do the brief', client=None, model='mimo/mimo-v2.6-flash'):
+    job = asyncio.run(SpawnerRunner().spawn(prompt, model_or_combo=model, role=role,
+                                            dry_run=True, client=client))
     return job.task_prompt
 
 
+def _skill(name):
+    return read_skill(name, str(ROOT))
+
+
+@pytest.mark.parametrize('role', ['implement', 'review'])
+@pytest.mark.parametrize('harness,leg_id,words,forbidden', [
+    ('agy', 'agy-x', 'agy', 'opencode'),
+    ('opencode', 'cx-gpt-6.1-sol', 'Codex', 'opencode'),
+    ('opencode', 'opencode-x', 'opencode', 'Codex'),
+])
+def test_header_names_own_harness(role, harness, leg_id, words, forbidden):
+    text = header(harness, role, leg_id)
+    assert text and words in text
+    assert forbidden not in text
+    assert 'AutoOS' not in text and 'build agent' not in text
+    assert ('read-only' in text) == (role == 'review')
+    assert 'never push' in text or role == 'review'
+    assert compose('x', role, harness, str(ROOT), leg_id).startswith(text)
+
+
+def test_spawned_prompts_have_header_and_skill():
+    impl = _prompt('implement', client='agy', model='agy-gemini-4-argon')
+    assert impl.startswith(header('agy', 'implement'))
+    assert _skill('implement') in impl and impl.endswith('do the brief')
+    review = _prompt('review', client='agy', model='agy-gemini-4-argon')
+    assert review.startswith(header('agy', 'review'))
+    assert _skill('review') in review
+    assert 'AutoOS' not in impl.split('name: implement')[0]
+
+
+def test_batch_briefs_share_prefix():
+    a = _prompt('implement', 'brief A' + BATCH_TAIL.format(n=1))
+    b = _prompt('implement', 'brief B' + BATCH_TAIL.format(n=2))
+    prefix = header('opencode', 'implement') + '\n\n' + _skill('batch-writer')
+    assert a.startswith(prefix) and b.startswith(prefix)
+
+
+def test_skill_in_brief_is_not_doubled():
+    skill = _skill('batch-writer')
+    brief = skill + '\n' + BATCH_TAIL.format(n=1)
+    out = _prompt('implement', brief)
+    assert out.count(skill) == 1
+    assert out == header('opencode', 'implement') + '\n\n' + brief
+
+
 def test_implement_prompt_starts_with_header():
-    assert _prompt('implement') == IMPLEMENT_HEADER + '\n\ndo the brief'
+    assert _prompt('implement').startswith(header('opencode', 'implement'))
 
 
 def test_review_prompt_has_no_header():
-    assert IMPLEMENT_HEADER not in _prompt('review')
+    # the implement header (commit allowed) never reaches a review prompt
+    assert 'commit is allowed' not in _prompt('review')
 
 
 def test_header_not_doubled_on_continuation():
-    assert _prompt('implement', IMPLEMENT_HEADER + '\n\nnext round').count(IMPLEMENT_HEADER) == 1
+    text = header('opencode', 'implement')
+    assert _prompt('implement', text + '\n\nnext round').count(text) == 1
+
+
+def test_continuation_is_idempotent():
+    once = _prompt('implement', 'next round')
+    assert _prompt('implement', once) == once
+
+
+def test_missing_skill_fails_the_check(monkeypatch):
+    # The guard of the guard: a prompt built without the skill text must not satisfy these checks.
+    monkeypatch.setattr('plangraph.spawner.prompt_input.read_skill', lambda *a: None)
+    out = _prompt('review')
+    assert _skill('review') not in out
+
+
+def test_gemini_md_links_agents_md():
+    # A repository scrub forbids symlinks, so GEMINI.md imports AGENTS.md the way CLAUDE.md does.
+    assert (ROOT / 'GEMINI.md').read_text() == '@AGENTS.md\n' == (ROOT / 'CLAUDE.md').read_text()
+    assert (ROOT / 'AGENTS.md').is_file()

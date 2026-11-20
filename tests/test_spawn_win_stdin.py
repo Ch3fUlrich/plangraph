@@ -20,13 +20,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 import plangraph.spawner.runner as runner_module
-from plangraph.spawner.runner import IMPLEMENT_HEADER, SpawnerRunner
+from plangraph.spawner.runner import SpawnerRunner
+from plangraph.spawner.prompt_input import compose
 from fake_pid import FAKE_PID
 
 
 def _sent(prompt):
     """The prompt an implement-role spawn sends (D-2966 header first)."""
-    return IMPLEMENT_HEADER + "\n\n" + prompt
+    return compose(prompt, "implement", None, None)
 
 
 @pytest.fixture(autouse=True)

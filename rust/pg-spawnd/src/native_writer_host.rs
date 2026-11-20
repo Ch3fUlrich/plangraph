@@ -279,6 +279,19 @@ impl Driver for Host {
         }
         result
     }
+    fn skill(&mut self, name: &str) -> Result<String, String> {
+        let shown = self
+            .command("git")
+            .arg("-C")
+            .arg(&self.cwd)
+            .args(["show", &format!("origin/main:skills/{name}/SKILL.md")])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !shown.status.success() {
+            return Err("skill not on origin/main".into());
+        }
+        String::from_utf8(shown.stdout).map_err(|e| e.to_string())
+    }
     fn head(&mut self) -> Result<String, String> {
         self.git(&["rev-parse", "HEAD"])
     }

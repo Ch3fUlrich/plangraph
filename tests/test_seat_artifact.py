@@ -167,7 +167,8 @@ def test_dispatch_hash_is_in_memory(tmp_path, monkeypatch, dry_run):
     job = asyncio.run(instance.spawn(prompt='synthetic é\n', role='review',
         dry_run=dry_run, cwd=str(tmp_path), wait_seconds=1))
     assert received == [job.task_prompt]
-    assert job.prompt_sha256 == hashlib.sha256('synthetic é\n'.encode()).hexdigest()
+    assert job.task_prompt.endswith('synthetic é\n')
+    assert job.prompt_sha256 == hashlib.sha256(job.task_prompt.encode()).hexdigest()
 
 
 def test_authenticated_finish_not_inferred(tmp_path):

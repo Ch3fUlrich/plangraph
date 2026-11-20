@@ -5,6 +5,8 @@ import time
 
 import pytest
 
+from plangraph.spawner.prompt_input import header
+
 from plangraph.spawner import launch_spec as spec
 from go_credential_fake import go_credential  # noqa: F401
 
@@ -75,7 +77,6 @@ def test_unknown(request_data):
 @pytest.mark.parametrize('role', ['implement', 'review'])
 @pytest.mark.parametrize('explicit', [False, True])
 def test_tools(request_data, role, tmp_path, explicit):
-    from plangraph.spawner.runner import IMPLEMENT_HEADER
     leg_id = 'cx-gpt-6.1-sol' if role == 'implement' else request_data['leg']['id']
     exe = tmp_path / ('opencode' if role == 'implement' else 'qodercli')
     exe.write_text('#!/bin/sh\nexit 99\n')
@@ -92,7 +93,9 @@ def test_tools(request_data, role, tmp_path, explicit):
     assert request_data['prompt'] not in result['argv']
     assert ('GIT_AUTHOR_NAME' in result['env']) == (role == 'implement')
     assert ('GIT_AUTHOR_EMAIL' in result['env']) == (role == 'implement')
-    assert (IMPLEMENT_HEADER in prompt) == (role == 'implement')
+    harness = 'opencode' if role == 'implement' else 'qodercli'
+    assert prompt.startswith(header(harness, role, leg_id))
+    assert ('name: ' + ('review' if role == 'review' else 'implement') in prompt)
     assert ('End every commit message' in prompt) == (role == 'implement')
     assert result['events'][-2]['event'] == 'admitted_by_render'
 
@@ -105,7 +108,8 @@ def test_opencode(request_data):
     job = result['events'][-1]['python_job_id']
     assert result['events'][-1]['event'] == 'launch_spec'
     assert result['argv'][result['argv'].index('--title') + 1] == 'plangraph-' + job
-    assert result['stdin'] == request_data['prompt']
+    assert result['stdin'] == result['prompt'] and result['stdin'].endswith(request_data['prompt'])
+    assert result['stdin'].startswith(header('opencode', 'review'))
     prefix = request_data['state'] + '/launch/' + request_data['run_id'] + '/'
     assert all(result['env'][key].startswith(prefix) for key in ('HOME', 'XDG_CONFIG_HOME'))
 
@@ -114,7 +118,7 @@ def test_agy_stream_spec(request_data):
     request_data.update(leg={'id': 'agy-gemini-4-argon'}, prompt='é\n' + 'x' * (300 * 1024))
     result = spec.build(request_data)
     assert request_data['prompt'] not in result['argv']
-    assert json.loads(result['stdin'])['message']['content'] == result['prompt'] == request_data['prompt']
+    assert json.loads(result['stdin'])['message']['content'] == result['prompt'] and result['prompt'].endswith(request_data['prompt'])
 
 
 @pytest.mark.parametrize('leg_id', ['agy-gemini-4-argon', 'qodercli-qwen3.8-flash', 'opencode-glm-5.3-flash-free'])
@@ -142,7 +146,7 @@ def test_real_producer_prompt_stays_out_of_env(request_data, monkeypatch, leg_id
     assert {name: result['env'][name] for name in settings} == settings
     assert all(prompt not in value for value in [*result['argv'], *result['env'].values()])
     payload = json.loads(result['stdin'])['message']['content'] if leg_id.startswith('agy-') else result['stdin']
-    assert payload == result['prompt'] == prompt
+    assert payload == result['prompt'] and payload.endswith(prompt)
 
 
 @pytest.mark.parametrize('harness,leg', [('agy', 'agy-gemini-4-argon'), ('qodercli', 'qodercli-qwen3.8-flash')])
@@ -197,11 +201,11 @@ def test_explicit_document_review(request_data, tmp_path, monkeypatch, with_diff
     leg = next(leg for leg in spec.DEFAULT_LEGS if leg.id == request_data['leg']['id'])
     direct = service._leg_prompt(request_data['prompt'], request_data['card'], 'review', leg,
                                  document_review=True)
-    assert result['prompt'] == direct
+    assert result['prompt'].endswith(direct)
     if with_diff:
         assert diff in result['prompt']
     else:
-        assert result['prompt'] == request_data['prompt']
+        assert result['prompt'].endswith(request_data['prompt'])
         assert 'diff --git' not in result['prompt']
 
 

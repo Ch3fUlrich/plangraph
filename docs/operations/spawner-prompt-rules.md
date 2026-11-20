@@ -41,3 +41,11 @@ prompts exceeding the leg budget (three chars/token) record `prompt_too_large`.
 Rejected stdin input or an unavailable/closed input pipe fails the run explicitly;
 the watchdog never retries a rejected payload as an empty prompt. Gateway config
 size refusal leaves the caller's environment unchanged.
+
+## Role header and role skill (rule 3.57)
+
+Every implement and review prompt starts with a role header naming the agent's own
+harness (`src/plangraph/config/role_headers.json`, also embedded by the native writer),
+then the role skill (`batch-writer` for a batch brief, `implement`, or `review`) read
+byte-identical from the run checkout's `origin/main`, then the caller's brief. A brief
+that already starts with the skill text gets it once.

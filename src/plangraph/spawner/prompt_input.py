@@ -1,5 +1,7 @@
 """Resolve caller-owned spawn inputs without copying them to disk."""
+from importlib import resources
 from pathlib import Path
+import json
 import os
 import subprocess
 
@@ -70,3 +72,71 @@ def resolve_prompt(prompt: str | None, prompt_file: str | None) -> str:
     if not text.strip():
         raise SpawnRefused(f'prompt_file_empty: {prompt_file}')
     return text
+
+
+# Role header and role skill of every spawned prompt (rule 3.57). The header words come
+# from config/role_headers.json, which the Rust native writer embeds too.
+_ROLE_KEY = {'implement': 'implement', 'fix': 'implement', 'review': 'review'}
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _table() -> dict:
+    return json.loads(resources.files('plangraph').joinpath('config/role_headers.json').read_text('utf-8'))
+
+
+def agent_key(harness: str | None, leg_id: str | None = None) -> str:
+    """Codex legs run through the opencode harness; their id says which agent they are."""
+    if leg_id and leg_id.startswith('cx-'):
+        return 'codex'
+    return harness or 'opencode'
+
+
+def header(harness: str | None, role: str, leg_id: str | None = None) -> str | None:
+    key = _ROLE_KEY.get(role)
+    if key is None:
+        return None
+    table = _table()
+    name = agent_key(harness, leg_id)
+    return table['roles'][key].format(agent=table['agents'].get(name, 'the ' + name + ' agent'))
+
+
+def is_batch_brief(brief: str) -> bool:
+    return '\n# Items\n' in brief and '\n# Run values' in brief
+
+
+def skill_name(role: str, brief: str) -> str | None:
+    key = _ROLE_KEY.get(role)
+    if key == 'review':
+        return 'review'
+    if key == 'implement':
+        return 'batch-writer' if is_batch_brief(brief) else 'implement'
+    return None
+
+
+def read_skill(name: str, cwd: str | None) -> str | None:
+    """Skill text from origin/main of the run checkout, falling back to this repository."""
+    for root in (cwd, str(_REPO_ROOT)):
+        if not root:
+            continue
+        try:
+            proc = subprocess.Popen(['git', '-C', root, 'show', f'origin/main:skills/{name}/SKILL.md'],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=checkout_env())
+            out, _ = proc.communicate(timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if proc.returncode == 0 and out:
+            return out.decode('utf-8')
+    return None
+
+
+def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id: str | None = None) -> str:
+    """header, role skill byte-identical, then the brief; neither is added twice."""
+    head = header(harness, role, leg_id)
+    if head is None:
+        return prompt
+    body = prompt[len(head):].lstrip('\n') if prompt.startswith(head) else prompt
+    name = skill_name(role, body)
+    skill = read_skill(name, cwd) if name else None
+    if skill and not body.startswith(skill):
+        body = skill + '\n' + body
+    return head + '\n\n' + body
