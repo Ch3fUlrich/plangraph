@@ -15,6 +15,38 @@ from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, 
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
+# Job id -> display name of the tests workflow (tests/test_ci_job_names.py keeps it equal to
+# tests.yml). The API reports the display name; the id still counts for runs of older heads.
+JOB_DISPLAY = {
+    "select": "Select suites for this change",
+    "scrub": "Public scrub: no private names or secrets",
+    "file-size": "File size limit (400 lines)",
+    "new-code-lang": "New code is Rust",
+    "changelog-docs": "Changelog fragment and docs",
+    "browser": "UI tests in headless Chromium",
+    "rust": "Rust workspace on Linux: fmt, clippy, tests",
+    "rust-windows": "Rust spawner and worker core tests on Windows",
+    "rust-worker": "Rust worker crate: fmt, clippy, tests",
+    "rust-spike": "Rust replay spike tests",
+    "ci-gate": "ci-gate",
+}
+# Sharded job id -> display name prefix; the shard suffix is " (shard N of M)", N from 1.
+SHARD_DISPLAY = {
+    "pytest": "Python tests, SQLite keeper",
+    "pytest-postgres": "Python tests, Postgres keeper: contract and storage",
+}
+
+
+def job_named(seen, key: str) -> bool:
+    return key in seen or JOB_DISPLAY[key] in seen
+
+
+def shard_named(seen, suite: str, index: int) -> bool:
+    """True when shard *index* (0-based) of *suite* ran, under the old or the new name."""
+    if f"{suite} ({index})" in seen:
+        return True
+    pattern = re.compile(re.escape(SHARD_DISPLAY[suite]) + rf" \(shard {index + 1} of \d+\)")
+    return any(pattern.fullmatch(name) for name in seen)
 #: Every bucket gh prints; any other word is unknown, and unknown is never green.
 BUCKETS = ("pass", "fail", "pending", "skipping", "cancel")
 #: A verdict line that says fail, whatever precedes it (quote mark, bullet, bold, underscores): it refuses the approval.
@@ -203,10 +235,10 @@ def require_full_run(repo, head, branch):
                 raise MergeBatchError("full_ci: incomplete job pagination")
             page += 1
     jobs = jobs_for(attempt)
-    required = {"select", "scrub", "file-size", "new-code-lang", "changelog-docs", "browser",
-                "rust", "rust-windows", "rust-worker", "rust-spike", "ci-gate"}
-    required.update(f"{suite} ({i})" for suite in ("pytest", "pytest-postgres") for i in range(3))
-    missing = required - {j["name"] for j in jobs}
+    seen = {j["name"] for j in jobs}
+    missing = {key for key in JOB_DISPLAY if not job_named(seen, key)}
+    missing.update(f"{suite} (shard {i + 1})" for suite in SHARD_DISPLAY for i in range(3)
+                   if not shard_named(seen, suite, i))
     bad = [f"{j['name']}={j.get('conclusion') or j.get('status')}" for j in jobs
            if j.get("status") != "completed" or j.get("conclusion") != "success"]
     if missing or bad:
