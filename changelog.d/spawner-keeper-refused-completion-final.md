@@ -1,0 +1,1 @@
+A completion the keeper refuses with a conflict (HTTP 409), or refuses twice with the same other 4xx status, is marked `keeper.delivered` as `refused: HTTP <status>` and is not sent on any later tick; 401/403/408/425/429 stay retryable.
