@@ -241,7 +241,7 @@ def test_overflow_keeps_explicit_cwd(checkouts, tmp_path, monkeypatch, source, d
             overflow.remote_spawn('remote', host, card, 'Review', ['--cwd=' + str(reviewed)])
     else:
         result = service.admit_spawn({'cwd': str(reviewed)} if source != 'card' else {}, card=card)
-        assert result['status'] == 'queued' and result['exit_code'] == 5
+        assert result['status'] == 'refused' and result['exit_code'] == 2
         assert not result.get('overflow_remote')
         assert service.result(result['run_id']) == result
     assert card == original

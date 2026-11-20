@@ -354,6 +354,28 @@ fn usage() {
     assert_eq!(status.code(), Some(64));
 }
 
+/// Failed user scopes whose description mentions `needle` (a unique temp directory).
+fn failed_scopes_mentioning(needle: &str) -> Vec<String> {
+    let out = Command::new("systemctl")
+        .args([
+            "--user",
+            "list-units",
+            "--failed",
+            "--all",
+            "--full",
+            "--plain",
+            "--no-legend",
+            "run-u*.scope",
+        ])
+        .output()
+        .expect("systemctl --user list-units");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|line| line.contains(needle))
+        .map(str::to_owned)
+        .collect()
+}
+
 #[test]
 fn memory_hog_and_fork_bomb() {
     if !landlock_ok() {
@@ -367,7 +389,7 @@ fn memory_hog_and_fork_bomb() {
 
     let mut cmd = Command::new("timeout");
     cmd.arg("30").arg("systemd-run");
-    cmd.args(["--user", "--scope", "--quiet"]);
+    cmd.args(["--user", "--scope", "--collect", "--quiet"]);
     cmd.args([
         "-p",
         "MemoryMax=64M",
@@ -388,10 +410,16 @@ fn memory_hog_and_fork_bomb() {
         out.status.signal() == Some(9) || out.status.code() == Some(137),
         "expected OOM SIGKILL, got {out:?}"
     );
+    let needle = work.path().to_string_lossy().into_owned();
+    assert_eq!(
+        failed_scopes_mentioning(&needle),
+        Vec::<String>::new(),
+        "the OOM-killed scope must not stay failed"
+    );
 
     let mut cmd = Command::new("timeout");
     cmd.arg("30").arg("systemd-run");
-    cmd.args(["--user", "--scope", "--quiet"]);
+    cmd.args(["--user", "--scope", "--collect", "--quiet"]);
     cmd.args([
         "-p",
         "MemoryMax=64M",
@@ -418,6 +446,11 @@ fn memory_hog_and_fork_bomb() {
         "expected task-limit refusal, got {out:?}"
     );
     assert!(!out.status.success(), "fork bomb unexpectedly succeeded");
+    assert_eq!(
+        failed_scopes_mentioning(&needle),
+        Vec::<String>::new(),
+        "the fork-bomb scope must not stay failed"
+    );
 }
 
 #[test]

@@ -27,13 +27,40 @@ RUST_TIMEOUT = 600
 # The affected-test step is bounded well under the 5 minute push target; the
 # measured normal run is about 50 s.
 TEST_TIMEOUT = 240
+# A large selection (spawner core selects hundreds of test paths) scales the bound:
+# paths x PER_PATH seconds, never below TEST_TIMEOUT and capped at MAX_TEST_TIMEOUT.
+TEST_PER_PATH_TIMEOUT = 2
+MAX_TEST_TIMEOUT = 1200
 
 
-def check_timeout(command):
+def is_affected_step(command):
+    return len(command) > 1 and Path(command[1]).name == "affected_tests.py"
+
+
+def planned_paths(command, cwd, env):
+    """Count of test paths the selector plans for this real (--run) command, else None."""
+    if "--run" not in command:
+        return None
+    try:
+        done = subprocess.run([part for part in command if part != "--run"], cwd=cwd, env=env, text=True,
+                              capture_output=True, timeout=CHECK_TIMEOUT)
+        count = selected_count(done.stdout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return count if isinstance(count, int) else None
+
+
+def scaled_test_timeout(count):
+    if count is None:
+        return TEST_TIMEOUT
+    return min(MAX_TEST_TIMEOUT, max(TEST_TIMEOUT, count * TEST_PER_PATH_TIMEOUT))
+
+
+def check_timeout(command, cwd=None, env=None):
     if command[:2] in (["cargo", "clippy"], ["cargo", "test"]):
         return RUST_TIMEOUT
-    if len(command) > 1 and Path(command[1]).name == "affected_tests.py":
-        return TEST_TIMEOUT
+    if is_affected_step(command):
+        return scaled_test_timeout(planned_paths(command, cwd, env))
     return CHECK_TIMEOUT
 
 
@@ -99,15 +126,15 @@ def run_test_process(command, **kwargs):
 
 
 def run(command, cwd, env):
-    timeout = check_timeout(command)
+    timeout = check_timeout(command, cwd, env)
     try:
-        runner = run_test_process if len(command) > 1 and Path(command[1]).name == "affected_tests.py" else subprocess.run
+        runner = run_test_process if is_affected_step(command) else subprocess.run
         result = runner(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=timeout)
         return result.returncode, result.stdout
     except subprocess.TimeoutExpired as exc:
-        if timeout == TEST_TIMEOUT and len(command) > 1 and Path(command[1]).name == "affected_tests.py":
+        if is_affected_step(command):
             return 1, (f"tests: affected-tests step exceeded its {timeout} second bound "
                        f"({selected_count(exc.stdout)} selected test paths)\n")
         return 1, f"check exceeded {timeout} second timeout\n"
