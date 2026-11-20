@@ -155,53 +155,6 @@ impl Host {
             .ok_or_else(|| "disk probe failed".into())
     }
 }
-impl Host {
-    /// Pin `base_ref` at `pin`: the pushed ref when `origin` has it, else the host
-    /// repository's own ref (a lane head that was never pushed). A ref found in
-    /// neither place is refused by name; an unreachable `origin` stays an error.
-    fn pin_base(&self, pin: &str) -> Result<(), String> {
-        let repo = |host: &Host, args: &[&str]| {
-            output(host.command("git").arg("-C").arg(&host.repo).args(args))
-        };
-        repo(
-            self,
-            &[
-                "fetch",
-                "--no-write-fetch-head",
-                "origin",
-                "+refs/heads/main:refs/remotes/origin/main",
-            ],
-        )?;
-        if !repo(self, &["ls-remote", "origin", &self.base_ref])?.is_empty() {
-            return repo(
-                self,
-                &[
-                    "fetch",
-                    "--no-write-fetch-head",
-                    "origin",
-                    &format!("+{}:{pin}", self.base_ref),
-                ],
-            )
-            .map(drop);
-        }
-        let local = repo(
-            self,
-            &[
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                &format!("{}^{{commit}}", self.base_ref),
-            ],
-        )
-        .map_err(|_| {
-            format!(
-                "base_ref {} exists neither on origin nor in the host repository",
-                self.base_ref
-            )
-        })?;
-        repo(self, &["update-ref", pin, &local]).map(drop)
-    }
-}
 impl Driver for Host {
     fn disk_gb(&mut self) -> Result<u64, String> {
         self.free()
@@ -528,11 +481,16 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     );
     Ok(())
 }
+#[path = "native_writer_base.rs"]
+mod base;
 #[path = "native_writer_review.rs"]
 mod review;
 use review::review_cli;
 #[cfg(test)]
 use review::{review_run_text, review_verdict};
+#[cfg(test)]
+#[path = "native_writer_base_tests.rs"]
+mod base_tests;
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;
