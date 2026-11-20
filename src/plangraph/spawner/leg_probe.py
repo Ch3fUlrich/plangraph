@@ -390,16 +390,6 @@ async def before_launch(runner, leg, role, dry_run):
         adapter._at = None  # Re-read after an ordinary probe.
     return (limit() or admission(probe_ok=result['ok'])) if result['ok'] or result.get('infra') or result.get('state') == 'probe_failed_leg_serving' else 'down: ' + reason
 
-def routed_review_legs():
-    """Active review legs offered by the review route in REVIEW_ORDER."""
-    from plangraph.planner.legs import DEFAULT_LEGS, REVIEW_FALLBACK_LEGS, REVIEW_ORDER, leg_active
-    default_ids = {leg.id for leg in DEFAULT_LEGS}
-    if any(leg_id in default_ids for leg_id in REVIEW_ORDER):
-        pool = {leg.id: leg for leg in (*DEFAULT_LEGS, *REVIEW_FALLBACK_LEGS)}
-        return [pool[leg_id] for leg_id in REVIEW_ORDER if leg_id in pool and leg_active(pool[leg_id])]
-    return [leg for leg in DEFAULT_LEGS if leg_active(leg) and 'review' in leg.roles]
-
-
 def _check_manage_key(runner):
     binary = shutil.which('pg-spawnd')
     if binary is None:
@@ -418,13 +408,13 @@ def _check_manage_key(runner):
                 logging.getLogger(__name__).warning('missing_manage_key')
             data.pop('key_path', None)
             return data
-    except (OSError, subprocess.SubprocessError, ValueError):
-        pass
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        logging.getLogger(__name__).warning('manage_key_check_failed: %s', type(exc).__name__)
     return None
 
 
 async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_reviewers=False, role=None):
-    from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
+    from plangraph.planner.legs import DEFAULT_LEGS, leg_active, routed_review_legs, spawnable_legs
     SPAWNABLE_LEGS = spawnable_legs()
     ids = {legs} if isinstance(legs, str) else set(legs or ())
     if not (ids or all_writers or all_reviewers):
