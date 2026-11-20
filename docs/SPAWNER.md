@@ -185,7 +185,7 @@ failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; o
 recognized availability/quota evidence does. Review `usage_limit:`/`credit_limit:` labels book only when their payload is recognized quota evidence (for example `error: usage limit reached`/`error: credits exhausted`); a label plus `task diagnostic` does not book. Writer
 generic failures keep their stop rule; cancellation, safety refusals and watchdog
 terminals still stop immediately. Safety refusal attempts precede provider-stop classification without overwriting distinct terminal reasons; specific unavailable diagnostics outrank generic provider stops. Provider-stop responses pass through spawner redaction before being added to attempts, including safety refusals. OOM wrapper marker lines (including prefixed telemetry) are not failure reasons. A `plangraph_oom` envelope on stderr is recorded only as an event and removed from the captured stderr, so each failed attempt keeps its own reason and a later attempt's OOM line cannot overwrite it.
-Plain stdout, including text saying 429, is never provider evidence.
+Plain stdout, including text saying 429, is never provider evidence; `not_served_on_host` is a host fact and is never booked as a 429 down window.
 
 ### SHA-named run-tree primitive (SPAWNER-RUN-TREE-S1)
 

@@ -255,7 +255,10 @@ def fallthrough_reason(service, chosen, job, record):
     streams = (job.stdout, job.stderr)
     reason = unavailable_reason(job.exit_code, *(map(without_progress, streams) if is_opencode(job) else streams))
     if reason is not None:
-        _book_failure(service, chosen, 'model_unavailable: ' + reason)
+        # not_served_on_host is a fact about this host's environment (a detached unit without the
+        # login opencode config), not provider evidence: never book it as a 429 down window.
+        if not reason.lstrip().startswith('not_served_on_host'):
+            _book_failure(service, chosen, 'model_unavailable: ' + reason)
         notify_leg_refused(service, record, chosen, reason)
     stop = getattr(getattr(service, 'runner', None), 'provider_responses', {}).get(getattr(job, 'job_id', None))
     if (not reason and record.get('role') == 'review' and stop

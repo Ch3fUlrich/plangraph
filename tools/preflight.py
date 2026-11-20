@@ -271,6 +271,40 @@ def rust_commands(root, base, head, env=None):
     return commands
 
 
+PROST_LOCK_MARKERS = ('name = "prost-build"', 'name = "prost-wkt-types"')
+
+
+def needs_protoc(root, commands):
+    """True when a cargo build or test targets a manifest whose lock pulls a protobuf build script."""
+    for command in commands:
+        if command[0] != 'cargo' or command[1:2] == ['fmt']:
+            continue
+        manifest = (Path(command[command.index('--manifest-path') + 1]) if '--manifest-path' in command
+                    else Path(root) / 'rust/Cargo.toml')
+        lock = manifest.parent / 'Cargo.lock'
+        if lock.is_file() and any(marker in lock.read_text() for marker in PROST_LOCK_MARKERS):
+            return True
+    return False
+
+
+def require_protoc(root, commands, env):
+    """Resolve protoc (PROTOC, ~/.local/bin, PATH) into env, or fail in a second: a detached unit's PATH
+    lacks ~/.local/bin and the build script would fail only after minutes of compiling."""
+    if not needs_protoc(root, commands):
+        return
+    given = env.get('PROTOC')
+    if given:
+        if not (Path(given).is_file() and os.access(given, os.X_OK)):
+            raise FailFamily(f"PROTOC={given} is not an executable file: fix or unset PROTOC")
+        return
+    local = Path.home() / '.local/bin/protoc'
+    found = str(local) if local.is_file() and os.access(local, os.X_OK) else shutil.which('protoc', path=env.get('PATH', ''))
+    if not found:
+        raise FailFamily("protoc not found: set PROTOC, or install it in ~/.local/bin or on PATH "
+                         "(a detached systemd-run unit needs the login PATH)")
+    env['PROTOC'] = found
+
+
 def test_environment(root, env):
     """A pre-push caller's Git context must not select a fixture's repository."""
     local = set(subprocess.check_output(
@@ -480,6 +514,7 @@ def _main(argv, root, cleanup):
                     print(f"rust CARGO_TARGET_DIR: {rust_env.get('CARGO_TARGET_DIR', root / 'rust/target')}", flush=True)
                     family_env = {key: value for key, value in rust_env.items()
                                   if not key.upper().startswith('GIT_')}
+                    require_protoc(root, commands, family_env)
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)
                 failed = []  # policy runs every check and reports all failures

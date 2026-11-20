@@ -26,7 +26,7 @@ affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes,
 With sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned before a private target is created. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). See docs/TESTING.md.
 `tools/merge_batch.py push` also waits without an overall deadline and forwards
 git and hook output to stderr while the hook enforces its per-step bounds.
-The shared subprocess runner kills the process group on a caller-supplied
+The Rust step resolves `protoc` (`PROTOC`, then `~/.local/bin/protoc`, then `PATH`) before cargo when a target pulls a protobuf build script, and refuses within a second with a named message when it is missing. The shared subprocess runner kills the process group on a caller-supplied
 timeout or interruption, including nested worker sessions on Linux, then reaps
 git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`

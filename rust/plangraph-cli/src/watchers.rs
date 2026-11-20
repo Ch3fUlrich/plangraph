@@ -33,7 +33,39 @@ fn write<T: Serialize>(path: &Path, value: &T) -> io::Result<()> {
     )
 }
 
-fn service(exe: &Path, dir: &Path, unit: &str) -> Command {
+/// Variables the user manager sets itself for a service; copying them would misname the unit.
+const MANAGER_VARS: [&str; 12] = [
+    "INVOCATION_ID",
+    "JOURNAL_STREAM",
+    "SYSTEMD_EXEC_PID",
+    "NOTIFY_SOCKET",
+    "LISTEN_FDS",
+    "LISTEN_PID",
+    "LISTEN_FDNAMES",
+    "MAINPID",
+    "MANAGERPID",
+    "WATCHDOG_PID",
+    "WATCHDOG_USEC",
+    "FDSTORE",
+];
+
+/// Names of the caller's environment a detached unit inherits: the whole login environment
+/// (PATH with ~/.local/bin, HOME, XDG and opencode config vars), minus what the manager sets.
+fn passthrough_names(vars: impl Iterator<Item = std::ffi::OsString>) -> Vec<String> {
+    let mut names: Vec<String> = vars
+        .filter_map(|name| name.into_string().ok())
+        .filter(|name| {
+            !name.is_empty()
+                && !name.contains('=')
+                && !name.bytes().any(|b| b == 0)
+                && !MANAGER_VARS.contains(&name.as_str())
+        })
+        .collect();
+    names.sort();
+    names
+}
+
+fn service(exe: &Path, dir: &Path, unit: &str, env_names: &[String]) -> Command {
     let mut cmd = Command::new("systemd-run");
     // A transient service belongs to the user manager, not the caller's scope.
     // Type=exec makes admission wait for the runner's exec, not its completion.
@@ -44,12 +76,16 @@ fn service(exe: &Path, dir: &Path, unit: &str) -> Command {
         "--service-type=exec",
         "--unit",
     ])
-    .arg(unit)
-    .arg("--")
-    .arg(exe)
-    .arg("watcher-run")
-    .arg(dir)
-    .stdin(Stdio::null());
+    .arg(unit);
+    // `-E NAME` takes the value from systemd-run's own environment: no value on a command line.
+    for name in env_names {
+        cmd.arg("-E").arg(name);
+    }
+    cmd.arg("--")
+        .arg(exe)
+        .arg("watcher-run")
+        .arg(dir)
+        .stdin(Stdio::null());
     cmd
 }
 
@@ -77,7 +113,8 @@ pub fn launch(job: &Path, name: &str, argv: &[String]) -> io::Result<()> {
         unit,
     };
     write(&dir.join("request.toml"), &request)?;
-    let admitted = service(&std::env::current_exe()?, &dir, &request.unit).status();
+    let names = passthrough_names(std::env::vars_os().map(|(name, _)| name));
+    let admitted = service(&std::env::current_exe()?, &dir, &request.unit, &names).status();
     let error = match admitted {
         Ok(status) if status.success() => return Ok(()),
         Ok(status) => format!("systemd-run: {status}"),
@@ -217,6 +254,7 @@ mod tests {
             Path::new("/bin/plangraph"),
             Path::new("/job/watchers/push"),
             "pg-watcher-test",
+            &[],
         );
         assert_eq!(command.get_program(), "systemd-run");
         assert_eq!(
@@ -233,6 +271,36 @@ mod tests {
                 "watcher-run",
                 "/job/watchers/push",
             ]
+        );
+    }
+
+    #[test]
+    fn watcher_service_passes_the_login_environment_by_name() {
+        let names = passthrough_names(
+            [
+                "PATH",
+                "HOME",
+                "XDG_CONFIG_HOME",
+                "INVOCATION_ID",
+                "JOURNAL_STREAM",
+                "A=B",
+            ]
+            .into_iter()
+            .map(std::ffi::OsString::from),
+        );
+        assert_eq!(names, ["HOME", "PATH", "XDG_CONFIG_HOME"]);
+        let command = service(
+            Path::new("/bin/plangraph"),
+            Path::new("/job/watchers/push"),
+            "pg-watcher-test",
+            &names,
+        );
+        let args = command.get_args().collect::<Vec<_>>();
+        let unit = args.iter().position(|a| *a == "pg-watcher-test").unwrap();
+        let separator = args.iter().position(|a| *a == "--").unwrap();
+        assert_eq!(
+            &args[unit + 1..separator],
+            ["-E", "HOME", "-E", "PATH", "-E", "XDG_CONFIG_HOME"]
         );
     }
 }
