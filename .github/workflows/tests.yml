@@ -441,6 +441,7 @@ jobs:
     defaults:
       run:
         working-directory: rust
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-rust

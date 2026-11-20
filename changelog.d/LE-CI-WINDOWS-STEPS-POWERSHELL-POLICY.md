@@ -1,0 +1,1 @@
+- Run the rust-windows steps under bash so a self-hosted Windows runner's PowerShell execution policy cannot block them.
