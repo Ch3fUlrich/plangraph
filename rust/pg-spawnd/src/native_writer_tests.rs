@@ -164,23 +164,27 @@ fn native_disk_floor_and_stale_base_prevent_execution() {
 }
 #[test]
 fn native_resume_cap_and_final_gates_fail_closed() {
-    // Falling HIGH counts keep progress; the fifth REQUEST_CHANGES round is the cap.
+    // Falling HIGH+MED counts at or below half of round 1 from round 3 on keep progress;
+    // the eighth REQUEST_CHANGES round is the ceiling of the one stop rule (round_progress.rs).
     let mut driver = Fake {
         verdicts: vec![
+            ("REQUEST_CHANGES", 20),
+            ("REQUEST_CHANGES", 15),
             ("REQUEST_CHANGES", 9),
+            ("REQUEST_CHANGES", 8),
             ("REQUEST_CHANGES", 7),
+            ("REQUEST_CHANGES", 6),
             ("REQUEST_CHANGES", 5),
-            ("REQUEST_CHANGES", 3),
-            ("REQUEST_CHANGES", 1),
+            ("REQUEST_CHANGES", 4),
         ],
         ..fake()
     };
     let record = run(&mut driver, json!({}), "brief");
     assert_eq!(record["exit_code"], 3);
     assert_eq!(record["round_stop"], "round_cap");
-    assert_eq!(record["review_rounds"], 5);
-    assert_eq!(driver.calls.len(), 5);
-    assert_eq!(driver.reviews.len(), 5);
+    assert_eq!(record["review_rounds"], 8);
+    assert_eq!(driver.calls.len(), 8);
+    assert_eq!(driver.reviews.len(), 8);
     assert!(driver.pushed.is_empty());
     let mut driver = Fake {
         gates: false,
@@ -196,25 +200,25 @@ fn native_placement_uses_existing_ram_overflow_and_disk_floor() {
         .args(["-c", r#"
 from unittest.mock import patch
 from types import SimpleNamespace
-from plangraph.spawner import seat_spawn as s, overflow as o
+from plangraph.spawner import seat_spawn as s, overflow as o, host_ready as h
 row = dict(ssh='other', ok=True, fresh=True, live_runs=0, mem_available_mb=17000, role_mb=2048, floor_mb=3000, disk_free_gb=6)
 opts = dict(card={}, prompt='brief')
 card = dict(run_kind='native-codex', base_ref='refs/heads/main')
-with patch.object(o, 'registry_caps', return_value={'self':'primary','hosts':[]}), patch.object(o, 'local_limits', return_value=(2048,3000)), patch.object(s, 'resources', return_value=(0,1000)), patch.object(o, 'ready_records', return_value={'other':row}), patch.object(o, 'repos_public', return_value=True):
-    placed = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+with patch.object(o, 'registry_caps', return_value={'self':'primary','hosts':[]}), patch.object(o, 'local_limits', return_value=(2048,3000)), patch.object(s, 'resources', return_value=(0,1000)), patch.object(o, 'ready_records', return_value={'other':row}), patch.object(o, 'repos_public', return_value=True), patch.object(h, 'cargo_target_size_gb', return_value=0.0):
+    placed = s.admit(SimpleNamespace(runner=SimpleNamespace(), ps=lambda: {'runs': []}), opts, card=card, preview=True)
     assert placed['host'] == 'other', placed
     row['disk_free_gb'] = 4
-    refused = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+    refused = s.admit(SimpleNamespace(runner=SimpleNamespace(), ps=lambda: {'runs': []}), opts, card=card, preview=True)
     assert refused['host'] != 'other', refused
     row.update(disk_free_gb=6)
     row.pop('refusal', None)
     card['repo'] = '/nonexistent-controller-repo'
     with patch.object(o, 'placement_policy', return_value=('primary',True)), patch('shutil.disk_usage', side_effect=FileNotFoundError):
-        placed = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+        placed = s.admit(SimpleNamespace(runner=SimpleNamespace(), ps=lambda: {'runs': []}), opts, card=card, preview=True)
         assert placed['host'] == 'other', placed
         row['refusal'] = 'stale readiness'
         row.pop('disk_free_gb')
-        refused = s.admit(SimpleNamespace(runner=SimpleNamespace()), opts, card=card, preview=True)
+        refused = s.admit(SimpleNamespace(runner=SimpleNamespace(), ps=lambda: {'runs': []}), opts, card=card, preview=True)
         assert row['refusal'] == 'stale readiness', row
         assert refused['host'] != 'other' and refused['reason'] == 'disk_low: measurement or configuration unavailable', refused
 "#]).output().unwrap();
@@ -674,11 +678,12 @@ impl Driver for CrashOnSecond<'_> {
     }
 }
 #[test]
-fn round_stop_is_the_round_progress_rule_capped_at_five() {
+fn round_stop_is_the_round_progress_rule_capped_at_max_rounds() {
     assert_eq!(round_stop(&[3]), None);
     assert_eq!(round_stop(&[3, 2, 1, 0]), None);
     assert_eq!(round_stop(&[3, 3, 3]), Some("no_progress"));
-    assert_eq!(round_stop(&[5, 4, 3, 2, 1]), Some("round_cap"));
+    assert_eq!(round_stop(&[5, 4, 3, 2, 1]), None);
+    assert_eq!(round_stop(&[16, 8, 7, 6, 5, 4, 3, 2]), Some("round_cap"));
     assert_eq!(
         high_med("HIGH a.rs:1 x\n- MED b.rs:2 y\nLOW c\nVERDICT: REQUEST_CHANGES\n"),
         2

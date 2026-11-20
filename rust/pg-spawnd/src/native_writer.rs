@@ -28,8 +28,6 @@ pub(crate) trait Driver {
         Err("skill unavailable".into())
     }
 }
-/// Review rounds per run (brief ROUND_CAP); the stop rule itself is `round_stop`.
-pub(crate) const ROUND_CAP: usize = 5;
 /// Review attempts per round before the run ends BLOCKED for want of a verdict.
 const REVIEW_TRIES: usize = 3;
 /// Fast-check fix turns per head before the run fails.
@@ -38,7 +36,7 @@ const FAST_CHECK_FIXES: usize = 2;
 /// round so far: the round progress rule of `round_progress`, applied to the round just
 /// finished. The one seam a later stop rule replaces.
 pub(crate) fn round_stop(counts: &[u64]) -> Option<&'static str> {
-    if counts.len() >= ROUND_CAP {
+    if counts.len() as u64 >= crate::round_progress::MAX_ROUNDS {
         return Some("round_cap");
     }
     crate::round_progress::stop_reason(counts, counts.len() as u64, false)
