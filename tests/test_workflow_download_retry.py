@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def run_blocks(node):
     if isinstance(node, yaml.MappingNode):
         for key, value in node.value:
-            if key.value == "run" and isinstance(value, yaml.ScalarNode):
+            if key.value in {"run", "command"} and isinstance(value, yaml.ScalarNode):
                 yield value.value, value.start_mark.line + 1
             else:
                 yield from run_blocks(value)
@@ -146,7 +146,7 @@ def assert_verified_downloads(document):
     if isinstance(document, dict):
         steps = document.get("steps", [])
         for index, step in enumerate(steps):
-            script = step.get("run", "")
+            script = step.get("run", "") + step.get("with", {}).get("command", "")
             if not any(form in script for form in DOWNLOAD_FORMS):
                 continue
             found += 1

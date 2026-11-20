@@ -85,6 +85,9 @@ def test_workstation_pytest_shard_matrix_matches_count_and_preserves_postgres():
 @pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])
 def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
     workflow = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())
+    for candidate in workflow['jobs'][job]['steps']:
+        if candidate.get('uses') == './.github/actions/bounded-step':
+            candidate['run'] = candidate['with']['command']
     step_name = 'Check nonempty selection' if job == 'pytest' else 'Check nonempty collection'
     step = next((s for s in workflow['jobs'][job]['steps']
                  if s.get('name') == step_name), None)

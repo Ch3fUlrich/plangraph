@@ -33,7 +33,15 @@ RELEASED_ASSET_SHA256 = "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7
 
 
 def workflow() -> dict:
-    return yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    result = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    # Inspect the original command inside our local process/logging envelope.
+    # External actions are never unwrapped and still fail the no-action assertion.
+    for job in result["jobs"].values():
+        for step in job.get("steps", []):
+            if step.get("uses") == "./.github/actions/bounded-step":
+                step["run"] = step.pop("with")["command"]
+                del step["uses"]
+    return result
 
 
 def gitleaks_steps() -> list[tuple[str, int, dict]]:

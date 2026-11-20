@@ -44,3 +44,15 @@ runner labels in the authorizing D-row. Only then switch the repository runner
 variables. A red trial is repaired on the branch; main is never the trial host.
 The router-owned `merge-part` command must perform the same main-tip check
 before using any single-PR exception.
+
+## Bounded Python CI steps (D-6054)
+
+Every step in the pytest and pytest-postgres jobs has a deadline below its job
+limit. Python-job commands and browser tests use `bounded-step`: GNU `timeout -k`
+ends the command before the step deadline, with stdout/stderr redirected directly
+to a unique `RUNNER_TEMP/ci-step.*.log`. The action prints that path, the saved
+output, and the original exit status, then fails on timeout or command failure.
+Escaped descendants inherit a regular file rather than the runner's output pipe.
+Logs remain on the runner for diagnosis; routine timeouts finish as failed steps,
+so the workflow job log remains available. External cancellation can still lose
+GitHub logs. The remaining non-Python CI jobs need the same treatment separately.
