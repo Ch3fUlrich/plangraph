@@ -478,3 +478,24 @@ fn card_refusals_exit_five_before_codex_starts() {
         assert!(!dir.path().join("state/runs/run-card/native.log").exists());
     }
 }
+#[cfg(unix)]
+#[test]
+fn a_failing_command_carries_its_stdout_and_stderr() {
+    let error = output(Command::new("sh").args([
+        "-c",
+        "echo 'stdout line: gate output'; echo 'stderr line' >&2; exit 3",
+    ]))
+    .unwrap_err();
+    assert!(error.contains("exit status: 3"), "{error}");
+    assert!(
+        error.contains("stdout: stdout line: gate output"),
+        "{error}"
+    );
+    assert!(error.contains("stderr: stderr line"), "{error}");
+    // A tool that prints nothing still names the exit status.
+    let error = output(&mut Command::new("false")).unwrap_err();
+    assert!(
+        error.starts_with("command failed (exit status: 1)"),
+        "{error}"
+    );
+}

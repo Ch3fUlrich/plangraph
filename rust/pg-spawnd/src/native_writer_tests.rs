@@ -20,6 +20,8 @@ struct Fake {
     review_head: Option<&'static str>,
     /// Fast-check runs that fail before the first green one.
     fast_failures: usize,
+    /// Turns after which HEAD is still the base (no commit yet).
+    uncommitted_turns: usize,
     /// When false, green fast checks leave no stamp.
     stamps: bool,
     stamped: Vec<String>,
@@ -57,7 +59,13 @@ impl Driver for Fake {
     }
     fn head(&mut self) -> Result<String, String> {
         self.heads += 1;
-        Ok("final-head".into())
+        Ok(
+            if self.uncommitted_turns > 0 && self.calls.len() <= self.uncommitted_turns {
+                "base".into()
+            } else {
+                "final-head".into()
+            },
+        )
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         if self.fast_failures > 0 {
@@ -562,6 +570,33 @@ fn batch_driver_reaches_done_on_accept_and_pushes_once() {
     assert_eq!(driver.pushed, vec!["final-head".to_owned()]);
     assert!(driver.reviews[0].is_none());
     assert!(!driver.prompts[0].contains("configured review directory"));
+}
+#[test]
+fn a_turn_without_a_commit_resumes_on_the_items_and_runs_no_gate() {
+    let mut driver = Fake {
+        uncommitted_turns: 1,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 0);
+    assert_eq!(driver.calls, vec![None, Some("same-session".into())]);
+    assert!(driver.prompts[1].contains("No commit yet"));
+    assert!(driver.prompts[1].contains("items of your brief"));
+    // No fast check ran on the base head, and the only review was on the committed head.
+    assert!(driver.stamped.iter().all(|head| head != "base"));
+    assert_eq!(driver.reviews.len(), 1);
+}
+#[test]
+fn a_writer_that_never_commits_fails_without_running_a_gate() {
+    let mut driver = Fake {
+        uncommitted_turns: 9,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 7);
+    assert!(record["reason"].as_str().unwrap().starts_with("no_commit"));
+    assert_eq!(driver.calls.len(), 1 + NO_COMMIT_RESUMES);
+    assert!(driver.stamped.is_empty() && driver.reviews.is_empty());
 }
 #[test]
 fn batch_driver_refuses_review_without_fast_checks_stamp() {

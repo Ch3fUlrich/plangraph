@@ -13,7 +13,9 @@ pub trait Probe {
 }
 pub fn check(host: &mut impl Probe) -> Vec<String> {
     let mut rows = Vec::new();
-    for point in ["version", "login", "prompts", "sandbox", "commit", "memory"] {
+    for point in [
+        "version", "login", "prompts", "sandbox", "commit", "identity", "memory",
+    ] {
         if let Err(reason) = host.check(point) {
             rows.push(format!("{point}: {}", reason.replace(['\n', '\r'], " ")));
         }
@@ -232,6 +234,33 @@ impl Host {
         result
     }
 }
+/// Why a git identity cannot author the writer's commits (a placeholder or an unset
+/// value), or None when it is usable. The review exclusion and the commit gate read these
+/// commits, so a placeholder such as `x <x@example.invalid>` must not reach them.
+pub fn identity_problem(name: &str, email: &str) -> Option<String> {
+    let (name, email) = (name.trim(), email.trim().to_ascii_lowercase());
+    let domain = email.rsplit_once('@').map_or("", |(_, domain)| domain);
+    if name.is_empty() || domain.is_empty() {
+        return Some("git user.name and user.email must both be set".into());
+    }
+    let placeholder = domain == "localhost"
+        || domain.ends_with(".invalid")
+        || domain.ends_with(".test")
+        || domain.ends_with(".localhost")
+        || ["example.com", "example.org", "example.net"].contains(&domain);
+    placeholder.then(|| format!("git identity {name} <{email}> is a placeholder"))
+}
+impl Host {
+    fn identity(&self) -> Result<(), String> {
+        let value = |key: &str| {
+            output(git().current_dir(&self.repo).args(["config", "--get", key])).unwrap_or_default()
+        };
+        match identity_problem(&value("user.name"), &value("user.email")) {
+            Some(problem) => Err(format!("{problem}; set user.name/user.email on this host")),
+            None => Ok(()),
+        }
+    }
+}
 fn git() -> Command {
     let mut cmd = Command::new("git");
     clean_git_env(&mut cmd);
@@ -343,6 +372,9 @@ impl Probe for Host {
             // A read-only sandbox cannot commit by design; nothing to probe there.
             "commit" if self.mode == "read-only" => Ok(()),
             "commit" => self.commit().map_err(|_| "scratch linked-worktree commit failed (check read-only git metadata, identity and hooks)".into()),
+            // A read-only sandbox never commits, so its identity is never used.
+            "identity" if self.mode == "read-only" => Ok(()),
+            "identity" => self.identity(),
             "memory" => {
                 let info = std::fs::read_to_string("/proc/meminfo").map_err(|_| "free memory unavailable (Linux required)")?;
                 let kb = info.lines().find_map(|l| l.strip_prefix("MemAvailable:")?.split_whitespace().next()?.parse::<u64>().ok()).ok_or("MemAvailable unavailable")?;

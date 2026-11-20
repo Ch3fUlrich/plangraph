@@ -66,9 +66,12 @@ struct Host {
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
     if !result.status.success() {
+        // A tool may report on stdout only; the failure carries both streams in full.
         return Err(format!(
-            "command failed: {}",
-            String::from_utf8_lossy(&result.stderr)
+            "command failed ({}):\nstdout: {}\nstderr: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stdout).trim(),
+            String::from_utf8_lossy(&result.stderr).trim()
         ));
     }
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())

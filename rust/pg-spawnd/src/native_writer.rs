@@ -32,6 +32,8 @@ pub(crate) trait Driver {
 const REVIEW_TRIES: usize = 3;
 /// Fast-check fix turns per head before the run fails.
 const FAST_CHECK_FIXES: usize = 2;
+/// Resumes after turns that left no commit beyond the base before the run fails.
+const NO_COMMIT_RESUMES: usize = 2;
 /// Stop rule after a REQUEST_CHANGES round, given the confirmed HIGH+MED count of every
 /// round so far: the round progress rule of `round_progress`, applied to the round just
 /// finished. The one seam a later stop rule replaces.
@@ -192,10 +194,24 @@ fn writer_attempt(
     record["session_id"] = json!(session);
     record["resumes"] = json!(0);
     let mut fixes = 0;
+    let mut idle = 0;
     loop {
         let head = driver.head().map_err(|e| (6, e))?;
         record["final_head"] = json!(head);
         driver.save(record).map_err(|e| (6, e))?;
+        // Nothing committed yet: the gates would only report an empty range. Send the writer
+        // back to its items instead of resuming it on a failure it did not cause.
+        if record["base_sha"] == head.as_str() {
+            idle += 1;
+            if idle > NO_COMMIT_RESUMES || session.is_empty() {
+                return Err((
+                    7,
+                    format!("no_commit: the writer ended its turn without a commit beyond {head}"),
+                ));
+            }
+            resume(driver, record, &session, &format!("No commit yet (HEAD is still the base {head}): continue with the items of your brief, implement them, commit your work and end your turn; keep this session."))?;
+            continue;
+        }
         if let Err(failure) = driver.fast_checks(&head) {
             record["fast_checks"] = json!({"head":head, "status":"failed", "output":failure});
             fixes += 1;
