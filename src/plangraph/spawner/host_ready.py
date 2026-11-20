@@ -148,8 +148,9 @@ def local_disk_refusal(worktree, service, role='implement'):
         if (target.is_symlink() or checkout.is_relative_to(cache) or
                 cache.is_relative_to(checkout) or cache == Path.home().resolve()):
             raise ValueError('unsafe cache directory')
-        size = cargo_target_size_gb(target)
-        if size >= cap and role not in NO_BUILD_ROLES:
+        building = role not in NO_BUILD_ROLES
+        size = cargo_target_size_gb(target) if building else 0
+        if building and size >= cap:
             if any(cargo_run_busy(r) for r in service.ps()['runs']):
                 return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
             try:
@@ -159,7 +160,7 @@ def local_disk_refusal(worktree, service, role='implement'):
                         shutil.rmtree(target)
             except OSError:
                 return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
-        if cap == 0 and role not in NO_BUILD_ROLES:
+        if cap == 0 and building:
             return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
         paths = [worktree, target]
         if getattr(service, 'state', None) is not None:
@@ -239,8 +240,9 @@ def running_disk_refusal(worktree, role='implement'):
         cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
         if not math.isfinite(cap) or cap < 0:
             raise ValueError('invalid cache cap')
-        size = cargo_target_size_gb(target)
-        if size >= cap and role not in NO_BUILD_ROLES:
+        building = role not in NO_BUILD_ROLES
+        size = cargo_target_size_gb(target) if building else 0
+        if building and size >= cap:
             return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB'
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: runtime measurement or configuration unavailable'
@@ -258,9 +260,12 @@ def fresh(record, now=None):
 
 
 def python_test_tools(command, fail, repo):
-    """Report the pre-push interpreter (checkout venv, else python3) lacking pytest or xdist."""
+    """Report the pre-push interpreter lacking pytest or xdist.
+
+    Same choice as the hook: the checkout venv, else PREFLIGHT_PYTHON, else python3.
+    """
     quoted = shlex.quote(repo.rstrip('/') + '/.venv/bin/python')
-    output = command('python', f'py={quoted}; [ -x "$py" ] || py=python3; '
+    output = command('python', f'py={quoted}; [ -x "$py" ] || py="${{PREFLIGHT_PYTHON:-python3}}"; '
                      'for m in pytest xdist; do "$py" -c "import $m" 2>/dev/null || echo "missing $m"; done')
     if output is None:
         return False

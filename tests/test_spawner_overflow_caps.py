@@ -283,11 +283,28 @@ def test_cargo_cap_binds_building_roles_only_and_names_its_path(tmp_path, monkey
     assert (h.running_disk_refusal(str(tmp_path / 'checkout'), role=role) is not None) == refused
 
 
+def test_review_never_measures_the_cargo_target(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
+    def unreadable(path):
+        raise PermissionError('cache scan')
+    monkeypatch.setattr(h, 'cargo_target_size_gb', unreadable)
+    service = SimpleNamespace(ps=lambda: {'runs': []})
+    assert h.local_disk_refusal(tmp_path / 'checkout', service, role='review') is None
+    assert h.running_disk_refusal(str(tmp_path / 'checkout'), role='review') is None
+    assert 'unavailable' in h.local_disk_refusal(tmp_path / 'checkout', service, role='implement')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '0')
+    assert h.local_disk_refusal(tmp_path / 'checkout', service, role='review') is None
+
+
 @pytest.mark.parametrize('role,refused', [('review', False), ('implement', True)])
 def test_admission_above_cargo_cap_admits_review_and_refuses_implement(tmp_path, monkeypatch, role, refused):
     from types import SimpleNamespace
     from plangraph.spawner import host_ready as h, seat_spawn
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
     monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
     monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 13.24)
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 99999))

@@ -372,3 +372,20 @@ def test_registry_host_reports_missing_pytest_and_xdist(tmp_path, missing):
     assert result['ok'] is (not missing), result['failures']
     assert [f for f in result['failures'] if f.startswith('python:')] == (
         [f'python: missing {" ".join(missing)}'] if missing else [])
+
+
+@pytest.mark.parametrize('preflight_python,missing', [('fails-pytest', 'pytest'), ('passes', None)])
+def test_readiness_probe_honours_preflight_python_like_the_hook(tmp_path, monkeypatch, preflight_python, missing):
+    """Run the probe script for real: no checkout .venv, so PREFLIGHT_PYTHON picks the interpreter."""
+    shim = tmp_path / 'preflight-python'
+    shim.write_text('#!/bin/sh\n[ "$2" = "import pytest" ] && [ "%s" = fails-pytest ] && exit 1\nexit 0\n' % preflight_python)
+    shim.chmod(0o755)
+    monkeypatch.setenv('PREFLIGHT_PYTHON', str(shim))
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    failures = []
+    ok = h.python_test_tools(
+        lambda check, script: subprocess.run(['sh', '-c', script], capture_output=True, text=True).stdout,
+        lambda check, reason: failures.append(f'{check}: {reason}'), str(repo))
+    assert ok is (missing is None)
+    assert failures == ([f'python: missing {missing}'] if missing else [])
