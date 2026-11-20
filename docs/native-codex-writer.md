@@ -41,8 +41,34 @@ reaches the Python supervisor locally or the target host over SSH.
 ## Health check
 
 After a spawner move, each target must answer `pg-spawnd health --json` with exit 0;
-`pg-spawnd` has no `--version` verb (advertised verbs: `probe`, `serve`, `shim`, `health`, `agents-view`).
+`pg-spawnd` has no `--version` verb (advertised verbs: `probe`, `serve`, `shim`, `health`, `agents-view`, `ledger-report`).
 Route listings never show `native-codex`: it is a card `run_kind` that spawn sends past routing
 (`src/plangraph/spawner/cli.py`); native dry runs are refused (`src/plangraph/spawner/overflow.py`).
 Check routing with a review dry run from a fresh `python3 -m plangraph.spawner.cli` process.
 Make the first native-codex run after a move a small canary; check its run record for the exit code and review path before real writers use the spawner.
+
+## Writer statistics ledger
+
+Each terminal native run writes one immutable row in `runs/<run-id>/ledger.jsonl`.
+Repeated saves of the same row are idempotent; differing rows are refused. Atomic
+private writes and the existing nonblocking lock prevent partial or duplicate rows.
+A failure is printed and retained as `ledger_error` in `record.json`.
+`pg-spawnd ledger-report <state-directory>/runs` prints JSONL totals by UTC end day.
+Each metric also has an `<metric>_unknown` count; unknown data never means zero.
+Malformed rows refuse the report. Interrupted runs without an end record have no row.
+
+Rows include the host, requested model/effort, exit code, elapsed wall minutes,
+committed additions plus deletions from the admitted base to final head (binary
+files contribute no text lines), and tokens. Text `tokens used` summaries accept
+comma separators; native `turn.completed` usage sums input plus output across
+resumes. Cached input is already included in input. If both representations are
+present they must agree, and are counted once. Missing usage is null.
+
+This slice counts the single `item_key` supplied to the native wrapper as given;
+it counts done only after success with that key in a new commit's Plan-Item trailer.
+Missing item identity is unknown. `review_rounds` counts canonical reviews observed
+by the wrapper, excluding probes with no review; HIGH/MED held are zero on ACCEPT
+and unknown otherwise. These are wrapper measurements, not inferred counts of the
+writer's internal self-review rounds. Native launch failures before the Rust wrapper
+starts have no ledger row. Batch landing statistics and legacy wrappers remain open: this slice does not
+close plangraph:LEDGER-AUTO-FILL, whose land-row part needs its own keeper item.
