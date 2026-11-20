@@ -108,6 +108,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "tools/gate_wiring_check.py",
     "tools/split/**",
     "tools/hooks/pre-push",
+    "tools/merge_batch.py",
     "tools/merge_batch_land.py",
     "tools/dell_ci_jobs.py",
     "tools/new_code_allowlist.txt",
