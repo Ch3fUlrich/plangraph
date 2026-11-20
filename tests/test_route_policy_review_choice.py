@@ -35,7 +35,7 @@ def test_review_route_never_offers_qwen_max():
     assert 'opencode-go-qwen3.8-max' not in [leg.id for leg in route.legs]
 
 
-def test_glm_never_a_review_option():
+def test_glm_is_an_admitted_review_option():
     policy = load_route_policy(Path('src/plangraph/planner/route_policy.json'))
     assert 'glm' not in policy.off_families
     route = plan_spawn({'estimate_tokens': 1000}, role='review',

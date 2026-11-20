@@ -31,7 +31,7 @@ def adapter(tmp_path, *, available=True, served=('opencode-go/sample',), enabled
     return reader, calls
 
 
-# Recorded from origin/main with an empty local evidence store.
+# Route order under D-6310 with an empty local evidence store; the list is the current policy order, not an origin/main recording.
 MAIN_ORDER = ['opencode-go/glm-5.3-flash', 'mimo/mimo-v2.6-pro', 'opencode-go/qwen3.8-max', 'opencode-go/muse-spark-1.3-contributor', 'opencode-go/deepseek-v4.1-flash', 'Qwen3.8-Flash', 'opencode/deepseek-v4.1-flash-free', 'opencode/glm-5.3-flash-free', 'openrouter/free', 'omniroute/cx-gpt-6.2-sol-medium', 'omniroute/cx-gpt-6.2-astra', 'omniroute/cx-gpt-6-luna', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-medium', 'gemini-4-neon-medium', 'opencode/flint-40b-free', 'opencode/big-pickle', 'gpt-oss-120b-medium', 'mimo/mimo-v2.6-flash', 'claude-sonnet-5-5-medium', 'claude-opus-4-6-thinking', 'claude-opus-5-5-high', 'omniroute/deepseek-v4.1-flash', 'omniroute/spark-1.3-contributor', 'claude-opus-5-5-medium', 'opencode-go/beam-free', 'omniroute/gc/grok-4.7', 'console-meta/muse-spark-1.3-contributor', 'omniroute/deepseek-direct-flash', 'claude-haiku-5-5']
 
 

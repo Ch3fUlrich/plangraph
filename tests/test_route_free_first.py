@@ -423,7 +423,7 @@ def test_main_policy_gpt_first_and_retained_routes():
                             policy=policy, leg_reader=clear)
         assert not {leg.family for leg in review.legs} & set(writers)
         assert not {leg.family for leg in review.review_seats} & set(writers)
-        assert review.first_leg.id == ("mimo-v2.6-pro" if "gemini" in writers else "agy-gemini-4-argon-low")
+        assert review.first_leg.id == "agy-gemini-4-argon-low"
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {
@@ -547,7 +547,16 @@ def _codex_reader(codex_out):
     return reader
 
 
-def test_claude_writer_fallback_only_while_codex_unavailable():
+def _one_codex_leg_reader(available_model_part):
+    def reader(model, **kwargs):
+        if "cx-gpt" in model and available_model_part not in model:
+            return {"state": "limited",
+                    "evidence": {"caller": "quota-snapshot", "reset_at": 2000000000}}
+        return {"state": "ok", "evidence": None}
+    return reader
+
+
+def test_claude_writer_fallback_only_while_every_codex_leg_unavailable():
     # Rule 3.58 / D-6366: Claude Sonnet writes only while every Codex leg is out.
     served = plan_spawn(CARD, role="implement", leg_reader=_codex_reader(False))
     assert [leg.id for leg in served.legs] == WRITERS
@@ -559,6 +568,12 @@ def test_claude_writer_fallback_only_while_codex_unavailable():
     assert reasons["cx-gpt-6.2-sol-medium"].startswith("quota_until ")
     assert reasons["cx-gpt-6.2-astra"].startswith("quota_until ")
     assert "agy-claude-sonnet-5-5-high" not in reasons
+    # One cx-gpt leg still available while the rest are limited: Claude stays skipped.
+    for keep in ("cx-gpt-6.2-astra", "cx-gpt-6.2-sol"):
+        mixed = plan_spawn(CARD, role="implement", leg_reader=_one_codex_leg_reader(keep))
+        assert keep in mixed.first_leg.id
+        assert {s["leg"]: s["reason"] for s in mixed.skipped}["agy-claude-sonnet-5-5-high"] == "codex_available"
+        assert "agy-claude-sonnet-5-5-high" not in [leg.id for leg in mixed.legs]
 
 
 def test_argon_low_review_leg_is_gemini_plan_mode():
