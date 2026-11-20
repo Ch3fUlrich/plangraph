@@ -320,7 +320,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
                           principal, body.get("project"), require_seats=body.get("require_seats", True),
-                          apply=body.get("apply", True)),
+                          apply=body.get("apply", True), repos_only=body.get("repos_only", False)),
                       "close_on_decision": _close_on_decision,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,

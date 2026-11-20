@@ -53,3 +53,16 @@ def test_a_commit_with_neither_is_refused_with_the_named_reason(tmp_path):
     result = verify(tmp_path, merge, "demo:A")
     assert result.ok is False
     assert result.detail == f"commit {merge} does not carry trailer 'Plan-Item: demo:A'"
+
+
+def test_every_branch_commit_of_a_merge_binds_its_own_item(tmp_path):
+    """The shape of a hosted merge: no trailers on the merge, one key per branch commit."""
+    git(tmp_path, "init", "-q", "-b", "main")
+    git(tmp_path, "commit", "--allow-empty", "-q", "-m", "base")
+    git(tmp_path, "checkout", "-q", "-b", "pr")
+    git(tmp_path, "commit", "--allow-empty", "-q", "-m", "one\n\nPlan-Item: demo:A\n")
+    git(tmp_path, "commit", "--allow-empty", "-q", "-m", "two\n\nPlan-Item: demo:B\n")
+    git(tmp_path, "checkout", "-q", "main")
+    git(tmp_path, "merge", "--no-ff", "-q", "-m", "Merge pull request #1080 from x/pr", "pr")
+    merge = git(tmp_path, "rev-parse", "HEAD")
+    assert [verify(tmp_path, merge, f"demo:{k}").ok for k in "ABC"] == [True, True, False]

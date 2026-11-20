@@ -85,6 +85,21 @@ pub fn run_with(
     })
 }
 
+/// The repositories the keeper's merged-on-default scan reads (`repos`, or `merge_scan` of its config).
+pub fn repos_with(keeper: &dyn Transport) -> Result<Vec<String>, String> {
+    let result = keeper.call("close_merged_auto", Some(json!({"repos_only": true})))?;
+    result["repos"]
+        .as_array()
+        .ok_or("keeper reply has no repos list")?
+        .iter()
+        .map(|name| {
+            name.as_str()
+                .map(str::to_owned)
+                .ok_or("keeper repo name is not text".to_owned())
+        })
+        .collect()
+}
+
 /// The call the land step makes after a merge: the job with the configured switch.
 pub fn run_once(env: &Env, project: Option<&str>) -> Result<Outcome, String> {
     let keeper = SlowKeeper {
@@ -94,21 +109,40 @@ pub fn run_once(env: &Env, project: Option<&str>) -> Result<Outcome, String> {
     run_with(&keeper, require_seats(env)?, true, project)
 }
 
-/// `merge-close [--count] [--project NAME]`; `--count` prints only the number of merged
-/// items that are not done, and changes nothing.
+/// `merge-close [--count | --repos] [--project NAME]`; `--count` prints only the number of
+/// merged items that are not done and `--repos` the scanned repositories, one per line;
+/// neither changes anything.
 pub fn run(env: &Env, args: &[String]) -> i32 {
     let mut count = false;
+    let mut repos = false;
     let mut project = None;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match arg.as_str() {
             "--count" => count = true,
+            "--repos" => repos = true,
             "--project" => match rest.next() {
                 Some(name) => project = Some(name.as_str()),
                 None => return usage(),
             },
             _ => return usage(),
         }
+    }
+    if repos {
+        let keeper = SlowKeeper {
+            env,
+            max_time_secs: MAX_TIME_SECS,
+        };
+        return match repos_with(&keeper) {
+            Ok(names) => {
+                names.iter().for_each(|name| println!("{name}"));
+                0
+            }
+            Err(reason) => {
+                eprintln!("merge-close: {reason}");
+                1
+            }
+        };
     }
     let outcome = if count {
         let keeper = SlowKeeper {
@@ -137,6 +171,6 @@ pub fn run(env: &Env, args: &[String]) -> i32 {
 }
 
 fn usage() -> i32 {
-    eprintln!("usage: plangraph merge-close [--count] [--project NAME]");
+    eprintln!("usage: plangraph merge-close [--count | --repos] [--project NAME]");
     2
 }

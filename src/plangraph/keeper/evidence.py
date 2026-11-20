@@ -714,7 +714,7 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
     if forgejo_url and forgejo_token_file:
         forgejo = ForgejoStatusAdapter(str(forgejo_url), str(forgejo_token_file))
     context = Context(
-        git=GitAdapter(_cfg(config, "repos", {}) or {}),
+        git=GitAdapter(_cfg(config, "repos", {}) or {}, merge_scan=_cfg(config, "merge_scan")),
         ci=CIAdapter(_cfg(config, "ci", {}) or {}, forgejo=forgejo),
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),

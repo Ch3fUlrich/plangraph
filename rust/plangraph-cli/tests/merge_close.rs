@@ -1,6 +1,6 @@
 //! The merge-close job against a fake keeper: no network, no keeper mutation.
 use plangraph_cli::feeder::{Env, Transport};
-use plangraph_cli::merge_close::{require_seats, run_with};
+use plangraph_cli::merge_close::{repos_with, require_seats, run_with};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 
@@ -72,4 +72,12 @@ fn require_seats_ships_on_and_only_a_clear_off_value_turns_it_off() {
     }
     env.insert("PG_MERGE_CLOSE_REQUIRE_SEATS".into(), "maybe".into());
     assert!(require_seats(&env).is_err());
+}
+
+#[test]
+fn the_scanned_repositories_come_from_the_keeper_config() {
+    let keeper = Fake(json!({"repos":["data","plangraph"]}), RefCell::default());
+    assert_eq!(repos_with(&keeper).unwrap(), ["data", "plangraph"]);
+    assert_eq!(keeper.1.borrow()[0].1, json!({"repos_only":true}));
+    assert!(repos_with(&Fake(json!({}), RefCell::default())).is_err());
 }

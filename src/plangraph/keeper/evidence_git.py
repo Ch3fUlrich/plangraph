@@ -112,8 +112,10 @@ class GitAdapter:
         timeout: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
         fetch_interval: float = 60.0,
+        merge_scan: list[str] | None = None,
     ) -> None:
         self._repos = dict(repos or {})
+        self._merge_scan = None if merge_scan is None else list(merge_scan)
         self._git = git
         self._timeout = float(timeout)
         self._clock = clock
@@ -122,6 +124,11 @@ class GitAdapter:
         self._last_fetch: dict[str, float] = {}
 
     # -- config -------------------------------------------------------------
+    def scan_projects(self) -> list[str]:
+        """The projects whose repositories the merged-on-default scan reads (all registered by default)."""
+        names = self._repos if self._merge_scan is None else self._merge_scan
+        return sorted(name for name in names if name in self._repos)
+
     def repo_path(self, project: str) -> str | None:
         """Return the registered repository path for *project*, or ``None``."""
         entry = self._repos.get(project)

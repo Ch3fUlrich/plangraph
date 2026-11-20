@@ -192,3 +192,67 @@ def test_the_http_route_passes_the_switches_and_admits_system(env):
     result = route(env.store, env.p("system"), {"require_seats": False, "apply": False}, None)
     assert [c["key"] for c in result["would_close"]] == ["demo:B"]
     assert state(env, "demo:B")["state"] == "open"
+
+
+def two_repos(env, scan=None):
+    """Project ``demo`` has its repository and the keeper names a second one, ``data``."""
+    other = env.repo.root.parent / "data"
+    other.mkdir()
+    env.data_repo = Repo(other)
+    env.store.ctx["git"] = GitAdapter({"demo": str(env.repo.root), "data": str(other)}, merge_scan=scan)
+    return env.data_repo
+
+
+def test_a_merge_in_another_scanned_repository_closes_the_item_and_the_repos_are_printed(env):
+    set_states(env)
+    data = two_repos(env)
+    # the real shape: a merge commit without trailers, the trailers on the branch commits
+    data.land("w1", "Plan-Item: demo:C", 400)
+    data.land("w2", "Plan-Item: demo:B", 401)
+    assert auto(env, repos_only=True) == {"repos": ["data", "demo"]}
+    result = auto(env, require_seats=False)
+    assert sorted(c["key"] for c in result["closed"]) == ["demo:B", "demo:C"]
+    assert result["repos"] == ["data", "demo"] and result["listed"] == []
+    assert state(env, "demo:C")["state"] == "done"
+
+
+def test_the_router_verb_also_finds_the_merge_in_another_scanned_repository(env):
+    set_states(env)
+    data = two_repos(env)
+    head = data.land("w1", "Plan-Item: demo:C", 400)
+    env.store.record_run(env.p("spawner"), "demo:C", {
+        "run_id": "fixture-seats", "phase": "finished", "rc": 0,
+        "seats": [{"model": "gemini-test", "verdict": "pass"}]})
+    path = env.repo.root.parent / "DECISIONS.md"
+    path.write_text(f"| D-1 | demo | GO {head} |\n", encoding="utf-8")
+    from plangraph.keeper.evidence_decisions import DecisionsAdapter
+    env.store.ctx["decisions"] = DecisionsAdapter(path)
+    assert env.store.close_merged(env.p("router"), "demo:C", "D-1", ["google"])["state"] == "done"
+
+
+def test_a_merge_scan_list_limits_the_repositories_read(env):
+    set_states(env)
+    two_repos(env, scan=["demo"]).land("w1", "Plan-Item: demo:C", 400)
+    result = auto(env, require_seats=False)
+    assert result["repos"] == ["demo"] and result["closed"] == []
+    assert state(env, "demo:C")["state"] == "in_review"
+
+
+def test_a_key_merged_in_two_scanned_repositories_is_listed_not_guessed(env):
+    set_states(env)
+    data = two_repos(env)
+    data.land("w1", "Plan-Item: demo:C", 400)
+    env.repo.land("w1", "Plan-Item: demo:C", 11)
+    result = auto(env, require_seats=False)
+    assert result["closed"] == []
+    assert "merge_repo_ambiguous: demo, data" in result["listed"][0]["reason"]
+    assert state(env, "demo:C")["state"] == "in_review"
+
+
+def test_the_config_names_the_scanned_repositories_in_one_place(tmp_path):
+    from plangraph.keeper.config import Config, ConfigError
+    repos = {"demo": str(tmp_path), "data": str(tmp_path)}
+    assert Config({"repos": repos, "merge_scan": ["data"]}, tmp_path).merge_scan == ["data"]
+    assert Config({"repos": repos}, tmp_path).merge_scan is None
+    with pytest.raises(ConfigError):
+        Config({"repos": repos, "merge_scan": ["elsewhere"]}, tmp_path)

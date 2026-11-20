@@ -131,7 +131,7 @@ class WaiverMixin:
         hints = [context_sources.MERGE_REPO_LINE.fullmatch(line) for line in text.splitlines()
                  if line.lstrip().startswith("Merge-Repo:")]
         if not hints:
-            return item["project"], None
+            return item.get("_merge_project") or item["project"], None
         if any(hint is None for hint in hints):
             raise Refused("evidence_unverified", "merge_repo_note_invalid")
         projects = {hint[1] for hint in hints}
@@ -142,6 +142,34 @@ class WaiverMixin:
         if not self._adapter("git").repo_path(project):
             raise Refused("evidence_unverified", f"merge_repo_unknown: {project}")
         return project, next(iter(revisions), None)
+
+    def _scan_projects(self, item):
+        """Projects to read for the item's merge: its own first, then every scanned repository."""
+        scan = getattr(self._adapter("git"), "scan_projects", None)
+        names = list(scan()) if callable(scan) else []
+        return [item["project"], *[n for n in names if n != item["project"]]] if names else []
+
+    def _with_merge_repo(self, item):
+        """The item tagged with the one scanned repository that holds its Plan-Item commits.
+
+        A hint (``Merge-Repo:``) or a hit in the item's own repository decides at once;
+        otherwise exactly one other scanned repository must hold them, else the refusal names all.
+        """
+        if item.get("_merge_project") or self._merge_repository(item) != (item["project"], None):
+            return item
+        git, found = self._adapter("git"), []
+        for project in self._scan_projects(item):
+            try:
+                commits = context_sources.plan_item_commits(git, project, item["key"], fetch=False)
+            except Exception:  # noqa: BLE001 - an unreadable repository names nothing
+                commits = None
+            if commits:
+                found.append(project)
+                if project == item["project"]:
+                    return item
+        if len(found) > 1:
+            raise Refused("evidence_unverified", f"merge_repo_ambiguous: {', '.join(found)} (name one with Merge-Repo:)")
+        return dict(item, _merge_project=found[0]) if found else item
 
     def _merge_project(self, item):
         return self._merge_repository(item)[0]
@@ -500,6 +528,7 @@ class WaiverMixin:
         item = self._get_or_refuse(key)
         self._merged_review_state(item, from_open)  # DONE is bad_state, not locked
         self._assert_unlocked(item)
+        item = self._with_merge_repo(item)
         if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
             raise Refused("validation", "decision_id must look like D-NNN")
         # The operator waiver row itself as the decision: no GO row is read.
@@ -524,9 +553,10 @@ class WaiverMixin:
             # Lease maintenance changes no close authority. All other fields
             # (including epoch/round, definition and writer proofs) must agree.
             stable = lambda row: {k: v for k, v in row.items()
-                                  if k not in ("updated_at", "lease_until")}
+                                  if k not in ("updated_at", "lease_until", "_merge_project")}
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
+            fresh = dict(fresh, **({"_merge_project": item["_merge_project"]} if "_merge_project" in item else {}))
             if waiver_only:
                 current_head, current_prs, current_waiver, result = self._merged_waiver_only(
                     fresh, decision_id, now, all_work=from_open)
@@ -595,50 +625,58 @@ class WaiverMixin:
     # every refusal are returned in ``listed`` with their reason, never skipped.
     AUTO_STATES = ("open", "claimed", "in_review")
 
-    def close_merged_auto(self, principal, project=None, require_seats=True, apply=True):
+    def close_merged_auto(self, principal, project=None, require_seats=True, apply=True, repos_only=False):
         return self._run(principal, "close_merged_auto", None,
-                         lambda now: self._close_merged_auto(principal, project, require_seats, apply, now),
+                         lambda now: self._close_merged_auto(principal, project, require_seats, apply, now, repos_only),
                          success_message=None)
 
-    def _close_merged_auto(self, principal, project, require_seats, apply, now):
+    def _close_merged_auto(self, principal, project, require_seats, apply, now, repos_only=False):
         self._require_role(principal, "system", "router")
-        if any(type(value) is not bool for value in (require_seats, apply)):
-            raise Refused("validation", "require_seats and apply must be booleans")
+        if any(type(value) is not bool for value in (require_seats, apply, repos_only)):
+            raise Refused("validation", "require_seats, apply and repos_only must be booleans")
         if project is not None and not isinstance(project, str):
             raise Refused("validation", "project must be a string")
-        git, by_repo = self._adapter("git"), {}
-        for item in self._all_items():
-            if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task") \
-                    and project in (None, item["project"]):
-                try:
-                    where = self._merge_repository(item)
-                except Refused as exc:
-                    by_repo.setdefault(None, []).append((item, exc))
-                    continue
-                by_repo.setdefault(where[0], []).append((item, where[1]))
-        closed, listed, pending = [], [], []
-        for repo_project, items in by_repo.items():
-            index = None
-            if repo_project is not None:
+        git = self._adapter("git")
+        scan = getattr(git, "scan_projects", None)
+        repos = list(scan()) if callable(scan) else []
+        if repos_only:
+            return {"repos": repos}
+        indexes, closed, listed, pending = {}, [], [], []
+
+        def index_of(repo_project):
+            if repo_project not in indexes:
                 index = context_sources.work_index(git, repo_project, fresh=True)
-                if index is None:
-                    continue  # no repository is registered: nothing to read
-                if index.get("origin_stale"):
+                if index is not None and index.get("origin_stale"):
                     raise Refused("evidence_unverified", f"merge_index_stale: {repo_project}: {index.get('reason')}")
-            for item, revision in items:
-                key = item["key"]
-                if repo_project is None:
-                    listed.append({"key": key, "state": item["state"], "reason": str(revision)})
+                indexes[repo_project] = index
+            return indexes[repo_project]
+
+        for item in self._all_items():
+            if item["state"] not in self.AUTO_STATES or item["kind"] in ("goal", "operator_task") \
+                    or project not in (None, item["project"]):
+                continue
+            key = item["key"]
+            try:
+                hinted, revision = self._merge_repository(item)
+                hinted = None if (hinted, revision) == (item["project"], None) else hinted
+                found = [hinted] if hinted else [
+                    p for p in self._scan_projects(item)
+                    if index_of(p) is not None and context_sources.indexed_work(index_of(p), key)["commits"]]
+                if hinted and not revision and not (index_of(hinted) and context_sources.indexed_work(
+                        index_of(hinted), key)["commits"]):
                     continue
-                if not (context_sources.indexed_work(index, key)["commits"] or revision):
+                if not found:
                     continue  # no merge names this item
-                try:
-                    result = self._auto_close_one(principal, item, require_seats, apply, now)
-                except Refused as exc:
-                    listed.append({"key": key, "state": item["state"], "reason": f"{exc.code}: {exc.msg}"})
-                    continue
-                (closed if apply else pending).append(result)
-        return {"closed": closed, "would_close": pending, "listed": listed,
+                if len(found) > 1:
+                    raise Refused("evidence_unverified",
+                                  f"merge_repo_ambiguous: {', '.join(found)} (name one with Merge-Repo:)")
+                tagged = item if found[0] == item["project"] else dict(item, _merge_project=found[0])
+                result = self._auto_close_one(principal, tagged, require_seats, apply, now)
+            except Refused as exc:
+                listed.append({"key": key, "state": item["state"], "reason": f"{exc.code}: {exc.msg}"})
+                continue
+            (closed if apply else pending).append(result)
+        return {"closed": closed, "would_close": pending, "listed": listed, "repos": repos,
                 "merged_not_done": len(pending) + len(listed), "require_seats": require_seats}
 
     def _auto_close_one(self, principal, item, require_seats, apply, now):
@@ -659,9 +697,10 @@ class WaiverMixin:
             self._assert_unlocked(fresh)
             if fresh["state"] not in self.AUTO_STATES:
                 raise Refused("conflict", f"{key} is {fresh['state']}")
-            stable = lambda row: {k: v for k, v in row.items() if k not in ("updated_at", "lease_until")}
+            stable = lambda row: {k: v for k, v in row.items() if k not in ("updated_at", "lease_until", "_merge_project")}
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
+            fresh = dict(fresh, **({"_merge_project": item["_merge_project"]} if "_merge_project" in item else {}))
             if self._merged_auto_proofs(fresh) != proofs:
                 raise Refused("conflict", "merged_on_default_changed")
             if seated and self._merged_backfill(fresh, None, proofs[0]["head"], now, proofs) != witnessed:
