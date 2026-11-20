@@ -51,6 +51,8 @@ def test_listed_refusal_and_refresh(tmp_path, monkeypatch, model, line, enabled)
     assert reader(model)['state'] == 'limited'
     if enabled:
         clock[0] = 11
+        assert reader(model)['state'] == 'limited'  # stored refusal outlives the provider refresh
+        monkeypatch.setattr('plangraph.routing_support.leg_state.time.time', lambda: 1100)
         assert reader(model)['state'] == 'ok'
         assert calls == ['probe', 'probe']
     else:

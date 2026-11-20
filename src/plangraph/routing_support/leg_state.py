@@ -433,7 +433,7 @@ class LegAdapter:
                 state = 'stale'
             else:
                 state = 'ok' if provider.available else 'unavailable'
-        if state == 'ok':
+        if state == 'ok' and self.store is not None:
             stored = self.store.leg_status(leg, **kwargs)
             if stored.get('state') in ('limited', 'down', 'expired'):
                 return dict(stored, reason=stored.get('reason') or stored['state'])
