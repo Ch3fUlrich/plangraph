@@ -43,6 +43,7 @@ def _known_family(value):
 # The statement may name a pull request (``GO #12``, ``GO <project> PR #12``, ``GO <project>
 # PR 12``) and one full ``GO-HEAD`` token; both bind the verdict to one merged PR head.
 _GO_PREFIX = re.compile(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z(?:, date -u)?\)\s+")
+_REVIEW_RUN = re.compile(r"Review-Run:[ \t]+(\S+)[ \t]+(run-[0-9a-f]+)[ \t]+([0-9a-f]{40})[ \t]*")
 _GO_RULING = re.compile(r"(?:(?<=\s)|^)\((\d{1,2})\)\s+")
 _GO_HEAD = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
 
@@ -386,6 +387,34 @@ class WaiverMixin:
                     writers.append(peer.family)
         return {model_family(w) or auth.norm_family(w) for w in writers if w}
 
+    def _merged_cited_parts(self, item, heads):
+        """``{part head: [run ids]}`` a landed batch cites for the item.
+
+        The merge commit that landed a head lists ``Review-Run: <key> <run-id> <part head>``
+        per keeper-bound part review. A part head counts when it is inside that merge's
+        range and its own commits name the item; the record itself is still verified
+        by the witness adapter, so a citation only points at it.
+        """
+        git, project = self._adapter("git"), self._merge_project(item)
+        repo, ref, key = git.repo_path(project), git.repo_ref(project), item["key"]
+        bare = re.escape(key.split(":", 1)[-1])
+        cited = {}
+        for head in heads:
+            merge = git.merge_commit_of(repo, head, ref)
+            if not merge or not valid_commit_ref(merge[0]):
+                continue
+            body = git._run(repo, ["show", "-s", "--format=%B", "--end-of-options", merge[0]]).stdout
+            for line in body.splitlines():
+                found = _REVIEW_RUN.fullmatch(line)
+                if not found or found[1] != key:
+                    continue
+                part = found[3]
+                named = git._run(repo, ["log", "-E", f"--grep=^Plan-Item:[[:space:]]*({re.escape(item['project'])}:)?{bare}[[:space:]]*$",
+                                        "--format=%H", "--end-of-options", part, f"^{merge[0]}^1"])
+                if named.returncode == 0 and named.stdout.split():
+                    cited.setdefault(part, []).append(found[2])
+        return cited
+
     def _merged_backfill(self, item, decision_id, head, now, prs=()):
         try:
             # No decision row (the automatic merge close): the merge is the proof,
@@ -396,6 +425,13 @@ class WaiverMixin:
                     else [decisions.text(decision_id)])
             text = " ".join(rows)
             heads = [p["head"] for p in prs] if prs else [head]
+            try:
+                parts = self._merged_cited_parts(item, heads)
+            except Exception:  # noqa: BLE001 - an unreadable citation never adds a witness
+                parts = {}
+            if parts:  # a batch landed these parts: their seats bind the part heads
+                heads = list(parts)
+                text += " Review-Runs: " + ", ".join(r for runs in parts.values() for r in runs)
             claude = [e for e in self._evidence(item["key"])
                       if e["epoch"] == item["epoch"] and e["kind"] == "claude-seat"]
             if claude and not prs:

@@ -309,6 +309,16 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
 
 def _merge_of(git, repo, ref, sha):
     """The first-parent merge on *ref* that introduced *sha*, or ``None``."""
+    # A merge commit on the ref's first-parent chain (a batch merge that carries
+    # the trailers itself) introduced itself, however many merges came after it.
+    parents = (_ok(git, repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]) or "").split()
+    if len(parents) > 2:
+        chain = _ok(git, repo, ["rev-list", "--first-parent", "--merges", "--end-of-options", f"{sha}^..{ref}"])
+        if chain is not None and sha in chain.split():
+            subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
+                                       "--end-of-options", sha]) or "").strip()
+            match = _PR_RE.search(subject)
+            return {"sha": sha, "subject": subject, "pr": int(match.group(1)) if match else None}
     # Combining --ancestry-path with --first-parent prunes paths through
     # second parents (nested batches and PR branches refreshed from main).
     # Walk ancestry separately, then intersect with the ref's landing merges.

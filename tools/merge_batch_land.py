@@ -400,9 +400,15 @@ def cmd_land(args):
 
 
 def merge_trailers(st):
-    """The body of the batch merge commit: one Plan-Item trailer per item of every included part."""
-    keys = sorted({key for rec in st["merged"] for key in part_items(st, rec)})
-    return "\n".join(f"Plan-Item: {key}" for key in keys)
+    """The body of the batch merge commit: one Plan-Item trailer per item of every included part and
+    the batch item, then one Review-Run line per keeper-bound part review (key, run id, part head)."""
+    keys = {key for rec in st["merged"] for key in part_items(st, rec)}
+    batch = st.get("plan")
+    if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
+        keys.add(batch)
+    runs = [f"Review-Run: {key} {run} {rec['head']}" for rec in st["merged"]
+            for key, run in sorted((rec.get("review_runs") or {}).items())]
+    return "\n".join([f"Plan-Item: {key}" for key in sorted(keys)] + runs)
 
 
 def close_merged_items():
