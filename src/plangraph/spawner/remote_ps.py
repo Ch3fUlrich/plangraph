@@ -299,7 +299,8 @@ def publish_run_record(state, path, body):
     if os.environ.get(_LIFECYCLE_PUBLISHER):
         # A configured publisher owns publication. A failure leaves its
         # journal obligation recoverable instead of replacing the projection.
-        lifecycle_command(state, 'record-publish', input=body, text=True)
+        lifecycle_command(state, 'record-publish', input=body, text=True,
+                          encoding='utf-8', errors='replace')
     else:
         from .private_io import atomic_write_private
         atomic_write_private(path, body)
