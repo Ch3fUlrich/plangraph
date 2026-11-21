@@ -416,3 +416,16 @@ def test_marker_straddling_the_line_cut_is_found(tree, monkeypatch):
     track(tree, "cut.py", "x" * (2001 - 8) + header + "\nsynthetic-body\n")
     pack = pack_for(tree, "cut.py:2-2")
     assert "synthetic-body" not in pack.text
+
+
+@pytest.mark.parametrize("label", ["R" * 100, "R " * 80, "RSA " * 40 + "OPENSSH "])
+@pytest.mark.parametrize("inside", [3, 20, 60, 90, 150, 200])
+def test_long_marker_label_straddling_a_read_of_the_dropped_part_is_found(tree, monkeypatch, label, inside):
+    monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", "2000")
+    marker = "-----BEGIN " + label + "PRIVATE KEY" + "-----"
+    # The kept part is cap + 1 chars, then the rest is read in 64 KiB pieces: the first one ends here.
+    boundary = 2001 + 65536
+    track(tree, "long.py", "x" * (boundary - min(inside, len(marker) - 1)) + marker + "\nsynthetic-body\n")
+    track(tree, "fine.py", "y = 2\n")
+    pack = pack_for(tree, "long.py:2-2", "fine.py:1-1")
+    assert "synthetic-body" not in pack.text and "y = 2" in pack.text

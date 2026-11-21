@@ -236,10 +236,11 @@ def is_computed(value):
         return False
     head = _CALL_HEAD.match(value)
     at = head.end() if head else 0
-    if (value[at:at + 1] if head else value[:1]) not in _CLOSER:
+    # Only a bare expression may open with a brace; after a name or a group only a call or subscript can follow.
+    if value[at:at + 1] not in (_CLOSER if not head else ('(', '[')):
         return False
     while at < len(value):
-        if value[at] not in _CLOSER:
+        if value[at] not in ('(', '[') and not (at == 0 and value[at] in _CLOSER):
             return False
         stack, at = [_CLOSER[value[at]]], at + 1
         while stack and at < len(value):
@@ -333,15 +334,17 @@ def _mask_hunk(lines):
                 low, high = max(first - offsets[cursor], 0), min(last - offsets[cursor], len(row))
                 row[low:high] = b'\x01' * (high - low)
                 cursor += 1
-    out, in_run = [], False
-    for line, mark, row in zip(lines, marked, masks):
+    out, join = [], False
+    for at, (line, mark, row) in enumerate(zip(lines, marked, masks)):
         if not mark:
             out.append(line)
-            in_run = False
+            join = False
             continue
-        if not (in_run and row[:1] == b'\x01'):
+        content = line[1:].rstrip('\r\n')
+        if not join:
             out.append(line[0])
-        for char, flag in zip(line[1:], row):
+        in_run = join
+        for char, flag in zip(content, row):
             if flag:
                 if not in_run:
                     out.append('[REDACTED]')
@@ -349,6 +352,10 @@ def _mask_hunk(lines):
             else:
                 out.append(char)
                 in_run = False
-        if len(row) == 0:
-            in_run = False
+        terminator = line[1 + len(content):]
+        # The break goes only where the next line continues this masked run.
+        nxt = at + 1 < len(lines) and marked[at + 1] and masks[at + 1][:1] == b'\x01'
+        join = bool(terminator) and bool(row[-1:] == b'\x01') and in_run and nxt
+        if not join:
+            out.append(terminator)
     return out

@@ -27,6 +27,27 @@ def _redact_pem(text):
 PEM_MARKER = re.compile(r'-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY')
 
 
+_MARKER_OPEN = re.compile(r'(-----(?:BEGIN|END) )([A-Z0-9 ]*)')
+_MARKER_START = re.compile(r'-----(?:B(?:E(?:G(?:I(?:N)?)?)?)?|E(?:N(?:D)?)?)?')
+
+
+def marker_carry(text):
+    """The tail of ``text`` to put before the next piece so no private-key marker is missed.
+
+    A marker is ``-----BEGIN|END `` plus any run of capitals, digits and blanks that
+    holds ``PRIVATE KEY``: only the opening and the last 12 characters of that run
+    can still complete one, so the carry stays short however long the run is."""
+    start = text.rfind('-----')
+    suffix = text[start:] if start >= 0 else ''
+    opened = _MARKER_OPEN.fullmatch(suffix)
+    if opened:
+        return opened[1] + opened[2][-12:]
+    if _MARKER_START.fullmatch(suffix):
+        return suffix
+    dashes = re.search(r'-{1,4}\Z', text)
+    return dashes[0] if dashes else ''
+
+
 class PrivateKeyScan:
     """Feed lines in file order; True for a line inside or touching a private-key block.
 

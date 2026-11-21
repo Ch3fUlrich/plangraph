@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
-from .env_redact import redact_source, _source_block, _join_prompt, PrivateKeyScan, PEM_MARKER
+from .env_redact import redact_source, _source_block, _join_prompt, PrivateKeyScan, PEM_MARKER, marker_carry
 from .inline_diff import InlineDiffError
 
 LANGUAGE_RULE = ('new code is Rust with Rust tests; no new Python or shell file; '
@@ -124,9 +124,6 @@ def _locate(root: Path, raw: str) -> Path:
     return resolved
 
 
-_MARKER_CARRY = 64
-
-
 class _CutLine(str):
     """An overlong line cut to the limit; ``dropped_markers`` holds the key markers of the part not kept."""
     def __new__(cls, text, dropped_markers):
@@ -151,13 +148,13 @@ def _lines(path: Path, limit: int = 65536):
                 yield line   # the last line, no terminator
                 return
             # Private-key markers in the dropped part still count: keep them as a side note on the line.
-            seen, carry = [], line[-_MARKER_CARRY:]
+            seen, carry = [], marker_carry(line)
             rest = fh.readline(65536)
             while True:
                 seen.extend(m.group() for m in PEM_MARKER.finditer(carry + rest) if m.end() > len(carry))
                 if not rest or rest.endswith('\n'):
                     break
-                carry = (carry + rest)[-_MARKER_CARRY:]
+                carry = marker_carry(carry + rest)
                 rest = fh.readline(65536)
             yield _CutLine(line, ''.join(seen))
 

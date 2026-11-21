@@ -315,3 +315,22 @@ def test_hunk_without_an_index_line_is_withheld(monkeypatch, tmp_path):
     monkeypatch.setattr(inline_diff, '_git_text', lambda *args, **kw: 'plain\n')
     shown = inline_diff._withhold_key_hunks(diff, str(tmp_path), 5)
     assert '+new' not in shown and inline_diff.WITHHELD in shown
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_masked_removal_keeps_its_line_ending_before_the_addition(newline):
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    diff = newline.join(['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1,3 +1,3 @@', ' keep',
+                         '-' + first, '+added words here', ' ' + rest, ' tail line', ''])
+    out = redact_diff_wrapped(diff)
+    assert out.split(newline) == ['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1,3 +1,3 @@', ' keep',
+                                  '-[REDACTED]', '+added words here', ' [REDACTED]', ' tail line', '']
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_masked_wrapped_removal_stays_one_line_and_the_addition_a_separate_one(newline):
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    diff = newline.join(['@@ -1,2 +1,1 @@', '-' + first, '-' + rest, '+added words here', ''])
+    assert redact_diff_wrapped(diff).split(newline) == ['@@ -1,2 +1,1 @@', '-[REDACTED]', '+added words here', '']

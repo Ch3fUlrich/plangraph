@@ -128,7 +128,8 @@ pub(crate) fn is_computed(value: &str) -> bool {
     }
     let chars: Vec<char> = value.chars().collect();
     let mut at = 0;
-    if chars[0].is_ascii_alphabetic() || chars[0] == '_' {
+    let named = chars[0].is_ascii_alphabetic() || chars[0] == '_';
+    if named {
         while at < chars.len()
             && (chars[at].is_ascii_alphanumeric() || matches!(chars[at], '_' | '.'))
         {
@@ -144,13 +145,21 @@ pub(crate) fn is_computed(value: &str) -> bool {
         '{' => Some('}'),
         _ => None,
     };
-    if at >= chars.len() || closer(chars[at]).is_none() {
+    // Only a bare expression may open with a brace; after a name or a group only a
+    // call or a subscript can follow.
+    let opens = |at: usize| match chars.get(at) {
+        Some('(' | '[') => true,
+        Some('{') => at == 0,
+        _ => false,
+    };
+    if !opens(at) {
         return false;
     }
     while at < chars.len() {
-        let Some(first) = closer(chars[at]) else {
+        if !opens(at) {
             return false;
-        };
+        }
+        let first = closer(chars[at]).unwrap();
         let mut stack = vec![first];
         at += 1;
         while !stack.is_empty() && at < chars.len() {
@@ -181,30 +190,39 @@ pub(crate) fn is_computed(value: &str) -> bool {
     true
 }
 
+/// Longest right-hand side a source-mode value is judged on; a longer one is masked.
+const MAX_JUDGED_VALUE: usize = 4096;
+
 /// Mask the value of every assignment `rule` finds. In source mode a value that is a
 /// computed expression, judged on the whole rest of its line, stays readable; any
 /// other unquoted value is masked through the end of the line, so nothing after the
 /// first closing delimiter can survive.
 pub(crate) fn replace_assignments(rule: &regex::Regex, text: &str, source: bool) -> String {
+    if !source {
+        return rule.replace_all(text, "$1$2$3[REDACTED]").into_owned();
+    }
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
+    // The line end of the last match is the line end of every later match before it.
+    let mut line_end = 0;
     for m in rule.captures_iter(text) {
         let whole = m.get(0).unwrap();
         if whole.start() < copied {
             continue;
         }
         let value = m.get(4).unwrap();
-        let line_end = text[value.start()..]
-            .find(['\n', '\r'])
-            .map_or(text.len(), |i| value.start() + i);
+        if value.start() >= line_end {
+            line_end = text[value.start()..]
+                .find(['\n', '\r'])
+                .map_or(text.len(), |i| value.start() + i);
+        }
+        let judged = &text[value.start()..line_end];
+        if judged.len() <= MAX_JUDGED_VALUE && is_computed(judged) {
+            continue;
+        }
         let mut end = whole.end();
-        if source {
-            if is_computed(&text[value.start()..line_end]) {
-                continue;
-            }
-            if !value.as_str().starts_with(['"', '\'']) {
-                end = end.max(line_end);
-            }
+        if !value.as_str().starts_with(['"', '\'']) {
+            end = end.max(line_end);
         }
         out.push_str(&text[copied..whole.start()]);
         out.push_str(&format!(
@@ -289,6 +307,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn dense_single_line_assignments_stay_linear() {
+        let plain = "TOKEN='a' ".repeat(100_000);
+        let nested = format!(
+            "TOKEN=f({}{}",
+            "TOKEN=f(".repeat(50_000),
+            ")".repeat(50_000)
+        );
+        for input in [&plain, &nested] {
+            for source in [false, true] {
+                let start = std::time::Instant::now();
+                let out = if source {
+                    crate::redact::redact_source(input)
+                } else {
+                    crate::redact::redact(input)
+                };
+                assert!(
+                    start.elapsed().as_secs() < 3,
+                    "{}",
+                    start.elapsed().as_secs()
+                );
+                assert!(out.contains("[REDACTED]"));
+            }
+        }
+    }
+
+    #[test]
     fn computed_values_are_single_literal_free_expressions() {
         for yes in [
             "tuple(sorted((left, right)))",
@@ -298,6 +342,8 @@ mod tests {
             "vault[name]",
             "a.b(c).d(e)",
             "f (a)",
+            "{a: b}",
+            "[1].b()",
             "None",
             "\"[REDACTED]\"",
         ] {
@@ -308,6 +354,9 @@ mod tests {
             "get_secret() or x",
             "foo(bar",
             "foo)",
+            "x{y}",
+            "f(a){b}",
+            "[a]{b}",
             "x",
             "123",
             "\"x\"",
