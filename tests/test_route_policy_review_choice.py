@@ -72,6 +72,30 @@ def test_d6550_routes_native_writer_hydrogen_and_sensitive_review():
     assert any(leg.claude_family for leg in plan("implement", reader=limited).legs)
 
 
+def test_d6550_claude_fallback_reads_booked_provider_quotas(tmp_path):
+    from plangraph.routing_support.leg_state import LegStateStore
+
+    for gpt_key in ("omniroute/cx-gpt-6.2-sol-medium", "cx-gpt-6.2-sol-medium",
+                    "gpt-6.2-sol-medium"):
+        store = LegStateStore(tmp_path / (gpt_key.replace("/", "-") + ".sqlite"))
+
+        def fallback_admitted(role, *, agy_installed=True):
+            writers = ("gpt",) if role == "review" else ()
+            plan = plan_spawn({"estimate_tokens": 1000}, role=role, writer_families=writers,
+                              leg_reader=store, now=100, catalog_rows=(),
+                              installed=lambda harness: agy_installed or harness != "agy")
+            return any(leg.claude_family for leg in plan.legs)
+
+        store.record_provider_response(gpt_key, 429, "quota", {"Retry-After": "60"}, "fixture", now=100)
+        assert not fallback_admitted("implement")
+        assert not fallback_admitted("review")
+        store.record_provider_response("agy/gemini-4-hydrogen-high", 429, "quota",
+                                       {"Retry-After": "60"}, "fixture", now=100)
+        assert fallback_admitted("implement"), gpt_key
+        assert fallback_admitted("review"), gpt_key
+        assert fallback_admitted("review", agy_installed=False), gpt_key
+
+
 def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys):
     import json
     import subprocess

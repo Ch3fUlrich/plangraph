@@ -369,20 +369,23 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     excluded = family_spellings((writer_set if role == "review" else set())
                                 | set(exclude_families) | claude_writer_fence(role, writer_set), legs)
     from plangraph.routing_support.leg_state import leg_key
+    def read_status(model):
+        return reader(model, now=now, account=card.get("account"), combo=card.get("combo"))
+
     def _leg_status(leg_obj):
         # Sonnet's bare model is also the native Claude subscription identity.
         if leg_obj.harness == "agy" and leg_obj.model == REVIEW_SONNET:
-            return reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
-        st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
+            return read_status("agy/" + leg_obj.model)
+        st = read_status(leg_obj.model)
         if leg_obj.harness == "agy" and "/" not in leg_obj.model:
-            alt = reader(leg_key(leg_obj), now=now, account=card.get("account"), combo=card.get("combo"))
+            alt = read_status(leg_key(leg_obj))
             if unavailable(alt) and (not unavailable(st) or (alt.get('evidence') or {}).get('quota_scope') == 'account'):
                 return alt
         return st
 
     states = {l.id: _leg_status(l) for l in candidates}
     quota_states = {"agy:" + model: (states[leg_id] if leg_id in states and leg_id != REVIEW_SONNET else
-        reader("agy:" + model, now=now, account=card.get("account"), combo=card.get("combo")))
+        read_status("agy:" + model))
         for model, leg_id in (("gemini-4-hydrogen", REVIEW_HYDROGEN),
                              ("gemini-4-argon", REVIEW_ARGON_LOW),
                              ("claude-sonnet-5-5", REVIEW_SONNET))}
@@ -390,10 +393,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     def quota_limited(state):
         return state["state"] == "limited" and (state.get("evidence") or {}).get("kind") != "auth_refused"
 
-    claude_quota_fallback = (native_implement or native_review) and all(
-        quota_limited(states[leg_id] if leg_id in states else
-                      reader(model, now=now, account=card.get("account"), combo=card.get("combo")))
-        for leg_id, model in ((REVIEW_GPT, REVIEW_GPT), (REVIEW_HYDROGEN, "gemini-4-hydrogen-high")))
+    claude_quota_fallback = False
+    if (native_implement or native_review) and quota_limited(quota_states["agy:gemini-4-hydrogen"]):
+        writer_model = next(leg.model for leg in DEFAULT_LEGS if leg.id == LEAD_WRITER)
+        claude_quota_fallback = any(
+            quota_limited(read_status(key)) for key in (writer_model, LEAD_WRITER, REVIEW_GPT))
 
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
