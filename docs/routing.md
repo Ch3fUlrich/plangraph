@@ -238,6 +238,8 @@ A review route also reads the `Writer` trailer of the `diff_ref` head commit
 (`planner.seats.head_writer_families`): its family is excluded in addition to the
 `--exclude-family` values, an unknown writer refuses, and an explicit `--leg` of that
 family is refused.
+A registered-repository ref (`repo_id`, `base_sha`, `head_sha`) is resolved only by the Rust
+server and carries no trailer lookup yet; the flag and `--review-of` families still apply.
 
 ## Own harness first (rule 3.53, D-6310)
 

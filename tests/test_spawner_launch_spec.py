@@ -515,3 +515,9 @@ def test_launch_refuses_an_unreadable_head(request_data, monkeypatch, tmp_path):
     request_data['card'] = card
     code, out, err = invoke(request_data)
     assert code == 2 and err.startswith('writer_family:') and 'cannot read the Writer trailer' in err, (out, err)
+
+
+def test_launch_accepts_a_registered_repository_diff_ref(request_data):
+    request_data['card'] = {'diff_ref': {'repo_id': 'demo', 'base_sha': 'a' * 40, 'head_sha': 'b' * 40}}
+    code, out, err = invoke(request_data)
+    assert code == 0, (out, err)

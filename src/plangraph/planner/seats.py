@@ -105,6 +105,9 @@ def head_writer_families(card):
     ref = card.get("diff_ref") if isinstance(card, Mapping) else None
     if ref is None:
         return []
+    if isinstance(ref, Mapping) and "repo_id" in ref and "repo" not in ref:
+        # A registered-repository ref ({repo_id, base_sha, head_sha}) is resolved only by the Rust server.
+        return []
     _check_diff_ref(ref)
     import subprocess
 
