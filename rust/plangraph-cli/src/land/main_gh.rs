@@ -47,9 +47,36 @@ pub struct GhSource<G: Github> {
     pub gh: G,
     pub branch: String,
     pub now: fn() -> i64,
+    /// The id of the identity whose `land-auth` commit status is trusted landing evidence; without it no
+    /// run is ever treated as fast-only and the full suite is expected on every tip.
+    pub land_app: Option<u64>,
+}
+
+/// `PLANGRAPH_LAND_APP_ID`: the trusted creator of `land-auth` statuses.
+pub fn land_app_from_env() -> Option<u64> {
+    std::env::var("PLANGRAPH_LAND_APP_ID")
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 impl<G: Github> GhSource<G> {
+    /// A `land-auth` success on the commit, created by the trusted identity.
+    fn trusted_fast(&mut self, tip: &str) -> Result<bool, String> {
+        let Some(app) = self.land_app else {
+            return Ok(false);
+        };
+        let rows = self
+            .gh
+            .page(&format!("commits/{tip}/statuses?per_page=100"), None)?;
+        Ok(rows.iter().any(|s| {
+            s["context"] == "land-auth"
+                && s["state"] == "success"
+                && s["creator"]["id"].as_u64() == Some(app)
+        }))
+    }
+
     fn attempt(&mut self, run: u64, number: u32) -> Result<Attempt, String> {
         let info = self
             .gh
@@ -119,7 +146,15 @@ impl<G: Github> Source for GhSource<G> {
             for n in 1..=latest {
                 attempts.push(self.attempt(id, n)?);
             }
-            let fast = attempts.last().is_some_and(|a| a.tier == "fast");
+            // Fast-only needs the trusted landing evidence, not just a short job list: a partial rerun of a
+            // full run lists few jobs too and must still be judged against the full matrix.
+            let looks_fast = attempts.last().is_some_and(|a| a.tier == "fast");
+            let fast = looks_fast && self.trusted_fast(tip)?;
+            if looks_fast && !fast {
+                for a in attempts.iter_mut().filter(|a| a.tier == "fast") {
+                    a.tier = "hosted".into();
+                }
+            }
             out.push(Run {
                 id,
                 event: row["event"].as_str().unwrap_or_default().to_owned(),
@@ -145,6 +180,9 @@ impl<G: Github> Source for GhSource<G> {
     }
     fn now(&mut self) -> i64 {
         (self.now)()
+    }
+    fn branch(&self) -> String {
+        self.branch.clone()
     }
 }
 
@@ -271,6 +309,7 @@ pub fn answer_for(repo: String, branch: &str, ledger_path: PathBuf, matrix: &Mat
         gh: Gh { repo },
         branch: branch.to_owned(),
         now: now_secs,
+        land_app: land_app_from_env(),
     };
     observe(&mut source, &mut ledger, matrix)
 }

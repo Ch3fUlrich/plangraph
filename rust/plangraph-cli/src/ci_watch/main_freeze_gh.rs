@@ -82,13 +82,14 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
         };
         self.gh.run_verb(run, verb)
     }
-    fn fix_task(&mut self, run: u64, diagnosis: &Diagnosis) -> Result<String> {
+    fn fix_task(&mut self, run: u64, episode: u32, diagnosis: &Diagnosis) -> Result<String> {
         let test = diagnosis
             .tests
             .first()
             .cloned()
             .unwrap_or_else(|| "<job-failure>".into());
-        let digest = Sha256::digest(format!("{}\0main\0{test}", self.repo).as_bytes());
+        // Each red episode of the same run and test is its own task: a cancelled one is never reused.
+        let digest = Sha256::digest(format!("{}\0main\0{test}\0{episode}", self.repo).as_bytes());
         let key = format!("plangraph:CI-FIX-{digest:x}");
         let task_path = self.dir.join("tasks.jsonl");
         let mut tasks = super::load_tasks(&task_path)?;
@@ -108,8 +109,13 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
             keeper_key: old.and_then(|t| t.keeper_key),
         };
         let mut output = Vec::new();
-        super::store_task(&task_path, &mut tasks, task, &mut self.define, &mut output)?;
+        let pending =
+            super::store_task(&task_path, &mut tasks, task, &mut self.define, &mut output)?;
         output.into_iter().for_each(|l| println!("{l}"));
+        if pending {
+            // Persisted locally; the keeper has not confirmed it, so the handler tries again next pass.
+            return Err("keeper delivery pending".into());
+        }
         Ok(key)
     }
     fn close_fix_task(&mut self, key: &str) -> Result<()> {
@@ -169,6 +175,20 @@ pub fn load_owners(dir: &Path) -> Result<Owners> {
     load(&dir.join("owners.json"))
 }
 
+/// Read-modify-write of `batch-failures.json` under one lock, so intake, sweep and acknowledgement cannot
+/// overwrite each other with an older copy.
+pub fn update_failures<T>(
+    dir: &Path,
+    f: impl FnOnce(&mut Vec<FailureRecord>) -> Result<T>,
+) -> Result<T> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let _lock = atomic::lock(&dir.join("batch-failures")).map_err(|e| e.to_string())?;
+    let mut records = load_failures(dir)?;
+    let out = f(&mut records)?;
+    save_failures(dir, &records)?;
+    Ok(out)
+}
+
 pub fn load_failures(dir: &Path) -> Result<Vec<FailureRecord>> {
     load(&dir.join("batch-failures.json"))
 }
@@ -197,17 +217,20 @@ pub fn pass(
     let _lock = atomic::lock(&dir.join("main-freeze")).map_err(|e| e.to_string())?;
     let state_path = dir.join("main-freeze.json");
     let mut state: FreezeState = load(&state_path)?;
-    let mut records = load_failures(dir)?;
     let owners = load_owners(dir)?;
     let mut escalations = BTreeMap::new();
-    let mut out = batch_failure::sweep(
-        &mut records,
-        &owners,
-        now,
-        &mut CommandDeliver { dir },
-        &mut escalations,
-    );
-    save_failures(dir, &records)?;
+    let mut out = Vec::new();
+    update_failures(dir, |records| {
+        out = batch_failure::sweep(
+            records,
+            &owners,
+            now,
+            &mut CommandDeliver { dir },
+            &mut escalations,
+        );
+        Ok(())
+    })?;
+    let records = load_failures(dir)?;
     out.extend(main_freeze::step(
         &mut state,
         answer,
@@ -241,15 +264,16 @@ pub fn route_or_define(
     keeper: impl FnOnce(&mut Task) -> Result<bool>,
 ) -> Result<bool> {
     let owners = load_owners(dir)?;
-    let mut records = load_failures(dir)?;
-    let routed = batch_failure::route(
-        &mut records,
-        &owners,
-        task,
-        now,
-        &mut CommandDeliver { dir },
-        |r| save_failures(dir, r),
-    )?;
+    let routed = update_failures(dir, |records| {
+        batch_failure::route(
+            records,
+            &owners,
+            task,
+            now,
+            &mut CommandDeliver { dir },
+            |r| save_failures(dir, r),
+        )
+    })?;
     if routed.is_some() {
         // The record is open and addressed to the batch: no unassigned fix lane is created.
         return Ok(true);

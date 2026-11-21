@@ -667,3 +667,18 @@ fn a_run_of_another_ref_on_a_full_tip_does_not_change_its_state() {
     other.refname = "somebranch".into();
     assert_eq!(state(&[green_run(1, "push"), other], 200), State::Green);
 }
+
+#[test]
+fn a_proof_ref_is_judged_by_its_own_runs() {
+    let mut run = green_run(1, "push");
+    run.refname = "land/proof".into();
+    assert_eq!(
+        evaluate_for("land/proof", &matrix(), &[run.clone()], 0, 100, T),
+        State::Green
+    );
+    // Read as main, the same run belongs to another ref: no push run of main yet.
+    assert_eq!(
+        evaluate_for("main", &matrix(), &[run], 0, 100, T),
+        State::Pending
+    );
+}

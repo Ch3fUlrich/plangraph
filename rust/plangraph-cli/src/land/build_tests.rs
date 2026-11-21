@@ -422,24 +422,106 @@ fn the_command_builds_nothing_while_main_is_red_or_pending_and_otherwise_writes_
         branch: "land/build/b1".into(),
         resolutions: vec![],
         protected: vec![],
+        open: BuildOpen {
+            build: "b1".into(),
+            policy_version: git::POLICY_VERSION.into(),
+            base: fx.base(),
+            grant_digest: "g".into(),
+            snapshot_position: 3,
+        },
     };
+    let tip = job.base.clone();
     for (state, word) in [
         (State::Red { blocking: vec![] }, "main_red"),
         (State::Pending, "main_pending"),
     ] {
-        let err = build_train(&job, &state).unwrap_err();
+        let err = build_train(&job, &state, &tip).unwrap_err();
         assert!(err.starts_with(word), "{err}");
     }
     assert!(
         !out.path().join("b1.manifest.json").exists(),
         "no manifest is frozen"
     );
-    let lines = build_train(&job, &State::Green).unwrap();
+    let lines = build_train(&job, &State::Green, &tip).unwrap();
     assert!(lines[0].contains("1 merged"));
     let m: Manifest =
         serde_json::from_slice(&std::fs::read(out.path().join("b1.manifest.json")).unwrap())
             .unwrap();
     assert_eq!(g(fx.path(), &["rev-parse", "land/build/b1"]), m.train_sha);
+    // The build record was written before the merges.
+    let open: BuildOpen =
+        serde_json::from_slice(&std::fs::read(out.path().join("b1.open.json")).unwrap()).unwrap();
+    assert_eq!(
+        (open.grant_digest.as_str(), open.snapshot_position),
+        ("g", 3)
+    );
+    // A tip that is not the base (main moved, or another repository was read): refused, nothing published.
+    let moved = Build {
+        name: "b2".into(),
+        branch: "land/build/b2".into(),
+        open: BuildOpen {
+            build: "b2".into(),
+            ..job.open.clone()
+        },
+        ..job.clone()
+    };
+    let err = build_train(
+        &moved,
+        &State::Green,
+        "0000000000000000000000000000000000000000",
+    )
+    .unwrap_err();
+    assert!(err.starts_with("stale_base"), "{err}");
+    assert!(g(fx.path(), &["for-each-ref", "refs/heads/land/build/b2"]).is_empty());
+    // A build record of another policy version or base is not this build's.
+    let bad_open = Build {
+        open: BuildOpen {
+            policy_version: "other".into(),
+            ..job.open.clone()
+        },
+        ..job.clone()
+    };
+    assert!(build_train(&bad_open, &State::Green, &tip).is_err());
+}
+
+#[test]
+fn verify_checks_the_result_and_the_freeze_against_the_recomputed_selection() {
+    use super::cli::adopted_from_log;
+    let fx = Fx::new();
+    let x = fx.commit(
+        &fx.base(),
+        "shared.txt",
+        &lines(&["line 1", "X", "line 3", "line 4", "line 5", "line 6"]),
+    );
+    let p = fx.commit(
+        &fx.base(),
+        "shared.txt",
+        &lines(&["line 1", "P", "line 3", "line 4", "line 5", "line 6"]),
+    );
+    let parts = vec![part(1, &x, None), part(2, &p, None)];
+    let out = build(&fx.input(parts.clone(), "", None)).unwrap();
+    let open = BuildOpen {
+        build: "b1".into(),
+        policy_version: git::POLICY_VERSION.into(),
+        base: fx.base(),
+        grant_digest: "g".into(),
+        snapshot_position: 1,
+    };
+    let freeze = Freeze {
+        policy_version: open.policy_version.clone(),
+        base: open.base.clone(),
+        grant_digest: "g".into(),
+        selection: parts.clone(),
+    };
+    assert_eq!(check_freeze(&open, &out.result.snapshot, &freeze), Ok(()));
+    let mut moved = freeze.clone();
+    moved.selection[1].head = x.clone();
+    assert_eq!(
+        check_freeze(&open, &out.result.snapshot, &moved),
+        Err(FreezeRefusal::SelectionChanged)
+    );
+    // Adopted results come from the replay of a log, a missing file is an error.
+    assert!(adopted_from_log("/nonexistent/log.json", "b1").is_err());
 }
 
 /// A conflicting pair: x and p edit the same line. Returns (x, p, prefix commit M1 of the first build).
@@ -617,4 +699,43 @@ fn a_resolution_entry_for_a_part_that_merges_cleanly_is_refused() {
     };
     let err = verify_manifest_with(fx.path(), &forged, &parts, &[ad], &[]).unwrap_err();
     assert!(err.contains("merges cleanly"), "{err}");
+}
+
+#[test]
+fn an_adopted_result_of_another_build_or_position_is_neither_used_nor_accepted() {
+    let fx = Fx::new();
+    let (x, p, m1) = conflicting(&fx);
+    let r = resolve(
+        &fx,
+        &m1,
+        &p,
+        "shared.txt",
+        &lines(&["line 1", "X and P", "line 3", "line 4", "line 5", "line 6"]),
+    );
+    let parts = vec![part(1, &x, None), part(2, &p, None)];
+    for tweak in [
+        (|a: &mut super::resolve::Adopted| a.build = "other-build".into())
+            as fn(&mut super::resolve::Adopted),
+        |a| a.position = 1,
+    ] {
+        let mut wrong = adopted(&m1, &p, &r);
+        tweak(&mut wrong);
+        let mut input = fx.input(parts.clone(), "", None);
+        input.resolutions = vec![wrong.clone()];
+        let out = build(&input).unwrap();
+        assert_eq!(
+            out.result.left_out.len(),
+            1,
+            "the builder does not use it: the part is left out as conflict"
+        );
+        assert!(out.manifest.unwrap().resolution.is_empty());
+        // The same result cannot back a manifest that lists the resolution.
+        let mut good = fx.input(parts.clone(), "", None);
+        good.resolutions = vec![adopted(&m1, &p, &r)];
+        let m = build(&good).unwrap().manifest.unwrap();
+        publish(fx.path(), "land/build/b1", &m).unwrap();
+        assert!(verify_manifest_with(fx.path(), &m, &parts, &[wrong], &[])
+            .unwrap_err()
+            .starts_with("resolution"));
+    }
 }

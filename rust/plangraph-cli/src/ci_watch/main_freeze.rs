@@ -29,6 +29,9 @@ pub struct Budget {
     /// 0 untouched, 1 cancelled and waiting for its rerun, 2 rerun requested.
     pub stall: u8,
     pub fix_task: bool,
+    /// Red episodes closed so far; each new episode gets its own fix task identity.
+    #[serde(default)]
+    pub episodes: u32,
 }
 
 /// A request that has not been reconciled yet.
@@ -138,7 +141,8 @@ pub trait Effects {
     fn latest_conclusion(&mut self, run: u64) -> Option<String>;
     fn request(&mut self, run: u64, kind: Kind) -> Result<(), String>;
     /// Creates (or finds) the fix task for the run; returns its key.
-    fn fix_task(&mut self, run: u64, diagnosis: &Diagnosis) -> Result<String, String>;
+    fn fix_task(&mut self, run: u64, episode: u32, diagnosis: &Diagnosis)
+        -> Result<String, String>;
     /// Closes the fix task of a main that is green again.
     fn close_fix_task(&mut self, key: &str) -> Result<(), String>;
 }
@@ -345,6 +349,7 @@ pub fn step(
                     // A later red of the same run may create a new task.
                     if let Some(b) = state.budgets.get_mut(&run) {
                         b.fix_task = false;
+                        b.episodes += 1;
                     }
                     out.push(format!("closed fix task {key}"));
                 }
@@ -400,12 +405,17 @@ pub fn step(
                 }
             }
             Decision::FixTask => {
-                state.budgets.entry(b.run).or_default().fix_task = true;
-                save(state)?;
-                let key = fx.fix_task(b.run, &diagnosis)?;
-                state.fix_tasks.insert(key, b.run);
-                save(state)?;
-                out.push(format!("fix task: run {}", b.run));
+                // The budget is spent only once the keeper confirmed the task; a failed creation is retried.
+                let episode = budget.episodes;
+                match fx.fix_task(b.run, episode, &diagnosis) {
+                    Ok(key) => {
+                        state.budgets.entry(b.run).or_default().fix_task = true;
+                        state.fix_tasks.insert(key, b.run);
+                        save(state)?;
+                        out.push(format!("fix task: run {}", b.run));
+                    }
+                    Err(e) => out.push(format!("fix task pending: run {}: {e}", b.run)),
+                }
                 return Ok(out);
             }
             Decision::Act(kind) => {
@@ -426,7 +436,9 @@ pub fn step(
                 save(state)?;
                 match fx.request(b.run, kind) {
                     Ok(()) => out.push(format!("requested {kind:?} run {}", b.run)),
-                    Err(e) => {
+                    // Only a definitive refusal releases the ref; any other failure leaves the outcome
+                    // unknown and the request stays pending until the attempts show it or 10 minutes pass.
+                    Err(e) if e.starts_with("refused:") => {
                         state.pending = None;
                         raise(
                             state,
@@ -438,6 +450,7 @@ pub fn step(
                         );
                         out.push(format!("refused {kind:?} run {}", b.run));
                     }
+                    Err(e) => out.push(format!("outcome unknown {kind:?} run {}: {e}", b.run)),
                 }
                 save(state)?;
                 return Ok(out);

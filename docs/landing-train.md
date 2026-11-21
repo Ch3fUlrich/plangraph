@@ -34,7 +34,12 @@
   touched) is merged by that commit and listed in the manifest as `resolution {part, submission, commit}` instead of
   being left out; `verify_manifest_with` requires the adopted result of the freeze's build and a replay that conflicts.
 
-`plangraph land-train verify --repo DIR --manifest FILE --parts FILE` repeats the proof on a published train branch.
+`plangraph land-train build` reads main for the repository of the `--repo` checkout and builds only when the tip it read
+is the `--base`; it writes the build record (`<name>.open.json`: policy version, base, `--grant-digest`,
+`--snapshot-position`) before the first merge, verifies manifest and result, and publishes the branch only after that.
+Adopted resolutions come from the replay of `--resolution-log`, bound to the build and to the part's position in the
+snapshot order. `plangraph land-train verify` repeats the proof with `--manifest`, `--parts` (the selection the verifier
+recomputed), `--open`, `--freeze` and `--result`.
 
 ## A red train
 

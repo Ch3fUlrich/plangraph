@@ -87,7 +87,7 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
     let mut resolution: Vec<Resolution> = Vec::new();
     let mut prefix = input.base.clone();
     let base_has = |sha: &str| in_base(repo, &input.base, sha);
-    for part in &ordered {
+    for (index, part) in ordered.iter().enumerate() {
         if !includable(part, &merged_heads, &base_has) {
             left_out.push(LeftOut {
                 pr: part.pr,
@@ -139,10 +139,14 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
                 });
             }
             Merged::Conflict => {
-                let adopted = input
-                    .resolutions
-                    .iter()
-                    .find(|a| a.part == part.pr && a.head == part.head && a.onto == prefix);
+                let adopted = input.resolutions.iter().find(|a| {
+                    // Bound to this build and this part's position in its snapshot order.
+                    a.build == input.build
+                        && a.position as usize == index + 1
+                        && a.part == part.pr
+                        && a.head == part.head
+                        && a.onto == prefix
+                });
                 if let Some(a) =
                     adopted.filter(|a| check_resolution(repo, a, &input.protected).is_ok())
                 {
@@ -338,8 +342,14 @@ pub fn verify_manifest_with(
         let resolved = m.resolution.iter().find(|r| r.part == part.pr);
         let merge = git::merge(check.path(), Some(&attrs.path), &part.head, "replay", &date)?;
         if let Some(r) = resolved {
+            let position = stack_order(selection)
+                .iter()
+                .position(|p| p.pr == part.pr)
+                .map_or(0, |i| i as u32 + 1);
             let ok = adopted.iter().find(|a| {
-                a.part == part.pr
+                a.build == m.build
+                    && a.position == position
+                    && a.part == part.pr
                     && a.submission == r.submission
                     && a.commit == r.commit
                     && a.commit == m.merges[i]

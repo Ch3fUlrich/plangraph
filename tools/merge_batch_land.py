@@ -393,8 +393,8 @@ def cmd_land(args):
         reruns = require_full_run(repo, st["head"], st["branch"])
         require_current_base(repo, st["head"])
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
-        require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
+        require_main_green(repo, st["head"], args.go_row)  # the final read: right before the merge call
         gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
            "--body", merge_trailers(st))
     elif pr["state"] != "MERGED":

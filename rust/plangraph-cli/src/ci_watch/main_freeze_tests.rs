@@ -49,6 +49,8 @@ struct Fake {
     fixes: Vec<u64>,
     closed: Vec<String>,
     close_fails: bool,
+    fix_fails: bool,
+    request_error: Option<String>,
 }
 
 impl Effects for Fake {
@@ -66,14 +68,24 @@ impl Effects for Fake {
     }
     fn request(&mut self, run: u64, kind: Kind) -> Result<(), String> {
         if self.refuse {
-            return Err("HTTP 403".into());
+            return Err("refused: HTTP 403".into());
+        }
+        if let Some(e) = &self.request_error {
+            return Err(e.clone());
         }
         self.requests.push((run, kind));
         Ok(())
     }
-    fn fix_task(&mut self, run: u64, _: &Diagnosis) -> Result<String, String> {
+    fn fix_task(&mut self, run: u64, episode: u32, _: &Diagnosis) -> Result<String, String> {
+        if self.fix_fails {
+            return Err("keeper delivery pending".into());
+        }
         self.fixes.push(run);
-        Ok(format!("plangraph:CI-FIX-{run}"))
+        Ok(if episode == 0 {
+            format!("plangraph:CI-FIX-{run}")
+        } else {
+            format!("plangraph:CI-FIX-{run}-e{episode}")
+        })
     }
     fn close_fix_task(&mut self, key: &str) -> Result<(), String> {
         if self.close_fails {
@@ -542,4 +554,87 @@ fn a_close_that_fails_stays_open_and_is_retried_on_the_next_pass() {
     run_step(&mut state, &answer(State::Green, 300), &mut fx);
     assert!(state.fix_tasks.is_empty());
     assert_eq!(fx.closed.len(), 1);
+}
+
+#[test]
+fn a_fix_task_the_keeper_did_not_confirm_keeps_its_budget_and_is_retried() {
+    let mut fx = Fake {
+        fix_fails: true,
+        ..Fake::default()
+    };
+    fx.diagnosis.insert(
+        7,
+        Diagnosis {
+            tests: vec!["real::bug".into()],
+            incomplete: false,
+        },
+    );
+    let mut state = FreezeState::default();
+    let red7 = |at| red(vec![blocking(7, 1, vec![suite(&["real::bug"])], false)], at);
+    let out = run_step(&mut state, &red7(100), &mut fx);
+    assert!(out.iter().any(|l| l.starts_with("fix task pending")));
+    assert!(state.fix_tasks.is_empty() && !state.budgets.get(&7).is_some_and(|b| b.fix_task));
+    fx.fix_fails = false;
+    run_step(&mut state, &red7(200), &mut fx);
+    assert_eq!(fx.fixes, vec![7], "created once the keeper accepts it");
+    assert!(state.budgets[&7].fix_task);
+}
+
+#[test]
+fn each_red_episode_of_a_run_gets_its_own_fix_task_identity() {
+    let mut fx = Fake::default();
+    fx.diagnosis.insert(
+        7,
+        Diagnosis {
+            tests: vec!["real::bug".into()],
+            incomplete: false,
+        },
+    );
+    let mut state = FreezeState::default();
+    let red7 = |at| red(vec![blocking(7, 1, vec![suite(&["real::bug"])], false)], at);
+    run_step(&mut state, &red7(100), &mut fx);
+    run_step(&mut state, &answer(State::Green, 200), &mut fx);
+    run_step(&mut state, &red7(300), &mut fx);
+    let keys: Vec<&String> = state.fix_tasks.keys().collect();
+    assert_eq!(
+        keys,
+        vec!["plangraph:CI-FIX-7-e1"],
+        "the cancelled task of episode 0 is not reused"
+    );
+}
+
+#[test]
+fn an_unknown_request_outcome_stays_pending_and_only_a_definitive_refusal_releases_the_ref() {
+    let mut fx = Fake {
+        request_error: Some("unknown outcome: gh failed without a definitive answer".into()),
+        ..Fake::default()
+    };
+    fx.diagnosis.insert(5, flake_diag());
+    fx.diagnosis.insert(9, flake_diag());
+    fx.attempts.insert(5, (1, true));
+    fx.attempts.insert(9, (1, true));
+    let mut state = FreezeState::default();
+    let both = |at| {
+        red(
+            vec![
+                blocking(5, 1, vec![suite(&["flaky::test"])], false),
+                blocking(9, 1, vec![suite(&["flaky::test"])], false),
+            ],
+            at,
+        )
+    };
+    let out = run_step(&mut state, &both(100), &mut fx);
+    assert!(out.iter().any(|l| l.starts_with("outcome unknown")));
+    assert!(
+        state.pending.is_some(),
+        "the reply may have been lost: the reservation stays"
+    );
+    // The other blocking run is not recovered while the first is unreconciled.
+    fx.request_error = None;
+    run_step(&mut state, &both(200), &mut fx);
+    assert!(fx.requests.is_empty());
+    // After ten minutes without a new attempt: unresolved, alert, released; run 5 is never sent again.
+    run_step(&mut state, &both(100 + RECONCILE_SECS), &mut fx);
+    assert_eq!(state.unresolved.len(), 1);
+    assert_eq!(fx.requests, vec![(9, Kind::RerunFailed)]);
 }

@@ -129,11 +129,13 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
         }
     };
     if let Some(id) = args.iter().find_map(|a| a.strip_prefix("--ack=")) {
-        let mut records = main_freeze_gh::load_failures(&dir)?;
-        if !batch_failure::acknowledge(&mut records, id) {
-            return Err("unknown failure record".into());
-        }
-        return main_freeze_gh::save_failures(&dir, &records);
+        return main_freeze_gh::update_failures(&dir, |records| {
+            if batch_failure::acknowledge(records, id) {
+                Ok(())
+            } else {
+                Err("unknown failure record".into())
+            }
+        });
     }
     let now = chrono::Utc::now().timestamp();
     let rows = scan(
@@ -364,22 +366,27 @@ fn store_task(
     mut task: Task,
     define: &mut impl FnMut(&mut Task) -> Result<bool>,
     output: &mut Vec<String>,
-) -> Result<()> {
+) -> Result<bool> {
     let key = task.key.clone();
     tasks.insert(key.clone(), task.clone());
     save_tasks(path, tasks)?;
+    let mut pending = false;
     if !task.keeper_defined {
         match define(&mut task) {
             Ok(defined) => task.keeper_defined = defined,
-            Err(error) => output.push(format!(
-                "keeper delivery pending: {}: {}",
-                task.key,
-                logs::scrub(&error)
-            )),
+            Err(error) => {
+                pending = true;
+                output.push(format!(
+                    "keeper delivery pending: {}: {}",
+                    task.key,
+                    logs::scrub(&error)
+                ))
+            }
         }
     }
     tasks.insert(key, task);
-    save_tasks(path, tasks)
+    save_tasks(path, tasks)?;
+    Ok(pending)
 }
 
 fn run_main_freeze(
@@ -410,6 +417,7 @@ fn run_main_freeze(
         },
         branch: "main".into(),
         now: || chrono::Utc::now().timestamp(),
+        land_app: crate::land::main_gh::land_app_from_env(),
     };
     let answer =
         crate::land::main_state::observe(&mut source, &mut ledger, &matrix_from_toml(MATRIX)?);

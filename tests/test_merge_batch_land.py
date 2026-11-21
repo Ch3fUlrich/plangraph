@@ -547,3 +547,11 @@ def test_land_names_the_batch_item_in_the_merge_commit(env):
     merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
     trailers = env.git("log", "-1", "--format=%(trailers:key=Plan-Item,valueonly)", merge, cwd=env.origin)
     assert trailers.split() == ["plangraph:BATCH-1", "plangraph:ITEM-A", "plangraph:ITEM-B", "plangraph:ITEM-C"]
+
+
+def test_land_reads_main_last_right_before_the_merge_call():
+    """The admission read follows the rerun-comment work, so main turning red during it still stops the merge."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "tools" / "merge_batch_land.py").read_text(encoding="utf-8")
+    src = text[text.index("def cmd_land("):]
+    assert src.index("record_reruns(") < src.index("require_main_green(") < src.index('"pr", "merge"')

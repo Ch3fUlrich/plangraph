@@ -217,3 +217,67 @@ fn a_train_failure_reaches_its_recorded_writer_and_defines_no_fix_lane() {
     other.pr = Some(8);
     assert!(route_or_define(dir.path(), &mut other, 100, |_| Ok(true)).unwrap());
 }
+
+#[test]
+fn intake_sweep_and_acknowledgement_share_one_locked_update_so_none_is_lost() {
+    use super::batch_failure::FailureRecord;
+    let dir = tempfile::tempdir().unwrap();
+    let rec = |n: u64| FailureRecord {
+        id: format!("f{n}"),
+        batch: "b".into(),
+        pr: n,
+        run_id: n,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        created_at: 0,
+        delivered_to: None,
+        acked: false,
+        escalated: false,
+    };
+    let path = dir.path().to_owned();
+    let threads: Vec<_> = (0..12)
+        .map(|n| {
+            let p = path.clone();
+            std::thread::spawn(move || {
+                update_failures(&p, |records| {
+                    records.push(rec(n));
+                    Ok(())
+                })
+                .unwrap();
+            })
+        })
+        .collect();
+    threads.into_iter().for_each(|t| t.join().unwrap());
+    assert_eq!(
+        load_failures(&path).unwrap().len(),
+        12,
+        "no concurrent update overwrote another"
+    );
+    // An acknowledgement is one more locked update.
+    update_failures(&path, |records| {
+        assert!(super::batch_failure::acknowledge(records, "f3"));
+        Ok(())
+    })
+    .unwrap();
+    assert!(load_failures(&path)
+        .unwrap()
+        .iter()
+        .any(|r| r.id == "f3" && r.acked));
+}
+
+#[test]
+fn the_supplied_service_runs_recovery_and_keeper_delivery() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let unit = std::fs::read_to_string(root.join("deploy/systemd/pg-ci-watch.service")).unwrap();
+    let exec = unit.lines().find(|l| l.starts_with("ExecStart=")).unwrap();
+    assert!(
+        exec.contains("--keeper") && exec.contains("--main-freeze"),
+        "{exec}"
+    );
+    let doc = std::fs::read_to_string(root.join("docs/ci-watch.md")).unwrap();
+    assert!(
+        doc.contains("ci-watch --keeper --main-freeze"),
+        "the documented command carries both flags"
+    );
+}

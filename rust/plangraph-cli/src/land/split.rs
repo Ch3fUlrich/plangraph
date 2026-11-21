@@ -120,6 +120,8 @@ pub struct Session {
     halves: Option<(String, String)>,
     green: BTreeSet<String>,
     held_second: Option<Candidate>,
+    /// Candidates already released for landing: each lands at most once.
+    landed: BTreeSet<String>,
     deferred: Vec<PartIn>,
     strikes: BTreeMap<u64, u32>,
 }
@@ -183,6 +185,29 @@ impl Session {
         if cand.kind == Kind::Second {
             return vec![Action::Unmerged(cand.parts)];
         }
+        let mut released = Vec::new();
+        if cand.kind == Kind::Half {
+            // A sibling that passed alone while this half was running lands now; this half goes on alone.
+            if let Some((a, b)) = self.halves.take() {
+                let sibling = if id == a { b } else { a };
+                if self.green.contains(&sibling) {
+                    released.extend(self.land_once(&sibling));
+                }
+            }
+        }
+        let mut out = released;
+        out.extend(self.red_rest(cand, hints, log));
+        out
+    }
+
+    fn land_once(&mut self, id: &str) -> Option<Action> {
+        let cand = self.cands.get(id)?.clone();
+        self.landed
+            .insert(id.to_owned())
+            .then_some(Action::Land(cand))
+    }
+
+    fn red_rest(&mut self, cand: Candidate, hints: &[u64], log: &str) -> Vec<Action> {
         if let Some(p) = hints
             .iter()
             .find_map(|h| cand.parts.iter().find(|p| p.pr == *h))
@@ -239,29 +264,31 @@ impl Session {
         vec![blocked, Action::Freeze(c)]
     }
 
-    /// Full CI on candidate `id` is green.
+    /// Full CI on candidate `id` is green. A repeated notification changes nothing.
     pub fn green(&mut self, id: &str) -> Vec<Action> {
         let Some(cand) = self.cands.get(id).cloned() else {
             return vec![];
         };
         if cand.kind != Kind::Half {
-            return vec![Action::Land(cand)];
+            return self.land_once(id).into_iter().collect();
         }
-        self.green.insert(id.to_owned());
+        if !self.green.insert(id.to_owned()) {
+            return vec![];
+        }
         let Some((a, b)) = self.halves.clone() else {
-            return vec![Action::Land(cand)];
+            // The sibling went red first and the halves were released: this half lands alone.
+            return self.land_once(id).into_iter().collect();
         };
         let sibling = if id == a { &b } else { &a };
         if self.green.contains(sibling) {
             // Both passed against the old base: the first lands, the other is rebuilt after it.
-            let (first, second) = (self.cands[&a].clone(), self.cands[&b].clone());
-            self.held_second = Some(second);
+            self.held_second = self.cands.get(&b).cloned();
             self.halves = None;
-            return vec![Action::Land(first)];
+            return self.land_once(&a).into_iter().collect();
         }
         if !self.cands.contains_key(sibling) {
             // The sibling was handled as red already (it is gone): this half lands alone.
-            return vec![Action::Land(cand)];
+            return self.land_once(id).into_iter().collect();
         }
         vec![]
     }

@@ -111,6 +111,7 @@ fn source(protection: Value) -> GhSource<Fixture> {
         },
         branch: "main".into(),
         now: || 1_800_000_000,
+        land_app: None,
     }
 }
 
@@ -185,4 +186,117 @@ fn the_whole_function_reads_the_recorded_listing_to_green() {
         answer.state
     );
     assert_eq!(answer.tip, TIP);
+}
+
+/// A recorded listing of a run that lists only the fast jobs (a partial rerun, or a landed tip's own run).
+struct FastListing {
+    statuses: Vec<Value>,
+}
+
+impl Github for FastListing {
+    fn pages(&mut self, _: &str, _: Option<&str>) -> Result<Vec<Value>, String> {
+        Ok(["Select suites for this change", "ci-gate"]
+            .iter()
+            .map(|n| json!({"name": n, "conclusion": "success"}))
+            .collect())
+    }
+    fn page(&mut self, endpoint: &str, _: Option<&str>) -> Result<Vec<Value>, String> {
+        if endpoint.starts_with("actions/workflows/tests.yml/runs?head_sha") {
+            return Ok(vec![
+                json!({"id": 3, "head_sha": TIP, "head_branch": "main", "event": "push", "run_attempt": 1}),
+            ]);
+        }
+        if endpoint.starts_with("commits/") {
+            return Ok(self.statuses.clone());
+        }
+        Err(format!("unexpected {endpoint}"))
+    }
+    fn log(&mut self, _: u64) -> Result<String, String> {
+        Err("none".into())
+    }
+    fn rerun(&mut self, _: u64) -> Result<(), String> {
+        Err("none".into())
+    }
+    fn value(&mut self, _: &str) -> Result<Value, String> {
+        Ok(
+            json!({"status": "completed", "conclusion": "success", "run_started_at": "2026-11-21T00:00:00Z"}),
+        )
+    }
+}
+
+fn fast_source(statuses: Vec<Value>, land_app: Option<u64>) -> GhSource<FastListing> {
+    GhSource {
+        gh: FastListing { statuses },
+        branch: "main".into(),
+        now: || 1_800_000_000,
+        land_app,
+    }
+}
+
+#[test]
+fn a_run_with_only_fast_jobs_is_fast_only_with_trusted_landing_evidence() {
+    let trusted = json!({"context": "land-auth", "state": "success", "creator": {"id": 77}});
+    let runs = fast_source(vec![trusted.clone()], Some(77))
+        .runs(TIP)
+        .unwrap();
+    assert!(runs[0].fast);
+    assert_eq!(runs[0].attempts[0].tier, "fast");
+    // Evidence from another identity, a failed status, or no configured identity: not fast.
+    let other = json!({"context": "land-auth", "state": "success", "creator": {"id": 5}});
+    let failed = json!({"context": "land-auth", "state": "failure", "creator": {"id": 77}});
+    for (statuses, app) in [
+        (vec![other], Some(77)),
+        (vec![failed], Some(77)),
+        (vec![trusted], None),
+        (vec![], Some(77)),
+    ] {
+        let runs = fast_source(statuses, app).runs(TIP).unwrap();
+        assert!(
+            !runs[0].fast,
+            "a partial job list alone does not make a run fast"
+        );
+        assert_eq!(
+            runs[0].attempts[0].tier, "hosted",
+            "it is judged against the full matrix"
+        );
+    }
+}
+
+#[test]
+fn a_partial_job_list_without_evidence_reads_red_not_green() {
+    let matrix = matrix_from_toml(MATRIX).unwrap();
+    let mut dir = tempfile::tempdir().unwrap();
+    let _ = &mut dir;
+    let mut ledger = FileLedger {
+        path: dir.path().join("l.json"),
+        descends: |_: &str, _: &str| true,
+    };
+    struct Protected(GhSource<FastListing>);
+    impl Source for Protected {
+        fn forward_only(&mut self) -> Result<bool, String> {
+            Ok(true)
+        }
+        fn tip(&mut self) -> Result<String, String> {
+            Ok(TIP.into())
+        }
+        fn runs(&mut self, tip: &str) -> Result<Vec<Run>, String> {
+            self.0.runs(tip)
+        }
+        fn green_push_durations(&mut self) -> Result<Vec<i64>, String> {
+            Ok(vec![])
+        }
+        fn now(&mut self) -> i64 {
+            1_800_000_000
+        }
+    }
+    let answer = observe(
+        &mut Protected(fast_source(vec![], Some(77))),
+        &mut ledger,
+        &matrix,
+    );
+    assert!(
+        matches!(answer.state, State::Red { .. }),
+        "{:?}",
+        answer.state
+    );
 }

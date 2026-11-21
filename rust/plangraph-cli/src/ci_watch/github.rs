@@ -119,9 +119,22 @@ impl Github for Gh {
             "rerun-failed" => vec!["run", "rerun", &run, "--failed", "--repo", &self.repo],
             "rerun" => vec!["run", "rerun", &run, "--repo", &self.repo],
             "cancel" => vec!["run", "cancel", &run, "--repo", &self.repo],
-            _ => return Err("unknown run verb".into()),
+            _ => return Err("refused: unknown run verb".into()),
         };
-        command("gh", &args).map(|_| ())
+        let out = Command::new("gh")
+            .args(&args)
+            .output()
+            .map_err(|_| "unknown outcome: cannot execute gh".to_owned())?;
+        if out.status.success() {
+            return Ok(());
+        }
+        // An HTTP 4xx answer is GitHub's refusal; anything else (transport, a lost reply) is unknown.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(if stderr.contains("HTTP 4") {
+            "refused: GitHub answered with a client error".into()
+        } else {
+            "unknown outcome: gh failed without a definitive answer".into()
+        })
     }
     fn value(&mut self, endpoint: &str) -> Result<Value, String> {
         let raw = command("gh", &["api", &format!("repos/{}/{endpoint}", self.repo)])?;

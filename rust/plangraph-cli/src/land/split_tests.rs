@@ -226,3 +226,61 @@ fn the_train_size_starts_at_four_grows_by_one_on_green_halves_on_red_within_one_
     assert_eq!(small.0, 1);
     assert_eq!(small.after(false).0, 1);
 }
+
+fn two_halves() -> (Session, Vec<Candidate>) {
+    let (mut s, first) = Session::new(vec![
+        part(1, None),
+        part(2, None),
+        part(3, None),
+        part(4, None),
+    ]);
+    let halves: Vec<Candidate> = freeze(&s.red(&first.id, &[], "log"))
+        .into_iter()
+        .cloned()
+        .collect();
+    assert_eq!(halves.len(), 2);
+    (s, halves)
+}
+
+#[test]
+fn a_half_that_passed_before_its_sibling_went_red_lands_when_the_sibling_is_handled() {
+    let (mut s, halves) = two_halves();
+    assert!(s.green(&halves[0].id).is_empty(), "waits for the sibling");
+    let out = s.red(&halves[1].id, &[3], "log");
+    assert!(
+        matches!(&out[0], Action::Land(c) if c.id == halves[0].id),
+        "the green half is released: {out:?}"
+    );
+    assert!(
+        out.iter().any(|a| matches!(a, Action::Evict { pr: 3, .. })),
+        "the red half goes on alone"
+    );
+}
+
+#[test]
+fn a_half_that_goes_red_first_lets_its_green_sibling_land_alone() {
+    let (mut s, halves) = two_halves();
+    let out = s.red(&halves[0].id, &[1], "log");
+    assert!(!out.iter().any(|a| matches!(a, Action::Land(_))));
+    let landing = s.green(&halves[1].id);
+    assert!(matches!(&landing[0], Action::Land(c) if c.id == halves[1].id));
+}
+
+#[test]
+fn a_duplicate_green_never_lands_twice_or_skips_the_second_halfs_rebuild() {
+    let (mut s, halves) = two_halves();
+    s.green(&halves[0].id);
+    let both = s.green(&halves[1].id);
+    assert!(matches!(&both[0], Action::Land(c) if c.id == halves[0].id));
+    // Duplicate notifications for either half release nothing.
+    assert!(s.green(&halves[1].id).is_empty());
+    assert!(s.green(&halves[0].id).is_empty());
+    // The second half is still rebuilt after the first lands, and only once.
+    let rebuild = s.landed(&halves[0].id, true);
+    assert!(matches!(&rebuild[0], Action::Rebuild(c) if c.kind == Kind::Second));
+    assert!(s.landed(&halves[0].id, true).is_empty());
+    // A plain candidate lands once as well.
+    let (mut one, first) = Session::new(vec![part(9, None)]);
+    assert_eq!(one.green(&first.id).len(), 1);
+    assert!(one.green(&first.id).is_empty());
+}

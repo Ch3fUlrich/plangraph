@@ -54,7 +54,7 @@ Rust CLI, and keeper credentials must be available to the user service.
 
 ## Main-freeze handler and batch failures
 
-`plangraph ci-watch --main-freeze` acts on the runs `plangraph main-state` names as blocking (docs/ci-parallel.md).
+`plangraph ci-watch --keeper --main-freeze` (the supplied `pg-ci-watch` service runs exactly this; without `--keeper` fix tasks stay local and are not defined or cancelled in the keeper) acts on the runs `plangraph main-state` names as blocking (docs/ci-parallel.md).
 The recovery table, one action per ref at a time, with a budget persisted per run in `main-freeze.json`:
 
 | Blocking run | Action |

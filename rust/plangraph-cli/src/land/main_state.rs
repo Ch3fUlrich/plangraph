@@ -355,13 +355,25 @@ fn evaluate_fast(matrix: &Matrix, runs: &[Run], first_seen: i64, now: i64, t: i6
 
 /// The state on one consistent observation. `first_seen` is when the tip was first observed (epoch seconds).
 pub fn evaluate(matrix: &Matrix, runs: &[Run], first_seen: i64, now: i64, t: i64) -> State {
+    evaluate_for("main", matrix, runs, first_seen, now, t)
+}
+
+/// As `evaluate` for the branch `branch` (a proof ref is judged by its own runs).
+pub fn evaluate_for(
+    branch: &str,
+    matrix: &Matrix,
+    runs: &[Run],
+    first_seen: i64,
+    now: i64,
+    t: i64,
+) -> State {
     if runs.iter().any(|r| r.event == "push" && r.fast) {
         return evaluate_fast(matrix, runs, first_seen, now, t);
     }
     // A full tip: the runs of main itself count; a run of another ref on the same commit does not.
     let own: Vec<Run> = runs
         .iter()
-        .filter(|r| r.refname.is_empty() || r.refname == "main")
+        .filter(|r| r.refname.is_empty() || r.refname == branch)
         .cloned()
         .collect();
     let runs = &own[..];
@@ -397,6 +409,10 @@ pub trait Source {
     fn runs(&mut self, tip: &str) -> Result<Vec<Run>, String>;
     fn green_push_durations(&mut self) -> Result<Vec<i64>, String>;
     fn now(&mut self) -> i64;
+    /// The branch whose state is read.
+    fn branch(&self) -> String {
+        "main".into()
+    }
 }
 
 /// The keeper's record of when a tip was first observed.
@@ -471,7 +487,7 @@ pub fn observe(source: &mut impl Source, ledger: &mut impl TipLedger, matrix: &M
         match pass(source, ledger) {
             Ok((tip, runs, first_seen, t)) => {
                 let now = source.now();
-                let state = evaluate(matrix, &runs, first_seen, now, t);
+                let state = evaluate_for(&source.branch(), matrix, &runs, first_seen, now, t);
                 return Answer {
                     tip,
                     state,

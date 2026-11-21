@@ -1,14 +1,17 @@
 //! `plangraph land-train`: build a train from READY parts, verify one, and report left-out parts.
-use super::build::{self, BuildInput};
+use super::build::{self, BuildInput, BuildResult};
+use super::git::POLICY_VERSION;
 use super::main_gh;
 use super::main_state::State;
-use super::resolve::Adopted;
-use super::train::{require_open_main, Manifest, PartIn};
+use super::resolve::{self, Adopted, Append, Outcome, Refusal};
+use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest, PartIn};
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE [--attributes FILE] [--cap N] [--resolutions FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train verify --repo DIR --manifest FILE --parts FILE\n\
-parts FILE: JSON array of {pr, head, parent: {pr, head} | null} in selection order (the registrar's READY entries)";
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train verify --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES]\n\
+parts FILE: JSON array of {pr, head, parent: {pr, head} | null} in selection order (the registrar's READY entries)\n\
+resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
+#[derive(Clone)]
 pub struct Build {
     pub repo: PathBuf,
     pub base: String,
@@ -20,12 +23,32 @@ pub struct Build {
     pub branch: String,
     pub resolutions: Vec<Adopted>,
     pub protected: Vec<String>,
+    /// `land_build_open`: policy version, base, grant digest and the snapshot position, fixed before building.
+    pub open: BuildOpen,
 }
 
-/// Builds, publishes and verifies one train. Nothing is built while main is red or pending.
-pub fn build_train(b: &Build, main: &State) -> Result<Vec<String>, String> {
+/// The tip of main that was read must be the base the train is built on.
+pub fn require_base_is_tip(tip: &str, base: &str) -> Result<(), String> {
+    if tip == base {
+        Ok(())
+    } else {
+        Err(format!(
+            "stale_base: main's tip is {tip}, the train base is {base}"
+        ))
+    }
+}
+
+/// Builds, verifies and publishes one train. Nothing is built while main is red or pending, or when the
+/// tip that was read is not the base; the build record is written before the first merge.
+pub fn build_train(b: &Build, main: &State, tip: &str) -> Result<Vec<String>, String> {
     require_open_main(main)
         .map_err(|word| format!("{word}: no train is built while main is not green"))?;
+    require_base_is_tip(tip, &b.base)?;
+    if b.open.policy_version != POLICY_VERSION || b.open.base != b.base || b.open.build != b.name {
+        return Err("the build record does not match this build".into());
+    }
+    std::fs::create_dir_all(&b.out).map_err(|e| e.to_string())?;
+    write(&b.out.join(format!("{}.open.json", b.name)), &b.open)?;
     let outcome = build::build(&BuildInput {
         repo: &b.repo,
         build: b.name.clone(),
@@ -36,13 +59,15 @@ pub fn build_train(b: &Build, main: &State) -> Result<Vec<String>, String> {
         resolutions: b.resolutions.clone(),
         protected: b.protected.clone(),
     })?;
-    std::fs::create_dir_all(&b.out).map_err(|e| e.to_string())?;
+    // The proof comes first; the branch is published only for a train that passed it.
     if let Some(m) = &outcome.manifest {
-        build::publish(&b.repo, &b.branch, m)?;
         build::verify_manifest_with(&b.repo, m, &b.parts, &b.resolutions, &b.protected)?;
-        write(&b.out.join(format!("{}.manifest.json", b.name)), m)?;
     }
     build::verify_result(&b.repo, &b.base, &outcome.result, outcome.manifest.as_ref())?;
+    if let Some(m) = &outcome.manifest {
+        build::publish(&b.repo, &b.branch, m)?;
+        write(&b.out.join(format!("{}.manifest.json", b.name)), m)?;
+    }
     write(
         &b.out.join(format!("{}.result.json", b.name)),
         &outcome.result,
@@ -60,6 +85,20 @@ pub fn build_train(b: &Build, main: &State) -> Result<Vec<String>, String> {
         lines.push(format!("left out #{} ({}) {:?}", l.pr, l.head, l.reason));
     }
     Ok(lines)
+}
+
+#[derive(serde::Deserialize)]
+pub struct ResolutionLog {
+    pub writers: std::collections::BTreeMap<String, String>,
+    pub log: Vec<(Append, Result<Outcome, Refusal>)>,
+}
+
+/// The adopted results of `build`, from the replay of the recorded resolution log (never caller-supplied).
+pub fn adopted_from_log(path: &str, build: &str) -> Result<Vec<Adopted>, String> {
+    let log: ResolutionLog = read(path)?;
+    let ledger = resolve::replay(log.writers, &log.log)
+        .map_err(|at| format!("resolution log refused at append {at}"))?;
+    Ok(ledger.adopted(build))
 }
 
 fn write(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
@@ -107,16 +146,29 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
             .ok_or_else(|| format!("{USAGE}\nmissing --{k}"))
     };
     let parts: Vec<PartIn> = read(&need("parts")?)?;
+    let protected: Vec<String> = flags
+        .get("protected")
+        .map(|p| p.split(',').map(str::to_owned).collect())
+        .unwrap_or_default();
     match cmd.as_str() {
         "build" => {
-            let (repo, ledger) = main_gh::repo_and_ledger(home, None, "main")?;
+            let repo_dir = PathBuf::from(need("repo")?);
+            // Main is read for the repository this checkout belongs to.
+            let origin = super::git::out(&repo_dir, &["remote", "get-url", "origin"])?;
+            let slug = crate::ci_watch::github::repository(&origin)?;
+            let (repo, ledger) = main_gh::repo_and_ledger(home, Some(&slug), "main")?;
             let matrix = main_gh::matrix_from_toml(main_gh::MATRIX)?;
             let answer = main_gh::answer_for(repo, "main", ledger, &matrix);
             let name = need("name")?;
+            let base = need("base")?;
+            let adopted = match flags.get("resolution-log") {
+                Some(p) => adopted_from_log(p, &name)?,
+                None => vec![],
+            };
             build_train(
                 &Build {
-                    repo: PathBuf::from(need("repo")?),
-                    base: need("base")?,
+                    repo: repo_dir,
+                    base: base.clone(),
                     parts,
                     attributes: flags
                         .get("attributes")
@@ -127,15 +179,17 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
                         .get("cap")
                         .map(|c| c.parse().map_err(|_| "cap must be a number".to_owned()))
                         .transpose()?,
-                    resolutions: flags
-                        .get("resolutions")
-                        .map(|p| read(p))
-                        .transpose()?
-                        .unwrap_or_default(),
-                    protected: flags
-                        .get("protected")
-                        .map(|p| p.split(',').map(str::to_owned).collect())
-                        .unwrap_or_default(),
+                    resolutions: adopted,
+                    protected,
+                    open: BuildOpen {
+                        build: name.clone(),
+                        policy_version: POLICY_VERSION.into(),
+                        base,
+                        grant_digest: need("grant-digest")?,
+                        snapshot_position: need("snapshot-position")?
+                            .parse()
+                            .map_err(|_| "snapshot-position must be a number".to_owned())?,
+                    },
                     out: PathBuf::from(flags.get("out").cloned().unwrap_or_else(|| ".".into())),
                     branch: flags
                         .get("branch")
@@ -144,23 +198,31 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
                     name,
                 },
                 &answer.state,
+                &answer.tip,
             )
         }
         "verify" => {
             let manifest: Manifest = read(&need("manifest")?)?;
             let repo = PathBuf::from(need("repo")?);
-            let adopted: Vec<Adopted> = flags
-                .get("resolutions")
-                .map(|p| read(p))
-                .transpose()?
-                .unwrap_or_default();
-            let protected: Vec<String> = flags
-                .get("protected")
-                .map(|p| p.split(',').map(str::to_owned).collect())
-                .unwrap_or_default();
+            let open: BuildOpen = read(&need("open")?)?;
+            let freeze: Freeze = read(&need("freeze")?)?;
+            let result: BuildResult = read(&need("result")?)?;
+            let adopted = match flags.get("resolution-log") {
+                Some(p) => adopted_from_log(p, &manifest.build)?,
+                None => vec![],
+            };
+            check_freeze(&open, &result.snapshot, &freeze)
+                .map_err(|e| format!("freeze refused: {e:?}"))?;
+            if freeze.selection != parts {
+                return Err(
+                    "freeze refused: the selection is not the one recomputed by the verifier"
+                        .into(),
+                );
+            }
             build::verify_manifest_with(&repo, &manifest, &parts, &adopted, &protected)?;
+            build::verify_result(&repo, &manifest.base, &result, Some(&manifest))?;
             Ok(vec![format!(
-                "train {} matches its manifest",
+                "train {} matches its manifest, result and freeze",
                 manifest.build
             )])
         }

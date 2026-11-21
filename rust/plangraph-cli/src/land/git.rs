@@ -166,7 +166,7 @@ impl Checkout {
         let source = self.dir.path().to_string_lossy().into_owned();
         out(
             &self.repo,
-            &["fetch", "-q", &source, &format!("{commit}:{hold}")],
+            &["fetch", "-q", &source, &format!("+{commit}:{hold}")],
         )
         .map(|_| ())
     }
