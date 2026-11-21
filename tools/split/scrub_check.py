@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import hashlib
+import ipaddress
 import math
 import re
 import subprocess
@@ -68,6 +69,8 @@ DEFAULTS = {
                          "example", "alice", "bob", "foo", "x"],
     "allow_ipv4_prefixes": ["127.", "0.0.0.0", "255.255.255.255",
                             "192.0.2.", "198.51.100.", "203.0.113."],
+    # Loopback and the RFC 3849 documentation range, as ipv4 allows 127. and the TEST-NETs.
+    "allow_ipv6": ["::1/128", "2001:db8::/32"],
     "entropy_min": 4.0,
 }
 
@@ -162,9 +165,26 @@ def build_config(words_file=None, rules_files=(), allow=None, allow_value=None, 
             raise ValueError(f"bad allow entry (rules {sorted(bad)}): needs path + known rules")
     cfg["_allow"] = [(glob_re(e["path"], ci=True), set(e["rules"])) for e in allow_entries]
     cfg["_allow_value"] = _value_allows(value_entries)
+    cfg["_ipv6_nets"] = _ipv6_networks(cfg["allow_ipv6"])
     cfg["_host_re"] = [re.compile(p, re.IGNORECASE) for p in cfg["hostname_patterns"]]
     cfg["_words"] = _load_words(words_file) if words_file else []
     return cfg
+
+
+def _ipv6_networks(entries):
+    try:
+        return [ipaddress.IPv6Network(e, strict=False) for e in entries]
+    except (ValueError, TypeError):
+        raise ValueError("allow_ipv6: every entry must be an IPv6 network such as 2001:db8::/32") from None
+
+
+def _ipv6_ok(text, cfg):
+    """True when the matched text parses as an address inside an allowed network."""
+    try:
+        address = ipaddress.IPv6Address(text.strip("[]"))
+    except ValueError:
+        return False
+    return any(address in net for net in cfg["_ipv6_nets"])
 
 
 def _ip_ok(m, cfg):
@@ -197,11 +217,12 @@ def _entropy_hits(line, cfg):
     return out
 
 
-def _ipv6_hits(line):
-    """The address-shaped matches (a compressed form needs a digit: db::add is code)."""
-    return ([m.group() for m in _IPV6_FULL.finditer(line)]
-            + [m.group() for m in _IPV6_LOOP.finditer(line)]
-            + [m.group() for m in _IPV6_COMP.finditer(line) if re.search(r"\d", m.group())])
+def _ipv6_hits(line, cfg):
+    """The address-shaped matches outside ``allow_ipv6`` (a compressed form needs a digit: db::add is code)."""
+    found = ([m.group() for m in _IPV6_FULL.finditer(line)]
+             + [m.group() for m in _IPV6_LOOP.finditer(line)]
+             + [m.group() for m in _IPV6_COMP.finditer(line) if re.search(r"\d", m.group())])
+    return [text for text in found if not _ipv6_ok(text, cfg)]
 
 
 def scan_line_values(line, cfg, find_shapes):
@@ -214,7 +235,7 @@ def scan_line_values(line, cfg, find_shapes):
     found = {
         "hostname": hosts,
         "ipv4": [m.group() for m in _IPV4.finditer(line) if not _ip_ok(m, cfg)],
-        "ipv6": _ipv6_hits(line),
+        "ipv6": _ipv6_hits(line, cfg),
         "email": [m.group() for m in _EMAIL.finditer(line) if not _email_ok(m, cfg)],
         "token-shape": [m.group() for p in _TOKENS for m in p.finditer(line)],
         "high-entropy": _entropy_hits(line, cfg),
