@@ -233,35 +233,52 @@ fn non_success_statuses_never_succeed() {
 fn access_checks_health_and_authenticated_project_hub() {
     const OK: &str = r#"{"graph_commit_id":"fixture","row_count":1,"rows":[{"slug":"plangraph"}]}"#;
     const EMPTY: &str = r#"{"graph_commit_id":"fixture","row_count":0,"rows":[]}"#;
-    for (graph, reply, expected) in [
-        ("plangraph", Some(("200 OK", OK)), Ok(())),
-        ("another", None, Err(AccessError::WrongGraph)),
+    for (graph, health_status, reply, expected) in [
+        ("plangraph", "200 OK", Some(("200 OK", OK)), Ok(())),
+        ("another", "200 OK", None, Err(AccessError::WrongGraph)),
         (
             "plangraph",
+            "503 Service Unavailable",
+            None,
+            Err(AccessError::HealthUnavailable),
+        ),
+        ("plangraph", "", None, Err(AccessError::HealthTimeout)),
+        (
+            "plangraph",
+            "200 OK",
             Some(("200 OK", EMPTY)),
             Err(AccessError::MissingHub),
         ),
         (
             "plangraph",
+            "200 OK",
             Some(("401 Unauthorized", "")),
             Err(AccessError::Unauthorized),
         ),
         (
             "plangraph",
+            "200 OK",
             Some(("403 Forbidden", "")),
             Err(AccessError::Forbidden),
         ),
         (
             "plangraph",
+            "200 OK",
             Some(("426 Upgrade Required", "")),
             Err(AccessError::UnsupportedApi),
         ),
         (
             "plangraph",
+            "200 OK",
             Some(("200 OK", "{}")),
             Err(AccessError::UnsupportedApi),
         ),
-        ("plangraph", Some(("", "")), Err(AccessError::ReadTimeout)),
+        (
+            "plangraph",
+            "200 OK",
+            Some(("", "")),
+            Err(AccessError::ReadTimeout),
+        ),
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base = format!("http://{}/graphs/{graph}", listener.local_addr().unwrap());
@@ -280,9 +297,15 @@ fn access_checks_health_and_authenticated_project_hub() {
             let headers = access_headers(&mut health);
             assert!(headers.starts_with("get /healthz "));
             assert!(!headers.contains("authorization:"));
-            health
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            if health_status.is_empty() {
+                thread::sleep(Duration::from_millis(450));
+            } else {
+                write!(
+                    health,
+                    "HTTP/1.1 {health_status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                )
                 .unwrap();
+            }
             drop(health);
             if let Some((status, body)) = reply {
                 listener.set_nonblocking(true).unwrap();
@@ -317,6 +340,11 @@ fn access_checks_health_and_authenticated_project_hub() {
                     write!(query, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
                 }
             }
+            listener.set_nonblocking(true).unwrap();
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
         });
         assert_eq!(client.probe_access(), expected);
         server.join().unwrap();

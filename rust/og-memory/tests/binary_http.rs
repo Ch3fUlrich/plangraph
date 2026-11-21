@@ -1,31 +1,32 @@
 #![cfg(unix)]
 use std::{
     io::{Read, Write},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     os::unix::fs::OpenOptionsExt,
     process::Command,
     thread,
+    time::{Duration, Instant},
 };
 
-fn command() -> Command {
+fn binary(args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_og-memory"));
     command
         .env_remove("OG_MEMORY_BASE_URL")
         .env_remove("OG_MEMORY_TOKEN_FILE");
-    command.args(["recall", "--scope", "global"]);
+    command.args(args);
     command
 }
 
 #[test]
 fn unconfigured_binary_refuses() {
-    let output = command().output().unwrap();
+    let output = binary(&["recall", "--scope", "global"]).output().unwrap();
     assert!(!output.status.success());
     assert_eq!(output.stderr, b"HttpUnconfigured\n");
 }
 
 #[test]
 fn unreadable_token_refuses_without_exposing_path() {
-    let output = command()
+    let output = binary(&["recall", "--scope", "global"])
         .env("OG_MEMORY_BASE_URL", "http://127.0.0.1:1/graphs/local")
         .env("OG_MEMORY_TOKEN_FILE", "/nonexistent/og-memory-token")
         .output()
@@ -49,38 +50,10 @@ fn configured_binary_uses_pinned_http_recall() {
         .unwrap();
     write!(file, "{token}").unwrap();
     let server = thread::spawn(move || {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
         for step in 0..3 {
-            let mut stream = loop {
-                match listener.accept() {
-                    Ok((stream, _)) => break stream,
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        assert!(std::time::Instant::now() < deadline, "missing HTTP request");
-                        thread::sleep(std::time::Duration::from_millis(5));
-                    }
-                    Err(_) => panic!("fake server accept failed"),
-                }
-            };
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .unwrap();
-            let mut headers = Vec::new();
-            while !headers.ends_with(b"\r\n\r\n") {
-                let mut byte = [0];
-                stream.read_exact(&mut byte).unwrap();
-                headers.push(byte[0]);
-            }
-            let headers = String::from_utf8(headers).unwrap().to_lowercase();
+            let (mut stream, headers, body) = receive_request(&listener);
             assert!(headers.starts_with("post /graphs/local/query "));
             assert!(headers.contains(&format!("authorization: bearer {token}\r\n")));
-            let length: usize = headers
-                .lines()
-                .find_map(|s| s.strip_prefix("content-length: "))
-                .unwrap()
-                .parse()
-                .unwrap();
-            let mut body = vec![0; length];
-            stream.read_exact(&mut body).unwrap();
             let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
             if step > 0 {
                 assert_eq!(request["snapshot"], "offline-pin");
@@ -99,7 +72,7 @@ fn configured_binary_uses_pinned_http_recall() {
             .unwrap();
         }
     });
-    let output = command()
+    let output = binary(&["recall", "--scope", "global"])
         .env("OG_MEMORY_BASE_URL", base)
         .env("OG_MEMORY_TOKEN_FILE", &path)
         .output()
@@ -139,4 +112,106 @@ fn checks_retired_mcp_url_without_opening_transport() {
             assert!(result.stderr.is_empty());
         }
     }
+}
+
+fn receive_request(listener: &TcpListener) -> (TcpStream, String, Vec<u8>) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut stream = loop {
+        match listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                assert!(Instant::now() < deadline, "missing HTTP request");
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(_) => panic!("fake server accept failed"),
+        }
+    };
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut headers = Vec::new();
+    while !headers.ends_with(b"\r\n\r\n") {
+        let mut byte = [0];
+        stream.read_exact(&mut byte).unwrap();
+        headers.push(byte[0]);
+    }
+    let headers = String::from_utf8(headers).unwrap().to_ascii_lowercase();
+    let length = headers
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length: "))
+        .map_or(0, |length| length.parse().unwrap());
+    let mut body = vec![0; length];
+    stream.read_exact(&mut body).unwrap();
+    (stream, headers, body)
+}
+
+#[test]
+fn unconfigured_access_probe_refuses() {
+    let output = binary(&["probe-access"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(output.stderr, b"HttpUnconfigured\n");
+}
+
+#[test]
+fn access_probe_binary_pins_its_output_contract() {
+    let token = format!("fixture-{}", std::process::id());
+    let path = std::env::temp_dir().join(format!("og-binary-access-{}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)
+        .unwrap();
+    writeln!(file, "{token}").unwrap();
+    for (status, body, expected_code, expected_stdout, expected_stderr) in [
+        (
+            "200 OK",
+            r#"{"graph_commit_id":"fixture","row_count":1,"rows":[{"slug":"plangraph"}]}"#,
+            0,
+            "HealthOk AuthenticatedReadOk plangraph HTTP 0.13\n",
+            "",
+        ),
+        ("401 Unauthorized", token.as_str(), 1, "", "Unauthorized\n"),
+        (
+            "426 Upgrade Required",
+            token.as_str(),
+            1,
+            "",
+            "UnsupportedApi\n",
+        ),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}/graphs/plangraph", listener.local_addr().unwrap());
+        let private_value = token.clone();
+        let response_body = body.to_owned();
+        let server = thread::spawn(move || {
+            let (mut health, headers, body) = receive_request(&listener);
+            assert!(headers.starts_with("get /healthz "));
+            assert!(!headers.contains("authorization:"));
+            assert!(body.is_empty());
+            health
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            drop(health);
+
+            let (mut query, headers, body) = receive_request(&listener);
+            assert!(headers.starts_with("post /graphs/plangraph/query "));
+            assert!(headers.contains(&format!("authorization: bearer {private_value}\r\n")));
+            let request: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(request["params"]["slug"], "plangraph");
+            write!(query, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}", response_body.len()).unwrap();
+        });
+        let output = binary(&["probe-access"])
+            .env("OG_MEMORY_BASE_URL", base)
+            .env("OG_MEMORY_TOKEN_FILE", &path)
+            .output()
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(output.status.code(), Some(expected_code));
+        assert_eq!(output.stdout, expected_stdout.as_bytes());
+        assert_eq!(output.stderr, expected_stderr.as_bytes());
+    }
+    std::fs::remove_file(path).unwrap();
 }

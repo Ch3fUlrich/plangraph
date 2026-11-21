@@ -240,10 +240,10 @@ def _memory_access():
     except OSError:
         return 'fail', 'og-memory probe unavailable'
     success = b'HealthOk AuthenticatedReadOk plangraph HTTP 0.13'
-    if result.returncode == 0 and result.stdout.strip() == success:
+    if result.returncode == 0 and result.stdout.strip() == success and not result.stderr:
         return 'pass', success.decode()
     reason = result.stderr.strip()
-    if reason in {
+    if result.returncode == 1 and not result.stdout and reason in {
         b'HttpUnconfigured', b'HttpConfigurationUnavailable', b'HealthUnavailable',
         b'HealthTimeout', b'WrongGraph', b'MissingHub', b'Unauthorized', b'Forbidden',
         b'UnsupportedApi', b'ReadUnavailable', b'ReadTimeout',
