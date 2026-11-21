@@ -646,10 +646,13 @@ class OpsMixin:
         if name != "create":
             # Resolved here, in the lock, exactly as ``_run_op`` resolves it: the
             # key checked is the key mutated even if a rehome landed meanwhile.
-            keys = [self.resolve_key(op["key"])]
+            target = self.resolve_key(op["key"])
+            keys = [target]
             fields = op.get("fields") if name == "edit" else None
             if isinstance(fields, dict):
-                project = self._key_project(op["key"])
+                # bare references qualify with the project of the RESOLVED target,
+                # as the edit does with the stored item's project
+                project = self._key_project(target)
                 deps = fields.get("depends_on")
                 if isinstance(deps, dict):
                     deps = list(deps.get("add") or []) + list(deps.get("remove") or [])

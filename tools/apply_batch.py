@@ -438,6 +438,13 @@ def main(argv=None, out=None, err=None):
                  "refusing before any call)", refusal=True)
             return _done(2)
     except ApiError as exc:
+        if opts.allow_no_whoami and opts.per_op:
+            # --per-op sends single verbs outside the grant gate: it needs the
+            # identity (and any apply grant) verified, so a lookup error stops it.
+            msg = f" ({exc.msg})" if exc.msg else ""
+            line(f"error: identity lookup failed: {exc.code}{msg}; --per-op needs a "
+                 "verified router or l1 identity (refusing before any call)", refusal=True)
+            return _done(2)
         if opts.allow_no_whoami:
             msg = f" ({exc.msg})" if exc.msg else ""
             err.write(f"warning: whoami failed ({exc.code}){msg}, continuing due to --allow-no-whoami\n")

@@ -8,3 +8,5 @@ PostgreSQL migration 13.
 A granted batch keeps the l1 name and role in its events, a cancel inside it may not rewrite a
 dependent in a foreign project, the grant check resolves aliases in the lock, and a granted
 token refuses `--per-op`.
+Bare references in a granted edit qualify with the project of the resolved target, and
+`--per-op` needs a verified identity even with `--allow-no-whoami`.

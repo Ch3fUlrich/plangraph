@@ -107,3 +107,13 @@ def test_granted_l1_token_cannot_use_per_op(world, srv, tmp_path):
                      extra=("--per-op",))
     assert rc == 2 and "atomic" in out
     assert item_count(world) == 0
+
+
+def test_per_op_needs_a_verified_identity_even_with_allow_no_whoami(world, srv, tmp_path):
+    world.store.grant_apply(world.p("router"), "l1main", "demo")
+    bad = tmp_path / "bad.token"
+    bad.write_text("not-a-token", encoding="utf-8")
+    rc, out, _ = run(l1_batch(tmp_path), srv.base_url, str(bad),
+                     extra=("--per-op", "--allow-no-whoami"))
+    assert rc == 2 and "verified" in out
+    assert item_count(world) == 0

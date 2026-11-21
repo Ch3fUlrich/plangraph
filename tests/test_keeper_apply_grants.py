@@ -243,3 +243,18 @@ def test_events_of_a_granted_batch_keep_the_l1_name_and_role(w):
         " ORDER BY seq DESC LIMIT 2").fetchall()
     assert [(r["actor"], r["role"]) for r in rows] == [(L1, "l1"), (L1, "l1")]
     assert w.store.verify_integrity() == []
+
+
+def test_bare_references_qualify_with_the_project_of_the_resolved_target(w, monkeypatch):
+    """The edit target moves to another granted project between the pre-lock and the
+    lock; a bare dependency must be judged in the project the edit will qualify it in."""
+    w.store.grant_apply(w.p("router"), L1, "third")
+    real = w.store.resolve_key
+
+    def resolve(key):
+        return "third:A" if key == "demo:A" else real(key)   # moved to "third"
+
+    monkeypatch.setattr(w.store, "resolve_key", resolve)
+    keys = w.store._op_keys({"op": "edit", "key": "demo:A",
+                             "fields": {"depends_on": {"add": ["B"]}}})
+    assert keys == ["third:A", "third:B"]               # not "demo:B"
