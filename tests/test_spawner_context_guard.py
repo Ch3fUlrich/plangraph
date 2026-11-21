@@ -397,3 +397,22 @@ def test_slice_after_a_closed_private_key_block_is_still_packed(tree):
     track(tree, "notes.py", "\n".join(["x = 1", header, "body", footer, "tail = 2", "last = 3"]) + "\n")
     pack = pack_for(tree, "notes.py:5-6", "notes.py:1-1")
     assert "tail = 2" in pack.text and "x = 1" in pack.text and "body" not in pack.text
+
+
+@pytest.mark.parametrize("pad", [300, 1000, 70000, 140000])
+def test_marker_in_the_dropped_part_of_an_overlong_line_still_withholds_later_slices(tree, monkeypatch, pad):
+    monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", "2000")
+    header = "-----BEGIN " + "RSA PRIVATE KEY" + "-----"
+    track(tree, "long.py", "x" * pad + header + "\nsynthetic-body\nmore-body\n")
+    track(tree, "fine.py", "y = 2\n")
+    pack = pack_for(tree, "long.py:2-3", "fine.py:1-1")
+    assert "synthetic-body" not in pack.text and "y = 2" in pack.text
+    assert any("long.py" in w and "secret-looking content" in w for w in pack.warnings)
+
+
+def test_marker_straddling_the_line_cut_is_found(tree, monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_CONTEXT_PACK_MAX_CHARS", "2000")
+    header = "-----BEGIN " + "RSA PRIVATE KEY" + "-----"
+    track(tree, "cut.py", "x" * (2001 - 8) + header + "\nsynthetic-body\n")
+    pack = pack_for(tree, "cut.py:2-2")
+    assert "synthetic-body" not in pack.text

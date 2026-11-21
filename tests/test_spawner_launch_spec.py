@@ -188,7 +188,7 @@ def test_leg_explicit_invalid(request_data, explicit):
 def test_explicit_document_review(request_data, tmp_path, monkeypatch, with_diff):
     request_data.update(dry_run=True, leg={'id': 'mimo-v2.6-flash', 'explicit': True})
     if with_diff:
-        diff = 'diff --git a/example.py b/example.py\n--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-old\n+new\n'
+        diff = 'diff --git a/example.py b/example.py\nindex 1111111..2222222 100644\n--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-old\n+new\n'
         from plangraph.spawner import inline_diff
         from types import SimpleNamespace
         real_run = inline_diff.subprocess.run

@@ -24,7 +24,7 @@ def _redact_pem(text):
     return ''.join((*out, text[copied:]))
 
 
-_PEM_MARKER = re.compile(r'-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY')
+PEM_MARKER = re.compile(r'-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY')
 
 
 class PrivateKeyScan:
@@ -39,7 +39,8 @@ class PrivateKeyScan:
 
     def feed(self, line):
         touched = self.inside
-        for marker in _PEM_MARKER.finditer(line):
+        # An overlong line may carry the markers of the part that was cut off.
+        for marker in PEM_MARKER.finditer(line + getattr(line, 'dropped_markers', '')):
             touched, self.inside = True, marker[1] == 'BEGIN'
         return touched
 

@@ -77,13 +77,8 @@ def redact_bearer_wrapped(text):
     return ''.join((*out, text[copied:]))
 
 
-def open_wrapped_line_start(text):
-    """Offset of the line holding the earliest token that later lines may still extend.
-
-    ``text`` holds only complete lines. A token is open when its joined body
-    reaches the last line, so a stream must keep that line until more arrives
-    (same joining rules as _wrapped_spans).
-    """
+def _open_start(text):
+    """Line offset of the earliest token whose joined body reaches the last line."""
     for match in _PREFIX.finditer(text):
         index = match.lastindex - 1
         spec, body = SPECS[index], _BODY[index]
@@ -111,6 +106,23 @@ def open_wrapped_line_start(text):
                 break
             end = next_start
     return None
+
+
+def open_wrapped_line_start(text):
+    """Offset of the line from which a stream must hold lines back, or None.
+
+    ``text`` holds only complete lines. A token is open when its joined body
+    reaches the last line (same joining rules as _wrapped_spans), so that line may
+    still be extended. A finished span that reaches the held line pulls the start
+    back to its own line: one line can end a credential and open the next.
+    """
+    start = _open_start(text)
+    if start is None:
+        return None
+    for first, last in reversed(list(_wrapped_spans(text))):
+        if first < start <= last:
+            start = text.rfind('\n', 0, first) + 1
+    return start
 
 
 def _wrapped_spans(text):
@@ -205,19 +217,45 @@ def _name_headers(text):
         yield header_start, index
 
 
-_COMPUTED = re.compile(r'(?:[(\[{]|[A-Za-z_][\w.]*[^\S\r\n]*[(\[])')
+_CALL_HEAD = re.compile(r'[A-Za-z_][\w.]*[^\S\r\n]*')
+_CLOSER = {'(': ')', '[': ']', '{': '}'}
 
 
 def is_computed(value):
-    """True for None/True/False/null or an already masked value, or a call, subscript or bracketed expression with no string literal.
+    """True for None/True/False/null or an already masked value, or for one call, subscript or
+    bracketed expression (with attribute/call chains) holding no string literal.
 
-    Spawner-read source keeps these readable; a quoted or bare literal after a
-    credential name is masked (the Rust redactor mirrors this as is_computed).
+    Spawner-read source keeps these readable; anything else after a credential
+    name, such as a literal or a call followed by more text, is masked (the Rust
+    redactor mirrors this as is_computed and must be given the whole right-hand side).
     """
     value = value.strip()
-    if re.fullmatch(r'None|True|False|null|["\']?\[REDACTED\]["\']?', value):
+    if re.fullmatch(r'None|True|False|null|["\']?\[REDACTED\][\"\']?', value):
         return True
-    return bool(_COMPUTED.match(value)) and '"' not in value and "'" not in value
+    if '"' in value or "'" in value or not value:
+        return False
+    head = _CALL_HEAD.match(value)
+    at = head.end() if head else 0
+    if (value[at:at + 1] if head else value[:1]) not in _CLOSER:
+        return False
+    while at < len(value):
+        if value[at] not in _CLOSER:
+            return False
+        stack, at = [_CLOSER[value[at]]], at + 1
+        while stack and at < len(value):
+            char = value[at]
+            if char in _CLOSER:
+                stack.append(_CLOSER[char])
+            elif char == stack[-1]:
+                stack.pop()
+            elif char in ')]}':
+                return False
+            at += 1
+        if stack:
+            return False
+        chain = re.match(r'\.[A-Za-z_]\w*', value[at:])
+        at += chain.end() if chain else 0
+    return True
 
 
 def redact_wide_assignments(text, assignment, keep=None):
@@ -253,36 +291,64 @@ def redact_wide_assignments(text, assignment, keep=None):
 
 
 def redact_diff_wrapped(text):
-    """Mask wrapped tokens in a unified diff, joining body lines across their markers.
+    """Mask wrapped tokens in a unified diff, scanning the old and the new side apart.
 
-    The one-character +/-/space marker of each hunk line is not part of the
-    credential, so the scan runs on the marker-free lines; a line inside a masked
-    span disappears with its marker, the others keep theirs.
+    Each hunk is read as two files: the old side is its ' ' and '-' lines, the new
+    side its ' ' and '+' lines, both without the one-character marker. A line that
+    either side masks is masked; a masked run that continues over a line break
+    drops the continuation's marker and text, as the plain scan does.
     """
-    lines, marks, in_hunk = re.findall(r'[^\n]*\n|[^\n]+', text), [], False
-    for line in lines:
+    out, body, in_hunk = [], [], False
+    for line in re.findall(r'[^\n]*\n|[^\n]+', text):
         if line.startswith('diff --git '):
-            in_hunk = False
+            out.extend(_mask_hunk(body))
+            body, in_hunk = [], False
         elif line.startswith('@@'):
-            in_hunk = True
-        marks.append(1 if in_hunk and line[:1] in ('+', '-', ' ') else 0)
-    stripped = ''.join(line[mark:] for line, mark in zip(lines, marks))
-    spans = list(_wrapped_spans(stripped))
-    if not spans:
-        return text
-    out, offset, spans_at = [], 0, 0
-    for line, mark in zip(lines, marks):
-        start, end = offset, offset + len(line) - mark
-        offset = end
-        while spans_at < len(spans) and spans[spans_at][1] <= start:
-            spans_at += 1
-        span = spans[spans_at] if spans_at < len(spans) else None
-        if span is None or span[0] >= end:
+            out.extend(_mask_hunk(body))
+            body, in_hunk = [], True
             out.append(line)
-        elif span[0] >= start:
-            out.extend((line[:mark + span[0] - start], '[REDACTED]'))
-            if span[1] < end:
-                out.append(line[mark + span[1] - start:])
-        elif span[1] < end:
-            out.append(line[mark + span[1] - start:])
+            continue
+        (body if in_hunk else out).append(line)
+    out.extend(_mask_hunk(body))
     return ''.join(out)
+
+
+def _mask_hunk(lines):
+    marked = [bool(line[:1] in ('+', '-', ' ')) for line in lines]
+    masks = [bytearray(len(line) - 1) if mark else bytearray() for line, mark in zip(lines, marked)]
+    for side in ('-', '+'):
+        members = [n for n, (line, mark) in enumerate(zip(lines, marked)) if mark and line[0] in (' ', side)]
+        stream = ''.join(lines[n][1:] for n in members)
+        offsets, total = [], 0
+        for n in members:
+            offsets.append(total)
+            total += len(lines[n]) - 1
+        at = 0
+        for first, last in _wrapped_spans(stream):
+            while offsets[at] + len(masks[members[at]]) <= first:
+                at += 1
+            cursor = at
+            while cursor < len(members) and offsets[cursor] < last:
+                row = masks[members[cursor]]
+                low, high = max(first - offsets[cursor], 0), min(last - offsets[cursor], len(row))
+                row[low:high] = b'\x01' * (high - low)
+                cursor += 1
+    out, in_run = [], False
+    for line, mark, row in zip(lines, marked, masks):
+        if not mark:
+            out.append(line)
+            in_run = False
+            continue
+        if not (in_run and row[:1] == b'\x01'):
+            out.append(line[0])
+        for char, flag in zip(line[1:], row):
+            if flag:
+                if not in_run:
+                    out.append('[REDACTED]')
+                in_run = True
+            else:
+                out.append(char)
+                in_run = False
+        if len(row) == 0:
+            in_run = False
+    return out

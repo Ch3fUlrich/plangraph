@@ -159,5 +159,7 @@
   {"id": "source-literal-colon", "input_parts": ["API_", "KEY: hunter2value", "\nnext retained"], "expected": "API_KEY: [REDACTED]\nnext retained", "source": "API_KEY: [REDACTED]\nnext retained"},
   {"id": "source-computed-stays-readable", "input_parts": ["TOKEN = ", "build_token(user)"], "expected": "TOKEN = [REDACTED]", "rust_expected": "TOKEN = [REDACTED])", "source": "TOKEN = build_token(user)"},
   {"id": "source-subscript-stays-readable", "input_parts": ["SECRET = ", "vault[name]"], "expected": "SECRET = [REDACTED]", "rust_expected": "SECRET = [REDACTED]]", "source": "SECRET = vault[name]"},
-  {"id": "source-quoted-literal-after-call-name", "input_parts": ["PASSWORD = ", "get(\"hunter2value\")"], "expected": "PASSWORD = [REDACTED]", "rust_expected": "PASSWORD = [REDACTED])"}
+  {"id": "source-quoted-literal-after-call-name", "input_parts": ["PASSWORD = ", "get(\"hunter2value\")"], "expected": "PASSWORD = [REDACTED]", "rust_expected": "PASSWORD = [REDACTED])"},
+  {"id": "source-computed-with-literal-fallback", "input_parts": ["SECRET = ", "get_secret() or \"hunter2", "value\""], "expected": "SECRET = [REDACTED]", "rust_expected": "SECRET = [REDACTED]) or \"hunter2value\"", "source": "SECRET = [REDACTED]"},
+  {"id": "source-call-then-bare-literal", "input_parts": ["PASSWORD = ", "load(x) + hunter2value"], "expected": "PASSWORD = [REDACTED]", "rust_expected": "PASSWORD = [REDACTED]) + hunter2value", "source": "PASSWORD = [REDACTED]"}
 ]

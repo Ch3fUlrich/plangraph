@@ -313,3 +313,32 @@ def test_cli_drain_masks_a_wrapped_token_split_across_lines(newline):
         written = []
         cli._drain_chunks(chunks, written.append)
         assert b''.join(written).replace(b'\r\n', b'\n') == b'[REDACTED]\nnext retained\n'
+
+
+def _stream_all(chunks, newline):
+    lines = env_redact.OutputLines(lambda text: text)
+    outs = [lines.feed(chunk) for chunk in chunks]
+    return outs, ''.join(outs) + lines.feed('', final=True)
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_one_line_that_ends_a_wrapped_token_and_starts_another(newline):
+    # Line 2 finishes the first credential mid-line and opens a second one.
+    first = 'gh' + 'p_' + 'A9' * 2 + newline
+    second = 'A9' * 8 + ' gh' + 'p_' + 'B8' * 10 + newline
+    tail = 'next retained' + newline
+    outs, whole = _stream_all([first, second, tail], newline)
+    assert 'A9' not in ''.join(outs) + whole and 'B8' not in ''.join(outs) + whole
+    assert whole == '[REDACTED] [REDACTED]' + newline + tail
+
+
+@pytest.mark.parametrize('newline', [b'\n', b'\r\n'])
+def test_cli_drain_one_line_that_ends_a_wrapped_token_and_starts_another(newline):
+    data = (b'gh' + b'p_' + b'A9' * 2 + newline + b'A9' * 8 + b' gh' + b'p_' + b'B8' * 10 + newline
+            + b'next retained' + newline)
+    for cut in (len(data), 12, 30):
+        written = []
+        cli._drain_chunks([data[:cut], data[cut:]], written.append)
+        out = b''.join(written)
+        assert b'A9' not in out and b'B8' not in out
+        assert out.replace(b'\r\n', b'\n') == b'[REDACTED] [REDACTED]\nnext retained\n'

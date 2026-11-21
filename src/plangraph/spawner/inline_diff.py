@@ -48,40 +48,45 @@ def _count(text):
     return 1 if text is None else int(text)
 
 
-def _withhold_key_hunks(diff, repo, old_rev, new_rev, timeout):
+_INDEX = re.compile(r'^index ([0-9a-f]+)\.\.([0-9a-f]+)')
+
+
+def _withhold_key_hunks(diff, repo, timeout):
     """The diff with the body of every hunk that overlaps a private-key block of either side replaced.
 
     A hunk cut from the middle of a key shows base64 body lines without any marker, so the
-    blocks are found in the whole file of each side. A side that cannot be read withholds."""
-    out, cache, files, in_hunk, keep = [], {}, {}, False, True
+    blocks are found in the whole blob of each side, named by the ids of the diff's own
+    ``index`` line (file names may be quoted). A side that cannot be read withholds."""
+    out, cache, blobs, in_hunk, keep = [], {}, {}, False, True
 
-    def key_lines(rev, name):
-        if (rev, name) not in cache:
-            text = _git_text(repo, "cat-file", "blob", f"{rev}:{name}", timeout=timeout)
-            cache[rev, name] = None if text is None else _key_lines(text)
-        return cache[rev, name]
+    def key_lines(blob):
+        if blob not in cache:
+            text = _git_text(repo, "cat-file", "blob", blob, timeout=timeout)
+            cache[blob] = None if text is None else _key_lines(text)
+        return cache[blob]
 
     for line in diff.splitlines(keepends=True):
         if line.startswith("diff --git "):
-            files, in_hunk, keep = {}, False, True
-        elif not in_hunk and line.startswith(("--- ", "+++ ")):
-            name = line[4:].rstrip("\r\n").split("\t")[0]
-            # None: no such side (/dev/null); False: a name we cannot resolve safely (quoted).
-            files[line[0]] = None if name == "/dev/null" else (
-                name[2:] if name[:2] in ("a/", "b/") and not name.startswith('"') else False)
+            blobs, in_hunk, keep = {}, False, True
+        elif not in_hunk and _INDEX.match(line):
+            old, new = _INDEX.match(line).groups()
+            # An all-zero id is the absent side of an added or deleted file.
+            blobs = {"-": None if not old.strip("0") else old, "+": None if not new.strip("0") else new}
         hunk = _HUNK.match(line)
         if hunk:
             in_hunk, keep, keyed = True, True, False
-            for mark, rev, first, count in (("-", old_rev, hunk[1], hunk[2]), ("+", new_rev, hunk[3], hunk[4])):
-                name = files.get(mark)
-                if name is None:
+            for mark, first, count in (("-", hunk[1], hunk[2]), ("+", hunk[3], hunk[4])):
+                if mark not in blobs:   # no index line: this side cannot be named
+                    keep, keyed = False, True
                     continue
-                lines = key_lines(rev, name) if name else None
+                if blobs[mark] is None:
+                    continue
+                lines = key_lines(blobs[mark])
                 keyed = keyed or lines is None or bool(lines)
                 if lines is None or any(n in lines for n in range(int(first), int(first) + _count(count))):
                     keep = False
             # The heading after the second @@ is a copy of an earlier line of the file: a keyed file loses it.
-            head = line[:hunk.end()] + line[len(line.rstrip("\r\n")):] if keyed else line
+            head = line[:hunk.end()] + line[len(line.rstrip("\r\n")):] if keyed or not keep else line
             out.append(head if keep else head + WITHHELD)
         elif keep:
             out.append(line)
@@ -121,11 +126,8 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     if len(proc.stdout) > max_chars:
         raise InlineDiffError(f"prompt_too_large: diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
                               chars=len(proc.stdout), max_chars=max_chars)
-    shown = proc.stdout
     try:
-        if "@@ -" in shown:
-            merge_base = (_git_text(diff_ref["repo"], "merge-base", base, head, timeout=timeout) or "").strip()
-            shown = _withhold_key_hunks(shown, diff_ref["repo"], merge_base or base, head, timeout)
+        shown = _withhold_key_hunks(proc.stdout, diff_ref["repo"], timeout) if "@@ -" in proc.stdout else proc.stdout
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise InlineDiffError(f"private key check failed: {type(exc).__name__}") from None
     return prompt + HEADER.format(base=base, head=head) + _diff_block(shown) + FOOTER

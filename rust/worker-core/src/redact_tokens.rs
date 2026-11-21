@@ -110,9 +110,11 @@ pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
         .into_owned()
 }
 
-/// True for None/True/False/null or an already masked value, or a call, subscript or bracketed expression
-/// with no string literal: spawner-read source keeps these assignments readable
-/// (src/plangraph/spawner/redact_tokens.py is_computed).
+/// True for None/True/False/null or an already masked value, or for one call,
+/// subscript or bracketed expression (with attribute/call chains) holding no
+/// string literal. Spawner-read source keeps these readable; anything else after a
+/// credential name is masked (src/plangraph/spawner/redact_tokens.py is_computed).
+/// `value` must be the whole right-hand side, to the end of the line.
 pub(crate) fn is_computed(value: &str) -> bool {
     let value = value.trim();
     if matches!(
@@ -121,22 +123,62 @@ pub(crate) fn is_computed(value: &str) -> bool {
     ) {
         return true;
     }
-    if value.contains('"') || value.contains('\'') {
+    if value.is_empty() || value.contains('"') || value.contains('\'') {
         return false;
     }
-    let Some(first) = value.chars().next() else {
-        return false;
+    let chars: Vec<char> = value.chars().collect();
+    let mut at = 0;
+    if chars[0].is_ascii_alphabetic() || chars[0] == '_' {
+        while at < chars.len()
+            && (chars[at].is_ascii_alphanumeric() || matches!(chars[at], '_' | '.'))
+        {
+            at += 1;
+        }
+        while at < chars.len() && chars[at].is_whitespace() && !matches!(chars[at], '\r' | '\n') {
+            at += 1;
+        }
+    }
+    let closer = |c: char| match c {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        _ => None,
     };
-    if matches!(first, '(' | '[' | '{') {
-        return true;
-    }
-    if !(first.is_ascii_alphabetic() || first == '_') {
+    if at >= chars.len() || closer(chars[at]).is_none() {
         return false;
     }
-    let rest =
-        value.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.');
-    rest.trim_start_matches(|c: char| c.is_whitespace() && c != '\r' && c != '\n')
-        .starts_with(['(', '['])
+    while at < chars.len() {
+        let Some(first) = closer(chars[at]) else {
+            return false;
+        };
+        let mut stack = vec![first];
+        at += 1;
+        while !stack.is_empty() && at < chars.len() {
+            let c = chars[at];
+            if let Some(end) = closer(c) {
+                stack.push(end);
+            } else if Some(&c) == stack.last() {
+                stack.pop();
+            } else if matches!(c, ')' | ']' | '}') {
+                return false;
+            }
+            at += 1;
+        }
+        if !stack.is_empty() {
+            return false;
+        }
+        if chars.get(at) == Some(&'.')
+            && chars
+                .get(at + 1)
+                .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+        {
+            at += 1;
+            while at < chars.len() && (chars[at].is_ascii_alphanumeric() || chars[at] == '_') {
+                at += 1;
+            }
+        }
+    }
+    true
 }
 
 pub(crate) fn redact_blob(
@@ -206,6 +248,36 @@ fn hex_shaped(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn computed_values_are_single_literal_free_expressions() {
+        for yes in [
+            "tuple(sorted((left, right)))",
+            "(scope, name)",
+            "[]",
+            "{}",
+            "vault[name]",
+            "a.b(c).d(e)",
+            "f (a)",
+            "None",
+            "\"[REDACTED]\"",
+        ] {
+            assert!(is_computed(yes), "{yes}");
+        }
+        for no in [
+            "load(x) + literal",
+            "get_secret() or x",
+            "foo(bar",
+            "foo)",
+            "x",
+            "123",
+            "\"x\"",
+            "os.environ[\"X\"]",
+            "",
+        ] {
+            assert!(!is_computed(no), "{no}");
+        }
+    }
 
     #[test]
     fn wrapped_xox_underscore_is_redacted() {

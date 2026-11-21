@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
-from .env_redact import redact_source, _source_block, _join_prompt, PrivateKeyScan
+from .env_redact import redact_source, _source_block, _join_prompt, PrivateKeyScan, PEM_MARKER
 from .inline_diff import InlineDiffError
 
 LANGUAGE_RULE = ('new code is Rust with Rust tests; no new Python or shell file; '
@@ -124,6 +124,17 @@ def _locate(root: Path, raw: str) -> Path:
     return resolved
 
 
+_MARKER_CARRY = 64
+
+
+class _CutLine(str):
+    """An overlong line cut to the limit; ``dropped_markers`` holds the key markers of the part not kept."""
+    def __new__(cls, text, dropped_markers):
+        value = super().__new__(cls, text)
+        value.dropped_markers = dropped_markers
+        return value
+
+
 def _lines(path: Path, limit: int = 65536):
     """The lines of ``path`` without terminators: the one line convention (see the module docstring).  Undecodable
     bytes become U+FFFD and the last unterminated line counts.  A line over ``limit`` chars comes back cut to
@@ -139,10 +150,16 @@ def _lines(path: Path, limit: int = 65536):
             if len(line) <= limit:
                 yield line   # the last line, no terminator
                 return
+            # Private-key markers in the dropped part still count: keep them as a side note on the line.
+            seen, carry = [], line[-_MARKER_CARRY:]
             rest = fh.readline(65536)
-            while rest and not rest.endswith('\n'):
+            while True:
+                seen.extend(m.group() for m in PEM_MARKER.finditer(carry + rest) if m.end() > len(carry))
+                if not rest or rest.endswith('\n'):
+                    break
+                carry = (carry + rest)[-_MARKER_CARRY:]
                 rest = fh.readline(65536)
-            yield line
+            yield _CutLine(line, ''.join(seen))
 
 
 def _line_count(path: Path) -> int:

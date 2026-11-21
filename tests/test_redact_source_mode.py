@@ -272,6 +272,46 @@ def test_git_hunk_inside_a_private_key_block_is_withheld(monkeypatch, tmp_path, 
 def test_hunk_is_withheld_when_a_side_cannot_be_read(monkeypatch, tmp_path):
     diff = 'diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@ section\n-old\n+new\n'
     monkeypatch.setattr(inline_diff, '_git_text', lambda *args, **kw: None)
-    shown = inline_diff._withhold_key_hunks(diff, str(tmp_path), 'a', 'b', 5)
+    shown = inline_diff._withhold_key_hunks(diff.replace('--- a', 'index 1111111..2222222 100644\n--- a'), str(tmp_path), 5)
     assert '-old' not in shown and '+new' not in shown and inline_diff.WITHHELD in shown
     assert '@@ -1 +1 @@' in shown and 'section' not in shown
+
+
+def test_removed_credential_continued_by_a_context_line_is_masked_in_a_diff():
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    diff = ('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n keep\n-' + first
+            + '\n+replacement words here\n ' + rest + '\n tail line\n')
+    out = redact_diff_wrapped(diff)
+    assert first not in out and rest not in out
+    assert '+replacement words here' in out and ' tail line' in out and '-[REDACTED]' in out
+
+
+def test_added_credential_continued_by_a_context_line_is_masked_in_a_diff():
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    diff = ('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,3 @@\n-old words here\n+' + first
+            + '\n ' + rest + '\n tail line\n')
+    out = redact_diff_wrapped(diff)
+    assert first not in out and rest not in out and '-old words here' in out
+
+
+def test_git_quoted_file_names_do_not_withhold_clean_hunks(monkeypatch, tmp_path):
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    name = 'café über.txt'
+    (tmp_path / name).write_text('one\ntwo\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'one')
+    _git(tmp_path, 'checkout', '-q', '-b', 'topic')
+    (tmp_path / name).write_text('one\nclean-change\n')
+    _git(tmp_path, 'commit', '-q', '-am', 'two')
+    ref = {'repo': str(tmp_path), 'base': 'main', 'head': 'topic'}
+    out = capture(monkeypatch, tmp_path, inline_diff.inline_diff_prompt('review', ref, max_chars=100000))
+    assert '+clean-change' in out and inline_diff.WITHHELD not in out
+
+
+def test_hunk_without_an_index_line_is_withheld(monkeypatch, tmp_path):
+    diff = 'diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n'
+    monkeypatch.setattr(inline_diff, '_git_text', lambda *args, **kw: 'plain\n')
+    shown = inline_diff._withhold_key_hunks(diff, str(tmp_path), 5)
+    assert '+new' not in shown and inline_diff.WITHHELD in shown
