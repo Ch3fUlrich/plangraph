@@ -609,3 +609,29 @@ fn the_newest_status_of_an_attempt_wins_whatever_order_the_listing_has() {
         );
     }
 }
+
+#[test]
+fn when_either_status_has_no_time_the_apis_newest_first_order_stands() {
+    let desc = format!("run 5 attempt 2 tree {TREE}");
+    let newest_undated = json!({"context": "ci-full", "state": "success", "creator": {"id": CI_BOT}, "description": desc});
+    let older_dated = json!({"context": "ci-full", "state": "pending", "creator": {"id": CI_BOT}, "description": desc, "updated_at": "2026-11-21T00:01:00Z"});
+    let statuses = vec![
+        auth(77, "success", APP_TEXT),
+        newest_undated.clone(),
+        older_dated.clone(),
+    ];
+    let runs = fast_source(statuses, Some(77)).runs(TIP).unwrap();
+    assert!(
+        by_id(&runs, 3).unwrap().fast,
+        "the undated newest status is not replaced by an older dated one"
+    );
+    // And the other mixed order: the older one is undated, the newest is dated.
+    let newest_dated = json!({"context": "ci-full", "state": "success", "creator": {"id": CI_BOT}, "description": desc, "updated_at": "2026-11-21T00:09:00Z"});
+    let older_undated = json!({"context": "ci-full", "state": "pending", "creator": {"id": CI_BOT}, "description": desc});
+    let statuses = vec![auth(77, "success", APP_TEXT), newest_dated, older_undated];
+    assert!(
+        by_id(&fast_source(statuses, Some(77)).runs(TIP).unwrap(), 3)
+            .unwrap()
+            .fast
+    );
+}

@@ -355,7 +355,7 @@ fn delivery_runs_outside_the_lock_so_a_command_that_acknowledges_at_once_works()
         ))
     })
     .unwrap();
-    deliver_pending(dir.path(), &owners, &mut AckingDeliver(dir.path()), 0).unwrap();
+    deliver_pending(dir.path(), &owners, &mut AckingDeliver(dir.path()), &|| 0).unwrap();
     let records = load_failures(dir.path()).unwrap();
     assert!(
         records[0].acked,
@@ -407,7 +407,7 @@ fn two_passes_never_send_the_same_record_twice() {
     let passes: Vec<_> = (0..2)
         .map(|_| {
             let (p, o, s) = (path.clone(), owners.clone(), sent.clone());
-            std::thread::spawn(move || deliver_pending(&p, &o, &mut Counting(s), 10).unwrap())
+            std::thread::spawn(move || deliver_pending(&p, &o, &mut Counting(s), &|| 10).unwrap())
         })
         .collect();
     for t in passes {
@@ -585,7 +585,7 @@ fn each_delivery_is_claimed_immediately_before_it_is_sent_not_when_the_pass_star
         .unwrap();
     }
     let mut deliver = Inspect(dir.path(), vec![]);
-    deliver_pending(dir.path(), &owners, &mut deliver, 10).unwrap();
+    deliver_pending(dir.path(), &owners, &mut deliver, &|| 10).unwrap();
     assert_eq!(deliver.1.len(), 2);
     assert!(
         deliver.1.iter().all(|(_, claimed)| *claimed == 1),
@@ -623,4 +623,64 @@ fn an_expired_deliverys_success_does_not_overwrite_the_replacements_confirmed_de
     // The overrun delivery to the old writer finishes late and reports success: it changes nothing.
     settle(&mut records, &id, "w1", &old, true);
     assert_eq!(records[0].delivered_to.as_deref(), Some("w2"));
+}
+
+#[test]
+fn every_claim_is_stamped_with_the_clock_read_for_that_claim() {
+    use super::batch_failure::{Deliver, FailureRecord, Owners};
+    use std::cell::Cell;
+    struct Slow<'a>(&'a std::path::Path, &'a Cell<i64>, Vec<(String, i64, i64)>);
+    impl Deliver for Slow<'_> {
+        fn send(&mut self, _: &str, record: &FailureRecord) -> Result<(), String> {
+            let claimed = load_failures(self.0)
+                .unwrap()
+                .iter()
+                .find(|r| r.id == record.id)
+                .and_then(|r| r.claim.clone())
+                .unwrap();
+            self.2.push((record.id.clone(), claimed.at, self.1.get()));
+            self.1.set(self.1.get() + 155); // each command takes 155 seconds
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let owners = Owners {
+        prs: (1..=3).map(|n| (n.to_string(), "b".to_owned())).collect(),
+        writers: [("b".to_owned(), "w1".to_owned())].into(),
+        successors: Default::default(),
+    };
+    for pr in 1..=3u64 {
+        let task = Task {
+            key: "k".into(),
+            head: format!("pr-{pr}"),
+            pr: Some(pr),
+            run_id: pr,
+            job: "j".into(),
+            test: "t".into(),
+            excerpt: "x".into(),
+            priority: 10,
+            keeper_defined: false,
+            keeper_key: None,
+        };
+        update_failures(dir.path(), |records| {
+            Ok(super::batch_failure::record_failure(
+                records, &owners, &task, 0,
+            ))
+        })
+        .unwrap();
+    }
+    let clock = Cell::new(1000);
+    let mut deliver = Slow(dir.path(), &clock, vec![]);
+    deliver_pending(dir.path(), &owners, &mut deliver, &|| clock.get()).unwrap();
+    assert_eq!(deliver.2.len(), 3);
+    for (id, claimed_at, at_send) in &deliver.2 {
+        assert_eq!(
+            claimed_at, at_send,
+            "{id} was claimed at the time it was sent, not when the pass began"
+        );
+    }
+    assert_eq!(
+        deliver.2[2].1, 1310,
+        "the third claim is stamped after the two earlier commands"
+    );
 }

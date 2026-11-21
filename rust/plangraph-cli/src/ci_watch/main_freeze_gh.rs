@@ -176,6 +176,11 @@ impl Deliver for CommandDeliver<'_> {
     }
 }
 
+/// The wall clock, read again for each delivery claim.
+fn system_now() -> i64 {
+    chrono::Utc::now().timestamp()
+}
+
 fn save(path: &Path, value: &impl Serialize) -> Result<()> {
     atomic::write(path, &serde_json::to_vec(value).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())
@@ -247,7 +252,7 @@ pub fn pass(
             dir,
             lease_secs: (batch_failure::CLAIM_SECS as u64).saturating_sub(60),
         },
-        now,
+        &system_now,
     )?);
     update_failures(dir, |records| {
         out.extend(batch_failure::escalate_overdue(
@@ -290,21 +295,24 @@ pub fn deliver_pending(
     dir: &Path,
     owners: &Owners,
     deliver: &mut impl Deliver,
-    now: i64,
+    clock: &dyn Fn() -> i64,
 ) -> Result<Vec<String>> {
     // The work list is only a candidate list; each delivery is claimed under the lock immediately before it
     // is sent, so a queued delivery never starts after its claim expired.
     let candidates: Vec<(String, String)> = update_failures(dir, |records| {
-        Ok(batch_failure::pending_deliveries(records, owners, now))
+        Ok(batch_failure::pending_deliveries(records, owners, clock()))
     })?;
     let mut lines = Vec::new();
     for (id, writer) in candidates {
         let claimed = update_failures(dir, |records| {
-            let still = batch_failure::pending_deliveries(records, owners, now);
+            // The clock is read under the lock for this claim: a late delivery in the queue is not stamped
+            // with the time the pass started.
+            let at = clock();
+            let still = batch_failure::pending_deliveries(records, owners, at);
             if !still.iter().any(|(i, w)| *i == id && *w == writer) {
                 return Ok(None);
             }
-            let Some(token) = batch_failure::claim(records, &id, &writer, now) else {
+            let Some(token) = batch_failure::claim(records, &id, &writer, at) else {
                 return Ok(None);
             };
             Ok(records
@@ -347,7 +355,7 @@ pub fn route_or_define(
                 dir,
                 lease_secs: (batch_failure::CLAIM_SECS as u64).saturating_sub(60),
             },
-            now,
+            &system_now,
         )?;
         // The record is open and addressed to the batch: no unassigned fix lane is created.
         return Ok(true);

@@ -133,7 +133,8 @@ impl<G: Github> GhSource<G> {
                                 v.insert((ts, ok));
                             }
                             std::collections::btree_map::Entry::Occupied(mut o) => {
-                                if ts > o.get().0 {
+                                // Times decide only when both statuses carry one; otherwise the API's newest-first order stands.
+                                if !ts.is_empty() && !o.get().0.is_empty() && ts > o.get().0 {
                                     o.insert((ts, ok));
                                 }
                             }
