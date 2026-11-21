@@ -159,7 +159,7 @@ def _add_writes(sub):
     waive.add_argument("key")
     waive.add_argument("decision_id", metavar="D-NNN")
 
-    withdraw = _p(sub, "withdraw", help="router: take a decision-closable item out of review")
+    withdraw = _p(sub, "withdraw", help="router: take a decision-closable item out of review (in_review only; an open item is not withdrawn, cancel it)")
     withdraw.add_argument("key")
     withdraw.add_argument("decision_id", metavar="D-NNN")
 

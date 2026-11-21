@@ -293,6 +293,7 @@ class OpsMixin:
     def _edit_op(self, principal, key, fields, now):
         """Execute an edit op, expanding depends_on forms and tracking dropped deps."""
         has_deps = isinstance(fields, dict) and "depends_on" in fields
+        derived = has_deps and isinstance(fields["depends_on"], dict)
         old_deps = []
         if has_deps:
             item = self._get_or_refuse(key)
@@ -300,7 +301,7 @@ class OpsMixin:
             dep_spec = fields["depends_on"]
             if isinstance(dep_spec, dict):
                 fields = dict(fields, depends_on=self._deps_from_form(item, dep_spec))
-        res = self._edit(principal, key, fields, now)
+        res = self._edit(principal, key, fields, now, deps_derived=derived)
         if has_deps:
             after_item = self._item(key)
             new_deps_set = set(after_item.get("depends_on") or []) if after_item else set()
@@ -361,7 +362,8 @@ class OpsMixin:
                 return self._dep_noop(principal, item,
                                       [f"dependency {target} already present"])
             deps = current + [target]
-        return self._edit(principal, key, {"depends_on": deps}, now)
+        return self._edit(principal, key, {"depends_on": deps}, now,
+                          deps_derived=True)
 
     def _dep_noop(self, principal, item, warnings):
         """The answer for a dep op that would not change the graph.

@@ -12,7 +12,7 @@ normalisation, evidence checks, authorisation) live on the ``Store`` base class.
 from __future__ import annotations
 
 from .. import views
-from . import auth, events
+from . import auth, context_sources as src, events
 from .errors import Refused
 from .evidence_floor import record_bases
 from .phase_merge import merge_subject
@@ -366,13 +366,6 @@ class VerbsMixin:
             if fresh["state"] != item["state"] or fresh["epoch"] != item["epoch"]:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
-            if principal.role != "router":
-                dependent = self.conn.execute(
-                    "SELECT 1 FROM edges e JOIN items i ON i.key=e.src"
-                    " WHERE e.dst=? AND i.state NOT IN ('done','cancelled')"
-                    " LIMIT 1", (key,)).fetchone()
-                if dependent is not None:
-                    raise Refused("conflict", f"{key} has active dependents")
             self._append(principal, key, "cancelled", {"reason": reason}, now)
             # Cancelling abandons the work, so the waiver that was granted for
             # it goes too; the ``cancelled`` fold branch clears the same column.
@@ -382,21 +375,27 @@ class VerbsMixin:
                 " AND epoch=?",
                 (self._iso(now), key, fresh["state"], fresh["epoch"]))
             self._row_guard(cursor, key, fresh["state"], fresh["epoch"])
-            # Frozen gates retain their history. Live gates no longer wait for
-            # abandoned work; ordinary work dependencies keep their meaning.
-            # An edge that is the only path from live work to a goal stays
-            # (legacy ``depends_on_cancelled``): dropping it would strand that
-            # work, and cancelling a gate with live children stays legal.
-            gates = self.conn.execute(
-                "SELECT i.key,i.state,i.epoch FROM edges e JOIN items i ON i.key=e.src"
-                " WHERE e.dst=? AND i.kind IN ('gate','goal')"
-                " AND i.state NOT IN ('done','cancelled') ORDER BY i.key",
-                (key,)).fetchall()
-            current = self._all_items()
-            for gate in gates:
-                if self._drop_would_orphan(current, gate["key"], key):
-                    continue
-                current = self._without_dep(current, gate["key"], key)
+            # A reason that names a decision (D-id) says the item was superseded:
+            # the cancel then repairs every dependent's edge in this same call.
+            decided = isinstance(reason, str) and bool(src.decision_ids(reason))
+            # (planned on the graph with the item already cancelled: dropping its
+            # edges must not read as stranding the item itself)
+            drops, kept = self._cancel_repairs(fresh, decided)
+            if principal.role != "router":
+                owner_repair = decided and fresh["state"] == "open"
+                dependent = self.conn.execute(
+                    "SELECT 1 FROM edges e JOIN items i ON i.key=e.src"
+                    " WHERE e.dst=? AND i.state NOT IN ('done','cancelled')"
+                    " LIMIT 1", (key,)).fetchone()
+                if dependent is not None and not owner_repair:
+                    raise Refused("conflict", f"{key} has active dependents"
+                                  + ("; a D-id cancel by the owner role repairs them"
+                                     " only for an open, unheld item" if decided else ""))
+                if owner_repair and kept:
+                    raise Refused("conflict", f"{key} has dependents whose edge this"
+                                  " cancel cannot repair: " + "; ".join(
+                                      f"{k['key']} ({k['why']})" for k in kept))
+            for gate in drops:
                 active = gate["state"] in ("claimed", "in_review")
                 payload = {"fields": ["depends_on"],
                            "dropped_cancelled_dependency": key}
@@ -414,4 +413,45 @@ class VerbsMixin:
                 self._append(principal, gate["key"], "item_defined", payload, now)
             self._validate_change(self._all_items(), before, affected={key},
                                   allow_new={"depends_on_cancelled"})
-        return {"key": key, "state": "cancelled"}
+        out = {"key": key, "state": "cancelled"}
+        if decided:
+            out["dropped_from"] = sorted(d["key"] for d in drops)
+            if kept:
+                out["kept"] = kept
+        return out
+
+    def _cancel_repairs(self, item, decided):
+        """``(edges to drop, edges kept)`` for the dependents of a cancelled *item*.
+
+        Frozen gates retain their history; live gates and goals no longer wait
+        for abandoned work, and an edge that is the only path from live work to
+        a goal stays (legacy ``depends_on_cancelled``).  With a D-id (*decided*)
+        every open dependent loses its edge too, except an edge to an operator
+        item (a human step the dependent waits on), a claimed or in-review
+        dependent (its epoch would reset) and an edge that would orphan work;
+        those are kept and named.
+        """
+        key = item["key"]
+        rows = self.conn.execute(
+            "SELECT i.key,i.kind,i.state,i.epoch FROM edges e JOIN items i ON i.key=e.src"
+            " WHERE e.dst=? AND i.state NOT IN ('done','cancelled') ORDER BY i.key",
+            (key,)).fetchall()
+        drops, kept, current = [], [], self._all_items()
+        for row in rows:
+            structural = row["kind"] in ("gate", "goal")
+            if not structural and not decided:
+                continue
+            why = None
+            if not structural and item.get("operator"):
+                why = "operator edge"
+            elif not structural and row["state"] != "open":
+                why = row["state"]
+            elif self._drop_would_orphan(current, row["key"], key):
+                why = "would orphan work"
+            if why is not None:
+                if decided:
+                    kept.append({"key": row["key"], "why": why})
+                continue
+            current = self._without_dep(current, row["key"], key)
+            drops.append(row)
+        return drops, kept

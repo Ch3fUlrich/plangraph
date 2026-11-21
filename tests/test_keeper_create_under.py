@@ -281,19 +281,17 @@ def test_cancel_drops_gate_edges_and_records_drop(w):
     assert w.store.verify_integrity() == []
 
 
-def test_define_refuses_only_item_under_gate_with_cancelled_dep(w):
+def test_define_under_gate_with_standing_cancelled_dep_is_accepted_and_reports_it(w):
     # Model legacy data without relying on cancel's new edge cleanup.
     w.conn.execute("UPDATE items SET state='cancelled' WHERE key='demo:X'")
     out = w.store.create_items(w.p("router"), [
-        defn("REFUSED", under="GOAL"),
+        defn("ACCEPTED", under="GOAL"),
         defn("CREATED", project="other", under="OG")])
-    assert out["created"] == ["other:CREATED"]
-    assert w.store._item("demo:REFUSED") is None
-    refusal, = out["refused"]
-    assert refusal["key"] == "demo:REFUSED"
-    assert refusal["code"] == "depends_on_cancelled"
-    assert "demo:GOAL" in refusal["message"] and "demo:X" in refusal["message"]
-    assert "remove_dep" in refusal["message"]
+    assert out["created"] == ["demo:ACCEPTED", "other:CREATED"]
+    assert "refused" not in out
+    assert w.store._item("demo:ACCEPTED") is not None
+    warning, = [x for x in out["warnings"] if "cancelled" in x]
+    assert "demo:GOAL" in warning and "demo:X" in warning and "did not create" in warning
 
 
 def test_cancel_gate_cleanup_invalidates_active_epoch(w):
@@ -312,37 +310,6 @@ def test_cancel_gate_cleanup_invalidates_active_epoch(w):
     assert w.store.verify_integrity() == []
 
 
-@pytest.mark.parametrize("json_mode", [False, True])
-def test_define_file_reports_partial_refusal(w, tmp_path, capsys, json_mode):
-    from types import SimpleNamespace
-    from plangraph.keeper.cli_output_verbs import cmd_define
-
-    w.conn.execute("UPDATE items SET state='cancelled' WHERE key='demo:X'")
-    path = tmp_path / "definitions.json"
-    path.write_text(json.dumps({"items": [
-        defn("REFUSED", under="GOAL", description="Why: needed\nHow: implement"),
-        defn("CREATED", project="other", under="OG",
-             description="Why: needed\nHow: implement")]}))
-
-    class Session:
-        def call(self, method, verb, *, body):
-            assert (method, verb) == ("POST", "create_items")
-            return w.store.create_items(w.p("router"), body["items"])
-
-    session = Session()
-    session.json_mode = json_mode
-    assert cmd_define(SimpleNamespace(file=str(path), edit=False), session) == 2
-    out = capsys.readouterr().out
-    assert w.store._item("other:CREATED") is not None
-    assert w.store._item("demo:REFUSED") is None
-    if json_mode:
-        assert json.loads(out)["refused"][0]["key"] == "demo:REFUSED"
-    else:
-        assert "created 1 items" in out
-        assert "refused demo:REFUSED: depends_on_cancelled:" in out
-        assert "demo:X" in out and "remove_dep" in out
-
-
 def test_cancel_cleanup_is_atomic_with_batch_failure(w):
     before = _snapshot(w)
     with pytest.raises(Refused):
@@ -354,18 +321,14 @@ def test_cancel_cleanup_is_atomic_with_batch_failure(w):
     assert w.store.verify_integrity() == []
 
 
-def test_all_cancelled_gate_refusals_create_nothing_and_batch_stays_atomic(w):
+def test_standing_cancelled_gate_dep_does_not_stop_a_batch_define(w):
     w.conn.execute("UPDATE items SET state='cancelled' WHERE key='demo:X'")
-    before = _snapshot(w)
-    out = w.store.create_items(w.p("router"), [defn("REFUSED", under="GOAL")])
-    assert out["created"] == [] and len(out["refused"]) == 1
-    assert _snapshot(w) == before
-    with pytest.raises(Refused) as exc:
-        w.store.apply_ops(w.p("router"), [{"op": "create", "item": [
-            defn("CREATED", project="other", under="OG"),
-            defn("REFUSED", under="GOAL")]}])
-    assert "depends_on_cancelled" in exc.value.msg
-    assert _snapshot(w) == before
+    out = w.store.apply_ops(w.p("router"), [{"op": "create", "item": [
+        defn("CREATED", project="other", under="OG"),
+        defn("ALSO", under="GOAL")]}])
+    assert out["applied"] == 1
+    assert w.store._item("demo:ALSO") is not None
+    assert any("demo:X" in x for x in out["results"][0]["warnings"])
 
 
 def test_cancel_gate_with_live_children_stays_legal_and_keeps_stranding_edge(w):
