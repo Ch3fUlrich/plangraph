@@ -106,7 +106,7 @@ def head_writer_families(card):
     if ref is None:
         return []
     if isinstance(ref, Mapping) and "repo_id" in ref and "repo" not in ref:
-        # A registered-repository ref ({repo_id, base_sha, head_sha}) is resolved only by the Rust server.
+        # A registered-repository ref ({repo_id, base_sha, head_sha}) is resolved only by the Rust server, which adds the trailer families to writer_families (launch::with_head_writers).
         return []
     _check_diff_ref(ref)
     import subprocess

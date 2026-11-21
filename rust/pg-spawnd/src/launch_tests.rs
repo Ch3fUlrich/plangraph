@@ -204,3 +204,89 @@ fn refusal_redaction_truncation_and_empty_line() {
         );
     }
 }
+
+fn ok(result: Result<Value, crate::errors::ToolError>) -> Value {
+    match result {
+        Ok(value) => value,
+        Err(_) => panic!("with_head_writers refused"),
+    }
+}
+
+fn repo_with_writer_trailer(trailer: Option<&str>) -> (TestDir, crate::launch::RepoMap, Value) {
+    use pg_worker_core::git_test_support::command as git;
+    let dir = std::env::temp_dir().join(pg_worker_core::run::record::new_run_id());
+    std::fs::create_dir(&dir).unwrap();
+    let run = |args: &[&str]| {
+        let out = git(&dir).args(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    run(&["init", "-q"]);
+    run(&["config", "user.name", "Fixture"]);
+    run(&["config", "user.email", "fixture@example.invalid"]);
+    std::fs::write(dir.join("f"), "a\n").unwrap();
+    run(&["add", "f"]);
+    run(&["commit", "-qm", "base"]);
+    let base = run(&["rev-parse", "HEAD"]);
+    std::fs::write(dir.join("f"), "b\n").unwrap();
+    let message = match trailer {
+        Some(t) => format!("change\n\nWriter: {t}"),
+        None => "change".to_owned(),
+    };
+    run(&["commit", "-qam", &message]);
+    let head = run(&["rev-parse", "HEAD"]);
+    let entry = pg_worker_core::hosts::RepoEntry {
+        root: dir.to_string_lossy().into(),
+        worktrees_root: dir.join("trees").to_string_lossy().into(),
+        remote: String::new(),
+        python: None,
+        import_roots: vec![],
+        cache_env: Default::default(),
+        live_dir: None,
+        health_checks: None,
+    };
+    let repos = [("demo".to_owned(), entry)].into_iter().collect();
+    let request = json!({"role":"review","writer_families":["openai"],
+        "card":{"diff_ref":{"repo_id":"demo","base_sha":base,"head_sha":head}}});
+    (TestDir(dir), repos, request)
+}
+
+#[test]
+fn a_registered_repository_review_adds_the_head_writer_trailer_families() {
+    let (_dir, repos, request) =
+        repo_with_writer_trailer(Some("gemini-4-hydrogen-high run-1 (writer)"));
+    let out = ok(with_head_writers(&request, &repos));
+    assert_eq!(
+        out["writer_families"],
+        json!(["openai", "gemini-4-hydrogen-high"])
+    );
+    // Idempotent: a family already named is not repeated.
+    assert_eq!(ok(with_head_writers(&out, &repos)), out);
+}
+
+#[test]
+fn a_head_without_trailer_or_a_card_without_registered_ref_is_unchanged() {
+    let (_dir, repos, request) = repo_with_writer_trailer(None);
+    assert_eq!(ok(with_head_writers(&request, &repos)), request);
+    let plain = json!({"role":"review","writer_families":["openai"],
+        "card":{"diff_ref":{"repo":"/x","base":"a","head":"b"}}});
+    assert_eq!(ok(with_head_writers(&plain, &repos)), plain);
+    let implement = json!({"role":"implement","card":{}});
+    assert_eq!(ok(with_head_writers(&implement, &repos)), implement);
+}
+
+#[test]
+fn an_unreadable_registered_head_refuses_instead_of_assuming_no_writer() {
+    let (_dir, repos, mut request) =
+        repo_with_writer_trailer(Some("gemini-4-hydrogen-high run-1 (writer)"));
+    request["card"]["diff_ref"]["head_sha"] = json!("0".repeat(40));
+    let error = with_head_writers(&request, &repos).unwrap_err();
+    assert!(
+        matches!(&error, crate::errors::ToolError::Refused { message, .. } if message.contains("cannot read the Writer trailer")),
+        "refused with another error"
+    );
+}

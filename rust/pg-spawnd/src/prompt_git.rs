@@ -227,6 +227,39 @@ fn reap_after_kill(
     child.wait()
 }
 
+/// The models named by the `Writer` trailers of the head commit (first word of each trailer value).
+pub(crate) fn head_writers(
+    repo: &RepoEntry,
+    diff: &DiffRef,
+) -> Result<Vec<String>, InlineDiffError> {
+    validate(diff)?;
+    workspace_resolver::ensure_commit(repo, &diff.head_sha, Duration::from_secs(10))
+        .map_err(|_| InlineDiffError::Git)?;
+    let out = workspace_resolver::git_command(Path::new(&repo.root))
+        .args([
+            "-c",
+            "core.hooksPath=",
+            "log",
+            "-1",
+            "--no-color",
+            "--format=%(trailers:key=Writer,valueonly,unfold)",
+            &diff.head_sha,
+            "--",
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|_| InlineDiffError::Git)?;
+    if !out.status.success() {
+        return Err(InlineDiffError::Git);
+    }
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_owned)
+        .collect())
+}
+
 pub(crate) fn validate(diff: &DiffRef) -> Result<(), InlineDiffError> {
     let id = diff.repo_id.as_bytes();
     let valid = !id.is_empty()

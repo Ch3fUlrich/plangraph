@@ -66,6 +66,44 @@ fn parse(bytes: &[u8]) -> Result<LaunchSpec, ToolError> {
     }
     Ok(spec)
 }
+/// A review of a registered-repository `diff_ref` also excludes the families named by the head's
+/// `Writer` trailers: the Python launch adapter cannot resolve `repo_id`, so the families join
+/// `writer_families` here. A head that cannot be read refuses; refs the later admission rejects pass through.
+pub(crate) type RepoMap = std::collections::BTreeMap<String, pg_worker_core::hosts::RepoEntry>;
+
+pub(crate) fn with_head_writers(request: &Value, repos: &RepoMap) -> Result<Value, ToolError> {
+    let mut request = request.clone();
+    let reference = &request["card"]["diff_ref"];
+    if request["role"] != "review" || reference.get("repo_id").is_none() {
+        return Ok(request);
+    }
+    let Ok(diff) = serde_json::from_value::<pg_worker_core::workspace::DiffRef>(reference.clone())
+    else {
+        return Ok(request);
+    };
+    let Some(repo) = repos.get(&diff.repo_id) else {
+        return Ok(request);
+    };
+    let writers = crate::prompt_git::head_writers(repo, &diff).map_err(|_| ToolError::Refused {
+        kind: crate::errors::RefusalKind::Spawn,
+        message: format!(
+            "cannot read the Writer trailer of {}",
+            &diff.head_sha[..12.min(diff.head_sha.len())]
+        ),
+        legs: vec![],
+    })?;
+    let mut families = request["writer_families"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    for writer in writers {
+        if !families.iter().any(|f| f == &Value::from(writer.as_str())) {
+            families.push(Value::from(writer));
+        }
+    }
+    request["writer_families"] = Value::Array(families);
+    Ok(request)
+}
 fn drain(mut reader: impl Read, cap: usize) -> Vec<u8> {
     let mut kept = Vec::new();
     let mut buf = [0; 8192];
@@ -117,7 +155,8 @@ impl LaunchAdapter {
         let mut child = pg_worker_core::stall::spawn_retrying(&mut cmd)
             .map_err(|e| internal(&format!("launch adapter could not start: {e}")))?;
         let mut stdin = child.stdin.take().unwrap();
-        let bytes = serde_json::to_vec(request).map_err(|_| invalid())?;
+        let request = with_head_writers(request, &crate::prompt::repos())?;
+        let bytes = serde_json::to_vec(&request).map_err(|_| invalid())?;
         std::thread::spawn(move || {
             let _ = stdin.write_all(&bytes);
         });
