@@ -53,17 +53,47 @@ fn final_cut_through_a_secret_leaves_no_fragment() {
 
 #[test]
 fn midstream_drain_through_a_secret_leaves_no_fragment() {
-    let s = secret();
-    // 16-byte chunks: the front is drained again and again while the secret streams in.
-    let mut data = " ".repeat(30).into_bytes();
-    data.extend_from_slice(s.as_bytes());
-    data.extend_from_slice(" ".repeat(70).as_bytes());
-    let out = tail(data.clone(), 16, 40, true);
+    let token = secret();
+    let max = 700;
+    let prefix_len = 690;
+    let data = format!("{}{token}{}", " ".repeat(prefix_len), " ".repeat(670));
+    assert!(data.len() > 2 * max);
+    assert!((prefix_len..prefix_len + token.len()).contains(&(data.len() - max)));
+
+    let mut capture = stall_capture::Capture::new(max, true);
+    capture.push(data.as_bytes());
+    let buffered = std::str::from_utf8(capture.buffered()).unwrap();
+    assert_eq!(buffered.len(), max, "the push drained before EOF");
+    assert!(buffered.contains(crate::redact::REDACTED));
+    assert!(!buffered.contains(fragment(&token)));
+}
+
+#[test]
+fn midstream_drain_preserves_an_unfinished_token_for_the_next_read() {
+    let token = secret();
+    let (first, rest) = token.split_at(token.len() - 2);
+    let max = 40;
+    let padding = " ".repeat(1000);
+    assert!(first.len() > max);
+    let mut capture = stall_capture::Capture::new(max, true);
+    capture.push(padding.as_bytes());
+    capture.push(first.as_bytes());
+
+    let buffered = capture.buffered();
     assert!(
-        !out.contains(fragment(&s)),
-        "fragment survived a mid-stream drain: {out:?}"
+        buffered.len() < padding.len() + first.len(),
+        "the push drained before EOF"
     );
-    assert!(!tail(data, 16, 40, false).is_empty());
+    assert!(
+        buffered.ends_with(first.as_bytes()),
+        "the drain kept the whole unfinished token"
+    );
+
+    capture.push(format!("{rest}\n!after\n").as_bytes());
+    let out = String::from_utf8(capture.finish()).unwrap();
+    assert!(out.ends_with("[REDACTED]\n!after\n"), "{out:?}");
+    assert!(!out.contains(fragment(&token)), "{out:?}");
+    assert!(out.len() <= max);
 }
 
 #[test]

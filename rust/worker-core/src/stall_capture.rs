@@ -119,6 +119,11 @@ impl Capture {
         self.buf
     }
 
+    #[cfg(test)]
+    pub(super) fn buffered(&self) -> &[u8] {
+        &self.buf
+    }
+
     /// Index in `data` just after a PEM footer that ends the swallowed block.
     fn footer_end(&mut self, data: &[u8]) -> Option<usize> {
         let mut seen = std::mem::take(&mut self.carry);
