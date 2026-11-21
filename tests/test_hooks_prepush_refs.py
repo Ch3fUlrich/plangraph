@@ -451,7 +451,8 @@ def _install_marker_preflight(r, marker):
 
 
 @pytest.mark.parametrize("ref", ["phase/x", "phase/nested/y", "feat/x", "lane/x", "main", "phase-x"])
-def test_legacy_preflight_flags_cannot_skip_affected_tests(repo, tmp_path, ref):
+def test_preflight_skip_scope_allows_only_phase_refs(repo, tmp_path, ref):
+    """Legacy phase skip flags cannot suppress affected preflight on any ref."""
     r, base = repo
     marker = tmp_path / "preflight-ran"
     env = _install_marker_preflight(r, marker)
@@ -462,7 +463,8 @@ def test_legacy_preflight_flags_cannot_skip_affected_tests(repo, tmp_path, ref):
     assert marker.read_text() == "ran\n"
 
 
-def test_legacy_preflight_skip_checks_every_ref_and_retains_scrub(repo, tmp_path):
+def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
+    """Legacy phase skip flags leave every ref and the scrub gate covered."""
     r, base = repo
     marker = tmp_path / "preflight-ran"
     env = {**_install_marker_preflight(r, marker), "PREFLIGHT_SKIP": "1"}

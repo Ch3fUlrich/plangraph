@@ -133,6 +133,15 @@ def test_skill_non_page_change_is_unknown_full():
     assert res["full"] is True
 
 
+def test_ci_github_workflow_full(capsys, monkeypatch):
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    assert main(["select", "--event", "pull_request", "--base-ref", "main",
+                 "--head-ref", "lane/workflows", "--labels", '["ci-full"]',
+                 "--files", ".github/workflows/tests.yml"]) == 0
+    output = dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+    assert output == dict.fromkeys((*SUITES, "full"), "true")
+
+
 def test_ci_only_workflows_select_regressions():
     res = select([".github/workflows/tests.yml", ".github/workflows/release.yml"])
     assert {job for job, active in res.items() if active} == {"pytest", "rust"}
