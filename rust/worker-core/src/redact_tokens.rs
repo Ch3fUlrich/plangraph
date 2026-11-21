@@ -181,6 +181,45 @@ pub(crate) fn is_computed(value: &str) -> bool {
     true
 }
 
+/// Mask the value of every assignment `rule` finds. In source mode a value that is a
+/// computed expression, judged on the whole rest of its line, stays readable; any
+/// other unquoted value is masked through the end of the line, so nothing after the
+/// first closing delimiter can survive.
+pub(crate) fn replace_assignments(rule: &regex::Regex, text: &str, source: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for m in rule.captures_iter(text) {
+        let whole = m.get(0).unwrap();
+        if whole.start() < copied {
+            continue;
+        }
+        let value = m.get(4).unwrap();
+        let line_end = text[value.start()..]
+            .find(['\n', '\r'])
+            .map_or(text.len(), |i| value.start() + i);
+        let mut end = whole.end();
+        if source {
+            if is_computed(&text[value.start()..line_end]) {
+                continue;
+            }
+            if !value.as_str().starts_with(['"', '\'']) {
+                end = end.max(line_end);
+            }
+        }
+        out.push_str(&text[copied..whole.start()]);
+        out.push_str(&format!(
+            "{}{}{}{}",
+            &m[1],
+            &m[2],
+            &m[3],
+            crate::redact::REDACTED
+        ));
+        copied = end;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
 pub(crate) fn redact_blob(
     token: &str,
     blob_re: &regex::Regex,

@@ -109,8 +109,8 @@ fn redact_inner(text: &str, mode: Mode, allow_shas: &BTreeSet<String>) -> String
     } else {
         super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5])
     };
-    let out = replace_assignments(&rs[3], &out, source);
-    let out = replace_assignments(&rs[4], &out, source);
+    let out = super::redact_tokens::replace_assignments(&rs[3], &out, source);
+    let out = super::redact_tokens::replace_assignments(&rs[4], &out, source);
     let out = super::redact_wrapped::redact_wrapped(&out);
     let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
@@ -140,39 +140,6 @@ fn redact_inner(text: &str, mode: Mode, allow_shas: &BTreeSet<String>) -> String
             )
         })
         .into_owned()
-}
-
-/// Mask the value of every assignment `rule` finds. In source mode a value that is a
-/// computed expression, judged on the whole rest of its line, stays readable; any
-/// other unquoted value is masked through the end of the line, so nothing after the
-/// first closing delimiter can survive.
-fn replace_assignments(rule: &regex::Regex, text: &str, source: bool) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut copied = 0;
-    for m in rule.captures_iter(text) {
-        let whole = m.get(0).unwrap();
-        if whole.start() < copied {
-            continue;
-        }
-        let value = m.get(4).unwrap();
-        let line_end = text[value.start()..]
-            .find(['\n', '\r'])
-            .map_or(text.len(), |i| value.start() + i);
-        let mut end = whole.end();
-        if source {
-            if super::redact_tokens::is_computed(&text[value.start()..line_end]) {
-                continue;
-            }
-            if !value.as_str().starts_with(['"', '\'']) {
-                end = end.max(line_end);
-            }
-        }
-        out.push_str(&text[copied..whole.start()]);
-        out.push_str(&format!("{}{}{}{REDACTED}", &m[1], &m[2], &m[3]));
-        copied = end;
-    }
-    out.push_str(&text[copied..]);
-    out
 }
 
 /// Cap `s` to its last `max_bytes` bytes, keeping the END and cutting on a
