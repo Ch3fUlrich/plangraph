@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
@@ -601,11 +602,26 @@ def test_local_work_drives_branch_admits_selected_drive_and_records_alarm(tmp_pa
     monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 0)
     state = tmp_path / 'state'
     service = SimpleNamespace(state=state, ps=lambda: {'runs': []})
-    assert h.local_disk_refusal(tmp_path / 'checkout', service) is None
+    assert h.local_disk_refusal(tmp_path / 'checkout', service, movable=True) is None
     free['/d2'] = 4.5
-    reason = h.local_disk_refusal(tmp_path / 'checkout', service)
+    reason = h.local_disk_refusal(tmp_path / 'checkout', service, movable=True)
     assert reason == 'disk_low: free 4.00 GB, floor 5 GB'
     assert json.loads((state / 'disk-hygiene.json').read_text())['alarm'] is True
+
+
+def test_pinned_run_is_measured_on_its_own_checkout_not_an_alternate_drive(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    checkout = tmp_path / 'checkout'
+    monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '5')
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps(
+        [{'path': '/healthy', 'disk_floor_gb': 5}]))
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 0)
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 1.0 if Path(path) == checkout else 20.0)
+    service = SimpleNamespace(state=tmp_path / 'state', ps=lambda: {'runs': []})
+    reason = h.local_disk_refusal(checkout, service, role='review')
+    assert reason == 'disk_low: free 1.00 GB, floor 5 GB'
+    assert h.local_disk_refusal(checkout, service, role='review', movable=True) is None
 
 
 def test_readiness_work_drives_reach_the_placement_decision(registry, monkeypatch):

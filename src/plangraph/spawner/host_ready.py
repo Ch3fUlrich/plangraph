@@ -328,10 +328,12 @@ def select_work_drive(drives, cleanup):
 NO_BUILD_ROLES = ('review',)
 
 
-def local_disk_refusal(worktree, service, role='implement'):
+def local_disk_refusal(worktree, service, role='implement', movable=False):
     """Check the worktree filesystem and bound the host's shared build cache.
 
-    A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap.
+    A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap. A run pinned to
+    ``worktree`` is measured on that checkout's own filesystem; configured work drives let an
+    alternate drive satisfy the floor only for a run the placement may ``movable``-ly move.
     """
     # SettingsError derives from ValueError: validate before measurement's catch.
     from plangraph.settings import _policy_data, SettingsError, as_spawn_refused
@@ -362,7 +364,7 @@ def local_disk_refusal(worktree, service, role='implement'):
                     _clean_single_cache(extra, service, cap=cap)
         if cap == 0 and building:
             return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
-        drives = _configured_work_drives(policy)
+        drives = _configured_work_drives(policy) if movable else None
         if drives:
             selected, low = select_work_drive(
                 drives, lambda: _cleanup_before_disk_refusal(worktree, service))
