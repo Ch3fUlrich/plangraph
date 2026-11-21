@@ -209,3 +209,24 @@ fn a_trailing_comment_does_not_change_whether_a_line_opens_a_block() {
     let hash = "x = \"a#b\"\n\ndef later():\n    pass\n";
     assert_eq!(owner(hash, 2, true), None);
 }
+#[test]
+fn comment_markers_are_found_outside_string_and_char_literals() {
+    // Python: either quote opens a string, so a `#` inside one is text.
+    let python = "def early(value='#'):\n\n    return 1\n";
+    assert_eq!(owner(python, 2, true).as_deref(), Some("early"));
+    let escaped = "def early(v=\"a\\\"#\"): # note\n\n    return 1\n";
+    assert_eq!(owner(escaped, 2, true).as_deref(), Some("early"));
+    // Rust: a `'\"'` char literal does not open a string; the comment after it is a comment.
+    let rust = "pub fn one() {} let c = '\"'; // {\n\nfn two() {}\n";
+    assert_eq!(owner(rust, 2, false), None);
+    let open = "pub fn one() { match '\"' { // note\n\n}\n";
+    assert_eq!(owner(open, 2, false).as_deref(), Some("one"));
+    // A lifetime is not a char literal.
+    let lifetime = "pub fn one<'a>(x: &'a str) { // {\n\n}\n";
+    assert_eq!(owner(lifetime, 2, false).as_deref(), Some("one"));
+    assert_eq!(
+        code_part("let u = \"http://x\"; // c", false),
+        "let u = \"http://x\"; "
+    );
+    assert_eq!(code_part("x = '''a#b''' # c", true), "x = '''a#b''' ");
+}
