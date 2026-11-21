@@ -1,5 +1,6 @@
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from contextlib import contextmanager
@@ -110,3 +111,63 @@ def shard_items(items, shard):
 @pytest.fixture
 def shard_selector():
     return shard_items
+
+
+def pytest_addoption(parser):
+    parser.addini('test_deadline', 'Default test deadline in seconds', default='120')
+
+
+def _test_deadline(item):
+    import math
+
+    seconds = float(item.config.getini('test_deadline'))
+    mark = item.get_closest_marker('test_deadline')
+    if mark is not None:
+        if (mark not in item.own_markers or len(mark.args) != 1
+                or not isinstance(mark.kwargs.get('reason'), str)
+                or not mark.kwargs['reason'].strip()):
+            raise pytest.UsageError(f'{item.nodeid}: test_deadline requires a named test and reason')
+        seconds = float(mark.args[0])
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise pytest.UsageError(f'{item.nodeid}: test_deadline must be finite and greater than zero')
+    return seconds
+
+
+def pytest_collection_finish(session):
+    for item in session.items:
+        _test_deadline(item)
+
+
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_runtest_protocol(item, nextitem):
+    import faulthandler
+    import json
+    import time
+    config = item.config
+    if not hasattr(config, '_pg_deadline_watchdog'):
+        helper = Path(__file__).resolve().parents[1] / 'src/plangraph/spawner/proc_kill.py'
+        config._pg_deadline_watchdog = subprocess.Popen(
+            [sys.executable, str(helper), '--test-watchdog'],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=config._pg_deadline_stderr,
+        )
+    watchdog = config._pg_deadline_watchdog
+    seconds = _test_deadline(item)
+    faulthandler.dump_traceback_later(seconds, file=config._pg_deadline_stderr)
+    try:
+        # Give faulthandler's native timer time to emit all threads before the kill.
+        watchdog.stdin.write(json.dumps([item.nodeid, time.monotonic() + seconds + 0.5]).encode() + b'\n')
+        watchdog.stdin.flush()
+        return (yield)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+        watchdog.stdin.write(b'false\n')
+        watchdog.stdin.flush()
+
+
+def pytest_unconfigure(config):
+    watchdog = getattr(config, '_pg_deadline_watchdog', None)
+    if watchdog is not None:
+        watchdog.stdin.close()
+        watchdog.wait(timeout=5)
+    if hasattr(config, '_pg_deadline_stderr'):
+        os.close(config._pg_deadline_stderr)

@@ -146,11 +146,40 @@ def run_test_process(command, **kwargs):
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
+def guarded_cargo_test(args):
+    """Build the checkout's runner into the inherited target and use it for cargo test."""
+    manifest = Path(__file__).resolve().parents[1] / 'rust/Cargo.toml'
+    build = subprocess.run(
+        ['cargo', 'build', '--manifest-path', str(manifest), '-p', 'pg-worker-core',
+         '--bin', 'pg-test-deadline', '--message-format=json-render-diagnostics'],
+        stdout=subprocess.PIPE, text=True,
+    )
+    runner = None
+    for line in build.stdout.splitlines():
+        event = json.loads(line)
+        if event.get('reason') == 'compiler-message':
+            sys.stderr.write(event['message'].get('rendered') or '')
+        if (event.get('reason') == 'compiler-artifact'
+                and event['target']['name'] == 'pg-test-deadline' and event.get('executable')):
+            runner = event['executable']
+    if build.returncode:
+        return build.returncode
+    if runner is None:
+        raise RuntimeError('cargo did not report the pg-test-deadline executable')
+    command = ['cargo', '--config', 'target."cfg(all())".runner=' + json.dumps([runner]),
+               'test', *args]
+    if os.name == 'posix':
+        os.execvp(command[0], command)
+    return subprocess.call(command)
+
+
 def run(command, cwd, env):
     timeout = check_timeout(command, cwd, env)
     try:
-        runner = run_test_process if is_affected_step(command) else subprocess.run
-        result = runner(command, cwd=cwd, env=env, text=True,
+        rust_test = command[:2] == ['cargo', 'test']
+        runner = run_test_process if rust_test or is_affected_step(command) else subprocess.run
+        argv = [sys.executable, __file__, '--cargo-test', *command[2:]] if rust_test else command
+        result = runner(argv, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=timeout)
         return result.returncode, result.stdout
@@ -585,4 +614,4 @@ def _main(argv, root, cleanup):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded_cargo_test(sys.argv[2:]) if sys.argv[1:2] == ["--cargo-test"] else main())

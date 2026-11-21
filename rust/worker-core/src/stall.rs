@@ -103,10 +103,21 @@ pub fn supervise(cmd: Command, opts: &Opts) -> io::Result<Supervised> {
 /// replaced by `CREATE_SUSPENDED | CREATE_NO_WINDOW` (the child is never
 /// interactive).
 pub fn supervise_with_cancel(
-    mut cmd: Command,
+    cmd: Command,
     opts: &Opts,
     cancelled: &dyn Fn() -> bool,
 ) -> io::Result<Supervised> {
+    supervise_with_diagnostics(cmd, opts, cancelled, |_| {})
+}
+
+/// Run timeout diagnostics against the live child before terminating its group.
+pub fn supervise_with_diagnostics(
+    mut cmd: Command,
+    opts: &Opts,
+    cancelled: &dyn Fn() -> bool,
+    diagnose: impl FnOnce(u32),
+) -> io::Result<Supervised> {
+    let mut diagnose = Some(diagnose);
     let (reader, writer) = io::pipe()?;
     cmd.stdin(Stdio::null())
         .stdout(writer.try_clone()?)
@@ -155,9 +166,14 @@ pub fn supervise_with_cancel(
                 } else if cancelled() {
                     cancelled_flag = true;
                 }
+                if timed_out {
+                    if let Some(diagnose) = diagnose.take() {
+                        diagnose(child.id());
+                    }
+                }
                 if timed_out || stalled || cancelled_flag {
                     group.terminate();
-                    term_at = Some(now);
+                    term_at = Some(Instant::now());
                 }
             }
             Some(t) if !killed && now - t >= opts.grace => {

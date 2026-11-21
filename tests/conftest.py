@@ -22,7 +22,8 @@ from contextlib import contextmanager
 import pytest
 from pathlib import Path
 from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
-    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
+    pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard,
+    pytest_addoption, pytest_collection_finish, pytest_runtest_protocol, pytest_unconfigure)
 
 # Initial nested conftests load before sessionstart and may invoke Git at import.
 _clear_inherited_git_environment()
@@ -243,6 +244,7 @@ def _remove_windows_basetemp(root):
             time.sleep(1)
 
 def pytest_configure(config):
+    config._pg_deadline_stderr = os.dup(2)
     if sys.platform == "win32" and config.option.basetemp is None:
         # Avoid numbered-root/pytest-current symlink cleanup on Windows mounts
         # affected by the reported WinError 448 (not reproduced on this run).

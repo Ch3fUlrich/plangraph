@@ -173,7 +173,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-targets
 cargo build -p pg-jail
-PG_JAIL_BIN="$CARGO_TARGET_DIR/debug/pg-jail" cargo test""",
+PG_JAIL_BIN="$CARGO_TARGET_DIR/debug/pg-jail" python3 ../tools/preflight.py --cargo-test""",
     "rust-worker": """cd rust/worker
 command -v temporal >/dev/null 2>&1 || { echo 'rust-worker: host fault: Temporal CLI missing' >&2; exit 1; }
 ports=$(python3 -c 'import socket
@@ -193,8 +193,8 @@ done
 test "$ready" = 1
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
-PG_TEMPORAL_ADDR=http://127.0.0.1:$port PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 cargo test""",
-    "rust-spike": "cargo test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay",
+PG_TEMPORAL_ADDR=http://127.0.0.1:$port PG_JAIL=off PG_TEST_ALLOW_UNJAILED=1 python3 ../../tools/preflight.py --cargo-test""",
+    "rust-spike": "python3 tools/preflight.py --cargo-test --manifest-path rust/spikes/temporal-spike/Cargo.toml --test replay",
 }
 
 POSTGRES = """password=$(python3 -c 'import secrets; print(secrets.token_hex(32))')

@@ -150,7 +150,8 @@ def main(argv=None, *, runner=subprocess.run):
                     command = ("python3 tools/ci_select.py gate --needs " +
                                shlex.quote(json.dumps(needs)))
                 # GNU timeout kills the remote job even if the SSH client disconnects.
-                if name in {"pytest", "pytest-postgres", "browser"}:
+                python_deps = name in {"pytest", "pytest-postgres", "browser", "rust"}
+                if python_deps:
                     venv = "/scratch/venv"
                     command = (f"(python3 -m venv {venv} && "
                                 f"{venv}/bin/python -m pip install --no-index --find-links /scratch/wheels -r requirements-ci.txt "
@@ -159,7 +160,7 @@ def main(argv=None, *, runner=subprocess.run):
                 script = isolated_script(command, qtree, directory + "/" + name,
                                          postgres=name == "pytest-postgres",
                                           browser=name == "browser",
-                                          python_deps=name in {"pytest", "pytest-postgres", "browser"},
+                                          python_deps=python_deps,
                                           cargo_deps=name.startswith("rust"))
                 result = call(f"timeout --kill-after=10s {timeout}s sh -c "
                               f"{shlex.quote(script)}", timeout + 30)

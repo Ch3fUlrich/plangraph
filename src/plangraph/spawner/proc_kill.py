@@ -191,12 +191,15 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
     if root in procs and procs[root][4] != ident:
         return {}  # the root pid was reused by a foreign process
     found = {p for p in found if p != root or procs[p][4] == ident}
-    grew = True
-    while grew:
-        kids = {p for p, s in procs.items() if s[1] in found and p not in found and p != root}
-        grew = bool(kids)
-        found |= kids
-    return {p: procs[p][4] for p in found if procs[p][0] != 'Z'}
+    return _descendants(procs, found, {root})
+
+
+def _descendants(procs, found, excluded=()):
+    while True:
+        kids = {p for p, s in procs.items() if s[1] in found and p not in found and p not in excluded}
+        if not kids:
+            return {p: procs[p][4] for p in found if p in procs and procs[p][0] != 'Z'}
+        found.update(kids)
 
 
 def alive(pid, start, *, platform=None, proc_root='/proc'):
@@ -342,7 +345,70 @@ def record_oom_envelope(events, envelope):
         events.append({'event': name})
 
 
+def _test_watchdog():
+    """Monitor a pytest process over stdin, independently of its GIL."""
+    import queue
+    import signal
+    import subprocess
+    import threading
+
+    parent = os.getppid()
+    token = _stat(parent) if sys.platform.startswith('linux') else None
+    events = queue.Queue()
+
+    def read_events():
+        for line in sys.stdin:
+            events.put(json.loads(line))
+        events.put(None)
+
+    threading.Thread(target=read_events, daemon=True).start()
+    while (event := events.get()) is not None:
+        if not event:
+            continue
+        while event:
+            node, deadline = event
+            try:
+                event = events.get(timeout=max(0, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+        if event is None:
+            return
+        if not event:
+            continue
+
+        os.write(2, (f'HUNG {node}\n').encode('utf-8', 'backslashreplace'))
+        if token is not None and alive(parent, token[4]):
+            # Stop forks while walking the subtree, including children that called setsid.
+            os.kill(parent, signal.SIGSTOP)
+            stopped = {parent: token[4]}
+            while True:
+                new = _descendants(_scan(), {parent}, {os.getpid()}).items() - stopped.items()
+                if not new:
+                    break
+                for pid, start in new:
+                    if alive(pid, start):
+                        try:
+                            os.kill(pid, signal.SIGSTOP)
+                        except ProcessLookupError:
+                            pass
+                stopped.update(new)
+            for pid, start in reversed(tuple(stopped.items())):
+                if alive(pid, start):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        elif os.name == 'nt':
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(parent)], timeout=10)
+        elif sys.platform != 'linux' and os.getppid() == parent:
+            os.kill(parent, signal.SIGKILL)
+        return
+
+
 if __name__ == '__main__':
+    if sys.argv[1:] == ['--test-watchdog']:
+        _test_watchdog()
+        sys.exit(0)
     if len(sys.argv) < 3:
         os.write(2, b'oom wrapper: expected score path and command\n')
         sys.exit(2)
