@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
+from .schema_guards import RECEIPTS_DDL
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
 from .schema import (ALIASES_DDL, DESIGN3_DDL, GRANTS_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
                      OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
@@ -188,7 +189,7 @@ def _split_statements(
 
 
 def _upgrade(conn):
-    """Add any column/table/trigger an older database lacks; idempotent, DML-free."""
+    """Install missing schema objects and import historical receipts idempotently."""
     for table, column, ddl in _ADDED_COLUMNS:
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         # A pre-design-3 database has no cards yet; its CREATE below adds defaults.
@@ -197,6 +198,9 @@ def _upgrade(conn):
     conn.executescript(ALIASES_DDL)
     conn.executescript(RUN_TOKENS_DDL)
     conn.executescript(OUTBOX_DDL)
+    receipts = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='op_receipts'").fetchone()
+    if receipts is None:
+        conn.executescript("BEGIN IMMEDIATE;\n" + RECEIPTS_DDL + "\nCOMMIT;")
     conn.executescript(DESIGN3_DDL)
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)

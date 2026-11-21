@@ -145,28 +145,34 @@ class KeeperHandler(BaseHTTPRequestHandler):
                         "msg": f"no route {method} /{name}"})
             return
 
-        body = None
-        if method == "POST":
+        server = self.server
+        try:
+            with server.lock:
+                try:
+                    principal = auth.authenticate(server.store.conn, self._token())
+                    revoked = None
+                except Refused as exc:
+                    if method != "POST" or not self._can_read_revoked_receipt(name, exc):
+                        self._auth_failure(name, method, exc)
+                        return
+                    principal, revoked = exc.principal, exc
+
+            # Socket reads stay outside the shared keeper lock.
             try:
-                body = self._read_body()
-            except Refused as exc:
-                self._json(400, {"error": exc.code, "msg": exc.msg})
+                body = self._read_body() if method == "POST" else {}
+            except Refused:
+                if revoked is None:
+                    raise
+                with server.lock:
+                    self._auth_failure(name, method, revoked)
                 return
             if body is None:
                 return  # 413 already sent
-
-        server = self.server
-        if name == "close_merged_auto":
-            self._warm_merge_scan(server)
-        with timing.RequestTimer(server.lock, "read" if method == "GET" else "write"):
-            try:
-                try:
-                    principal = auth.authenticate(server.store.conn, self._token())
-                except Refused as exc:
-                    audit = getattr(server.store, "audit_auth_failure", None)
-                    with suppress(Exception):  # absent or broken: still a 401
-                        audit and audit(exc.msg or exc.code)
-                    self._json(403 if name == 'ingest_host_sample' else 401, {"error": exc.code, "msg": exc.msg})
+            if name == "close_merged_auto":
+                self._warm_merge_scan(server)
+            with timing.RequestTimer(server.lock, "read" if method == "GET" else "write"):
+                if revoked is not None:
+                    self._read_revoked_receipt(name, principal, body, revoked)
                     return
                 api_routes.run_gate(principal, name)
                 if method == "GET":
@@ -174,7 +180,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 else:
                     payload = self._write(name, body or {}, principal, extra)
                     as_text = query.get("fmt", ["json"])[0] == "text"
-                    self._snapshot(principal)
+                    if name != "write_receipt" or payload.get("result") != "duplicate":
+                        self._snapshot(principal)
                     if payload is None:   # worker verbs: 204, no body
                         self._empty(204)
                         return
@@ -183,21 +190,48 @@ class KeeperHandler(BaseHTTPRequestHandler):
                                else fmt.result_text(name, payload))
                 else:
                     self._json(200, payload)
-            except Refused as exc:
-                self._json(_STATUS.get(exc.code, 400),
-                           {"error": exc.code, "msg": exc.msg})
-            except ConnectionLost as exc:  # I1/I4: fail loud, never a silent close
-                self._fail_line(exc)
-                msg = ("keeper database lost at commit; outcome unknown"
-                       if exc.phase == "commit" else "keeper database unavailable")
-                try:
-                    self._json(503, {"error": "unavailable", "msg": msg})
-                finally:               # F2: a dead client must not skip the fatal
-                    server.fail("postgres connection lost")
-            except Exception as exc:  # noqa: BLE001 - never leak internals
-                self._fail_line(exc)
-                self._json(500, {"error": "internal",
-                                 "msg": "internal server error"})
+        except Refused as exc:
+            self._json(_STATUS.get(exc.code, 400), {"error": exc.code, "msg": exc.msg})
+        except ConnectionLost as exc:  # I1/I4: fail loud, never a silent close
+            self._fail_line(exc)
+            msg = ("keeper database lost at commit; outcome unknown"
+                   if exc.phase == "commit" else "keeper database unavailable")
+            try:
+                self._json(503, {"error": "unavailable", "msg": msg})
+            finally:               # F2: a dead client must not skip the fatal
+                server.fail("postgres connection lost")
+        except Exception as exc:  # noqa: BLE001 - never leak internals
+            self._fail_line(exc)
+            self._json(500, {"error": "internal", "msg": "internal server error"})
+
+    @staticmethod
+    def _can_read_revoked_receipt(name, exc):
+        return isinstance(exc, auth.RevokedRunToken) and (
+            name == "write_receipt" or exc.principal.token_role == "reviewer"
+            and name in ("replay", "verdict", "bind_seat_verdict")
+        )
+
+    def _read_revoked_receipt(self, name, principal, body, refusal):
+        store = self.server.store
+        if name == "write_receipt":
+            settled = store.read_revoked_write_receipt(principal, body)
+        elif name == "replay":
+            settled = store.read_revoked_seat_replay(principal, body)
+        else:
+            settled = store.read_revoked_seat_verdict(principal, body)
+            if name == "bind_seat_verdict" and settled is not None:
+                settled = {"binding": body["binding"]}
+        if settled is None:
+            self._auth_failure(name, "POST", refusal)
+        else:
+            self._json(200, settled)
+
+    def _auth_failure(self, name, method, exc):
+        if method == "POST":
+            self.close_connection = True   # Never interpret an unread body as another request.
+        with suppress(Exception):          # Missing or broken audit still returns the refusal.
+            self.server.store.audit_auth_failure(exc.msg or exc.code)
+        self._json(403 if name == "ingest_host_sample" else 401, {"error": exc.code, "msg": exc.msg})
 
     # ------------------------------------------------------------- plumbing
     def _fail_line(self, exc):
@@ -293,6 +327,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         return values[0] if values else default
 
     def _read(self, name, extra, query, principal):
+        if name == "write_context":
+            return self.server.store.write_context(principal, query.get("key", [None])[0]), False
         if name in ("host_samples", "host_samples_range"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_read"]).http_read(self.server.store, principal, name, query), False
         if name == "hosts":
             registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
@@ -381,6 +417,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         raise Refused("not_found", f"no read verb {name!r}")
     def _write(self, name, body, principal, extra=""):
         if name in ("ingest_host_sample", "mint_host_token", "revoke_host_token"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_write"]).http_write(self.server.store, principal, name, body)
+        if name == "write_receipt":
+            return self.server.store.write_receipt(principal, body)
         if name == "post_message":
             if not isinstance(body, dict):
                 raise Refused("validation", "body must be a JSON object")
@@ -421,7 +459,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "delegate":
             return store.delegate(principal, self._need(body, "key"),
                                   self._need(body, "worker", "worker_principal"))
-        if name in ("heartbeat", "release", "submit"):
+        if name == "submit":
+            source_round = body.get("source_round")
+            if isinstance(principal, auth.RunPrincipal) and type(source_round) is not int:
+                raise Refused("validation", "run-token submit requires source_round")
+            return store.submit(principal, self._need(body, "key"), self._need(body, "epoch"),
+                                source_round=source_round)
+        if name in ("heartbeat", "release"):
             return getattr(store, name)(principal, self._need(body, "key"),
                                         self._need(body, "epoch"))
         if name == "add_evidence":
@@ -433,12 +477,17 @@ class KeeperHandler(BaseHTTPRequestHandler):
             return store.add_evidence_router(principal, self._need(body, "key"),
                                              self._need(body, "kind"),
                                              body.get("ref") or {})
+        if name == "admit_seat_verdict":
+            return store.admit_seat_verdict(principal, body)
+        if name == "bind_seat_verdict":
+            return store.bind_seat_verdict(principal, self._need(body, "key"), body.get("ok"),
+                                           body.get("reason", ""), body.get("binding"))
         if name == "verdict":
             ok = body.get("ok")
             if not isinstance(ok, bool):   # "false" must never pass a review
                 raise Refused("validation", "ok is required and must be a boolean")
             return store.verdict(principal, self._need(body, "key"), ok,
-                                 body.get("reason") or "")
+                                 body.get("reason") or "", binding=body.get("binding"))
         if name == "cancel":
             return store.cancel(principal, self._need(body, "key"),
                                 body.get("reason") or "")

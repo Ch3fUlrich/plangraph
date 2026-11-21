@@ -1,0 +1,6 @@
+heartbeat	1	0	0	ok
+heartbeat	1	0	0	duplicate
+heartbeat	2	0	0	ok
+submit	3	0	1	round_stale
+submit	3	0	1	duplicate
+submit	4	1	1	ok

@@ -296,6 +296,17 @@ CREATE TABLE apply_grants (
 );
 """
 
+from .schema_guards import RECEIPTS_IMPORT, RECEIPTS_TABLE
+
+_V15 = RECEIPTS_TABLE.replace(" TEXT", ' TEXT COLLATE "C"') + RECEIPTS_IMPORT + """
+CREATE TRIGGER trg_op_receipts_append_only_update BEFORE UPDATE ON op_receipts
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('op_receipts is append-only');
+CREATE TRIGGER trg_op_receipts_append_only_delete BEFORE DELETE ON op_receipts
+    FOR EACH ROW EXECUTE FUNCTION pgk_reject('op_receipts is append-only');
+CREATE TRIGGER trg_op_receipts_append_only_truncate BEFORE TRUNCATE ON op_receipts
+    FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('op_receipts is append-only');
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
@@ -310,7 +321,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(12, "host samples", HOST_SAMPLES_DDL),
               Migration(13, "l1 apply grants", _V13),
               Migration(14, "host samples: partition function not executable by PUBLIC",
-                        HOST_SAMPLES_ACL_DDL))
+                        HOST_SAMPLES_ACL_DDL),
+              Migration(15, "keeper write receipts", _V15))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)

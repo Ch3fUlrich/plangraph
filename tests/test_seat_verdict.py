@@ -75,9 +75,13 @@ def seat(tmp_path, review, **ev):
     d.mkdir()
     evidence = {"requested_model": "gpt-oss-120b", "served_model": "gpt-oss-120b",
                 "finish_reason": "stop", "verdict": "pass", "test_gaming": "no",
-                "correlation_id": "corr-1", "prompt_sha256": "ab" * 32}
+                "correlation_id": "corr-1", "prompt_sha256": "ab" * 32,
+                "head_sha": "a" * 40, "run_id": "run-example"}
     evidence.update(ev)
     (d / "evidence.json").write_text(json.dumps(evidence))
+    binding = {"key": "demo:A", "epoch": 1, "round": 1, "head": evidence["head_sha"],
+               "seat_run": evidence["run_id"]}
+    (d / "record.json").write_text(json.dumps({"request": {"verdict_binding": binding}}))
     (d / "review.txt").write_text(review)
     tokens = tmp_path / "tok"
     tokens.mkdir()
@@ -275,8 +279,8 @@ def test_fix_sent_with_test_gaming_missing(tmp_path, monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
-    (_, _, raw), = Stub.seen
-    assert json.loads(raw)["ok"] is False
+    assert [path for path, _, _ in Stub.seen] == ["/v1/bind_seat_verdict", "/v1/verdict"]
+    assert all(json.loads(raw)["ok"] is False for _, _, raw in Stub.seen)
 
 
 def test_payload_is_bool():
@@ -329,8 +333,9 @@ def test_send(tmp_path, capsys, monkeypatch, review, literal):
     finally:
         srv.shutdown()
         srv.server_close()
-    (path, auth, raw), = Stub.seen
-    assert path == "/v1/verdict" and auth == f"Bearer {TOKEN}"
+    (bind, binding_auth, bound), (path, auth, raw) = Stub.seen
+    assert (bind, path) == ("/v1/bind_seat_verdict", "/v1/verdict")
+    assert auth == binding_auth == f"Bearer {TOKEN}" and bound == raw
     assert literal in raw and json.loads(raw)["key"] == "demo:A"
     cap = capsys.readouterr()
     assert TOKEN not in cap.out + cap.err and "http=200" in cap.out

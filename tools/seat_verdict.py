@@ -12,17 +12,11 @@ the chosen leg) and the review text (live log, else stdout_tail for
 single-attempt records).  A record
 that cannot witness a completed review is refused, never posted.
 
-The JSON ``ok`` is always a real boolean: the keeper coerces it with ``bool()``,
-so a string such as ``"false"`` would be read as true.
-
-Exit codes: 0 sent (2xx), 1 I/O or keeper error, 2 refused (unknown model
-family, empty writer-family list, a Claude seat over a writer list that is
-unknown or contains anthropic, or a seat whose family covers no listed writer),
-3 no parseable verdict, 4 pass refused.  A Claude (anthropic) seat is accepted
-only over a known non-anthropic writer list.  coverage() computes which writer
-families the recorded seats cover.  A PASS is sent only when finish_reason is
-"stop" or "end_turn" AND test_gaming is "no" (case-insensitive); missing, "unsure", "yes" or
-anything else refuses it.  fix/halt verdicts are sent regardless of test_gaming.  The token is read at send time and never printed.
+Verdicts carry a JSON boolean. The verifier requires a witnessed independent
+model family and a strict decision. A PASS additionally requires a normal
+finish and ``TEST_GAMING: no``. Exit codes are 0 delivered, 1 I/O failure,
+2 refused, 3 no verdict, and 4 unsafe pass. The reviewer token is read at send
+time.
 """
 from __future__ import annotations
 
@@ -32,15 +26,16 @@ import os
 import re
 import sys
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 
-from seat_backfill import apply_backfill, repost_transport, _SEND_STATE
-from seat_record import evidence_from_record, RecordPending
+from seat_backfill import (EXIT_IO, EXIT_REFUSED, _SEND_STATE, apply_backfill, dispatch_verdict,
+                           mark_verdict_recovery, post_verdict, read_verdict_payload,
+                           repost_transport, save_verdict_payload)
+from seat_record import check_record_permissions, evidence_from_record, RecordPending
 ROUTE = "/v1/verdict"
 TIMEOUT = 30
-EXIT_IO, EXIT_REFUSED, EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 1, 2, 3, 4
+EXIT_NO_VERDICT, EXIT_PASS_REFUSED = 3, 4
 
 # (regex on the lowercased model name without any "vendor/" prefix, family)
 FAMILIES = (
@@ -195,16 +190,13 @@ def parse_writer_families(value):
     return [part.strip().lower() for part in str(value or "").split(",") if part.strip()]
 
 def send(url, token, payload):
-    """POST the payload; return (http_status, reply_text)."""
-    request = urllib.request.Request(
-        url.rstrip("/") + ROUTE, data=json.dumps(payload).encode("utf-8"),
-        method="POST", headers={"Content-Type": "application/json",
-                                "Authorization": f"Bearer {token}"})
-    try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT) as resp:
-            return resp.status, resp.read(65536).decode("utf-8", "replace")
-    except urllib.error.HTTPError as exc:
-        return exc.code, exc.read(65536).decode("utf-8", "replace")
+    """Bind a seat decision, then deliver it to the keeper."""
+    if payload.get("binding") is not None:
+        status, reply = post_verdict(url, "/v1/bind_seat_verdict", token, payload, TIMEOUT)
+        if not 200 <= status < 300:
+            return status, reply
+    return post_verdict(url, ROUTE, token, payload, TIMEOUT)
+
 
 
 def read_record_identity(seat_dir, key=None):
@@ -224,7 +216,25 @@ def read_record_identity(seat_dir, key=None):
         raise ValueError("cannot read record identity")
     if key is not None and "item_key" in record and record["item_key"] != key:
         raise ValueError("record item_key does not match --key")
-    return {"item_key": record["item_key"]} if "item_key" in record else {}
+    identity = {"item_key": record["item_key"]} if "item_key" in record else {}
+    request = record.get("request")
+    if isinstance(request, dict) and "verdict_binding" in request:
+        identity["binding"] = request["verdict_binding"]
+    return identity
+
+
+def send_saved_verdict(directory, key, url, token_dir):
+    try:
+        check_record_permissions(directory / "record.json")
+        decision = read_verdict_payload(directory)
+        identity = read_record_identity(directory, key)
+        if decision["payload"].get("binding") != identity.get("binding"):
+            raise ValueError("stored verdict differs from the seat record binding")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        print(f"seat_verdict: refused, {exc}", file=sys.stderr)
+        return EXIT_REFUSED
+    return dispatch_verdict(key, url, token_dir, decision, send, KNOWN_FAMILIES)
+
 
 
 def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
@@ -264,13 +274,15 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
         return repost_transport(args, main)
     if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
+    if not args.dry_run and args.url and (args.seat_dir / "verdict.payload.json").is_file():
+        return send_saved_verdict(args.seat_dir, args.key, args.url, args.token_dir)
     writer_families = parse_writer_families(args.writer_family)
     from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
     if from_record:
         deadline = clock() + record_wait
         while True:
             try:
-                read_record_identity(args.seat_dir, args.key)
+                identity = read_record_identity(args.seat_dir, args.key)
                 evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
                 break
             except ValueError as exc:
@@ -284,7 +296,7 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
                 return EXIT_REFUSED
     else:
         try:
-            read_record_identity(args.seat_dir, args.key)
+            identity = read_record_identity(args.seat_dir, args.key)
         except ValueError as exc:
             print(f"seat_verdict: refused, {exc}", file=sys.stderr)
             return EXIT_REFUSED
@@ -374,24 +386,15 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     if not args.url:
         print("seat_verdict: no keeper URL: pass --url or set PG_URL", file=sys.stderr)
         return EXIT_IO
-    try:
-        token = (args.token_dir / f"reviewer-{family}.token").read_text("utf-8").strip()
-        if not token: raise ValueError("empty reviewer token")
-    except (OSError, ValueError) as exc:
-        print(f"seat_verdict: send failed (token read): {type(exc).__name__}", file=sys.stderr)
-        return EXIT_IO
-    try:
-        if send_state is not None: send_state["started"] = True
-        status, reply = send(args.url, token, payload)
-    except (OSError, ValueError) as exc:
-        if send_state is not None: send_state["started"] = False
-        print(f"seat_verdict: send failed: {type(exc).__name__}", file=sys.stderr)
-        return EXIT_IO
-    except BaseException:
-        if send_state is not None: send_state["started"] = False
-        raise
-    short = " ".join(reply.split())[:120]
-    print(f"key={args.key} family={family} ok={ok} http={status} reply={short}", flush=True)
-    return 0 if 200 <= status < 300 else EXIT_IO
+    binding = identity.get("binding")
+    if not isinstance(binding, dict) or binding.get("head") != evidence.get("head_sha") \
+            or binding.get("key") != args.key or binding.get("seat_run") != evidence.get("run_id"):
+        mark_verdict_recovery(args.seat_dir, "seat record has no proven admission binding")
+        print("seat_verdict: recovery required for unbound seat", file=sys.stderr)
+        return EXIT_REFUSED
+    payload["binding"] = binding
+    decision = save_verdict_payload(args.seat_dir, family, payload)
+    return dispatch_verdict(args.key, args.url, args.token_dir, decision, send, KNOWN_FAMILIES)
+
 if __name__ == "__main__":
     sys.exit(main())

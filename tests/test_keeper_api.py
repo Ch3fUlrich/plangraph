@@ -84,6 +84,38 @@ def test_unknown_token_is_401(srv):
     assert status == 401
 
 
+@pytest.mark.parametrize("payload", [{"verb": "verdict"}, {"verb": "verdict", "id": "invalid"}, b"{"])
+def test_malformed_verdict_receipt_requires_authentication(srv, w, monkeypatch, payload):
+    audit = []
+    monkeypatch.setattr(w.store, "audit_auth_failure", audit.append)
+    status, _, raw = call(srv, "/v1/write_receipt", method="POST", body=payload, token="invalid")
+    assert (status, jbody(raw)["error"]) == (401, "forbidden")
+    assert audit == ["unknown or revoked token"]
+
+
+def test_unauthenticated_writes_never_parse_or_touch_the_store(srv, w, monkeypatch):
+    audit = []
+
+    class AuthenticationOnly:
+        conn = w.conn
+        audit_auth_failure = audit.append
+
+        def __getattr__(self, name):
+            raise AssertionError(f"unauthenticated request touched the store through {name}")
+
+    def read_body(handler):
+        raise AssertionError("unauthenticated request read the body")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(srv, "store", AuthenticationOnly())
+        patch.setattr(api.KeeperHandler, "_read_body", read_body)
+        for verb in sorted(api._WRITE_VERBS):
+            status, _, raw = call(srv, "/v1/" + verb, method="POST", body=b"{")
+            assert (status, jbody(raw)["error"]) == (
+                403 if verb == "ingest_host_sample" else 401, "forbidden"), verb
+    assert audit == ["missing token"] * len(api._WRITE_VERBS)
+
+
 def test_refused_maps_to_4xx_with_code(srv, w):
     status, _, raw = call(srv, "/v1/claim", method="POST",
                           body={"key": "demo:A"}, token=w.tok("reader"))

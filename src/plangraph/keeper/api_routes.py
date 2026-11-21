@@ -21,7 +21,7 @@ __all__ = ["READ_VERBS", "WRITE_VERBS", "TEXT_DEFAULT", "STATUS",
 READ_VERBS = {"ready", "show", "blocked", "waves", "critical_path", "percent",
               "alerts", "digest", "snapshot", "whoami", "aliases", "needs_you",
               "answers", "progress", "changelog", "audit-meta", "metrics",
-              "jev_report"}
+              "jev_report", "write_context"}
 WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "set_priority", "claim", "delegate", "heartbeat", "release",
                "add_evidence", "add_evidence_router", "submit", "verdict",
@@ -43,7 +43,7 @@ READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 READ_VERBS.add("messages")
 READ_VERBS |= {"host_samples", "host_samples_range", "apply_grants"}
 WRITE_VERBS |= {"ingest_host_sample", "mint_host_token", "revoke_host_token"}
-WRITE_VERBS.add("post_message")
+WRITE_VERBS |= {"post_message", "write_receipt", "admit_seat_verdict", "bind_seat_verdict"}
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
                 "audit-meta"}
@@ -61,7 +61,7 @@ READ_CALLS = {
 }
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
-RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay"})
+RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay", "write_receipt", "write_context", "bind_seat_verdict"})
 
 #: Read-only verbs reachable by the ``sweep`` role (claims, runs, PR links).
 SWEEP_READ_VERBS = frozenset({"whoami", "snapshot", "show"})
@@ -92,7 +92,7 @@ def run_gate(principal, name):
 
 
 STATUS = {"forbidden": 403, "not_found": 404, "conflict": 409, "locked": 409,
-          "epoch_stale": 409, "lease_held": 409, "same_principal": 409,
+          "epoch_stale": 409, "round_stale": 409, "lease_held": 409, "same_principal": 409,
           "same_family": 409, "unavailable": 503, "exec_stale": 409,
           "bad_transition": 409, "exec_stale_state": 409,
           # R2a': bus codes registered statically (never at runtime);

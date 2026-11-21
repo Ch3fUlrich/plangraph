@@ -108,7 +108,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
 
 
 def test_schema_version_is_sixteen():
-    assert schema.SCHEMA_VERSION == 17
+    assert schema.SCHEMA_VERSION == 18
 
 
 def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path):
@@ -141,7 +141,7 @@ def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 17
+    assert schema.SCHEMA_VERSION == 18
     assert "message_nonces" in tables(conn)
     assert "message_envelopes" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
@@ -181,7 +181,7 @@ def test_v14_db_upgrades_to_v15_creates_messages_and_keeps_chain(tmp_path):
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 17
+    assert schema.SCHEMA_VERSION == 18
     assert "messages" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert {"trg_messages_no_update", "trg_messages_no_delete"} <= triggers
@@ -217,7 +217,7 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     conn = kdb.open_db(path, backend="sqlite")
     # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
     # production upgrades detect missing columns without reading/writing the pragma.
-    assert schema.SCHEMA_VERSION == 17
+    assert schema.SCHEMA_VERSION == 18
     row = dict(Store(conn, clock=Clock())._item("demo:A"))
     for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
         assert column in row and row.pop(column) is None
@@ -358,15 +358,15 @@ def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
         assert not set(EXEC_COLUMNS) & columns()
         # Merged code needs migration 7: opening the old schema is refused first ...
         path = tmp_path / "pg-jev.db"
-        with pytest.raises(RuntimeError, match="code needs 14"):
+        with pytest.raises(RuntimeError, match="code needs 15"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         # ... then pg admin migrate runs 7 and the exec columns are there.
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
-        assert db_pg.migrate(raw, name) == [7, 8, 9, 10, 11, 12, 13, 14]
+        assert db_pg.migrate(raw, name) == [7, 8, 9, 10, 11, 12, 13, 14, 15]
         assert set(EXEC_COLUMNS) <= columns()
         assert "jev_shadow" in jev_tables()
         assert [row[0] for row in raw.execute(
-            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 15))
+            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 16))
         conn = kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         conn.close()
     finally:
@@ -381,7 +381,7 @@ OVERSIGHT_TABLES = {"oversight_tokens", "oversight_ops"}
 
 def test_fresh_sqlite_db_is_v16_with_oversight_and_bus_tables(tmp_path):
     conn = kdb.open_db(tmp_path / "fresh.db", create=True, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 17
+    assert schema.SCHEMA_VERSION == 18
     assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
     conn.close()
 
@@ -440,21 +440,25 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
 
     try:
         full = schema_pg.MIGRATIONS
-        assert schema_pg.LATEST == 14
-        assert db_pg.migrate(raw, fresh) == list(range(1, 15))
+        assert schema_pg.LATEST == 15
+        assert db_pg.migrate(raw, fresh) == list(range(1, 16))
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
 
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full[:8])
         assert db_pg.migrate(raw, name) == list(range(1, 9))
         assert OVERSIGHT_TABLES <= pg_tables(name)
         assert not BUS_TABLES & pg_tables(name)
+        raw.execute("INSERT INTO outbox_seen VALUES (%s, 7, 'heartbeat', NULL, 'ok', 'then')",
+                    ("01" * 16,))
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
         path = tmp_path / "pg-main.db"
-        with pytest.raises(RuntimeError, match="code needs 14"):
+        with pytest.raises(RuntimeError, match="code needs 15"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
-        assert db_pg.migrate(raw, name) == [9, 10, 11, 12, 13, 14]
+        assert db_pg.migrate(raw, name) == [9, 10, 11, 12, 13, 14, 15]
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(name)
         kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name).close()
+        assert raw.execute("SELECT token_id,request_hash,result FROM op_receipts WHERE entry_id=%s",
+                           ("01" * 16,)).fetchone() == (7, None, "ok")
     finally:
         raw.execute(f'DROP SCHEMA IF EXISTS "{fresh}" CASCADE')
         raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')

@@ -39,6 +39,11 @@ def fixture_seat(tmp_path, name=PASS_RUN):
         path = seat / fname
         if path.exists():
             path.chmod(0o600)
+    record_path = seat / "record.json"
+    record = json.loads(record_path.read_text())
+    record["request"] = {"verdict_binding": {
+        "key": "demo:A", "epoch": 1, "round": 1, "head": HEAD40, "seat_run": record["run_id"]}}
+    record_path.write_text(json.dumps(record))
     return seat
 
 

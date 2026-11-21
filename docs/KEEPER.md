@@ -414,8 +414,8 @@ Readers on other hosts get only the `.pub` file and `snapshot_pubkey` in their c
 
 Other hosts never run a keeper: they keep a verified LOCAL COPY of the signed snapshot, pulled before
 and after every update and every 5 minutes (`deploy/systemd/pg-snapshot-pull.{service,timer}`).
-Writes still go to the keeper through the host's existing channel; a run token's writes queue in the
-outbox while the keeper is unreachable (M2B-OUTBOX).
+Writes still go to the keeper through the host's existing channel. Run-token heartbeat, evidence,
+and submit writes use the [durable outbox](#run-token-write-receipts).
 
 - Keeper side: `python3 -m plangraph.keeper.snapshot_serve --config keeper.json` is the forced
   command of a `restrict` authorized_keys line (one pull key per host). It prints one JSON line
@@ -640,6 +640,39 @@ The keeper writes no backups itself; operators leave ad-hoc copies (`backup-pre-
 - Never touched, whatever the name: `keeper.db`, `keeper.json` (and `keeper.json.*`), `*.token`, `*-wal`, `*-shm`, `*.lock`, `*.pid`, `*.alive`, `*.log`, `plan.snapshot*`, `md-sync*`, symlinks, sub-directories (not entered; no recursion) and any name outside the explicit allow-list in `backup_retention.py`.
 - Opt-in keeper hook (default off), in `keeper.json`: `"backup_prune": {"enabled": false, "dir": "<path>", "keep": 10, "daily_days": 7, "interval_s": 21600}`. When `enabled`, the daemon prunes (apply) once after startup and then every `interval_s` on a daemon thread that stops on shutdown; errors go to stderr and never stop the keeper. `enabled` without `dir` is a config error. If startup fails before the shutdown thread exists, `daemon.run()` independently attempts to stop the reaper and close the socket under `suppress(Exception)`, preserving the original startup error even if cleanup raises.
 - Alternative to the hook: run `pg admin prune-backups --dir DIR --apply` from a Semaphore playbook or cron job.
+
+## Run-token write receipts
+
+The `pg` CLI uses the native `plangraph` client for run-token heartbeat, evidence, and submit
+writes. The client saves a fresh invocation ID and one file per write before sending. Set
+`PG_OUTBOX` to the run's original JSONL path to use the adjacent `.d` directory and import
+its entries in order. With no override, the client uses its local state directory and a queue
+bound to the run credential.
+
+`pg replay` resumes the same queue with the original run credential. The keeper authenticates
+before reading request bodies. A verified revoked run credential only permits exact receipt
+readback on the receipt routes. The keeper commits the mutation and its result together, so the
+same invocation can recover the result after a lost reply
+even if a submit revoked its token. A submit carries its source review round and waits for
+earlier evidence in the same claim to be verified, superseded by later verified evidence of
+the same kind, or explicitly resolved. An imported entry with no historical
+outcome stays queued for routing recovery. A router can record a disposition with
+`pg replay --resolve-entry INVOCATION --decision D-ID` using the run's `PG_OUTBOX`.
+
+For rollout, apply Postgres Migration 15 (`keeper write receipts`) with `pg admin migrate`,
+restart the keeper, and deploy the matching native `plangraph` client. The migration imports
+known legacy outcomes. SQLite installs the same receipt store when the keeper opens the database.
+
+### Seat verdict receipts
+
+The spawner registers the item, claim epoch, review round, verified head, and seat run before
+launch. The reviewer binds its boolean verdict and reason once. Direct delivery and replay
+both check the admission and the payload inside the verdict transaction. The original
+reviewer run token can read its settled verdict through direct delivery or replay after
+revocation. Every entry in such a replay batch must already be settled for that token.
+Outside run-token replay, only reviewer principals may submit an all-verdict replay batch.
+A new round requires a new seat binding even when the head SHA is unchanged. The keeper stores these records in
+`op_receipts` alongside run-token write receipts.
 
 ## Placement rules migration-gates
 Migration 11 requires operator GO naming the reviewed SHA and scope, verified

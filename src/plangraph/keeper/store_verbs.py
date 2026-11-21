@@ -78,12 +78,12 @@ class VerbsMixin:
             raise Refused("forbidden", "system evidence requires an in_review phase card")
         return [gate["key"] for gate in gates]
 
-    def add_evidence(self, principal, key, epoch, kind, ref):
+    def add_evidence(self, principal, key, epoch, kind, ref, *, receipt=None):
         return self._run(principal, "add_evidence", key,
                          lambda now: self._claimant_evidence(principal, key, epoch,
-                                                             kind, ref, now))
+                                                             kind, ref, now, receipt))
 
-    def _claimant_evidence(self, principal, key, epoch, kind, ref, now):
+    def _claimant_evidence(self, principal, key, epoch, kind, ref, now, receipt):
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
         if item["state"] != "claimed":
@@ -95,17 +95,20 @@ class VerbsMixin:
         # Slow verification runs outside the write lock; the row is inserted
         # only under the state/epoch guard below.
         result = self._verify_evidence(item, kind, ref, now)
-        with self._write():
+        with self._receipt_transaction(receipt) as record:
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
             self._epoch_ok(fresh, epoch)
             if fresh["state"] != "claimed":
                 raise Refused("conflict",
                               f"{fresh['key']} is {fresh['state']}, not claimed")
+            if receipt is not None:
+                self._check_run_principal(principal, "add_evidence", key, self.now())
             self._actor_or_delegate(principal, fresh)
             self._guarded_touch(fresh["key"], ("claimed",), epoch)
-            return self._record_evidence(principal, fresh, kind, ref, now,
-                                         result)
+            reply = self._record_evidence(principal, fresh, kind, ref, now, result)
+            record({"result": "ok", "reply": reply})
+            return reply
 
     def _record_evidence(self, principal, item, kind, ref, now, result):
         self.conn.execute(
@@ -222,24 +225,26 @@ class VerbsMixin:
             self._race_guard(cursor, key, "claimed", item["epoch"])
         return {"key": key, "delegate": name}
 
-    def heartbeat(self, principal, key, epoch):
+    def heartbeat(self, principal, key, epoch, *, receipt=None):
         return self._run(principal, "heartbeat", key,
-                         lambda now: self._heartbeat(principal, key, epoch, now))
+                         lambda now: self._heartbeat(principal, key, epoch, now, receipt))
 
-    def _heartbeat(self, principal, key, epoch, now):
+    def _heartbeat(self, principal, key, epoch, now, receipt):
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
         if item["state"] != "claimed":
             raise Refused("bad_state", f"{key} is {item['state']}, not claimed")
         self._actor_or_delegate(principal, item)
         self._epoch_ok(item, epoch)
-        with self._write():
+        with self._receipt_transaction(receipt) as record:
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
             self._epoch_ok(fresh, epoch)
             if fresh["state"] != "claimed":
                 raise Refused("conflict",
                               f"{key} is {fresh['state']}, not claimed")
+            if receipt is not None:
+                self._check_run_principal(principal, "heartbeat", key, self.now())
             self._actor_or_delegate(principal, fresh)
             # D-837: a heartbeat extends, never shortens - a claim may hold a lease longer than
             # the default (claim lease_s), and the fold expects the cache lease >= the claimed one.
@@ -253,7 +258,11 @@ class VerbsMixin:
             self._race_guard(cursor, key, "claimed", epoch)
             if isinstance(principal, auth.RunPrincipal):
                 self._extend_run_token(principal, dict(fresh, lease_until=lease), now)
-        return {"key": key, "epoch": epoch, "lease_until": lease}
+            reply = {"key": key, "epoch": epoch, "lease_until": lease}
+            if receipt is not None:
+                reply["source_round"] = fresh["round"]
+            record({"result": "ok", "reply": reply})
+            return reply
 
     def release(self, principal, key, epoch):
         return self._run(principal, "release", key,
@@ -294,9 +303,9 @@ class VerbsMixin:
         return {"key": key}
 
     # ----------------------------------------------------------- submit
-    def submit(self, principal, key, epoch):
+    def submit(self, principal, key, epoch, *, source_round=None, receipt=None):
         return self._run(principal, "submit", key,
-                         lambda now: self._submit(principal, key, epoch, now))
+                         lambda now: self._submit(principal, key, epoch, now, source_round, receipt))
 
     @staticmethod
     def _without_dep(items, gate_key, dep):
@@ -315,10 +324,10 @@ class VerbsMixin:
         after = views.validate(self._without_dep(items, gate_key, dep))
         return any((p["code"], p["key"]) not in known for p in after)
 
-    def _submit(self, principal, key, epoch, now):
+    def _submit(self, principal, key, epoch, now, source_round, receipt):
         # Read and validate inside one immediate transaction so a competing
         # writer cannot slip between the check and the guarded UPDATE.
-        with self._write():
+        with self._receipt_transaction(receipt) as record:
             item = self._get_or_refuse(key)
             self._assert_unlocked(item)
             if item["state"] != "claimed":
@@ -328,8 +337,13 @@ class VerbsMixin:
             if principal.role == "worker":
                 self._require_project(principal, item["project"])
             self._epoch_ok(item, epoch)
+            if receipt is not None:
+                self._check_run_principal(principal, "submit", key, self.now())
+            current_round = int(item.get("round") or 0)
+            if source_round is not None and (type(source_round) is not int or source_round != current_round):
+                raise Refused("round_stale", f"{key} source round {source_round} does not match {current_round}")
             self._require_evidence(item)
-            round_no = int(item.get("round") or 0) + 1
+            round_no = current_round + 1
             self._append(principal, key, "submitted",
                          {"epoch": epoch, "round": round_no}, now)
             cursor = self.conn.execute(
@@ -337,8 +351,9 @@ class VerbsMixin:
                 " updated_at=? WHERE key=? AND state='claimed' AND epoch=?",
                 (round_no, self._iso(now), key, epoch))
             self._row_guard(cursor, key, "claimed", epoch)
-        return {"key": key, "epoch": epoch, "round": round_no,
-                "state": "in_review"}
+            reply = {"key": key, "epoch": epoch, "round": round_no, "state": "in_review"}
+            record({"result": "ok", "reply": reply})
+            return reply
 
     # ------------------------------------------------------------ cancel
     def cancel(self, principal, key, reason=""):
