@@ -3,8 +3,8 @@
 Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 `overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 5
 (GiB); the checkout, configured `worktree_root`, and state tree filesystems must
-all meet it (or, when `work_drives` are configured, at least one drive meets its
-floor). Before refusing `disk_low`, admission cleans idle rebuildable caches
+all meet it. When `work_drives` are configured, a run the placement may move needs at
+least one drive above its floor; a run pinned to a checkout is measured on that checkout's filesystem. Before refusing `disk_low`, admission cleans idle rebuildable caches
 (`shared_cargo_target`, its pool slots `<target>-pool/slot-N`, `~/.cache/pg-target-po`,
 `~/.cache/pg-target-warm`, and idle worktree `rust/target` directories) once and re-measures free space; a
 persistent breach records a `disk-hygiene.json` floor alarm (`alarm: true`).
