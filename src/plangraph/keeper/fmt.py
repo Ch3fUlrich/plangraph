@@ -265,6 +265,13 @@ def aliases_text(rows) -> str:
         or "no aliases"
 
 
+def apply_grants_text(data) -> str:
+    rows = (data or {}).get("grants") or []
+    return "\n".join(f"{r['principal']} | {r['project']} | granted by "
+                     f"{r['granted_by']} {r['granted_at']}" for r in rows) \
+        or "no apply grants"
+
+
 def needs_you_text(rows) -> str:
     return "\n".join(
         f"{r['key']} | {r['title']} | {r['kind']} {r.get('wait') or '-'} | "
