@@ -169,11 +169,11 @@ for `.pid` targets or exact `pgrep -x --` otherwise.
 Set `env.PG_SESSION_UNIT` in a host registry entry to a systemd unit, a
 `.pid` file path, or the exact process name (`comm`) to include that session
 in readiness checks.
-Migration note: `overflow-hosts.json` `session_unit` entries that previously
-relied on `pgrep -f` command-line substrings (for example interpreter flags or
-script arguments) no longer match under `pgrep -x --`; update them to a systemd
-unit name (`.service`/`.scope`/etc.), a `.pid` file path, or the exact process
-name (`comm`).
+Migration note: a legacy `overflow-hosts.json` `session_unit` is no longer read; readiness
+takes the session from `env.PG_SESSION_UNIT` in the host's registry entry, and without it the
+session probe is skipped. Move the old value there, and replace a `pgrep -f` command-line
+substring (no longer matched under `pgrep -x --`) with a systemd unit name
+(`.service`/`.scope`/etc.), a `.pid` file path, or the exact process name (`comm`).
 A queued admission is rechecked for cancellation before placement, removed when a host accepts it, and finalized as failed if admission raises an exception.
 `--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
 Review/seat routes record each failed, limited or not-served attempt with its reason
