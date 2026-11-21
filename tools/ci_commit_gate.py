@@ -230,7 +230,17 @@ def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
             ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', '--cc', '--no-renames', sha],
             cwd=cwd,
         )
-        return sorted({path for path in out.split('\0') if path})
+        paths = {path for path in out.split('\0') if path}
+        if len(parents) == 2:
+            # No merge-tree --write-tree: a path both sides changed may be a conflict resolved by
+            # keeping one side, which the combined diff omits. Stricter, never looser.
+            base = _git_text(['merge-base', *parents], cwd=cwd).strip()
+            sides = [
+                set(_git_text(['diff', '--name-only', '-z', base, parent], cwd=cwd).split('\0')) - {''}
+                for parent in parents
+            ]
+            paths |= sides[0] & sides[1]
+        return sorted(paths)
     tree, conflicts = merged
     out = _git_text(
         ['diff-tree', '--name-only', '-r', '-z', '--no-renames', tree, f'{sha}^{{tree}}'], cwd=cwd

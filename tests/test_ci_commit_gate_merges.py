@@ -146,3 +146,21 @@ def test_workflow_gate_reads_the_shared_detector_for_a_rename_conflict(tmp_path:
         assert "Gate-Edit" in str(exc) and head in str(exc)
     else:
         raise AssertionError("a rename conflict resolved by keeping one side passed the gate")
+
+
+def test_without_merge_tree_a_kept_side_still_needs_a_trailer(repo: Path, monkeypatch):
+    # A git lacking `merge-tree --write-tree`: the fallback must stay at least as strict as before.
+    monkeypatch.setattr(ci_commit_gate_module(), "_auto_merge", lambda parents, cwd: None)
+    for keep in ("ours", "theirs"):
+        sub = repo.parent / f"fallback-{keep}"
+        sub.mkdir()
+        _git(sub, "init", "-q")
+        _commit(sub, BASE_MSG_SEED)
+        base, merge = _conflicted_workflow_merge(sub, "Merge side into lane", keep=keep)
+        assert check(base, merge, cwd=sub) == [f"{merge}: gate edit without Gate-Edit trailer"]
+
+
+def ci_commit_gate_module():
+    from test_ci_commit_gate import ci_commit_gate
+
+    return ci_commit_gate
