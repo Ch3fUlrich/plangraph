@@ -499,8 +499,13 @@ def build_policy(root, env, cleanup):
 
     The build target is keyed by the sources (policy_target), so no other checkout's build can
     replace this artifact, and cleanup needs the exclusive lease, so the copy happens before release.
-    Returns (code, text, staged binary or None)."""
-    with cargo_lease():
+    Returns (code, text, staged binary or None); an unusable lease is a failed build named in the
+    text, so the independent policy checks still run."""
+    try:
+        lease = cargo_lease()
+    except OSError as exc:
+        return 1, f'cargo lease unavailable: {type(exc).__name__}: {exc}\n', None
+    with lease:
         refusal = running_disk_refusal(root)
         if refusal:
             return 1, refusal + '\n', None

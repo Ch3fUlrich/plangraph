@@ -238,3 +238,20 @@ def test_interleaved_builds_stay_apart_under_a_target_ancestor(rig, tmp_path, mo
     code, text, staged_a = preflight.build_policy(a, env, [])
     assert code == 0
     assert "A-SOURCES" in Path(staged_a).read_text() and "B-SOURCES" not in Path(staged_a).read_text()
+
+
+def test_an_unusable_cargo_lease_fails_the_build_by_name_and_the_other_checks_still_run(rig, monkeypatch, capsys):
+    repo, log, seen = rig
+    ran = repo / "changelog-check-ran"
+    script(repo / "ptools/check_changelog_docs.py", f"open({str(ran)!r}, 'w').write('x')\n")
+
+    def broken():
+        raise PermissionError("[Errno 30] Read-only file system: 'cargo-target.plangraph-lock'")
+
+    monkeypatch.setattr(preflight, "cargo_lease", broken)
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 1
+    out = capsys.readouterr().out
+    assert "pg-policy build: cargo lease unavailable: PermissionError" in out
+    assert "policy: 1 check(s) failed:" in out and "FAIL policy" in out
+    assert ran.exists()                                  # an independent policy check still ran
+    assert not log.exists()                              # cargo never ran

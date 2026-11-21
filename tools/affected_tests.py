@@ -49,9 +49,32 @@ def pytest_runtest_logreport(report):
 
 def pytest_sessionfinish(session):
     if not hasattr(session.config, "workerinput"):
+        # xdist's scheduler exists only when workers were really started.
+        workers = session.config.pluginmanager.get_plugin("dsession") is not None
         with open(os.environ["AFFECTED_OUTCOMES"], "w") as out:
-            json.dump(_outcomes, out)
+            json.dump({"outcomes": _outcomes, "workers": workers}, out)
 """
+
+
+def read_record(text):
+    """(outcomes, workers started) from a recorder file; anything malformed is ({}, False)."""
+    try:
+        record = json.loads(text)
+        outcomes, workers = record["outcomes"], record["workers"]
+    except (ValueError, KeyError, TypeError, RecursionError):
+        return {}, False
+    if (not isinstance(outcomes, dict) or not isinstance(workers, bool)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in outcomes.items())):
+        return {}, False
+    return outcomes, workers
+
+
+def read_record_file(path):
+    """read_record of a file; a missing, unreadable or non-UTF-8 file is ({}, False)."""
+    try:
+        return read_record(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        return {}, False
 
 
 def tree_hash(root):
@@ -77,15 +100,17 @@ def tree_hash(root):
         return None
 
 
-def flake_labels(failed, first_rerun, second_rerun, hashes):
-    """FLAKY needs an explicit pass on both reruns and one tree hash around every run."""
+def flake_labels(failed, first_rerun, second_rerun, hashes, parallel=True):
+    """FLAKY needs an explicit pass on both reruns and one tree hash around every run.
+
+    FAILED-IN-PARALLEL needs workers that actually ran (parallel); a serial sequence has none."""
     stable = None not in hashes and len(set(hashes)) == 1
     lines = []
     for nodeid in failed:
         low, high = first_rerun.get(nodeid), second_rerun.get(nodeid)
         if "passed" in (low, high) and not stable:
             lines.append(f"FAILED-THEN-PASSED: {nodeid}")
-        elif low == "passed" and high == "failed":
+        elif parallel and low == "passed" and high == "failed":
             lines.append(f"FAILED-IN-PARALLEL: {nodeid}")
         elif low == high == "passed":
             lines.append(f"FLAKY (rerun -n0; a parallel race is not excluded): {nodeid}")
@@ -590,7 +615,7 @@ def main(root=None):
             runs = []
 
             def pytest(options, capture=False):
-                """One pytest run: (exit code, {nodeid: outcome}) from the controller's recorder."""
+                """One pytest run: (exit code, {nodeid: outcome}, workers started) from the controller's recorder."""
                 outcomes = Path(scratch) / f"outcomes-{len(runs)}.json"
                 runs.append(outcomes)
                 run_env = dict(env, AFFECTED_OUTCOMES=str(outcomes), PYTHONPATH=os.pathsep.join(
@@ -599,13 +624,10 @@ def main(root=None):
                     [sys.executable, "-m", "pytest", "-p", "affected_outcomes", *options],
                     cwd=root, env=run_env,
                     **({"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}))
-                try:
-                    return result.returncode, json.loads(outcomes.read_text())
-                except (OSError, ValueError):
-                    return result.returncode, {}
+                return result.returncode, *read_record_file(outcomes)
 
             hashes = [tree_hash(root)]
-            code, first = pytest([*parallel, "--durations=30", *quiet, *([] if args.loud else QUIET_DURATIONS),
+            code, first, _ = pytest([*parallel, "--durations=30", *quiet, *([] if args.loud else QUIET_DURATIONS),
                                   *(["--maxfail", str(args.maxfail)] if args.maxfail else []),
                                   *plan["tests"]])
             print(f"affected wall seconds: {time.monotonic() - start:.3f}")
@@ -614,11 +636,11 @@ def main(root=None):
             if code == 1 and 0 < len(failed) <= MAX_RERUN_FAILURES:
                 hashes.append(tree_hash(root))
                 serial = ["-n", "0"] if parallel else []
-                _, low = pytest([*serial, *QUIET_FLAGS, *failed], capture=True)
+                _, low, _ = pytest([*serial, *QUIET_FLAGS, *failed], capture=True)
                 hashes.append(tree_hash(root))
-                _, high = pytest([*parallel, *QUIET_FLAGS, *failed], capture=True)
+                _, high, ran_workers = pytest([*parallel, *QUIET_FLAGS, *failed], capture=True)
                 hashes.append(tree_hash(root))
-                for line in flake_labels(failed, low, high, hashes):
+                for line in flake_labels(failed, low, high, hashes, parallel=ran_workers):
                     print(line)
         return code
     return 0
