@@ -1,0 +1,10 @@
+state_dir = ".local/state/plangraph/liveness"
+inbox = ".local/state/plangraph/liveness/router-alerts.log"
+
+[[targets]]
+name = "routing-00"
+stamp = ".local/state/router-liveness/routing-00.json"
+# An hourly session heartbeat can be 60 minutes old between healthy beats.
+# Keep five minutes of slack and alert on a 70-minute-old stamp.
+alert_after_min = 65
+alert_cmd = ["code/plangraph/tools/fleet-msg", "send", "routing"]

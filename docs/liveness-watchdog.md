@@ -160,6 +160,13 @@ mkdir -p ~/.config/plangraph/liveness
 # Edit ~/.config/plangraph/liveness/<name>.toml with appropriate paths and commands
 ```
 
+For the router session, install the supplied config with
+`install -m 600 deploy/liveness/router.toml ~/.config/plangraph/liveness/router.toml`
+and enable `liveness-watchdog@router.timer`. The watchdog uses its home directory
+for the relative paths in the config. It checks the session's existing hourly
+heartbeat with a 65-minute threshold, so a host timer cannot mask a stalled
+session. Alerts go to routing over the fleet bus and to the local alert log.
+
 ### 3. Reload systemd Manager Configuration
 
 ```bash
