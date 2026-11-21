@@ -242,8 +242,11 @@ def test_collect_only_keeps_maxfail(fx):
     assert "-q" not in args
 
 
-def test_a_serial_fail_pass_fail_sequence_is_not_failed_in_parallel(fx):
-    """--workers 0 runs everything serially: no label claims a parallel failure."""
+@pytest.mark.parametrize("workers,auto_workers", [("0", None), ("00", None), ("auto", "0")])
+def test_a_serial_fail_pass_fail_sequence_is_not_failed_in_parallel(fx, workers, auto_workers):
+    """Whatever spelling makes xdist start no workers, no label claims a parallel failure."""
+    if auto_workers is not None:
+        fx.env["PYTEST_XDIST_AUTO_NUM_WORKERS"] = auto_workers
     fx.write("""
         import os
         from pathlib import Path
@@ -254,7 +257,7 @@ def test_a_serial_fail_pass_fail_sequence_is_not_failed_in_parallel(fx):
             assert runs == 2, f"run {runs}: fails on the first and third run"
     """)
     fx.commit()
-    result = fx.run(workers="0")
+    result = fx.run(workers=workers)
     assert result.returncode == 1
     assert len(fx.invocations()) == 3
     assert "FAILED-IN-PARALLEL" not in result.stdout and "FLAKY" not in result.stdout
