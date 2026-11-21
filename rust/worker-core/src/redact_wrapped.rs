@@ -56,6 +56,12 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
         let mut end = m.end();
         let mut count = 0;
         let mut wrapped = false;
+        // A value opened by a quote ends at the same quote on a continuation line.
+        let quote = m
+            .start()
+            .checked_sub(1)
+            .map(|i| bytes[i])
+            .filter(|b| matches!(b, b'"' | b'\''));
         loop {
             while end < bytes.len() && allowed(bytes[end]) {
                 count += 1;
@@ -83,7 +89,8 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
                 if count + line.len() > limit
                     || !(line_end == bytes.len()
                         || bytes.get(line_end) == Some(&b'\n')
-                        || bytes.get(line_end..line_end + 2) == Some(b"\r\n"))
+                        || bytes.get(line_end..line_end + 2) == Some(b"\r\n")
+                        || (quote.is_some() && bytes.get(line_end) == quote.as_ref()))
                 {
                     break;
                 }

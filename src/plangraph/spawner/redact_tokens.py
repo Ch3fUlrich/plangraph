@@ -72,6 +72,8 @@ def _wrapped_spans(text):
         index = match.lastindex - 1
         spec, body = SPECS[index], _BODY[index]
         end, count, wrapped = match.end(), 0, False
+        # A value opened by a quote ends at the same quote on a continuation line.
+        quote = text[match.start() - 1] if match.start() and text[match.start() - 1] in '"\'' else None
         while True:
             run = body.match(text, end)
             if run:
@@ -90,7 +92,8 @@ def _wrapped_spans(text):
                 line_end = next_run.end() if next_run else next_start
                 if (count + line_end - next_start > MAX_WRAPPED_BODY
                         or not (line_end == len(text) or text.startswith('\n', line_end)
-                                or text.startswith('\r\n', line_end))):
+                                or text.startswith('\r\n', line_end)
+                                or (quote and text.startswith(quote, line_end)))):
                     break
             if not next_run:
                 break

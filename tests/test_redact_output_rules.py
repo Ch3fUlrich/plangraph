@@ -219,3 +219,15 @@ def test_cli_stream_doctor_and_env_value_results_use_output_rules(monkeypatch):
     cli._drain_chunks([text[:10].encode(), text[10:].encode()], written.append)
     assert b''.join(written) == b'[REDACTED] [autoos:redacted]\n'
     assert doctor.clean(text) == '[REDACTED] [autoos:redacted]'
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+@pytest.mark.parametrize('quote', ['"', "'"])
+@pytest.mark.parametrize('scrub', [env_redact.redact, env_redact.redact_source, env_redact.redact_output])
+def test_quoted_wrapped_assignment_masks_final_fragment_past_the_floor(newline, quote, scrub):
+    # The first physical line already meets the family floor (20 body bytes).
+    secret = 'gh' + 'p_' + 'A9' * 10 + newline + 'A9' * 4
+    text = 'API_KEY=' + quote + secret + quote + newline + 'next retained'
+    expected = 'API_KEY=' + quote + '[REDACTED]' + quote + newline + 'next retained'
+    assert scrub(text) == expected
+    assert scrub(expected) == expected
