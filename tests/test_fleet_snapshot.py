@@ -219,37 +219,59 @@ def test_bridge_failure_snapshot_fallback(tmp_path, monkeypatch, caplog, failure
 
 @pytest.mark.parametrize('ci', [None, 'true'])
 def test_missing_binary_policy(tmp_path, monkeypatch, ci):
-    import shutil
     import subprocess
+    home = tmp_path / 'home'
+    monkeypatch.setattr(fleet.Path, 'home', lambda: home)
     monkeypatch.setattr(fleet, '__file__', str(tmp_path / 'src/plangraph/fleet_snapshot.py'))
-    monkeypatch.setattr(shutil, 'which', lambda name: None)
+    path_dir = tmp_path / 'system-bin'
+    monkeypatch.setenv('PATH', str(path_dir))
     if ci is None:
         monkeypatch.delenv('CI', raising=False)
     else:
         monkeypatch.setenv('CI', ci)
     monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: pytest.fail('must not exec'))
-    reason = 'pg-spawnd binary missing (build the release helper)'
     with pytest.raises(RuntimeError) as error:
         fleet.build_fleet([])
-    assert str(error.value) == reason
+    reason = str(error.value)
+    assert reason.startswith('pg-spawnd binary missing (build the release helper)')
+    assert str(path_dir) in reason
+    for directory in (home / '.local/bin', tmp_path / 'rust/target/release'):
+        for name in ('pg-spawnd', 'pg-spawnd.exe'):
+            assert str(directory / name) in reason
     outcome = pytest.fail.Exception if ci else pytest.skip.Exception
     with pytest.raises(outcome) as error:
         require_spawnd()
     assert str(error.value) == reason
 
 
-@pytest.mark.parametrize('name', ['pg-spawnd', 'pg-spawnd.exe', 'PATH'])
-def test_projection_binary_lookup(tmp_path, monkeypatch, name):
-    import shutil
+@pytest.mark.parametrize('path_hit,installed,checkout,selected', [
+    (True, True, 'pg-spawnd', 'path'),
+    (False, True, 'pg-spawnd', 'installed'),
+    (False, True, None, 'installed'),
+    (False, False, 'pg-spawnd', 'checkout'),
+    (False, False, 'pg-spawnd.exe', 'checkout'),
+])
+def test_projection_binary_lookup(tmp_path, monkeypatch, path_hit, installed, checkout, selected):
     import subprocess
+    home = tmp_path / 'home'
+    monkeypatch.setattr(fleet.Path, 'home', lambda: home)
     monkeypatch.setattr(fleet, '__file__', str(tmp_path / 'src/plangraph/fleet_snapshot.py'))
-    binary = tmp_path / 'rust/target/release' / name
-    binary.parent.mkdir(parents=True)
-    if name != 'PATH':
-        binary.touch()
-    monkeypatch.setattr(shutil, 'which', lambda command: str(tmp_path / 'PATH'))
+    path_dir = tmp_path / 'system-bin'
+    monkeypatch.setenv('PATH', str(path_dir))
+    name = 'pg-spawnd.exe' if os.name == 'nt' else 'pg-spawnd'
+    binaries = {
+        'path': path_dir / name,
+        'installed': home / '.local/bin' / name,
+        'checkout': tmp_path / 'rust/target/release' / (checkout or 'pg-spawnd'),
+    }
+    for location, present in [('path', path_hit), ('installed', installed), ('checkout', checkout)]:
+        if present:
+            binary = binaries[location]
+            binary.parent.mkdir(parents=True)
+            binary.touch(mode=0o755)
+
     def run(command, **kwargs):
-        assert command == [str(binary if name != 'PATH' else tmp_path / 'PATH'), 'fleet-snapshot']
+        assert command == [str(binaries[selected]), 'fleet-snapshot']
         return subprocess.CompletedProcess(command, 0, '{"hosts": [], "running_agents": 0}')
     monkeypatch.setattr(subprocess, 'run', run)
     assert fleet.build_fleet([]) == dict(hosts=[], running_agents=0)
