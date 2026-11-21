@@ -276,7 +276,11 @@ def test_spawnd_build_failure_fails_with_cargo_diagnostics(monkeypatch):
     from types import SimpleNamespace
     import _spawnd
     monkeypatch.setattr(_spawnd, '_BUILT', {})
+    import json
+    # Cargo's --message-format=json puts the rendered error on stdout, not stderr.
+    stdout = json.dumps(dict(reason='compiler-message', message=dict(
+        level='error', rendered='error[E0432]: unresolved import `missing`\n --> src/main.rs:1:5\n')))
     monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: SimpleNamespace(
-        returncode=101, stdout='', stderr='error[E0432]: unresolved import'))
-    with pytest.raises(pytest.fail.Exception, match='E0432'):
+        returncode=101, stdout=stdout + '\n{"reason":"build-finished","success":false}', stderr=''))
+    with pytest.raises(pytest.fail.Exception, match=r'(?s)E0432.*src/main\.rs:1:5'):
         _spawnd.build_spawnd()

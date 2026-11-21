@@ -46,6 +46,20 @@ def artifact_executable(lines, name):
     return found
 
 
+def build_diagnostics(lines, stderr):
+    """Rendered compiler errors Cargo put on stdout (JSON format), then the stderr tail."""
+    rendered = []
+    for line in lines:
+        try:
+            message = json.loads(line)
+        except ValueError:
+            continue
+        body = message.get('message') or {}
+        if message.get('reason') == 'compiler-message' and body.get('level') == 'error':
+            rendered.append(body.get('rendered') or body.get('message') or '')
+    return ''.join(rendered)[-4000:] + stderr[-2000:]
+
+
 _BUILT = {}
 TREE_TARGET = Path(__file__).resolve().parents[1] / 'rust/target'
 _TARGET_ENV = ('CARGO_TARGET_DIR', 'CARGO_BUILD_TARGET_DIR')
@@ -88,7 +102,8 @@ def build_spawnd():
             pytest.fail(f'cargo build -p pg-spawnd: {error}', pytrace=False)
         path = artifact_executable(done.stdout.splitlines(), 'pg-spawnd') if not done.returncode else None
         if path is None or not Path(path).is_file():
-            pytest.fail('cargo build -p pg-spawnd failed (exit %s):\n%s'
-                        % (done.returncode, done.stderr[-4000:]), pytrace=False)
+            pytest.fail('cargo build -p pg-spawnd failed (exit %s):\n%s' % (
+                done.returncode, build_diagnostics(done.stdout.splitlines(), done.stderr)),
+                pytrace=False)
         _BUILT[release] = path
     return Path(_BUILT[release])
