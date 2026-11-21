@@ -7,6 +7,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 fn plain(value: &Value) -> Option<&str> {
     value
@@ -26,11 +27,13 @@ fn check_with(args: &Args, repos: &BTreeMap<String, RepoEntry>) -> Result<(), To
     }
     let reference = &args["card"]["diff_ref"];
     // Two formats: {repo, base, head} (a path) and the registry-rooted {repo_id, base_sha, head_sha}.
-    let registered = reference["repo_id"]
-        .as_str()
-        .and_then(|id| repos.get(id).map(|entry| entry.root.clone()));
+    let registered = reference["repo_id"].as_str().and_then(|id| repos.get(id));
     let (root, base, head) = match registered {
-        Some(root) => (Some(root), &reference["base_sha"], &reference["head_sha"]),
+        Some(entry) => (
+            Some(entry.root.clone()),
+            &reference["base_sha"],
+            &reference["head_sha"],
+        ),
         None => (
             reference["repo"]
                 .as_str()
@@ -43,6 +46,15 @@ fn check_with(args: &Args, repos: &BTreeMap<String, RepoEntry>) -> Result<(), To
     let (Some(repo), Some(base), Some(head)) = (root.as_deref(), plain(base), plain(head)) else {
         return Ok(());
     };
+    if let Some(entry) = registered {
+        // Resolve the commits first, as the inline diff reader does: a registry checkout that has not
+        // fetched them yet would otherwise look unreadable and pass an empty range on to routing.
+        for sha in [base, head] {
+            if workspace_resolver::ensure_commit(entry, sha, Duration::from_secs(10)).is_err() {
+                return Ok(());
+            }
+        }
+    }
     let mut cmd = workspace_resolver::git_command(Path::new(repo));
     cmd.args([
         "--literal-pathspecs",
@@ -147,5 +159,44 @@ mod tests {
         }
         // An unregistered repo id is left to the legs.
         assert!(check_with(&card(&head), &BTreeMap::new()).is_ok());
+    }
+
+    #[test]
+    fn registry_checkout_that_has_not_fetched_the_commits_is_still_checked() {
+        let origin = tempfile::tempdir().unwrap();
+        git(origin.path(), &["init", "-q", "-b", "main"]);
+        std::fs::write(origin.path().join("a.txt"), "one\n").unwrap();
+        git(origin.path(), &["add", "a.txt"]);
+        git(origin.path(), &["commit", "-qm", "base"]);
+        let base = git(origin.path(), &["rev-parse", "HEAD"]);
+        let clone = tempfile::tempdir().unwrap();
+        let remote = origin.path().to_str().unwrap().to_owned();
+        git(clone.path(), &["clone", "-q", &remote, "."]);
+        // The head exists only in the remote: same tree as the base, so the range is empty.
+        git(
+            origin.path(),
+            &["commit", "-q", "--allow-empty", "-m", "head"],
+        );
+        let head = git(origin.path(), &["rev-parse", "HEAD"]);
+        let entry: RepoEntry = serde_json::from_value(json!({
+            "root": clone.path(), "worktrees_root": clone.path(), "remote": remote,
+            "import_roots": [], "cache_env": {}
+        }))
+        .unwrap();
+        let repos = BTreeMap::from([("demo".to_owned(), entry)]);
+        let args: Args = json!({"role": "review",
+            "card": {"diff_ref": {"repo_id": "demo", "base_sha": base, "head_sha": head}}})
+        .as_object()
+        .unwrap()
+        .clone();
+        match check_with(&args, &repos) {
+            Err(ToolError::Refused { message, .. }) => {
+                assert!(message.starts_with("empty_diff:"), "{message}")
+            }
+            other => panic!(
+                "an unfetched empty range must be refused, got {:?}",
+                other.is_ok()
+            ),
+        }
     }
 }
