@@ -18,7 +18,7 @@ def historical_waiver_fixture(world, monkeypatch, *, authority="OPERATOR", date=
     original = git._run
     monkeypatch.setattr(git, "_run", lambda repo, args: SimpleNamespace(
         returncode=0, stdout=f"{date}T12:00:00Z") if "--format=%cI" in args else original(repo, args))
-    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
 
 
 @pytest.mark.parametrize("decision,authority,cause", [

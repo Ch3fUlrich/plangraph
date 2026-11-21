@@ -315,8 +315,8 @@ def indexed_work(index, key):
             if prs is not None else None}
 
 
-def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
-    """Commits on the default ref with a ``Plan-Item: <key>`` trailer, newest first.
+def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT, head=None):
+    """Commits with a ``Plan-Item: <key>`` trailer, newest first, optionally at a pinned head.
 
     Returns ``None`` when unknown (no repo, malformed key, git failure), else a
     list of ``{sha, date, subject}`` (at most *limit*, default :data:`COMMIT_LIMIT`);
@@ -329,13 +329,14 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
     """
     repo, ref = _repo_ref(git, project)
     proj, bare = _split(key)
-    if repo is None or not bare:
+    if repo is None or not bare or (head is not None and not valid_commit_ref(head)):
         return None
-    if fetch:
+    if fetch and head is None:
         try:
             git._maybe_fetch(repo)
         except Exception:
             pass
+    ref = head or ref
     prefix = f"({_ere(proj)}:)?" if proj else ""
     out = _ok(git, repo, [
         "log", "--no-show-signature", "-E", "--grep",
@@ -413,7 +414,7 @@ def _head_introduced_by_merge(git, repo, parents, head):
     return p1_code == 0
 
 
-def pr_merge_of(git, project, head, *, fallback_pr=None):
+def pr_merge_of(git, project, head, *, fallback_pr=None, default_head=None):
     """``{pr, merge, head}`` when *head* was introduced on the second parent of the
     first-parent merge on the default ref, else ``None`` (also when git cannot answer).
 
@@ -422,9 +423,10 @@ def pr_merge_of(git, project, head, *, fallback_pr=None):
     otherwise the subject's ``#N`` is authoritative and *head* must equal the second parent.
     """
     repo, ref = _repo_ref(git, project)
-    if repo is None or not valid_commit_ref(head):
+    if (repo is None or not valid_commit_ref(head)
+            or (default_head is not None and not valid_commit_ref(default_head))):
         return None
-    merge = _merge_of(git, repo, ref, head)
+    merge = _merge_of(git, repo, default_head or ref, head)
     if not merge:
         return None
     parents = (_ok(git, repo, ["show", "-s", "--format=%P", "--end-of-options",
@@ -442,15 +444,16 @@ def pr_merge_of(git, project, head, *, fallback_pr=None):
     return {"pr": fallback_pr, "merge": merge["sha"], "head": head}
 
 
-def named_merge(git, project, revision):
+def named_merge(git, project, revision, *, head=None):
     """Verify a named merge on the default ref. Refuse a PR known to be unmerged.
 
     Returns ``head`` (the PR head), ``pr`` and ``landed``: the commit that is on the default ref,
     which the deploy scan reads (a squash merge leaves the PR head off the ref).
     """
     repo, ref = _repo_ref(git, project)
-    if repo is None:
+    if repo is None or (head is not None and not valid_commit_ref(head)):
         return None
+    ref = head or ref
     pr = None
     sha = revision.lower()
     if revision.startswith("#"):
@@ -575,7 +578,7 @@ def _closed_lane_pr(git, repo, hosted, branch, head):
     return 0
 
 
-def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, frozen=False):
+def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, frozen=False, head=None):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -584,12 +587,13 @@ def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, froze
     """
     repo, ref = _repo_ref(git, project)
     _, bare = _split(key)
-    if repo is None or not bare:
+    if repo is None or not bare or (head is not None and not valid_commit_ref(head)):
         return None
     snapshot = _refs(git, repo, fresh)
     if snapshot is None:
         return None
     names, remotes = snapshot
+    target = head or ref
     slug = bare.lower()
     lanes, closed_prs = {}, set()
     verified = {} if cache is None else cache  # hosted-PR answers a caller keeps between calls
@@ -602,7 +606,7 @@ def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, froze
         head, _, rest = name.partition("/")
         short = rest if remote_ref and head in remotes and rest else name
         code, _ = _git(git, repo, ["merge-base", "--is-ancestor",
-                                   "--end-of-options", full, ref])
+                                   "--end-of-options", full, target])
         if code == 0:            # already on the ref: finished, not open
             continue
         if code != 1:            # git error: the whole answer is unknown

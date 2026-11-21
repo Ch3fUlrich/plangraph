@@ -145,7 +145,7 @@ class RunsMixin:
         by the witness adapter, so a citation only points at it.
         """
         git, project = self._adapter("git"), self._merge_project(item)
-        repo, ref, key = git.repo_path(project), git.repo_ref(project), item["key"]
+        repo, ref, key = git.repo_path(project), item.get("_close_head") or git.repo_ref(project), item["key"]
         names = {key, key.split(":", 1)[-1]}
         valid_run = RunRecordAdapter(None).valid_run_id
         cited = {}
@@ -211,7 +211,7 @@ class RunsMixin:
                     for key, item_project in candidates:
                         if context_sources.indexed_work(index, key)["commits"]:
                             context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
-                            self._snapshot_deploy(key)
+                            self._snapshot_deploy(key, project)
                     self.__dict__["_warmed"][project] = time.monotonic()
 
     def _warm(self, project):
@@ -275,7 +275,7 @@ class RunsMixin:
             for proof in prs:
                 go_date = as_epoch(_decision_date(decisions.fields(proof["decision_id"])))
                 merge = git.merge_commit_of(git.repo_path(project), proof["head"],
-                                             git.repo_ref(project))
+                                             item.get("_close_head") or git.repo_ref(project))
                 proc = git._run(git.repo_path(project),
                                 ["show", "-s", "--format=%cI", "--end-of-options", merge[0]]) if merge else None
                 merge_date = as_epoch(proc.stdout.strip()) if proc and proc.returncode == 0 else None
@@ -334,12 +334,14 @@ class RunsMixin:
         from .evidence_types import valid_commit_ref
         git = self._adapter("git")
         project = self._merge_project(item)
-        if not self._refresh_merged_default_ref(git, project):
+        default_head = item.get("_close_head")
+        if default_head is None and not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
-        if context_sources.open_lanes(git, project, item["key"]) != []:
+        lanes = {"head": default_head} if default_head is not None else {}
+        if context_sources.open_lanes(git, project, item["key"], **lanes) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
-            git, project, item["key"], fetch=False, limit=None)
+            git, project, item["key"], fetch=False, limit=None, head=default_head)
         from .store_waiver import _go_binding, _go_statement, _strip_prefix
         go_pr, go_head = None, None
         try:
@@ -351,7 +353,7 @@ class RunsMixin:
         proofs = ({named["head"]: {"pr": named["pr"], "head": named["head"]}}
                   if named and named["pr"] else {})
         repo = git.repo_path(project)
-        ref = git.repo_ref(project)
+        ref = default_head or git.repo_ref(project)
         for commit in commits or ():
             merge = commit.get("merge") or {}
             pr = merge.get("pr")
@@ -375,7 +377,7 @@ class RunsMixin:
             # A GO row bound to its own merged PR (merged_go_row) may name a head
             # the trailer search did not reach; that PR is proof in its own right.
             bound = context_sources.pr_merge_of(
-                git, project, head, fallback_pr=go_pr if head == go_head else None)
+                git, project, head, fallback_pr=go_pr if head == go_head else None, default_head=default_head)
             if bound:
                 proofs[head] = {"pr": bound["pr"], "head": head}
         if not proofs or head not in proofs:

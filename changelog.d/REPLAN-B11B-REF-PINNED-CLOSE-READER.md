@@ -1,0 +1,1 @@
+- Keeper merge closes pin history, merge proofs and deploy scans to one commit, preserve deploy checks across unrelated fast-forwards, and reject rewritten history at write time.

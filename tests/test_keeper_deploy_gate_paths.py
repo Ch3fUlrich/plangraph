@@ -129,15 +129,13 @@ def test_a_frozen_close_without_a_warm_deploy_scan_closes_nothing(env):  # noqa:
 def test_a_failed_history_read_is_not_an_empty_deploy_scan(env, monkeypatch):  # noqa: F811
     env.repo.land("docs", "Plan-Item: demo:A", 48)
     real = context_sources.plan_item_commits
-    broken = {"on": False}
 
     def history(git_, project, key, **kw):
         # Only the deploy scan's own read fails; the close's proof of the merge still sees the commits.
         scan = sys._getframe(1).f_code.co_name == "_deploy_changes"
-        return None if broken["on"] and scan else real(git_, project, key, **kw)
+        return None if scan else real(git_, project, key, **kw)
 
     monkeypatch.setattr(context_sources, "plan_item_commits", history)
-    broken["on"] = True
     for run in (lambda: auto(env, require_seats=False),
                 lambda: frozen(env, require_seats=False)):  # frozen: the snapshot read the failure
         result = run()
@@ -309,3 +307,94 @@ def test_a_ref_that_moves_between_the_check_and_the_write_closes_nothing(env, mo
     result = auto(env, require_seats=False)
     assert result["closed"] == []
     assert "merged_on_default_changed" in result["listed"][0]["reason"]
+
+
+def test_replacement_during_the_final_ref_read_cannot_close(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 57)
+    root = env.repo.root
+    original, parent, topic = git(root, "rev-list", "--parents", "-n", "1", "HEAD").split()
+    git(root, "checkout", "-q", "--detach", original)
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/replacement.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    tree = git(root, "write-tree")
+    replacement = git(root, "commit-tree", tree, "-p", parent, "-p", topic,
+                      "-m", "Merge pull request #57 from x/docs (replacement)")
+    git(root, "checkout", "-q", "-f", "main")
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    adapter = env.store.ctx["git"]
+    ref_commit, moved = adapter.ref_commit, []
+    def move_after_read(repo, ref):
+        sha = ref_commit(repo, ref)
+        if ref == "main" and env.conn.in_transaction and not moved:
+            git(root, "update-ref", "refs/heads/main", replacement, original)
+            moved.append(sha)
+        return sha
+
+    monkeypatch.setattr(adapter, "ref_commit", move_after_read)
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert moved == [original]
+    assert result["closed"] == []
+    assert "merged_on_default_changed" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_automatic_close_pins_tagged_named_and_deploy_reads(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 59)
+    root = env.repo.root
+    original = git(root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:A'", (f"Merge-Repo: demo {original}",))
+    adapter = env.store.ctx["git"]
+    run = adapter._run
+    revisions = []
+
+    def record(repo, args, **kw):
+        if args[0] == "log" and "--grep" in args:
+            revisions.append(("tagged", args[-1]))
+        if args[:2] == ["merge-base", "--is-ancestor"] and args[-2] == original and not args[-1].endswith("^1"):
+            revisions.append(("named", args[-1]))
+        return run(repo, args, **kw)
+
+    monkeypatch.setattr(adapter, "_run", record)
+    scan = adapter.deploy_changes
+
+    def record_scan(repo, sha, ref):
+        revisions.append(("deploy", ref))
+        return scan(repo, sha, ref)
+
+    monkeypatch.setattr(adapter, "deploy_changes", record_scan)
+    result = frozen(env, require_seats=False)
+    assert [row["key"] for row in result["closed"]] == ["demo:A"]
+    assert {kind for kind, _ in revisions} == {"tagged", "named", "deploy"}
+    assert {ref for _, ref in revisions} == {original}
+
+
+@pytest.mark.parametrize("related", [False, True])
+def test_manual_close_handles_a_fast_forward_after_its_diff(w, monkeypatch, tmp_path, related):  # noqa: F811
+    root = tmp_path / "repo"
+    merged_repo(root, [])
+    _land_with_unit(root, pr=58)
+    original = git(root, "rev-parse", "HEAD")
+    topic = git(root, "rev-parse", "HEAD^2")
+    w.decision_path.write_text(
+        HEADER + f"| D-5504 | demo | GO #58 demo:A; GO-HEAD {topic} | ROUTER | 2026-11-05 |\n")
+    adapter = GitAdapter({"demo": {"path": str(root), "ref": "main"}})
+    w.store.ctx["git"] = adapter
+    monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
+    scan = adapter.deploy_changes
+    scanned = []
+
+    def fast_forward(repo, sha, ref):
+        changes = scan(repo, sha, ref)
+        if not scanned:
+            message = "more work\n\nPlan-Item: demo:A" if related else "unrelated work"
+            git(root, "commit", "-q", "--allow-empty", "-m", message)
+        scanned.append(ref)
+        return changes
+
+    monkeypatch.setattr(adapter, "deploy_changes", fast_forward)
+    result = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert scanned[0] == original
+    assert set(scanned) == ({original, git(root, "rev-parse", "main")} if related else {original})
+    assert result["closed"] is False and result["reason"] == "deploy_pending"
+    assert w.store._item("demo:A")["state"] == "in_review"

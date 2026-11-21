@@ -94,11 +94,14 @@ def test_complete_pr_scan_refreshes_or_refuses(unseated_w, monkeypatch, failed):
         if args[0] == "fetch":
             refreshed.append(args)
             return SimpleNamespace(returncode=int(failed), stdout="")
+        if args[0] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout=MERGE)
         if "--format=%cI" in args:
             return SimpleNamespace(returncode=0, stdout="2026-11-12T12:00:00Z")
         return SimpleNamespace(returncode=0, stdout=f"{'2' * 40} {HEAD}")
     monkeypatch.setattr(git, "_run", run)
     monkeypatch.setattr(git, "merge_commit_of", lambda *a: (MERGE, "fixture"))
+    monkeypatch.setattr(git, "deploy_changes", lambda *a: [])
     world.store.ctx["git"] = git
     original = world.store._merged_open_prs_checked
     def checked(*args):
@@ -126,6 +129,8 @@ def test_refresh_exposes_previously_unseen_pr(unseated_w, monkeypatch):
         if args[0] == "fetch":
             refreshed.append(args)
             return SimpleNamespace(returncode=0, stdout="")
+        if args[0] == "rev-parse":
+            return SimpleNamespace(returncode=0, stdout=MERGE)
         if "--format=%cI" in args:
             return SimpleNamespace(returncode=0, stdout="2026-11-12T12:00:00Z")
         return SimpleNamespace(returncode=0, stdout=f"{'2' * 40} {args[-1]}")
@@ -134,6 +139,7 @@ def test_refresh_exposes_previously_unseen_pr(unseated_w, monkeypatch):
             [{"sha": other, "merge": {"pr": 900}}] if refreshed else [])
     monkeypatch.setattr(git, "_run", run)
     monkeypatch.setattr(git, "merge_commit_of", lambda repo, sha, ref: (sha, "fixture"))
+    monkeypatch.setattr(git, "deploy_changes", lambda *a: [])
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", commits)
     world.store.ctx["git"] = git
     with pytest.raises(Refused, match="merged_pr_go_missing"):
@@ -296,7 +302,7 @@ def _close_pr_repo(w, tmp_path, monkeypatch, follow_up_files, tagged_files=None,
     repo, tip = _pr_repo(tmp_path, follow_up_files, tagged_files, **repo_args)
     from plangraph.keeper.evidence_git import GitAdapter
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
-    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
     w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
     w.store.verifiers["deploy"] = VERIFIERS["deploy"]
     w.conn.execute("UPDATE items SET state='open', description=? WHERE key='demo:A'",
@@ -386,7 +392,7 @@ def test_subjectless_merge_closes_via_go_row_pr_and_head(w, tmp_path, monkeypatc
         tmp_path, "Spawner admission window, session counter, prepush bound (Batch 7, GO D-6395)")
     from plangraph.keeper.evidence_git import GitAdapter
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
-    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
     w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
     w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
     chosen = anc_head if use_ancestor else tip_head
@@ -414,7 +420,7 @@ def test_a_title_with_an_earlier_reference_closes_on_the_trailing_pr(w, tmp_path
     repo, _, _, tip_head, _ = _subjectless_repo(tmp_path, "Follow up on #42 (#1078)")
     from plangraph.keeper.evidence_git import GitAdapter
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
-    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
     w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
     w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
     w.decision_path.write_text(f"| D-6395 | demo | GO #1078 demo:A; GO-HEAD {tip_head} | ROUTER |\n")
@@ -444,7 +450,7 @@ def test_subjectless_merge_refuses_bad_pr_or_head(w, tmp_path, monkeypatch, case
     repo, prior_head, anc_head, tip_head, unmerged = _subjectless_repo(tmp_path, subject)
     from plangraph.keeper.evidence_git import GitAdapter
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
-    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
     w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
     w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
     row = {
