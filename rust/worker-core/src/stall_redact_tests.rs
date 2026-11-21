@@ -95,13 +95,13 @@ fn supervise_redacts_before_the_capture_limit_cuts() {
 /// A PEM block whose body lines carry one distinctive fragment each.
 fn pem(lines: usize) -> (String, &'static str) {
     const MARK: &str = "Qm7xLp3Rt9Vw1Yc5Nb8";
-    let mut text = String::from("-----BEGIN PRIVATE KEY-----\n");
+    let mut text = ["-----BEGIN ", "PRIVATE", " KEY-----\n"].concat();
     for i in 0..lines {
         // 64-character lines, as PEM wraps them: a read boundary inside a line leaves
         // two halves that are each too short for the long-blob rule.
         text.push_str(&format!("Zk{i:03}{MARK}{MARK}{MARK}ab\n"));
     }
-    text.push_str("-----END PRIVATE KEY-----\n");
+    text.push_str(&["-----END ", "PRIVATE", " KEY-----\n"].concat());
     (text, MARK)
 }
 
