@@ -62,14 +62,14 @@ fn a_variable_outside_the_allowlist_does_not_reach_the_child_process() {
     apply_env(
         &mut command,
         [
-            (OsString::from("HOME"), OsString::from("/home/fixture")),
+            (OsString::from("HOME"), OsString::from("/fixture/home")),
             (OsString::from("FLEET_SECRET_TOKEN"), OsString::from("leak")),
         ],
         "/usr/bin:/bin",
     );
     let out = command.output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.lines().any(|l| l == "HOME=/home/fixture"), "{text}");
+    assert!(text.lines().any(|l| l == "HOME=/fixture/home"), "{text}");
     assert!(text.lines().any(|l| l == "PATH=/usr/bin:/bin"), "{text}");
     assert!(
         !text.contains("FLEET_SECRET_TOKEN") && !text.contains("leak"),
