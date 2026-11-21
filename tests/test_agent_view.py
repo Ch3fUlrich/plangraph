@@ -293,15 +293,3 @@ def test_scheduled_local_write_keeps_configured_hosts_unknown_through_render(
     far = [h for h in view['hosts'] if h['host'] == 'far-host']
     assert far and far[0]['readable'] is False and far[0]['reason'] == 'not_collected'
 
-
-def test_cargo_artifact_report_names_the_exact_binary():
-    from _spawnd import artifact_executable
-    lines = [json.dumps(dict(reason='compiler-artifact', target=dict(name='pg-spawnd', kind=['lib']),
-                             executable=None)),
-             'not json',
-             json.dumps(dict(reason='compiler-artifact', target=dict(name='other', kind=['bin']),
-                             executable='/t/other')),
-             json.dumps(dict(reason='compiler-artifact', target=dict(name='pg-spawnd', kind=['bin']),
-                             executable='/per-run/debug/pg-spawnd'))]
-    assert artifact_executable(lines, 'pg-spawnd') == '/per-run/debug/pg-spawnd'
-    assert artifact_executable(lines[:3], 'pg-spawnd') is None

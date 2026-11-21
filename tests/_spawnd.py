@@ -47,32 +47,48 @@ def artifact_executable(lines, name):
 
 
 _BUILT = {}
+TREE_TARGET = Path(__file__).resolve().parents[1] / 'rust/target'
+_TARGET_ENV = ('CARGO_TARGET_DIR', 'CARGO_BUILD_TARGET_DIR')
+
+
+def spawnd_build_command(release):
+    """The build of ``pg-spawnd`` into the checkout's own target, whatever the environment says."""
+    manifest = Path(__file__).resolve().parents[1] / 'rust/Cargo.toml'
+    return ['cargo', 'build', '-p', 'pg-spawnd', '--manifest-path', str(manifest),
+            '--target-dir', str(TREE_TARGET), '--message-format=json',
+            *(['--release'] if release else [])]
+
+
+def spawnd_build_env(environ):
+    """*environ* without the variables that move Cargo's target directory."""
+    return {key: value for key, value in environ.items() if key not in _TARGET_ENV}
 
 
 def build_spawnd():
     """Build ``pg-spawnd`` for this tree and return the exact executable Cargo produced.
 
-    The build uses the tree's own ``rust/target`` and returns the path Cargo reports, never a
-    guessed location: a target directory shared with other checkouts can hold another tree's
-    binary under the same name, and a per-run preflight target is not visible to the tests.
-    CI builds the release helper there first (a no-op here); elsewhere a debug build is used.
+    The build owns ``rust/target`` of this checkout (``--target-dir``) and returns the path
+    Cargo reports, never a guessed location: a target directory shared with other checkouts
+    can hold another tree's binary under the same name, and a per-run preflight target is not
+    visible to the tests. CI builds the release helper there first (a no-op here); elsewhere a
+    debug build is used. A missing toolchain skips; a failing build fails with its diagnostics.
     """
-    profile = ['--release'] if os.environ.get('CI') else []
-    key = tuple(profile)
-    if key not in _BUILT:
-        manifest = Path(__file__).resolve().parents[1] / 'rust/Cargo.toml'
+    release = bool(os.environ.get('CI'))
+    if release not in _BUILT:
         try:
             done = subprocess.run(
-                ['cargo', 'build', '-p', 'pg-spawnd', '--manifest-path', str(manifest),
-                 '--message-format=json', *profile], stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, timeout=1500,
-                env={k: v for k, v in os.environ.items() if k != 'CARGO_TARGET_DIR'})
-            path = artifact_executable(done.stdout.splitlines(), 'pg-spawnd') if not done.returncode else None
-        except (OSError, subprocess.SubprocessError):
-            path = None
-        if path is None or not Path(path).is_file():
+                spawnd_build_command(release), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                stdin=subprocess.DEVNULL, text=True, timeout=1500,
+                env=spawnd_build_env(os.environ))
+        except FileNotFoundError:
             if os.environ.get('CI'):
-                pytest.fail('cargo build -p pg-spawnd failed', pytrace=False)
-            pytest.skip('cargo build -p pg-spawnd failed or cargo is missing')
-        _BUILT[key] = path
-    return Path(_BUILT[key])
+                pytest.fail('cargo is missing', pytrace=False)
+            pytest.skip('cargo is missing')
+        except subprocess.SubprocessError as error:
+            pytest.fail(f'cargo build -p pg-spawnd: {error}', pytrace=False)
+        path = artifact_executable(done.stdout.splitlines(), 'pg-spawnd') if not done.returncode else None
+        if path is None or not Path(path).is_file():
+            pytest.fail('cargo build -p pg-spawnd failed (exit %s):\n%s'
+                        % (done.returncode, done.stderr[-4000:]), pytrace=False)
+        _BUILT[release] = path
+    return Path(_BUILT[release])
