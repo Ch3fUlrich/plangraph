@@ -31,8 +31,9 @@ workflow *file* (`PLANGRAPH_CI_WORKFLOW_PATH`, default `.github/workflows/tests.
 another file, or a fork PR's copy of it, cannot decide the result; the run's `name` is not consulted.
 The runs of a PR head count only when they belong to that PR and its target branch (the run's
 `pull_requests` entry), so a green run of another PR on the same head cannot outweigh a red one.
-A commit with no PR must carry its own green run. The render itself runs only when `live_follow verified`
-finds the checkout at the head the gate recorded as green; otherwise the previous page stays up. Docs-only PRs run only the scrub and the `ci-gate` job (the
+A commit with no PR must carry its own green run. The render itself runs only when `live_follow export`
+finds the checkout at the head the gate recorded as green, and it imports an exported copy of exactly that
+commit (`render-tree` beside the state file), never the live checkout; otherwise the previous page stays up. Docs-only PRs run only the scrub and the `ci-gate` job (the
 workflow selects suites per change), so their heads are followed too. Keep `PLANGRAPH_STATE` outside
 `PLANGRAPH_OUT`: the output directory is the web-served render directory, and the gate state does not
 belong in it (a path inside it is refused; unset, it defaults to `$XDG_STATE_HOME/plangraph/live-follow.json`).

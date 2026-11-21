@@ -1,8 +1,9 @@
 """Follow the CI-green head of main on the live host, then audit the page.
 
 The live host runs ``python3 -m plangraph.live_follow follow`` before each
-render, ``... verified`` as the render's gate (the checkout must be the
-recorded green head) and ``... check`` after it. ``follow`` fast-forwards the live checkout
+render, ``... export`` as the render's gate (the checkout must be the recorded
+green head; the render imports an exported copy of that commit) and ``... check``
+after it. ``follow`` fast-forwards the live checkout
 to ``origin/<branch>`` only when GitHub CI has verified that head green; every
 doubt keeps the tree, and nothing here ever raises into the render unit —
 a broken gate must not blank a live page. ``check`` compares the published
@@ -29,8 +30,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from dataclasses import dataclass
@@ -49,6 +52,7 @@ __all__ = [
     "main",
     "page_stamp",
     "read_token",
+    "export_tree",
     "record_green",
     "verified",
 ]
@@ -135,8 +139,11 @@ def _state_path(env: Mapping[str, str], out: str) -> str:
         if not base:
             raise ConfigError("PLANGRAPH_STATE is not set and no state directory is known")
         state = os.path.join(base, "plangraph", "live-follow.json")
-    real_state, real_out = os.path.realpath(state), os.path.realpath(out)
-    if os.path.commonpath([real_state, real_out]) == real_out:
+    real_out = os.path.realpath(out)
+    # The atomic save replaces the final entry itself, so a symlink at that entry
+    # is judged where it sits (resolved parent + name) as well as where it points.
+    entry = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(state))), os.path.basename(state))
+    if any(os.path.commonpath([p, real_out]) == real_out for p in (os.path.realpath(state), entry)):
         raise ConfigError("PLANGRAPH_STATE must be outside PLANGRAPH_OUT (the web-served directory)")
     return state
 
@@ -464,6 +471,55 @@ def verified(cfg: Config, runner) -> dict:
     return {"status": "unverified", "sha": head or None}
 
 
+def _extract_tar(archive: Path, dest: Path) -> None:
+    """Extract ``archive`` into ``dest``; a member that would leave ``dest`` raises."""
+    with tarfile.open(archive) as tar:
+        root = dest.resolve()
+        for member in tar.getmembers():
+            target = (dest / member.name).resolve()
+            if target != root and root not in target.parents:
+                raise ValueError("archive member outside the destination")
+            if member.issym() or member.islnk():
+                raise ValueError("archive link")
+        tar.extractall(dest, filter="data") if hasattr(tarfile, "data_filter") else tar.extractall(dest)
+
+
+def export_tree(cfg: Config, runner) -> dict:
+    """Export the verified commit to a private directory the render imports from.
+
+    The live checkout may carry local edits or untracked files; the render must
+    only see the commit the gate recorded as green. Returns ``{"status":
+    "verified", "sha", "tree"}``; any doubt leaves the previous export in place.
+    """
+    gate = verified(cfg, runner)
+    if gate["status"] != "verified":
+        return gate
+    sha = gate["sha"]
+    base = Path(cfg.state).parent
+    final = base / "render-tree"
+    staging = None
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(dir=str(base), prefix="render-tree.tmp-"))
+        archive = staging / "tree.tar"
+        rc, _ = runner.run(["git", "-C", cfg.tree, "archive", "--format=tar", "-o", str(archive), sha])
+        if rc != 0:
+            return {"status": "unverified", "sha": sha}
+        content = staging / "content"
+        content.mkdir()
+        _extract_tar(archive, content)
+        old = staging / "previous"
+        if final.exists():
+            os.replace(final, old)
+        os.replace(content, final)
+        return {"status": "verified", "sha": sha, "tree": str(final)}
+    except (OSError, ValueError, tarfile.TarError):
+        return {"status": "unverified", "sha": sha}
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
 def page_stamp(path: str) -> str | None:
     """The content of the page's <meta name="plangraph-build"> tag, else None."""
     try:
@@ -531,12 +587,13 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
 
     Returns 0 for every follow/check outcome — a page render must never be
     blocked by this step; only a unusable config exits 2. ``verified`` is the
-    render gate: 0 when the checkout is the recorded green head, else 3.
+    render gate: 0 when the checkout is the recorded green head, else 3;
+    ``export`` also copies that commit to a private tree and prints its path.
     """
     words = list(sys.argv[1:] if argv is None else argv)
     command = words[0] if words else ""
-    if command not in ("follow", "check", "verified"):
-        print("live_follow: usage: follow|check|verified", file=sys.stderr)
+    if command not in ("follow", "check", "verified", "export"):
+        print("live_follow: usage: follow|check|verified|export", file=sys.stderr)
         return 2
     try:
         cfg = Config.from_env(env or os.environ)
@@ -544,13 +601,17 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
         print(f"live_follow: {exc}", file=sys.stderr)
         return 2
     active = runner if runner is not None else Runner()
-    if command == "verified":
+    if command in ("verified", "export"):
         try:
-            result = verified(cfg, active)
+            result = (verified if command == "verified" else export_tree)(cfg, active)
         except Exception:
             result = {"status": "unverified", "sha": None}
-        print(json.dumps(result))
-        return 0 if result["status"] == "verified" else 3
+        if result["status"] != "verified":
+            print(json.dumps(result), file=sys.stderr if command == "export" else sys.stdout)
+            return 3
+        # export: "<tree> <short sha>" for the render unit to read; verified: JSON.
+        print(f"{result['tree']} {result['sha'][:10]}" if command == "export" else json.dumps(result))
+        return 0
     try:
         result = (
             follow(cfg, active, now) if command == "follow" else check(cfg, active, now)

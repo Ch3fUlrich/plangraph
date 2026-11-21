@@ -2,13 +2,15 @@
 and render only from a recorded verified revision. Helpers come from the sibling suite."""
 from __future__ import annotations
 
+import io
 import json
 import os
+import tarfile
 from pathlib import Path
 
 import pytest
 
-from plangraph.live_follow import Config, ConfigError, is_green, main, record_green
+from plangraph.live_follow import Config, ConfigError, export_tree, is_green, main, record_green
 from test_live_follow import (  # noqa: F401  (helpers shared with the sibling suite)
     CUR,
     HEAD,
@@ -139,3 +141,91 @@ def test_verified_never_raises_on_a_broken_state_file(tmp_path, capsys):
     fake = FakeRunner()
     fake.script(("git", "-C", cfg.tree, "rev-parse", "HEAD"), (0, CUR + "\n"))
     assert main(["verified"], env=base_env(tmp_path), runner=fake, now=T0) == 3
+
+
+def test_state_symlink_inside_the_output_dir_pointing_out_is_rejected(tmp_path):
+    """The atomic save replaces the symlink itself, which would put a regular state
+    file inside the served directory."""
+    (tmp_path / "out").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "out" / "state.json").symlink_to(tmp_path / "elsewhere" / "state.json")
+    env = base_env(tmp_path, PLANGRAPH_STATE=str(tmp_path / "out" / "state.json"))
+    with pytest.raises(ConfigError) as ei:
+        Config.from_env(env)
+    assert "PLANGRAPH_OUT" in str(ei.value)
+
+
+# --- the render reads an exported copy of the verified commit, never the live tree ------------
+
+def _tar(files):
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        for name, body in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+    return raw.getvalue()
+
+
+def _exporting(tmp_path, files, head=CUR, recorded=CUR, archive_rc=0):
+    cfg = make_cfg(tmp_path)
+    if recorded:
+        record_green(cfg, recorded, T0)
+    fake = FakeRunner()
+    fake.script(("git", "-C", cfg.tree, "rev-parse", "HEAD"), (0, head + "\n"))
+
+    def archive(argv, env, cwd):
+        out = Path(argv[argv.index("-o") + 1])
+        if archive_rc == 0:
+            out.write_bytes(_tar(files))
+        return (archive_rc, "")
+
+    fake.script(("git", "-C", cfg.tree, "archive"), archive)
+    return cfg, fake
+
+
+def test_export_extracts_exactly_the_verified_commit(tmp_path):
+    cfg, fake = _exporting(tmp_path, {"src/plangraph/mod.py": b"print(1)\n"})
+    res = export_tree(cfg, fake)
+    assert res["status"] == "verified" and res["sha"] == CUR
+    tree = Path(res["tree"])
+    assert tree.is_relative_to(Path(cfg.state).parent) and not tree.is_relative_to(cfg.out)
+    assert (tree / "src/plangraph/mod.py").read_bytes() == b"print(1)\n"
+    archive_call = fake.calls_where("archive")[0]["argv"]
+    assert archive_call[-1] == CUR, "archive the recorded sha, not a moving ref"
+
+
+def test_export_replaces_the_previous_tree_completely(tmp_path):
+    cfg, fake = _exporting(tmp_path, {"a.txt": b"new"})
+    old = Path(cfg.state).parent / "render-tree"
+    old.mkdir(parents=True)
+    (old / "stale.txt").write_text("old")
+    res = export_tree(cfg, fake)
+    assert sorted(p.name for p in Path(res["tree"]).iterdir()) == ["a.txt"]
+
+
+@pytest.mark.parametrize("case", ["unverified_head", "no_state", "archive_failed", "traversal"])
+def test_export_refuses_and_keeps_the_previous_tree(tmp_path, case):
+    kwargs = {"unverified_head": dict(head=HEAD), "no_state": dict(recorded=None),
+              "archive_failed": dict(archive_rc=1), "traversal": {}}[case]
+    files = {"../evil.txt": b"x"} if case == "traversal" else {"a.txt": b"new"}
+    cfg, fake = _exporting(tmp_path, files, **kwargs)
+    old = Path(cfg.state).parent / "render-tree"
+    old.mkdir(parents=True, exist_ok=True)
+    (old / "keep.txt").write_text("old")
+    res = export_tree(cfg, fake)
+    assert res["status"] != "verified" and "tree" not in res
+    assert (old / "keep.txt").read_text() == "old"
+    assert not (Path(cfg.state).parent.parent / "evil.txt").exists()
+    leftovers = [p.name for p in Path(cfg.state).parent.iterdir() if p.name.startswith("render-tree.tmp")]
+    assert leftovers == []
+
+
+def test_main_export_prints_tree_and_short_sha_or_nothing(tmp_path, capsys):
+    cfg, fake = _exporting(tmp_path, {"a.txt": b"x"})
+    assert main(["export"], env=base_env(tmp_path), runner=fake, now=T0) == 0
+    tree, short = capsys.readouterr().out.split()
+    assert Path(tree) == Path(cfg.state).parent / "render-tree" and short == CUR[:10]
+    cfg2, fake2 = _exporting(tmp_path, {"a.txt": b"x"}, head=HEAD)
+    assert main(["export"], env=base_env(tmp_path), runner=fake2, now=T0) == 3
+    assert capsys.readouterr().out == ""

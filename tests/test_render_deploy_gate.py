@@ -30,14 +30,17 @@ def test_plan_location_denies_anonymous_requests():
     assert not any(d.startswith(("allow all", "auth_request off")) for d in block)
 
 
-def test_render_only_runs_from_a_verified_revision():
+def test_render_runs_from_an_exported_copy_of_the_verified_commit():
     lines = [line for line in SERVICE.read_text(encoding="utf-8").splitlines() if line.startswith("ExecStart=")]
     assert len(lines) == 1
     start = lines[0]
-    gate = start.find("plangraph.live_follow verified &&")
-    assert gate != -1, "ExecStart must gate on `live_follow verified &&`"
-    assert gate < start.find("mktemp"), "the gate must run before anything is rendered"
-    assert gate < start.find("cat "), "the gate must run before anything is published"
+    gate = start.find("plangraph.live_follow export")
+    assert gate != -1, "ExecStart must export the verified commit first"
+    assert gate < start.find("mktemp"), "the export must run before anything is rendered"
+    assert gate < start.find("cat "), "the export must run before anything is published"
+    after = start[gate:]
+    assert 'PYTHONPATH="$R/src"' in after, "the render must import from the exported copy"
+    assert 'PYTHONPATH="$PLANGRAPH_LIVE_TREE/src"; python3 -m plangraph.keeper' not in start
 
 
 def test_live_tree_dropin_sets_a_private_state_path_outside_the_output_dir():
