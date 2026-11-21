@@ -94,3 +94,34 @@ def pick_seats(ordered, writer_families, *, high):
     coverage = tuple({"leg": leg.id, "covers": [w for w in writers if w != seat_family(leg.family)]}
                      for leg in seats)
     return seats, coverage, uncovered(writers, families, need=need, sensitive=high)
+
+
+def head_writer_families(card):
+    """Families named by the ``Writer`` trailer(s) of the head commit of ``card["diff_ref"]``.
+
+    Empty without a ``diff_ref`` or a trailer. A trailer naming an unknown writer refuses (fail
+    closed, like ``writer_parts``): the head's writer must never review its own work.
+    """
+    ref = card.get("diff_ref") if isinstance(card, Mapping) else None
+    if ref is None:
+        return []
+    _check_diff_ref(ref)
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "-C", ref["repo"], "log", "-1", "--no-color", "--format=%(trailers:key=Writer,valueonly,unfold)", ref["head"]],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=30, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    # "Writer: <model> <session> (<note>)": the model is the first word.
+    models = [line.split()[0] for line in out.splitlines() if line.strip()]
+    from plangraph.review.family import FamilyError, writer_key
+    families = []
+    for model in models:
+        try:
+            writer_key(model)
+        except FamilyError:
+            raise SpawnRefused(f"unknown writer in Writer trailer of {ref['head'][:12]}: {model[:64]}") from None
+        families.append(model)
+    return families

@@ -185,6 +185,9 @@ class SpawnService(SeatSpawnMixin):
             if not any(family):
                 raise SpawnRefused('writer family unavailable')
             families.extend(family)
+        if role == 'review':
+            from plangraph.planner.seats import head_writer_families
+            families.extend(head_writer_families(card))
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
@@ -273,6 +276,9 @@ class SpawnService(SeatSpawnMixin):
             from plangraph.planner.routing import plan_spawn
             from plangraph.planner.seats import seat_family, writer_parts
             reviewed = ((source.get('given_writer_families') or [f for f in [source.get('writer_family')] if f]) if (source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)) else []) if review_of else []
+            if role == 'review':
+                from plangraph.planner.seats import head_writer_families
+                reviewed = [*reviewed, *head_writer_families(card)]
             plan_spawn(card, role=role, legs=(), writer_families=[*writer_families, *reviewed])
             chosen = next((l for l in spawnable_legs() if l.id == leg), None) if leg else None
             if leg and chosen is None: raise SpawnRefused('unknown leg')

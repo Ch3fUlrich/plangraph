@@ -102,6 +102,15 @@ def _supervise():
         return spawn_exit_code(record)
     return asyncio.run(run())
 
+class _DeprecatedWriterFamily(argparse.Action):
+    """``--writer-family`` still appends to the excluded families, with a warning: it reads like a reviewer choice."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        print('warning: --writer-family is deprecated: it names the family EXCLUDED from review, '
+              'not the reviewer; use --exclude-family', file=sys.stderr)
+        setattr(namespace, self.dest, [*(getattr(namespace, self.dest, None) or []), values])
+
+
 def _card(value):
     return json.loads(Path(value[1:]).read_text(encoding='utf-8') if value.startswith('@') else value)
 
@@ -125,7 +134,10 @@ def main(argv=None):
         p.add_argument('--require-bench', action='store_true')
         p.add_argument('--bench-db', action='append')
         p.add_argument('--role', choices=('implement', 'review', 'orchestrate', 'research'), default='implement')
-        p.add_argument('--writer-family', action='append', default=[])
+        # The family EXCLUDED from review (the writer's), not a reviewer choice.
+        p.add_argument('--exclude-family', dest='writer_family', action='append', default=[])
+        p.add_argument('--writer-family', dest='writer_family', action=_DeprecatedWriterFamily, default=[],
+                       help='deprecated alias of --exclude-family')
         p.add_argument('--review-of')
         p.add_argument('--json', action='store_true')
         if verb == 'route':

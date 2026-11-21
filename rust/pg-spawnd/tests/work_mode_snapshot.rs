@@ -17,7 +17,7 @@ writer = N(to_dict=lambda: dict(legs=[dict(id=weak.id)], skipped=[dict(leg=stron
 service = N(route=lambda *a, **kw: writer, _route=lambda *a, **kw: writer)
 rows = [dict(id=strong.model, aa_intelligence=60), dict(id=weak.model, aa_intelligence=40)]
 with patch.object(cli, 'SpawnService', return_value=service), patch('plangraph.planner.legs.DEFAULT_LEGS', [strong, weak]), patch('plangraph.routing_support.resolver.get_catalog_models', return_value=rows):
-    cli.main(['route', '--role', 'review', '--writer-family', 'openai', '--card', '{"estimate_tokens":100}', '--writer-snapshot', '--json'])
+    cli.main(['route', '--role', 'review', '--exclude-family', 'openai', '--card', '{"estimate_tokens":100}', '--writer-snapshot', '--json'])
 "#;
     let output = Command::new("python3")
         .args(["-c", script])

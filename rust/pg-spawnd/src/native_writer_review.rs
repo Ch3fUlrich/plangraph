@@ -128,7 +128,7 @@ impl Host {
             .arg("--state")
             .arg(&self.state)
             .args(["spawn", "--card", &card.to_string(), "--role", "review"])
-            .args(["--writer-family", "openai", "--prompt-file"])
+            .args(["--exclude-family", "openai", "--prompt-file"])
             .arg(&prompt_path)
             .args(["--wait", "3300", "--json"])
             .current_dir(clone)

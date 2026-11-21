@@ -346,7 +346,7 @@ argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
 assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
-assert value('--writer-family') == 'openai' and 'cwd' in card
+assert value('--exclude-family') == 'openai' and 'cwd' in card
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 head = card['diff_ref']['head']
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt

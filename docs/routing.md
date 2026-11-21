@@ -221,3 +221,8 @@ over the same `base` and `head`, passing each group in `diff_ref.paths` and
 failing the review if any group returns `REQUEST_CHANGES` or a single file exceeds
 the leg cap.
 
+
+A review route also reads the `Writer` trailer of the `diff_ref` head commit
+(`planner.seats.head_writer_families`): its family is excluded in addition to the
+`--exclude-family` values, an unknown writer refuses, and an explicit `--leg` of that
+family is refused.

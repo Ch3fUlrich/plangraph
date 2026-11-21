@@ -205,7 +205,7 @@ print('tokens used\n1,234')
     fs::write(&review_cli, r#"import json, pathlib, sys, uuid
 argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
-assert value('--role') == 'review' and value('--writer-family') == 'openai', argv
+assert value('--role') == 'review' and value('--exclude-family') == 'openai', argv
 card = json.loads(value('--card'))
 head = card['diff_ref']['head']
 prompt = pathlib.Path(value('--prompt-file')).read_text()

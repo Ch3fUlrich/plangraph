@@ -220,3 +220,81 @@ def test_nested_host_key_still_redacted(tmp_path, monkeypatch):
     stored = service.result(run_id)
     assert stored["host"] == "bench-host-secretlike"
     assert "bench-host-secretlike" not in json.dumps(stored["attempts"])
+
+
+def head_card(tmp_path, monkeypatch, writer_line):
+    """A card whose diff_ref head commit carries ``writer_line`` as its Writer trailer."""
+    import subprocess
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    ident = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-q")
+    (repo / "f.txt").write_text("a\n")
+    git("add", "f.txt")
+    git(*ident, "commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (repo / "f.txt").write_text("b\n")
+    git(*ident, "commit", "-qam", f"change\n\nWriter: {writer_line}")
+    return dict(CARD, diff_ref={"repo": str(repo), "base": base, "head": git("rev-parse", "HEAD")})
+
+
+def families_served(plan):
+    return {leg["family"] for leg in plan["legs"]}
+
+
+def test_review_head_writer_trailer_excludes_its_family_despite_other_exclusion(tmp_path, capsys, monkeypatch):
+    """The 2026-11-19 incident: --writer-family mimo (meant 'review on mimo') plus a gemini writer head
+    must never serve a gemini leg."""
+    from plangraph.spawner.cli import main as cli_main
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    capsys.readouterr()
+    assert cli_main(["--state", str(tmp_path / "state"), "route", "--card", json.dumps(card),
+                     "--role", "review", "--exclude-family", "mimo", "--json"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["legs"] and "gemini" not in families_served(plan) and "mimo" not in families_served(plan)
+    assert any(row["reason"] == "excluded_family" and "gemini" in row["leg"] for row in plan["skipped"])
+
+
+def test_review_head_writer_trailer_alone_names_the_writer(tmp_path, capsys, monkeypatch):
+    from plangraph.spawner.cli import main as cli_main
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    capsys.readouterr()
+    assert cli_main(["--state", str(tmp_path / "state"), "route", "--card", json.dumps(card),
+                     "--role", "review", "--exclude-family", "claude", "--json"]) == 0
+    assert "gemini" not in families_served(json.loads(capsys.readouterr().out))
+
+
+def test_review_unknown_head_writer_trailer_refuses(tmp_path, monkeypatch):
+    from plangraph.spawner.service import SpawnService
+    card = head_card(tmp_path, monkeypatch, "no-such-model-xyz run-1 (writer)")
+    with pytest.raises(SpawnRefused, match="Writer trailer"):
+        SpawnService(state=tmp_path / "state").route(card, "review", ["claude"])
+
+
+def test_explicit_leg_of_head_writer_family_is_refused(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.spawner.service import SpawnService
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    service = SpawnService(state=tmp_path / "state")
+    with pytest.raises(SpawnRefused, match="excluded writer family"):
+        asyncio.run(service._spawn(card=card, role="review", writer_families=["mimo"],
+                                   leg="agy-gemini-4-neon-medium", dry_run=True))
+
+
+def test_exclude_family_flag_and_deprecated_writer_family_alias(tmp_path, capsys):
+    from plangraph.spawner.cli import main as cli_main
+    state = str(tmp_path / "state")
+    capsys.readouterr()
+    assert cli_main(["--state", state, "route", "--card", json.dumps(CARD), "--role", "review",
+                     "--exclude-family", "claude", "--json"]) == 0
+    new = capsys.readouterr()
+    assert "deprecated" not in new.err
+    assert cli_main(["--state", state, "route", "--card", json.dumps(CARD), "--role", "review",
+                     "--writer-family", "claude", "--json"]) == 0
+    old = capsys.readouterr()
+    assert "--writer-family is deprecated" in old.err and "--exclude-family" in old.err
+    assert json.loads(old.out)["legs"] == json.loads(new.out)["legs"]
