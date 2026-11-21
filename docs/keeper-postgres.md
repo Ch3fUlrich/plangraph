@@ -56,6 +56,14 @@ applied_at)` records what ran. `open_db(create=True)` and `pg admin migrate` app
 lock; `open_db(create=False)` refuses a database that is behind (a runtime role has no DDL rights). A unit test compares the
 SQLite and Postgres table/column lists so the two schemas cannot drift.
 
+Migration 14 installs `landing_stages` with `pg admin migrate` using the schema
+owner's connection. SQLite installs the same table on open. Each completed stage
+has a repository, batch key, name, positive attempt number, exact Git head, and
+start and end times in UTC Unix milliseconds. Producers use
+`landing_stage_insert.sql` with the same identity on delivery retry. The first
+record wins. A new execution of that stage uses a new attempt number. The read
+query in `landing_stage_list.sql` returns the batch's stages in start-time order.
+
 ## Hash chain
 
 `events.hash` is computed in Python from canonical JSON (sorted keys, no whitespace, ASCII) over text values; nothing in it
