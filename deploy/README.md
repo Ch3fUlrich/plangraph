@@ -29,10 +29,14 @@ page every 5 minutes. Three steps, in order:
 workflow *file* (`PLANGRAPH_CI_WORKFLOW_PATH`, default `.github/workflows/tests.yml`) whose own
 `head_sha` is that sha and whose `head_repository` is `PLANGRAPH_REPO` — a same-NAMED workflow in
 another file, or a fork PR's copy of it, cannot decide the result; the run's `name` is not consulted.
-A commit with no PR must carry its own green run. Docs-only PRs run only the scrub and the `ci-gate` job (the
+The runs of a PR head count only when they belong to that PR and its target branch (the run's
+`pull_requests` entry), so a green run of another PR on the same head cannot outweigh a red one.
+A commit with no PR must carry its own green run. The render itself runs only when `live_follow verified`
+finds the checkout at the head the gate recorded as green; otherwise the previous page stays up. Docs-only PRs run only the scrub and the `ci-gate` job (the
 workflow selects suites per change), so their heads are followed too. Keep `PLANGRAPH_STATE` outside
 `PLANGRAPH_OUT`: the output directory is the web-served render directory, and the gate state does not
-belong in it. The read-only token authorising
+belong in it (a path inside it is refused; unset, it defaults to `$XDG_STATE_HOME/plangraph/live-follow.json`).
+The `/plan` nginx block requires authentication: the page embeds the keeper snapshot, which is private. The read-only token authorising
 those GitHub queries lives only in the file named by `PLANGRAPH_GH_TOKEN_FILE` — a `KEY=VALUE` file
 holding `GH_TOKEN`; keep it mode 0600 (live_follow does not check permissions) — and it is never printed
 or copied into a unit or into `render.env`.

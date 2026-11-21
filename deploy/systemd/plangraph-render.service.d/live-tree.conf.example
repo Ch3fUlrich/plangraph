@@ -11,3 +11,5 @@ Environment=PLANGRAPH_LIVE_TREE=%h/plangraph-live
 Environment=PLANGRAPH_OUT=%h/plangraph-live/out
 Environment=PLANGRAPH_REPO=owner/name
 Environment=PLANGRAPH_GH_TOKEN_FILE=%h/.config/plangraph/gh-token.env
+# Gate state lives outside the web-served output directory; live_follow refuses a state file inside PLANGRAPH_OUT.
+Environment=PLANGRAPH_STATE=%h/.local/state/plangraph/live-follow.json

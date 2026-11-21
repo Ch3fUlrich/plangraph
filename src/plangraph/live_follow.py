@@ -1,7 +1,8 @@
 """Follow the CI-green head of main on the live host, then audit the page.
 
 The live host runs ``python3 -m plangraph.live_follow follow`` before each
-render and ``... check`` after it. ``follow`` fast-forwards the live checkout
+render, ``... verified`` as the render's gate (the checkout must be the
+recorded green head) and ``... check`` after it. ``follow`` fast-forwards the live checkout
 to ``origin/<branch>`` only when GitHub CI has verified that head green; every
 doubt keeps the tree, and nothing here ever raises into the render unit —
 a broken gate must not blank a live page. ``check`` compares the published
@@ -49,6 +50,7 @@ __all__ = [
     "page_stamp",
     "read_token",
     "record_green",
+    "verified",
 ]
 
 
@@ -108,7 +110,7 @@ class Config:
             repo=required("PLANGRAPH_REPO"),
             token_file=required("PLANGRAPH_GH_TOKEN_FILE"),
             out=out,
-            state=env.get("PLANGRAPH_STATE") or os.path.join(out, ".live-follow.json"),
+            state=_state_path(env, out),
             workflow_path=(
                 env.get("PLANGRAPH_CI_WORKFLOW_PATH")
                 or ".github/workflows/tests.yml"
@@ -116,6 +118,27 @@ class Config:
             alert_cmd=alert_cmd,
             grace_s=grace_s,
         )
+
+
+def _state_path(env: Mapping[str, str], out: str) -> str:
+    """The gate state file: PLANGRAPH_STATE, else a private per-user default.
+
+    The output directory is web-served; gate state in it (or reachable through a
+    symlink or ``..``) would be published, so such a path is a ConfigError.
+    """
+    state = env.get("PLANGRAPH_STATE")
+    if not state:
+        base = env.get("XDG_STATE_HOME")
+        home = env.get("HOME")
+        if not base and home:
+            base = os.path.join(home, ".local", "state")
+        if not base:
+            raise ConfigError("PLANGRAPH_STATE is not set and no state directory is known")
+        state = os.path.join(base, "plangraph", "live-follow.json")
+    real_state, real_out = os.path.realpath(state), os.path.realpath(out)
+    if os.path.commonpath([real_state, real_out]) == real_out:
+        raise ConfigError("PLANGRAPH_STATE must be outside PLANGRAPH_OUT (the web-served directory)")
+    return state
 
 
 class Runner:
@@ -229,8 +252,31 @@ def _counts_toward_gate(run: dict, cfg: Config, head_sha: str) -> bool:
     return _workflow_file(run.get("path")) == cfg.workflow_path
 
 
-def _head_green(runner, cfg: Config, head_sha: str) -> bool:
-    """True when the newest run of cfg.workflow_path on head_sha completed success."""
+def _bound_to_pr(run: dict, cfg: Config, number: object) -> bool:
+    """Whether the run belongs to pull request ``number`` into the target branch.
+
+    The workflow picks its suites from the PR's target and draft status, so a
+    run of another PR (or of the same head into another branch) proves nothing
+    about this merge. A run with no usable PR list does not count.
+    """
+    if not isinstance(number, int) or isinstance(number, bool):
+        return False
+    for entry in run.get("pull_requests") or []:
+        if not isinstance(entry, dict) or entry.get("number") != number:
+            continue
+        if (entry.get("base") or {}).get("ref") == cfg.branch:
+            return True
+    return False
+
+
+def _head_green(
+    runner, cfg: Config, head_sha: str, pr_number: object = None, bound: bool = False
+) -> bool:
+    """True when the newest counting run of cfg.workflow_path on head_sha succeeded.
+
+    ``bound`` restricts the runs to those of pull request ``pr_number`` into the
+    target branch; a commit without a PR (``bound`` false) uses any run of the head.
+    """
     runs = gh_api(
         runner, cfg, f"repos/{cfg.repo}/actions/runs?head_sha={head_sha}&per_page=30"
     )
@@ -239,7 +285,9 @@ def _head_green(runner, cfg: Config, head_sha: str) -> bool:
     entries = [
         r
         for r in runs.get("workflow_runs") or []
-        if isinstance(r, dict) and _counts_toward_gate(r, cfg, head_sha)
+        if isinstance(r, dict)
+        and _counts_toward_gate(r, cfg, head_sha)
+        and (not bound or _bound_to_pr(r, cfg, pr_number))
     ]
     if not entries:
         return False
@@ -279,7 +327,10 @@ def is_green(runner, cfg: Config, sha: str) -> bool:
         # A candidate without a head sha cannot be verified: fail closed
         # rather than falling back to the commit sha.
         return False
-    return all(_head_green(runner, cfg, h) for h in heads)
+    return all(
+        _head_green(runner, cfg, h, p.get("number"), bound=True)
+        for h, p in zip(heads, candidates)
+    )
 
 
 def _result(action: str, reason: str, sha: str | None = None) -> dict:
@@ -398,6 +449,21 @@ def record_green(cfg: Config, sha: str, now=time.time) -> None:
     _save_state(cfg, state)
 
 
+def verified(cfg: Config, runner) -> dict:
+    """Whether the live checkout is exactly the head the gate recorded as green.
+
+    The render publishes the checkout, so it may only run from a revision CI
+    verified: a first start, a hand-moved checkout or a refused fast-forward
+    leave HEAD different from the record, and the previous page stays up.
+    """
+    rc, out = runner.run(["git", "-C", cfg.tree, "rev-parse", "HEAD"])
+    head = out.strip() if rc == 0 else ""
+    green = load_state(cfg).get("green_sha")
+    if head and head == green:
+        return {"status": "verified", "sha": head}
+    return {"status": "unverified", "sha": head or None}
+
+
 def page_stamp(path: str) -> str | None:
     """The content of the page's <meta name="plangraph-build"> tag, else None."""
     try:
@@ -464,12 +530,13 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
     """CLI: ``follow`` before the render, ``check`` after it.
 
     Returns 0 for every follow/check outcome — a page render must never be
-    blocked by this step; only a unusable config exits 2.
+    blocked by this step; only a unusable config exits 2. ``verified`` is the
+    render gate: 0 when the checkout is the recorded green head, else 3.
     """
     words = list(sys.argv[1:] if argv is None else argv)
     command = words[0] if words else ""
-    if command not in ("follow", "check"):
-        print("live_follow: usage: follow|check", file=sys.stderr)
+    if command not in ("follow", "check", "verified"):
+        print("live_follow: usage: follow|check|verified", file=sys.stderr)
         return 2
     try:
         cfg = Config.from_env(env or os.environ)
@@ -477,6 +544,13 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
         print(f"live_follow: {exc}", file=sys.stderr)
         return 2
     active = runner if runner is not None else Runner()
+    if command == "verified":
+        try:
+            result = verified(cfg, active)
+        except Exception:
+            result = {"status": "unverified", "sha": None}
+        print(json.dumps(result))
+        return 0 if result["status"] == "verified" else 3
     try:
         result = (
             follow(cfg, active, now) if command == "follow" else check(cfg, active, now)
