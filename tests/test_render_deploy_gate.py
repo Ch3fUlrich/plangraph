@@ -57,6 +57,17 @@ def test_gate_code_runs_from_a_trusted_install_never_the_live_checkout():
             assert "PLANGRAPH_LIVE_TREE/src" not in line, line
 
 
+def test_every_python_module_run_ignores_the_working_directory():
+    """`python3 -m` puts the working directory first on sys.path; -P keeps it out."""
+    runs = 0
+    for line in SERVICE.read_text(encoding="utf-8").splitlines():
+        if line.startswith("#"):
+            continue
+        assert "python3 -m" not in line, line
+        runs += line.count("python3 -P -m")
+    assert runs == 4, "follow, export, render and check all run with -P"
+
+
 def run_service_script(tmp_path, sha_out="abcdef0123", export_rc=0):
     """Run the real ExecStart script with a fake python3, under a path containing spaces."""
     root = tmp_path / "a dir with spaces"

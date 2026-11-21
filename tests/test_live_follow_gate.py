@@ -167,8 +167,8 @@ def _tar(files):
     return raw.getvalue()
 
 
-def _exporting(tmp_path, files, head=CUR, recorded=CUR, archive_rc=0):
-    cfg = make_cfg(tmp_path)
+def _exporting(tmp_path, files, head=CUR, recorded=CUR, archive_rc=0, **cfg_over):
+    cfg = make_cfg(tmp_path, **cfg_over)
     if recorded:
         record_green(cfg, recorded, T0)
     fake = FakeRunner()
@@ -257,7 +257,12 @@ def test_export_never_replaces_the_page_directory(tmp_path):
 
 
 def test_export_refuses_a_render_tree_that_overlaps_the_live_checkout(tmp_path):
-    cfg, fake = _exporting(tmp_path, {"a.txt": b"x"})
-    from dataclasses import replace
-    res = export_tree(replace(cfg, tree=str(Path(cfg.state).parent / "render-tree")), fake)
-    assert res["status"] != "verified"
+    """Git is scripted for the overlapping checkout itself, so verification passes and
+    only the overlap guard can refuse."""
+    live = Path(make_cfg(tmp_path).state).parent / "render-tree"
+    cfg, fake = _exporting(tmp_path, {"a.txt": b"x"}, tree=str(live))
+    live.mkdir(parents=True)
+    (live / "keep.txt").write_text("live")
+    assert export_tree(cfg, fake)["status"] != "verified"
+    assert fake.calls_where("archive") == [], "nothing is archived once the paths overlap"
+    assert (live / "keep.txt").read_text() == "live"
