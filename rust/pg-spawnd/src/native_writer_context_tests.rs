@@ -230,3 +230,22 @@ fn comment_markers_are_found_outside_string_and_char_literals() {
     );
     assert_eq!(code_part("x = '''a#b''' # c", true), "x = '''a#b''' ");
 }
+#[test]
+fn literals_with_their_own_escape_rules_hide_comment_markers() {
+    // Python triple quotes honour a backslash escape.
+    let triple = "def early(v=\"\"\"a\"b\\\"\"\"#c\"\"\"):\n\n    return 1\n";
+    assert_eq!(owner(triple, 2, true).as_deref(), Some("early"));
+    // A Rust raw string has no escapes: `r\"\\\"` ends at its second quote.
+    let raw = "pub fn one() { let _s = r\"\\\"; } // {\n\nfn two() {}\n";
+    assert_eq!(owner(raw, 2, false), None);
+    let hashed = "pub fn one() { let _s = r#\"a\"b\"#; // note\n\nfn two() {}\n";
+    assert_eq!(owner(hashed, 2, false), None);
+    assert_eq!(code_part("r#\"a\"//\"# // c", false), "r#\"a\"//\"# ");
+    assert_eq!(code_part("br\"x//\" // c", false), "br\"x//\" ");
+    // An identifier ending in `r` is not a raw string prefix.
+    assert_eq!(code_part("bar\"x\" // c", false), "bar\"x\" ");
+    // A block comment hides a `{`; an unterminated one runs to the line end.
+    let block = "pub fn one() {} /* { */\n\nfn two() {}\n";
+    assert_eq!(owner(block, 2, false), None);
+    assert_eq!(code_part("fn f() { /* open {", false), "fn f() { ");
+}

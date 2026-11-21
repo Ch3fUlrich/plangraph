@@ -155,51 +155,81 @@ fn is_where(text: &str) -> bool {
         .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
-/// `line` without its trailing comment (`//` for Rust, `#` for Python): a marker inside a
-/// string literal (Python `'`, `"` and triple quotes, Rust `"`) or a Rust char literal
-/// (`'"'`, `'\\''`; a lifetime `'a` is none) is text.
+/// `line` without its trailing comment (`//` or `/*` for Rust, `#` for Python). A marker inside
+/// a literal is text: Python `'`, `"` and triple-quoted strings, Rust strings, raw strings
+/// (`r"..."`, `r#"..."#`, no escapes) and char literals (`'"'`, `'\\''`; a lifetime is none).
 fn code_part(line: &str, python: bool) -> &str {
     let chars: Vec<(usize, char)> = line.char_indices().collect();
-    let mut at = 0;
-    while at < chars.len() {
-        let (byte, c) = chars[at];
-        let ahead = |n: usize| chars.get(at + n).map(|(_, c)| *c);
-        let quote = |q: char, from: usize| {
-            // Index just past the closing `q`, honouring backslash escapes (the line end closes it).
-            let mut i = from;
-            while i < chars.len() {
-                match chars[i].1 {
-                    '\\' => i += 1,
-                    c if c == q => return i + 1,
-                    _ => {}
-                }
-                i += 1;
+    let at = |i: usize| chars.get(i).map(|(_, c)| *c);
+    let ident = |i: Option<char>| i.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i].1;
+        let comment = || &line[..chars[i].0];
+        i = match c {
+            '#' if python => return comment(),
+            '/' if !python && matches!(at(i + 1), Some('/' | '*')) => return comment(),
+            '"' | '\'' if python && at(i + 1) == Some(c) && at(i + 2) == Some(c) => {
+                skip_literal(&chars, i + 3, c, 3)
             }
-            chars.len()
-        };
-        at = match c {
-            '#' if python => return &line[..byte],
-            '/' if !python && ahead(1) == Some('/') => return &line[..byte],
-            '"' | '\'' if python => {
-                let triple = ahead(1) == Some(c) && ahead(2) == Some(c);
-                if triple {
-                    // Closes at the next triple on this line, else the string runs on.
-                    let rest: String = chars[at + 3..].iter().map(|(_, c)| c).collect();
-                    let closing = [c; 3].iter().collect::<String>();
-                    rest.find(&closing).map_or(chars.len(), |found| {
-                        at + 3 + rest[..found].chars().count() + 3
-                    })
+            '"' | '\'' if python => skip_literal(&chars, i + 1, c, 1),
+            '"' => skip_literal(&chars, i + 1, '"', 1),
+            'r' if !python && (!ident(i.checked_sub(1).and_then(at)) || is_byte_raw(&chars, i)) => {
+                let hashes = (i + 1..chars.len())
+                    .take_while(|&k| chars[k].1 == '#')
+                    .count();
+                if at(i + 1 + hashes) == Some('"') {
+                    skip_raw(&chars, i + 2 + hashes, hashes)
                 } else {
-                    quote(c, at + 1)
+                    i + 1
                 }
             }
-            '"' => quote('"', at + 1),
-            '\'' if ahead(1) == Some('\\') => quote('\'', at + 1),
-            '\'' if ahead(2) == Some('\'') => at + 3,
-            _ => at + 1,
+            '\'' if at(i + 1) == Some('\\') => skip_literal(&chars, i + 1, '\'', 1),
+            '\'' if at(i + 2) == Some('\'') => i + 3,
+            _ => i + 1,
         };
     }
     line
+}
+
+/// `br"` / `br#"`: an `r` after a `b` that itself starts a token.
+fn is_byte_raw(chars: &[(usize, char)], at: usize) -> bool {
+    at >= 1
+        && chars[at - 1].1 == 'b'
+        && (at < 2 || !(chars[at - 2].1.is_alphanumeric() || chars[at - 2].1 == '_'))
+}
+
+/// Index just past the end of a literal opened with `quote` repeated `count` times, whose body
+/// starts at `from`; a backslash escapes the next char, and the line end closes it.
+fn skip_literal(chars: &[(usize, char)], from: usize, quote: char, count: usize) -> usize {
+    let mut i = from;
+    while i < chars.len() {
+        if chars[i].1 == '\\' {
+            i += 2;
+        } else if chars[i..]
+            .iter()
+            .take(count)
+            .filter(|(_, c)| *c == quote)
+            .count()
+            == count
+        {
+            return i + count;
+        } else {
+            i += 1;
+        }
+    }
+    chars.len()
+}
+
+/// Index just past the end of a raw string whose body starts at `from`: a `"` followed by
+/// `hashes` `#`; the line end closes it.
+fn skip_raw(chars: &[(usize, char)], from: usize, hashes: usize) -> usize {
+    (from..chars.len())
+        .find(|&i| {
+            chars[i].1 == '"'
+                && (1..=hashes).all(|k| chars.get(i + k).is_some_and(|(_, c)| *c == '#'))
+        })
+        .map_or(chars.len(), |i| i + 1 + hashes)
 }
 
 /// The indent that places line `index` in a scope: its own indent. A blank line takes the
