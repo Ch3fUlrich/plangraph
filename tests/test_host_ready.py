@@ -578,3 +578,47 @@ def test_checkout_path_with_shell_characters_stays_literal_in_every_probe_plan(t
     assert git_plans and all(plan['steps'][0]['argv'][2] == repo for plan in git_plans)
     df = next(plan for _, plan in calls if plan['steps'][0]['argv'][:1] == ['df'])
     assert df['steps'][0]['argv'][-1] == repo
+
+
+@pytest.mark.parametrize('available,ok', [(2999, False), (3000, True)])
+def test_remote_memory_floor_with_legacy_run_cap(tmp_path, available, ok):
+    def fake(argv, **kwargs):
+        if 'meminfo' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=f'MemAvailable: {available * 1024} kB\n')
+        if 'cli ps' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                {'runs': [{'status': 'running'}] * CONFIG['run_cap']}))
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert result['ok'] is ok
+    assert result['mem_available_mb'] == available
+    assert result['live_runs'] == CONFIG['run_cap']
+    assert result['failures'] == ([] if ok else ['memory: below_floor'])
+    assert json.loads((tmp_path / 'fiction.json').read_text()) == result
+
+
+@pytest.mark.parametrize('command,output,field,check', [
+    ('meminfo', 'MemFree: 8000000 kB', 'mem_available_mb', 'memory'),
+    ('df -Pk', '', 'disk_free_gb', 'disk'),
+    ('rev-parse HEAD', 'bad-sha', 'checkout_sha', 'checkout'),
+    ('rev-parse origin/main', 'bad-sha', 'main_sha', 'main'),
+    ('rev-list', '-1', 'behind_main', 'behind_main'),
+    ('cli ps', '{', 'live_runs', 'runs'),
+    ('cli ps', '{"runs": null}', 'live_runs', 'runs'),
+    ('cli ps', '{"runs": {}}', 'live_runs', 'runs'),
+    ('cli ps', '{"runs": [{}]}', 'live_runs', 'runs'),
+    ('cli ps', '{"runs": [{"status": false}]}', 'live_runs', 'runs'),
+])
+def test_invalid_probe_response(tmp_path, command, output, field, check):
+    def fake(argv, **kwargs):
+        if command in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=output)
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', CONFIG, tmp_path, fake)
+    assert result['reachable'] and not result['ok']
+    assert result[field] is None
+    assert result['failures'] == [f'{check}: invalid_response']
+    assert result['doctor_ok'] and result['spawner_session']
+    assert json.loads((tmp_path / 'fiction.json').read_text()) == result
