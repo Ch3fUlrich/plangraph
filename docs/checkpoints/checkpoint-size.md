@@ -11,7 +11,10 @@ installation and non-checkpoint pushes are unchanged.
 ## Batch size is computed
 
 `plangraph batch-size INPUT.json` (`rust/plangraph-cli/src/batch_size.rs`) prints how many
-items one batch brief carries and why; the brief names both. The count is the smallest of:
+items one batch brief carries and why; with `--brief` it assembles that brief: a `# Batch size`
+block naming the count and the reason (and the items left for the next batch), the selected
+items' text in order under `# Items`, and the input's `run_values` under `# Run values`. An item
+without text refuses the brief. The count is the smallest of:
 the model cap (10 for a strong writer, catalog intelligence 50 or more, with a window of
 400k tokens or more; 5 for a strong writer below that window; 3 otherwise), the fit (the
 items' expected diff bytes, in order, kept under 60% of the limit so the fix rounds still

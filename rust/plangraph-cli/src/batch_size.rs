@@ -37,6 +37,9 @@ pub struct Item {
     pub key: String,
     pub kind: String,
     pub expected_bytes: Option<u64>,
+    /// The item text (Why, How, Done when) the brief carries; `brief` refuses an item without.
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
@@ -66,6 +69,9 @@ pub struct Input {
     pub merged_bytes: BTreeMap<String, Vec<u64>>,
     pub limit_bytes: Option<u64>,
     pub last: Option<Last>,
+    /// The `NAME: value` lines of the brief's Run values block, in key order.
+    #[serde(default)]
+    pub run_values: BTreeMap<String, String>,
 }
 
 #[derive(Debug, PartialEq, Serialize)]
@@ -173,21 +179,71 @@ pub fn plan(input: &Input) -> Plan {
     }
 }
 
-/// `plangraph batch-size INPUT.json`: print the plan as JSON.
+/// The batch brief of the plan: a size block (how many of how many items and why, what waits
+/// for the next batch), the selected items in order with their text, and the run values. The
+/// `# Items` and `# Run values` headings are the ones the spawner recognises as a batch brief.
+pub fn brief(input: &Input, plan: &Plan) -> Result<String, String> {
+    let mut out = format!(
+        "# Batch size\n{} of {} item(s): {}\n",
+        plan.count,
+        input.items.len(),
+        plan.reason
+    );
+    let waiting: Vec<&str> = input
+        .items
+        .iter()
+        .map(|i| i.key.as_str())
+        .filter(|k| !plan.keys.iter().any(|s| s == k))
+        .collect();
+    if !waiting.is_empty() {
+        out.push_str(&format!("Left for the next batch: {}\n", waiting.join(" ")));
+    }
+    out.push_str("\n# Items\n");
+    for key in &plan.keys {
+        let item = input.items.iter().find(|i| &i.key == key);
+        let text = item
+            .and_then(|i| i.text.as_deref())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .ok_or_else(|| format!("item {key} has no text for the brief"))?;
+        out.push_str(&format!("\n## {key}\n{text}\n"));
+    }
+    out.push_str("\n# Run values\n");
+    for (name, value) in &input.run_values {
+        out.push_str(&format!("{name}: {value}\n"));
+    }
+    Ok(out)
+}
+
+/// `plangraph batch-size INPUT.json [--brief]`: print the plan as JSON, or with `--brief` the
+/// batch brief that carries exactly the selected items and the reason.
 pub fn run(args: &[String]) -> i32 {
-    let [path] = args else {
-        eprintln!("usage: plangraph batch-size INPUT.json");
-        return 2;
+    execute(args, &mut std::io::stdout())
+}
+
+fn execute(args: &[String], out: &mut dyn std::io::Write) -> i32 {
+    let (path, as_brief) = match args {
+        [path] => (path, false),
+        [path, flag] if flag == "--brief" => (path, true),
+        _ => {
+            eprintln!("usage: plangraph batch-size INPUT.json [--brief]");
+            return 2;
+        }
     };
     let parsed = std::fs::read(path)
         .map_err(|e| e.to_string())
         .and_then(|b| serde_json::from_slice::<Input>(&b).map_err(|e| e.to_string()));
-    match parsed {
-        Ok(input) => {
-            println!(
-                "{}",
-                serde_json::to_string(&plan(&input)).unwrap_or_default()
-            );
+    let result = parsed.and_then(|input| {
+        let plan = plan(&input);
+        if as_brief {
+            brief(&input, &plan)
+        } else {
+            Ok(serde_json::to_string(&plan).unwrap_or_default() + "\n")
+        }
+    });
+    match result {
+        Ok(text) => {
+            let _ = out.write_all(text.as_bytes());
             0
         }
         Err(error) => {

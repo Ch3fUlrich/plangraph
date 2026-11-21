@@ -11,6 +11,7 @@ fn item(key: &str, kind: &str, bytes: Option<u64>) -> Item {
         key: key.into(),
         kind: kind.into(),
         expected_bytes: bytes,
+        text: Some(format!("Why: {key}\nHow: h\nDone when: d")),
     }
 }
 fn input(writer: Writer, sizes: &[u64]) -> Input {
@@ -24,6 +25,7 @@ fn input(writer: Writer, sizes: &[u64]) -> Input {
         merged_bytes: BTreeMap::new(),
         limit_bytes: None,
         last: None,
+        run_values: BTreeMap::new(),
     }
 }
 
@@ -159,4 +161,76 @@ fn the_reason_names_every_bound_and_the_json_input_parses() {
     for part in ["model cap 10", "feedback 4", "fit 5000 of 60000"] {
         assert!(p.reason.contains(part), "{part} in {}", p.reason);
     }
+}
+
+fn briefed(sizes: &[u64], writer: Writer) -> (Input, Plan) {
+    let mut input = input(writer, sizes);
+    input.run_values.insert("NAME".into(), "batch-x".into());
+    let plan = plan(&input);
+    (input, plan)
+}
+
+#[test]
+fn the_brief_carries_the_selected_items_and_the_reason_and_waits_with_the_rest() {
+    // A writer below the strong threshold: the cap is 3 of 5 items.
+    let (input, plan) = briefed(&[1_000; 5], writer(Some(10.0), Some(500_000)));
+    let text = brief(&input, &plan).unwrap();
+    assert_eq!(plan.count, 3);
+    assert!(text.starts_with("# Batch size\n3 of 5 item(s): 3 item(s): model cap 3"));
+    assert!(text.contains(&plan.reason));
+    for key in ["k0", "k1", "k2"] {
+        assert!(text.contains(&format!("\n## {key}\nWhy: {key}\n")), "{key}");
+    }
+    for key in ["k3", "k4"] {
+        assert!(
+            !text.contains(&format!("## {key}")),
+            "{key} must not be in the brief"
+        );
+    }
+    assert!(text.contains("Left for the next batch: k3 k4\n"));
+    // The items come in order, and the spawner recognises the batch shape.
+    assert!(text.find("## k0").unwrap() < text.find("## k1").unwrap());
+    assert!(text.contains("\n# Items\n") && text.ends_with("\n# Run values\nNAME: batch-x\n"));
+}
+
+#[test]
+fn an_item_without_text_refuses_the_brief() {
+    let (mut input, plan) = briefed(&[1_000; 2], writer(Some(60.0), Some(500_000)));
+    input.items[1].text = Some("  ".into());
+    assert_eq!(
+        brief(&input, &plan).unwrap_err(),
+        "item k1 has no text for the brief"
+    );
+}
+
+#[test]
+fn the_command_prints_the_brief_with_dash_dash_brief_and_the_plan_json_without() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("input.json");
+    std::fs::write(
+        &file,
+        serde_json::json!({
+            "writer": {"aa_intelligence": 10.0, "context_window": 500000},
+            "items": (0..5).map(|i| serde_json::json!({
+                "key": format!("k{i}"), "kind": "lane", "expected_bytes": 1000,
+                "text": format!("Why: w{i}\nHow: h\nDone when: d")})).collect::<Vec<_>>(),
+            "run_values": {"NAME": "batch-x"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let path = file.to_string_lossy().into_owned();
+    let mut brief_out = Vec::new();
+    assert_eq!(
+        execute(&[path.clone(), "--brief".into()], &mut brief_out),
+        0
+    );
+    let text = String::from_utf8(brief_out).unwrap();
+    assert!(text.contains("## k2\nWhy: w2") && !text.contains("## k3"));
+    assert!(text.contains("model cap 3"));
+    let mut plan_out = Vec::new();
+    assert_eq!(execute(&[path.clone()], &mut plan_out), 0);
+    let value: serde_json::Value = serde_json::from_slice(&plan_out).unwrap();
+    assert_eq!(value["count"], 3);
+    assert_eq!(execute(&[path, "--other".into()], &mut Vec::new()), 2);
 }
