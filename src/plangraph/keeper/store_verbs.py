@@ -32,14 +32,11 @@ class VerbsMixin:
                                                            ref, now))
 
     def _router_evidence(self, principal, key, kind, ref, now):
-        if not self._batch_acts_as_router(principal):
-            self._require_role(principal, "router", "system")
+        self._require_role(principal, "router", "system")
         # System access exists only for phase merge proof.
         if principal.role == "system" and kind != "commit+ci":
             raise Refused("forbidden", "system may attach only commit+ci evidence")
         item = self._get_or_refuse(key)
-        if principal.role != "system":
-            self._may_manage(principal, item["project"])
         if principal.role == "system":
             gates = self._phase_evidence_scope(item)
             git = self._adapter("git")
@@ -370,13 +367,12 @@ class VerbsMixin:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
             if principal.role != "router":
-                for dependent in self.conn.execute(
-                        "SELECT i.key, i.project FROM edges e JOIN items i ON i.key=e.src"
-                        " WHERE e.dst=? AND i.state NOT IN ('done','cancelled')", (key,)):
-                    if not self._batch_acts_as_router(principal):
-                        raise Refused("conflict", f"{key} has active dependents")
-                    if dependent["project"] not in self._batch.granted_projects:
-                        raise Refused("forbidden", f"dependent {dependent['key']} is outside the apply grant")
+                dependent = self.conn.execute(
+                    "SELECT 1 FROM edges e JOIN items i ON i.key=e.src"
+                    " WHERE e.dst=? AND i.state NOT IN ('done','cancelled')"
+                    " LIMIT 1", (key,)).fetchone()
+                if dependent is not None:
+                    raise Refused("conflict", f"{key} has active dependents")
             self._append(principal, key, "cancelled", {"reason": reason}, now)
             # Cancelling abandons the work, so the waiver that was granted for
             # it goes too; the ``cancelled`` fold branch clears the same column.

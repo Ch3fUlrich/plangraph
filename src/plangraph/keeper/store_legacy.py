@@ -148,8 +148,7 @@ class LegacyMixin:
 
     def _set_legacy_state(self, principal, key, state, note, now):
         with self._write():
-            if not self._batch_acts_as_router(principal):
-                self._require_role(principal, "router")
+            self._require_role(principal, "router")
             if state not in _LEGACY_TARGETS:
                 raise Refused("validation",
                               f"target state {state!r} must be claimed or"

@@ -108,9 +108,6 @@ Rust tests. The feeder service is also a Rust contract-test input. Changes to
 these inputs select the Rust CI job through
 `tools/ci_select.py` so template and default-policy checks cannot be skipped.
 
-For `tools/apply_batch.py`, a granted L1 token must submit the entire batch
-atomically. See [keeper grant management and reporting](docs/KEEPER.md#residual-risks).
-
 ## Setup and tests
 
 New devstack keeper configs require `PLANGRAPH_DECISIONS_REPO` naming a decisions

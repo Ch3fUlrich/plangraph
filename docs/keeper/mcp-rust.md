@@ -35,7 +35,6 @@ python3 -m pytest -q tests/test_keeper_mcp_snapshot.py
 Existing Python and Rust CI jobs discover these tests. Production keeps using
 Python MCP; the snapshot also advertises the router-only `close_merged` GO close.
 Python tool schemas live in `mcp_tools.py`, separate from the stdio transport.
-The snapshot includes `apply_ops.batch_meta` for granted L1 batches. Tool
-descriptions keep the full `tools/list` reply under 9,000 bytes.
+Tool descriptions keep the full `tools/list` reply under 9,000 bytes.
 HTTP proxying, auth parity, shadow diffs, seeded mutation replay,
 role canary configuration and deleting Python MCP are later slices.

@@ -3,7 +3,7 @@
 ``apply_ops(principal, ops, batch_ref=None, base_seq=None, dry_run=False)``
 applies a list of BATCH.md ops (create, edit, legacy_state, add_evidence,
 close_on_decision, cancel, priority, rehome, set_kind, add_dep, remove_dep) in
-ONE ``BEGIN IMMEDIATE`` transaction, all or nothing.  L1 needs a project grant;
+ONE ``BEGIN IMMEDIATE`` transaction, all or nothing.  The router owns the verb;
 an ``oversight`` principal may use it for its narrow grant only (see
 :mod:`.oversight_policy`), with ``batch_ref`` required.  ``base_seq`` is an
 optimistic precondition: a ``conflict`` when any touched key has events newer
@@ -36,15 +36,13 @@ also hashed pre-lock as a fail-fast.
 """
 from __future__ import annotations
 
-import hashlib
+import json
 import logging
-import re
 
 from .. import views
 from . import events
 from . import db_errors
 from . import oversight_policy
-from .credential_guard import guard
 from .errors import Refused
 from .store_create import CreateMixin, _MAX_DEPS
 
@@ -66,8 +64,6 @@ _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
               *db_errors.PROGRAMMING)
 #: ops that change a key's state or epoch (evidence after them is verified in-lock).
 _MOVES = ("create", "legacy_state", "cancel", "close_on_decision", "rehome")
-_L1_OPS = frozenset({"create", "edit", "cancel", "priority", "add_evidence",
-                     "close_on_decision", "legacy_state"})
 
 
 class OpBatch:
@@ -79,7 +75,6 @@ class OpBatch:
         self.allow_new = set()   # codes an op is expected to introduce
         self.strict = set()      # keys of ops that may introduce NO new code
         self.pre = {}            # (key, kind, ref json) -> (result, state, epoch)
-        self.granted_projects = None
 
     def note(self, affected, allow_new):
         self.touched.setdefault(self.current, set()).update(affected or ())
@@ -122,18 +117,17 @@ def _fail(index, op, exc):
 
 
 class OpsMixin:
-    """The atomic ``apply_ops`` verb for the router and scoped grant holders."""
+    """The ``apply_ops`` verb (router; a narrow ``oversight`` grant too)."""
 
     def apply_ops(self, principal, ops, batch_ref=None, base_seq=None,
-                  dry_run=False, batch_meta=None):
+                  dry_run=False):
         return self._run(principal, "apply_ops", None,
                          lambda now: self._apply_ops_audited(
                              principal, ops, batch_ref, now,
-                             base_seq=base_seq, dry_run=dry_run,
-                             batch_meta=batch_meta))
+                             base_seq=base_seq, dry_run=dry_run))
 
     def _apply_ops_audited(self, principal, ops, batch_ref, now, base_seq=None,
-                           dry_run=False, batch_meta=None):
+                           dry_run=False):
         """Run one batch; an oversight refusal is recorded after the rollback.
 
         ``_run`` records every oversight refusal at the VERB seam, so this path
@@ -150,8 +144,7 @@ class OpsMixin:
         self._oversight_ops = list(ops) if isinstance(ops, list) else []
         try:
             return self._apply_ops(principal, ops, batch_ref, now,
-                                   base_seq=base_seq, dry_run=dry_run,
-                                   batch_meta=batch_meta)
+                                   base_seq=base_seq, dry_run=dry_run)
         except Refused as exc:
             if oversight:
                 # May raise ``oversight:rate_limited`` instead: once the denied
@@ -188,8 +181,6 @@ class OpsMixin:
         elif oversight and name not in oversight_policy.OVERSIGHT_OPS:
             raise Refused("forbidden",
                           f"oversight:op_denied op {name!r} is not granted")
-        if getattr(principal, "role", None) == "l1" and name not in _L1_OPS:
-            raise Refused("forbidden", f"op {name!r} is not granted for l1 apply")
         if name not in _OPS:
             raise Refused("validation", f"unknown op {name!r}")
         allowed = _OPS[name]
@@ -399,78 +390,9 @@ class OpsMixin:
             raise Refused("conflict",
                           f"base_seq {base_seq}: changed after base_seq: {stale_str}")
 
-    def _check_l1_scope(self, ops, projects):
-        def check(key):
-            resolved = self.resolve_key(key)
-            item = self._item(resolved)
-            for candidate in (key, resolved):
-                project, sep, identifier = candidate.partition(":")
-                if not sep or not identifier or project not in projects:
-                    raise Refused("forbidden", f"key {candidate} is outside the apply grant")
-            if item is not None and item["project"] not in projects:
-                raise Refused("forbidden", f"key {resolved} is outside the apply grant")
-            return resolved.partition(":")[0]
-
-        def refs(project, fields):
-            if not isinstance(fields, dict):
-                return
-            deps = fields.get("depends_on")
-            lists = deps.values() if isinstance(deps, dict) else (deps,)
-            keys = [d for values in lists if isinstance(values, (list, tuple))
-                    for d in values]
-            keys.extend(fields.get(f) for f in ("under", "corrects", "fixes"))
-            for key in keys:
-                if isinstance(key, str) and key:
-                    check(key if ":" in key else f"{project}:{key}")
-
-        for index, op in enumerate(ops):
-            try:
-                if op["op"] == "create":
-                    items = op["item"]
-                    for item in items if isinstance(items, list) else [items]:
-                        project = item.get("project")
-                        if project not in projects:
-                            raise Refused("forbidden",
-                                          f"key {project}:{item.get('id')} is outside the apply grant")
-                        check(f"{project}:{item.get('id')}")
-                        refs(project, item)
-                else:
-                    project = check(op["key"])
-                    if op["op"] == "edit":
-                        refs(project, op.get("fields"))
-            except Refused as exc:
-                raise _fail(index, op, exc) from None
-
-    def _l1_batch_report(self, ops, batch_ref, meta):
-        if meta is None:
-            # Direct HTTP/MCP submissions have no batch file to hash.
-            meta = {"batch": "apply_ops", "source": batch_ref or "inline",
-                    "ops_sha256": hashlib.sha256(
-                        events.canonical(ops).encode()).hexdigest()}
-        else:
-            if not isinstance(meta, dict) or set(meta) != {"batch", "source", "batch_sha256"}:
-                raise Refused("validation", "batch_meta needs batch, source and batch_sha256")
-            if not isinstance(meta["batch_sha256"], str) or not re.fullmatch(
-                    r"[0-9a-f]{64}", meta["batch_sha256"]):
-                raise Refused("validation", "batch_meta needs a SHA-256 hex digest")
-        for field, limit in (("batch", 128), ("source", 512)):
-            value = meta[field]
-            if not isinstance(value, str) or not value.strip() or len(value) > limit \
-                    or not value.isprintable():
-                raise Refused("validation", f"batch report {field} must be bounded single-line text")
-            guard(field, value)
-        body = dict(meta, op_count=len(ops))
-        digest = (f"sha256={body['batch_sha256']}" if "batch_sha256" in body
-                  else f"ops_sha256={body['ops_sha256']}")
-        body["text"] = (f"batch {body['batch']} {digest} ops={len(ops)} "
-                        f"source={body['source']}")
-        return body
-
     def _apply_ops(self, principal, ops, batch_ref, now, base_seq=None,
-                   dry_run=False, batch_meta=None):
+                   dry_run=False):
         oversight = principal.role == "oversight"
-        scoped = principal.role == "l1"
-        projects = self._l1_apply_grants(principal) if scoped else None
         if oversight:
             if not isinstance(batch_ref, str) or not batch_ref.strip():
                 raise Refused("validation",
@@ -478,8 +400,7 @@ class OpsMixin:
             # build-L1 LOW: batch_ref bounded + guarded like reason/finding
             from .store_oversight import OversightMixin, _REASON_CAP
             batch_ref = OversightMixin._oversight_text("batch_ref", batch_ref, _REASON_CAP)
-        if not projects:
-            self._require_role(principal, "router", "oversight")
+        self._require_role(principal, "router", "oversight")
         if base_seq is not None:
             if isinstance(base_seq, bool) or not isinstance(base_seq, int) \
                     or base_seq < 0:
@@ -489,9 +410,6 @@ class OpsMixin:
             raise Refused("validation", "dry_run must be a boolean")
         dry_run = bool(dry_run)
         self._plan_ops(ops, batch_ref, principal)
-        if scoped:
-            self._check_l1_scope(ops, projects)
-            report = self._l1_batch_report(ops, batch_ref, batch_meta)
         metas = [{} for _ in ops]
         if oversight:
             kept = []
@@ -501,9 +419,8 @@ class OpsMixin:
                              if name not in ("reason", "finding")})
             ops = kept
         self._oversight_meta_list = metas
-        if not scoped:
-            ops = [dict(op, key=self.resolve_key(op["key"])) if "key" in op else op
-                   for op in ops]
+        ops = [dict(op, key=self.resolve_key(op["key"])) if "key" in op else op
+               for op in ops]
         if oversight:
             self._oversight_budget(principal, now)
             self._oversight_gate(principal, ops)
@@ -513,14 +430,6 @@ class OpsMixin:
         self.conn.execute("BEGIN IMMEDIATE")
         self._batch = batch
         try:
-            if scoped:
-                self._check_principal(principal)
-                batch.granted_projects = self._l1_apply_grants(principal)
-                if not batch.granted_projects:
-                    raise Refused("forbidden", "l1 apply grant revoked")
-                self._check_l1_scope(ops, batch.granted_projects)
-                ops = [dict(op, key=self.resolve_key(op["key"])) if "key" in op else op
-                       for op in ops]
             if base_seq is not None:
                 self._check_base_seq(ops, base_seq)
             # Re-check token inside the write transaction to close mint/revoke race
@@ -547,13 +456,7 @@ class OpsMixin:
             if dry_run:
                 self.conn.execute("ROLLBACK")
                 return {"applied": len(results), "results": results,
-                         "dry_run": True}
-            if scoped:
-                self._insert_message(**{
-                    "from": principal.name, "to": "routing", "body": report,
-                    "posted_by": principal.name, "ts": int(now * 1000),
-                    "trace_id": "", "key": "", "run_id": "", "attempt_n": 0,
-                    "ack_state": "pending"})
+                        "dry_run": True}
             self.conn.execute("COMMIT")
         except BaseException:
             if self.conn.in_transaction:

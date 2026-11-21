@@ -19,8 +19,7 @@ from .messages_schema import SQLITE as MESSAGES_DDL
 __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL",
            "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "ALERTS_DDL", "APPLY_GRANTS_DDL",
-           "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
+           "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "ALERTS_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
 #: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
@@ -377,18 +376,6 @@ CREATE TABLE audit_findings (
 );
 """
 
-APPLY_GRANTS_DDL = """
-CREATE TABLE IF NOT EXISTS apply_grants (
-    principal  TEXT NOT NULL,
-    project    TEXT NOT NULL,
-    granted_by TEXT NOT NULL DEFAULT '',
-    granted_at TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (principal, project)
-);
-CREATE INDEX IF NOT EXISTS apply_grants_principal_idx
-    ON apply_grants(principal);
-"""
-
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
-          + ALERTS_DDL + APPLY_GRANTS_DDL)
+          + ALERTS_DDL)

@@ -27,7 +27,6 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
-               "grant_apply", "revoke_apply",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                 "withdraw_review", "reopen", "set_kind", "set_metrics", "requeue",
                "close_merged", "close_merged_auto",
@@ -196,7 +195,7 @@ def _set_kind(store, principal, body, need):
 def _apply_ops(store, principal, body, need):
     return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"),
                            base_seq=body.get("base_seq"),
-                           dry_run=body.get("dry_run"), batch_meta=body.get("batch_meta"))
+                           dry_run=body.get("dry_run"))
 
 
 def _migrate_descriptions(store, principal, body, need):
@@ -313,10 +312,6 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "migrate_descriptions": _migrate_descriptions,
                 "set_legacy_state": _set_legacy_state,
                 "apply_ops": _apply_ops,
-                "grant_apply": lambda store, principal, body, need: store.grant_apply(
-                    principal, need(body, "principal"), need(body, "project")),
-                "revoke_apply": lambda store, principal, body, need: store.revoke_apply(
-                    principal, need(body, "principal"), need(body, "project")),
                 "record_run": _record_run}
 
 

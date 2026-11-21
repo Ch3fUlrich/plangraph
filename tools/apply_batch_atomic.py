@@ -12,15 +12,13 @@ from apply_batch_transport import uncertain
 _OP_PREFIX = re.compile(r"^op (\d+) ")
 
 
-def payload(ops, start, source, digest, base_seq=None, dry_run=False, batch_meta=None):
+def payload(ops, start, source, digest, base_seq=None, dry_run=False):
     """The ``apply_ops`` body for ``ops[start-1:]`` plus the hashed batch ref."""
     body = {"ops": list(ops[start - 1:]), "batch_ref": f"{source}@{digest}"}
     if base_seq is not None:
         body["base_seq"] = base_seq
     if dry_run:
         body["dry_run"] = True
-    if batch_meta is not None:
-        body["batch_meta"] = batch_meta
     return body
 
 
@@ -89,8 +87,7 @@ def refusal_lines(exc, offset, first, batch_label=None):
 
 
 def send(session, ops, start, source, digest, errors, op_key,
-         base_seq=None, dry_run=False, batch_label=None, identity=None,
-         submitted=None, batch_meta=None):
+         base_seq=None, dry_run=False, batch_label=None, identity=None, submitted=None):
     """Post the batch as one ``apply_ops`` call; ``(exit_code, report_lines)``.
 
     An unreadable 2xx reply, or one that does not report every op applied, is
@@ -100,8 +97,7 @@ def send(session, ops, start, source, digest, errors, op_key,
     try:
         raw = session.post("apply_ops",
                            payload(ops, start, source, digest,
-                                   base_seq=base_seq, dry_run=dry_run, batch_meta=batch_meta),
-                           timeout=session.mutation_timeout)
+                                   base_seq=base_seq, dry_run=dry_run), timeout=session.mutation_timeout)
     except errors as exc:
         if getattr(exc, "code", "") in ("unknown outcome", "unreachable"):
             return 1, uncertain(identity, submitted)

@@ -93,7 +93,7 @@ def _active_edit_only(fields):
             and not set(fields) - _ACTIVE_EDITABLE)
 
 
-def creation_tier(raw, definition, principal, *, stored=False, acting_router=None):
+def creation_tier(raw, definition, principal, *, stored=False):
     """The tier a create stores for *principal* (D-2458: raise-only, never a clamp).
 
     A tier below the project default needs the router role; an ``oversight``
@@ -110,7 +110,7 @@ def creation_tier(raw, definition, principal, *, stored=False, acting_router=Non
         tier = validated_review_tier(explicit)
         # Oversight may only RAISE tiers, never lower below default
         # But oversight can set tier='none' for questions (per policy)
-        allowed_lowering = principal.role == "router" or acting_router
+        allowed_lowering = principal.role == "router"
         oversight_can_set_none = (principal.role == "oversight"
                                  and tier == "none"
                                  and definition.get("kind") == "question")
@@ -134,19 +134,12 @@ def creation_tier(raw, definition, principal, *, stored=False, acting_router=Non
                 raise Refused(
                     "forbidden",
                     "only the router may lower review_tier below its default")
-        return validated_decision_tier(tier, definition["evidence_kinds"], principal=principal, stored=stored, acting_router=acting_router)
-    return validated_decision_tier(default, definition["evidence_kinds"], principal=principal, stored=stored, acting_router=acting_router)
+        return validated_decision_tier(tier, definition["evidence_kinds"], principal=principal, stored=stored)
+    return validated_decision_tier(default, definition["evidence_kinds"], principal=principal, stored=stored)
 
 
 class CreateMixin:
     """Create, import and edit item definitions."""
-
-    def _batch_acts_as_router(self, principal):
-        """Router semantics only for the router and a scope-checked L1 batch."""
-        batch = getattr(self, "_batch", None)
-        return (principal.role == "router"
-                or (principal.role == "l1" and batch is not None
-                    and batch.granted_projects is not None))
 
     # -------------------------------------------------------- create/import
     def create_items(self, principal, items):
@@ -188,7 +181,7 @@ class CreateMixin:
                 validate_family(raw.get("owner_family"))
         for definition in defs:
             self._may_manage(principal, definition["project"])
-        if not self._batch_acts_as_router(principal):
+        if principal.role != "router":
             for definition in defs:
                 for dep in definition["depends_on"]:
                     if not dep.startswith(definition["project"] + ":"):
@@ -310,7 +303,7 @@ class CreateMixin:
             return None
         gate = self._get_or_refuse(gate_key)
         self._may_manage(principal, gate["project"])
-        if not self._batch_acts_as_router(principal) and gate["project"] != definition["project"]:
+        if principal.role != "router" and gate["project"] != definition["project"]:
             raise Refused("forbidden",
                           "cross-project 'under' needs the router")
         if gate["state"] in ("done", "cancelled"):
@@ -331,8 +324,7 @@ class CreateMixin:
         An explicit tier LOWER than the computed default requires the router role.
         Raising or keeping the same tier is allowed for router and L1.
         """
-        return creation_tier(raw, definition, principal,
-                             acting_router=self._batch_acts_as_router(principal))
+        return creation_tier(raw, definition, principal)
 
     def _insert_item(self, principal, definition, now):
         state = definition["state"]
@@ -403,15 +395,13 @@ class CreateMixin:
                          lambda now: self._edit(principal, key, fields, now))
 
     def _edit(self, principal, key, fields, now):
-        acting_router = self._batch_acts_as_router(principal)
         has_priority = isinstance(fields, dict) and "priority" in fields
         prio = fields["priority"] if has_priority else None
         rest = ({name: value for name, value in fields.items()
                  if name != "priority"} if has_priority else fields)
         if has_priority:
             # Same order as ``_priority``: role, value, then the item lookup.
-            if not acting_router:
-                self._require_role(principal, "oversight")
+            self._require_role(principal, "router", "oversight")
             self._checked_priority(prio)
             if not rest:
                 with self._write():
@@ -419,7 +409,7 @@ class CreateMixin:
                 return {"key": key, "priority": int(prio)}
         item = self._get_or_refuse(key)
         self._assert_unlocked(item)
-        holder_edit = (not acting_router and item["state"] == "claimed"
+        holder_edit = (principal.role != "router" and item["state"] == "claimed"
                        and item["claimed_by"] == principal.name
                        and isinstance(rest, dict) and set(rest) == {"depends_on"})
         if holder_edit:
@@ -436,7 +426,7 @@ class CreateMixin:
         merge_note_edit = (principal.role == "router" and item["state"] == "in_review"
                            and isinstance(rest, dict) and set(rest) == {"note"}
                            and self._only_merge_repo_note_changed(item.get("note"), rest["note"]))
-        if tier_edit and not acting_router and not holder_edit:
+        if tier_edit and principal.role != "router" and not holder_edit:
             raise Refused("forbidden", "only the router may edit tier fields, "
                           "done_criteria or depends_on while an item is "
                           "claimed or in review")
@@ -479,16 +469,16 @@ class CreateMixin:
             validated_review_tier(edit_fields["review_tier"])
             if (item["review_tier"] == "high"
                     and edit_fields["review_tier"] == "standard"
-                    and not acting_router):
+                    and principal.role != "router"):
                 raise Refused("forbidden", "only the router may lower review_tier")
         # X7b: the *resulting* (tier, evidence_kinds) pair must hold, so an edit
         # of either field alone cannot leave a `none` item with looser evidence.
         # Legacy row shapes missing review_tier use the standard default.
         resulting_tier = edit_fields.get("review_tier", item.get("review_tier") or "standard")
         if (tier_needs_router(resulting_tier) and resulting_tier != item["review_tier"]
-                and not acting_router):
+                and principal.role != "router"):
             raise Refused("forbidden", "only the router may set review_tier='none'")
-        validate_decision_edit(item, edit_fields, principal, acting_router=acting_router)
+        validate_decision_edit(item, edit_fields, principal)
         # Preserve caller declarations separately from automatic escalation.
         decision_fields = dict(edit_fields)
         before = self._all_items()
@@ -523,7 +513,7 @@ class CreateMixin:
                         continue
                     kept.append(dep)
                 if any(not d.startswith(item["project"] + ":") for d in kept) \
-                        and not acting_router:
+                        and principal.role != "router":
                     raise Refused("forbidden",
                                   "cross-project dependency needs the router")
                 me["depends_on"] = kept
@@ -590,7 +580,7 @@ class CreateMixin:
                 self._may_manage(principal, fresh["project"])
             bump_epoch = tier_edit and ("done_criteria" in edit_fields or "depends_on" in edit_fields)
             # Re-check tier/evidence under the lock, including open-item edits.
-            validate_decision_edit(fresh, decision_fields, principal, acting_router=acting_router)
+            validate_decision_edit(fresh, decision_fields, principal)
             if tier_edit:
                 # Bump the round like ``submit`` does: earlier verdicts stop
                 # matching ``_round_verdicts`` -- no stale count under the new tier.
@@ -718,8 +708,7 @@ class CreateMixin:
                          lambda now: self._priority(principal, key, n, now))
 
     def _priority(self, principal, key, n, now):
-        if not self._batch_acts_as_router(principal):
-            self._require_role(principal, "oversight")
+        self._require_role(principal, "router", "oversight")
         self._checked_priority(n)
         with self._write():
             self._apply_priority(principal, key, n, now)
