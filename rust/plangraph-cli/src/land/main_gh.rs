@@ -208,29 +208,34 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
             }
         }
     }
-    let setup = || -> Result<(String, Matrix, PathBuf), String> {
-        let repo = match &named_repo {
-            Some(r) => r.clone(),
-            None => github::repository(&github::command("git", &["remote", "get-url", "origin"])?)?,
-        };
-        if !repo
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-._/".contains(&b))
-        {
-            return Err("invalid repository".into());
+    let matrix = match matrix_from_toml(MATRIX) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
         }
-        let ledger = home
-            .join(".local/state/plangraph/main-state")
-            .join(format!("{}-{branch}.json", repo.replace('/', "_")));
-        Ok((repo, matrix_from_toml(MATRIX)?, ledger))
     };
-    let (repo, matrix, ledger_path) = match setup() {
+    let (repo, ledger_path) = match repo_and_ledger(home, named_repo.as_deref(), &branch) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("{e}");
             return 2;
         }
     };
+    let answer = answer_for(repo, &branch, ledger_path, &matrix);
+    println!("{}", serde_json::to_string(&answer).unwrap_or_default());
+    if admit_flag {
+        if let Err(word) = admit(&answer.state, exception.as_deref()) {
+            eprintln!("{word}");
+            return 3;
+        }
+        return 0;
+    }
+    i32::from(answer.state.refusal().is_some()) * 3
+}
+
+/// Reads main's state live with the first-observation record at `ledger_path`.
+pub fn answer_for(repo: String, branch: &str, ledger_path: PathBuf, matrix: &Matrix) -> Answer {
     let compare_repo = repo.clone();
     let mut ledger = FileLedger {
         path: ledger_path,
@@ -245,17 +250,30 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
     };
     let mut source = GhSource {
         gh: Gh { repo },
-        branch,
+        branch: branch.to_owned(),
         now: now_secs,
     };
-    let answer: Answer = observe(&mut source, &mut ledger, &matrix);
-    println!("{}", serde_json::to_string(&answer).unwrap_or_default());
-    if admit_flag {
-        if let Err(word) = admit(&answer.state, exception.as_deref()) {
-            eprintln!("{word}");
-            return 3;
-        }
-        return 0;
+    observe(&mut source, &mut ledger, matrix)
+}
+
+/// The repository named by `--repo` or by the `origin` remote, and where its tip ledger lives.
+pub fn repo_and_ledger(
+    home: &Path,
+    named: Option<&str>,
+    branch: &str,
+) -> Result<(String, PathBuf), String> {
+    let repo = match named {
+        Some(r) => r.to_owned(),
+        None => github::repository(&github::command("git", &["remote", "get-url", "origin"])?)?,
+    };
+    if !repo
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b"-._/".contains(&b))
+    {
+        return Err("invalid repository".into());
     }
-    i32::from(answer.state.refusal().is_some()) * 3
+    let ledger = home
+        .join(".local/state/plangraph/main-state")
+        .join(format!("{}-{branch}.json", repo.replace('/', "_")));
+    Ok((repo, ledger))
 }

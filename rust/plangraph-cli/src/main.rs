@@ -16,6 +16,13 @@ fn run() -> i32 {
         let rest: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         return plangraph_cli::host_sync::run_cli(&rest);
     }
+    if args.first().map(String::as_str) == Some("land-train") {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        return plangraph_cli::land::cli::run(&home, &args[1..]);
+    }
     if args.first().map(String::as_str) == Some("main-state") {
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))

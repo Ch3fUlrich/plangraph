@@ -1,0 +1,231 @@
+//! The landing train as data: parts, dependency closure (P3), the manifest, the build record (P4, P9)
+//! and the freeze comparison. Pure; the git-backed builder and verifier are in `build`.
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::main_state::State;
+
+/// The parent a part was registered on: the parent pull request and its READY head at that moment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Parent {
+    pub pr: u64,
+    pub head: String,
+}
+
+/// One READY part as the registrar hands it over: pull request, head, declared parent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartIn {
+    pub pr: u64,
+    pub head: String,
+    pub parent: Option<Parent>,
+}
+
+/// The digest and count of the commits of `diff_base..head`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Own {
+    pub count: usize,
+    pub digest: String,
+}
+
+impl Own {
+    pub fn of(commits: &[String]) -> Own {
+        let mut sorted: Vec<&String> = commits.iter().collect();
+        sorted.sort();
+        let text = sorted
+            .iter()
+            .map(|c| c.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Own {
+            count: commits.len(),
+            digest: format!("{:x}", Sha256::digest(text.as_bytes())),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Part {
+    pub pr: u64,
+    pub head: String,
+    pub parent: Option<Parent>,
+    pub own: Own,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reason {
+    /// The merge of the part's head onto its prefix conflicts under the protected inputs.
+    Conflict,
+    /// A part below it in its chain is not merged in this build.
+    Descendant,
+    /// The train is at its size cap; the stack enters as a dependency-closed prefix.
+    Cap,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeftOut {
+    pub pr: u64,
+    pub head: String,
+    pub reason: Reason,
+    /// For `conflict`: the commit the merge was attempted on.
+    pub prefix: String,
+}
+
+/// The merge inputs fixed by the policy version and recorded with the train.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Policy {
+    pub version: String,
+    pub git: String,
+    /// The merge attributes used (the builder accepts them from outside the tree).
+    pub attributes: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Manifest {
+    pub build: String,
+    pub policy: Policy,
+    pub base: String,
+    /// Parts in stack order.
+    pub parts: Vec<Part>,
+    /// (child pr, parent pr) edges among the parts.
+    pub graph: Vec<(u64, u64)>,
+    /// Every READY head left out, with its reason.
+    pub left_out: Vec<LeftOut>,
+    /// The merge commit of each part, in order.
+    pub merges: Vec<String>,
+    pub train_sha: String,
+}
+
+/// `land_build_open`: fixed before the builder merges anything; the freeze must carry the same three.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildOpen {
+    pub build: String,
+    pub policy_version: String,
+    pub base: String,
+    pub grant_digest: String,
+    /// Position Nb of the log prefix the selection snapshot was computed over.
+    pub snapshot_position: u64,
+}
+
+/// What the push gate computes at the freeze.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Freeze {
+    pub policy_version: String,
+    pub base: String,
+    pub grant_digest: String,
+    pub selection: Vec<PartIn>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum FreezeRefusal {
+    PolicyVersion,
+    Base,
+    GrantDigest,
+    /// The two full selections differ (a part became READY, unready or got another head or dependency).
+    SelectionChanged,
+}
+
+/// The freeze compares the full selections before any exclusion is applied.
+pub fn check_freeze(
+    open: &BuildOpen,
+    snapshot: &[PartIn],
+    freeze: &Freeze,
+) -> Result<(), FreezeRefusal> {
+    if freeze.policy_version != open.policy_version {
+        return Err(FreezeRefusal::PolicyVersion);
+    }
+    if freeze.base != open.base {
+        return Err(FreezeRefusal::Base);
+    }
+    if freeze.grant_digest != open.grant_digest {
+        return Err(FreezeRefusal::GrantDigest);
+    }
+    if freeze.selection != snapshot {
+        return Err(FreezeRefusal::SelectionChanged);
+    }
+    Ok(())
+}
+
+/// No train is built while main is red or pending (design D5): `main_red`, `main_pending`, ...
+pub fn require_open_main(state: &State) -> Result<(), &'static str> {
+    state.refusal().map_or(Ok(()), Err)
+}
+
+/// Stack order: every part after the part it is stacked on, otherwise the given order. Parts on a parent
+/// cycle are returned last; the closure leaves them out.
+pub fn stack_order(parts: &[PartIn]) -> Vec<PartIn> {
+    let prs: BTreeSet<u64> = parts.iter().map(|p| p.pr).collect();
+    let mut done: BTreeSet<u64> = BTreeSet::new();
+    let mut out: Vec<PartIn> = Vec::new();
+    loop {
+        let before = out.len();
+        for p in parts {
+            if done.contains(&p.pr) {
+                continue;
+            }
+            let ready = p
+                .parent
+                .as_ref()
+                .is_none_or(|q| !prs.contains(&q.pr) || done.contains(&q.pr));
+            if ready {
+                done.insert(p.pr);
+                out.push(p.clone());
+            }
+        }
+        if out.len() == before {
+            break;
+        }
+    }
+    out.extend(parts.iter().filter(|p| !done.contains(&p.pr)).cloned());
+    out
+}
+
+/// Whether a part may enter: its parent is in the manifest before it with exactly the registered head,
+/// or that head already is in the train base (the parent landed).
+pub fn includable(
+    part: &PartIn,
+    merged: &BTreeMap<u64, String>,
+    in_base: &dyn Fn(&str) -> bool,
+) -> bool {
+    match &part.parent {
+        None => true,
+        Some(q) => merged.get(&q.pr) == Some(&q.head) || in_base(&q.head),
+    }
+}
+
+/// Counts verified `conflict` exclusions per head; the third in a row escalates to plan-order once.
+#[derive(Default, Serialize, Deserialize)]
+pub struct ConflictCounter {
+    streak: BTreeMap<String, u32>,
+    seen_builds: BTreeSet<String>,
+    escalated: BTreeSet<String>,
+}
+
+impl ConflictCounter {
+    /// Records one verified build; returns the stable id of each new escalation (head + third build id).
+    pub fn record(&mut self, build: &str, left_out: &[LeftOut]) -> Vec<String> {
+        if !self.seen_builds.insert(build.to_owned()) {
+            return vec![];
+        }
+        let conflicted: BTreeSet<&str> = left_out
+            .iter()
+            .filter(|l| l.reason == Reason::Conflict)
+            .map(|l| l.head.as_str())
+            .collect();
+        self.streak
+            .retain(|head, _| conflicted.contains(head.as_str()));
+        let mut out = vec![];
+        for head in conflicted {
+            let n = self.streak.entry(head.to_owned()).or_insert(0);
+            *n += 1;
+            if *n == 3 {
+                let id = format!("{head}:{build}");
+                if self.escalated.insert(id.clone()) {
+                    out.push(id);
+                }
+            }
+        }
+        out
+    }
+}
