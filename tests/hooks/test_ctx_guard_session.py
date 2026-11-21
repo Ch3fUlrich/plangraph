@@ -229,9 +229,10 @@ class Plumbing(WrapperCase):
                 text = self.line(self.guard(self.payload(sid=sid)))
                 self.assertIn("HARD-CAP" if n else "HANDOFF-NOW", text)
                 self.assertIn("ctx=%dk" % (read // 1000), text)
-                self.assertIn("at the next natural stop, write your handoff to %s, then run" %
+                self.assertIn("at the next natural stop, write your handoff to %s, then run `python3 " %
                               (path if configured else "your private handoff path"), text)
-                for forbidden in ("commit+push", "no new work", "plangraph"):
+                self.assertIn(" ready %s`" % (path if configured else "<handoff-path>"), text)
+                for forbidden in ("commit+push", "no new work"):
                     self.assertNotIn(forbidden, text)
                 self.assertTrue(text.endswith("If you are a subagent, finish your task and report; "
                                               "this does not apply to you."))
