@@ -609,6 +609,18 @@ def test_local_work_drives_branch_admits_selected_drive_and_records_alarm(tmp_pa
     assert json.loads((state / 'disk-hygiene.json').read_text())['alarm'] is True
 
 
+def test_cargo_cap_refusal_binds_a_standalone_build_not_a_running_run(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready as h
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 11.9)
+    assert h.cargo_cap_refusal() is None
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 12.0)
+    assert h.cargo_cap_refusal().startswith('cargo_target_cap: measured 12.00 GB in ')
+    assert h.running_disk_refusal(str(tmp_path / 'checkout')) is None
+
+
 def test_remote_work_drives_selects_eligible_drive_or_overflows(tmp_path):
     low_drive_only = dict(
         ssh='a', ok=True, fresh=True, live_runs=0, mem_available_mb=10000,

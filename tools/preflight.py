@@ -18,7 +18,7 @@ import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, disk_free_gb,
-                                          running_disk_refusal, shared_cargo_target)
+                                          cargo_cap_refusal, running_disk_refusal, shared_cargo_target)
 from plangraph.spawner.overflow import available_memory_mb
 
 CHECK_TIMEOUT = 60
@@ -481,11 +481,11 @@ def _main(argv, root, cleanup):
             return run(command, cwd, command_env)
         # Share the spawner's target, cap checks and cleanup lease.
         with cargo_lease():
-            refusal = running_disk_refusal(root)
+            refusal = running_disk_refusal(root) or cargo_cap_refusal()
             if refusal:
                 return 1, refusal + '\n'
             code, output = run(command, cwd, command_env)
-            refusal = running_disk_refusal(root)
+            refusal = running_disk_refusal(root) or cargo_cap_refusal()
             return (1, output + refusal + '\n') if refusal else (code, output)
 
     scrub = python("split/scrub_check.py", ".", "--base", args.scrub_base or args.base, "--head", args.head,

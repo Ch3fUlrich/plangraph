@@ -418,6 +418,23 @@ def running_disk_refusal(worktree):
     return None
 
 
+def cargo_cap_refusal():
+    """A refusal when the shared cache is at or over its cap, for a standalone build that
+    holds the shared lease (push preflight). The spawner's own runs are never stopped for
+    cache size, so `running_disk_refusal` does not apply it."""
+    try:
+        cap = cargo_target_cap_gb()
+        if not math.isfinite(cap) or cap < 0:
+            raise ValueError('invalid cache cap')
+        target = shared_cargo_target()
+        size = cargo_target_size_gb(target)
+        if size >= cap:
+            return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB'
+    except (OSError, ValueError, TypeError, KeyError):
+        return 'disk_low: runtime measurement or configuration unavailable'
+    return None
+
+
 def fresh(record, now=None):
     """Consumers must reject stale readiness, even if the saved check passed."""
     try:
