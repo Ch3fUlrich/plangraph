@@ -162,13 +162,6 @@ except (OSError, ValueError, KeyError, TypeError):
     return 0
   fi
   if [[ -z "$values" ]]; then
-    # A successful config reader cannot produce empty output. A no-op command
-    # harness may also expose a systemctl that succeeds without an environment.
-    local environment
-    if command -v systemctl >/dev/null && environment="$(systemctl --user show-environment 2>/dev/null)" && [[ -z "$environment" ]]; then
-      echo "ctx-watchdog: skipped: no-op config reader and unusable systemctl user environment"
-      return 0
-    fi
     echo "ctx-watchdog: config reader returned no values" >&2
     return 1
   fi
