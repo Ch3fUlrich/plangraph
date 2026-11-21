@@ -155,20 +155,30 @@ fn is_where(text: &str) -> bool {
         .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
-/// `line` without its trailing comment (`//` or `/*` for Rust, `#` for Python). A marker inside
+/// `line` without its comments: a trailing `//` (Rust) or `#` (Python) and everything after it,
+/// and every closed `/* ... */` (Rust) with the code around it kept; an unterminated `/*` runs
+/// to the line end. A marker inside
 /// a literal is text: Python `'`, `"` and triple-quoted strings, Rust strings, raw strings
 /// (`r"..."`, `r#"..."#`, no escapes) and char literals (`'"'`, `'\\''`; a lifetime is none).
-fn code_part(line: &str, python: bool) -> &str {
+fn code_part(line: &str, python: bool) -> String {
     let chars: Vec<(usize, char)> = line.char_indices().collect();
     let at = |i: usize| chars.get(i).map(|(_, c)| *c);
     let ident = |i: Option<char>| i.is_some_and(|c| c.is_alphanumeric() || c == '_');
-    let mut i = 0;
+    let (mut i, mut kept, mut out) = (0, 0, String::new());
     while i < chars.len() {
         let c = chars[i].1;
-        let comment = || &line[..chars[i].0];
         i = match c {
-            '#' if python => return comment(),
-            '/' if !python && matches!(at(i + 1), Some('/' | '*')) => return comment(),
+            '#' if python => break,
+            '/' if !python && at(i + 1) == Some('/') => break,
+            '/' if !python && at(i + 1) == Some('*') => {
+                out.push_str(&line[kept..chars[i].0]);
+                let close = block_comment_end(&chars, i + 2);
+                let Some(close) = close else {
+                    return out;
+                };
+                kept = chars.get(close + 2).map_or(line.len(), |(byte, _)| *byte);
+                close + 2
+            }
             '"' | '\'' if python && at(i + 1) == Some(c) && at(i + 2) == Some(c) => {
                 skip_literal(&chars, i + 3, c, 3)
             }
@@ -189,7 +199,33 @@ fn code_part(line: &str, python: bool) -> &str {
             _ => i + 1,
         };
     }
-    line
+    let end = chars.get(i).map_or(line.len(), |(byte, _)| *byte);
+    out.push_str(&line[kept..end.max(kept)]);
+    out
+}
+
+/// Index of the `*/` that closes a Rust block comment whose body starts at `from` (block
+/// comments nest); none when the line ends first.
+fn block_comment_end(chars: &[(usize, char)], from: usize) -> Option<usize> {
+    let pair = |k: usize, a: char, b: char| {
+        chars.get(k).is_some_and(|(_, c)| *c == a) && chars.get(k + 1).is_some_and(|(_, c)| *c == b)
+    };
+    let (mut depth, mut k) = (1, from);
+    while k < chars.len() {
+        if pair(k, '/', '*') {
+            depth += 1;
+            k += 2;
+        } else if pair(k, '*', '/') {
+            depth -= 1;
+            if depth == 0 {
+                return Some(k);
+            }
+            k += 2;
+        } else {
+            k += 1;
+        }
+    }
+    None
 }
 
 /// `br"` / `br#"`: an `r` after a `b` that itself starts a token.
@@ -244,7 +280,8 @@ fn scope_indent(lines: &[&str], index: usize, python: bool) -> Option<usize> {
     }
     let before = lines[..index].iter().rev().find(|l| !l.trim().is_empty())?;
     let after = lines[index..].iter().find(|l| !l.trim().is_empty())?;
-    let code = code_part(before, python).trim_end();
+    let code = code_part(before, python);
+    let code = code.trim_end();
     let opens = code.ends_with('{') || (python && code.ends_with(':'));
     if opens {
         return Some(indent(before) + 1);

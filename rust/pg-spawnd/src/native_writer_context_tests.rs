@@ -249,3 +249,20 @@ fn literals_with_their_own_escape_rules_hide_comment_markers() {
     assert_eq!(owner(block, 2, false), None);
     assert_eq!(code_part("fn f() { /* open {", false), "fn f() { ");
 }
+#[test]
+fn code_after_a_closed_block_comment_still_counts() {
+    let before_brace = "pub fn one() /* note */ {\n\n}\n";
+    assert_eq!(owner(before_brace, 2, false).as_deref(), Some("one"));
+    let two = "pub fn one() /* a */ /* b */ {\n\n}\n";
+    assert_eq!(owner(two, 2, false).as_deref(), Some("one"));
+    // The closing brace after the comment closes the function: the blank line is outside.
+    let closed = "pub fn one() { /* note */ }\n\nfn two() {}\n";
+    assert_eq!(owner(closed, 2, false), None);
+    assert_eq!(code_part("a /* x */ b /* y */ c // d", false), "a  b  c ");
+    assert_eq!(code_part("a /* x */ b /* open {", false), "a  b ");
+    assert_eq!(code_part("a /* \"x */ b", false), "a  b");
+    assert_eq!(code_part("a /* x /* y */ z */ b", false), "a  b");
+    assert_eq!(code_part("a /* x /* y */ z {", false), "a ");
+    // `/*` and `*/` in Python are plain text.
+    assert_eq!(code_part("x = a /* b", true), "x = a /* b");
+}
