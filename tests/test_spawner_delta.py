@@ -124,6 +124,20 @@ def test_hung_pid_start_identity(tmp_path):
     assert 'identity' not in boundary.probe(tmp_path, record, 1000)
 
 
+def test_hung_default_sampler_and_cancel_read_persisted_pid_start():
+    import os
+    from plangraph.spawner.hung_capture import HungBoundary
+    from plangraph.spawner.proc_kill import _stat
+    pid = os.getpid()
+    start = _stat(pid)[4]
+    record = dict(status='running', started=0, pid=pid, pid_start=start, tokens=0)
+    evidence = HungBoundary._sample(record)  # the persisted record has no root_identity
+    assert any(row['pid'] == pid and row['start'] == start for row in evidence['tree'])
+    stale = dict(record, pid_start=start + 1)  # another process now: never signalled
+    # The recorded identity is not this live process: nothing is signalled, the leg counts as gone.
+    assert HungBoundary._cancel(HungBoundary(SimpleNamespace(enabled=True)), stale) is True
+
+
 def test_collect_cr_live_probe(tmp_path):
     import asyncio
     import os

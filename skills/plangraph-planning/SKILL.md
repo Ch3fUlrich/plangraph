@@ -17,6 +17,9 @@ not restate numbers**: model tiers and review counts live in the registry policy
 gate codes, leg order and the context pack live in `docs/PLANNER-KIT.md`; this file only says how
 the layers fit together.
 
+Use LSP for symbol navigation or `pg-ctx nav <symbol|path|key>` in Codex and agy.
+Use grep for text that is not a symbol.
+
 ## 1. The hierarchy (expandable and collapsible in the page)
 
 ```

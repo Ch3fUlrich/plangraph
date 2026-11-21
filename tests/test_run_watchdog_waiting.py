@@ -36,24 +36,24 @@ def test_invalid_card_idle_limit_is_refused(value):
 
 
 def test_live_child_counts_as_activity_but_keeps_hard_deadline():
-    # Non-writer roles have no ordinary activity/edit stall; child presence defers stuck only.
     gate = Watchdog(thresholds({'stuck_min': 1, 'stall_min': 1, 'max_min': 10}, role='review'),
                     0, 'same', writer=False)
     assert gate.decide(0, 'same', 0, 0) is None
-    assert gate.decide(300, 'same', 0, 0, waiting=True) is None
-    assert gate.decide(600, 'same', 0, 0, waiting=True)['rule'] == 'max'
+    for now in range(30, 600, 30):
+        assert gate.decide(now, 'same', 0, now, children={(101, 1)}) is None
+    assert gate.decide(600, 'same', 0, 600, children={(101, 1)})['rule'] == 'max'
 
 
 @pytest.mark.parametrize('state,expected', [('S', True), ('R', True), ('Z', False)])
 def test_cpu_sample_records_visible_live_child(monkeypatch, state, expected):
     from plangraph.spawner import run_cpu
-    rows = {100: (1, 100, 0, 'S'), 101: (100, 100, 0, state)}
+    rows = {100: (1, 100, 0, 'S', 1), 101: (100, 100, 0, state, 2)}
     monkeypatch.setattr(run_cpu.sys, 'platform', 'linux')
     monkeypatch.setattr(run_cpu, 'proc_scan', lambda: rows)
     job = SimpleNamespace()
     runner = SimpleNamespace(jobs={'job': job})
     assert asyncio.run(run_cpu.cpu_seconds(runner, 'job', 100, 1)) == 0
-    assert job._watchdog_child_active is expected
+    assert job._watchdog_children == ({(101, 2)} if expected else set())
 
 
 def test_idle_default_follows_card_stall_window():
@@ -63,13 +63,13 @@ def test_idle_default_follows_card_stall_window():
 
 @pytest.mark.parametrize('edited', [False, True])
 def test_persistent_live_child_cannot_reset_writer_stall_progress(edited):
-    limits = thresholds({'stall_min': 1, 'stuck_min': .1, 'max_min': 10}, role='implement')
+    limits = thresholds({'stall_min': 1, 'stuck_min': 2, 'max_min': 10}, role='implement')
     gate = Watchdog(limits, 0, 'before', writer=True)
     edit = 'after' if edited else 'before'
-    assert gate.decide(1, edit, 1, 0, waiting=True) is None
+    assert gate.decide(1, edit, 1, 0, children={(101, 1)}) is None
     for now in (20, 40, 60):
-        assert gate.decide(now, edit, 1, 0, waiting=True) is None
-    event = gate.decide(61, edit, 1, 0, waiting=True)
+        assert gate.decide(now, edit, 1, 0, children={(101, 1)}) is None
+    event = gate.decide(61, edit, 1, 0, children={(101, 1)})
     assert event is not None
     assert event['rule'] == ('no-progress' if edited else 'no-activity')
     assert event['last_activity_ts'] == 1
@@ -91,12 +91,12 @@ def test_persistent_child_run_stalls_or_fails_fast_on_quota(tmp_path, monkeypatc
               "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
               "print(child.pid, flush=True); time.sleep(60)")
     async def run():
-        runner, job = _job(tmp_path, {'stall_min': .01, 'stuck_min': .001, 'max_min': .05})
+        runner, job = _job(tmp_path, {'stall_min': .01, 'stuck_min': .02, 'max_min': .05})
         job._watchdog_limits['interval'] = .05
         job._watchdog_limits['hard_max'] = True
         job.model_or_combo = 'omniroute/gpt-6.1-sol'
         observed = []
-        runner.on_sample = lambda *a: observed.append(getattr(job, '_watchdog_child_active', False))
+        runner.on_sample = lambda *a: observed.append(bool(getattr(job, '_watchdog_children', None)))
         proc = await asyncio.create_subprocess_exec(sys.executable, '-c', script, cwd=tmp_path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True)
         runner._owned = {'j': dict(pid=proc.pid, pid_start=proc_kill.root_identity(proc.pid), job_object=False)}
@@ -117,3 +117,37 @@ def test_persistent_child_run_stalls_or_fails_fast_on_quota(tmp_path, monkeypatc
         finally:
             await runner._reap_process('j', proc)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('active', [False, True])
+def test_review_child_cpu_progress_controls_stuck_deadline(active):
+    gate = Watchdog(thresholds({'stuck_min': 1, 'max_min': 10}, role='review'),
+                    0, None, writer=False)
+    for now in (0, 30, 59):
+        assert gate.decide(now, None, None, now if active else 0, children={(101, 1)}) is None
+    finding = gate.decide(60, None, None, 60 if active else 0, children={(101, 1)})
+    if active:
+        assert finding is None
+    else:
+        assert finding['rule'] == 'stuck'
+        assert gate.decide(60, None, None, 0, children={(101, 2)}) is None
+        assert gate.decide(120, None, None, 0, children={(101, 2)})['rule'] == 'stuck'
+
+
+def test_windows_job_tree_cpu_progress_with_unobserved_children(monkeypatch):
+    from plangraph.spawner import run_cpu
+
+    monkeypatch.setattr(run_cpu.sys, 'platform', 'win32')
+    job = SimpleNamespace(_watchdog_children={(101, 1)})
+    totals = iter([0, 1, 1, 1])
+    runner = SimpleNamespace(jobs={'job': job}, _win_jobs={'job': 42},
+                             win_job_api=SimpleNamespace(cpu_seconds=lambda _: next(totals)))
+    gate = Watchdog(thresholds({'stuck_min': 1, 'max_min': 10}, role='review'),
+                    0, None, writer=False)
+    findings = []
+    for now in (0, 30, 60, 90):
+        cpu = asyncio.run(run_cpu.cpu_seconds(runner, 'job', 100, now))
+        assert job._watchdog_children is None
+        findings.append(gate.decide(now, None, None, cpu, children=job._watchdog_children))
+    assert findings[:3] == [None, None, None]
+    assert findings[3]['rule'] == 'stuck'

@@ -34,4 +34,5 @@ Description=Liveness watchdog pass (%i)
 
 [Service]
 Type=oneshot
+WorkingDirectory=%h
 ExecStart=/usr/bin/env python3 %h/code/plangraph/tools/liveness_watchdog.py --config %h/.config/plangraph/liveness/%i.toml --apply

@@ -264,6 +264,13 @@ TOKEN_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN'
 TOKEN_FILE_ENV = 'PLANGRAPH_GATEWAY_LOG_TOKEN_FILE'
 
 
+def drop_parent_only_env(env):
+    """Remove the management token variables from a child environment, in place."""
+    for name in (TOKEN_ENV, TOKEN_FILE_ENV):
+        env.pop(name, None)
+    return env
+
+
 def _owner_only(info, windows=None):
     """Regular file readable by its owner only."""
     # Windows mode bits cannot verify owner-only access; silently refuse key files there.

@@ -253,3 +253,14 @@ fn aliases_are_canonical() {
     assert_eq!(sample.gpu_percent, None);
     assert_eq!(result.running_agents, Some(1));
 }
+
+#[test]
+fn stalled_no_leg_keeps_host_counts_known() {
+    assert_eq!(
+        counts(Some(&[
+            record("alpha", "run-first", "stalled_no_leg"),
+            record("alpha", "run-second", "running"),
+        ])),
+        [Some(1), Some(1), Some(0)]
+    );
+}
