@@ -60,6 +60,80 @@ fn judged_report(
     }
 }
 
+/// The report the workflow sends for a finished attempt.
+pub(crate) fn attempt_report(
+    card: &str,
+    n: u32,
+    leg_id: &str,
+    result: &AttemptResult,
+) -> AttemptReport {
+    judged_report(
+        card,
+        n,
+        leg_id,
+        result.exit_class,
+        &result.diff_hash,
+        &result.check_tail,
+    )
+}
+
+/// The tail the workflow keeps for an attempt's synthetic follow-ups and parks:
+/// the attempt's redacted CHECK tail (not its harness output tail).
+pub(crate) fn initial_check_tail(result: &AttemptResult) -> String {
+    result.check_tail.clone()
+}
+
+/// What the workflow sends and keeps for a finished attempt: the keeper report,
+/// the retry-budget entry and the tail its synthetic follow-ups and parks use.
+/// The workflow builds all three here, so a test of this function is a test of
+/// the payloads the workflow emits.
+pub(crate) fn attempt_outputs(
+    card: &str,
+    n: u32,
+    leg: &LegSpec,
+    result: &AttemptResult,
+) -> (AttemptReport, Attempt, String) {
+    (
+        attempt_report(card, n, &leg.id, result),
+        to_budget_attempt(result, leg),
+        initial_check_tail(result),
+    )
+}
+
+/// How the workflow reads an attempt activity that returned no result.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AttemptFailure {
+    /// A typed admission refusal: nothing ran. The card ends here, before any
+    /// attempt report or probe.
+    Refused(String),
+    /// The worker never answered: the exit class of the synthetic attempt.
+    Synthetic(ExitClass),
+}
+
+/// Classify a failed attempt activity from its failure chain and, for a timeout,
+/// its kind. `refusal_terminal` is asked only when a refusal was found (it is the
+/// replay-safety marker, which must not be recorded for other failures).
+pub(crate) fn classify_attempt_failure(
+    failure: Option<&Failure>,
+    timeout: Option<TimeoutType>,
+    refusal_terminal: impl FnOnce() -> bool,
+) -> AttemptFailure {
+    if let Some(kind) = admission_refusal(failure)
+        && refusal_terminal()
+    {
+        return AttemptFailure::Refused(kind.to_owned());
+    }
+    // A heartbeat timeout means the worker is hung (a stall); a start-to-close
+    // or schedule-to-close timeout means it ran past its budget (a timeout); any
+    // other timeout kind stays a stall; a non-timeout is a crash.
+    AttemptFailure::Synthetic(match timeout {
+        Some(TimeoutType::Heartbeat) => ExitClass::Stall,
+        Some(TimeoutType::StartToClose) | Some(TimeoutType::ScheduleToClose) => ExitClass::Timeout,
+        Some(_) => ExitClass::Stall,
+        None => ExitClass::WorkerCrash,
+    })
+}
+
 /// Sweep dead attempts; every terminal path except `merged` runs this first.
 async fn run_janitor(
     ctx: &WorkflowContext<Card>,
@@ -149,6 +223,23 @@ fn stale_state_refusal(failure: Option<&Failure>) -> Option<&Failure> {
 /// `exec_stale_state`) -- the one failure a fresh observation can repair?
 fn is_stale_state_refusal(failure: Option<&Failure>) -> bool {
     stale_state_refusal(failure).is_some()
+}
+
+/// The typed admission refusal in a failure's cause chain (`card_not_allowlisted`,
+/// `card_not_claimable`, `card_attempt_overlap`), if any. A refusal is policy,
+/// not a crashed worker: nothing ran, so the workflow must end the card, never
+/// report an attempt or probe a worktree for it.
+fn admission_refusal(failure: Option<&Failure>) -> Option<&str> {
+    let mut f = failure;
+    while let Some(node) = f {
+        if let Some(FailureInfo::ApplicationFailureInfo(info)) = &node.failure_info
+            && crate::card_admit::REFUSAL_KINDS.contains(&info.r#type.as_str())
+        {
+            return Some(info.r#type.as_str());
+        }
+        f = node.cause.as_deref();
+    }
+    None
 }
 
 /// Record a park packet and raise the alarm that goes with it.
@@ -304,7 +395,7 @@ fn packet_for(card: &str, tier: Tier, exit_class: ExitClass, check_tail: &str) -
 }
 
 /// A park packet for the newest attempt in `history`.
-fn packet_from_last(card: &str, history: &[Attempt], check_tail: &str) -> ParkPacket {
+pub(crate) fn packet_from_last(card: &str, history: &[Attempt], check_tail: &str) -> ParkPacket {
     let last = history
         .last()
         .expect("the policy only acts on a non-empty history");

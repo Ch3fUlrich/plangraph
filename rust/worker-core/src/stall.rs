@@ -18,6 +18,8 @@ use std::time::{Duration, Instant};
 mod wait;
 pub use wait::supervise_redirected;
 
+#[path = "stall_capture.rs"]
+mod stall_capture;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -42,6 +44,10 @@ pub struct Opts {
     pub grace: Duration,
     /// Keep at most this many trailing bytes of combined output.
     pub max_output: usize,
+    /// Scrub secret-shaped text from the captured output before any of it is
+    /// dropped from the front, so a secret that straddles the cut leaves no
+    /// fragment behind. Retained bytes are then redacted, not raw.
+    pub redact_discarded: bool,
 }
 
 impl Default for Opts {
@@ -51,6 +57,7 @@ impl Default for Opts {
             timeout: None,
             grace: Duration::from_secs(10),
             max_output: 1 << 20,
+            redact_discarded: false,
         }
     }
 }
@@ -69,23 +76,23 @@ pub struct Supervised {
     pub output: Vec<u8>,
 }
 
-fn read_tail(mut r: impl Read, start: Instant, last: &AtomicU64, max: usize) -> Vec<u8> {
-    let mut buf = Vec::new();
+fn read_tail(
+    mut r: impl Read,
+    start: Instant,
+    last: &AtomicU64,
+    max: usize,
+    redact: bool,
+) -> Vec<u8> {
+    let mut capture = stall_capture::Capture::new(max, redact);
     let mut chunk = [0u8; 8192];
     while let Ok(n) = r.read(&mut chunk) {
         if n == 0 {
             break;
         }
         last.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-        buf.extend_from_slice(&chunk[..n]);
-        if buf.len() > max.saturating_mul(2) {
-            buf.drain(..buf.len() - max);
-        }
+        capture.push(&chunk[..n]);
     }
-    if buf.len() > max {
-        buf.drain(..buf.len() - max);
-    }
-    buf
+    capture.finish()
 }
 
 /// Run `cmd` to completion under the watchdog described in the module docs.
@@ -130,8 +137,8 @@ pub fn supervise_with_diagnostics(
     drop(cmd); // closes our copies of the write end so the reader sees EOF
     let start = Instant::now();
     let last = Arc::new(AtomicU64::new(0));
-    let (last2, max) = (last.clone(), opts.max_output);
-    let reader = thread::spawn(move || read_tail(reader, start, &last2, max));
+    let (last2, max, redact) = (last.clone(), opts.max_output, opts.redact_discarded);
+    let reader = thread::spawn(move || read_tail(reader, start, &last2, max, redact));
 
     let result = wait::wait(
         child,
@@ -188,6 +195,11 @@ pub fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg(unix)]
+#[path = "stall_redact_tests.rs"]
+mod redact_tests;
 
 #[cfg(test)]
 #[cfg(unix)]

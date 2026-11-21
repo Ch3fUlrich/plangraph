@@ -148,13 +148,13 @@ def gh_json(payload):
 
 def run_entry(name=WF, path=WF_PATH, status="completed", conclusion="success",
               created_at="2026-10-01T00:00:00Z", head_sha=HEAD,
-              head_repository=None):
-    """A workflow-run entry that passes the gate filters by default:
-    pinned file, our repo, and the sha the runs endpoint was queried for."""
+              head_repository=None, pr=7, base="main"):
+    """Passes the gate filters by default: pinned file, our repo, PR 7 into main."""
     return {"name": name, "path": path, "status": status, "conclusion": conclusion,
             "created_at": created_at, "head_sha": head_sha,
             "head_repository": dict(head_repository if head_repository is not None
-                                    else {"full_name": REPO})}
+                                    else {"full_name": REPO}),
+            "pull_requests": [{"number": pr, "base": {"ref": base}}] if pr else []}
 
 
 def runs_payload(*entries):
@@ -733,13 +733,13 @@ def test_main_output_never_contains_token(tmp_path, capsys):
 # 16. Config.from_env
 
 def test_config_from_env_defaults_and_required(tmp_path):
-    env = base_env(tmp_path, PLANGRAPH_STATE=None)  # None drops the key: exercise the default
+    env = base_env(tmp_path, PLANGRAPH_STATE=None, HOME=str(tmp_path))  # no key: the default
     cfg = Config.from_env(env)
     assert cfg.tree == env["PLANGRAPH_LIVE_TREE"]
     assert cfg.repo == REPO
     assert cfg.token_file == env["PLANGRAPH_GH_TOKEN_FILE"]
     assert cfg.out == env["PLANGRAPH_OUT"]
-    assert Path(cfg.state) == Path(cfg.out) / ".live-follow.json"
+    assert Path(cfg.state) == tmp_path / ".local/state/plangraph/live-follow.json"
     assert cfg.workflow_path == WF_PATH
     assert cfg.remote == "origin"
     assert cfg.branch == "main"
@@ -817,9 +817,9 @@ def test_all_exact_prs_must_be_green(tmp_path):
         merged_pr(8, HEAD, "main", PH_RED),
     ]))
     fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
-                gh_json(runs_payload(run_entry())))
-    fake.script(("gh", "api", runs_endpoint(PH_RED)),
-                gh_json(runs_payload(run_entry(conclusion="failure"))))
+                gh_json(runs_payload(run_entry(head_sha=PH_GREEN))))
+    fake.script(("gh", "api", runs_endpoint(PH_RED)), gh_json(runs_payload(
+        run_entry(head_sha=PH_RED, conclusion="failure", pr=8))))
     assert is_green(fake, cfg, HEAD) is False
 
 
@@ -832,8 +832,8 @@ def test_rebase_merge_fallback_closed_merged_pr(tmp_path):
     fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([
         merged_pr(9, OTHER_MERGE, cfg.branch, PH_GREEN),
     ]))
-    fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
-                gh_json(runs_payload(run_entry(head_sha=PH_GREEN))))
+    fake.script(("gh", "api", runs_endpoint(PH_GREEN)), gh_json(
+        runs_payload(run_entry(head_sha=PH_GREEN, pr=9))))
     assert is_green(fake, cfg, HEAD) is True
 
 
