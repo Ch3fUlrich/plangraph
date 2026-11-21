@@ -186,14 +186,12 @@ fn apply_facts(
 pub(super) fn facts(
     env: &Env,
     repo: &Path,
-    path: &Path,
+    f: HostFacts,
     runs: &[Run],
     home: &Path,
     p: &Policy,
     local: Option<&str>,
 ) -> Result<HostFacts, String> {
-    let f: HostFacts =
-        serde_json::from_value(read_json(path)?).map_err(|_| "invalid host facts")?;
     let mut cmd = python(env, repo);
     cmd.args(["-c","import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
     let rows = output(cmd).ok();

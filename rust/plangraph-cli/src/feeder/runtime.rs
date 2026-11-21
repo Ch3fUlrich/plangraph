@@ -1,7 +1,7 @@
 //! Thin I/O adapter. No selection logic belongs here; these calls can become activities.
 use super::adapters::{Adapters, Env, Keeper, Transport};
-use super::sources;
 use super::*;
+use super::{capacity, sources};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug)]
 struct Options {
     dry: bool,
+    live: bool,
     policy: PathBuf,
     facts: PathBuf,
     rules: PathBuf,
@@ -17,27 +18,33 @@ struct Options {
 fn options(home: &Path, args: &[String]) -> Result<Options, String> {
     let mut o = Options {
         dry: false,
+        live: false,
         policy: "deploy/feeder/policy.toml".into(),
         facts: home.join(".config/plangraph/feeder-facts.json"),
         rules: "deploy/feeder/house-rules.md".into(),
         repo: std::env::current_dir().map_err(|_| "cwd unavailable")?,
     };
     let mut once = false;
+    let mut explicit_facts = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--once" => once = true,
             "--dry-run" => o.dry = true,
+            "--live-facts" => o.live = true,
             "--policy" | "--facts" | "--house-rules" | "--repo" => {
                 let value = PathBuf::from(args.next().ok_or("option requires a path")?);
-                match arg.as_str() { "--policy" => o.policy=value, "--facts" => o.facts=value,
+                match arg.as_str() { "--policy" => o.policy=value, "--facts" => { o.facts=value; explicit_facts = true; },
                     "--house-rules" => o.rules=value, _ => o.repo=value }
             }
-            _ => return Err("usage: plangraph feed --once [--dry-run] [--facts PATH] [--policy PATH] [--house-rules PATH] [--repo PATH]".into()),
+            _ => return Err("usage: plangraph feed --once [--dry-run] [--live-facts | --facts PATH] [--policy PATH] [--house-rules PATH] [--repo PATH]".into()),
         }
     }
     if !once {
         return Err("feed requires --once; use the systemd timer for repetition".into());
+    }
+    if o.live && explicit_facts {
+        return Err("--live-facts and --facts are mutually exclusive".into());
     }
     if !o.repo.is_absolute() {
         return Err("repo must be an absolute checkout path".into());
@@ -56,21 +63,52 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
     let ready = Keeper { env }.call("ready?fmt=json&all=1&agent=1&project=plangraph", None)?;
     validate_ready(&ready)?;
     let running = sources::runs(env, &o.repo, &ready, state, o.dry)?;
-    if pick(&ready, &running, &policy).is_none() {
+    let eligible = pick(&ready, &running, &policy).is_some();
+    if !o.live && !eligible {
         return Ok(json!({"decision":"idle","reason":"no_eligible_item"}));
     }
-    let facts = sources::facts(
+    let host = env
+        .get("PLANGRAPH_HOST_NAME")
+        .map(String::as_str)
+        .or(local.as_deref());
+    let (sample, load) = if o.live {
+        let host = host
+            .filter(|host| !host.trim().is_empty())
+            .ok_or("live capacity requires a configured host name")?;
+        let disk_root = state.ancestors().find(|path| path.is_dir()).unwrap_or(home);
+        let (sample, cpus, load) = capacity::sample(host, disk_root, env)?;
+        (sample, Some((cpus, load)))
+    } else {
+        let sample = serde_json::from_value(sources::read_json(&o.facts)?)
+            .map_err(|_| "invalid host facts")?;
+        (sample, None)
+    };
+    let mut facts = sources::facts(
         env,
         &o.repo,
-        &o.facts,
+        sample,
         &running,
         home,
         &policy,
         local.as_deref(),
     )?;
+    let measurement = if let Some((cpus, load)) = load {
+        let free_ram_bytes = facts.free_ram_bytes;
+        capacity::apply(&mut facts, &mut policy, cpus, load)?;
+        Some(json!({
+            "host":facts.host, "cpus":cpus, "load1":load, "running_writers":facts.running_writers,
+            "free_ram_bytes":free_ram_bytes, "free_disk_bytes":facts.free_disk_bytes,
+            "quota_remaining_percent":facts.quota_remaining_percent, "observed_at":facts.observed_at,
+        }))
+    } else {
+        None
+    };
+    if !eligible {
+        return Ok(json!({"decision":"idle","reason":"no_eligible_item","capacity":measurement}));
+    }
     let rules = fs::read_to_string(&o.rules).map_err(|_| "house rules unreadable")?;
     let reviews = home.join(".local/share/plangraph/handoffs/plan-order/reviews");
-    Ok(tick(
+    let mut row = tick(
         &ready,
         &running,
         &facts,
@@ -86,7 +124,11 @@ fn decision(home: &Path, env: &Env, o: &Options, state: &Path) -> Result<Value, 
             state: state.into(),
             host: facts.host.clone(),
         },
-    ))
+    );
+    if let Some(measurement) = measurement {
+        row["capacity"] = measurement;
+    }
+    Ok(row)
 }
 
 #[cfg(unix)]
@@ -166,6 +208,27 @@ pub fn run(home: &Path, env: &Env, args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn live_capacity_budget_changes_with_load_and_reserves_memory_floor() {
+        let mut facts: HostFacts = serde_json::from_value(json!({
+            "host":"worker", "free_ram_bytes":7000000000u64,
+            "free_disk_bytes":20000000000u64, "quota_remaining_percent":80,
+            "observed_at":1000, "now":1000, "running_writers":5
+        }))
+        .unwrap();
+        let mut policy = Policy::default();
+        super::super::capacity::apply(&mut facts, &mut policy, 12, 0.5).unwrap();
+        assert_eq!(admit(&facts, &policy), Admission::Admit);
+        assert_eq!(facts.free_ram_bytes, 4_000_000_000);
+        facts.running_writers = 6;
+        assert_eq!(admit(&facts, &policy), Admission::Admit);
+        facts.free_ram_bytes = 7_000_000_000;
+        super::super::capacity::apply(&mut facts, &mut policy, 12, 11.5).unwrap();
+        assert_eq!(
+            admit(&facts, &policy),
+            Admission::Refuse("max_writers".into())
+        );
+    }
     #[test]
     fn routine_admission_refusals_are_healthy_unit_exits() {
         for reason in [
