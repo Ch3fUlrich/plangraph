@@ -54,7 +54,7 @@ impl Ports for Fixture {
     fn item_text(&self, _item: &str) -> Result<String, ToolError> {
         Ok("Why: w\nHow: h".into())
     }
-    fn open_findings(&self, _item: &str) -> Result<Vec<String>, ToolError> {
+    fn open_findings(&self, _item: &str, _pr: &str) -> Result<Vec<String>, ToolError> {
         Ok(vec![
             "HIGH a/one.rs:3 keep\nverbatim".into(),
             "MED b/three.rs: two".into(),
@@ -295,8 +295,8 @@ fn a_plan_that_drops_a_file_is_refused_and_nothing_is_closed() {
         fn item_text(&self, i: &str) -> Result<String, ToolError> {
             self.0.item_text(i)
         }
-        fn open_findings(&self, i: &str) -> Result<Vec<String>, ToolError> {
-            self.0.open_findings(i)
+        fn open_findings(&self, i: &str, p: &str) -> Result<Vec<String>, ToolError> {
+            self.0.open_findings(i, p)
         }
         fn plan(&self, _l: &Leg, _i: &PlanInput) -> Result<Vec<Vec<String>>, ToolError> {
             Ok(vec![vec!["a/one.rs".into()]])

@@ -56,3 +56,33 @@ def test_writer_snapshot_scores_real_legs_from_seed_catalog():
     assert scores['cx-gpt-6.2-astra'] >= 50.0
     assert scores['mimo-v2.6-pro'] == 46.0
     assert scores['agy-gemini-4-hydrogen-high'] is None
+
+
+def test_route_leg_scores_reports_catalog_intelligence_per_routed_leg(monkeypatch, capsys):
+    from types import SimpleNamespace
+    from plangraph.planner.legs import DEFAULT_LEGS
+    legs = [leg for leg in DEFAULT_LEGS if leg.id in ('agy-sonnet-5.5', 'mimo-v2.6-pro')]
+
+    class Routed:
+        def __init__(self):
+            self.legs = tuple(legs)
+
+        def to_dict(self):
+            return {'legs': [{'id': leg.id} for leg in legs]}
+
+    class Service:
+        def __init__(self, **kw):
+            pass
+
+        def route(self, *args, **kw):
+            return Routed()
+
+    monkeypatch.setattr(cli, 'SpawnService', Service)
+    monkeypatch.setattr('plangraph.spawner.bench_entry.benchmark_options', lambda *a: {})
+    card = json.dumps({'estimate_tokens': 1000})
+    assert cli.main(['route', '--role', 'orchestrate', '--json', '--leg-scores', '--card', card]) == 0
+    out = json.loads(capsys.readouterr().out)
+    # The legs keep the route order; the scores carry the catalog strength.
+    assert [leg['id'] for leg in out['legs']] == [leg.id for leg in legs]
+    assert out['leg_scores']['mimo-v2.6-pro'] == 46.0
+    assert out['leg_scores']['agy-sonnet-5.5'] != out['leg_scores']['mimo-v2.6-pro']

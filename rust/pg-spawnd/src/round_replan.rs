@@ -68,7 +68,7 @@ pub(crate) trait Ports {
     fn legs(&self) -> Result<Vec<Leg>, ToolError>;
     fn pr_files(&self, pr: &str) -> Result<Vec<FileChange>, ToolError>;
     fn item_text(&self, item: &str) -> Result<String, ToolError>;
-    fn open_findings(&self, item: &str) -> Result<Vec<String>, ToolError>;
+    fn open_findings(&self, item: &str, pr: &str) -> Result<Vec<String>, ToolError>;
     fn plan(&self, leg: &Leg, input: &PlanInput) -> Result<Vec<Vec<String>>, ToolError>;
     fn define_slice(&self, slice: &Slice) -> Result<(), ToolError>;
     fn close_pr_unmerged(&self, pr: &str) -> Result<(), ToolError>;
@@ -171,7 +171,7 @@ fn plan_step(job: &mut Value, ports: &dyn Ports) -> Result<(), ToolError> {
     let leg = strongest_leg(&legs)
         .ok_or_else(|| parameter("replan_no_planning_leg: no available planning leg"))?;
     let files = counted(&ports.pr_files(&pr)?);
-    let findings = ports.open_findings(&item)?;
+    let findings = ports.open_findings(&item, &pr)?;
     let text = ports.item_text(&item)?;
     let proposal = group_files(&files, SLICE_TARGET_LINES);
     let groups = ports.plan(

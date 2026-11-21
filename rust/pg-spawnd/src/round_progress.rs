@@ -46,7 +46,12 @@ pub(crate) fn stop_reason(counts: &[u64], next: u64, used_exception: bool) -> Op
         _ => None,
     }
 }
-fn summarize(value: &Value, run: &str, item: &str, pr: &Value) -> Result<Value, ToolError> {
+pub(crate) fn summarize(
+    value: &Value,
+    run: &str,
+    item: &str,
+    pr: &Value,
+) -> Result<Value, ToolError> {
     let invalid = || refused("round_verdict_invalid");
     if value["writer_run_id"] != run || value["item_key"] != item || &value["pr"] != pr {
         return Err(invalid());
@@ -100,6 +105,45 @@ pub(crate) fn read_json(path: &Path) -> Result<Value, ToolError> {
     read().map_err(|_| refused("round_verdict_invalid"))
 }
 
+/// The writer rounds of `item` that count toward the stop rule (voided and refused attempts
+/// excluded), ordered by round.
+pub(crate) fn round_history(state: &Path, item: &str) -> Result<Vec<Value>, ToolError> {
+    let mut history = Vec::new();
+    match std::fs::read_dir(state.join("runs")) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.map_err(|_| refused("round_history_unavailable"))?;
+                let name = entry.file_name();
+                let Some(id) = name.to_str().filter(|s| s.starts_with("run-")) else {
+                    continue;
+                };
+                if let Err(error) = std::fs::symlink_metadata(entry.path().join("record.json")) {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        continue; // Prompt storage precedes creation of the run record.
+                    }
+                    return Err(refused("round_history_unavailable"));
+                }
+                let record = crate::records::read_record(state, &json!(id))
+                    .map_err(|_| refused("round_history_unavailable"))?;
+                if record["role"] == "implement"
+                    && record["item_key"] == item
+                    && record["writer_round"].is_u64()
+                    && !(record["round_void"] == true
+                        && crate::runs::terminal(&record)
+                        && record["status"] != "completed")
+                    && !matches!(record["status"].as_str(), Some("dry_run" | "refused"))
+                {
+                    history.push(record);
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(refused("round_history_unavailable")),
+    }
+    history.sort_by_key(|r| r["writer_round"].as_u64().unwrap());
+    Ok(history)
+}
+
 pub(crate) struct Admission {
     // Held until the run record (or refusal) has been persisted, never across wait().
     _lock: Option<LockGuard>,
@@ -138,39 +182,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     let lock = pg_worker_core::lockfile::try_lock(&state.join(lock_name))
         .map_err(|_| refused("round_history_unavailable"))?
         .ok_or_else(|| refused("round_admission_busy"))?;
-    let mut history = Vec::new();
-    match std::fs::read_dir(state.join("runs")) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = entry.map_err(|_| refused("round_history_unavailable"))?;
-                let name = entry.file_name();
-                let Some(id) = name.to_str().filter(|s| s.starts_with("run-")) else {
-                    continue;
-                };
-                if let Err(error) = std::fs::symlink_metadata(entry.path().join("record.json")) {
-                    if error.kind() == std::io::ErrorKind::NotFound {
-                        continue; // Prompt storage precedes creation of the run record.
-                    }
-                    return Err(refused("round_history_unavailable"));
-                }
-                let record = crate::records::read_record(state, &json!(id))
-                    .map_err(|_| refused("round_history_unavailable"))?;
-                if record["role"] == "implement"
-                    && record["item_key"] == item
-                    && record["writer_round"].is_u64()
-                    && !(record["round_void"] == true
-                        && crate::runs::terminal(&record)
-                        && record["status"] != "completed")
-                    && !matches!(record["status"].as_str(), Some("dry_run" | "refused"))
-                {
-                    history.push(record);
-                }
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err(refused("round_history_unavailable")),
-    }
-    history.sort_by_key(|r| r["writer_round"].as_u64().unwrap());
+    let history = round_history(state, item)?;
     let next = history.len() as u64 + 1;
     let used_exception = history.iter().any(|r| r["narrow_fix"] == true);
     let mut summaries = vec![];

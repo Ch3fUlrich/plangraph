@@ -73,8 +73,12 @@ so a crash between the mark and the delivery sends the line again, under one ide
 is `sent` only after the delivery was acknowledged. The engine takes its legs, PR, keeper and
 routing through the `Ports` trait; `round_replan_ports.rs` binds them to the spawner route,
 `gh pr view|close`, the keeper CLI (`show`, `define`) and the fleet bus client, and
-`pg-spawnd serve` runs a pass over the queued jobs every 30 s. The production planner adopts
-the deterministic grouping; the strongest planning leg is named in the job file.
+`pg-spawnd serve` runs a pass over the queued jobs every 30 s. The strongest planning leg is
+the routed orchestrate leg with the highest catalog score (`route --leg-scores`); it is named
+in the job file, and the production planner adopts the deterministic grouping. Each slice is
+defined `under` its parent item, so it reaches a goal. The routing line counts as delivered
+only on the receiver's receipt (`sent <id> seq=<n>`): a locally queued line is retried. The
+findings on the slices are those of the latest validated review round of the PR.
 
 A spawner-owned `round_void: true` excludes failed rounds that never launched
 (no PID), or whose bounded Git fingerprint proves HEAD, tracked diff and

@@ -94,80 +94,76 @@ impl CommandPorts<'_> {
     }
 }
 
-/// The confirmed findings of the item's last review round, verbatim, `<SEVERITY> <text>`.
-fn last_round_findings(state: &Path, item: &str) -> Result<Vec<String>, ToolError> {
-    let unavailable = || parameter("replan_history_unavailable: round history unreadable");
-    let entries = match std::fs::read_dir(state.join("runs")) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(_) => return Err(unavailable()),
-    };
-    let mut last: Option<(u64, Value)> = None;
-    for entry in entries.filter_map(|e| e.ok()) {
-        let name = entry.file_name();
-        let Some(id) = name.to_str().filter(|s| s.starts_with("run-")) else {
+/// The confirmed findings of the latest validated review round of `item` on `pr`, verbatim,
+/// `<SEVERITY> <text>`. The rounds are the admission's own history (voided and refused attempts
+/// left out); a round whose verdict is missing or invalid is skipped for the one before it.
+fn last_round_findings(state: &Path, item: &str, pr: &str) -> Result<Vec<String>, ToolError> {
+    let history = crate::round_progress::round_history(state, item)?;
+    for record in history.iter().rev().filter(|r| r["round_pr"] == pr) {
+        let run = record["run_id"].as_str().unwrap_or("");
+        let Ok(dir) = pg_worker_core::run::record::run_dir(state, run) else {
             continue;
         };
-        if !entry.path().join("record.json").exists() {
+        let snapshot = dir.join("round-verdict.json");
+        let verdict = if snapshot.exists() {
+            crate::round_progress::read_json(&snapshot).map(|saved| saved["verdict"].clone())
+        } else {
+            crate::round_progress::read_json(Path::new(
+                record["round_verdict_file"].as_str().unwrap_or(""),
+            ))
+        };
+        let Ok(verdict) = verdict else { continue };
+        let pr_value = json!(pr);
+        if crate::round_progress::summarize(&verdict, run, item, &pr_value).is_err() {
             continue;
         }
-        let record = crate::records::read_record(state, &json!(id)).map_err(|_| unavailable())?;
-        let round = record["writer_round"].as_u64();
-        if record["role"] == "implement" && record["item_key"] == item {
-            if let Some(round) = round.filter(|r| last.as_ref().is_none_or(|(n, _)| r > n)) {
-                last = Some((round, record));
-            }
-        }
+        return Ok(verdict["findings"]
+            .as_array()
+            .map(|all| {
+                all.iter()
+                    .filter(|f| f["confirmed"] == true)
+                    .filter_map(|f| {
+                        Some(format!(
+                            "{} {}",
+                            f["severity"].as_str()?,
+                            f["text"].as_str()?
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default());
     }
-    let Some((_, record)) = last else {
-        return Ok(vec![]);
-    };
-    let id = record["run_id"].as_str().unwrap_or("");
-    let snapshot = pg_worker_core::run::record::run_dir(state, id)
-        .map_err(|_| unavailable())?
-        .join("round-verdict.json");
-    let verdict = if snapshot.exists() {
-        crate::round_progress::read_json(&snapshot)?["verdict"].clone()
-    } else {
-        let source = record["round_verdict_file"].as_str().unwrap_or("");
-        crate::round_progress::read_json(Path::new(source))?
-    };
-    Ok(verdict["findings"]
-        .as_array()
-        .map(|all| {
-            all.iter()
-                .filter(|f| f["confirmed"] == true)
-                .filter_map(|f| {
-                    Some(format!(
-                        "{} {}",
-                        f["severity"].as_str()?,
-                        f["text"].as_str()?
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default())
+    Ok(vec![])
 }
 
 impl Ports for CommandPorts<'_> {
-    /// The legs the spawner route serves for the orchestrate role, best first; the route order
-    /// is the strength order, and a leg the route skipped is not in the list.
+    /// The legs the spawner route serves for the orchestrate role, each with its catalog
+    /// intelligence (`--leg-scores`; an unscored leg counts 0); a leg the route skipped is not in
+    /// the list.
     fn legs(&self) -> Result<Vec<Leg>, ToolError> {
         let card = json!({"item_key":"replan", "estimate_tokens":20000}).to_string();
         let out = self.exec.run(
             Tool::Spawner,
-            &strings(&["route", "--role", "orchestrate", "--json", "--card", &card]),
+            &strings(&[
+                "route",
+                "--role",
+                "orchestrate",
+                "--json",
+                "--leg-scores",
+                "--card",
+                &card,
+            ]),
         )?;
         let route = parse(&out, "route")?;
         let legs = route["legs"].as_array().cloned().unwrap_or_default();
-        let count = legs.len() as u32;
         Ok(legs
             .iter()
-            .enumerate()
-            .filter_map(|(rank, leg)| {
+            .filter_map(|leg| {
+                let name = leg["id"].as_str()?.to_string();
                 Some(Leg {
-                    name: leg["id"].as_str()?.to_string(),
-                    intelligence: count - rank as u32,
+                    intelligence: route["leg_scores"][&name].as_f64().unwrap_or(0.0).max(0.0)
+                        as u32,
+                    name,
                     planning: leg["roles"]
                         .as_array()
                         .is_some_and(|r| r.iter().any(|r| r == "orchestrate")),
@@ -204,8 +200,8 @@ impl Ports for CommandPorts<'_> {
             .to_string())
     }
 
-    fn open_findings(&self, item: &str) -> Result<Vec<String>, ToolError> {
-        last_round_findings(self.state, item)
+    fn open_findings(&self, item: &str, pr: &str) -> Result<Vec<String>, ToolError> {
+        last_round_findings(self.state, item, pr)
     }
 
     /// The deterministic grouping stands in for the leg's own: it already honours the line
@@ -232,6 +228,8 @@ impl Ports for CommandPorts<'_> {
             "track":parent["track"].as_str().unwrap_or("T0"),
             "owner":parent["owner"].as_str().unwrap_or(""),
             "estimate_h":1, "depends_on":[], "operator":false,
+            // The parent depends on its slices, so they reach the goal through it.
+            "under":slice.parent,
             "done_criteria":format!("Slice of {}: {} changed lines in {} files; every finding below fixed",
                 slice.parent, slice.lines, slice.files.len()),
             "evidence_kinds":["any"],
@@ -268,12 +266,17 @@ impl Ports for CommandPorts<'_> {
     }
 
     fn send_routing(&self, key: &str, line: &str) -> Result<(), ToolError> {
-        self.exec
-            .run(
-                Tool::Bus,
-                &strings(&["send", "--msg-id", key, "routing", line]),
-            )
-            .map(|_| ())
+        let out = self.exec.run(
+            Tool::Bus,
+            &strings(&["send", "--msg-id", key, "routing", line]),
+        )?;
+        // `fleet-msg` exits 0 for a line it only queued locally ("queued <id> (will retry)");
+        // the receiver's receipt is "sent <id> seq=<n>". Anything else is not an acknowledgment.
+        if out.starts_with("sent ") {
+            Ok(())
+        } else {
+            Err(parameter("replan_bus_unacknowledged: no receiver receipt"))
+        }
     }
 }
 
