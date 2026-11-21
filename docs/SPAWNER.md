@@ -103,7 +103,7 @@ credential ID. This selection also applies to mixed legacy/v2 stores. A failed q
 `no row / inactive or store error`, not a login instruction; credentials stay out of logs and events.
 ### Doctor host source checks
 
-Moved to [doctor checks](operations/spawner-doctor.md); session names, admission window: [queue](operations/spawner-admission-queue.md); landing a batch on a GO row: [land-go](operations/spawner-land-go.md).
+See [doctor checks](operations/spawner-doctor.md). To check Omnigraph health and read the plangraph project hub, run `python3 -m plangraph.spawner.doctor --memory-probe` with `og-memory` on PATH, `OG_MEMORY_BASE_URL` set to the graph route, and `OG_MEMORY_TOKEN_FILE` set to a private token file. See [queue](operations/spawner-admission-queue.md) for session names and the admission window, and [land-go](operations/spawner-land-go.md) for landing a batch on a GO row.
 
 ## Spawn by card
 Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
