@@ -1,0 +1,2 @@
+- Host readiness reports malformed run inventories as `runs: invalid_response`. The memory floor still controls readiness when the legacy run count reaches its former cap.
+- Linux bootstrap fails when the context watchdog configuration reader returns empty output. The Rust worker CI job runs when the probe admission policy guard changes.
