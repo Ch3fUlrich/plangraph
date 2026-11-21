@@ -198,3 +198,49 @@ def test_a_squash_merged_hosted_pr_is_scanned_at_its_landed_commit_not_its_topic
     out = w.store.close_merged(router, "demo:A", "D-5504", ["google"])
     assert out["closed"] is False and out["reason"] == "deploy_pending"
     assert out["missing"] == ["(hosts unnamed)"]
+
+
+def test_a_snapshot_older_than_the_work_the_close_proves_is_stale(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 50)
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    # After the warm-up a second PR of the same item lands and ships a unit.
+    root = env.repo.root
+    git(root, "checkout", "-q", "-b", "later", "main")
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/late.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "late unit\n\nPlan-Item: demo:A")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #51 from x/later", "later")
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+    # A fresh warm-up sees both PRs and finds the unit.
+    again = frozen(env, require_seats=False)
+    assert again["closed"] == [] and "deploy_pending" in again["listed"][0]["reason"]
+
+
+def test_a_failed_merge_lookup_is_an_unreadable_scan_not_the_commits_own_diff(env, monkeypatch):  # noqa: F811
+    _land_with_unit(env.repo.root, pr=52)
+    monkeypatch.setattr(GitAdapter, "merge_commit_of", lambda *a, **k: None)  # as after a git failure
+    for run in (lambda: auto(env, require_seats=False), lambda: frozen(env, require_seats=False)):
+        result = run()
+        assert result["closed"] == []
+        assert "deploy_scan_unreadable" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_a_direct_commit_on_the_ref_has_no_merge_to_find(tmp_path):
+    repo = tmp_path / "repo"
+    merged_repo(repo, [])
+    (repo / "deploy/systemd").mkdir(parents=True)
+    (repo / "deploy/systemd/direct.service").write_text("[Service]\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "direct unit\n\nPlan-Item: demo:A")
+    sha = _git(repo, "rev-parse", "HEAD")
+    adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    r, ref = adapter.repo_path("demo"), adapter.repo_ref("demo")
+    assert ("A", "deploy/systemd/direct.service") in adapter.deploy_changes(r, sha, ref)
+    # An older direct commit, with newer work after it, is still on the chain.
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "later")
+    assert ("A", "deploy/systemd/direct.service") in adapter.deploy_changes(r, sha, ref)

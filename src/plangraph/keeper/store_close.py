@@ -432,7 +432,7 @@ class CloseMixin:
         return heads
 
     def _deploy_changes(self, item, *, named=True, strict=False):
-        """``(status, path)`` pairs the landed PRs of the item's merged work shipped.
+        """``(tagged commit shas, {(status, path)})``: the landed PRs of the item's merged work.
 
         Reads the item's Plan-Item commits and, with ``named``, the commit a ``Merge-Repo:`` line
         names (fetching). Raises when any input cannot be read, a failed history read (``None``)
@@ -443,6 +443,7 @@ class CloseMixin:
         if commits is None:
             raise RuntimeError("commit history unreadable")
         shas = [commit.get("sha") for commit in commits]
+        tagged = frozenset(shas)
         if named:
             try:  # the landed commit of a named merge counts like a Plan-Item merge
                 merge = self._named_merge_proof(item)
@@ -453,7 +454,7 @@ class CloseMixin:
             shas += [merge["landed"]] if merge else []
         repo, ref = git.repo_path(project), git.repo_ref(project)
         # The landed changes of each merged PR, not only the tagged commits.
-        return {c for sha in shas if valid_commit_ref(sha) for c in git.deploy_changes(repo, sha, ref)}
+        return tagged, {c for sha in shas if valid_commit_ref(sha) for c in git.deploy_changes(repo, sha, ref)}
 
     def _deploy_pending(self, item, *, named=True, changes=None):
         """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for.
@@ -464,7 +465,7 @@ class CloseMixin:
         """
         if changes is None:
             try:
-                changes = self._deploy_changes(item, named=named)
+                changes = self._deploy_changes(item, named=named)[1]
             except Exception:  # noqa: BLE001 - an unreadable diff never blocks the manual close
                 return []
         targets = deploy_targets(changes)
@@ -486,11 +487,12 @@ class CloseMixin:
         if item is None:
             return
         try:
-            changes = frozenset(self._deploy_changes(self._with_merge_repo(item), named=True, strict=True))
+            shas, changes = self._deploy_changes(self._with_merge_repo(item), named=True, strict=True)
+            changes = frozenset(changes)
         except Exception:  # noqa: BLE001 - recorded as unreadable
-            changes = None
+            shas, changes = None, None
         self.__dict__.setdefault("_deploy_warm", {})[key] = {
-            "at": time.monotonic(), "text": self._merge_text(item), "changes": changes}
+            "at": time.monotonic(), "text": self._merge_text(item), "shas": shas, "changes": changes}
 
     def _auto_deploy_pending(self, item):
         """The deploy gate of the automatic close. It fails closed: no scan, no close.
@@ -504,9 +506,16 @@ class CloseMixin:
                     or hit["text"] != self._merge_text(item)):
                 raise Refused("evidence_unverified", "deploy_scan_not_warm")
             changes = hit["changes"]
+            # The snapshot belongs to the commits this close proves: work that landed after the
+            # warm-up (a newer tagged merge) makes it stale, however young it is.
+            now_tagged = context_sources.plan_item_commits(
+                self._adapter("git"), self._merge_project(item), item["key"], fetch=False, limit=None)
+            if changes is not None and (
+                    now_tagged is None or frozenset(c.get("sha") for c in now_tagged) != hit["shas"]):
+                raise Refused("evidence_unverified", "deploy_scan_not_warm")
         else:
             try:
-                changes = self._deploy_changes(item, named=True, strict=True)
+                changes = self._deploy_changes(item, named=True, strict=True)[1]
             except Exception:  # noqa: BLE001 - see the docstring
                 changes = None
         if changes is None:
