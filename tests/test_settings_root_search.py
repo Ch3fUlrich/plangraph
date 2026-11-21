@@ -91,16 +91,31 @@ def test_guard_context_fails_the_test_that_leaks_above_basetemp(tmp_path, monkey
         pass
 
 
-def test_guard_only_warns_off_ci_and_fails_in_strict_mode(tmp_path, monkeypatch):
+def test_guard_fails_an_owned_leak_and_only_warns_for_a_shared_one_off_ci(tmp_path, monkeypatch):
     import _stray_git_guard as guard
-    inner = tmp_path / 'tmp' / 'worker'
-    inner.mkdir(parents=True)
     monkeypatch.delenv('CI', raising=False)
     monkeypatch.delenv('PLANGRAPH_STRAY_GIT_GUARD', raising=False)
     assert not guard.strict_mode()
-    with pytest.warns(UserWarning, match='left a .git outside'):
-        with guard.watch_stray_git('demo::warns', str(inner), strict=False):
-            (tmp_path / 'tmp' / '.git').mkdir()
+    system_tmp = tmp_path / 'shared'
+    private = system_tmp / 'private'          # TMPDIR is a private subdirectory of the shared temp root
+    basetemp = private / 'pytest-of-user' / 'pytest-0'
+    basetemp.mkdir(parents=True)
+    monkeypatch.setattr(guard.tempfile, 'gettempdir', lambda: str(private))
+    monkeypatch.setenv('PLANGRAPH_ROOT_CEILING', str(basetemp))
+    # Directly above the basetemp is this run's own tree: it fails by default.
+    with pytest.raises(AssertionError, match='demo::owned left a .git outside its tmp_path'):
+        with guard.watch_stray_git('demo::owned'):
+            (basetemp.parent / '.git').mkdir()
+    with pytest.raises(AssertionError, match='demo::private'):
+        with guard.watch_stray_git('demo::private'):
+            (private / '.git').mkdir()
+    # Above the process temp dir the directory is shared with other runs: warn, and fail in strict mode.
+    with pytest.warns(UserWarning, match='demo::shared left a .git outside'):
+        with guard.watch_stray_git('demo::shared'):
+            (system_tmp / '.git').mkdir()
+    with pytest.raises(AssertionError, match='demo::strict'):
+        with guard.watch_stray_git('demo::strict', strict=True):
+            (system_tmp / '.git').mkdir()
     monkeypatch.setenv('CI', 'true')
     assert guard.strict_mode()
     monkeypatch.delenv('CI')

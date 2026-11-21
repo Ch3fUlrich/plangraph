@@ -141,6 +141,19 @@ def read_skill(name: str, cwd: str | None) -> str | None:
     return None
 
 
+def _without_review_skill(body: str, cwd: str | None) -> str:
+    """A caller brief that starts with the review skill (origin/main's or this tree's copy) loses it."""
+    texts = [read_skill('review', cwd)]
+    try:
+        texts.append((_REPO_ROOT / 'skills' / 'review' / 'SKILL.md').read_bytes().decode('utf-8'))
+    except (OSError, UnicodeDecodeError):
+        pass
+    for text in texts:
+        if text and body.startswith(text):
+            return body[len(text):].lstrip('\n')
+    return body
+
+
 def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id: str | None = None,
             tool_mode: str | None = None) -> str:
     """header (naming the leg's tool mode), role skill byte-identical, then the brief; neither is added twice."""
@@ -150,7 +163,10 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
     body = prompt[len(head):].lstrip('\n') if prompt.startswith(head) else prompt
     # A toolless inline seat gets the inline rules from its header only: the review skill below
     # it demands test runs and file reads, and origin/main may serve a skill older than the header.
-    name = None if tool_mode == INLINE_TOOL_MODE and _ROLE_KEY.get(role) == 'review' else skill_name(role, body)
+    inline_review = tool_mode == INLINE_TOOL_MODE and _ROLE_KEY.get(role) == 'review'
+    if inline_review:
+        body = _without_review_skill(body, cwd)
+    name = None if inline_review else skill_name(role, body)
     skill = read_skill(name, cwd) if name else None
     if skill and not body.startswith(skill):
         body = skill + '\n' + body

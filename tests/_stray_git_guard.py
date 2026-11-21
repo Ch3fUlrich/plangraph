@@ -47,19 +47,41 @@ def leaked_gits(before, tempdir=None):
 
 
 def strict_mode():
-    """CI fails the leaking test. A shared workstation only warns: another session's run can create
-    the same `.git` while this test runs, and one run's stray must not fail an unrelated run."""
+    """CI also fails on a `.git` in a directory shared with other runs (the system temp root and above)."""
     return bool(os.environ.get('CI')) or os.environ.get('PLANGRAPH_STRAY_GIT_GUARD') == '1'
 
 
+def _is_below(path, parent):
+    return os.path.commonpath([path, parent]) == parent and path != parent
+
+
+def owned_gits(found, tempdir=None):
+    """Entries in directories this run owns: the pytest basetemp and its parent, and the process temp
+    dir with the directories between it and the basetemp. A `.git` above the process temp dir
+    (/tmp itself when TMPDIR is a private subdirectory) is shared with other sessions' runs."""
+    temp = os.path.realpath(tempdir or tempfile.gettempdir())
+    base = os.environ.get('PLANGRAPH_ROOT_CEILING') if not tempdir else None
+    owned = {temp}
+    if base:
+        base = os.path.realpath(base)
+        owned |= {base, os.path.dirname(base)}
+        here = base
+        while _is_below(here, temp):
+            owned.add(here)
+            here = os.path.dirname(here)
+    return {entry for entry in found if os.path.dirname(entry) in owned}
+
+
 @contextmanager
-def watch_stray_git(nodeid, tempdir=None, strict=True):
-    """Fail (strict) or warn with the test's id when it leaves a `.git` at or above the temp dirs."""
+def watch_stray_git(nodeid, tempdir=None, strict=False):
+    """Fail when the test leaves a `.git` in a directory this run owns; a `.git` in a shared directory
+    fails only in strict mode and otherwise warns (another session's run can create it)."""
     before = temp_ancestor_gits(tempdir)
     yield
     leaked = leaked_gits(before, tempdir)
+    owned = owned_gits(leaked, tempdir)
     message = f'{nodeid} left a .git outside its tmp_path: {leaked}'
-    if leaked and strict:
+    if owned or (leaked and strict):
         raise AssertionError(message)
     if leaked:
         warnings.warn(message, stacklevel=2)

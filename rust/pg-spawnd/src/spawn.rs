@@ -108,14 +108,21 @@ fn record_validation_error(
             message,
             ..
         } => ("ParameterRefused", message.clone(), 2, Status::Refused),
+        // The one card failure of an empty review diff; other spawn refusals have their own records.
+        ToolError::Refused {
+            kind: crate::errors::RefusalKind::Spawn,
+            message,
+            ..
+        } if message.starts_with("empty_diff:") => {
+            ("SpawnRefused", message.clone(), 2, Status::Refused)
+        }
         _ => return Ok(()),
     };
-    save(
-        state,
-        host,
-        json!({"role":role,"refusal":name,"error":message,"exit_code":code,"legs":[],"evidence":[]}),
-        status,
-    )?;
+    let mut record = json!({"role":role,"refusal":name,"error":message,"exit_code":code,"legs":[],"evidence":[]});
+    if name == "SpawnRefused" {
+        record["reason"] = json!("empty_diff");
+    }
+    save(state, host, record, status)?;
     Ok(())
 }
 pub(crate) fn spawn(
@@ -204,9 +211,20 @@ mod tests {
             legs: vec![],
         };
         assert!(record_validation_error(&state, "local", json!("implement"), &refused).is_ok());
+        assert!(!state.exists());
+        let empty = ToolError::Refused {
+            kind: crate::errors::RefusalKind::Spawn,
+            message: "empty_diff: no change between base a and head a".into(),
+            legs: vec![],
+        };
+        assert!(record_validation_error(&state, "local", json!("review"), &empty).is_ok());
+        let first = crate::records::list_runs(&state);
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert_eq!(first[0]["reason"], "empty_diff");
+        assert_eq!(first[0]["role"], "review");
+        std::fs::remove_dir_all(&state).unwrap();
         let answer = error.into_error_data();
         assert_eq!(answer.message, "validation failed");
-        assert!(!state.exists());
         let key = ToolError::Key("card".into());
         assert!(record_validation_error(&state, "local", json!("review"), &key).is_ok());
         let rows = crate::records::list_runs(&state);

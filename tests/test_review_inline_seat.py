@@ -69,3 +69,12 @@ def test_oversize_inline_diff_is_refused_with_its_reason_never_elided(tmp_path):
     card = {'diff_ref': {'repo': str(repo), 'base': base, 'head': head}}
     with pytest.raises(PromptBoundError, match='prompt_too_large: inline_diff_oversized'):
         seat._unbounded_leg_prompt('Review', card, 'review', leg, pack=SimpleNamespace(text=''))
+
+
+def test_a_brief_that_starts_with_the_review_skill_loses_it_on_an_inline_seat():
+    brief = SKILL + '\nReview the change'
+    inline = prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only')
+    assert SKILL not in inline and 'Run only the tests' not in inline and 'run tests' not in inline.lower()
+    assert inline.endswith('Review the change') and 'tool mode inline' in inline
+    # Tools legs keep it exactly once.
+    assert prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro').count(SKILL) == 1

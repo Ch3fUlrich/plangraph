@@ -5,3 +5,5 @@ diff once before any leg and fails the card with `empty_diff` instead of skippin
 inline leg with `inline_diff_failed: empty diff`. The plan-order `bin/review.sh` is not in
 this repository: it must stop setting diff_ref base to REVIEW_PREV's head when that head is
 the head under review, and may rely on the spawner's `empty_diff` card error.
+The Rust MCP spawn checks both `diff_ref` formats (`repo`/`base`/`head` and the registry-rooted
+`repo_id`/`base_sha`/`head_sha`) before routing and saves one failure record with reason `empty_diff`.
