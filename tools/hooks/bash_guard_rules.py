@@ -67,6 +67,9 @@ _SIZE_MSG = (
 _PARSE_MSG = (
     "bash-guard: DENIED - could not parse this command (%s); the guard fails "
     "closed. Simplify the quoting or pass the text from a file.")
+_SELF_MATCH_MSG = (
+    "bash-guard: DENIED - pgrep -f in a sleep loop can match the shell running "
+    "the loop; wait on the PID or unit, or run the command itself with run_in_background.")
 
 
 # ─── unquoted heredoc scanner ───────────────────────────────────────────
@@ -227,6 +230,51 @@ def _shell_strings(words, k):
 
 # ─── per-command rules ────────────────────────────────────────────────
 
+def _self_matching_pgrep(args, source):
+    full = False
+    for index, arg in enumerate(args):
+        if arg == "--":
+            index += 1
+            break
+        if not arg.startswith("-"):
+            break
+        if arg == "--full" or re.fullmatch(r"-[aflicq]*f[aflicq]*", arg):
+            full = True
+        elif not re.fullmatch(r"-[alicq]+", arg):
+            return False
+    else:
+        return False
+    if not full or len(args) != index + 1:
+        return False
+    pattern = args[index]
+    return bool(re.fullmatch(r"[A-Za-z0-9_./ :@=-]+", pattern) and pattern in source)
+
+
+def _has_self_matching_wait(commands, source):
+    # Track the condition and body of the same loop. Words in strings and
+    # heredocs are not reserved words in the scanner's command stream.
+    loops = []
+    for cmd in commands:
+        pos = [word for word in cmd if not word.redir]
+        i = lead(pos, ("for", "select", "done"))
+        for keyword in pos[:i]:
+            if keyword.text in ("while", "until", "for", "select"):
+                loops.append([False, False])
+            elif keyword.text == "done" and loops:
+                loops.pop()
+            elif keyword.text == "do" and loops:
+                loops[-1][0] = True
+        if not loops or i == len(pos):
+            continue
+        body, matches = loops[-1]
+        name = _basename(pos[i].text)
+        if not body and name == "pgrep":
+            loops[-1][1] |= _self_matching_pgrep([word.text for word in pos[i + 1:]], source)
+        elif body and matches and name == "sleep":
+            return True
+    return False
+
+
 def _check_simple(cmd, depth, placement_required):
     pos = [w for w in cmd if not w.redir]
     i = lead(pos)
@@ -278,6 +326,8 @@ def check_command(command, depth=0, placement_required=None):
         if placement_required is None:
             placement_required = tests_required()
         commands, heredocs = scan(command)
+        if _has_self_matching_wait(commands, command):
+            return _SELF_MATCH_MSG
         for delim, quoted, body in heredocs:
             if not quoted and _has_unescaped_heredoc_injection(body):
                 return _HEREDOC_MSG % (delim, delim)

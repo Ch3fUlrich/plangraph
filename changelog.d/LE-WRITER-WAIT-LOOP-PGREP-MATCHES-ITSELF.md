@@ -1,0 +1,1 @@
+- Refuse Bash sleep loops whose `pgrep -f` condition can match the loop's own shell command line.

@@ -656,6 +656,7 @@ denies:
   `claude agents`, and `claude stop <id>` stay allowed.
 - Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
   (see `docs/TESTING.md`).
+- Sleep loops with a literal `pgrep -f` condition that can match their own shell command line.
 
 ## Skill lint (`tools/skill-rules.py`)
 
