@@ -30,8 +30,8 @@ from .liveness import unavailable
 MIN_PCT_ENV = 'PLANGRAPH_QUOTA_MIN_REMAINING_PCT'
 #: omniroute model aliases (cx-gpt..., gc/grok...) to the provider whose pool serves them.
 ALIASES = {'cx': 'codex', 'cc': 'claude', 'gc': 'grok-cli', 'gh': 'github'}
-LIMITS_PATH = '/api/usage/provider-limits'
-LEGACY_PATH = '/api/usage/utilization?range=7d&aggregateBy=connection'
+#: The management route may omit resets; prefer QUOTA_SNAPSHOT_DB when available.
+URL_PATH = '/api/usage/utilization?range=7d&aggregateBy=connection'
 HOLD_S = 1800.0
 CACHE_S = 60.0
 
@@ -89,54 +89,6 @@ def pool_down_until(rows, provider, now, *, min_pct=1.0):
     return None if not accounts or 0.0 in accounts.values() else min(accounts.values())
 
 
-def _remaining_percent(quota):
-    if quota.get('unlimited') is True or quota.get('fractionReported') is False:
-        return None
-    pct = quota.get('remainingPercentage')
-    if pct is None:
-        remaining, total = quota.get('remaining'), quota.get('total')
-        if type(remaining) in (int, float) and type(total) in (int, float) and total > 0:
-            pct = 100 * (remaining / total)
-    return pct if type(pct) in (int, float) and 0 <= pct <= 100 else None
-
-
-def _limit_rows(data, providers):
-    caches = data['caches']
-    connections = providers['connections']
-    if not isinstance(caches, dict) or not isinstance(connections, list):
-        raise ValueError
-    if isinstance(providers.get('total'), int) and providers['total'] > len(connections):
-        raise ValueError  # An incomplete connection list cannot establish pool exhaustion.
-    rows = []
-    for connection in connections:
-        account, provider = connection['id'], connection['provider']
-        active = connection.get('isActive')
-        if not all(isinstance(key, str) and key for key in (account, provider)) or type(active) is not bool:
-            raise ValueError
-        if not active:
-            continue
-        cache = caches.get(account) or {}
-        timestamp = cache.get('fetchedAt')
-        quotas = cache.get('quotas')
-        windows = quotas.items() if isinstance(quotas, dict) and quotas and _ts(timestamp) is not None else [('unknown', {})]
-        for window, quota in windows:
-            quota = quota if isinstance(quota, dict) else {}
-            pct = _remaining_percent(quota)
-            rows.append(dict(provider=provider, connection_id=account, window_key=window,
-                             remaining_percentage=pct, is_exhausted=pct == 0,
-                             next_reset_at=quota.get('resetAt'), created_at=timestamp))
-    return rows
-
-
-def _get_quota_json(fetch, base, path, key):
-    try:
-        status, body = fetch(base + path, {'Authorization': 'Bearer ' + key}, 5.0)
-    except urllib.error.HTTPError as exc:
-        status, body = exc.code, None
-        exc.close()
-    return status, json.loads(body) if status == 200 else None
-
-
 def fetch_snapshot_rows(env=None, *, fetch=None):
     """Read-only snapshot DB or management API; LookupError when unreadable."""
     source = os.environ if env is None else env
@@ -163,21 +115,15 @@ def fetch_snapshot_rows(env=None, *, fetch=None):
         key = None
     if not base or not isinstance(key, str) or not key.strip():
         raise LookupError('gateway not configured')
-    fetch = fetch or _default_fetch
     try:
-        status, data = _get_quota_json(fetch, base, LIMITS_PATH, key)
-        if status == 200:
-            status, providers = _get_quota_json(fetch, base, '/api/providers', key)
-            if status == 200:
-                return _limit_rows(data, providers)
-        elif status == 404:
-            status, data = _get_quota_json(fetch, base, LEGACY_PATH, key)
-            rows = data.get('data') if isinstance(data, dict) else data
-            if status == 200 and isinstance(rows, list):
-                return rows
+        status, body = (fetch or _default_fetch)(base + URL_PATH, {'Authorization': 'Bearer ' + key}, 5.0)
+        data = json.loads(body)
+        rows = data.get('data') if isinstance(data, dict) else data
     except Exception:
-        pass
-    raise LookupError('quota snapshots unreadable') from None
+        raise LookupError('quota snapshots unreadable') from None
+    if status != 200 or not isinstance(rows, list):
+        raise LookupError('quota snapshots unreadable')
+    return rows
 
 
 def _min_pct():

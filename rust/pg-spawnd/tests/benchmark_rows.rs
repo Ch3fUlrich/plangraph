@@ -35,41 +35,29 @@ from plangraph.spawner.mcp import MCPSpawnerServer
 with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     db.init_and_seed()
     model = 'mimo/mimo-v2.6-pro'
-    required_priors = {
-        ('omniroute/cx-gpt-6.2-sol-medium', 'medium', 'opencode'),
-        ('omniroute/cx-gpt-6.2-sol-high', 'high', 'opencode'),
-        ('omniroute/cx-gpt-6.2-sol-xhigh', 'xhigh', 'opencode'),
-        ('codex/gpt-6.2-sol-medium', 'medium', 'codex'),
-        ('claude/claude-fable-5-2', 'low', 'claude'),
-        ('claude/claude-fable-5-2', 'medium', 'claude'),
-        ('claude/claude-fable-5-2', 'high', 'claude'),
-        ('agy/gemini-4-argon-medium', 'medium', 'agy'),
-        ('mimo/mimo-v2.6-pro', '', 'opencode'),
-        ('mimo/mimo-v2.6-flash', '', 'opencode'),
-        ('agy/gemini-4-hydrogen-high', 'high', 'agy'),
-        ('agy/gemini-4-hydrogen-medium', 'medium', 'agy'),
-        ('agy/gemini-4-neon-medium', 'medium', 'agy'),
-        ('agy/claude-opus-5-5-low', 'low', 'agy'),
-        ('agy/claude-opus-5-5-medium', 'medium', 'agy'),
-        ('agy/claude-opus-5-5-high', 'high', 'agy'),
-    }
-    seeded = {(r['model_id'], r['effort'], r['harness']): r for r in db.conn.execute(
-        'SELECT * FROM catalog_benchmark_rows WHERE legacy = 0')}
-    assert required_priors <= seeded.keys(), required_priors - seeded.keys()
-    assert all(r['source_date'] and r['source_record'] and r['source_url'] for r in seeded.values())
-    assert all(seeded[key]['imputed'] for key in required_priors)
-    def record(effort, harness, origin, score, cost=None, at='2000-01-01'):
+    def record(effort, harness, origin, score, cost=None, at='2000-01-01', model_id=model):
         db.conn.execute('''INSERT INTO catalog_benchmark_measurements
             (model_id, effort, harness, origin, score, cost_per_task_usd, measured_at, source_url)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
-            (model, effort, harness, origin, score, cost, at, 'https://example.invalid/bench'))
+            (model_id, effort, harness, origin, score, cost, at, 'https://example.invalid/bench'))
+    for family in ('gpt-6.2-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna', 'mimo-v2.6'):
+        model_id = 'fixture/' + family
+        query = 'SELECT imputed FROM catalog_benchmark_rows WHERE model_id=?'
+        record('medium', 'fixture', 'aa-index', 75, model_id=model_id)
+        assert db.conn.execute(query, (model_id,)).fetchone()[0] == 1, family
+        record('medium', 'fixture', 'own', 50, model_id=model_id)
+        assert db.conn.execute(query, (model_id,)).fetchone()[0] == 0, family
+    recent, stale = db.conn.execute("SELECT datetime('now', '-44 days'), datetime('now', '-46 days')").fetchone()
     record('high', 'mimo', 'aa-index', 90)
     record('high', 'mimo', 'deepswe', 80)
-    record('high', 'mimo', 'own', 0.0, 0.0)
+    record('high', 'mimo', 'own', 0.0, 0.0, at=stale)
     record('low', 'mimo', 'cursorbench', 13)
     record('low', 'mimo', 'frontierswe', 66)
     record('low', 'mimo', 'aa-index', 90)
-    record('low', 'opencode', 'frontierswe', 20)
+    record('low', 'opencode', 'deepswe', 20, at=recent)
+    record('low', 'opencode', 'cursorbench', 100, at=recent)
+    record('max', 'fixture', 'aa-index', 90)
+    record('max', 'fixture', 'frontierswe', 60)
     for origin in ('aider', 'livebench', 'swe-bench-verified'):
         try:
             record('high', 'mimo', origin, 100)
@@ -80,12 +68,16 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     db.conn.commit()
     rows = {(row['effort'], row['harness']): row for row in db.get_model(model)['benchmark_rows']}
     own = rows['high', 'mimo']
+    assert {'model_id', 'effort', 'harness', 'score', 'score_se', 'n_runs', 'steps',
+            'cost_per_task_usd', 'tokens_per_task', 'imputed', 'effort_channel',
+            'index_version', 'source_url', 'measured_at', 'origin'} <= own.keys()
     assert own['origin'] == 'own' and not own['imputed']
     assert own['score'] == own['cost_per_task_usd'] == 0.0 and own['stale']
     assert own['n_runs'] is None and own['tokens_per_task'] is None and own['score_se'] is None
     assert rows['low', 'mimo']['imputed'] and rows['low', 'mimo']['cost_per_task_usd'] is None
     assert rows['low', 'mimo']['origin'] == 'cursorbench'
-    assert rows['low', 'opencode']['score'] == 20
+    assert rows['low', 'opencode']['score'] == 20 and not rows['low', 'opencode']['stale']
+    assert rows['max', 'fixture']['origin'] == 'frontierswe'
     data = benchmark_options()['benchmark']
     assert {(r['effort'], r['harness']): r for r in data[model]['benchmark_rows']} == rows
     for leg in spawnable_legs():
@@ -99,11 +91,6 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     muse = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-muse-spark')
     assert benchmark_for_leg(data, muse)['effort'] == 'xhigh'
     assert benchmark_for_leg(data, replace(muse, effort='low')) is None
-    codex = next(leg for leg in spawnable_legs() if leg.id == 'gpt-6.2-sol-medium')
-    assert benchmark_for_leg(data, codex)['score'] == 53
-    luna_legs = [leg for leg in spawnable_legs() if leg.id.startswith('cx-gpt-6-luna-')]
-    assert {leg.effort for leg in luna_legs} == {'low', 'medium', 'high', 'xhigh', 'max'}
-    assert all(benchmark_for_leg(data, leg)['imputed'] for leg in luna_legs)
     base = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
     missing = replace(base, effort='high')
     assert benchmark_for_leg(data, missing) is None
@@ -128,13 +115,14 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     with patch('plangraph.spawner.mcp.get_catalog_models', db.list_models), \
             patch('plangraph.spawner.mcp.leg_status', leg_status):
         queried = asyncio.run(MCPSpawnerServer.call_tool(server, 'plangraph_agent_query_catalog', {}))
-    assert next(row for row in queried['models'] if row['id'] == model)['benchmark_rows'] == list(rows.values())
-    assert {(r['model_id'], r['effort'], r['harness']) for r in queried['benchmark_rows']} >= required_priors
-    muse_row = next(row for row in queried['benchmark_rows'] if row['model_id'] == muse.model)
+    queried_models = {row['id']: row for row in queried['models']}
+    assert queried_models[model]['benchmark_rows'] == list(rows.values())
+    muse_row, = queried_models[muse.model]['benchmark_rows']
     if not (muse_row['source_url'] and muse_row['source_date']):
         pending = json.loads(Path(os.environ['PLANGRAPH_BENCH_PENDING']).read_text(encoding='utf-8'))
         entry = next(row for row in pending if row['subject'] == muse.model and row['effort'] == muse_row['effort'])
-        assert 'Muse Amber' in entry['reason'] and 'publisher' in entry['reason']
+        assert {'source_url', 'source_date', 'source_identity'} <= set(entry['problems'])
+        assert 'publisher record' in entry['reason']
     db.init_and_seed()
     assert any(row['origin'] == 'own' for row in db.get_model(model)['benchmark_rows'])
     export = db.export_json()

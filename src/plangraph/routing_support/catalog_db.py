@@ -32,9 +32,6 @@ DEFAULT_DB_PATH: Path = default_db_path()
 SCHEMA_PATH: Path = Path(__file__).parent / "catalog_schema.sql"
 BENCHMARK_BACKUPS = (
     ('benchmark_measurements', 'model_id, effort, harness, origin'),
-    ('benchmark_refresh_sources', 'source'), ('benchmark_openrouter_models', 'id'),
-    ('benchmark_price_inputs', 'model_id, effort, harness'),
-    ('benchmark_refresh_flags', 'model_id, effort, harness'),
 )
 
 
@@ -79,9 +76,8 @@ class CatalogDB:
     def init_and_seed(self) -> None:
         """Initialize schema and seed catalog tables idempotently."""
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
-        priors = SCHEMA_PATH.with_name('catalog_benchmark_seed.sql').read_text(encoding='utf-8')
         with self.conn:
-            self.conn.executescript('BEGIN IMMEDIATE;\n' + schema_sql + '\n' + priors + '\nCOMMIT;')
+            self.conn.executescript('BEGIN IMMEDIATE;\n' + schema_sql + '\nCOMMIT;')
         registry_columns.migrate(self.conn)
 
         self._insert_records("catalog_quota_pools", SEED_QUOTA_POOLS)

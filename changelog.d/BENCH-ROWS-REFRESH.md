@@ -1,4 +1,1 @@
-Add a conditional benchmark refresh to `tools/bench_gate.py --refresh --db PATH`. The Rust command imports Epoch AI coding benchmark exports and OpenRouter model metadata, persists HTTP validators and attribution, and records stale reasons and price disagreements in the catalog view.
-Seed reference rates for the OpenRouter MiMo cells. Repricing uses the measured per-task input and output counts when those counts are available.
-Select Rust checks when the shared SQLite schema or seed changes.
-The loopback first-run fixture verifies 300 distinct effort cells, including all five Fable efforts, before checking a zero-write HTTP 304 refresh.
+SKIPPED plangraph:BENCH-ROWS-REFRESH. D-5174 requires at least 300 live effort-labeled rows. The live source check yielded 146. The refresh implementation is withdrawn so a follow-up can deliver the capability with its source coverage.

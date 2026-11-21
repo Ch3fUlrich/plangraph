@@ -574,16 +574,13 @@ def test_management_key_callers_use_real_load_token(tmp_path, monkeypatch):
 
     def fake_fetch(url, headers, timeout):
         seen_auth.append(headers.get('Authorization'))
-        if url.endswith(quota_snapshots.LIMITS_PATH):
-            return 200, b'{"caches": {}}'
-        return 200, b'{"connections": [{"id": "connection", "provider": "p", "isActive": true}]}'
+        return 200, b'{"connections": [{"provider": "p", "isActive": true}], "data": []}'
 
     env = {'OMNIROUTE_BASE_URL': 'https://gw.example/v1'}
     state = quota_snapshots.from_env(env, fetch=fake_fetch)
     assert state.provider_state('p').available is True
-    rows = quota_snapshots.fetch_snapshot_rows(env, fetch=fake_fetch)
-    assert len(rows) == 1 and rows[0]['remaining_percentage'] is None
-    assert seen_auth == ['Bearer ' + mgmt_token] * 3
+    assert quota_snapshots.fetch_snapshot_rows(env, fetch=fake_fetch) == []
+    assert seen_auth == ['Bearer ' + mgmt_token, 'Bearer ' + mgmt_token]
     assert all(CLIENT_KEY_SENTINEL not in (auth or '') for auth in seen_auth)
 
     child_env = {}

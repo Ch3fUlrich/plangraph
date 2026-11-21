@@ -9,9 +9,6 @@ fn run() -> i32 {
     if args.first().map(String::as_str) == Some("fast-checks") {
         return plangraph_cli::fast_checks::run(&args[1..]);
     }
-    if args.first().map(String::as_str) == Some("bench-refresh") {
-        return plangraph_cli::bench_refresh::run(&args[1..]);
-    }
     if args.first().map(String::as_str) == Some("review") {
         return plangraph_cli::review::run(&args[1..]);
     }

@@ -130,10 +130,9 @@ python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR 
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
-`cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test benchmark_refresh`
-checks the benchmark refresh and conditional requests against a loopback server.
-The CI selector includes both SQL files compiled into the refresh command and
-the pending provenance list read by the benchmark catalog test.
+`cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test benchmark_rows`
+checks the catalog schema and strict route admission. Both the schema and the
+legacy provenance fixture select Rust CI checks.
 
 The selector follows static Python module launches (`-m`) and calls through
 `tools/*.sh`, including imports in shell Python heredocs. Deleted Python modules

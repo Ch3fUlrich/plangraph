@@ -262,11 +262,10 @@ class MCPSpawnerServer:
                     continue
                 if family and detect_model_family(m["id"]) != family.lower():
                     continue
-                if min_intel is not None and float(m.get("aa_intelligence") or 0) < float(min_intel):
+                if min_intel is not None and float(m.get("aa_intelligence", 0)) < float(min_intel):
                     continue
                 matched.append(m)
-            return {"count": len(matched), "models": matched,
-                    **bench_entry.catalog_query_benchmarks(matched, combo, family, min_intel)}
+            return {"count": len(matched), "models": matched}
 
         if name == "plangraph_agent_health":
             restart = self._source_guard.restart_required()

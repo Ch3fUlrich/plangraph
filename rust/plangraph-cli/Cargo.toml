@@ -13,9 +13,6 @@ sha2 = "0.10"
 ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
 tempfile = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-csv = "1"
-rusqlite = { version = "0.37", features = ["bundled"] }
-zip = { version = "2.4", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

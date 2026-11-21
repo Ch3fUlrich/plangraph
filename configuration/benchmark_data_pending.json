@@ -40,7 +40,7 @@
   {"subject":"opencode-go/gemini-4-argon","effort":"high","problems":["source_url","source_date","source_identity"],"reason":"Legacy AA label supplies no source URL, source date, or publisher record naming this model."},
   {"subject":"opencode-go/glm-5.2","effort":null,"problems":["source_url","source_date","source_identity"],"reason":"Legacy AA label supplies no source URL, source date, or publisher record naming this model."},
   {"subject":"opencode-go/kimi-k3.1-pro","effort":null,"problems":["source_url","source_date","source_identity"],"reason":"Legacy AA label supplies no source URL, source date, or publisher record naming this model."},
-  {"subject":"opencode-go/muse-spark-1.3-contributor","effort":"xhigh","problems":["source_url","source_date","source_identity"],"reason":"Legacy AA label supplies no source URL, source date, or publisher record naming this serving configuration. No verified publisher record or registered alias identifies the requested Muse Amber as this leg."},
+  {"subject":"opencode-go/muse-spark-1.3-contributor","effort":"xhigh","problems":["source_url","source_date","source_identity"],"reason":"Legacy AA label supplies no source URL, source date, or publisher record naming this model."},
   {"subject":"opencode-go/qwen3.8-max","effort":null,"problems":["source_url","source_date","source_identity"],"reason":"Legacy AA label supplies no source URL, source date, or publisher record naming this model."},
   {"subject":"qoder/qwen3.8-flash-next","effort":null,"problems":["source_url","source_date","source_identity"],"reason":"Legacy AA label supplies no source URL, source date, or publisher record naming this model."}
 ]

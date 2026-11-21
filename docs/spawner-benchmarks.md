@@ -64,29 +64,16 @@ DeepSWE, CursorBench, FrontierSWE, then the Artificial Analysis index prior.
 Missing measurements remain null. The view marks observations older than 45
 days and rows without a measurement date as stale. Utility resolves the same
 view against the leg's effort and harness. Legacy databases remain readable.
-The top-level `benchmark_rows` also includes sourced identities that have no
-legacy model row. `source_date` records when a publisher's result was checked.
+`source_date` records when a publisher's result was checked.
 A separate `measured_at` records the task run date when the source reports it.
-Publisher results for named model efforts are priors for the serving harness.
 The legacy contract and its pending list still track the original seed rows and
-their provenance. No publisher result was established for the Muse Amber name.
-The pending Muse Spark contributor entry records the unresolved identity and
-provenance. The catalog contract checks that entry when its legacy row lacks a
-publisher link or source date.
+their provenance. Muse Amber is excluded from this batch's seed coverage because
+the name has no verified catalog identity or publisher record. The existing
+Muse Spark contributor row has a separate provenance allowance in the pending
+list. The catalog test checks the allowance when that row lacks a link or date.
 
-`python tools/bench_gate.py --refresh --db PATH` runs the Rust `plangraph`
-refresh command. It imports DeepSWE, CursorBench and FrontierSWE observations
-from Epoch AI and reads OpenRouter model listings and prices. It saves HTTP
-validators in the catalog with the observations. If both sources return 304,
-the command reports zero writes. OpenRouter AA index results without a published
-benchmark effort remain unspecified. Repricing uses explicit per-cell entries
-in `catalog_benchmark_price_inputs` and requires both input and output token
-counts. The view reports model identity, index version and price changes through
-`stale_reason`, and marks token rates that differ from a supplied comparison
-price by more than five percent.
-The shipped MiMo seed supplies Xiaomi reference rates for price disagreement
-checks. Its OpenRouter task costs remain unset because the source provides no
-per-task split of billable tokens. Later polls preserve prior change flags.
+The schema check for this batch is
+`cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test benchmark_rows`.
 
 ### Offline benchmark data contract (BENCH-DATA-TEST, slice 1)
 

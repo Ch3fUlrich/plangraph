@@ -259,7 +259,7 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
           "gpt", ("128k", "256k"), 475000, False, roles=("review",),
-          tool_mode="inline-only", effort=e)
+          tool_mode="inline-only")
       for e in CX_EFFORTS),
 )
 EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS
