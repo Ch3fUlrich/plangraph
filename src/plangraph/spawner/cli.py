@@ -58,6 +58,19 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
     if pending:
         write(clean(pending.decode('utf-8')))
 
+def _rotate_log(path):
+    """Move the full log to `path.1` and empty `path`, which stays present throughout."""
+    import shutil
+    mode = 0o600
+    tmp = path + '.1.tmp'
+    try:
+        with open(path, 'rb') as source, os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), 'wb') as target:
+            shutil.copyfileobj(source, target)
+        os.replace(tmp, path + '.1')
+    except FileNotFoundError:
+        pass
+    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode))
+
 def _prune_supervisor_logs(state):
     logs = []
     for path in state.glob('supervisor-*.stderr.log'):
@@ -340,10 +353,7 @@ def drain():
                 if output.tell() + len(data) > 1024 * 1024:
                     output.close()
                     output = None
-                    try:
-                        os.replace(path, path + ".1")
-                    except FileNotFoundError:
-                        pass
+                    supervisor._rotate_log(path)
                     output = open_log()
                 output.write(data)
             except OSError:

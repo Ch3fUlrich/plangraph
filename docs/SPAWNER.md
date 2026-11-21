@@ -54,7 +54,7 @@ Long hex (32+), then base64/url-safe blobs (40+, mixing letters and digits), run
 only on child output via Python's `redact_output`, and as part of Rust's `redact`.
 Python never runs these broad rules on prompts or record structures: SHAs and hashes
 must stay readable there, including run IDs, card hashes and prompt SHA-256 fields. Run records add immutable process-load `tree_sha` and `tree_branch` (or `detached`) captured once by a bounded Git read when the spawner code loads, independent of the job cwd and later checkout moves; record persistence performs no Git I/O; old records may omit them. A code path without its own `.git` marker records null identity, a `tree_absent` reason and a warning, including installed packages within an enclosing project checkout. See [checkout auditing](fleet-sync.md#production-checkout-guard-and-audit).
-Stored stdout/stderr tails and `live.log` have already passed the output scrubber at collection.
+Stored stdout/stderr tails and `live.log` have already passed the output scrubber at collection. The supervisor stderr log rotates by copy and in-place truncate, so its path is never absent.
 Exact word-boundary 40-hex commit SHAs (either case) resolved from `card.diff_ref` (`head` and `base`) or resolved as commits in the run cwd from the run's own prompt via `git cat-file --batch-check` stay visible in run output (`stdout_tail`, `live.log`, `prompt.txt`, child stdin and `seat/review.txt`); any other 40-hex or longer hex/blob token (including a 64-hex token containing an allowlisted SHA, or one joined to it by `-`, `+` or a hex fragment) remains masked. Only a path-shaped token (`/` or the token edge on both sides, no hex fragment of 8+ digits beside it) keeps an allowlisted SHA.
 
 ### Prompt delivery
