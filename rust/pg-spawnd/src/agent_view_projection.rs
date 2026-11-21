@@ -26,7 +26,7 @@ pub(super) fn mask_words(data: &mut Value, path: &Path) {
             .collect::<Result<Vec<_>, _>>()
             .ok()
     });
-    let mask = |text: &str| {
+    let word_spans = |text: &str| {
         let mut spans = Vec::new();
         for (regex, token) in patterns.as_ref().into_iter().flatten() {
             for hit in regex.find_iter(text) {
@@ -54,11 +54,29 @@ pub(super) fn mask_words(data: &mut Value, path: &Path) {
                 merged.push((start, end));
             }
         }
+        merged
+    };
+    let apply = |text: &str, spans: Vec<(usize, usize)>| {
         let mut result = text.to_owned();
-        for (start, end) in merged.into_iter().rev() {
+        for (start, end) in spans.into_iter().rev() {
             result.replace_range(start..end, "[redacted]");
         }
         result
+    };
+    // Both policies read the original text. When a secret and a private word are both
+    // present their spans cannot be combined from the redactor's output, so the whole
+    // string is withheld rather than letting one replacement break the other's match.
+    let mask = |text: &str| {
+        let redacted = pg_worker_core::redact::redact(text);
+        let own = word_spans(text);
+        if own.is_empty() {
+            let spans = word_spans(&redacted);
+            apply(&redacted, spans)
+        } else if redacted == text {
+            apply(text, own)
+        } else {
+            "[redacted]".to_owned()
+        }
     };
     for host in data["hosts"].as_array_mut().into_iter().flatten() {
         if patterns.is_none() {
@@ -101,11 +119,37 @@ pub(super) fn project_view(data: &Value) -> Value {
             {
                 Some(rows) => json!({"host":host,"readable":true,"reason":null,
                 "agents":rows.iter().map(|r| project(r,host,None,None)).collect::<Vec<_>>()}),
-                None => unavailable(host, "unreadable"),
+                None => unavailable(host, &kept_reason(entry)),
             }
         })
         .collect();
-    json!({"generated_at":data["generated_at"].as_str(),"hosts":hosts})
+    json!({"generated_at":data["generated_at"].as_str().filter(|s| valid_stamp(s)),"hosts":hosts})
+}
+/// The collector's own timestamp shape; anything else is dropped, never published.
+fn valid_stamp(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() == 20
+        && bytes.iter().enumerate().all(|(i, b)| match i {
+            4 | 7 => *b == b'-',
+            10 => *b == b'T',
+            13 | 16 => *b == b':',
+            19 => *b == b'Z',
+            _ => b.is_ascii_digit(),
+        })
+}
+/// An unavailable host keeps its reason only when the shared schema allowlists it.
+fn kept_reason(entry: &Value) -> String {
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../../src/plangraph/web/agents_schema.json"
+    ))
+    .expect("schema");
+    let reason = entry["reason"].as_str().unwrap_or("");
+    let allowed = schema["reasons"].as_array().into_iter().flatten();
+    if allowed.into_iter().any(|r| r.as_str() == Some(reason)) {
+        reason.to_owned()
+    } else {
+        "unreadable".to_owned()
+    }
 }
 #[cfg(test)]
 #[path = "agent_view_projection_tests.rs"]

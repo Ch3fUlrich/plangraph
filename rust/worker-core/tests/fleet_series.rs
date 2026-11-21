@@ -160,3 +160,65 @@ fn bounded_reads_keep_aligned_tail_and_report_corruption() {
     std::fs::write(&path, "corrupt\n").unwrap();
     assert!(read(&path).is_err());
 }
+
+fn finish_run(state: &std::path::Path, started: f64, ended: f64) -> RunRecord {
+    let mut record = RunRecord::create(
+        state,
+        "run-cov",
+        "worker",
+        Default::default(),
+        Status::Running,
+        started,
+    )
+    .unwrap();
+    record.transition(Status::Completed, ended).unwrap();
+    record
+}
+
+#[test]
+fn one_sample_before_the_run_is_not_coverage_of_the_run() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("fleet")).unwrap();
+    let text = serde_json::to_string(&sample(60, 2, &[])).unwrap() + "\n";
+    std::fs::write(tmp.path().join("fleet/worker.ndjson"), text).unwrap();
+    let record = finish_run(tmp.path(), 61.0, 120.0);
+    assert_eq!(record.get("oom_kill_delta"), Some(&json!(null)));
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_transition_does_not_block_on_a_fifo_history() {
+    use std::os::unix::ffi::OsStrExt;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("fleet")).unwrap();
+    let fifo = tmp.path().join("fleet/worker.ndjson");
+    let c_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+    let state = tmp.path().to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let record = finish_run(&state, 60.0, 120.0);
+        let _ = tx.send(record.get("oom_kill_delta").cloned());
+    });
+    let delta = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("terminal transition blocked on the history path");
+    assert_eq!(delta, Some(json!(null)));
+}
+
+#[cfg(unix)]
+#[test]
+fn history_symlink_is_not_followed() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir(tmp.path().join("fleet")).unwrap();
+    let real = tmp.path().join("elsewhere.ndjson");
+    let text = [sample(60, 2, &[]), sample(120, 5, &[])]
+        .iter()
+        .map(|r| serde_json::to_string(r).unwrap() + "\n")
+        .collect::<String>();
+    std::fs::write(&real, text).unwrap();
+    std::os::unix::fs::symlink(&real, tmp.path().join("fleet/worker.ndjson")).unwrap();
+    assert!(pg_worker_core::fleet_series::read(&tmp.path().join("fleet/worker.ndjson")).is_err());
+    let record = finish_run(tmp.path(), 60.0, 120.0);
+    assert_eq!(record.get("oom_kill_delta"), Some(&json!(null)));
+}

@@ -283,7 +283,7 @@ CREATE TRIGGER trg_oversight_tokens_append_only_truncate BEFORE TRUNCATE ON over
     FOR EACH STATEMENT EXECUTE FUNCTION pgk_reject('oversight tokens are revoke-only');
 """
 
-from .host_samples_rollup import DDL as HOST_SAMPLES_DDL
+from .host_samples_rollup import ACL_DDL as HOST_SAMPLES_ACL_DDL, DDL as HOST_SAMPLES_DDL
 
 #: Logical twin of ``schema.GRANTS_DDL``: the l1 apply grants (KEEPER-PROJECT-SCOPED-L1-APPLY).
 _V13 = """
@@ -308,7 +308,9 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(9, "bus: durable messages", MESSAGES_DDL), Migration(10, "federation jobs", SPAWNER_DDL),
               Migration(11, "placement rules", PLACEMENT_RULES_DDL),
               Migration(12, "host samples", HOST_SAMPLES_DDL),
-              Migration(13, "l1 apply grants", _V13))
+              Migration(13, "l1 apply grants", _V13),
+              Migration(14, "host samples: partition function not executable by PUBLIC",
+                        HOST_SAMPLES_ACL_DDL))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
