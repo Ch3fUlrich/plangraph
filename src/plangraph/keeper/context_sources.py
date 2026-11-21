@@ -35,6 +35,15 @@ _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 _PR_RE = re.compile(r"#(\d+)")
+# The canonical merge subject ends ``(#N)`` (tools/merge_batch_land.py); an earlier ``#42`` in
+# the title is prose, not the PR.
+_PR_TRAILING_RE = re.compile(r"\(#(\d+)\)\s*\Z")
+
+
+def subject_pr(subject):
+    """The PR number of a merge subject: the trailing ``(#N)``, else the first ``#N``, else None."""
+    match = _PR_TRAILING_RE.search(subject) or _PR_RE.search(subject)
+    return int(match.group(1)) if match else None
 _DID_RE = re.compile(r"(?<![\w-])[Dd]-0*(\d{1,6})(?!\d)")
 # Row 40 "supersedes / corrects / withdraws / replaces D-12" retires D-12.
 _SUPERSEDES_RE = re.compile(
@@ -207,9 +216,8 @@ def work_index(git, project, *, fresh=False):
             introduced.append(sha)
             todo.extend(records.get(sha, ([],))[0])
         if len(parents) > 1:
-            match = _PR_RE.search(commit["subject"])
             merge = {"sha": landing, "subject": commit["subject"],
-                     "pr": int(match.group(1)) if match else None}
+                     "pr": subject_pr(commit["subject"])}
             for sha in introduced:
                 if sha != landing and sha in records:
                     records[sha][1]["merge"] = merge
@@ -326,9 +334,7 @@ def _merge_of(git, repo, ref, sha):
         return None
     subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                "--end-of-options", found[-1]]) or "").strip()
-    match = _PR_RE.search(subject)
-    return {"sha": found[-1], "subject": subject,
-            "pr": int(match.group(1)) if match else None}
+    return {"sha": found[-1], "subject": subject, "pr": subject_pr(subject)}
 
 
 def _head_introduced_by_merge(git, repo, parents, head):

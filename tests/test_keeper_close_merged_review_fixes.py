@@ -397,6 +397,33 @@ def test_subjectless_merge_closes_via_go_row_pr_and_head(w, tmp_path, monkeypatc
         {"pr": 1078, "head": chosen, "decision_id": "D-6395"}]
 
 
+@pytest.mark.parametrize("subject,pr", [
+    ("Follow up on #42 (#1078)", 1078),
+    ("Fix #7 and #8 (#9)", 9),
+    ("Merge pull request #12 from x/y", 12),
+    ("no number", None),
+    ("see #5 and #6", 5),
+])
+def test_merge_subject_pr_prefers_the_trailing_canonical_number(subject, pr):
+    from plangraph.keeper.context_sources import subject_pr
+    assert subject_pr(subject) == pr
+
+
+def test_a_title_with_an_earlier_reference_closes_on_the_trailing_pr(w, tmp_path, monkeypatch):
+    repo, _, _, tip_head, _ = _subjectless_repo(tmp_path, "Follow up on #42 (#1078)")
+    from plangraph.keeper.evidence_git import GitAdapter
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    w.conn.execute("UPDATE items SET state='open' WHERE key='demo:A'")
+    w.decision_path.write_text(f"| D-6395 | demo | GO #1078 demo:A; GO-HEAD {tip_head} | ROUTER |\n")
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
+                               from_open=True, apply=True)
+    assert out["state"] == "done"
+    assert w.store._evidence("demo:A")[-1]["ref"]["prs"] == [
+        {"pr": 1078, "head": tip_head, "decision_id": "D-6395"}]
+
+
 @pytest.mark.parametrize("case", ["no_pr_in_go", "prior_head", "unmerged_head", "other_pr_on_ancestor"])
 def test_subjectless_merge_refuses_bad_pr_or_head(w, tmp_path, monkeypatch, case):
     subject = ("batch (#1078)" if case == "other_pr_on_ancestor"
