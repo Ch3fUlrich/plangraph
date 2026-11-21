@@ -466,8 +466,11 @@ def changed_files(root, base, head=None):
     return sorted(set(p.decode() for p in (tracked + untracked).split(b"\0") if p))
 
 
-def pushed_parts_files(root, base, head):
-    """Return interaction paths only for a verifiable batch; otherwise use normal diff."""
+def pushed_parts_files(root, base, head, union=False):
+    """Return interaction paths only for a verifiable batch; otherwise use normal diff.
+
+    union=True returns every file any part changed, so a train selects the tests a part
+    breaks in a file no other part touched (imports and fixtures follow from select_tests)."""
     def git(*args):
         return subprocess.check_output(
             ["git", "--no-replace-objects", *args], cwd=root,
@@ -513,6 +516,8 @@ def pushed_parts_files(root, base, head):
             selected.update(paths("show", "--remerge-diff", "--format=",
                                   "--name-only", "--no-renames", "-z", commit))
             parts += 1
+        if union:
+            selected.update(touched)
         return (sorted(selected), parts) if parts else None
     except (OSError, subprocess.SubprocessError, UnicodeError):
         return None
@@ -529,6 +534,70 @@ def test_environment(root, env):
             if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
 
 
+KEEPER_TEST_RE = re.compile(r"^tests/test_keeper_[^/]+\.py$")
+POSTGRES_BIN_GLOBS = ("/usr/lib/postgresql/*/bin", "/usr/local/pgsql/bin", "/opt/homebrew/opt/postgresql@16/bin")
+
+
+def keeper_postgres_files(root, changed):
+    """Changed or added tests/test_keeper_* files that still exist: these run on Postgres too."""
+    return sorted(p for p in dict.fromkeys(Path(c).as_posix() for c in changed)
+                  if KEEPER_TEST_RE.match(p) and (Path(root) / p).is_file())
+
+
+def postgres_bin(env, search=POSTGRES_BIN_GLOBS):
+    """The directory with initdb and pg_ctl: PG_BIN, then PATH, then the usual install places."""
+    names = ("initdb", "pg_ctl", "createdb")
+    candidates = [Path(env["PG_BIN"])] if env.get("PG_BIN") else []
+    candidates += [Path(d) for d in env.get("PATH", "").split(os.pathsep) if d]
+    for pattern in search:
+        candidates += sorted(Path("/").glob(pattern.lstrip("/")), reverse=True)
+    for directory in candidates:
+        if all(shutil.which(name, path=str(directory)) for name in names):
+            return directory
+    return None
+
+
+def run_keeper_postgres(root, changed, env, *, runner=subprocess.run, search=POSTGRES_BIN_GLOBS):
+    """Run the changed keeper test files with PG_KEEPER_BACKEND=postgres, as the CI job does.
+
+    An existing PG_DSN is used as is; else a throwaway local cluster is started and stopped. A host
+    without the Postgres binaries says so and passes: CI is then the first Postgres run."""
+    files = keeper_postgres_files(root, changed)
+    if not files:
+        return 0
+    command = [sys.executable, "-m", "pytest", *files]
+    pg_env = dict(env, PG_KEEPER_BACKEND="postgres")
+    if env.get("PG_DSN"):
+        return runner(command, cwd=root, env=pg_env).returncode
+    directory = postgres_bin(env, search)
+    if directory is None:
+        print("keeper-postgres: SKIPPED: no Postgres binaries on this host (set PG_BIN or PG_DSN); "
+              f"{len(files)} keeper test file(s) run on Postgres first in CI", flush=True)
+        return 0
+    scratch = Path(tempfile.mkdtemp(prefix="pgkeeper-"))
+    tool = lambda name: str(Path(shutil.which(name, path=str(directory))))  # noqa: E731
+    try:
+        subprocess.run([tool("initdb"), "-D", str(scratch / "data"), "-U", "postgres", "--auth=trust"],
+                       check=True, capture_output=True)
+        subprocess.run([tool("pg_ctl"), "-D", str(scratch / "data"), "-w", "-o",
+                        f"-c listen_addresses='' -c unix_socket_directories='{scratch}'", "-l",
+                        str(scratch / "log"), "start"], check=True, capture_output=True)
+        try:
+            subprocess.run([tool("createdb"), "-h", str(scratch), "-U", "postgres", "keeper"],
+                           check=True, capture_output=True)
+            pg_env["PG_DSN"] = f"postgresql://postgres@/keeper?host={scratch}"
+            print(f"keeper-postgres: {len(files)} keeper test file(s) on a throwaway cluster", flush=True)
+            return runner(command, cwd=root, env=pg_env).returncode
+        finally:
+            subprocess.run([tool("pg_ctl"), "-D", str(scratch / "data"), "-m", "immediate", "stop"],
+                           capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        print(f"keeper-postgres: FAIL: cannot start a throwaway cluster: {exc.cmd[0]}", flush=True)
+        return 1
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def main(root=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
@@ -538,6 +607,7 @@ def main(root=None):
     parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
     parser.add_argument("--loud", action="store_true", help="pytest's default report, no quiet flags")
+    parser.add_argument("--parts-union", action="store_true", help="a pushed batch or train selects the union of every part's changed files, not only the files parts share")
     parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
@@ -558,8 +628,12 @@ def main(root=None):
     batch = None
     pushed_range = os.environ.get("PLANGRAPH_PUSH_RANGE", "").split(":")
     hook_selection = args.files_only and args.local and args.head and args.changed is None
+    if hook_selection and args.parts_union and "PLANGRAPH_PUSH_RANGE" not in os.environ:
+        # standalone preflight: the batch starts where the train left the base, not at a base that moved on
+        start = subprocess.run(["git", "merge-base", args.base, args.head], cwd=root, capture_output=True, text=True)
+        pushed_range = [start.stdout.strip() or args.base, args.head]
     if hook_selection and len(pushed_range) == 2 and pushed_range[1] == args.head:
-        batch = pushed_parts_files(root, pushed_range[0], args.head)
+        batch = pushed_parts_files(root, pushed_range[0], args.head, union=args.parts_union)
     if changed is None:
         changed = batch[0] if batch else changed_files(root, args.base, args.head)
     plan = select_tests(root, changed, within=args.within, files_only=args.files_only, local=args.local,
@@ -642,7 +716,10 @@ def main(root=None):
                 hashes.append(tree_hash(root))
                 for line in flake_labels(failed, low, high, hashes, parallel=ran_workers):
                     print(line)
-        return code
+        if args.within is not None:
+            return code
+        postgres = run_keeper_postgres(root, changed, env)
+        return code or postgres
     return 0
 
 

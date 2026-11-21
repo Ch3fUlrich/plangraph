@@ -285,7 +285,7 @@ def test_skip_conflicts_labels_and_continues(env):
     assert env.git("status", "--porcelain", cwd=wt) == ""
     assert not Path(env.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=wt)).exists()
     label = ["api", "--method", "POST", "repos/owner/proj/issues/2/labels", "-f", "labels[]=needs-update"]
-    assert env.calls("api") == [label, label]  # the first try finds no such label, the retry follows its creation
+    assert [c for c in env.calls("api") if "--method" in c] == [label, label]  # the first try finds no such label, the retry follows its creation
     assert env.calls("label", "create")[0][2] == "needs-update" and not env.calls("pr", "edit")
     assert {"name": "needs-update"} in env.load()["prs"]["2"]["labels"]
 

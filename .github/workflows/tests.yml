@@ -13,9 +13,10 @@ on:
   schedule:
     - cron: '23 3 * * *'
 
-# The full suite runs once, on the merge candidate: a batch/* head, a merge queue event, or a head a router GO row
-# labels ci-full (a push to main and a dispatch also run it). Every other pull request, draft or ready, runs the
-# affected selection (tools/ci_select.py full_run_required).
+# The full suite runs once, on the merge candidate: a train head (land/train-*), a batch/* head without the
+# land-part label, a merge queue event, or a head a router GO row labels ci-full (a push to main and a dispatch
+# also run it). Every other pull request, a part included (label land-part), runs the affected selection
+# (tools/ci_select.py full_run_required).
 # Marking a draft ready starts no run: the head already has its required ci-gate from the run its last push
 # started, and a second run would leave the required check pending for an hour (landing a draft part).
 # A newer push to the PR cancels the stale run, but never a workflow_dispatch run (timing measurements

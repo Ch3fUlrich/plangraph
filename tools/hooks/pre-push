@@ -4,7 +4,11 @@
 Runs scrub rules over committed blobs in the pushed range, including preflight;
 new branches scrub from origin/main and select affected test files from their nearest remote base.
 Missing preflight refuses main pushes; topic and tag pushes retain the other gates.
-Preflight uses file-only local selection; suite-control smoke checks stay bounded, with full coverage in CI.
+Lane and train pushes run the seconds-fast checks only (preflight --lane: scrub, policy, skill lint,
+cargo fmt) and no test; the affected tests run once, in CI. A push to refs/heads/land/train-* is a
+train: its first-parent chain must be exactly the merges of the parts listed in the manifest
+(PLANGRAPH_TRAIN_MANIFEST, one head per line, merge order), and the open-pull-request parent
+check is replaced by that manifest check.
 When origin/main is available, identical upstream/base blobs and inherited lines
 are excluded; without it the stricter whole-file scan remains in effect.
 PLANGRAPH_SCRUB_WORDS overrides ~/.config/plangraph/scrub-words.txt; an explicit
@@ -155,8 +159,65 @@ def file_size_gate(head):
     return 0
 
 
-def commit_gate(head):
-    """Refuse bad trailers before expensive checks; only the network probe is optional."""
+TRAIN_REF_PREFIX = "refs/heads/land/train-"
+HEX40 = re.compile(r"[0-9a-f]{40}")
+
+
+def is_train_ref(remote_ref):
+    return remote_ref.startswith(TRAIN_REF_PREFIX) and len(remote_ref) > len(TRAIN_REF_PREFIX)
+
+
+def lane_or_train_ref(remote_ref):
+    """Lane and train pushes run no test; a direct push to main or a tag keeps the full preflight."""
+    return remote_ref.startswith("refs/heads/") and remote_ref != "refs/heads/main"
+
+
+def read_train_manifest(path):
+    """The parts of a train, in merge order: one full head sha per line, # comments allowed."""
+    heads = []
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines() if path else []
+    except OSError:
+        lines = []
+    for line in lines:
+        line = line.split("#", 1)[0].strip()
+        if line:
+            if not HEX40.fullmatch(line):
+                raise ValueError("manifest line is not a full lowercase sha")
+            heads.append(line)
+    if not heads:
+        raise ValueError("manifest missing or empty (set PLANGRAPH_TRAIN_MANIFEST)")
+    return heads
+
+
+def train_gate(local_sha, manifest):
+    """The train is exactly its manifest: the first-parent chain above the base holds one two-parent
+    merge per manifest head, in manifest order, nothing else. Any other parent is refused."""
+    main = git_out("rev-parse", "--verify", "-q", "refs/remotes/origin/main^{commit}")
+    base = git_out("merge-base", main, local_sha) if main else ""
+    if not base:
+        return "train base unavailable (no origin/main merge-base)"
+    chain = git_out("rev-list", "--first-parent", "--reverse", f"{base}..{local_sha}").split()
+    previous = base
+    for index, commit in enumerate(chain):
+        parents = git_out("rev-list", "--parents", "-n", "1", commit).split()[1:]
+        if len(parents) != 2 or parents[0] != previous:
+            return f"train commit {commit[:12]} is not a merge of its predecessor (an extra commit?)"
+        if parents[1] not in manifest:
+            return f"train parent {parents[1][:12]} is outside its manifest"
+        if index >= len(manifest) or parents[1] != manifest[index]:
+            return f"train parent {parents[1][:12]} is out of manifest order"
+        previous = commit
+    if len(chain) != len(manifest):
+        return f"train has {len(chain)} merges, its manifest {len(manifest)} parts"
+    return None
+
+
+def commit_gate(head, open_prs=True):
+    """Refuse bad trailers before expensive checks; only the network probe is optional.
+
+    A train skips the open-pull-request probe: its parents are open part heads by design,
+    and train_gate checks them against the manifest instead."""
     base = git_out("rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
     if not base:
         print("pre-push: origin/main unavailable: commit gate refused", file=sys.stderr)
@@ -164,7 +225,7 @@ def commit_gate(head):
     command = [PYTHON, str(TOOLS / "ci_commit_gate.py"), "check", "--base", base, "--head", head]
     result = subprocess.run(command, capture_output=True, text=True)
     sys.stderr.write(result.stdout + result.stderr)
-    if result.returncode:
+    if result.returncode or not open_prs:
         return result.returncode
     try:
         probe = subprocess.run(
@@ -321,8 +382,18 @@ def push_main():
         return 0
     PYTHON = python_interpreter(Path(git_out("rev-parse", "--show-toplevel")))
     print(f"pre-push Python: {PYTHON}", flush=True)
-    for _, local_sha, _, _ in refs:
-        if commit_gate(local_sha) or file_size_gate(local_sha):
+    for _, local_sha, remote_ref, _ in refs:
+        train = is_train_ref(remote_ref)
+        if train:
+            try:
+                problem = train_gate(local_sha, read_train_manifest(os.environ.get("PLANGRAPH_TRAIN_MANIFEST")))
+            except ValueError as exc:
+                problem = f"train {exc}"
+            if problem:
+                print(f"pre-push: {problem}: push refused", file=sys.stderr)
+                return 1
+            print(f"pre-push: train path for {remote_ref}: manifest ok, no affected tests", file=sys.stderr)
+        if (commit_gate(local_sha, open_prs=False) if train else commit_gate(local_sha)) or file_size_gate(local_sha):
             return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
@@ -419,9 +490,12 @@ def push_main():
                     print("pre-push: tools/preflight.py missing: push refused", file=sys.stderr)
                     return 1
                 continue
+            # Lane and train pushes run the seconds-fast checks only; the affected tests run once, in CI.
             command = [PYTHON, str(preflight),
                        "--base", affected_base_commit(remote_sha, local_sha),
                        "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
+            if lane_or_train_ref(remote_ref):
+                command.append("--lane")
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             # Git's hook-local repository variables must not redirect the worktree.
