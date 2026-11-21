@@ -1,0 +1,1 @@
+- Recognize Docker and containerd ownership before reporting an OpenCode server as unclaimed.

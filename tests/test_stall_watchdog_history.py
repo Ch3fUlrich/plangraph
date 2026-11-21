@@ -352,3 +352,69 @@ def test_expired_queue_with_live_supervisor_is_preserved(tmp_path):
     path.with_suffix('.log.pid').write_text(str(os.getpid()))
     record = dict(status='queue_claimed', queued_until=1, supervisor_stderr_path=str(path))
     assert _expire_queue(record, 2) == record
+
+
+@pytest.mark.parametrize('configured', [None, 15])
+def test_never_launched_run_transitions_and_alerts_parent_once(tmp_path, monkeypatch, configured):
+    monkeypatch.delenv('PLANGRAPH_WATCHDOG_NO_LEG_SECONDS', raising=False)
+    if configured is not None:
+        monkeypatch.setenv('PLANGRAPH_WATCHDOG_NO_LEG_SECONDS', str(configured))
+    clock = SimpleNamespace(now=100)
+    monkeypatch.setattr(w.time, 'time', lambda: clock.now)
+    records(tmp_path, 3, status='running', started=100, plan={}, attempts=[],
+            parent_session='parent', ended=None)
+    launched = tmp_path / 'runs/run-1/record.json'
+    launched.write_text(json.dumps(dict(json.loads(launched.read_text()), pid=123, job_id='job-live')))
+    prior_attempt = tmp_path / 'runs/run-2/record.json'
+    prior_attempt.write_text(json.dumps(dict(json.loads(prior_attempt.read_text()),
+                                            attempts=[{'status': 'failed'}])))
+    deadline = 100 + (configured or 600)
+    clock.now = deadline - 1
+    assert [r['status'] for r in w.sweep_runs(tmp_path)] == ['running'] * 3
+    clock.now = deadline
+    dry = w.sweep_runs(tmp_path, dry_run=True)
+    assert dry[0]['status'] == 'stalled_no_leg'
+    assert all(r['status'] == 'running' for r in w.read_runs(tmp_path))
+    assert not list((tmp_path / 'watchdog/outbox').glob('*.json'))
+    first = w.sweep_runs(tmp_path)
+    assert first[0]['status'] == 'stalled_no_leg'
+    assert first[0]['ended'] == deadline
+    assert [r['status'] for r in first[1:]] == ['running', 'running']
+    sent = []
+    w.flush_outbox(tmp_path, ['notify'], run=lambda cmd, **kw: sent.append(json.loads(kw['input'])))
+    assert [(e['rule'], e['recipient'], e['run_id']) for e in sent] == [
+        ('stalled_no_leg', 'parent', 'run-0')]
+    from plangraph.spawner.runner import spawn_service
+    service = spawn_service(state=tmp_path)
+    delivery = SimpleNamespace(deliver=lambda *a: pytest.fail('duplicate completion delivery'))
+    service.completion_sink = service.keeper_sink = delivery
+    clock.now += 3600
+    service.retry_completions()
+    assert 'completion' not in service.result('run-0')
+    stale = dict(dry[0], status='running', ended=None)
+    from plangraph.spawner.service import claim_first_dispatch
+    with pytest.raises(RuntimeError, match='first dispatch expired'):
+        claim_first_dispatch((None, stale, service._save))
+    assert stale['status'] == 'stalled_no_leg'
+    w.sweep_runs(tmp_path)
+    assert w.read_runs(tmp_path)[0]['status'] == 'stalled_no_leg'
+    assert not list((tmp_path / 'watchdog/outbox').glob('*.json'))
+
+
+def test_no_leg_sweep_preserves_launch_recorded_before_lock(tmp_path, monkeypatch):
+    from plangraph.spawner import notify
+    records(tmp_path, status='running', started=0, plan={}, attempts=[], parent_session='parent')
+    monkeypatch.setattr(w.time, 'time', lambda: 700)
+    real_lock = notify.inbox_lock
+
+    @contextmanager
+    def launch_before_lock(path):
+        with real_lock(path):
+            record = json.loads(path.read_text())
+            path.write_text(json.dumps(dict(record, job_id='job-live', pid=123)))
+            yield
+
+    monkeypatch.setattr(notify, 'inbox_lock', launch_before_lock)
+    record, = w.sweep_runs(tmp_path)
+    assert record['status'] == 'running' and record['pid'] == 123
+    assert not list((tmp_path / 'watchdog/outbox').glob('*.json'))

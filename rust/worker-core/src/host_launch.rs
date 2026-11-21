@@ -1,11 +1,12 @@
 //! Token-free client of existing local/SSH pg-spawnd shims.
 use crate::{
-    host_command, host_overflow::Launch, hosts::HostRegistry, package_placement::Candidate,
-    run::record::valid_run_id,
+    host_command, host_link, host_overflow::Launch, hosts::HostRegistry,
+    package_placement::Candidate, run::record::valid_run_id,
 };
 use serde_json::{json, Value};
 use std::{
     io::{self, BufRead, BufReader, Read, Write},
+    path::Path,
     process::{Command, Stdio},
     sync::mpsc,
     time::{Duration, Instant},
@@ -54,6 +55,25 @@ pub fn classify(reply: &Value, host: &str) -> Launch {
     Launch::Started(receipt)
 }
 pub fn launch(registry: &HostRegistry, host: &Candidate, request: &Value) -> Launch {
+    launch_inner(registry, host, request, None)
+}
+
+/// Keep the selected host when the link monitor has recorded an outage.
+pub fn launch_with_state(
+    registry: &HostRegistry,
+    host: &Candidate,
+    request: &Value,
+    state: &Path,
+) -> Launch {
+    launch_inner(registry, host, request, Some(state))
+}
+
+fn launch_inner(
+    registry: &HostRegistry,
+    host: &Candidate,
+    request: &Value,
+    state: Option<&Path>,
+) -> Launch {
     let mut cmd = if registry
         .resolve(&registry.self_host)
         .is_some_and(|local| local.id == host.id)
@@ -67,6 +87,15 @@ pub fn launch(registry: &HostRegistry, host: &Candidate, request: &Value) -> Lau
             Ok(cmd) => cmd,
             Err(_) => return Launch::Refused("invalid SSH route".into()),
         };
+        if let Some(state) = state {
+            match host_link::ssh_down_since(state, dest) {
+                Ok(Some(since)) => {
+                    return Launch::Waiting(format!("{} unreachable since {since}", host.id));
+                }
+                Ok(None) => (),
+                Err(error) => return Launch::Uncertain(format!("host link state: {error}")),
+            }
+        }
         if let Some(distro) = registry
             .resolve(&host.id)
             .and_then(|host| host.wsl_distro.as_deref())

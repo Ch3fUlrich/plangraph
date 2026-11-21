@@ -41,6 +41,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_errors.py",
     "deploy/feeder/**",
     "deploy/systemd/pg-feeder.service",
+    "deploy/liveness/router.toml",
+    "tools/liveness_watchdog.py",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
     "src/plangraph/planner/measured_down.py",

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the Tailscale link to the coordinator
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/host-link.env
+ExecStart=%h/.local/bin/pg-host-link ${PLANGRAPH_SPAWN_STATE} ${HOST_LINK_ID} ${HOST_LINK_PEER}
+TimeoutStartSec=15s
+UMask=0077
+NoNewPrivileges=true

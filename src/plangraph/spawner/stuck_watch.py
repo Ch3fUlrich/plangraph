@@ -9,6 +9,7 @@ import asyncio
 import ipaddress
 import json
 import os
+import re
 import socket
 from pathlib import Path
 import sys
@@ -32,6 +33,31 @@ def processes(proc):
         except (OSError, ValueError, IndexError, UnicodeError):
             continue
     return table
+
+
+def container_owned(proc, table, pid):
+    """Recognize runtime ancestry and Docker's cgroupfs and systemd layouts."""
+    seen = set()
+    while pid in table and pid not in seen:
+        seen.add(pid)
+        row = table[pid]
+        words = row['cmd'].split()
+        exe = Path(words[0]).name if words else ''
+        if exe in ('docker-init', 'containerd-shim') or exe.startswith('containerd-shim-'):
+            return True
+        try:
+            lines = (Path(proc) / str(pid) / 'cgroup').read_text().splitlines()
+        except (OSError, UnicodeError):
+            lines = ()
+        for line in lines:
+            fields = line.split(':', 2)
+            if len(fields) != 3:
+                continue
+            path = fields[2]
+            if re.search(r'(?:^|/)(?:docker/[0-9a-f]{64}|docker-[0-9a-f]{64}\.scope)(?:/|$)', path):
+                return True
+        pid = row['parent']
+    return False
 
 
 def outbound(proc, members):
@@ -194,6 +220,9 @@ def check(state, runs, now, *, dry_run=False, proc='/proc', platform=None,
         words = row['cmd'].split()
         if pid not in covered and words and Path(words[0]).name == 'opencode' and 'serve' in words:
             key = 'process-' + str(pid)
+            if container_owned(proc, table, pid):
+                samples[key] = dict(start=row['start'], host=host, owner='container')
+                continue
             old = previous.get(key, {})
             if old.get('host') != host:
                 old = {}
