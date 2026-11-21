@@ -229,3 +229,115 @@ def test_off_never_flags_away_the_credential_lane_seat_rule(unseated_w, risk):
     with pytest.raises(Refused, match="NO-WITNESS|insufficient_non_anthropic"):
         w.store.close_merged(w.p("router"), "demo:H", "D-5504")
     assert w.store._item("demo:H")["state"] == "in_review"
+
+
+# --- KEEPER-CLOSE-KEY-IN-GO-PART-TABLE: a merged GO row is frozen evidence, so its part table
+# (the heads it names) can vouch for a key its key list omits.
+
+def _train_repo(path):
+    """main <- train(#9) <- parts: ``partP`` (Plan-Item demo:H) and ``partQ`` (Plan-Item demo:A)."""
+    import subprocess
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    lines, when = [], 1_760_000_000
+
+    def commit(ref, mark, message, parents):
+        nonlocal when
+        when += 60
+        lines.extend([f"commit {ref}", f"mark :{mark}", f"committer T <t@example.invalid> {when} +0000",
+                      f"data {len(message.encode())}", message])
+        lines.extend(f"{'from' if n == 0 else 'merge'} :{p}" for n, p in enumerate(parents))
+        lines.append("")
+    commit("refs/heads/main", 1, "base", [])
+    commit("refs/heads/partP", 2, "work p\n\nPlan-Item: demo:H\nPlan-Item: demo:SPLIT", [1])
+    commit("refs/heads/partQ", 3, "work q\n\nPlan-Item: demo:A\nPlan-Item: demo:SPLIT", [1])
+    commit("refs/heads/train", 4, "train", [1, 2, 3])
+    commit("refs/heads/main", 5, "Landing train (#9)", [1, 4])
+    commit("refs/heads/partR", 6, "late\n\nPlan-Item: demo:LATE", [2])
+    commit("refs/heads/main", 7, "Later (#10)", [5, 6])
+    subprocess.run(["git", "-C", str(path), "fast-import", "--quiet"], input="\n".join(lines) + "\n",
+                   text=True, check=True)
+    rev = lambda ref: subprocess.run(["git", "-C", str(path), "rev-parse", ref], text=True,
+                                     capture_output=True, check=True).stdout.strip()
+    return {name: rev(name) for name in ("partP", "partQ", "partR", "train")}
+
+
+def _part_table_world(world, monkeypatch, tmp_path, table):
+    from plangraph.keeper.context_sources import open_lanes  # noqa: F401 - the module the patch targets
+    heads = _train_repo(tmp_path / "train")
+    row = (f"| D-5504 | demo | GO #9 demo:X; GO-HEAD {heads['train']}; Per-part table: "
+           + table.format(**{k: v[:9] for k, v in heads.items()}) + " | ROUTER | 2026-11-12 |\n")
+    world.decision_path.write_text(
+        "| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n" + row
+        + "| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H demo:A | OPERATOR | 2026-11-14 |\n")
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", world.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    world.store.ctx["git"] = GitAdapter({"demo": {"path": str(tmp_path / "train"), "ref": "main"}})
+    return heads
+
+
+def _scope(world, key):
+    item = dict(world.store._item("demo:H"), key=key)
+    return world.store._merged_go_scope_matches("D-5504", item, None, require_key=False)
+
+
+def test_part_table_head_vouches_for_a_key_the_list_omits(unseated_w, monkeypatch, tmp_path):
+    heads = _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partP}, keys demo:X")
+    assert _scope(unseated_w, "demo:H")
+    result = unseated_w.store.close_merged(unseated_w.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+    assert result["state"] == "done"
+    ref = unseated_w.store._evidence("demo:H")[-1]["ref"]
+    assert ref["go_part"] == heads["partP"] and ref["merged_head"] == heads["train"]
+    assert unseated_w.store.verify_integrity() == []
+
+
+def test_key_in_a_part_the_row_does_not_name_still_refuses(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partP}, keys demo:X")
+    assert not _scope(unseated_w, "demo:A")
+    with pytest.raises(Refused, match="merged_pr_go_scope_mismatch"):
+        unseated_w.store.close_merged(unseated_w.p("router"), "demo:A", "D-5504", waive_seats="D-6000")
+
+
+def test_key_in_no_part_still_refuses(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path,
+                      "Batch 23, part head {partP} and fix {partQ}, keys demo:X")
+    assert not _scope(unseated_w, "demo:NOWHERE")
+
+
+def test_the_go_head_itself_is_not_a_part(unseated_w, monkeypatch, tmp_path):
+    """A table that names the train head as a part would vouch for every key of the train."""
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 1, part head {train}, keys demo:X")
+    assert not _scope(unseated_w, "demo:H")
+
+
+def test_a_part_outside_the_go_head_does_not_vouch(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 24, part head {partR}, keys demo:X")
+    assert not _scope(unseated_w, "demo:LATE")
+
+
+def test_a_head_outside_a_part_entry_does_not_vouch(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "rejected head {partP}, keys demo:X")
+    assert not _scope(unseated_w, "demo:H")
+
+
+def test_a_key_split_across_a_named_and_an_unnamed_part_refuses(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partP}, keys demo:X")
+    assert not _scope(unseated_w, "demo:SPLIT")
+    both = "Batch 23, part head {partP}, keys demo:X; Batch 24, heads {partQ}, keys demo:Y"
+    _part_table_world(unseated_w, monkeypatch, tmp_path / "again", both)
+    assert _scope(unseated_w, "demo:SPLIT")
+
+
+def test_part_heads_in_code_spans_and_lists_are_read(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path,
+                      "Batch 22 (folded PR #1088, closed unmerged), heads `{partQ}` and fix `{partP}`, keys demo:X")
+    assert _scope(unseated_w, "demo:H") and _scope(unseated_w, "demo:A")
+
+
+def test_a_part_listed_under_another_ruling_of_the_row_does_not_vouch(unseated_w, monkeypatch, tmp_path):
+    heads = _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partQ}, keys demo:X")
+    path = unseated_w.decision_path
+    text = path.read_text().replace("| D-5504 | demo | GO #9 demo:X;", "| D-5504 | demo | RULINGS (1) HOLD Batch 23, part head "
+                                    + heads["partP"] + ", keys demo:Z; (2) GO #9 demo:X;")
+    path.write_text(text)
+    assert not _scope(unseated_w, "demo:H")
+    assert _scope(unseated_w, "demo:A")

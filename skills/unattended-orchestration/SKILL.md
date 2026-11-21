@@ -151,3 +151,14 @@ persist the job directory in the handoff. On start, including successor sessions
 read `plangraph resume-digest JOB` before spawning or scheduling follow-up work.
 The detached service owns the wait and its authorized push/merge steps; result
 files are the recovery contract when the orchestrator is killed.
+
+## Learn as you go
+
+- When something fails, stalls or surprises you (a wrong assumption, a tool that lied, a gate
+  that blocked valid work, a check that passed wrong work), report one line to your
+  orchestrator in the same turn: `LESSON <what happened> <evidence: run id, file:line, command output>`.
+- The orchestrator defines an `LE-*` keeper item the same beat: what happened with evidence,
+  the cause, the change in code that prevents it, a done check. A prompt line or a memory note
+  is never the fix.
+- Before you start work in an area, read the open and done `LE-*` items that name its files.
+- A lesson that happens twice raises the priority of its item.

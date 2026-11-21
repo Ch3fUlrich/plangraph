@@ -108,3 +108,14 @@ evidence; raise no new finding on code unchanged since round 1.
 
 Read files and run tests only. No edits, no commits, no web access, no spawning. If a
 finding needs a fix, state the fix in the finding; the author applies it.
+
+## Learn as you go
+
+- When something fails, stalls or surprises you (a wrong assumption, a tool that lied, a gate
+  that blocked valid work, a check that passed wrong work), report one line to your
+  orchestrator in the same turn: `LESSON <what happened> <evidence: run id, file:line, command output>`.
+- The orchestrator defines an `LE-*` keeper item the same beat: what happened with evidence,
+  the cause, the change in code that prevents it, a done check. A prompt line or a memory note
+  is never the fix.
+- Before you start work in an area, read the open and done `LE-*` items that name its files.
+- A lesson that happens twice raises the priority of its item.

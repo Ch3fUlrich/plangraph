@@ -587,6 +587,9 @@ class WaiverMixin:
                            seat_rule_waived_by=waive_seats)
             if from_open:
                 ref["prs"] = prs
+            part = None if waiver_only else self._merged_go_scope(decision_id, fresh, now, require_key=False)[1]
+            if part:
+                ref["go_part"] = part   # the named part head covering a key the row's list omits
             return self._land_merged(principal, fresh, head, seats, witnessed, decision_id, from_open,
                                      ("decision", ref, result), f"router GO {decision_id} merged {head}", now,
                                      flags=flags)
