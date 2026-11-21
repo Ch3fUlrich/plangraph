@@ -9,6 +9,7 @@ pub mod fast_checks;
 pub mod feeder;
 pub mod host_sync;
 pub mod landing;
+mod landing_ci;
 pub mod merge_close;
 pub mod paths;
 pub mod review;

@@ -69,6 +69,11 @@ train's frozen manifest before it requests a merge. `merge_batch.py settle`
 discovers unfinished trains and verifies the merged commit against main before
 resuming the keeper cursor. Recovery uses the keeper merge lease for that repo.
 
+Migration 16 stores individual GitHub Actions job timings. The lander imports the
+exact run and attempt with `plangraph landing ci-import OWNER/REPO BATCH HEAD RUN ATTEMPT`.
+The writer and delta reviewer use `PG_LANDING_REPO` for the repository identity.
+Train push, GO observation, merge and host sync share the train's keeper batch key.
+
 ## Hash chain
 
 `events.hash` is computed in Python from canonical JSON (sorted keys, no whitespace, ASCII) over text values; nothing in it

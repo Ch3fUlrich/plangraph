@@ -1,5 +1,7 @@
 //! Native CLI writer lifecycle, independent of placement and transport.
 use serde_json::{json, Value};
+#[path = "native_writer_stage.rs"]
+mod stage;
 /// Batch writer driver (R-batch-01..04, 06): one writer session, fast checks per head,
 /// an other-family review run on the exact head, fixes in the same session.
 pub(crate) trait Driver {
@@ -145,7 +147,12 @@ fn resume(
 ) -> Result<(), (i32, String)> {
     record["resumes"] = json!(record["resumes"].as_u64().unwrap_or(0) + 1);
     driver.save(record).map_err(|e| (6, e))?;
-    driver.execute(Some(session), prompt).map_err(|e| (6, e))?;
+    let started = stage::now();
+    let result = driver.execute(Some(session), prompt);
+    if let Ok(head) = driver.head() {
+        stage::record(record, "writing", &head, started);
+    }
+    result.map_err(|e| (6, e))?;
     Ok(())
 }
 /// One review round on `head`: refused without the fast-checks stamp; a run without a
@@ -192,7 +199,12 @@ fn writer_attempt(
 ) -> Result<i32, (i32, String)> {
     // HEAD before the turn: a relaunch keeps the commits of the earlier attempts.
     let mut turn_start = driver.head().map_err(|e| (6, e))?;
-    let session = driver.execute(None, prompt).map_err(|e| (6, e))?;
+    let started = stage::now();
+    let executed = driver.execute(None, prompt);
+    if let Ok(head) = driver.head() {
+        stage::record(record, "writing", &head, started);
+    }
+    let session = executed.map_err(|e| (6, e))?;
     record["session_id"] = json!(session);
     record["resumes"] = json!(0);
     let mut fixes = 0;
@@ -219,7 +231,10 @@ fn writer_attempt(
         }
         idle = 0;
         turn_start = head.clone();
-        if let Err(failure) = driver.fast_checks(&head) {
+        let started = stage::now();
+        let checked = driver.fast_checks(&head);
+        stage::record(record, "fast_checks", &head, started);
+        if let Err(failure) = checked {
             record["fast_checks"] = json!({"head":head, "status":"failed", "output":failure});
             fixes += 1;
             if fixes > FAST_CHECK_FIXES || session.is_empty() {
@@ -232,7 +247,10 @@ fn writer_attempt(
         record["fast_checks"] = json!({"head":head, "status":"passed"});
         let previous =
             (record["review"]["verdict"] == "REQUEST_CHANGES").then(|| record["review"].clone());
-        let review = review_round(driver, &head, previous.as_ref())?;
+        let started = stage::now();
+        let review = review_round(driver, &head, previous.as_ref());
+        stage::record(record, "review", &head, started);
+        let review = review?;
         record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
         let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"]});
         record["review"] = review;
@@ -246,7 +264,12 @@ fn writer_attempt(
                 return Err((7, "HEAD changed during final gates".into()));
             }
             // One push per package: only the accepted, gated head leaves the host.
-            record["pushed"] = json!(driver.push(&head).map_err(|e| (7, e))?);
+            let started = stage::now();
+            let pushed = driver.push(&head);
+            if !matches!(pushed, Ok(None)) {
+                stage::record(record, "push", &head, started);
+            }
+            record["pushed"] = json!(pushed.map_err(|e| (7, e))?);
             record["status_line"] = json!("DONE");
             return Ok(0);
         }

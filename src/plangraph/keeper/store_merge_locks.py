@@ -1,6 +1,7 @@
 """Principal-bound merge lease locks."""
 import json
 import re
+from importlib.resources import files
 
 from .errors import Refused
 from .store_cards import _text
@@ -10,6 +11,9 @@ _OWNER_MAX = 512
 _ACQUIRE_KEYS = frozenset(("owner", "ttl_s"))
 _RELEASE_KEYS = frozenset(("token", "owner"))
 _LAND_STEPS = ("evidence", "close_parts", "host_sync", "cleanup")
+_STAGE_NAMES = frozenset(("writing", "review", "fast_checks", "push", "ci", "delta_review", "go", "merge", "host_sync"))
+_STAGE_SQL = files(__package__).joinpath("landing_stage_insert.sql").read_text(encoding="utf-8")
+_LIST_STAGE_SQL = files(__package__).joinpath("landing_stage_list.sql").read_text(encoding="utf-8")
 
 
 def _land_sha(value):
@@ -43,14 +47,24 @@ def _land_manifest(body):
                          "items": sorted(set(items)), "ref": ref})
     if len({part["pr"] for part in manifest}) != len(manifest):
         raise Refused("validation", "landing part PR appears twice")
-    return json.dumps(sorted(manifest, key=lambda part: part["pr"]), separators=(",", ":"))
+    return sorted(manifest, key=lambda part: part["pr"])
 
 
 def _landing_data(row):
-    return {"repo": row["repo"], "pr": row["pr"], "base": row["base"],
-            "head": row["head"], "parts": json.loads(row["manifest"]), "merge": row["merged"],
+    manifest = json.loads(row["manifest"])
+    if isinstance(manifest, list):
+        manifest = {"parts": manifest, "batch_key": f"train-{row['pr']}"}
+    return {"repo": row["repo"], "pr": row["pr"], "base": row["base"], **manifest,
+            "head": row["head"], "merge": row["merged"],
             "abandoned": bool(row["abandoned"]),
             "open_steps": list(_LAND_STEPS[row["cursor"]:]) if row["merged"] else []}
+
+
+def _timing(row):
+    start, end = row.get("started_at_ms"), row.get("ended_at_ms")
+    if type(start) is not int or type(end) is not int or not 0 <= start <= end < 2**63:
+        raise Refused("validation", "landing timestamps must be ordered Unix milliseconds")
+    return start, end
 
 
 class MergeLocksMixin:
@@ -60,12 +74,14 @@ class MergeLocksMixin:
                          success_message=None)
 
     def _land(self, principal, body, now):
-        self._require_role(principal, "router", "system")
         repo = body.get("repo")
         if not isinstance(repo, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}", repo):
             raise Refused("validation", "landing repository must be OWNER/NAME")
         repo = repo.lower()
         action = body.get("action")
+        if action in ("stage", "ci_timings", "timeline"):
+            return self._landing_timing(principal, repo, action, body)
+        self._require_role(principal, "router", "system")
         if action == "acquire":
             return self._lock_acquire(principal, repo, {"owner": body.get("owner"), "ttl_s": 1800}, now)
         if action == "release":
@@ -76,12 +92,12 @@ class MergeLocksMixin:
                 (repo, len(_LAND_STEPS)))
             return {"trains": [_landing_data(row) for row in rows]}
         if action == "consumed":
-            parts = json.loads(_land_manifest({"parts": body.get("parts")}))
+            parts = _land_manifest({"parts": body.get("parts")})
             requested = {(part["pr"], part["head"]) for part in parts}
             landed = self.conn.execute(
-                "SELECT manifest FROM landing_trains WHERE repo=? AND merged IS NOT NULL", (repo,))
+                "SELECT * FROM landing_trains WHERE repo=? AND merged IS NOT NULL", (repo,))
             matched = {(part["pr"], part["head"]) for row in landed
-                       for part in json.loads(row["manifest"])} & requested
+                       for part in _landing_data(row)["parts"] if (part["pr"], part["head"]) in requested}
             return {"consumed": [{"pr": pr, "head": head} for pr, head in sorted(matched)]}
         identity = (repo, _land_number(body.get("pr")))
         select = "SELECT * FROM landing_trains WHERE repo=? AND pr=?"
@@ -97,13 +113,18 @@ class MergeLocksMixin:
                     or lease["expires_at"] <= int(now)):
                 raise Refused("conflict", "landing mutation requires the current keeper lease")
             if action == "prepare":
-                frozen = (_land_sha(body.get("base")), _land_sha(body.get("head")), _land_manifest(body))
+                parts = _land_manifest(body)
+                batch = _text("batch_key", body.get("batch_key", f"train-{identity[1]}"), required=True, cap=256)
+                manifest = json.dumps({"parts": parts, "batch_key": batch}, separators=(",", ":"))
+                frozen = (_land_sha(body.get("base")), _land_sha(body.get("head")), manifest)
                 self.conn.execute("INSERT INTO landing_trains(repo,pr,base,head,manifest) VALUES(?,?,?,?,?)"
                                   " ON CONFLICT (repo,pr) DO NOTHING", (*identity, *frozen))
                 row = self.conn.execute(select, identity).fetchone()
-                if tuple(row[col] for col in ("base", "head", "manifest")) != frozen or row["abandoned"]:
+                data = _landing_data(row)
+                if ((row["base"], row["head"], data["parts"], data["batch_key"]) !=
+                        (*frozen[:2], parts, batch) or row["abandoned"]):
                     raise Refused("conflict", "landing manifest differs from prepared train")
-                return _landing_data(row)
+                return data
             row = self.conn.execute(select, identity).fetchone()
             if row is None:
                 raise Refused("not_found", "landing train is not prepared")
@@ -125,6 +146,42 @@ class MergeLocksMixin:
             elif action != "landed":
                 raise Refused("conflict", "invalid landing journal transition")
             return _landing_data(self.conn.execute(select, identity).fetchone())
+
+    def _landing_timing(self, principal, repo, action, body):
+        roles = ("router", "system", "spawner") if action == "stage" else ("router", "system")
+        self._require_role(principal, *roles)
+        batch = _text("batch_key", body.get("batch_key"), required=True, cap=256)
+        if action == "timeline":
+            stages = self.conn.execute(_LIST_STAGE_SQL, (repo, batch))
+            jobs = self.conn.execute(
+                "SELECT *, ended_at_ms-started_at_ms AS duration_ms FROM landing_ci_jobs WHERE repo=? AND batch_key=? "
+                "ORDER BY run_id,attempt,started_at_ms,job_id", (repo, batch))
+            return {"stages": [dict(row) for row in stages], "jobs": [dict(row) for row in jobs]}
+        stage = body.get("stage") if action == "ci_timings" else body
+        if not isinstance(stage, dict) or not isinstance(stage.get("stage"), str) or stage["stage"] not in _STAGE_NAMES:
+            raise Refused("validation", "unknown landing stage")
+        head = _land_sha(stage.get("head"))
+        row = (repo, batch, stage["stage"], _land_number(stage.get("attempt")), head, *_timing(stage))
+        with self._write():
+            self.conn.execute(_STAGE_SQL, row)
+            if action == "ci_timings":
+                jobs = body.get("jobs")
+                if stage["stage"] != "ci" or not isinstance(jobs, list) or len(jobs) > 500:
+                    raise Refused("validation", "CI timing needs a CI stage and up to 500 jobs")
+                run_id = _land_number(body.get("run_id"))
+                attempt = _land_number(body.get("run_attempt"))
+                conclusion = _text("run conclusion", body.get("run_conclusion"), required=True, cap=64)
+                for job in jobs:
+                    if not isinstance(job, dict):
+                        raise Refused("validation", "CI job must be an object")
+                    self.conn.execute(
+                        "INSERT INTO landing_ci_jobs VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+                        " ON CONFLICT (repo,batch_key,run_id,attempt,job_id) DO NOTHING",
+                        (repo, batch, run_id, attempt, _land_number(job.get("job_id")), head,
+                         _text("job name", job.get("name"), required=True, cap=512),
+                         _text("job conclusion", job.get("conclusion"), required=True, cap=64),
+                         conclusion, *_timing(job)))
+        return {"stage": stage["stage"], "attempt": row[3]}
 
     # -------------------------------------------------------- merge locks
     # A lease lock: expiry is what makes it safe, the token is only an
