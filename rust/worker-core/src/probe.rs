@@ -1,6 +1,6 @@
 //! Outcome probe: run before retrying an attempt to see what it left behind.
 
-use crate::check::run_check_scoped;
+use crate::check::{run_check_scoped, CheckResult};
 use crate::git::{check_rev, git, GitError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -23,6 +23,17 @@ pub enum ProbeError {
     Git(#[from] GitError),
     #[error("check could not run: {0}")]
     Check(#[from] std::io::Error),
+}
+
+/// Whether a jailed check died because the jail helper could not set itself up
+/// (unsupported kernel, bad path, no exec: `pg-jail` exits 64, 78, 126 or 127 and
+/// names itself on stderr), not because the card's check failed.
+fn jail_setup_failed(jailed: bool, r: &CheckResult) -> bool {
+    jailed
+        && matches!(r.exit_code, Some(64 | 78 | 126 | 127))
+        && r.tail
+            .lines()
+            .any(|l| l.trim_start().starts_with("pg-jail:"))
 }
 
 /// Number of commits on HEAD of `dir` beyond `base`.
@@ -59,6 +70,11 @@ pub fn probe_scoped(
         return Ok(ProbeOutcome::Nothing);
     }
     let r = run_check_scoped(check_cmd, dir, timeout, tail_n, jail, &|| false)?;
+    if jail_setup_failed(jail.is_some(), &r) {
+        return Err(ProbeError::Check(std::io::Error::other(
+            "the attempt jail could not be applied",
+        )));
+    }
     Ok(if r.passed() {
         ProbeOutcome::AlreadyDone
     } else {
@@ -72,6 +88,33 @@ mod tests {
     use crate::testutil::{commit_all, repo, write};
 
     const T: Duration = Duration::from_secs(20);
+
+    fn result(code: i32, tail: &str) -> CheckResult {
+        CheckResult {
+            exit_code: Some(code),
+            signal: None,
+            timed_out: false,
+            cancelled: false,
+            tail: tail.into(),
+            output_hash: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_jail_that_cannot_apply_is_not_a_failed_check() {
+        let setup = result(78, "pg-jail: Landlock ABI 3 is not supported");
+        assert!(jail_setup_failed(true, &setup));
+        // An unjailed run, a plain failing check and a different exit are checks.
+        assert!(!jail_setup_failed(false, &setup));
+        assert!(!jail_setup_failed(true, &result(78, "make: *** error")));
+        assert!(!jail_setup_failed(true, &result(1, "pg-jail: boom")));
+        for code in [64, 126, 127] {
+            assert!(jail_setup_failed(
+                true,
+                &result(code, "out\npg-jail: refused")
+            ));
+        }
+    }
 
     #[test]
     fn nothing_without_commits_even_if_dirty() {

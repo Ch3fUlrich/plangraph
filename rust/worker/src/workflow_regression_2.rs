@@ -255,6 +255,53 @@
         assert_eq!(ADMISSION_REFUSAL_PATCH, "admission-refusal-terminal-v1");
     }
 
+    /// The workflow reads a failed attempt activity through
+    /// `classify_attempt_failure`: a typed refusal ends the card (only once the
+    /// replay marker holds), every other failure is a synthetic attempt.
+    #[test]
+    fn a_refusal_ends_the_card_and_other_failures_stay_synthetic_attempts() {
+        let refusal = Failure {
+            message: "Activity task failed".into(),
+            cause: Some(Box::new(Failure {
+                failure_info: Some(FailureInfo::ApplicationFailureInfo(
+                    ApplicationFailureInfo {
+                        r#type: "card_not_allowlisted".into(),
+                        non_retryable: true,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert_eq!(
+            classify_attempt_failure(Some(&refusal), None, || true),
+            AttemptFailure::Refused("card_not_allowlisted".into())
+        );
+        // A history recorded before the marker replays the old crash path.
+        assert_eq!(
+            classify_attempt_failure(Some(&refusal), None, || false),
+            AttemptFailure::Synthetic(ExitClass::WorkerCrash)
+        );
+        // The marker is asked about only when a refusal was found.
+        let plain = Failure::default();
+        assert_eq!(
+            classify_attempt_failure(Some(&plain), None, || panic!("marker recorded")),
+            AttemptFailure::Synthetic(ExitClass::WorkerCrash)
+        );
+        for (timeout, class) in [
+            (TimeoutType::Heartbeat, ExitClass::Stall),
+            (TimeoutType::StartToClose, ExitClass::Timeout),
+            (TimeoutType::ScheduleToClose, ExitClass::Timeout),
+            (TimeoutType::ScheduleToStart, ExitClass::Stall),
+        ] {
+            assert_eq!(
+                classify_attempt_failure(None, Some(timeout), || true),
+                AttemptFailure::Synthetic(class)
+            );
+        }
+    }
+
     /// The kinds the workflow ends a card on are exactly the `type_name`s the
     /// worker's admission refusals carry.
     #[test]

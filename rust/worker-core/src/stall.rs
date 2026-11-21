@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "stall_capture.rs"]
+mod stall_capture;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -71,18 +73,6 @@ pub struct Supervised {
     pub output: Vec<u8>,
 }
 
-/// Redact the captured bytes in place. An incomplete UTF-8 character at the end
-/// (the next read completes it) stays as raw bytes.
-fn redact_captured(buf: &mut Vec<u8>) {
-    let body = match std::str::from_utf8(buf) {
-        Err(e) if e.error_len().is_none() => e.valid_up_to(),
-        _ => buf.len(),
-    };
-    let mut out = crate::redact::redact(&String::from_utf8_lossy(&buf[..body])).into_bytes();
-    out.extend_from_slice(&buf[body..]);
-    *buf = out;
-}
-
 fn read_tail(
     mut r: impl Read,
     start: Instant,
@@ -90,28 +80,16 @@ fn read_tail(
     max: usize,
     redact: bool,
 ) -> Vec<u8> {
-    let mut buf = Vec::new();
+    let mut capture = stall_capture::Capture::new(max, redact);
     let mut chunk = [0u8; 8192];
     while let Ok(n) = r.read(&mut chunk) {
         if n == 0 {
             break;
         }
         last.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-        buf.extend_from_slice(&chunk[..n]);
-        if buf.len() > max.saturating_mul(2) {
-            if redact {
-                redact_captured(&mut buf);
-            }
-            buf.drain(..buf.len().saturating_sub(max));
-        }
+        capture.push(&chunk[..n]);
     }
-    if buf.len() > max {
-        if redact {
-            redact_captured(&mut buf);
-        }
-        buf.drain(..buf.len().saturating_sub(max));
-    }
-    buf
+    capture.finish()
 }
 
 /// Run `cmd` to completion under the watchdog described in the module docs.

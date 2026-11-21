@@ -91,3 +91,68 @@ fn supervise_redacts_before_the_capture_limit_cuts() {
         "fragment survived supervision: {out:?}"
     );
 }
+
+/// A PEM block whose body lines carry one distinctive fragment each.
+fn pem(lines: usize) -> (String, &'static str) {
+    const MARK: &str = "Qm7xLp3Rt9Vw1Yc5Nb8";
+    let mut text = String::from("-----BEGIN PRIVATE KEY-----\n");
+    for i in 0..lines {
+        // 64-character lines, as PEM wraps them: a read boundary inside a line leaves
+        // two halves that are each too short for the long-blob rule.
+        text.push_str(&format!("Zk{i:03}{MARK}{MARK}{MARK}ab\n"));
+    }
+    text.push_str("-----END PRIVATE KEY-----\n");
+    (text, MARK)
+}
+
+fn scrubbed(out: &str) -> String {
+    crate::redact::redact(out)
+}
+
+#[test]
+fn pem_block_split_across_midstream_drains_leaves_no_body_line() {
+    let (block, mark) = pem(40);
+    let data = [" filler\n".repeat(60), block, "tail\n".repeat(60)].concat();
+    // Small reads and a small capture: the drains land inside the block.
+    for size in [7, 13, 16, 29, 50] {
+        let out = tail(data.clone().into_bytes(), size, 300, true);
+        assert!(!scrubbed(&out).contains(mark), "size {size}: {out:?}");
+        assert!(!out.contains("Zk0"), "size {size}: raw body kept: {out:?}");
+    }
+}
+
+#[test]
+fn pem_block_longer_than_the_capture_is_swallowed_to_its_footer() {
+    let (block, mark) = pem(400);
+    let data = ["head\n".repeat(20), block, "after\n".repeat(20)].concat();
+    for size in [5, 16, 100] {
+        let out = tail(data.clone().into_bytes(), size, 200, true);
+        assert!(!scrubbed(&out).contains(mark), "size {size}: {out:?}");
+        assert!(
+            out.contains("after"),
+            "output after the footer is kept: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn footer_split_across_reads_still_ends_the_swallow() {
+    let (block, mark) = pem(400);
+    let data = [block, "visible-after\n".repeat(5)].concat();
+    // Every split position of the footer line is covered by sweeping the read size.
+    for size in 1..=9 {
+        let out = tail(data.clone().into_bytes(), size, 120, true);
+        assert!(!scrubbed(&out).contains(mark), "size {size}: {out:?}");
+        assert!(out.contains("visible-after"), "size {size}: {out:?}");
+    }
+}
+
+#[test]
+fn pem_block_open_at_a_drain_stays_whole_until_its_footer_arrives() {
+    let (block, mark) = pem(40);
+    // The block starts just before the drain point and ends after it, and it is
+    // far smaller than the capture: only its unfinished end must stay raw.
+    let data = ["x\n".repeat(1750), block, "tail\n".repeat(400)].concat();
+    let out = tail(data.into_bytes(), 64, 2000, true);
+    assert!(!scrubbed(&out).contains(mark), "{out:?}");
+}

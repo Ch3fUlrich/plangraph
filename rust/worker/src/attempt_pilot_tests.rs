@@ -184,13 +184,11 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
                 assert_eq!(result.output_tail, "[REDACTED]");
             }
             safe(&serde_json::to_string(&result).unwrap());
-            // The payloads the workflow itself emits for this result.
-            let (report, packet) = crate::workflow::attempt_payloads(
-                &inp.claim.card,
-                1,
-                &inp.leg,
-                &result,
-            );
+            // The outputs the workflow itself builds for this result: the keeper
+            // report, and the tail its park packets carry.
+            let (report, entry, tail) =
+                crate::workflow::attempt_outputs(&inp.claim.card, 1, &inp.leg, &result);
+            let packet = crate::workflow::packet_from_last(&inp.claim.card, &[entry], &tail);
             assert_eq!(report.check_tail, result.check_tail, "{mode}: report tail source");
             assert_eq!(packet.check_tail, result.check_tail, "{mode}: park tail source");
             safe(&serde_json::to_string(&report).unwrap());
