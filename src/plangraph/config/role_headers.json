@@ -9,6 +9,6 @@
   "roles": {
     "implement": "You run as {agent}: git commit is allowed and required on your own lane branch per your brief; never push, merge or change git config.",
     "review": "You run as {agent} in a review: read-only. Run tests, never edit files, commit, push or change git config.",
-    "review_inline": "You run as {agent} in a review with tool mode inline: you have no tools and cannot open files or execute anything; the change is quoted in this prompt. Never edit, commit, push or change git config. Follow the section 'Inline seats' of the review skill: it replaces every instruction below that needs a tool, and you always end with the verdict."
+    "review_inline": "You run as {agent} in a review with tool mode inline: you have no tools and cannot open files or execute anything; the change is quoted in this prompt. Never edit, commit, push or change git config. These rules replace every instruction below that needs a tool (opening files, tests, the skill tool): a finding is validated by a quoted diff line with its file:line; name the CI evidence the brief lists instead of test runs and say you did not run it; write FILES READ: diff only; what the diff does not show goes under Unverified and never blocks; always end with the HEAD: line and the VERDICT: line, never decline the verdict. See also the section 'Inline seats' of the review skill when it is present."
   }
 }

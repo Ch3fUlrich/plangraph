@@ -278,11 +278,17 @@ pub struct WriterGroup {
     pub commits: Vec<String>,
 }
 
-/// Group commits by their writer family set, in first-seen order. Commits with no resolved
-/// family belong to no group. One family exclusion applies per group, never per range.
+/// Group commits by their writer family set, in first-seen order. A commit with no resolved
+/// family joins the first group, so a seat still reviews it. One family exclusion applies per
+/// group, never per range.
 pub fn group_by_families(per_commit: &[(String, BTreeSet<String>)]) -> Vec<WriterGroup> {
     let mut groups: Vec<WriterGroup> = Vec::new();
-    for (sha, families) in per_commit.iter().filter(|(_, f)| !f.is_empty()) {
+    let mut unresolved = Vec::new();
+    for (sha, families) in per_commit {
+        if families.is_empty() {
+            unresolved.push(sha.clone());
+            continue;
+        }
         let families: Vec<String> = families.iter().cloned().collect();
         match groups.iter_mut().find(|g| g.families == families) {
             Some(group) => group.commits.push(sha.clone()),
@@ -291,6 +297,9 @@ pub fn group_by_families(per_commit: &[(String, BTreeSet<String>)]) -> Vec<Write
                 commits: vec![sha.clone()],
             }),
         }
+    }
+    if let Some(first) = groups.first_mut() {
+        first.commits.extend(unresolved);
     }
     groups
 }
@@ -383,7 +392,7 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                (vec!["openai"], vec!["c1", "c3"]),
+                (vec!["openai"], vec!["c1", "c3", "c5"]), // c5 has no family: it joins the first group
                 (vec!["google"], vec!["c2"]),
                 (vec!["anthropic", "google"], vec!["c4"]),
             ]

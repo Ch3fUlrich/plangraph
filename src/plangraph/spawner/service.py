@@ -260,12 +260,6 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.routing import hand_picked, SpawnRefused, SpawnPlan
         from plangraph.planner.legs import spawnable_legs
         if not card: raise ParameterRefused('spawn by card; card required')
-        if role == 'review' and _plan is None and not dry_run and card.get('diff_ref') is not None:
-            from .inline_diff import InlineDiffError, ensure_nonempty_diff
-            try:
-                ensure_nonempty_diff(card['diff_ref'])
-            except InlineDiffError as exc:
-                raise SpawnRefused(str(exc)) from None
         if seats:
             return await self._spawn_seats(card=card, prompt=prompt, role=role,
                 writer_families=writer_families, review_of=review_of, model=model, leg=leg,

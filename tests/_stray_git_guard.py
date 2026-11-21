@@ -5,22 +5,33 @@ later test finds its repository root, so a leak fails the test that made it.
 """
 import os
 import tempfile
+from contextlib import contextmanager
 
 import pytest
 
 
+def _watched_dirs(tempdir=None):
+    """The process temp dir and, when set, pytest's basetemp (they can differ under --basetemp)."""
+    dirs = [tempdir or tempfile.gettempdir()]
+    if not tempdir and os.environ.get('PLANGRAPH_ROOT_CEILING'):
+        dirs.append(os.environ['PLANGRAPH_ROOT_CEILING'])
+    return dirs
+
+
 def temp_ancestor_gits(tempdir=None):
-    """Existing `.git` entries at the temp dir and above it (plain os.path: some tests fake os.name)."""
-    here = os.path.realpath(tempdir or tempfile.gettempdir())
+    """Existing `.git` entries at the temp dirs and above them (plain os.path: some tests fake os.name)."""
     found = set()
-    while True:
-        entry = os.path.join(here, '.git')
-        if os.path.lexists(entry):
-            found.add(entry)
-        parent = os.path.dirname(here)
-        if parent == here:
-            return found
-        here = parent
+    for start in _watched_dirs(tempdir):
+        here = os.path.realpath(start)
+        while True:
+            entry = os.path.join(here, '.git')
+            if os.path.lexists(entry):
+                found.add(entry)
+            parent = os.path.dirname(here)
+            if parent == here:
+                break
+            here = parent
+    return found
 
 
 def leaked_gits(before, tempdir=None):
@@ -34,12 +45,19 @@ def leaked_gits(before, tempdir=None):
     return leaked
 
 
+@contextmanager
+def watch_stray_git(nodeid, tempdir=None):
+    """Fail with the test's id when it leaves a `.git` at or above the temp dirs."""
+    before = temp_ancestor_gits(tempdir)
+    yield
+    leaked = leaked_gits(before, tempdir)
+    assert not leaked, f'{nodeid} left a .git outside its tmp_path: {leaked}'
+
+
 @pytest.fixture(autouse=True)
 def no_git_outside_tmp_path(request):
-    before = temp_ancestor_gits()
-    yield
-    leaked = leaked_gits(before)
-    assert not leaked, f'{request.node.nodeid} left a .git outside its tmp_path: {leaked}'
+    with watch_stray_git(request.node.nodeid):
+        yield
 
 
 @pytest.fixture(scope='session', autouse=True)

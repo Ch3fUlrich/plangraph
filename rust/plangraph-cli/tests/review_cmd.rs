@@ -146,6 +146,7 @@ fn writer_families_extracted_from_trailers_and_fallback() {
     // Three writer families: one route + spawn pass per family, each excluding only its own.
     assert_eq!(entries.len(), 6);
     let mut seen = std::collections::BTreeSet::new();
+    let mut seat_families = std::collections::BTreeSet::new();
     for pair in entries.chunks(2) {
         assert_eq!(pair[0]["verb"], "route");
         assert_eq!(pair[1]["verb"], "spawn");
@@ -159,8 +160,17 @@ fn writer_families_extracted_from_trailers_and_fallback() {
         };
         assert_eq!(fams(&pair[0]), fams(&pair[1]));
         assert_eq!(fams(&pair[0]).len(), 1, "{pair:?}");
+        // The seat comes from outside its own group's family (the mock prefers google, openai,
+        // then deepseek: it would pick xiaomi only if every writer family were excluded at once).
+        let seat = pair[1]["seat_family"].as_str().unwrap().to_owned();
+        assert!(!fams(&pair[0]).contains(&seat), "{pair:?}");
+        seat_families.insert(seat);
         seen.extend(fams(&pair[0]));
     }
+    assert_eq!(
+        seat_families.into_iter().collect::<Vec<_>>(),
+        vec!["google", "openai"]
+    );
     assert_eq!(
         seen.into_iter().collect::<Vec<_>>(),
         vec!["deepseek", "google", "openai"]

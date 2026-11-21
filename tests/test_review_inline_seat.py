@@ -12,12 +12,22 @@ from plangraph.spawner.seat_spawn import SeatSpawnMixin
 SKILL = (Path(__file__).resolve().parents[1] / 'skills/review/SKILL.md').read_text(encoding='utf-8')
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def working_tree_skill(monkeypatch):
     monkeypatch.setattr(prompt_input, 'read_skill', lambda name, cwd: SKILL if name == 'review' else None)
 
 
-def test_inline_leg_prompt_names_its_tool_mode_and_carries_the_inline_section():
+def test_inline_header_is_self_sufficient_with_the_real_skill_loader():
+    # Whatever skill text the run checkout's origin/main serves, the header carries the inline rules.
+    text = prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro',
+                                tool_mode='inline-only')
+    first = text.split('\n\n', 1)[0]
+    for rule in ('tool mode inline', 'no tools', 'quoted diff line', 'FILES READ: diff only', 'VERDICT:'):
+        assert rule in first, rule
+    assert 'Run tests' not in first and 'run tests' not in first
+
+
+def test_inline_leg_prompt_names_its_tool_mode_and_carries_the_inline_section(working_tree_skill):
     text = prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro',
                                 tool_mode='inline-only')
     first = text.split('\n\n', 1)[0]
@@ -27,7 +37,7 @@ def test_inline_leg_prompt_names_its_tool_mode_and_carries_the_inline_section():
     assert 'VERDICT' in text.split('## Inline seats', 1)[1]
 
 
-def test_tools_leg_prompt_is_unchanged():
+def test_tools_leg_prompt_is_unchanged(working_tree_skill):
     tools = prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro')
     assert tools == prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro',
                                          tool_mode='tools')
@@ -36,7 +46,7 @@ def test_tools_leg_prompt_is_unchanged():
         '\n\n', 1)[0] == prompt_input.header('claude', 'implement')
 
 
-def test_composing_an_inline_prompt_twice_adds_nothing():
+def test_composing_an_inline_prompt_twice_adds_nothing(working_tree_skill):
     once = prompt_input.compose('Review', 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only')
     assert prompt_input.compose(once, 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only') == once
 

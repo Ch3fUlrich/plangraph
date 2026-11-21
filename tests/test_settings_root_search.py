@@ -1,6 +1,8 @@
 """The settings root search never walks out of a test's own tree into a stray .git."""
 import json
 
+import pytest
+
 from plangraph.settings import review_method
 
 
@@ -72,3 +74,18 @@ def test_session_ceiling_is_the_pytest_basetemp(tmp_path_factory):
     import os
     from pathlib import Path
     assert Path(os.environ['PLANGRAPH_ROOT_CEILING']) == tmp_path_factory.getbasetemp().resolve()
+
+
+def test_guard_context_fails_the_test_that_leaks_above_basetemp(tmp_path, monkeypatch):
+    import _stray_git_guard as guard
+    basetemp = tmp_path / 'base' / 'worker'
+    basetemp.mkdir(parents=True)
+    other_tmp = tmp_path / 'elsewhere'
+    other_tmp.mkdir()
+    monkeypatch.setattr(guard.tempfile, 'gettempdir', lambda: str(other_tmp))
+    monkeypatch.setenv('PLANGRAPH_ROOT_CEILING', str(basetemp))
+    with pytest.raises(AssertionError, match='demo::leaks left a .git outside its tmp_path'):
+        with guard.watch_stray_git('demo::leaks'):
+            (tmp_path / 'base' / '.git').mkdir()  # directly above the basetemp, away from the temp dir
+    with guard.watch_stray_git('demo::clean'):
+        pass

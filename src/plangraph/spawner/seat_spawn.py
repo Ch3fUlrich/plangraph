@@ -426,6 +426,14 @@ class SeatSpawnMixin:
                 options['cwd'] = bound.arguments['cwd'] = cwd
             from .prompt_guard import admit_prompt
             from plangraph.planner.routing import SpawnRefused
+            if (options.get('role') == 'review' and options.get('_plan') is None and not options.get('dry_run')
+                    and (card or {}).get('diff_ref') is not None):
+                # One card error before admission, routing or any leg (seats and plain spawns alike).
+                from .inline_diff import InlineDiffError, ensure_nonempty_diff
+                try:
+                    await asyncio.to_thread(ensure_nonempty_diff, card['diff_ref'])
+                except InlineDiffError as exc:
+                    raise SpawnRefused(str(exc)) from None
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
             parent_admitted = getattr(self, '_parent_admitted', False)
