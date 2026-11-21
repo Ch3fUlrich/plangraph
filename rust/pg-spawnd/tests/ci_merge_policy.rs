@@ -149,7 +149,12 @@ assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
     for input in ["--event", "--base-ref", "--head-ref", "--labels"] {
         assert!(gate.contains(input), "ci-gate missing {input}");
     }
-    assert_eq!(workflow.matches("needs.select.outputs.full").count(), 4);
+    let suite_jobs = jobs.split_once("\n  ci-gate:\n").unwrap().0;
+    assert_eq!(suite_jobs.matches("needs.select.outputs.full").count(), 4);
+    assert!(gate.contains("- name: Post ci-full evidence"));
+    assert!(gate.contains(
+        "success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true'"
+    ));
     assert!(workflow.contains("types: [opened, synchronize, reopened, edited, labeled]"));
     assert!(!workflow.contains("ready_for_review"));
 }
@@ -211,14 +216,20 @@ fn red_main_freezes_land_except_a_head_bound_go_row() {
     python(
         r#"
 import pathlib, sys, tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 sys.path.insert(0, 'tools')
 import merge_batch_land as land
 head = 'a' * 40
-run = {'head_sha': 'b' * 40, 'head_branch': 'main', 'status': 'completed', 'conclusion': 'failure'}
-def api(*args):
-    return {'object': {'sha': 'b' * 40}} if '/git/ref/' in args[1] else {'workflow_runs': [run]}
-with patch.object(land, 'gh_json', side_effect=api), tempfile.TemporaryDirectory() as tmp:
+state = 'main_red'
+def admit(argv, **kwargs):
+    assert argv[:5] == ['fixture-plangraph', 'main-state', '--repo', 'o/r', '--admit'], argv
+    assert argv[5:] in ([], ['--exception', 'EXCEPTION:main-red-fix']), argv
+    allowed = state == 'green' or (state == 'main_red' and len(argv) == 7)
+    return SimpleNamespace(returncode=0 if allowed else 3, stderr='' if allowed else state)
+
+with (patch.dict(land.os.environ, PLANGRAPH_BIN='fixture-plangraph'),
+      patch.object(land.subprocess, 'run', side_effect=admit), tempfile.TemporaryDirectory() as tmp):
     path = pathlib.Path(tmp, 'GO')
     for text in ['', 'GO ' + head, 'GO ' + 'c' * 40 + ' EXCEPTION:main-red-fix', 'GO ' + head + ' EXCEPTION:main-red-fix-extra']:
         path.write_text(text)
@@ -229,14 +240,14 @@ with patch.object(land, 'gh_json', side_effect=api), tempfile.TemporaryDirectory
             assert 'main_red' in str(exc), str(exc)
     path.write_text('GO ' + head + ' EXCEPTION:main-red-fix')
     land.require_main_green('o/r', head, str(path))
-    run['conclusion'] = 'success'
+    state = 'green'
     land.require_main_green('o/r', head, None)
-    run['status'] = 'in_progress'
+    state = 'main_pending'
     try:
         land.require_main_green('o/r', head, None)
         raise AssertionError('pending main accepted')
-    except land.MergeBatchError:
-        pass
+    except land.MergeBatchError as exc:
+        assert 'main_pending' in str(exc), str(exc)
 "#,
     );
 }

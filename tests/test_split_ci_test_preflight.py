@@ -34,7 +34,11 @@ def test_slow_passing_check(repo, monkeypatch, capsys, command, family):
     monkeypatch.setattr(preflight.subprocess, "run", sleeping_check)
     monkeypatch.setattr(preflight, "run_test_process", sleeping_check)
     monkeypatch.setattr(preflight, "run", run)
-    monkeypatch.setattr(preflight, "test_environment", lambda root, env: env)
+    def detach_test_environment(root, env, *, timeout):
+        assert timeout == 0.06
+        return env
+
+    monkeypatch.setattr(preflight, "test_environment", detach_test_environment)
     monkeypatch.setattr(preflight, "test_baseline", lambda root, base: base)
     monkeypatch.setattr(preflight, "rust_commands",
                         lambda *args: [command] if family == "rust" else [])

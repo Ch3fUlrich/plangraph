@@ -79,6 +79,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "docs/spawner-reliability.md",
     "docs/workspace-resolver.md",
     "skills/review/SKILL.md",  # Native writer review composition fixture.
+    "tools/seat_record.py",  # Native review seat binding fixture.
     "skills/router-core/SKILL.md",
     "changelog.d/FLEET-WINDOW-CATALOG.md",
     "changelog.d/PLACEMENT-RULES-AUDIT.md",
@@ -617,8 +618,8 @@ RUST_PER_BINARY_TIMEOUT = 15
 MAX_RUST_TIMEOUT = 3600
 
 
-def rust_bound(binaries, load, cores):
-    base = max(RUST_TIMEOUT, binaries * RUST_PER_BINARY_TIMEOUT)
+def rust_bound(binaries, load, cores, *, floor=RUST_TIMEOUT):
+    base = max(floor, binaries * RUST_PER_BINARY_TIMEOUT)
     saturation = min(max(load, 0.0), cores) / max(cores, 1)
     return min(MAX_RUST_TIMEOUT, base * (1 + saturation))
 

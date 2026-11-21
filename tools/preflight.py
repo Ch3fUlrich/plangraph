@@ -89,7 +89,7 @@ def build_jobs(env, cores, load):
 def check_timeout(command, cwd=None, env=None):
     if command[:2] in (["cargo", "clippy"], ["cargo", "test"], ["cargo", "build"]):
         load, cores = host_load()
-        return rust_bound(planned_test_binaries([command], cwd or Path.cwd()), load, cores)
+        return rust_bound(planned_test_binaries([command], cwd or Path.cwd()), load, cores, floor=RUST_TIMEOUT)
     if is_affected_step(command):
         if "--files-only" in command:
             return TEST_TIMEOUT
