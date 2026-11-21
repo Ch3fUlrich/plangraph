@@ -317,6 +317,8 @@ A permitted probe returns `{"dry_run": true, "route": "close_merged"}` with
 zero item, audit, evidence, or event writes.
 `POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}` plus
 `GET /v1/audit-meta?project=&stale_days=` (router/L1 only), `GET /v1/changelog?since=` and the [principal-scoped event replay route](contract/keeper-contract-v1-routes.md#get-v1events).
+The shadow collector also reads `GET /v1/messages?since=SEQ` for bus messages and
+`GET /v1/hosts` for current host levels.
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, `merge_scan` (optional list of `repos` projects the merged-on-default scan reads; default every repo; `plangraph merge-close --repos` prints the scanned repositories), repos

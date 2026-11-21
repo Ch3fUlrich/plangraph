@@ -1,8 +1,8 @@
 """The event chain checked through the keeper's HTTP surface only.
 
 Replaces, for the Postgres CI job, the three frozen contract tests that read the keeper's
-database file directly (``tests/contract/test_events.py``).  The keeper serves no event
-export, so the chain is checked from outside with what it does expose:
+database file directly (``tests/contract/test_events.py``). The chain is checked
+from outside through its HTTP reads and the admin integrity check:
 
 * ``/v1/snapshot`` carries the chain head (``head_seq`` + ``head``); after every write the
   new head must equal ``sha256(previous head + canonical event)`` for the event we expect
@@ -203,3 +203,16 @@ def test_scoped_event_feed_replays_release_and_interleaved_writes(kp):
     assert [r["seq"] for r in rows] == sorted({r["seq"] for r in rows})
     assert replay("reader", page("reader", cursor)) == []
     assert kp.get("/v1/events?since=-1", "worker1").status == 400
+
+
+def test_shadow_message_cursor_and_host_reads_are_registered(kp):
+    sent = write(kp, "post_message", "router", {
+        "from": "router", "to": "worker1", "body": {"text": "shadow message"},
+    })["row"]
+    messages = kp.get(f"/v1/messages?since={sent['seq'] - 1}", "worker1")
+    assert messages.status == 200, messages.raw
+    assert any(row["seq"] == sent["seq"] and row["body"] == sent["body"]
+               for row in messages.json["rows"])
+    hosts = kp.get("/v1/hosts", "worker1")
+    assert hosts.status == 200, hosts.raw
+    assert isinstance(hosts.json["hosts"], list)

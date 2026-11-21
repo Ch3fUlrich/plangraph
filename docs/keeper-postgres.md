@@ -56,6 +56,14 @@ applied_at)` records what ran. `open_db(create=True)` and `pg admin migrate` app
 lock; `open_db(create=False)` refuses a database that is behind (a runtime role has no DDL rights). A unit test compares the
 SQLite and Postgres table/column lists so the two schemas cannot drift.
 
+Migration 14 creates `event_audience` for the scoped replay feed. Run
+`pg --config CONFIG admin migrate` with the migration role before restarting
+the keeper. The runtime role needs SELECT and INSERT on `event_audience`.
+The event type column remains text across the upgrade. The application
+recognizes the four new grant and question kinds through `EVENT_TYPES`.
+The pre-audience database test appends and replays all four after upgrading
+each backend.
+
 ## Hash chain
 
 `events.hash` is computed in Python from canonical JSON (sorted keys, no whitespace, ASCII) over text values; nothing in it

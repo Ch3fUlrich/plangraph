@@ -328,7 +328,7 @@ def test_main_shaped_jev_db_gains_exec_columns_and_keeps_rows_and_chain(tmp_path
 
 @needs_pg
 def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
-    """A Postgres schema at migration 6 (main's jev shape, no exec columns) upgrades to 7."""
+    """Migration 6 retains JEV and gains the exec columns on upgrade."""
     import uuid
 
     import psycopg
@@ -358,15 +358,15 @@ def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
         assert not set(EXEC_COLUMNS) & columns()
         # Merged code needs migration 7: opening the old schema is refused first ...
         path = tmp_path / "pg-jev.db"
-        with pytest.raises(RuntimeError, match="code needs 13"):
+        with pytest.raises(RuntimeError, match=f"code needs {schema_pg.LATEST}:"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
-        # ... then pg admin migrate runs 7 and the exec columns are there.
+        # Apply migration 7 and all later steps through the admin migrator.
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
-        assert db_pg.migrate(raw, name) == [7, 8, 9, 10, 11, 12, 13]
+        assert db_pg.migrate(raw, name) == list(range(7, schema_pg.LATEST + 1))
         assert set(EXEC_COLUMNS) <= columns()
         assert "jev_shadow" in jev_tables()
         assert [row[0] for row in raw.execute(
-            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 14))
+            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, schema_pg.LATEST + 1))
         conn = kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         conn.close()
     finally:
@@ -421,8 +421,7 @@ def test_main_v14_sqlite_db_with_oversight_upgrades_to_v16(tmp_path):
 
 @needs_pg
 def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
-    """A fresh Postgres schema migrates 1..9; one at main's Migration 8 (oversight,
-    no bus tables) is refused by the merged code, then migrate runs 9 alone."""
+    """Fresh and migration-8 schemas both gain the bus tables at current."""
     import uuid
 
     import psycopg
@@ -440,8 +439,7 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
 
     try:
         full = schema_pg.MIGRATIONS
-        assert schema_pg.LATEST == 13
-        assert db_pg.migrate(raw, fresh) == list(range(1, 14))
+        assert db_pg.migrate(raw, fresh) == list(range(1, schema_pg.LATEST + 1))
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
 
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full[:8])
@@ -450,9 +448,9 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
         assert not BUS_TABLES & pg_tables(name)
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
         path = tmp_path / "pg-main.db"
-        with pytest.raises(RuntimeError, match="code needs 13"):
+        with pytest.raises(RuntimeError, match=f"code needs {schema_pg.LATEST}:"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
-        assert db_pg.migrate(raw, name) == [9, 10, 11, 12, 13]
+        assert db_pg.migrate(raw, name) == list(range(9, schema_pg.LATEST + 1))
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(name)
         kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name).close()
     finally:
