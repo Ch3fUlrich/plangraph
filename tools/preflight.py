@@ -18,7 +18,7 @@ import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, disk_free_gb,
-                                          capped_cargo_lease, running_disk_refusal, shared_cargo_target)
+                                          running_disk_refusal, shared_cargo_target)
 from plangraph.spawner.overflow import available_memory_mb
 
 CHECK_TIMEOUT = 60
@@ -457,7 +457,6 @@ def _main(argv, root, cleanup):
     mode.add_argument("--keep-going", action="store_true", help="default behaviour")
     mode.add_argument("--fail-fast", action="store_true")
     args = parser.parse_args(argv)
-    push = os.environ.get('PLANGRAPH_PREFLIGHT_PUSH') == '1' or 'PLANGRAPH_PUSH_RANGE' in os.environ
     root = Path(root or Path(__file__).resolve().parent.parent)
     interpreter = python_interpreter(root)
     print(f"preflight Python: {interpreter}", flush=True)
@@ -480,15 +479,14 @@ def _main(argv, root, cleanup):
     def invoke(command, cwd, command_env):
         if command[0] != 'cargo':
             return run(command, cwd, command_env)
-        try:
-            with (capped_cargo_lease(root) if push else cargo_lease()):
-                if not push:
-                    refusal = running_disk_refusal(root)
-                    if refusal:
-                        return 1, refusal + '\n'
-                return run(command, cwd, command_env)
-        except (ValueError, OSError) as exc:
-            return 1, f'{exc}\n'
+        # Share the spawner's target, cap checks and cleanup lease.
+        with cargo_lease():
+            refusal = running_disk_refusal(root)
+            if refusal:
+                return 1, refusal + '\n'
+            code, output = run(command, cwd, command_env)
+            refusal = running_disk_refusal(root)
+            return (1, output + refusal + '\n') if refusal else (code, output)
 
     scrub = python("split/scrub_check.py", ".", "--base", args.scrub_base or args.base, "--head", args.head,
                    "--rules", str(tools / "split/manifest.toml"),
@@ -524,7 +522,7 @@ def _main(argv, root, cleanup):
                     commands = rust_commands(root, args.base, args.head, env)
                 family_env = policy_env if family == "policy" else env
                 if family == 'rust':
-                    rust_env = env if push else rust_target_env(env, cleanup)
+                    rust_env = rust_target_env(env, cleanup)
                     print(f"rust CARGO_TARGET_DIR: {rust_env.get('CARGO_TARGET_DIR', root / 'rust/target')}", flush=True)
                     family_env = {key: value for key, value in rust_env.items()
                                   if not key.upper().startswith('GIT_')}

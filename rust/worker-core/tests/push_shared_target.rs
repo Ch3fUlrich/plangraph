@@ -8,7 +8,6 @@ fn preflight_overrides_private_target_and_holds_shared_lease() {
         .current_dir(&repo)
         .env("PYTHONPATH", repo.join("src"))
         .env("PLANGRAPH_CARGO_TARGET_DIR", tmp.path().join("shared"))
-        .env("PLANGRAPH_PREFLIGHT_PUSH", "1")
         .env("CARGO_TARGET_DIR", tmp.path().join("private"))
         .args(["-c", r#"
 import importlib.util, os
@@ -34,15 +33,6 @@ with patch.object(p, 'run', run), patch.object(p, 'rust_commands', return_value=
     assert p.main(['--base', 'HEAD', '--fast']) == 0
 assert seen == [['cargo', 'test']], seen
 assert not Path(os.environ['CARGO_TARGET_DIR']).exists()
-seen.clear()
-target = shared_cargo_target()
-target.mkdir(exist_ok=True)
-artifact = target / 'old-artifact'
-artifact.write_bytes(b'x' * 4096)
-with patch.dict(os.environ, PLANGRAPH_CARGO_TARGET_CAP_GB='0.000001', PLANGRAPH_DISK_FLOOR_GB='0'), patch.object(p, 'run', run), patch.object(p, 'rust_commands', return_value=[['cargo', 'test']]):
-    assert p.main(['--base', 'HEAD', '--fast']) == 0
-assert not artifact.exists(), 'over-cap cache was not reclaimed before preflight built'
-assert seen == [['cargo', 'test']], seen
 seen.clear()
 with patch.dict(os.environ, PLANGRAPH_CARGO_TARGET_CAP_GB='0'), patch.object(p, 'run', run), patch.object(p, 'rust_commands', return_value=[['cargo', 'test']]):
     assert p.main(['--base', 'HEAD', '--fast']) == 1

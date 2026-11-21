@@ -26,27 +26,6 @@ fn hash(value: &str) -> bool {
     value.len() == 16 && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Evict old checkout-specific test builds. Caller must hold the target lease.
-pub(crate) fn cli_test_candidates(root: &Path) -> io::Result<Vec<(PathBuf, u64)>> {
-    let cache = root.join("cli-tests");
-    if cache.is_symlink() {
-        return Ok(vec![]);
-    }
-    let mut entries = Vec::new();
-    for path in directories(&cache)? {
-        if path.file_name().and_then(|s| s.to_str()).is_some_and(hash) {
-            let (bytes, newest) = crate::disk_hygiene::scan(&path)?;
-            entries.push((newest, path, bytes));
-        }
-    }
-    entries.sort_unstable_by(|a, b| b.cmp(a));
-    Ok(entries
-        .into_iter()
-        .skip(3)
-        .map(|(_, path, bytes)| (path, bytes))
-        .collect())
-}
-
 fn build_units(parent: &Path) -> io::Result<Vec<(String, PathBuf, bool)>> {
     let mut units = vec![];
     for path in directories(parent)? {
@@ -131,33 +110,6 @@ pub(crate) fn candidates(root: &Path, now: SystemTime) -> io::Result<Vec<(PathBu
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    #[test]
-    fn cli_test_cache_keeps_only_three_newest_checkout_builds() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cache = tmp.path().join("cli-tests");
-        let now = SystemTime::now();
-        for n in 0..5 {
-            let dir = cache.join(format!("{n:016x}"));
-            fs::create_dir_all(&dir).unwrap();
-            fs::File::open(&dir)
-                .unwrap()
-                .set_modified(now - Duration::from_secs(60 - n))
-                .unwrap();
-        }
-        fs::create_dir(cache.join("unknown")).unwrap();
-        let paths: Vec<_> = cli_test_candidates(tmp.path())
-            .unwrap()
-            .into_iter()
-            .map(|(path, _)| path)
-            .collect();
-        assert_eq!(
-            paths,
-            [
-                cache.join("0000000000000001"),
-                cache.join("0000000000000000")
-            ]
-        );
-    }
     #[test]
     fn nested_units_keep_newest_compile_and_run_and_unknown_artifacts() {
         let tmp = tempfile::tempdir().unwrap();

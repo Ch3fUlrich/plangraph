@@ -172,14 +172,8 @@ fn shared_cache_using(
         return Ok(());
     }
     let mut bytes = crate::disk_hygiene::scan(path)?.0;
-    let cli_tests = crate::shared_target::cli_test_candidates(path)?;
-    let candidates = crate::shared_target::candidates(path, std::time::SystemTime::now())?;
-    for (mandatory, (candidate, size)) in cli_tests
-        .into_iter()
-        .map(|c| (true, c))
-        .chain(candidates.into_iter().map(|c| (false, c)))
-    {
-        if !mandatory && !pressure && bytes <= cap {
+    for (candidate, size) in crate::shared_target::candidates(path, std::time::SystemTime::now())? {
+        if !pressure && bytes <= cap {
             break;
         }
         if guards.protects(&candidate) {
@@ -188,7 +182,6 @@ fn shared_cache_using(
         // Recheck eligibility before the final process probe, so a potentially
         // expensive filesystem scan never separates that probe from removal.
         if apply
-            && !mandatory
             && !crate::shared_target::candidates(path, std::time::SystemTime::now())?
                 .iter()
                 .any(|(p, _)| p == &candidate)

@@ -428,7 +428,6 @@ def push_main():
             local_env = set(git_out("rev-parse", "--local-env-vars").splitlines())
             env = {key: value for key, value in os.environ.items() if key not in local_env}
             env["PREFLIGHT_PYTHON"] = PYTHON
-            env["PLANGRAPH_PREFLIGHT_PUSH"] = "1"
             env["PLANGRAPH_PUSH_RANGE"] = f"{batch_base}:{local_sha}" if fetched else ""
             # Per-check deadlines govern, including the possible INFRA retry.
             result = subprocess.run(command, cwd=root, env=env)
