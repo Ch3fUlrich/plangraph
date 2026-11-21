@@ -2,6 +2,7 @@
 import json
 import subprocess
 import sys
+import types
 
 import pytest
 
@@ -52,17 +53,39 @@ def test_the_scaled_bound_is_named_when_it_is_exceeded(tmp_path, monkeypatch):
     assert text == 'tests: affected-tests step exceeded its 2.0 second bound (40 selected test paths)\n'
 
 
-@pytest.mark.parametrize('cores,mem_gib,expected', [
-    (32, 110, 16), (32, 20, 10), (12, 3.8, 2), (2, 64, 2), (8, None, 4)])
-def test_affected_workers_follow_cores_and_memory_never_fixed_at_two(cores, mem_gib, expected):
-    """LE-PREPUSH-TESTS-ON-BUSIEST-HOST (3): the worker count comes from the host, between 2 and 16."""
-    assert preflight.affected_workers({}, cores=cores, mem_gib=mem_gib) == expected
+
+def _memory(mb):
+    def read():
+        if isinstance(mb, Exception):
+            raise mb
+        return mb
+    return read
 
 
-def test_affected_workers_override_and_meminfo(tmp_path):
-    assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': '6'}, cores=32, mem_gib=110) == 6
-    assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': 'x'}, cores=32, mem_gib=110) == 16
+@pytest.mark.parametrize('cores,memory,expected', [
+    (32, 110 * 1024, 16), (32, 20 * 1024, 10), (12, 3891, 2), (2, 64 * 1024, 2),
+    (8, PermissionError('no /proc'), 4), (8, ValueError('MemAvailable missing'), 4)])
+def test_affected_workers_follow_cores_and_memory_never_fixed_at_two(cores, memory, expected):
+    """LE-PREPUSH-TESTS-ON-BUSIEST-HOST (3): the worker count comes from the host, between 2 and 16;
+    an unreadable memory probe falls back to the cores."""
+    assert preflight.affected_workers({}, cores=cores, memory_mb=_memory(memory)) == expected
+
+
+def test_affected_workers_override():
+    assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': '6'}, cores=32, memory_mb=_memory(110 * 1024)) == 6
+    for bad in ('x', '0', '-3', '\u00b2', ''):
+        assert preflight.affected_workers({'PREFLIGHT_TEST_WORKERS': bad}, cores=32, memory_mb=_memory(110 * 1024)) == 16
+
+
+def test_memavailable_line_without_value_raises_valueerror(tmp_path, monkeypatch):
+    """The shared probe answers ValueError for a malformed line, so preflight falls back to cores."""
+    from plangraph.spawner import overflow
     meminfo = tmp_path / 'meminfo'
-    meminfo.write_text('MemTotal:       33554432 kB\nMemAvailable:    8388608 kB\n')
-    assert preflight.mem_available_gib(str(meminfo)) == 8
-    assert preflight.mem_available_gib(str(tmp_path / 'missing')) is None
+    meminfo.write_text('MemTotal: 1 kB\nMemAvailable:\n')
+    real = overflow.Path
+    monkeypatch.setattr(overflow, 'Path', lambda p: meminfo if str(p) == '/proc/meminfo' else real(p))
+    # Only overflow sees a POSIX os.name; the global os module stays untouched, so pathlib works on Windows.
+    monkeypatch.setattr(overflow, 'os', types.SimpleNamespace(name='posix'))
+    with pytest.raises(ValueError):
+        overflow.available_memory_mb()
+    assert preflight.affected_workers({}, cores=12, memory_mb=overflow.available_memory_mb) == 6

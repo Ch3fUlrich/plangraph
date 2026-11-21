@@ -157,7 +157,7 @@ CLI and overflow admission use the worker-core memory rule:
 `effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as
 free memory and `warmup.ramp_mb[role]` as the reservation (an unknown role
 uses that host's largest positive ramp). Live run/writer counts never limit
-admission. Overflow ranks hosts by free RAM above their floor.
+admission. Overflow ranks hosts by free RAM above their floor. A missing or valueless `MemAvailable:` line raises `ValueError` (pre-push workers then size from CPUs).
 Admission reads `caps.mem_floor_mb` and `warmup.ramp_mb` for each host
 from the worker-core hosts registry (`$XDG_CONFIG_HOME/plangraph/hosts.json`,
 or `~/.config/plangraph/hosts.json`), the same location used by fleet-sync.
