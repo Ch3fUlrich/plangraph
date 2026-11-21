@@ -8,6 +8,7 @@ file gate); plangraph.spawner.sessions re-exports every name defined here.
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import threading
@@ -26,6 +27,21 @@ _NAME_LOCKS_GUARD = threading.Lock()
 # Per-thread `_audit_argv` carrier (D-3193): each MCP action runs in its own
 # worker thread (asyncio.to_thread), so thread-local is per action.
 _AUDIT_TLS = threading.local()
+
+
+def _check_launch_pause(state):
+    path = state / "fleet-launch.pause"
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        with open(path, encoding="utf-8", opener=lambda name, _: os.open(name, flags)) as stream:
+            if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+                raise OSError("pause marker must be a regular file")
+            reason = stream.read().strip()
+    except FileNotFoundError:
+        return
+    except (OSError, UnicodeError):
+        reason = "cannot read fleet-launch.pause"
+    raise ParameterRefused(_scrub(f"launch paused: {reason or 'operator pause'}"))
 
 
 def _scrub_free(value):
@@ -144,9 +160,11 @@ class _StoreMixin:
 
     def _action_run(self, action, name, fn, dry):
         try:
-            from .target import quota_paused
-            if action in ('launch', 'relaunch') and quota_paused(self._state, name):
-                raise ParameterRefused('quota pause')
+            if action in ('launch', 'relaunch'):
+                _check_launch_pause(self._state)
+                from .target import quota_paused
+                if quota_paused(self._state, name):
+                    raise ParameterRefused('quota pause')
             result = fn()
         except ParameterRefused as exc:
             if not dry:

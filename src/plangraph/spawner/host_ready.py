@@ -108,6 +108,138 @@ def cargo_lease(exclusive=False, wait=0.0):
             time.sleep(min(0.5, max(deadline - time.monotonic(), 0)))
 
 
+CLI_TESTS_KEEP_ENV = 'PLANGRAPH_CLI_TESTS_KEEP'
+CLI_TESTS_KEEP = 3
+CLI_TESTS_MAX_AGE_S = 24 * 3600
+
+
+def _touched(path):
+    """Newest mtime of a directory, its entries and their entries (cargo touches the inner ones)."""
+    newest = path.stat().st_mtime
+    for child in path.iterdir():
+        newest = max(newest, child.lstat().st_mtime)
+        if child.is_dir() and not child.is_symlink():
+            for inner in child.iterdir():
+                newest = max(newest, inner.lstat().st_mtime)
+    return newest
+
+
+def prune_builds(target, subdir, keep, max_age=CLI_TESTS_MAX_AGE_S, now=None):
+    """Keep at most ``keep`` ``<target>/<subdir>/<hash>`` builds, none untouched for ``max_age`` seconds.
+
+    Call it only under the exclusive cargo lease. Returns the removed directory names."""
+    now = time.time() if now is None else now
+    root, builds = Path(target) / subdir, []
+    if root.is_symlink():
+        raise ValueError(f'{root} is a symbolic link; build root not pruned')
+    try:
+        for entry in root.iterdir():
+            if entry.is_dir() and not entry.is_symlink():
+                try:
+                    builds.append((_touched(entry), entry))
+                except OSError:
+                    continue  # a build removed meanwhile
+    except FileNotFoundError:
+        return []
+    builds.sort(key=lambda b: b[0], reverse=True)
+    removed = []
+    for index, (touched, entry) in enumerate(builds):
+        if index >= max(keep, 0) or now - touched > max_age:
+            shutil.rmtree(entry, ignore_errors=True)
+            removed.append(entry.name)
+    return removed
+
+
+def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
+    """Per-checkout ``cli-tests/<hash>`` builds: the newest ``keep`` (PLANGRAPH_CLI_TESTS_KEEP, default 3)."""
+    if keep is None:
+        try:
+            keep = int(os.environ.get(CLI_TESTS_KEEP_ENV, CLI_TESTS_KEEP))
+        except ValueError:
+            keep = CLI_TESTS_KEEP
+    return prune_builds(target, CLI_TESTS_ROOT, keep, max_age, now)
+
+
+# Cargo's own output is the evidence that a directory is a cargo target: a CACHEDIR.TAG with
+# the signature Cargo writes, or a .rustc_info.json holding a rustc fingerprint. File names alone
+# prove nothing, and neither does a bare debug/.
+CACHEDIR_SIGNATURE = b'Signature: 8a477f597d28d172789f06886806bc55'
+CLI_TESTS_ROOT, POLICY_BIN_ROOT = 'cli-tests', 'policy-bin'
+BUILD_ROOTS = (CLI_TESTS_ROOT, POLICY_BIN_ROOT)
+
+
+def cargo_output(path):
+    """True when ``path`` holds a regular CACHEDIR.TAG with Cargo's signature or a real .rustc_info.json."""
+    tag, info = Path(path) / 'CACHEDIR.TAG', Path(path) / '.rustc_info.json'
+    try:
+        if tag.is_file() and not tag.is_symlink() and tag.read_bytes().startswith(CACHEDIR_SIGNATURE):
+            return True
+        if info.is_file() and not info.is_symlink() and info.stat().st_size <= 1 << 20:
+            data = json.loads(info.read_text())
+            return isinstance(data, dict) and 'rustc_fingerprint' in data
+    except (OSError, ValueError, TypeError):
+        pass
+    return False
+
+
+def unsafe_cache_dir(target, checkout):
+    """Refuse a cache that is, holds or sits inside a checkout, the home directory or an ancestor of it."""
+    checkout, cache, home = Path(checkout).resolve(), Path(target).resolve(), Path.home().resolve()
+    if (Path(target).is_symlink() or checkout.is_relative_to(cache) or cache.is_relative_to(checkout)
+            or home.is_relative_to(cache) or cache == Path(cache.anchor)):
+        raise ValueError('unsafe cache directory')
+
+
+def identified_cargo_target(target):
+    """An empty directory, or one with Cargo's own output at its top or in a build root's builds; never a Git checkout."""
+    target = Path(target)
+    names = {entry.name for entry in target.iterdir()}
+    if not names:
+        return True
+    if '.git' in names:
+        return False
+    if cargo_output(target):
+        return True
+    for root in BUILD_ROOTS:
+        base = target / root
+        if root in names and base.is_dir() and not base.is_symlink():
+            if any(build.is_dir() and not build.is_symlink() and cargo_output(build)
+                   for build in base.iterdir()):
+                return True
+    return False
+
+
+def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
+    """Trim the shared target before a build: prune old cli-tests builds, then drop all of it if still over ``cap`` GB.
+
+    Holds the exclusive lease (live builds hold shared ones) and raises OSError when it cannot get it,
+    ValueError for a target that is unsafe next to ``checkout`` or, with ``identified``, holds no cargo markers."""
+    unsafe_cache_dir(target, checkout)
+    if identified and Path(target).exists() and not identified_cargo_target(target):
+        raise ValueError(f'{target} is not an identified cargo target; not touched')
+    if wait is None:
+        try:
+            wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
+        except ValueError:
+            wait = 30.0
+        wait = wait if math.isfinite(wait) and wait >= 0 else 30.0
+    with cargo_lease(exclusive=True, wait=wait):
+        for root in BUILD_ROOTS:   # refuse before any build root is pruned
+            if (Path(target) / root).is_symlink():
+                raise ValueError(f'{Path(target) / root} is a symbolic link; build root not pruned')
+        prune_cli_tests(target)
+        prune_builds(target, POLICY_BIN_ROOT, CLI_TESTS_KEEP)
+        if target.exists() and cargo_target_size_gb(target) >= cap:
+            shutil.rmtree(target)
+
+
+def cargo_target_cap_gb():
+    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+    if not math.isfinite(cap) or cap < 0:
+        raise ValueError('invalid cache cap')
+    return cap
+
+
 def cargo_run_busy(record):
     """A run keeps the shared cargo target busy only while one of its processes can still build.
 
@@ -144,20 +276,14 @@ def local_disk_refusal(worktree, service, role='implement'):
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
         target = shared_cargo_target()
-        checkout, cache = Path(worktree).resolve(), target.resolve()
-        if (target.is_symlink() or checkout.is_relative_to(cache) or
-                cache.is_relative_to(checkout) or cache == Path.home().resolve()):
-            raise ValueError('unsafe cache directory')
+        unsafe_cache_dir(target, worktree)
         building = role not in NO_BUILD_ROLES
         size = cargo_target_size_gb(target) if building else 0
         if building and size >= cap:
             if any(cargo_run_busy(r) for r in service.ps()['runs']):
                 return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
             try:
-                wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
-                with cargo_lease(exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
-                    if target.exists():
-                        shutil.rmtree(target)
+                reclaim_cargo_target(target, cap, worktree)
             except OSError:
                 return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
         if cap == 0 and building:
@@ -237,9 +363,7 @@ def running_disk_refusal(worktree, role='implement'):
         free = min(disk_free_gb(path) for path in paths)
         if free < 2:
             return f'disk_low: free {free:.2f} GB, stop 2 GB'
-        cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
-        if not math.isfinite(cap) or cap < 0:
-            raise ValueError('invalid cache cap')
+        cap = cargo_target_cap_gb()
         building = role not in NO_BUILD_ROLES
         size = cargo_target_size_gb(target) if building else 0
         if building and size >= cap:

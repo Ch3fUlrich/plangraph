@@ -12,6 +12,9 @@ pub mod windows;
 #[cfg(all(test, unix))]
 #[path = "watch_blind_tests.rs"]
 mod blind_tests;
+#[cfg(all(test, unix))]
+#[path = "watch_busy_fixture.rs"]
+mod busy_fixture;
 #[path = "watch_supervise.rs"]
 #[cfg(unix)]
 mod supervise;
