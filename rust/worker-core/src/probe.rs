@@ -1,8 +1,9 @@
 //! Outcome probe: run before retrying an attempt to see what it left behind.
 
-use crate::check::{run_check_scoped, END_MARKER};
+use crate::check::run_check_scoped;
 use crate::git::{check_rev, git, GitError};
 use serde::{Deserialize, Serialize};
+use std::io::{self, Read};
 use std::path::Path;
 use std::time::Duration;
 
@@ -25,25 +26,22 @@ pub enum ProbeError {
     Check(#[from] std::io::Error),
 }
 
-/// Written by the wrapped check's own shell before the card's command runs. It
-/// proves a start when the end marker is lost (a killed check prints none).
-const STARTED: &str = ".pg-check-started";
-
-/// Run `cmd` in a nested shell, record that it started, and after it print the end
-/// marker ([`END_MARKER`]) as the last line and keep its exit code, whatever the
-/// command did to its own tmp directory.
-fn marked(cmd: &str) -> String {
+/// Mark the start out of band, then let supervision collect the command's exit status.
+fn marked(cmd: &str, status: &tempfile::NamedTempFile) -> String {
+    let name = status
+        .path()
+        .file_name()
+        .expect("tempfile name")
+        .to_string_lossy();
     let quoted = format!("'{}'", cmd.replace('\'', "'\\''"));
-    format!(
-        ": > \"$TMPDIR/{STARTED}\"; sh -c {quoted}; rc=$?; printf '\\n{END_MARKER}%s\\n' \"$rc\"; exit \"$rc\""
-    )
+    format!("printf 1 > \"$TMPDIR/{name}\" || exit 1; exec sh -c {quoted}")
 }
 
-/// Whether the launcher and jail actually started the card's command. A launcher or
-/// jail-setup failure (also a launcher that hangs until the timeout) leaves neither
-/// the end marker nor the start file: a probe error, not a failed check.
-fn started(tmp: &Path, r: &crate::check::CheckResult) -> bool {
-    r.ended.is_some() || tmp.join(STARTED).exists()
+fn started(status: &tempfile::NamedTempFile) -> io::Result<bool> {
+    // Read the original file even if the check deleted its tmp contents.
+    let mut byte = [0];
+    status.as_file().read(&mut byte)?;
+    Ok(byte == *b"1")
 }
 
 /// Number of commits on HEAD of `dir` beyond `base`.
@@ -79,22 +77,25 @@ pub fn probe_scoped(
     if commits_beyond(dir, base)? == 0 {
         return Ok(ProbeOutcome::Nothing);
     }
-    let cmd = if jail.is_some() {
-        marked(check_cmd)
-    } else {
-        check_cmd.to_string()
-    };
-    if let Some((_, _, tmp)) = jail {
-        let _ = std::fs::remove_file(tmp.join(STARTED));
-    }
-    let r = run_check_scoped(&cmd, dir, timeout, tail_n, jail, &|| false)?;
-    if let Some((_, _, tmp)) = jail {
-        if !started(tmp, &r) {
-            return Err(ProbeError::Check(std::io::Error::other(
+    let r = if let Some((_, _, tmp)) = jail {
+        let status = tempfile::NamedTempFile::new_in(tmp).map_err(ProbeError::Check)?;
+        let r = run_check_scoped(
+            &marked(check_cmd, &status),
+            dir,
+            timeout,
+            tail_n,
+            jail,
+            &|| false,
+        )?;
+        if !started(&status).map_err(ProbeError::Check)? {
+            return Err(ProbeError::Check(io::Error::other(
                 "the jailed check never started (launcher or jail setup failed)",
             )));
         }
-    }
+        r
+    } else {
+        run_check_scoped(check_cmd, dir, timeout, tail_n, None, &|| false)?
+    };
     Ok(if r.passed() {
         ProbeOutcome::AlreadyDone
     } else {
@@ -109,54 +110,46 @@ mod tests {
 
     const T: Duration = Duration::from_secs(20);
 
-    fn result(ended: Option<i32>, timed_out: bool) -> crate::check::CheckResult {
-        crate::check::CheckResult {
-            exit_code: Some(1),
-            signal: None,
-            timed_out,
-            cancelled: false,
-            tail: String::new(),
-            output_hash: String::new(),
-            ended,
-        }
+    #[test]
+    fn a_launcher_that_never_runs_the_wrapper_leaves_no_start_signal() {
+        let status = tempfile::NamedTempFile::new().unwrap();
+        assert!(!started(&status).unwrap());
     }
 
+    #[cfg(unix)]
     #[test]
-    fn a_check_started_when_it_ended_or_left_its_start_file() {
+    fn the_probe_wrapper_emits_only_child_output() {
         let tmp = tempfile::tempdir().unwrap();
-        assert!(started(tmp.path(), &result(Some(1), false)), "end marker");
-        assert!(
-            !started(tmp.path(), &result(None, false)),
-            "launcher failure"
-        );
-        // A launcher that hangs until the timeout started nothing either.
-        assert!(!started(tmp.path(), &result(None, true)));
-        // A killed check that did start left its start file.
-        std::fs::write(tmp.path().join(STARTED), "").unwrap();
-        assert!(started(tmp.path(), &result(None, true)));
+        let status = tempfile::NamedTempFile::new_in(tmp.path()).unwrap();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(marked("echo diagnostic; exit 7", &status))
+            .env("TMPDIR", tmp.path())
+            .output()
+            .unwrap();
+        assert_eq!(out.status.code(), Some(7));
+        assert_eq!(out.stdout, b"diagnostic\n");
+        assert!(started(&status).unwrap());
     }
 
     #[cfg(unix)]
     #[test]
     fn the_wrapper_keeps_the_exit_code_and_marks_a_check_that_wiped_its_tmp() {
-        let tmp = tempfile::tempdir().unwrap();
         for (cmd, code) in [
             ("exit 3", 3),
             ("true", 0),
-            ("echo it\\'s; rm -rf \"$TMPDIR\"/* ; exit 1", 1),
+            ("echo it\\'s; rm -rf \"$TMPDIR\"; exit 1", 1),
         ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let status = tempfile::NamedTempFile::new_in(tmp.path()).unwrap();
             let out = std::process::Command::new("sh")
                 .arg("-c")
-                .arg(marked(cmd))
+                .arg(marked(cmd, &status))
                 .env("TMPDIR", tmp.path())
                 .output()
                 .unwrap();
             assert_eq!(out.status.code(), Some(code), "{cmd}");
-            let text = String::from_utf8_lossy(&out.stdout);
-            assert!(
-                text.trim_end().ends_with(&format!("{END_MARKER}{code}")),
-                "{cmd}: {text:?}"
-            );
+            assert!(started(&status).unwrap(), "{cmd}");
         }
     }
 

@@ -22,26 +22,6 @@ pub struct CheckResult {
     pub tail: String,
     /// Hash of `tail`, for "identical failure" comparisons.
     pub output_hash: String,
-    /// The exit code a wrapped check reported on its last output line
-    /// ([`END_MARKER`]), read from the raw output before any redaction or line
-    /// cut: proof the wrapper ran the command to its end.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ended: Option<i32>,
-}
-
-/// Prefix of the last output line a wrapped check prints after its command.
-pub const END_MARKER: &str = "PG-CHECK-DONE:";
-
-/// The code on the last non-empty line of `output`, if that line is the end marker.
-fn end_marker(output: &str) -> Option<i32> {
-    output
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())?
-        .strip_prefix(END_MARKER)?
-        .trim()
-        .parse()
-        .ok()
 }
 
 impl CheckResult {
@@ -120,7 +100,6 @@ pub fn run_check_scoped(
     };
     let r = supervise_with_cancel(c, &opts, cancelled)?;
     let raw = String::from_utf8_lossy(&r.output);
-    let ended = end_marker(&raw);
     let tail = redact::redacted_tail(&raw, tail_n, redact::MAX_TAIL_BYTES);
     Ok(CheckResult {
         exit_code: r.code,
@@ -129,7 +108,6 @@ pub fn run_check_scoped(
         cancelled: r.cancelled,
         output_hash: hash_bytes(tail.as_bytes()),
         tail,
-        ended,
     })
 }
 
@@ -479,21 +457,19 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     }
 
     #[test]
-    fn the_end_marker_is_read_from_the_raw_output_not_the_cut_tail() {
+    fn diagnostic_text_does_not_report_completion() {
         let d = tempfile::tempdir().unwrap();
-        let cmd = "echo noise; printf '\\nPG-CHECK-DONE:7\\n'";
-        // A zero-line tail keeps nothing, yet the marker is still seen.
+        let r = run_check("printf 'PG-CHECK-DONE:7\\n'; exit 3", d.path(), T, 50).unwrap();
+        assert_eq!(r.tail, "PG-CHECK-DONE:7");
+        assert_eq!(r.exit_code, Some(3));
+    }
+
+    #[test]
+    fn completion_status_is_independent_of_the_cut_tail() {
+        let d = tempfile::tempdir().unwrap();
+        let cmd = "echo noise; printf '\\nPG-CHECK-DONE:7\\n'; exit 3";
         let r = run_check_cancellable(cmd, d.path(), T, 0, &|| false).unwrap();
-        assert_eq!((r.tail.as_str(), r.ended), ("", Some(7)));
-        // Only the last line counts, and only a number.
-        for cmd in [
-            "printf 'PG-CHECK-DONE:7\\nlater\\n'",
-            "echo PG-CHECK-DONE:x",
-            "echo hi",
-        ] {
-            let r = run_check_cancellable(cmd, d.path(), T, 50, &|| false).unwrap();
-            assert_eq!(r.ended, None, "{cmd}");
-        }
+        assert_eq!((r.tail.as_str(), r.exit_code), ("", Some(3)));
     }
 
     #[test]

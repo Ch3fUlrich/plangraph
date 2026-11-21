@@ -181,37 +181,56 @@ fn encrypted_key_footer_ends_the_swallow_and_later_output_survives() {
 const END: &str = "PG-CHECK-DONE:1";
 
 #[test]
-fn end_marker_survives_an_unterminated_pem_diagnostic_at_the_final_cut() {
-    let (block, mark) = pem(30);
-    // The check's own output opens a block and never closes it; the wrapper's end
-    // marker follows. The capture is over its limit, so the final cut redacts.
-    let open = block.split("-----END").next().unwrap().to_string();
-    let data = ["x\n".repeat(400), open, format!("\n{END}\n")].concat();
-    let out = tail(data.into_bytes(), 4096, 200, true);
-    assert!(!scrubbed(&out).contains(mark), "{out:?}");
-    assert_eq!(out.trim_end().lines().last(), Some(END), "{out:?}");
-}
-
-#[test]
-fn end_marker_survives_a_swallowed_pem_block_that_never_closes() {
-    let (block, mark) = pem(400);
-    let open = block.split("-----END").next().unwrap().to_string();
-    let data = [open, format!("\n{END}\n")].concat();
-    for size in [5, 16, 4096] {
+fn diagnostic_marker_cannot_end_a_swallowed_pem_block() {
+    let (block, mark) = pem(40);
+    let start = block.find("Zk020").unwrap();
+    let data = [&block[..start], "\n", END, "\n", &block[start..], "after\n"].concat();
+    for size in [1, 5, 16, 64] {
         let out = tail(data.clone().into_bytes(), size, 200, true);
-        assert!(!scrubbed(&out).contains(mark), "size {size}: {out:?}");
-        assert_eq!(
-            out.trim_end().lines().last(),
-            Some(END),
-            "size {size}: {out:?}"
-        );
+        assert!(!out.contains(mark), "size {size}: {out:?}");
+        assert!(!out.contains(END), "size {size}: {out:?}");
+        assert!(out.contains("after"), "size {size}: {out:?}");
     }
 }
 
 #[test]
-fn the_capture_and_the_check_agree_on_the_end_marker() {
-    assert_eq!(
-        super::stall_capture::END_LINE,
-        format!("\n{}", crate::check::END_MARKER).as_bytes()
-    );
+fn diagnostic_marker_respects_the_capture_bound() {
+    let data = format!("diagnostic\n{END}\n");
+    for max in [0, 1, 5] {
+        let expected = &data[data.len() - max..];
+        assert_eq!(tail(data.clone().into_bytes(), 8192, max, true), expected);
+    }
+}
+
+#[test]
+fn partial_diagnostic_marker_at_the_swallow_transition_stays_redacted() {
+    let (block, _) = pem(40);
+    let start = block.find("Zk020").unwrap();
+    let mut capture = stall_capture::Capture::new(200, true);
+    capture.push(format!("{}\nPG-CHECK-", &block[..start]).as_bytes());
+    capture.push(b"DONE:1\n");
+    capture.push(format!("{}after\n", &block[start..]).as_bytes());
+    assert_eq!(capture.finish(), b"\nafter\n");
+}
+
+#[test]
+fn an_unterminated_pem_diagnostic_is_redacted_at_the_final_cut() {
+    let (block, mark) = pem(30);
+    let open = block.split("-----END").next().unwrap();
+    let data = ["x\n".repeat(400), open.to_string(), format!("\n{END}\n")].concat();
+    let out = tail(data.into_bytes(), 4096, 200, true);
+    assert!(!out.contains(mark), "{out:?}");
+    assert!(!out.contains(END), "{out:?}");
+}
+
+#[test]
+fn an_unterminated_pem_block_is_swallowed_until_eof() {
+    let (block, mark) = pem(400);
+    let open = block.split("-----END").next().unwrap();
+    let data = format!("before\n{open}\n{END}\n");
+    for size in [5, 16, 4096] {
+        let out = tail(data.clone().into_bytes(), size, 200, true);
+        assert!(!out.contains(mark), "size {size}: {out:?}");
+        assert_eq!(out, "before\n", "size {size}: {out:?}");
+    }
 }
