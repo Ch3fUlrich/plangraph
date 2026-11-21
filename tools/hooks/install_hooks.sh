@@ -38,6 +38,8 @@
 #   fleet_inject.py    PostToolUse and UserPromptSubmit
 #   fleet_report.py    Stop
 #   session_title.py   UserPromptSubmit
+# For approved fail-closed PreToolUse registration of the Bash and context
+# guards, use the Rust guard-hook runner and onFailure block in docs/guard-hooks.md.
 # Rust hook turn-budget-hook is built/installed separately; see
 # docs/turn-budget-hook.md for events and the missing-binary guard. This
 # Python-only copier does not ship it or register any hook.

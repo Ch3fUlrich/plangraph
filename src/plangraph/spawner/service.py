@@ -11,7 +11,7 @@ from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
-from .remote_ps import native_receipt
+from .remote_ps import native_receipt, publish_run_record
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
@@ -78,7 +78,6 @@ class SpawnService(SeatSpawnMixin):
             annotate_tree(record)
             if record.get('tree_sha') is None:
                 record.setdefault('tree_absent', 'spawner code checkout identity unavailable at process startup')
-        from .private_io import atomic_write_private
         from .notify import inbox_lock
         from .runner import redact
         from .seat_artifact import publish
@@ -156,7 +155,7 @@ class SpawnService(SeatSpawnMixin):
                     record.clear()
                     record.update(stored)
                     return False
-            atomic_write_private(path, payload)
+            publish_run_record(self.state, path, payload)
         publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)

@@ -1137,7 +1137,7 @@ def test_pg_migration_7_matches_the_sqlite_ddl():
 
 
 def test_all_pg_migrations_apply_in_order_exec_7_oversight_8_bus_9():
-    """migrations 1..9 apply in order, no gaps.
+    """The full migration list is contiguous and preserves the original steps.
 
     Applied through the parity parser (``parse_tables`` over the ``MIGRATIONS``
     list, no live Postgres): 7 is main's exec ownership of ``items``, 8 is our
@@ -1147,9 +1147,9 @@ def test_all_pg_migrations_apply_in_order_exec_7_oversight_8_bus_9():
 
     steps = list(schema_pg.MIGRATIONS)
     versions = [m.version for m in steps]
-    assert versions == list(range(1, 16))             # 1..15: no gaps
-    assert versions == sorted(set(versions))          # strictly increasing
-    assert schema_pg.LATEST == 15
+    assert versions == list(range(1, schema_pg.LATEST + 1))
+    assert versions == sorted(set(versions))
+    assert schema_pg.LATEST == 16
 
     import re
     exec_cols = re.findall(

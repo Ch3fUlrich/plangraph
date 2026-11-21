@@ -64,6 +64,7 @@ pub(crate) fn run(
     state: std::path::PathBuf,
     mut cfg: SupervisorCfg,
 ) -> Result<(), String> {
+    pg_worker_core::run::lifecycle::recover(&state).map_err(|error| error.to_string())?;
     cfg.run.state_dir = state.clone();
     let _recovery = crate::reconcile_serve::configured(&state)?;
     let host = cfg.run.host.clone();
@@ -105,6 +106,7 @@ pub(crate) fn run(
     state: std::path::PathBuf,
     mut cfg: SupervisorCfg,
 ) -> Result<(), String> {
+    pg_worker_core::run::lifecycle::recover(&state).map_err(|error| error.to_string())?;
     cfg.run.state_dir = state.clone();
     let _recovery = crate::reconcile_serve::configured(&state)?;
     let host = cfg.run.host.clone();

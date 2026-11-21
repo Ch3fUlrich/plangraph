@@ -1,6 +1,6 @@
 //! Target-host execution for the placed native-Codex run kind.
 use crate::native_writer::{self, Driver};
-use pg_worker_core::run::record_io::atomic_write_private;
+use pg_worker_core::run::lifecycle;
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -392,6 +392,7 @@ impl Driver for Host {
         let mut record = record.clone();
         record["cwd"] = json!(self.cwd);
         record["review_dir"] = json!(self.reviews);
+        lifecycle::publish(&self.state, &self.record_path, &record).map_err(|e| e.to_string())?;
         let ledger = if record["ended"].is_number() {
             self.ledger_row(&record).and_then(|row| {
                 crate::writer_ledger::append(
@@ -406,9 +407,9 @@ impl Driver for Host {
         };
         if let Err(error) = &ledger {
             record["ledger_error"] = json!(error);
+            lifecycle::publish(&self.state, &self.record_path, &record)
+                .map_err(|e| e.to_string())?;
         }
-        atomic_write_private(&self.record_path, record.to_string().as_bytes())
-            .map_err(|e| e.to_string())?;
         ledger
     }
 }

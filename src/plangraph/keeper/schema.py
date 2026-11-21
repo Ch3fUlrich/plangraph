@@ -67,6 +67,7 @@ EVENT_TYPES = (
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
     "kind_set", "state_set", "exec_owner_changed", "oversight_token_minted",
+    "apply_granted", "apply_revoked", "question_asked", "question_resolved",
 )
 
 def _in(values):
@@ -359,6 +360,15 @@ CREATE TABLE audit_findings (
 );
 """
 
+EVENT_AUDIENCE_DDL = """
+CREATE TABLE IF NOT EXISTS event_audience (
+    seq BIGINT NOT NULL REFERENCES events(seq),
+    recipient TEXT NOT NULL,
+    project TEXT,
+    PRIMARY KEY (seq, recipient)
+);
+"""
+
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + RECEIPTS_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
-          + GRANTS_DDL)
+          + GRANTS_DDL + EVENT_AUDIENCE_DDL)

@@ -190,6 +190,8 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps').add_argument('--all-hosts', action='store_true',
                                            help='no-op alias: plain ps already includes configured SSH hosts')
+    p = commands.add_parser('runs', help='read host lifecycle transitions')
+    p.add_argument('--changed-since', required=True, type=json.loads, metavar='CURSOR_JSON')
     p = commands.add_parser('harness-report', help='runs, failures and no-verdict reviews per harness')
     p.add_argument('--hours', type=float, default=24)
     commands.add_parser('catalog')
@@ -469,6 +471,9 @@ raise SystemExit(code)
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
+        elif args.verb == 'runs':
+            from .remote_ps import changed_runs
+            result = changed_runs(service.state, args.changed_since)
         elif args.verb == 'harness-report':
             from .exit_outcome import harness_report
             result = harness_report(service.ps()['runs'], hours=args.hours)
