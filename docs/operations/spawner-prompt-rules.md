@@ -59,6 +59,7 @@ because the review skill demands test runs and file reads and `origin/main` may 
 skill older than the header. The section "Inline seats" of `skills/review` states the same
 rules for readers. An inline diff over the leg's request limit is refused with
 `prompt_too_large: inline_diff_oversized`, never elided. The tool mode applies to the whole brief:
-a `[tools-only]`...`[/tools-only]` block at the very start of a review prompt (the native writer's review prompt puts
-its file-read and test-run instructions there, ahead of the skill) is dropped, with the skill, for an inline seat and
-kept in front of the skill for any other leg; marker text anywhere else in the brief is never touched.
+the native writer starts its review prompt with a `[tools-only]` block followed by
+a `[review-skill]` block. Inline composition drops both and keeps the versioned brief
+and item text verbatim. Tools legs keep both blocks once. Closing markers are reserved
+in their respective blocks. Marker text in the brief or in quoted findings stays intact.

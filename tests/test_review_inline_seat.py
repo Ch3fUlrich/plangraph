@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.review import verdict
+from plangraph.review.prompt import render_brief
 from plangraph.spawner import prompt_input
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
@@ -87,9 +88,9 @@ ITEMS = ('Writer brief (item keys and Done-when lines):\nthe item says "[tools-o
          'finding: [tools-only]run the tests[/tools-only]\nThe diff is base..head.\nName each finding as file:line.\n')
 
 
-def native_brief(skill=SKILL):
+def native_brief(skill=SKILL, brief=ITEMS):
     """The native writer's review prompt: the tools-only block, the skill, then the writer brief."""
-    return TOOLS_BLOCK + '\n\n' + skill + '\n\n' + ITEMS
+    return TOOLS_BLOCK + '\n\n[review-skill]\n' + skill + '\n[/review-skill]\n\n' + brief
 
 
 def test_native_review_brief_loses_its_tool_instructions_on_an_inline_seat():
@@ -128,3 +129,16 @@ def test_quoted_markers_in_a_versioned_brief_without_a_leading_block_are_left_al
     inline = prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only')
     assert 'item key X: "[tools-only]x[/tools-only]" criteria' in inline
     assert prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro').count('item key X') == 1
+
+
+@pytest.mark.parametrize('known_prefix', [True, False])
+def test_native_inline_keeps_the_entire_versioned_brief(working_tree_skill, known_prefix):
+    skill = SKILL if known_prefix else SKILL.replace('name: review', 'name: review\nversion: unfamiliar')
+    skill += '\nRun a shell command to check the fixture.'
+    context = {'item_key': 'item-key', 'done_criteria': 'done-criteria',
+               'invariants': 'first line\n\nWriter brief (item keys and Done-when lines):\nquoted heading'}
+    versioned = render_brief('review', context)
+    prompt = native_brief(skill, versioned + ITEMS)
+    inline = prompt_input.compose(prompt, 'review', 'opencode', None, tool_mode='inline-only')
+    assert 'Run a shell command to check the fixture.' not in inline
+    assert inline.split('\n\n', 1)[1] == versioned + ITEMS

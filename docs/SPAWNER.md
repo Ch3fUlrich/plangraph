@@ -61,7 +61,8 @@ Exact word-boundary 40-hex commit SHAs (either case) resolved from `card.diff_re
 
 Prompts travel by stdin or file on every launch path (D-5233). See
 [spawner prompt rules](operations/spawner-prompt-rules.md) for transport contracts,
-carrier validation, failure behavior, fixer reports, retry bounds and the role header and skill prefix.
+carrier validation, failure behavior, fixer reports, retry bounds, and how native review
+prompts mark the tool instructions and skill for inline composition.
 
 ### MiMo seat timeouts and reasoning-only output
 

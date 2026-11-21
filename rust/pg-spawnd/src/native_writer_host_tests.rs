@@ -370,7 +370,9 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     // (Joined from parts: a fixture file, not a repository input of the CI selector.)
     let skill_dir = cwd.join("skills").join("review");
     fs::create_dir_all(&skill_dir).unwrap();
-    fs::write(skill_dir.join("SKILL.md"), "REVIEW-SKILL-FIXTURE-LINE\n").unwrap();
+    let skill = include_str!("../../../skills/review/SKILL.md");
+    let extended_skill = format!("{skill}\nRun a shell command to check the fixture.\n");
+    fs::write(skill_dir.join("SKILL.md"), &extended_skill).unwrap();
     // The writer's checkout carries a planted family table: it must never be imported.
     // (File names are assembled: they are fixtures, not Python inputs of the CI selector.)
     let py = |stem: &str| format!("{stem}.{}", "py");
@@ -388,7 +390,9 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     fs::write(
         &cli,
         r#"import json, pathlib, subprocess, sys
-argv = sys.argv[1:]
+sys.path.insert(0, sys.argv[1])
+from plangraph.spawner.prompt_input import compose, resolve_prompt
+argv = sys.argv[2:]
 value = lambda flag: argv[argv.index(flag) + 1]
 state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
 assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
@@ -396,17 +400,28 @@ families = [argv[i + 1] for i, a in enumerate(argv) if a == '--writer-family']
 # The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
 assert sorted(families) == ['anthropic', 'google', 'openai'], families
 assert 'cwd' not in card
-prompt = pathlib.Path(value('--prompt-file')).read_text()
+prompt = resolve_prompt(None, value('--prompt-file'))
+assert prompt.startswith('[tools-only]'), prompt
+inline = compose(prompt, 'review', 'opencode', None, tool_mode='inline-only')
+assert 'Run a shell command to check the fixture.' not in inline, inline
+assert 'Item key: plangraph:HOST-TEST-ITEM' in inline, inline
+assert 'Done criteria: By test: first line\nsecond criteria line\n' in inline, inline
+assert 'Invariants named by the item: never push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading' in inline, inline
 head = card['diff_ref']['head']
 repo = pathlib.Path(card['diff_ref']['repo'])
 assert repo != pathlib.Path.cwd()
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
-body = prompt.split('[/tools-only]\n\n', 1)[-1]  # the static tools-only block, then the fixed prefix
+body = prompt.split('[/review-skill]\n\n', 1)[1]
+assert inline.split('\n\n', 1)[1] == body, inline
+assert 'git diff ' not in inline and 'Open callers' not in inline and 'CARGO_TARGET_DIR' not in inline, inline
 assert body.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
-skill, context = prompt.index('REVIEW-SKILL-FIXTURE-LINE'), prompt.index('=== ITEM CONTEXT')
-assert prompt.index('Rules:') < skill < context, prompt  # the review skill is a rule, ahead of the context
+skill, context = prompt.index('Run a shell command to check the fixture.'), prompt.index('=== ITEM CONTEXT')
+assert skill < context, prompt
+tools = compose(prompt, 'review', 'opencode', None, tool_mode='tools')
+assert tools.split('\n\n', 1)[1] == prompt, tools
+assert compose(tools, 'review', 'opencode', None, tool_mode='tools') == tools
 assert 'Item key: plangraph:HOST-TEST-ITEM' in prompt, prompt
 assert 'Done criteria: By test: first line\nsecond criteria line\n' in prompt, prompt  # multi-line, whole
 assert 'Invariants named by the item: never push\n' in prompt, prompt
@@ -423,7 +438,7 @@ assert '== ci_commit_gate.py (exit status: 0)' in pathlib.Path(log).read_text(),
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'
-run.mkdir(parents=True)
+run.mkdir(parents=True, exist_ok=True)
 text = 'src/lib.rs:1 checked\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type': 'result', 'is_error': False, 'result': text}) + '\n')
 print('banner line')
@@ -441,11 +456,18 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         tool_path: std::env::var("PATH").unwrap(),
         effort: WRITER_EFFORT.into(),
         state: state.clone(),
-        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n"
+        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n"
             .into(),
         push_ref: None,
         reviews_started: 0,
-        review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
+        review_cli: vec![
+            "python3".into(),
+            cli.to_string_lossy().into_owned(),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src")
+                .to_string_lossy()
+                .into_owned(),
+        ],
         python_src: Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")),
     };
     assert!(!host.stamped(&head));
@@ -482,6 +504,11 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         .reviews
         .join(format!("checkout-{}-1", &head[..8]))
         .exists());
+    let unfamiliar_skill =
+        extended_skill.replace("name: review", "name: review\nversion: unfamiliar");
+    fs::write(skill_dir.join("SKILL.md"), unfamiliar_skill).unwrap();
+    let review = host.review(&head, None).unwrap();
+    assert_eq!(review["verdict"], "ACCEPT", "{review}");
     // OpenCode legs: no result frame in the live log, the answer is the stdout tail.
     let record = json!({"run_id":"run-rv2", "status":"completed",
         "stdout_tail":format!("HIGH src/lib.rs:1 - x\nHEAD: {head}\nVERDICT: REQUEST_CHANGES\n")});
@@ -692,8 +719,10 @@ fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
         None,
         &["openai".to_owned()],
         "VERSIONED BRIEF",
+        "A nonempty review skill.",
     );
-    let open = prompt.find(TOOLS_ONLY_OPEN).unwrap();
+    assert!(prompt.starts_with(TOOLS_ONLY_OPEN));
+    let open = 0;
     let close = prompt.find(TOOLS_ONLY_CLOSE).unwrap();
     let block = &prompt[open..close];
     assert!(
