@@ -366,3 +366,11 @@ def test_real_git_diff_keeps_both_markers_of_two_masked_credentials(monkeypatch,
 def test_nested_credential_literal_in_a_computed_value_is_masked_in_source(value):
     out = env_redact.redact_source('API_' + 'KEY = ' + value)
     assert 'hunter2value' not in out and out == env_redact.redact('API_' + 'KEY = ' + value)
+
+
+@pytest.mark.parametrize('value', ['same(PASSWORD == other)', 'ok(TOKEN == secret_of(user), x)',
+                                  'eq(MY_' + 'SECRET == other)'])
+def test_equality_inside_a_computed_value_is_not_a_nested_assignment(value):
+    text = 'API_' + 'KEY = ' + value
+    assert env_redact.redact_source(text) == text
+    assert env_redact.redact(text) == 'API_KEY = [REDACTED]'

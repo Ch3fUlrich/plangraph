@@ -118,7 +118,11 @@ pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
 pub(crate) fn is_computed(value: &str, nested: &[regex::Regex]) -> bool {
     let value = value.trim();
     // A credential-name assignment nested in the expression is judged by itself.
-    if nested.iter().any(|rule| rule.is_match(value)) {
+    // (`==` compares and assigns nothing.)
+    if nested
+        .iter()
+        .any(|rule| rule.captures_iter(value).any(|m| !m[4].starts_with('=')))
+    {
         return false;
     }
     if matches!(
