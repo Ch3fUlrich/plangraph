@@ -87,10 +87,11 @@ def _private_rotating_log(path, max_bytes=1024 * 1024):
     handler.terminator = ''
     return handler
 
-def _rotation_source():
-    """Rotation helpers as source for the supervisor bootstrap: the run tree's own cli may predate them."""
+def _rotation_source(handler=True):
+    """Rotation helpers as source for the supervisor bootstrap (the run tree's own cli may predate them).
+    The `-c` argument stays small, so a bootstrap that needs only the rotation passes handler=False."""
     import inspect
-    return inspect.getsource(_rotate_log) + inspect.getsource(_private_rotating_log)
+    return inspect.getsource(_rotate_log) + (inspect.getsource(_private_rotating_log) if handler else '')
 
 def _prune_supervisor_logs(state):
     logs = []
@@ -338,7 +339,7 @@ def main(argv=None):
                 _prune_supervisor_logs(service.state)
                 bootstrap = '''import os, pathlib, sys, threading
 from plangraph.spawner import cli as supervisor
-''' + _rotation_source() + '''from plangraph.spawner.env_redact import redact_env_values
+''' + _rotation_source(handler=False) + '''from plangraph.spawner.env_redact import redact_env_values
 from plangraph.routing_support.host_keys import redaction_env
 # The parent env never holds a file key; compute the redaction env once at
 # bootstrap top, not per emitted line (D-2759).

@@ -63,3 +63,8 @@ def test_rotation_source_is_self_contained_for_an_older_run_tree(tmp_path):
     namespace['_rotate_log'](str(log))
     assert Path(str(log) + '.1').read_bytes() == b'x\n' and log.read_bytes() == b''
     assert callable(namespace['_private_rotating_log'])
+
+
+def test_rotation_only_source_leaves_the_handler_out():
+    assert '_private_rotating_log' not in cli._rotation_source(handler=False)
+    assert 'def _rotate_log' in cli._rotation_source(handler=False)
