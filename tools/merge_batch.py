@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -50,7 +51,8 @@ import merge_batch_build as build
 import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
 from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, refresh_diff, fetch_pr,
-                              gh_json, norm_pr, parse_prs, repo_info)
+                              gh_json, landing_report, norm_pr, parse_prs, record_landing, render_landing_report,
+                              repo_info, set_fix_tasks, settle_landings)
 
 
 def cmd_plan(args):
@@ -69,6 +71,63 @@ def cmd_plan(args):
     plan = plan_batches(prs, base, args.max_prs, args.max_lines, patterns)
     plan.update(repo=repo, label=None if args.prs else args.label)
     print(json.dumps(plan, indent=2) if args.json else render_table(plan))
+    return 0
+
+
+def cmd_landing_mode(args):
+    """Print the landing mode of ``--repo`` (default: gh's current repository) from the ``landing.mode`` setting:
+    the one reading every landing path uses (router merge-part calls this). An unknown mode exits 1."""
+    from plangraph.settings import SettingsError, landing_mode
+
+    try:
+        print(landing_mode(args.repo or repo_info()[0]))
+    except SettingsError as exc:
+        raise MergeBatchError(f"landing mode refused: {exc}") from None
+    return 0
+
+
+def cmd_landing_report(args):
+    """Compare the landing modes from the telemetry database in one command: trains, median and worst minutes from
+    the first part READY to landed and from landed to the first green run, test minutes per landed part, CI
+    reruns, red-main count and fix tasks per train (``--json`` for the same numbers as JSON)."""
+    report = landing_report()
+    print(json.dumps(report, indent=2) if args.json else render_landing_report(report), end="" if not args.json else "\n")
+    return 0
+
+
+def cmd_landing_settle(args):
+    """Fill the green and red-main columns of the telemetry rows from the runs GitHub shows on each landed commit;
+    ``--fix-tasks N`` records how many fix tasks named the train ``--train`` (a repository's repair work)."""
+    if args.train:
+        if args.fix_tasks is None:
+            raise MergeBatchError("--train needs --fix-tasks N")
+        set_fix_tasks(args.train, args.fix_tasks)
+    done = settle_landings(lambda repo, sha: gh_json(
+        "api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={sha}&event=push&per_page=100")["workflow_runs"])
+    print(f"settled {done} landing row(s)")
+    return 0
+
+
+def cmd_landing_backfill(args):
+    """Record a train pull request that was landed before the telemetry existed, from what GitHub shows: its
+    creation (train build start), merge time and merge commit, the full run on its head (times, run id,
+    reruns) and the rows of the first table of its description (the parts). First-READY and GO times
+    are not on GitHub: pass ``--ready-at`` and ``--go-at`` when the keeper log knows them, else they stay unknown
+    and the statistics skip them. ``landing-settle`` then fills the green and red-main columns."""
+    repo, _ = repo_info(args.repo)
+    pr = gh_json("pr", "view", str(args.pr), "--repo", repo, "--json",
+                 "number,title,body,createdAt,mergedAt,mergeCommit,headRefOid,state")
+    if pr["state"] != "MERGED" or not (pr.get("mergeCommit") or {}).get("oid"):
+        raise MergeBatchError(f"PR #{args.pr} is {pr['state']}: only a merged train is backfilled")
+    table = [line for line in (pr.get("body") or "").splitlines() if line.startswith("|")]
+    rows = [[c.strip() for c in line.strip("|").split("|")] for line in table[2:]]
+    parts = [int(m.group(1)) if (m := re.search(r"#(\d+)", " ".join(r))) else r[0] for r in rows if r and r[0]]
+    window = land.ci_window(repo, pr["headRefOid"])
+    row = {"repo": repo, "mode": args.mode, "train": f"pr{args.pr}", "pr": args.pr, "parts": parts,
+           "landed_sha": pr["mergeCommit"]["oid"], "first_ready_at": args.ready_at, "build_started_at": pr["createdAt"],
+           "go_at": args.go_at, "landed_at": pr["mergedAt"], "fit_commits": None, "left_out": None, **window}
+    record_landing(row)
+    print(f"recorded {args.mode} train #{args.pr}: {len(parts)} part(s), landed {pr['mergedAt']}")
     return 0
 
 
@@ -141,6 +200,18 @@ def parser():
     cmd.add_argument("--go-row", metavar="PATH", help="recorded GO row; red-main exception must name this full head and EXCEPTION:main-red-fix")
     cmd.add_argument("--checks", metavar="NAME,..", help="check names to require instead of the required checks")
     cmd.add_argument("--wait", type=float, default=20.0, help="seconds to wait for GitHub to mark PRs merged")
+    add("landing-mode", cmd_landing_mode, "print the landing.mode setting of a repository", repo=True)
+    cmd = add("landing-report", cmd_landing_report, "compare the landing modes from the telemetry database")
+    cmd.add_argument("--json", action="store_true")
+    cmd = add("landing-settle", cmd_landing_settle, "fill green/red-main columns of the telemetry rows")
+    cmd.add_argument("--train", help="train name whose fix-task count to record")
+    cmd.add_argument("--fix-tasks", type=int, help="fix tasks that named --train")
+    cmd = add("landing-backfill", cmd_landing_backfill, "record a past landed train pull request as a telemetry row",
+              repo=True)
+    cmd.add_argument("--pr", required=True, type=positive, help="the merged train pull request")
+    cmd.add_argument("--mode", required=True, choices=("tested-ff", "train-pr-merge", "single-pr"))
+    cmd.add_argument("--ready-at", help="ISO time the first part was READY, when known")
+    cmd.add_argument("--go-at", help="ISO time of the GO, when known")
     add("status", land.cmd_status, "batches in progress").add_argument("--json", action="store_true")
     add("abort", build.cmd_abort, "drop a batch: worktree, branch and state").add_argument("--name", required=True)
     return top
