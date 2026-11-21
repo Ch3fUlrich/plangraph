@@ -382,6 +382,9 @@ class SpawnerRunner:
                 pass  # An unparseable config cannot supply a session-tag witness.
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
+            if cmd[0] == 'agy' and (prepare_launch or not dry_run):
+                from plangraph.routing_support.clients import prepare_agy_review_home
+                render_reason = prepare_agy_review_home(child_env, role, model_or_combo, self._ocdata_dirs, job_id)
         if render_reason is None:
             self._child_envs[job_id] = child_env
 

@@ -444,7 +444,7 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
     plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=store, catalog_rows=())
     assert not {'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium'} & {leg.id for leg in plan.legs}
-    assert plan.legs[0].id == 'mimo-v2.6-pro'
+    assert plan.legs[0].id == 'agy-gemini-4-hydrogen-high'
     assert any(s['leg'] == 'agy-gemini-4-argon-low' and s['reason'] == 'down' for s in plan.skipped)
 
     # Shared LegAdapter must honor the stored down probe even when the gateway snapshot is healthy.
@@ -461,14 +461,14 @@ def test_review_probe_selects_routed_legs_and_excludes_failed_from_route(tmp_pat
     svc = SpawnService(runner=runner, state=tmp_path, leg_reader=adapter)
     routed = svc.route(card, role='review', writer_families=('openai',), benchmark={})
     assert not {'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium'} & {leg.id for leg in routed.legs}
-    assert routed.legs[0].id == 'mimo-v2.6-pro'
+    assert routed.legs[0].id == 'agy-gemini-4-hydrogen-high'
 
     failing.clear()
     recovered = asyncio.run(leg_probe.probe_many(runner, all_reviewers=True, timeout=5))
     assert recovered['ok'] is True
     assert store.leg_status('agy/gemini-4-argon-low')['state'] == 'ok'
     after = svc.route(card, role='review', writer_families=('openai',), benchmark={})
-    assert after.legs[0].id == 'mimo-v2.6-pro'
+    assert after.legs[0].id == 'agy-gemini-4-hydrogen-high'
     assert 'agy-gemini-4-argon-low' in [leg.id for leg in after.legs]
 
 
@@ -519,8 +519,8 @@ def test_review_probe_coverage_equals_review_route(tmp_path, monkeypatch):
     monkeypatch.setattr(resolver, 'get_catalog_models', lambda: [])
     card = {'estimate_tokens': 1000, 'diff_ref': {'repo': str(tmp_path), 'base': 'a', 'head': 'b'}}
     plan = plan_spawn(card, role='review', writer_families=('openai',), leg_reader=LegStateStore(tmp_path / 'l.sqlite'), catalog_rows=())
-    assert [leg.id for leg in plan.legs] == [leg.id for leg in routed_review_legs() if leg.family != 'gpt']
-    assert [leg.id for leg in routed_review_legs()] == list(REVIEW_ORDER)   # an openai writer skips the gpt leg
+    assert [leg.id for leg in plan.legs] == [leg.id for leg in routed_review_legs() if leg.family not in {'gpt', 'claude'}]
+    assert [leg.id for leg in routed_review_legs()] == list(REVIEW_ORDER)
 
 
 def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkeypatch):

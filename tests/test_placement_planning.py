@@ -113,3 +113,33 @@ def test_orchestration_production_local_record(orchestration, monkeypatch, overr
 def test_research_uses_orchestrate_model_policy():
     card = {'estimate_tokens': 100}
     assert plan_spawn(card, role='research').to_dict() == plan_spawn(card, role='orchestrate').to_dict()
+
+
+@pytest.mark.parametrize('placed', [False, True])
+@pytest.mark.parametrize('memory,swap,reason', [
+    (4095, 0, 'local_min_available_mb'), (8000, 90.1, 'local_max_swap_used_pct'),
+    (4096, 90, 'local_fallback_no_remote'),
+])
+def test_repository_review_stays_local_and_checks_orchestration_health(
+        orchestration, monkeypatch, placed, memory, swap, reason):
+    service, rows, remote, _, _ = orchestration
+    if placed:
+        monkeypatch.setenv('PLANGRAPH_PLACED_HOST', 'host-a')
+    else:
+        monkeypatch.delenv('PLANGRAPH_PLACED_HOST', raising=False)
+    monkeypatch.setattr(overflow, 'available_memory_mb', lambda: memory)
+    monkeypatch.setattr(overflow, 'swap_used_pct', lambda: swap)
+    monkeypatch.setattr(overflow, 'ready_records',
+                        lambda config, role: {name: rows[name] for name in config['hosts']})
+    options = {'role': 'review', 'cwd': service.runner.default_cwd}
+    record = service.admit_spawn(options, card={'repository_review_required': True})
+
+    if reason == 'local_fallback_no_remote':
+        assert record is None
+        placement = options['_placement']
+    else:
+        assert record is not None and record['status'] == 'refused'
+        assert record['exit_code'] == 2 and record['reason'] == reason
+        placement = service.result(record['run_id'])['placement']
+    assert placement == dict(host='host-a', reason=reason, free_mb=memory)
+    remote.assert_not_called()

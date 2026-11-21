@@ -78,6 +78,21 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
         _ => diagnostic(&text),
     }
 }
+/// A native ACCEPT needs a reported repository read and cannot disavow tool access.
+pub(crate) fn has_repository_evidence(text: &str, paths: &[String]) -> bool {
+    static NO_TOOLS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let disavowed = NO_TOOLS
+        .get_or_init(|| regex::Regex::new(
+            r"(?i)\b(?:no (?:repository|repo|shell|test) (?:access|tools?)[, .]|no (?:tools?|tool access)\b|no repository, shell|(?:without|could not|couldn't) access (?:to )?(?:the )?(?:repo(?:sitory)?|tools?)\b|only (?:the )?inline diff\b)"
+        ).unwrap())
+        .is_match(text);
+    !disavowed
+        && text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("FILES READ:"))
+            .any(|files| crate::review_citation::names_file(files, paths))
+}
+
 #[cfg(test)]
 pub(crate) fn write_review_artifacts(
     state: &Path,

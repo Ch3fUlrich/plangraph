@@ -1,4 +1,4 @@
-"""REVIEW-GPT-NATIVE-CODEX-LEG: the review route serves gpt-6.2-sol-medium first (rule 3.61)."""
+"""REVIEW-GPT-NATIVE-CODEX-LEG: the review route keeps gpt-6.2-sol-medium in Codex after Hydrogen (D-6550)."""
 from pathlib import Path
 
 from plangraph.planner.legs import HARNESSES, REVIEW_ORDER
@@ -13,7 +13,7 @@ def route(*writers):
 
 
 def test_review_order_names_gpt_first_then_mimo_deepseek_and_argon_late():
-    assert REVIEW_ORDER[:5] == ("gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free",
+    assert REVIEW_ORDER[:6] == ("agy-gemini-4-hydrogen-high", "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free",
                                 "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash")
     assert REVIEW_ORDER[-2:] == ("agy-gemini-4-argon-low", "agy-gemini-4-argon-medium")
 
@@ -21,10 +21,10 @@ def test_review_order_names_gpt_first_then_mimo_deepseek_and_argon_late():
 def test_claude_written_diff_routes_gpt_first_in_codex():
     plan = plan_spawn(CARD, role="review", writer_families=("claude",), leg_reader=UP)
     ids = [leg.id for leg in plan.legs]
-    assert ids[:3] == ["gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free"]
-    assert plan.legs[0].harness == "codex" and plan.legs[0].family == "gpt"
+    assert ids[:3] == ["agy-gemini-4-hydrogen-high", "gpt-6.2-sol-medium", "mimo-v2.6-pro"]
+    assert plan.legs[1].harness == "codex" and plan.legs[1].family == "gpt"
     assert "codex" in HARNESSES
-    assert ids == ["gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free",
+    assert ids == ["agy-gemini-4-hydrogen-high", "gpt-6.2-sol-medium", "mimo-v2.6-pro", "opencode-deepseek-v4.1-flash-free",
                    "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", "agy-gemini-4-neon-medium",
                    "mimo-v2.6-flash", "cx-gpt-6-luna", "agy-gpt-oss-120b",
                    "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"]   # argon last
@@ -33,7 +33,7 @@ def test_claude_written_diff_routes_gpt_first_in_codex():
 def test_gpt_written_diff_skips_the_gpt_leg():
     for writer in ("gpt", "openai"):
         ids = route(writer)
-        assert "gpt-6.2-sol-medium" not in ids and ids[0] == "mimo-v2.6-pro"
+        assert "gpt-6.2-sol-medium" not in ids and ids[0] == "agy-gemini-4-hydrogen-high"
 
 
 def test_argon_is_the_end_of_the_whole_eligible_route():

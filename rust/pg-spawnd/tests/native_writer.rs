@@ -210,6 +210,8 @@ print('tokens used\n1,234')
 argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 assert value('--role') == 'review' and value('--writer-family') == 'openai', argv
+assert value('--leg') == 'claude-sonnet-5-5-high', argv
+assert value('--override-reason') == 'D-6550 fixture credential review' and '--no-fallthrough' in argv, argv
 card = json.loads(value('--card'))
 head = card['diff_ref']['head']
 prompt = pathlib.Path(value('--prompt-file')).read_text()
@@ -219,9 +221,9 @@ run.mkdir(parents=True)
 if 'reject marker' in prompt:
     text = 'HIGH writer.txt:1 - fixture finding\nHEAD: ' + head + '\nVERDICT: REQUEST_CHANGES\n'
 else:
-    text = 'Reviewed writer.txt\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
+    text = 'FILES READ: writer.txt\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type':'result','is_error':False,'result':text}) + '\n')
-print(json.dumps({'run_id':run_id,'status':'completed','live_log':str(run / 'live.log'),'chosen_leg':{'id':'fixture-seat'}}))
+print(json.dumps({'run_id':run_id,'status':'completed','live_log':str(run / 'live.log'),'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
 "#).unwrap();
     fs::create_dir_all(dir.join("supervisor-bin")).unwrap();
     // The fixture does not depend on free space on the host's /tmp mount.
@@ -298,7 +300,8 @@ FIXTURE_KEYS = {'GIT_CONFIG_NOSYSTEM', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM',
 assert not [k for k in os.environ if k.startswith(('AUTOOS_', 'PLANGRAPH_', 'XDG_', 'GIT_CONFIG')) and k not in FIXTURE_KEYS], sorted(os.environ)
 async def check():
     service = SpawnService(state=root/'state')
-    card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main')
+    card = dict(run_kind='native-codex', repo=str(root/'checkout'), base_ref='refs/heads/main',
+                review_leg='claude-sonnet-5-5-high', review_override_reason='D-6550 fixture credential review')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         run = await admitted_spawn(service, dict(card=card, prompt='brief marker'))
         assert run.get('base_admitted') or run['status'] != 'running', run
@@ -311,7 +314,7 @@ async def check():
     assert record['host'] and record['exit_code'] == 0, record
     assert record['session_id'] == 'fixture-session' and record['resumes'] == 0, record
     assert record['review']['verdict'] == 'ACCEPT' and record['review']['head'] == record['final_head'], record
-    assert record['review']['leg'] == 'fixture-seat' and record['status_line'] == 'DONE', record
+    assert record['review']['leg'] == 'claude-sonnet-5-5-high' and record['review']['harness'] == 'claude' and record['status_line'] == 'DONE', record
     assert record['fast_checks'] == {'head': record['final_head'], 'status': 'passed'}, record
     assert pathlib.Path(record['cwd']).is_dir(), record
     # A remote ref that is absent must never resolve the local-only branch.
