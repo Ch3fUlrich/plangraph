@@ -388,7 +388,7 @@ def push_main():
                 print(f"pre-push: {problem}: push refused", file=sys.stderr)
                 return 1
             print(f"pre-push: train path for {remote_ref}: manifest ok, no affected tests", file=sys.stderr)
-        if commit_gate(local_sha, open_prs=not train) or file_size_gate(local_sha):
+        if (commit_gate(local_sha, open_prs=False) if train else commit_gate(local_sha)) or file_size_gate(local_sha):
             return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None
