@@ -145,6 +145,12 @@ def test_workflow_gate_reads_the_shared_detector_for_a_rename_conflict(tmp_path:
     from merge_batch_util import MergeBatchError, workflow_gate
 
     repo, base, head = _rename_conflict_merge(tmp_path)
+    assert ".github/workflows" not in _git(repo, "diff-tree", "--cc", "--name-only", "-r", head)
+    # A base that already holds both parents leaves the merge as the only commit in range, so only
+    # the shared conflict detector can name the workflow paths it touched.
+    p1, p2 = (_git(repo, "rev-parse", f"{head}^{n}").strip() for n in (1, 2))
+    tree = _git(repo, "rev-parse", f"{p1}^{{tree}}").strip()
+    base = _git(repo, "commit-tree", tree, "-p", p1, "-p", p2, "-m", "base holding both parents").strip()
     try:
         workflow_gate(repo, base, head)
     except MergeBatchError as exc:
@@ -169,3 +175,36 @@ def ci_commit_gate_module():
     from test_ci_commit_gate import ci_commit_gate
 
     return ci_commit_gate
+
+
+def test_without_merge_tree_a_rename_into_the_workflow_directory_needs_a_trailer(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ci_commit_gate_module(), "_auto_merge", lambda parents, cwd: None)
+    repo = tmp_path / "into"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit(repo, BASE_MSG)
+    _commit(repo, OK_LANE_MSG, files={"ci/x.yml": SEVEN})
+    base = _head(repo)
+    _git(repo, "checkout", "-q", "-b", "side")
+    (repo / ".github/workflows").mkdir(parents=True)
+    _git(repo, "mv", "ci/x.yml", ".github/workflows/y.yml")
+    _git(repo, "commit", "-q", "-m", GATE_MSG)
+    _git(repo, "checkout", "-q", "-")
+    (repo / ".github/workflows").mkdir(parents=True, exist_ok=True)
+    _git(repo, "mv", "ci/x.yml", ".github/workflows/z.yml")
+    _git(repo, "commit", "-q", "-m", GATE_MSG)
+    subprocess.run(["git", "merge", "--no-ff", "--no-commit", "side"], cwd=repo, env=_git_env(), capture_output=True)
+    _git(repo, "checkout", "--theirs", ".github/workflows/y.yml")
+    _git(repo, "rm", "-q", "-f", ".github/workflows/z.yml")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "Merge side")
+    head = _head(repo)
+    assert check(base, head, cwd=repo) == [f"{head}: gate edit without Gate-Edit trailer"]
+
+
+def test_a_fatal_merge_tree_error_is_not_an_unsupported_fallback(repo: Path):
+    import pytest
+
+    module = ci_commit_gate_module()
+    with pytest.raises(module.GateError, match="merge-tree failed"):
+        module._auto_merge(["0" * 40, "1" * 40], repo)

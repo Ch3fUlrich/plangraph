@@ -199,16 +199,38 @@ def _iter_merges(base: str, head: str, cwd: str | Path | None = None) -> list[tu
     return merges
 
 
+def _changed_since(base: str, parent: str, cwd: str | Path | None) -> tuple[set[str], list[tuple[str, str]]]:
+    '''(paths changed base..parent with renames split into delete + add, the (old, new) renames).'''
+    plain = set(_git_text(['diff', '--name-only', '--no-renames', '-z', base, parent], cwd=cwd).split('\0')) - {''}
+    fields = _git_text(['diff', '--name-status', '-M', '-z', base, parent], cwd=cwd).split('\0')
+    renames, index = [], 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        if status.startswith(('R', 'C')) and index + 2 < len(fields):
+            renames.append((fields[index + 1], fields[index + 2]))
+            index += 3
+        else:
+            index += 2
+    return plain, renames
+
+
 def _auto_merge(parents: list[str], cwd: str | Path | None) -> tuple[str, list[str]] | None:
     '''(tree git merges the two parents to on its own, the paths it conflicts on), or None.'''
     proc = subprocess.run(
         ['git', 'merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', *parents],
         cwd=cwd, capture_output=True,
     )
+    if proc.returncode == 129:
+        return None  # usage error: a git without merge-tree --write-tree
     if proc.returncode not in (0, 1):
-        return None  # a git without merge-tree --write-tree
+        message = proc.stderr.decode('utf-8', errors='replace').strip()
+        raise GateError(f'git merge-tree failed: {message or proc.returncode}')
     fields = proc.stdout.decode('utf-8', errors='replace').split('\0')
     tree, names = fields[0], fields[1:]
+    if not re.fullmatch(r'[0-9a-f]{40,64}', tree):
+        # Exit 1 with no tree id is a failure (an unknown commit), not a conflict.
+        message = proc.stderr.decode('utf-8', errors='replace').strip()
+        raise GateError(f'git merge-tree failed: {message or tree or proc.returncode}')
     conflicts = [name for name in (names[: names.index('')] if '' in names else names) if name]
     return tree, (conflicts if proc.returncode == 1 else [])
 
@@ -235,11 +257,12 @@ def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
             # No merge-tree --write-tree: a path both sides changed may be a conflict resolved by
             # keeping one side, which the combined diff omits. Stricter, never looser.
             base = _git_text(['merge-base', *parents], cwd=cwd).strip()
-            sides = [
-                set(_git_text(['diff', '--name-only', '--no-renames', '-z', base, parent], cwd=cwd).split('\0')) - {''}
-                for parent in parents
-            ]
-            paths |= sides[0] & sides[1]
+            sides = [_changed_since(base, parent, cwd) for parent in parents]
+            both = sides[0][0] & sides[1][0]
+            paths |= both
+            # A path both sides renamed away conflicts at each destination, which may be a workflow.
+            for _, renames in sides:
+                paths |= {new for old, new in renames if old in both}
         return sorted(paths)
     tree, conflicts = merged
     out = _git_text(
