@@ -1,6 +1,8 @@
 //! Review rounds of the native writer: fast checks with a per-head stamp, then one
 //! spawner review run on the exact head, its verdict read from the run record.
 use super::{context, output, Host};
+#[path = "native_writer_review_wait.rs"]
+mod wait;
 use crate::native_writer::Driver;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
@@ -8,6 +10,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use wait::ReviewCheckout;
 
 impl Host {
     /// Fast-checks stamp of `head`, in the worktree's own git directory.
@@ -158,7 +161,7 @@ impl Host {
         families: &[String],
         versioned: &str,
     ) -> String {
-        let mut prompt = format!("{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let mut prompt = format!("{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the pytest checkout guard and the guarded Cargo runner (python3 tools/preflight.py --cargo-test with the relevant manifest and package). Wrap Unix test commands in timeout -k 10s with a wall limit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
         match previous {
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),
@@ -186,19 +189,22 @@ impl Host {
                 .arg(&self.cwd)
                 .arg(&clone),
         )?;
-        let result = self.review_in(&clone, &tag, &origin, &base, head, previous);
-        let _ = fs::remove_dir_all(&clone);
-        result
+        let mut checkout = ReviewCheckout {
+            path: clone,
+            removable: true,
+        };
+        self.review_in(&mut checkout, &tag, &origin, &base, head, previous)
     }
     fn review_in(
         &mut self,
-        clone: &Path,
+        checkout: &mut ReviewCheckout,
         tag: &str,
         origin: &str,
         base: &str,
         head: &str,
         previous: Option<&Value>,
     ) -> Result<Value, String> {
+        let clone = &checkout.path;
         let git = |host: &Self, args: &[&str]| {
             output(host.command("git").arg("-C").arg(clone).args(args))
         };
@@ -243,26 +249,34 @@ impl Host {
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
             "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
-        let printed = self
-            .command(&self.review_cli[0])
-            .args(&self.review_cli[1..])
-            .arg("--state")
-            .arg(&self.state)
-            .args(["spawn", "--card", &card.to_string(), "--role", "review"])
-            .args(families.iter().flat_map(|f| ["--writer-family", f]))
-            .arg("--prompt-file")
-            .arg(&prompt_path)
-            .args(["--wait", "3300", "--json"])
-            .current_dir(clone)
-            .output()
-            .map_err(|e| e.to_string())?;
-        let record =
-            printed_record(&String::from_utf8_lossy(&printed.stdout)).ok_or_else(|| {
-                format!(
-                    "review run returned no record: {}",
-                    String::from_utf8_lossy(&printed.stderr).trim()
-                )
-            })?;
+        if self.cancelled() {
+            return Err("review cancelled".into());
+        }
+        let card = card.to_string();
+        let mut args = vec!["spawn", "--card", &card, "--role", "review"];
+        args.extend(
+            families
+                .iter()
+                .flat_map(|f| ["--writer-family", f.as_str()]),
+        );
+        args.extend([
+            "--prompt-file",
+            prompt_path
+                .to_str()
+                .ok_or("review prompt path is not UTF-8")?,
+            "--wait",
+            "0",
+            "--json",
+        ]);
+        // A lost admission reply cannot prove the review stopped. Keep its checkout.
+        checkout.removable = false;
+        let admitted = self.review_request(clone, &args).map_err(|err| {
+            format!(
+                "{}: {err}; checkout retained",
+                crate::native_writer::REVIEW_CLEANUP_UNCONFIRMED
+            )
+        })?;
+        let record = self.finish_review(checkout, admitted)?;
         let text = review_run_text(&self.state, &record)?;
         let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
         let mut verdict = review_verdict(&text, head, &paths);

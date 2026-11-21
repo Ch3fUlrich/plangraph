@@ -1,3 +1,6 @@
+#[cfg(target_os = "linux")]
+#[path = "flow_watchdog_hosts/deleted_cwd.rs"]
+mod deleted_cwd;
 #[path = "flow_watchdog_hosts/mod.rs"]
 mod hosts;
 #[path = "flow_watchdog_quiet/mod.rs"]
@@ -139,9 +142,15 @@ fn pending_event(path: &Path) -> Option<serde_json::Value> {
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    if args.len() != 3 {
-        return Err("usage: flow-watchdog SNAPSHOT.json STATE_DIR".into());
-    }
+    let deleted_cwd_proc = match args.get(3..).unwrap_or(&[]) {
+        [flag, proc] if flag == "--deleted-cwd-proc" => Some(Path::new(proc)),
+        [] if args.len() == 3 => None,
+        _ => {
+            return Err(
+                "usage: flow-watchdog SNAPSHOT.json STATE_DIR [--deleted-cwd-proc /proc]".into(),
+            )
+        }
+    };
     let validated = (|| -> Result<Snapshot, Box<dyn std::error::Error>> {
         let mut s: Snapshot = serde_json::from_slice(&fs::read(&args[1])?)?;
         s.idle_messages = s.host_idle_capacity.messages()?;
@@ -180,6 +189,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(_) => vec![Alert::from("invalid snapshot".to_owned())],
     };
+    if let Some(proc) = deleted_cwd_proc {
+        #[cfg(target_os = "linux")]
+        match deleted_cwd::alert(proc) {
+            Ok(alert) => messages.extend(alert),
+            Err(error) => eprintln!("FLOW-WATCHDOG: deleted-cwd scan failed: {error}"),
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = proc;
+    }
     if let Some(state) = std::env::var_os("PLANGRAPH_TURN_BUDGET_STATE_DIR") {
         let now = std::env::var("PLANGRAPH_TURN_BUDGET_NOW")
             .ok()

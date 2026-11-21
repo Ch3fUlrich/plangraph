@@ -240,17 +240,31 @@ async def kill_process_tree(pid, *, platform=None, command_factory=None, members
     st = _stat(pid, proc_root)
     if st is not None and (st[4] != ident or st[2] != pid):
         raise KillIncomplete([pid])   # reused pid / not the group this run created
-    if st is not None:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass  # the run's process group is already gone
-    for member, start in (members or {}).items():
-        if alive(member, start, proc_root=proc_root):
+    owned = snapshot(pid, ident, proc_root=proc_root)
+    owned.update(members or {})
+    if not owned:
+        return
+
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        current = {member: row for member, start in owned.items()
+                   if (row := _stat(member, proc_root)) is not None
+                   and row[0] != 'Z' and row[4] == start}
+        group_signalled = False
+        if any(row[2] == pid for row in current.values()):
             try:
-                os.kill(member, signal.SIGKILL)
+                os.killpg(pid, sig)
+                group_signalled = True
             except (ProcessLookupError, PermissionError):
                 pass
+        for member, row in current.items():
+            if (not group_signalled or row[2] != pid) and alive(member, row[4], proc_root=proc_root):
+                try:
+                    os.kill(member, sig)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        if sig == signal.SIGTERM:
+            await asyncio.sleep(0.2)
+            owned.update(snapshot(pid, ident, proc_root=proc_root))
     # SIGKILL + wait: the reaped run must be seen dead, not merely signalled -
     # CI caught a grandchild still in state R while collect was returning.
     deadline = time.monotonic() + WAIT_S

@@ -44,6 +44,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -148,6 +149,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -444,6 +446,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
             .into(),
         push_ref: None,
         reviews_started: 0,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
         python_src: Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")),
     };
@@ -567,6 +570,7 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -633,6 +637,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };

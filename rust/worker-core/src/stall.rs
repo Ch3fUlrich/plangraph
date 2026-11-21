@@ -15,6 +15,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod wait;
+pub use wait::supervise_redirected;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -117,88 +120,40 @@ pub fn supervise_with_diagnostics(
     cancelled: &dyn Fn() -> bool,
     diagnose: impl FnOnce(u32),
 ) -> io::Result<Supervised> {
-    let mut diagnose = Some(diagnose);
     let (reader, writer) = io::pipe()?;
     cmd.stdin(Stdio::null())
         .stdout(writer.try_clone()?)
         .stderr(writer);
-    let (group, mut child) = platform::Group::spawn(&mut cmd)?;
+    let (group, child) = platform::Group::spawn(&mut cmd)?;
     drop(cmd); // closes our copies of the write end so the reader sees EOF
     let start = Instant::now();
     let last = Arc::new(AtomicU64::new(0));
     let (last2, max) = (last.clone(), opts.max_output);
     let reader = thread::spawn(move || read_tail(reader, start, &last2, max));
 
-    let (mut stalled, mut timed_out, mut cancelled_flag) = (false, false, false);
-    let mut term_at: Option<Instant> = None;
-    let mut killed = false;
-    let status = loop {
-        let waited = match child.try_wait() {
-            Ok(s) => s,
-            Err(e) => {
-                // Every exit path closes the group before the reader is
-                // joined: the kill terminates the job on Windows and SIGKILLs
-                // the group on Unix, so the reader cannot block on a survivor.
-                group.kill();
-                // Concrete std::process::Child offers no try_wait error injection.
-                let _ = child.wait();
-                // Dropping the Windows Group closes the job handle; the Unix
-                // one is a plain pgid, hence the lint allowance.
-                #[allow(clippy::drop_non_drop)]
-                drop(group);
-                let _ = reader.join();
-                return Err(e);
-            }
-        };
-        if let Some(s) = waited {
-            break s;
-        }
-        let now = Instant::now();
-        match term_at {
-            None => {
-                let quiet = now.saturating_duration_since(
-                    start + Duration::from_millis(last.load(Ordering::Relaxed)),
-                );
-                if opts.timeout.is_some_and(|t| now - start >= t) {
-                    timed_out = true;
-                } else if opts.stall.is_some_and(|s| quiet >= s) {
-                    stalled = true;
-                } else if cancelled() {
-                    cancelled_flag = true;
-                }
-                if timed_out {
-                    if let Some(diagnose) = diagnose.take() {
-                        diagnose(child.id());
-                    }
-                }
-                if timed_out || stalled || cancelled_flag {
-                    group.terminate();
-                    term_at = Some(Instant::now());
-                }
-            }
-            Some(t) if !killed && now - t >= opts.grace => {
-                group.kill();
-                killed = true;
-            }
-            Some(_) => {}
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    // Leave nothing behind (orphans would also keep the pipe open).
-    group.kill();
-    // Close the group before the join on every exit path: closing the job
-    // handle sweeps any survivor (`KILL_ON_JOB_CLOSE`), so the reader can
-    // never block on one (the Unix Group is a plain pgid, hence the lint
-    // allowance).
-    #[allow(clippy::drop_non_drop)]
-    drop(group);
+    let result = wait::wait(
+        child,
+        group,
+        opts,
+        || {
+            opts.stall.is_some_and(|bound| {
+                start
+                    .elapsed()
+                    .saturating_sub(Duration::from_millis(last.load(Ordering::Relaxed)))
+                    >= bound
+            })
+        },
+        || Ok(cancelled()),
+        diagnose,
+    );
     let output = reader.join().unwrap_or_default();
+    let result = result?;
     Ok(Supervised {
-        code: status.code(),
-        signal: platform::exit_signal(&status),
-        stalled,
-        timed_out,
-        cancelled: cancelled_flag,
+        code: result.status.code(),
+        signal: platform::exit_signal(&result.status),
+        stalled: result.stalled,
+        timed_out: result.timed_out,
+        cancelled: result.cancelled,
         output,
     })
 }
