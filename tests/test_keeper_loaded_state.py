@@ -42,19 +42,17 @@ def test_daemon_writes_loaded_sha_pid_and_start_time(checkout, tmp_path, monkeyp
 
 
 def test_daemon_publishes_loaded_state_for_its_lifetime(tmp_path):
-    import signal
-    from test_keeper_daemon import free_port, make_db_and_config, spawn, wait_health
+    from test_keeper_daemon import free_port, make_db_and_config, spawn, stop_daemon, wait_health
     port = free_port()
     db, cfg = make_db_and_config(tmp_path, port)
     path = db.with_name(db.name + '.loaded.json')
     process = spawn(cfg)
     try:
-        assert wait_health(port)['status'] == 'ok'
+        assert wait_health(port, proc=process)['status'] == 'ok'
         row = json.loads(path.read_text())
         assert row['pid'] == process.pid
         assert len(row['loaded_sha']) in (40, 64) and row['start_time'] > 0
-        process.send_signal(signal.SIGTERM)
-        assert process.wait(timeout=10) == 0
+        assert stop_daemon(process)[0] == 0
         assert not path.exists()
     finally:
         if process.poll() is None:

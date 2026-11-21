@@ -66,6 +66,16 @@ class RepoFixture(unittest.TestCase):
         self.assertEqual(len(run.call_args_list), 2)
         self.assertIn("--batch", run.call_args_list[-1].args[0])
 
+    def test_capped_doc_over_its_cap_is_refused_naming_file_and_cap(self):
+        self.file("docs/SPAWNER.md", 728)
+        self.assertPasses(self.check())
+        self.file("docs/SPAWNER.md", 729)
+        run = self.check()
+        self.assertFails(run, "docs/SPAWNER.md: 729 lines > doc cap 728")
+        # The cap holds in HEAD mode, which the pre-push gate uses.
+        self.commit("over")
+        self.assertFails(self.check("--head", "HEAD"), "docs/SPAWNER.md: 729 lines > doc cap 728")
+
     def write(self, rel, text):
         path = self.repo / rel
         path.parent.mkdir(parents=True, exist_ok=True)

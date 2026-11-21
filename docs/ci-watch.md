@@ -27,7 +27,7 @@ State is in `~/.local/state/plangraph/ci-watch/`: `tasks.jsonl` holds one record
 per repository/head/test, updated by later failures; `reruns.json` records rerun
 reservations and newest completed selections (so an in-flight rerun cannot
 revive older completed failures); `recurrences.jsonl` records known flake sightings and keeper keys.
-Concurrent writers are refused by a file lock. State replacement is atomic.
+Concurrent writers are refused by a file lock (a busy lock is retried for up to 2 s first, so a fork that briefly holds the fd does not flake it). State replacement is atomic.
 An active keeper lane is reused on later runs. A regression after that lane
 closes gets a deterministic run-suffixed successor; `keeper_key` tracks that
 lane while the local head/test row stays unique. A closed lane for the same run

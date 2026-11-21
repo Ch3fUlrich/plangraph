@@ -98,3 +98,7 @@ This first slice covers standard Rust-spawner launches and their review quota
 fallbacks. Cards without criteria retain their behavior. Native-Codex lifecycle
 briefs, the Python spawner and the shared Python brief renderer still need this
 integration; they do not enforce this gate yet.
+
+The `codex` client launch (`codex exec`) takes a registered gpt leg model as its plain id plus a
+reasoning effort: `omniroute/cx-gpt-6.2-sol-medium` and `gpt-6.2-sol-medium` both run as
+`--model gpt-6.2-sol -c model_reasoning_effort=medium` (`clients.codex_model`).

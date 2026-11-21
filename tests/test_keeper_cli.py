@@ -26,6 +26,9 @@ def make_cfg(tmp_path, world):
         "db": str(world.path),
         "snapshot": str(tmp_path / "plan.snapshot.json"),
         "bind": "127.0.0.1:0",
+        # Tests call ``w.store`` directly without ``server.lock``; a debounced background
+        # snapshot build would share that SQLite connection, so rebuild synchronously.
+        "snapshot_debounce_s": 0,
     }), encoding="utf-8")
     os.chmod(path, 0o600)
     return path, config.load_config(path)
@@ -523,3 +526,10 @@ def test_sweep_transport_and_store_refusal_layers(live, monkeypatch):
         "SELECT ok, code FROM audit_log WHERE actor='sweep-layer' AND action='messages'"
     ).fetchone()
     assert msg_row is not None and msg_row["ok"] == 0 and msg_row["code"] == "forbidden"
+
+
+def test_live_server_has_no_background_snapshot_writer(live):
+    server, _, _, cfg, _ = live
+    assert cfg.snapshot_debounce_s == 0
+    assert server.snapshot_writer is None
+    assert not [t for t in threading.enumerate() if t.name == "keeper-snapshot"]

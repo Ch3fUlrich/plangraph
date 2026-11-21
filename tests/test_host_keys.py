@@ -532,7 +532,7 @@ def test_client_key_invalid_content_never_leaks_value(tmp_path, monkeypatch, fak
 
 
 def test_client_key_callers_use_real_reader(tmp_path, monkeypatch):
-    from plangraph.routing_support import omniroute_state, quota_snapshots
+    from plangraph.routing_support import quota_snapshots
 
     home = tmp_path / 'home-callers'
     monkeypatch.setenv('HOME', str(home))
@@ -551,8 +551,8 @@ def test_client_key_callers_use_real_reader(tmp_path, monkeypatch):
     assert redaction_env({'PATH': '/bin'})[GATEWAY_KEY_ENV] == CLIENT_KEY_SENTINEL
 
     env = {'OMNIROUTE_BASE_URL': 'https://gw.example/v1'}
-    state = omniroute_state.from_env(env, fetch=fake_fetch)
-    with pytest.raises(omniroute_state.OmniRouteUnreachable, match='^no_key$'):
+    state = quota_snapshots.from_env(env, fetch=fake_fetch)
+    with pytest.raises(quota_snapshots.OmniRouteUnreachable, match='^no_key$'):
         state.provider_state('p')
     with pytest.raises(LookupError, match='^gateway not configured$'):
         quota_snapshots.fetch_snapshot_rows(env, fetch=fake_fetch)
@@ -560,7 +560,7 @@ def test_client_key_callers_use_real_reader(tmp_path, monkeypatch):
 
 
 def test_management_key_callers_use_real_load_token(tmp_path, monkeypatch):
-    from plangraph.routing_support import omniroute_state, quota_snapshots
+    from plangraph.routing_support import quota_snapshots
 
     home = tmp_path / 'home-mgmt-callers'
     monkeypatch.setenv('HOME', str(home))
@@ -577,7 +577,7 @@ def test_management_key_callers_use_real_load_token(tmp_path, monkeypatch):
         return 200, b'{"connections": [{"provider": "p", "isActive": true}], "data": []}'
 
     env = {'OMNIROUTE_BASE_URL': 'https://gw.example/v1'}
-    state = omniroute_state.from_env(env, fetch=fake_fetch)
+    state = quota_snapshots.from_env(env, fetch=fake_fetch)
     assert state.provider_state('p').available is True
     assert quota_snapshots.fetch_snapshot_rows(env, fetch=fake_fetch) == []
     assert seen_auth == ['Bearer ' + mgmt_token, 'Bearer ' + mgmt_token]

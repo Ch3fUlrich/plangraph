@@ -5,7 +5,9 @@ applies a list of BATCH.md ops (create, edit, legacy_state, add_evidence,
 close_on_decision, cancel, priority, rehome, set_kind, add_dep, remove_dep) in
 ONE ``BEGIN IMMEDIATE`` transaction, all or nothing.  The router owns the verb;
 an ``oversight`` principal may use it for its narrow grant only (see
-:mod:`.oversight_policy`), with ``batch_ref`` required.  ``base_seq`` is an
+:mod:`.oversight_policy`), with ``batch_ref`` required; a role ``l1`` principal
+holding an ``apply_grants`` row may apply the ops of ``GRANT_OPS`` while every key
+of the batch lies in a granted project (see ``_grant_gate``).  ``base_seq`` is an
 optimistic precondition: a ``conflict`` when any touched key has events newer
 than it, checked under the write lock.  ``dry_run`` performs every check and op
 and then rolls the transaction back, so a dry run changes no state (an
@@ -36,10 +38,12 @@ also hashed pre-lock as a fail-fast.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 
 from .. import views
+from . import auth
 from . import events
 from . import db_errors
 from . import oversight_policy
@@ -62,6 +66,13 @@ _OPS = {
 }
 _MALFORMED = (TypeError, ValueError, AttributeError, KeyError,
               *db_errors.PROGRAMMING)
+#: KEEPER-PROJECT-SCOPED-L1-APPLY: the only ops a granted l1 principal may send.
+#: rehome, set_kind and the dependency ops are router-only; role, token,
+#: principal, permission and grant changes are no batch op at all.
+GRANT_OPS = frozenset({"create", "edit", "cancel", "priority", "add_evidence",
+                       "close_on_decision", "legacy_state"})
+#: the key-valued fields of a create item / an edit, beyond ``depends_on``.
+_KEY_FIELDS = ("under", "corrects", "fixes")
 #: ops that change a key's state or epoch (evidence after them is verified in-lock).
 _MOVES = ("create", "legacy_state", "cancel", "close_on_decision", "rehome")
 
@@ -120,14 +131,15 @@ class OpsMixin:
     """The ``apply_ops`` verb (router; a narrow ``oversight`` grant too)."""
 
     def apply_ops(self, principal, ops, batch_ref=None, base_seq=None,
-                  dry_run=False):
+                  dry_run=False, batch_name=None):
         return self._run(principal, "apply_ops", None,
                          lambda now: self._apply_ops_audited(
                              principal, ops, batch_ref, now,
-                             base_seq=base_seq, dry_run=dry_run))
+                             base_seq=base_seq, dry_run=dry_run,
+                             batch_name=batch_name))
 
     def _apply_ops_audited(self, principal, ops, batch_ref, now, base_seq=None,
-                           dry_run=False):
+                           dry_run=False, batch_name=None):
         """Run one batch; an oversight refusal is recorded after the rollback.
 
         ``_run`` records every oversight refusal at the VERB seam, so this path
@@ -144,7 +156,8 @@ class OpsMixin:
         self._oversight_ops = list(ops) if isinstance(ops, list) else []
         try:
             return self._apply_ops(principal, ops, batch_ref, now,
-                                   base_seq=base_seq, dry_run=dry_run)
+                                   base_seq=base_seq, dry_run=dry_run,
+                                   batch_name=batch_name)
         except Refused as exc:
             if oversight:
                 # May raise ``oversight:rate_limited`` instead: once the denied
@@ -168,6 +181,11 @@ class OpsMixin:
     @staticmethod
     def _check_op_shape(op, batch_ref, principal=None):
         oversight = getattr(principal, "role", None) == "oversight"
+        if getattr(principal, "role", None) == "l1" and isinstance(op, dict) \
+                and op.get("op") in _OPS and op["op"] not in GRANT_OPS:
+            raise Refused("forbidden",
+                          f"op {op['op']!r} is router-only; a granted l1 may send "
+                          f"{sorted(GRANT_OPS)}")
         if not isinstance(op, dict):
             raise Refused("validation", "op must be a mapping")
         name = op.get("op")
@@ -275,6 +293,7 @@ class OpsMixin:
     def _edit_op(self, principal, key, fields, now):
         """Execute an edit op, expanding depends_on forms and tracking dropped deps."""
         has_deps = isinstance(fields, dict) and "depends_on" in fields
+        derived = has_deps and isinstance(fields["depends_on"], dict)
         old_deps = []
         if has_deps:
             item = self._get_or_refuse(key)
@@ -282,7 +301,7 @@ class OpsMixin:
             dep_spec = fields["depends_on"]
             if isinstance(dep_spec, dict):
                 fields = dict(fields, depends_on=self._deps_from_form(item, dep_spec))
-        res = self._edit(principal, key, fields, now)
+        res = self._edit(principal, key, fields, now, deps_derived=derived)
         if has_deps:
             after_item = self._item(key)
             new_deps_set = set(after_item.get("depends_on") or []) if after_item else set()
@@ -343,7 +362,8 @@ class OpsMixin:
                 return self._dep_noop(principal, item,
                                       [f"dependency {target} already present"])
             deps = current + [target]
-        return self._edit(principal, key, {"depends_on": deps}, now)
+        return self._edit(principal, key, {"depends_on": deps}, now,
+                          deps_derived=True)
 
     def _dep_noop(self, principal, item, warnings):
         """The answer for a dep op that would not change the graph.
@@ -391,7 +411,7 @@ class OpsMixin:
                           f"base_seq {base_seq}: changed after base_seq: {stale_str}")
 
     def _apply_ops(self, principal, ops, batch_ref, now, base_seq=None,
-                   dry_run=False):
+                   dry_run=False, batch_name=None):
         oversight = principal.role == "oversight"
         if oversight:
             if not isinstance(batch_ref, str) or not batch_ref.strip():
@@ -400,7 +420,14 @@ class OpsMixin:
             # build-L1 LOW: batch_ref bounded + guarded like reason/finding
             from .store_oversight import OversightMixin, _REASON_CAP
             batch_ref = OversightMixin._oversight_text("batch_ref", batch_ref, _REASON_CAP)
-        self._require_role(principal, "router", "oversight")
+        granted = None
+        if principal.role == "l1":
+            granted = self._grant_projects(principal.name)
+            if not granted:
+                raise Refused("forbidden", f"role 'l1' may not do this: "
+                              f"{principal.name} holds no apply grant")
+        else:
+            self._require_role(principal, "router", "oversight")
         if base_seq is not None:
             if isinstance(base_seq, bool) or not isinstance(base_seq, int) \
                     or base_seq < 0:
@@ -424,6 +451,8 @@ class OpsMixin:
         if oversight:
             self._oversight_budget(principal, now)
             self._oversight_gate(principal, ops)
+        if granted is not None:
+            self._grant_gate(principal, ops)
         batch = OpBatch()
         self._prelock(ops, batch_ref, batch, now)
         results = []
@@ -439,6 +468,8 @@ class OpsMixin:
             before = self._all_items()
             if oversight:
                 self._oversight_gate(principal, ops, before)
+            if granted is not None:
+                granted = self._grant_gate(principal, ops)   # re-read in the lock
             for index, op in enumerate(ops):
                 batch.current = index
                 before_seq = self.conn.execute(
@@ -457,6 +488,9 @@ class OpsMixin:
                 self.conn.execute("ROLLBACK")
                 return {"applied": len(results), "results": results,
                         "dry_run": True}
+            if granted is not None:
+                self._report_granted_batch(principal, ops, batch_ref, batch_name,
+                                           granted, now)
             self.conn.execute("COMMIT")
         except BaseException:
             if self.conn.in_transaction:
@@ -486,6 +520,15 @@ class OpsMixin:
 
     def _guarded_op(self, principal, index, op, batch_ref, now):
         try:
+            if principal.role == "l1":
+                # The gate admitted this op for the granted projects alone, so it
+                # runs under the router's checks (the single verbs' own state and
+                # graph rules still apply); events keep the l1 name and role and
+                # the grant bounds what a verb writes beyond its named key.
+                principal = auth.ScopedPrincipal(
+                    principal.name, "router", principal.projects, principal.family,
+                    audit_role="l1",
+                    granted=frozenset(self._grant_projects(principal.name)))
             return self._run_op(principal, op, batch_ref, now)
         except Refused as exc:
             if principal.role == "oversight":
@@ -538,3 +581,138 @@ class OpsMixin:
         if bad:
             raise Refused("validation", "; ".join(
                 f"{p['code']}:{p['key']}:{p['msg']}" for p in bad))
+
+    # ------------------------------------------------- l1 apply grants
+    def grant_apply(self, principal, name, project):
+        """Router only: let the l1 principal *name* apply batches in *project*."""
+        return self._run(principal, "grant_apply", None,
+                         lambda now: self._set_grant(principal, name, project, True, now))
+
+    def revoke_apply(self, principal, name, project):
+        """Router only: take the grant of *project* from *name* away."""
+        return self._run(principal, "revoke_apply", None,
+                         lambda now: self._set_grant(principal, name, project, False, now))
+
+    def _set_grant(self, principal, name, project, grant, now):
+        self._require_role(principal, "router")
+        for label, value in (("principal", name), ("project", project)):
+            if not isinstance(value, str) or not value.strip() or ":" in value:
+                raise Refused("validation", f"{label} must be a plain name")
+        with self._write():
+            row = self.conn.execute(
+                "SELECT role FROM principals WHERE name=?", (name,)).fetchone()
+            if row is None:
+                raise Refused("not_found", f"no principal {name!r}")
+            if row["role"] != "l1":
+                raise Refused("validation",
+                              f"{name} is role {row['role']!r}; only l1 takes a grant")
+            self.conn.execute(
+                "DELETE FROM apply_grants WHERE principal=? AND project=?",
+                (name, project))
+            if grant:
+                self.conn.execute(
+                    "INSERT INTO apply_grants(principal,project,granted_by,granted_at)"
+                    " VALUES (?,?,?,?)",
+                    (name, project, principal.name, self._iso(now)))
+        return {"principal": name, "project": project,
+                "granted" if grant else "revoked": True}
+
+    def apply_grants(self, principal, name=None):
+        """The grants: the router sees all (or one principal's), an l1 its own."""
+        def work(_now):
+            self._require_role(principal, "router", "l1")
+            who = principal.name if principal.role == "l1" else name
+            sql = ("SELECT principal,project,granted_by,granted_at"
+                   " FROM apply_grants")
+            rows = self.conn.execute(
+                sql + (" WHERE principal=?" if who else "")
+                + " ORDER BY principal,project", (who,) if who else ()).fetchall()
+            return [dict(row) for row in rows]
+        return self._run(principal, "apply_grants", None, work)
+
+    def _grant_projects(self, name):
+        return {row["project"] for row in self.conn.execute(
+            "SELECT project FROM apply_grants WHERE principal=?", (name,))}
+
+    def _key_project(self, key):
+        """The project of a key that must name one; a bare id has none."""
+        if not isinstance(key, str) or ":" not in key:
+            raise Refused("forbidden", f"key {key!r} names no project, so no grant covers it")
+        return key.split(":", 1)[0]
+
+    def _op_keys(self, op):
+        """Every key an op creates, edits, or points at, alias-resolved."""
+        name = op["op"]
+        if name != "create":
+            # Resolved here, in the lock, exactly as ``_run_op`` resolves it: the
+            # key checked is the key mutated even if a rehome landed meanwhile.
+            target = self.resolve_key(op["key"])
+            keys = [target]
+            fields = op.get("fields") if name == "edit" else None
+            if isinstance(fields, dict):
+                # bare references qualify with the project of the RESOLVED target,
+                # as the edit does with the stored item's project
+                project = self._key_project(target)
+                deps = fields.get("depends_on")
+                if isinstance(deps, dict):
+                    deps = list(deps.get("add") or []) + list(deps.get("remove") or [])
+                keys += [self._qualify(project, d) for d in deps or ()
+                         if isinstance(d, str)]
+                keys += [self._qualify(project, fields[f]) for f in _KEY_FIELDS
+                         if isinstance(fields.get(f), str)]
+            return keys
+        keys = []
+        items = op["item"] if isinstance(op["item"], list) else [op["item"]]
+        for item in items:
+            project = item.get("project")
+            if not isinstance(project, str) or not project:
+                raise Refused("forbidden", "create item names no project, so no grant covers it")
+            keys.append(f"{project}:{item.get('id')}")
+            keys += [self._qualify(project, d) for d in item.get("depends_on") or ()
+                     if isinstance(d, str)]
+            keys += [self._qualify(project, item[f]) for f in _KEY_FIELDS
+                     if isinstance(item.get(f), str) and item[f]]
+        return keys
+
+    def _grant_gate(self, principal, ops):
+        """Refuse the whole batch at its first key outside the granted projects.
+
+        Run before the slow pre-lock I/O and again in the lock, so a grant
+        revoked in between is honoured.  Returns the granted projects.
+        """
+        granted = self._grant_projects(principal.name)
+        if not granted:
+            raise Refused("forbidden", f"{principal.name} holds no apply grant")
+        for index, op in enumerate(ops):
+            try:
+                for key in self._op_keys(op):
+                    project = self._key_project(key)
+                    if project not in granted:
+                        raise Refused(
+                            "forbidden",
+                            f"key {key} is outside the granted projects "
+                            f"{sorted(granted)} of {principal.name}")
+            except Refused as exc:
+                raise _fail(index, op, exc) from None
+        return granted
+
+    def _report_granted_batch(self, principal, ops, batch_ref, batch_name,
+                              granted, now):
+        """One line per applied batch of a granted principal to the routing inbox:
+        batch name, the source plan and its sha256 (from ``batch_ref``
+        ``<source>@<sha256>``), the sha256 of the applied ops and their count --
+        what the router reads for its D-id and reverts from."""
+        source, _, digest = (batch_ref or "").rpartition("@")
+        if not source:
+            source, digest = digest, ""
+        name = batch_name if isinstance(batch_name, str) else ""
+        self._insert_message(**{
+            "from": principal.name, "to": "routing", "trace_id": "", "key": "",
+            "run_id": "", "attempt_n": 0, "ts": int(now * 1000),
+            "ack_state": "pending", "posted_by": principal.name,
+            "body": {"event": "granted_apply", "batch": name,
+                     "batch_ref": batch_ref or "", "source": source,
+                     "sha256": digest,
+                     "ops_sha256": hashlib.sha256(
+                         events.canonical(ops).encode("utf-8")).hexdigest(),
+                     "ops": len(ops), "projects": sorted(granted)}})

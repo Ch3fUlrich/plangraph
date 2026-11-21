@@ -22,6 +22,12 @@ def isolated_config(tmp_path, monkeypatch):
     return config
 
 
+@pytest.fixture(autouse=True)
+def pinned_admission_memory(admission_memory):
+    """Every spawn in this file sees ample admission memory, whatever the host is doing."""
+    admission_memory()
+
+
 def child_config(provider, endpoint=None):
     options = {} if endpoint is None else {'baseURL': endpoint}
     cfg = {'provider': {provider: {'options': options}}}
@@ -49,7 +55,7 @@ def test_file_only_url_is_shared_by_child_and_witness(isolated_config, monkeypat
     class Runner:
         def __init__(self):
             self._adapter_tokens = {'job': object()}
-        def served_witness(self, job_id, model, *, adapter_token):
+        def served_witness(self, job_id, model, *, adapter_token, finish_reason=None):
             assert adapter_token is self._adapter_tokens[job_id]
             witness.served_model = model
     def opener(request, timeout):
@@ -239,7 +245,7 @@ def test_required_witness_invalid_file_never_reads_key(isolated_config, monkeypa
     ('https://v1/prefix/', 'https://v1/prefix'),
 ])
 def test_management_urls_preserve_authority(endpoint, management, monkeypatch):
-    from plangraph.routing_support import omniroute_state, quota_snapshots
+    from plangraph.routing_support import quota_snapshots
     secrets = {'OMNIROUTE_BASE_URL': endpoint, gw.TOKEN_ENV: 'synthetic'}
     seen = []
 
@@ -257,7 +263,7 @@ def test_management_urls_preserve_authority(endpoint, management, monkeypatch):
 
     assert gw.fetch_rows('test', {}, secrets=secrets, opener=opener) == []
     assert seen == [management + '/api/usage/call-logs?sessionTag=test&limit=200']
-    state = omniroute_state.from_env(secrets, key_resolver=lambda _: 'synthetic')
+    state = quota_snapshots.from_env(secrets, key_resolver=lambda _: 'synthetic')
     assert state.base_url == management
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda _: 'synthetic')
     def fetch(url, headers, timeout):
@@ -317,7 +323,7 @@ def test_xdg_config_does_not_require_home(isolated_config, monkeypatch):
     assert clients.effective_gateway_base_url() == endpoint
 
 
-def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path, monkeypatch, admission_memory):
+def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path, monkeypatch):
     """CLI review run for mimo-v2.6-pro overrides direct root options/env and records served_family=mimo."""
     from http.server import BaseHTTPRequestHandler, HTTPServer
     import os
@@ -327,7 +333,6 @@ def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path,
     from pathlib import Path
     from plangraph.spawner import cli as spawner_cli
 
-    admission_memory()
     origin = tmp_path / 'origin.git'
     subprocess.run(['git', 'init', '--bare', '-q', str(origin)], check=True)
     repo = tmp_path / 'repo'

@@ -3,7 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-pub(super) type Env = BTreeMap<String, String>;
+pub type Env = BTreeMap<String, String>;
 pub(super) fn python(env: &Env, repo: &Path) -> Command {
     let mut cmd = Command::new("python3");
     cmd.current_dir(repo).envs(env);
@@ -27,11 +27,16 @@ pub(super) fn output(mut cmd: Command) -> Result<Value, String> {
     }
     serde_json::from_slice(&out.stdout).map_err(|_| "adapter returned invalid JSON".into())
 }
-pub(super) trait Transport {
+pub trait Transport {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String>;
 }
 pub(super) struct Keeper<'a> {
     pub env: &'a Env,
+}
+/// The same keeper transport with a caller-chosen request limit, for verbs that read git.
+pub struct SlowKeeper<'a> {
+    pub env: &'a Env,
+    pub max_time_secs: u32,
 }
 fn http_response(raw: &[u8]) -> Result<Value, String> {
     let split = raw
@@ -67,60 +72,65 @@ fn http_response(raw: &[u8]) -> Result<Value, String> {
 }
 impl Transport for Keeper<'_> {
     fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
-        let url = self.env.get("PG_URL").ok_or("PG_URL missing")?;
-        let path = self
-            .env
-            .get("PG_TOKEN_FILE")
-            .ok_or("PG_TOKEN_FILE missing")?;
-        let token = fs::read_to_string(path).map_err(|_| "keeper token file unreadable")?;
-        let token = token.trim();
-        if token.is_empty()
-            || !token
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"-_.=+/".contains(&b))
-        {
-            return Err("invalid keeper token".into());
-        }
-        let config = format!("header = \"Authorization: Bearer {token}\"\n");
-        let mut cmd = Command::new("curl");
-        cmd.args([
-            "--silent",
-            "--max-time",
-            "20",
-            "--proto",
-            "=http,https",
-            "--config",
-            "-",
-            "--write-out",
-            "\n%{http_code}",
-        ])
-        .arg(format!("{}/v1/{verb}", url.trim_end_matches('/')))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-        if let Some(body) = body {
-            cmd.args([
-                "--header",
-                "Content-Type: application/json",
-                "--data",
-                &body.to_string(),
-            ]);
-        }
-        let mut child = cmd.spawn().map_err(|_| "cannot execute curl")?;
-        child
-            .stdin
-            .take()
-            .ok_or("curl stdin unavailable")?
-            .write_all(config.as_bytes())
-            .map_err(|_| "keeper request failed")?;
-        let out = child
-            .wait_with_output()
-            .map_err(|_| "keeper request failed")?;
-        if !out.status.success() {
-            return Err("keeper request refused or unreachable".into());
-        }
-        http_response(&out.stdout)
+        post(self.env, verb, body, 20)
     }
+}
+impl Transport for SlowKeeper<'_> {
+    fn call(&self, verb: &str, body: Option<Value>) -> Result<Value, String> {
+        post(self.env, verb, body, self.max_time_secs)
+    }
+}
+fn post(env: &Env, verb: &str, body: Option<Value>, max_time_secs: u32) -> Result<Value, String> {
+    let url = env.get("PG_URL").ok_or("PG_URL missing")?;
+    let path = env.get("PG_TOKEN_FILE").ok_or("PG_TOKEN_FILE missing")?;
+    let token = fs::read_to_string(path).map_err(|_| "keeper token file unreadable")?;
+    let token = token.trim();
+    if token.is_empty()
+        || !token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.=+/".contains(&b))
+    {
+        return Err("invalid keeper token".into());
+    }
+    let config = format!("header = \"Authorization: Bearer {token}\"\n");
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "--silent",
+        "--max-time",
+        &max_time_secs.to_string(),
+        "--proto",
+        "=http,https",
+        "--config",
+        "-",
+        "--write-out",
+        "\n%{http_code}",
+    ])
+    .arg(format!("{}/v1/{verb}", url.trim_end_matches('/')))
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+    if let Some(body) = body {
+        cmd.args([
+            "--header",
+            "Content-Type: application/json",
+            "--data",
+            &body.to_string(),
+        ]);
+    }
+    let mut child = cmd.spawn().map_err(|_| "cannot execute curl")?;
+    child
+        .stdin
+        .take()
+        .ok_or("curl stdin unavailable")?
+        .write_all(config.as_bytes())
+        .map_err(|_| "keeper request failed")?;
+    let out = child
+        .wait_with_output()
+        .map_err(|_| "keeper request failed")?;
+    if !out.status.success() {
+        return Err("keeper request refused or unreachable".into());
+    }
+    http_response(&out.stdout)
 }
 /// Parse the receipt before interpreting exit status: queued (5) and unknown (1)
 /// are durable admissions. Missing/unparseable admission receipts are failures.

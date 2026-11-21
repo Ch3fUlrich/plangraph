@@ -1,0 +1,1 @@
+Spawner honors cancellation before a leg starts, preserves child refusal and seat diagnostics, records gateway finish evidence and snapshot fallback reasons, and redacts wrapped credentials even when output contains private-use markers. Strict review routing skips the explicitly unmeasured GPT-OSS review leg until its exact benchmark row is available.

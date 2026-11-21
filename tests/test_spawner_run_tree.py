@@ -452,6 +452,8 @@ def test_empty_seats_cli_envelope_keeps_main_json_and_exit_code(tmp_path, monkey
     assert json.loads(capsys.readouterr().out) == {'seats': []}
 
 
+# The supervise entry runs admission on the process cwd; pinned_base keeps the cwd's branch out.
+@pytest.mark.pinned_base
 @pytest.mark.parametrize('entry', ['spawn', 'seats', 'mcp', 'supervise'])
 @pytest.mark.parametrize('identity', [True, False])
 def test_all_python_entry_records_have_tree_sha_or_reason(tmp_path, monkeypatch, entry, identity):

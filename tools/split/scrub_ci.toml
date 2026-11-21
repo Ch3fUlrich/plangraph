@@ -8,6 +8,18 @@
 [scrub]
 
 [[scrub.allow_value]]
+path = "rust/worker-core/src/host_command.rs"
+rule = "ipv6"
+value_sha256 = "eff8e7ca506627fe15dda5e0e512fcaad70b6d520f37cc76597fdb4f2d83a1a3"
+why = "IPv6 loopback fixture verifies that SSH preserves an unbracketed user-qualified destination; not a private host"
+
+[[scrub.allow_value]]
+path = "rust/worker-core/src/host_command.rs"
+rule = "ipv6"
+value_sha256 = "5afd19e856d1c18d17d600dfd2b5f534992333985e126c2a951047102c1ed536"
+why = "IPv6 documentation-range fixture verifies that SSH preserves a bracketed user-qualified destination; not a private host"
+
+[[scrub.allow_value]]
 path = "tests/fleet_bus/vectors/sign.json"
 rule = "token-shape"
 value_sha256 = "48f27ef8fc9d274fbeee761e0171b64e32551784d0b4543998a94085fa0f07e6"

@@ -298,20 +298,21 @@ fn main_order(text: &str) -> String {
 }
 
 #[test]
-fn redact_shield_markers_skip_prepass_and_equal_main() {
+fn redact_shield_markers_preserve_literal_text_and_mask_continuations() {
     for marker in ["\u{e000}", "\u{e001}", "\u{e000}0\u{e001}"] {
         for nl in ["\n", "\r\n"] {
             let text = format!(
-                "{marker} API_KEY={}{}{nl}{}{nl}next",
+                "{marker} API_KEY={}{}{nl}{}{nl}next retained",
                 ["gh", "p_"].concat(),
                 "A9".repeat(7),
                 "B8".repeat(8)
             );
+            let expected = format!("{marker} API_KEY=[REDACTED]{nl}next retained");
             assert_eq!(
                 crate::redact_wrapped::join_shielded_assignments(&text, &super::patterns()[3..5]),
-                text
+                expected
             );
-            assert_eq!(redact(&text), main_order(&text));
+            assert_eq!(redact(&text), expected);
         }
     }
 }

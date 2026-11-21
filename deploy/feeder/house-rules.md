@@ -12,9 +12,11 @@ $HOME/.local/share/plangraph/handoffs/plan-order/bin/agy-review.sh
 with tag feed-<head8>, base origin/main, full HEAD and a prompt file stating the
 goal and rules, demanding every changed file and hunk be named, no background
 commands, FINDING/VERDICT and a TEST_GAMING line. Review routing must use role
-review and writer_families ["openai"]. Store the review under the card's review_dir
+review and writer_families listing the family of every Writer trailer in base..head
+(your own family included). Store the review under the card's review_dir
 with HEAD's eight-character SHA in its filename. Require VERDICT: ACCEPT naming
-files; fix REQUEST_CHANGES and repeat fast checks/review, at most 4 rounds.
+files; fix REQUEST_CHANGES in the same session and repeat fast checks/review until
+ACCEPT or the round stop rule of rust/pg-spawnd/src/round_progress.rs (at most 8 rounds).
 Final message: max 10 lines, include validation and any remaining limitation.
 Every non-merge commit ends with all trailers in ONE final paragraph:
 

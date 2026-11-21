@@ -10,6 +10,8 @@ import time
 import pytest
 
 pytestmark = pytest.mark.real_base_fresh
+from plangraph.spawner import leg_probe as _leg_probe
+_REAL_BEFORE_LAUNCH = _leg_probe.before_launch  # the `dispatch` fixture replaces it
 GIT_ENV = ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR')
 
 
@@ -561,3 +563,128 @@ def test_base_fresh_checks_the_named_ref_not_head(repository):
     current = git(repo, 'rev-parse', 'HEAD')
     assert base_fresh(repo, ref=current, fetch=False)['ok'] is True
     assert base_fresh(repo, ref=old, fetch=False)['ok'] is False
+
+
+def lane_clone(repository, tmp_path):
+    """A clone of a lane-branch checkout, its origin pointed back at the real remote."""
+    origin, repo = repository
+    git(repo, 'checkout', '-b', 'lane/x')
+    git(repo, 'commit', '--allow-empty', '-m', 'lane work')
+    clone = tmp_path / 'clone'
+    git(tmp_path, 'clone', '-q', str(repo), str(clone))
+    git(clone, 'remote', 'set-url', 'origin', str(origin))
+    assert git(clone, 'symbolic-ref', 'refs/remotes/origin/HEAD') == 'refs/remotes/origin/lane/x'
+    return origin, clone
+
+
+def test_origin_head_naming_an_absent_remote_branch_is_unknown(repository, tmp_path):
+    from plangraph.spawner.base_fresh import base_fresh
+    origin, clone = lane_clone(repository, tmp_path)
+    result = base_fresh(clone)
+    assert result['ok'] is True and result['reason'] is None
+    assert result['default_branch'] == 'main'
+    assert result['origin_sha'] == git(origin, 'rev-parse', 'main')
+
+
+def test_origin_head_naming_an_absent_remote_branch_still_refuses_a_stale_head(repository, tmp_path):
+    from plangraph.spawner.base_fresh import base_fresh
+    origin, repo = repository
+    old = advance(origin, repo)
+    _, clone = lane_clone(repository, tmp_path)
+    git(clone, 'checkout', '-q', '--detach', old)
+    result = base_fresh(clone)
+    assert result['ok'] is False and result['reason'] == 'base_stale: behind=2'
+    assert result['default_branch'] == 'main'
+
+
+def test_origin_head_naming_a_present_remote_branch_stays_the_default(repository, tmp_path):
+    from plangraph.spawner.base_fresh import base_fresh
+    origin, repo = repository
+    git(repo, 'push', 'origin', 'HEAD:refs/heads/trunk')
+    git(origin, 'symbolic-ref', 'HEAD', 'refs/heads/trunk')
+    clone = tmp_path / 'trunk-clone'
+    git(tmp_path, 'clone', '-q', str(origin), str(clone))
+    assert git(clone, 'symbolic-ref', 'refs/remotes/origin/HEAD') == 'refs/remotes/origin/trunk'
+    result = base_fresh(clone)
+    assert result['default_branch'] == 'trunk' and result['ok'] is True
+
+
+def test_same_checkout_review_reuses_the_resolved_default_branch(repository, tmp_path):
+    """A lane-checkout clone passes both admission checks: the cached one reuses main."""
+    from types import SimpleNamespace
+    from plangraph.spawner.base_fresh import admit_base
+    _, clone = lane_clone(repository, tmp_path)
+    # Review the main tip while origin/HEAD stays on the lane: only the resolved default passes.
+    head = git(clone, 'rev-parse', 'origin/main')
+    assert head != git(clone, 'rev-parse', 'origin/lane/x')
+    record = dict(role='review', cwd=str(clone))
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(clone)), _save=lambda r: None)
+    card = dict(diff_ref=dict(repo=str(clone), base='HEAD', head=head))
+    assert asyncio.run(admit_base(service, record, card, launch=True)) is True
+    assert record['base_sha'] == git(clone, 'rev-parse', 'origin/main')
+
+
+def test_stuck_initiating_probe_is_a_leg_skip_not_an_admission_timeout(repository, dispatch, monkeypatch):
+    """A probe stuck in its own setup fails the leg inside the admission window."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setattr(leg_probe, 'before_launch', _REAL_BEFORE_LAUNCH)
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.8)  # 0.6 s per probe, 0.9 s in all
+    async def stuck(runner, leg, **kwargs):
+        await asyncio.sleep(30)  # e.g. delayed log scanning before the probe's own deadline
+        return dict(ok=True, reason='', seconds=0)
+    monkeypatch.setattr(leg_probe, 'probe', stuck)
+    # The hardened service runs the leg loop that probes.
+    service, calls = dispatch[0](True), dispatch[1]
+    async def main():
+        started = time.monotonic()
+        record = await base_fresh.admitted_spawn(service, dict(
+            card=dict(estimate_tokens=100), prompt='Implement a tested change', role='implement'))
+        await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+        return record, time.monotonic() - started
+    record, elapsed = asyncio.run(main())
+    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+    assert 'base_admission_timeout' not in json.dumps(record), record
+    attempts = service.result(record['run_id'])['attempts']
+    assert [a['skip_reason'] for a in attempts] == ['probe_budget_exhausted'], attempts
+    assert not calls
+
+
+def test_probe_budget_counts_routing_time_spent_before_the_run_record(repository, dispatch, monkeypatch):
+    """Slow routing eats the admission window: the probe gets what is left, not a fresh budget."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setattr(leg_probe, 'before_launch', _REAL_BEFORE_LAUNCH)
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.8)
+    async def stuck(runner, leg, **kwargs):
+        await asyncio.sleep(30)
+        return dict(ok=True, reason='', seconds=0)
+    monkeypatch.setattr(leg_probe, 'probe', stuck)
+    service, calls = dispatch[0](True), dispatch[1]
+    async def slow_plan(plan, **kwargs):
+        await asyncio.sleep(1.35)  # routing, before the run record exists
+        return plan
+    monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', slow_plan)
+    async def main():
+        started = time.monotonic()
+        record = await base_fresh.admitted_spawn(service, dict(
+            card=dict(estimate_tokens=100), prompt='Implement a tested change', role='implement'))
+        await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+        return record, time.monotonic() - started
+    record, elapsed = asyncio.run(main())
+    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+    assert 'base_admission_timeout' not in json.dumps(record), record
+    attempts = service.result(record['run_id'])['attempts']
+    assert [a['skip_reason'] for a in attempts] == ['probe_budget_exhausted'], attempts
+    assert not calls
+
+
+def test_admitted_spawn_leaves_the_callers_admission_clock_unset(repository, dispatch):
+    from plangraph.spawner import base_fresh
+    service = dispatch[0](True)
+    async def main():
+        await base_fresh.admitted_spawn(service, dict(
+            card=dict(estimate_tokens=100), prompt='Implement a tested change', role='implement'))
+        await asyncio.gather(*service.tasks.values(), return_exceptions=True)
+        return base_fresh.ADMISSION_STARTED.get()
+    assert asyncio.run(main()) is None

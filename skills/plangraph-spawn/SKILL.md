@@ -29,7 +29,7 @@ Waits that trigger a later action must use the Rust CLI's detached watcher servi
 The command owns the entire wait and authorized continuation, including any pending
 push or merge; no continuation may exist only in a session child shell. Use a
 transient user service, never `systemd-run --scope`, `run_in_background`, or `&`.
-The launcher returns after service admission and refuses reuse of NAME. It saves
+The launcher passes the caller's whole login environment to the unit by name (`-E NAME`: PATH with ~/.local/bin, HOME, XDG and opencode config vars), so a detached push finds protoc and opencode serves its models. The launcher returns after service admission and refuses reuse of NAME. It saves
 `watchers/NAME/request.toml` before launch; the service writes `result.toml`
 atomically plus `stdout.log` and `stderr.log`. Use absolute executable paths and
 explicit command arguments/environment (the user manager does not inherit the
