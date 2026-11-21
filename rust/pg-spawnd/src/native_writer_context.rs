@@ -1,6 +1,6 @@
 //! Evidence for the item-context block of the native review brief, read from the writer
 //! brief (feeder or batch layout) and the exact diff.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_CALLERS_PER_SYMBOL: usize = 3;
 
@@ -134,19 +134,19 @@ fn definition(line: &str, python: bool) -> Option<(usize, Symbol, bool)> {
 
 /// Whether the body of a definition at `indent` is still open at line `at`: no later
 /// non-blank line between them returns to that indent, other than a signature continuation
-/// (`)`, `where`, `{`) that Rust and Python wrap at the definition's own indent.
-fn scope_open(between: &[&str], indent: usize) -> bool {
+/// (`)`, Rust `where`, `{`) that Rust and Python wrap at the definition's own indent.
+fn scope_open(between: &[&str], indent: usize, python: bool) -> bool {
     between.iter().all(|line| {
         let text = line.trim_start();
-        let continuation = text.starts_with([')', '{', ']']) || is_where(text);
+        let continuation = text.starts_with([')', '{', ']']) || (!python && is_where(text));
         text.is_empty() || line.len() - text.len() > indent || continuation
     })
 }
 
 /// Whether `text` continues or closes a definition at its own indent (`)`, `}`, `]`, `{`,
-/// `where`).
-fn closes_or_continues(text: &str) -> bool {
-    text.starts_with([')', '{', '}', ']']) || is_where(text)
+/// Rust `where`).
+fn closes_or_continues(text: &str, python: bool) -> bool {
+    text.starts_with([')', '{', '}', ']']) || (!python && is_where(text))
 }
 
 /// The Rust `where` keyword at the start of `text`, not an identifier that begins with it.
@@ -156,18 +156,23 @@ fn is_where(text: &str) -> bool {
 }
 
 /// The indent that places line `index` in a scope: its own indent. A blank line takes the
-/// indent of the line before it (that line's block, or the block around it when it closes
-/// one), lowered to the next line's indent when that line leaves the block without closing
-/// it; none before the first or after the last non-blank line.
-fn scope_indent(lines: &[&str], index: usize) -> Option<usize> {
+/// indent of the line before it: one level deeper when that line opens a block (ends in `{`,
+/// or in `:` for Python), else the block around it; lowered to the next line's indent when
+/// that line leaves the block without closing it. None before the first or after the last
+/// non-blank line.
+fn scope_indent(lines: &[&str], index: usize, python: bool) -> Option<usize> {
     let indent = |line: &str| line.len() - line.trim_start().len();
     if !lines[index].trim().is_empty() {
         return Some(indent(lines[index]));
     }
     let before = lines[..index].iter().rev().find(|l| !l.trim().is_empty())?;
     let after = lines[index..].iter().find(|l| !l.trim().is_empty())?;
+    let opens = before.trim_end().ends_with('{') || (python && before.trim_end().ends_with(':'));
+    if opens {
+        return Some(indent(before) + 1);
+    }
     let own = indent(before);
-    let leaves = !closes_or_continues(after.trim_start()) && indent(after) < own;
+    let leaves = !closes_or_continues(after.trim_start(), python) && indent(after) < own;
     Some(if leaves { indent(after) } else { own })
 }
 
@@ -182,15 +187,15 @@ fn enclosing_public(source: &str, at: usize, python: bool) -> Option<Symbol> {
     if let Some((_, symbol, true)) = definition(line, python) {
         return Some(symbol);
     }
-    let own = scope_indent(&lines, at - 1)?;
-    let closing = closes_or_continues(line.trim_start());
+    let own = scope_indent(&lines, at - 1, python)?;
+    let closing = closes_or_continues(line.trim_start(), python);
     let mut scope = own + 1;
     for (index, earlier) in lines[..at - 1].iter().enumerate().rev() {
         let Some((indent, symbol, public)) = definition(earlier, python) else {
             continue;
         };
         let inside = indent < own || (closing && indent == own);
-        if inside && indent < scope && scope_open(&lines[index + 1..at - 1], indent) {
+        if inside && indent < scope && scope_open(&lines[index + 1..at - 1], indent, python) {
             if public {
                 return Some(symbol);
             }
@@ -205,7 +210,7 @@ fn enclosing_public(source: &str, at: usize, python: bool) -> Option<Symbol> {
 /// as well as an added declaration. `read(path)` returns that file's text at the reviewed head.
 pub(super) fn changed_symbols(diff: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<Symbol> {
     let hunk = regex::Regex::new(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@");
-    let mut found = BTreeSet::new();
+    let mut found = BTreeMap::new();
     let (mut path, mut source): (Option<String>, Option<String>) = (None, None);
     for line in diff.lines() {
         if let Some(file) = line.strip_prefix("+++ b/") {
@@ -220,11 +225,17 @@ pub(super) fn changed_symbols(diff: &str, read: &dyn Fn(&str) -> Option<String>)
             let start: usize = caps[1].parse().unwrap_or(0);
             let count: usize = caps.get(2).map_or(1, |m| m.as_str().parse().unwrap_or(1));
             for at in start..start + count.max(1) {
-                found.extend(enclosing_public(text, at, file.ends_with(".py")));
+                if let Some(symbol) = enclosing_public(text, at, file.ends_with(".py")) {
+                    // One entry per name; a name that also declares a type keeps the type kind.
+                    *found.entry(symbol.name).or_insert(false) |= symbol.type_like;
+                }
             }
         }
     }
-    found.into_iter().collect()
+    found
+        .into_iter()
+        .map(|(name, type_like)| Symbol { name, type_like })
+        .collect()
 }
 
 /// Whether a `git grep -n` line is a use of `symbol` worth naming: a `.rs`/`.py` code line

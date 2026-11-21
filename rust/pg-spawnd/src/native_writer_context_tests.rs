@@ -171,3 +171,30 @@ fn a_lowercase_type_is_used_through_its_path_and_the_kind_comes_from_the_declara
     );
     assert_eq!(callers_line(&symbols[0], grep), None);
 }
+#[test]
+fn where_continues_a_signature_only_in_rust() {
+    let python = "def early():\n    return 1\nwhere = 2\n";
+    assert_eq!(owner(python, 3, true), None);
+    let rust = "pub fn long<T>(a: T)\nwhere\n    T: Copy,\n{\n    1\n}\n";
+    assert_eq!(owner(rust, 2, false).as_deref(), Some("long"));
+}
+#[test]
+fn a_blank_line_after_an_opening_line_is_inside_its_block() {
+    let empty = "pub fn empty() {\n\n}\n";
+    assert_eq!(owner(empty, 2, false).as_deref(), Some("empty"));
+    let python = "def early():\n\n    return 1\n";
+    assert_eq!(owner(python, 2, true).as_deref(), Some("early"));
+    let fields = "pub struct S {\n\n    a: u8,\n}\n";
+    assert_eq!(owner(fields, 2, false).as_deref(), Some("S"));
+    // The blank line after a closed one-line function and an `impl` header stays outside.
+    let after = "pub fn one() {}\n\nimpl S {\n\n    fn m() {}\n}\n";
+    assert_eq!(owner(after, 2, false), None);
+    assert_eq!(owner(after, 4, false), None);
+}
+#[test]
+fn a_type_and_a_function_of_one_name_are_one_symbol() {
+    let source = "pub struct Same;\n\npub fn Same() {\n    let a = 1;\n}\n";
+    let diff = "+++ b/a.rs\n@@ -1,1 +1,1 @@\n+pub struct Same;\n@@ -4,1 +4,1 @@\n+    let a = 1;\n";
+    let symbols = changed_symbols(diff, &|_| Some(source.to_owned()));
+    assert_eq!(symbols, [kind("Same")]);
+}
