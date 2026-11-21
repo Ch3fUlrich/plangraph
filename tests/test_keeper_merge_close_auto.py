@@ -189,7 +189,7 @@ def test_the_http_route_passes_the_switches_and_admits_system(env):
     assert "close_merged_auto" in api_routes.WRITE_VERBS
     route = api_routes.ROLE_CHECKED_VERBS["close_merged_auto"]
     env.repo.land("c", "Plan-Item: demo:B", 71)
-    env.store.warm_merge_scan()  # the API does this before it takes its lock; the route itself runs frozen
+    env.store.warm_merge_scan(env.store.merge_candidates())  # the API does this before its lock; the route runs frozen
     result = route(env.store, env.p("system"), {"require_seats": False, "apply": False}, None)
     assert [c["key"] for c in result["would_close"]] == ["demo:B"]
     assert state(env, "demo:B")["state"] == "open"

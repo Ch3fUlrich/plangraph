@@ -679,7 +679,7 @@ class WaiverMixin:
         self._assert_unlocked(item)
         seated = require_seats and tier != "none"
         proofs = self._merged_auto_proofs(item)
-        pending = self._deploy_pending(item, named=False, strict=True)  # before the lock, preview and apply
+        pending = self._auto_deploy_pending(item)  # preview and apply alike
         if pending:
             if apply:
                 self._deploy_pending_result(item, pending, now)

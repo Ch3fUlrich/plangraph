@@ -183,8 +183,11 @@ class RunsMixin:
 
     def merge_candidates(self):
         """``(key, project)`` of every item the automatic close may take: the input of :meth:`warm_merge_scan`."""
-        return [(item["key"], item["project"]) for item in self._all_items()
-                if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+        items = [item for item in self._all_items()
+                 if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+        # What the deploy scan needs of each item, read here under the lock so the scan does not touch the database.
+        self.__dict__["_deploy_inputs"] = {item["key"]: dict(item) for item in items}
+        return [(item["key"], item["project"]) for item in items]
 
     def warm_merge_scan(self, candidates=()):
         """Fetch, index and look up the hosted lanes of the scanned repositories; the API calls it outside its lock.
@@ -195,6 +198,7 @@ class RunsMixin:
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
         self.__dict__["_warmed"], self.__dict__["_lanes"] = {}, {}   # a failed refresh must not keep an old snapshot
+        self.__dict__["_deploy_warm"] = {}
         for project in list(scan()) if callable(scan) else []:
             if self._refresh_merged_default_ref(git, project):
                 index = context_sources.work_index(git, project, fresh=True)
@@ -202,6 +206,7 @@ class RunsMixin:
                     for key, item_project in candidates:
                         if context_sources.indexed_work(index, key)["commits"]:
                             context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
+                            self._snapshot_deploy(key)
                     self.__dict__["_warmed"][project] = time.monotonic()
 
     def _warm(self, project):

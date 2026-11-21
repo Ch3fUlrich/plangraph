@@ -1,4 +1,6 @@
 """The deploy gate reads the same merged work on every close path (LE-MERGED-UNIT-NEVER-DEPLOYED)."""
+import sys
+
 import pytest
 
 from plangraph.keeper import context_sources
@@ -77,15 +79,71 @@ def test_both_merge_subject_paths_read_the_trailing_pr(tmp_path, subject, pr):
     assert context_sources.named_merge(adapter, "demo", merge)["pr"] == pr
 
 
-def test_the_automatic_close_never_resolves_a_named_merge_while_it_holds_its_lock(env, monkeypatch):  # noqa: F811
-    head = env.repo.land("docs", "Plan-Item: demo:A", 43)
+def frozen(env, **kw):  # noqa: F811
+    """What the API does: warm the scan outside the lock, then run the verb frozen."""
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    return env.store.close_merged_auto(env.p("system"), frozen=True, **kw)
+
+
+def test_the_frozen_automatic_close_resolves_no_named_merge_under_its_lock(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 43)
     merge = git(env.repo.root, "rev-parse", "HEAD")
     env.conn.execute("UPDATE items SET description=? WHERE key='demo:A'", (f"Merge-Repo: demo {merge}",))
-
+    env.store.warm_merge_scan(env.store.merge_candidates())  # outside the lock: may fetch and resolve
     resolved = []
-    monkeypatch.setattr(env.store, "_named_merge_proof", lambda *a, **k: resolved.append(a))
-    assert head and [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
-    assert resolved == [], "a named merge needs a fetch: not under the automatic close's lock"
+    real = env.store._named_merge_proof
+    monkeypatch.setattr(env.store, "_named_merge_proof", lambda *a: resolved.append(a) or real(*a))
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert [c["key"] for c in result["closed"]] == ["demo:A"]
+    assert resolved == [], "under the request lock the scan comes from the warm snapshot"
+
+
+def test_a_frozen_close_holds_an_item_whose_separately_named_merge_ships_a_unit(env):  # noqa: F811
+    """A tagged docs merge, plus a `Merge-Repo:` SHA naming another merge that adds a unit."""
+    env.repo.land("docs", "Plan-Item: demo:A", 45)
+    root = env.repo.root
+    git(root, "checkout", "-q", "-b", "unit", "main")
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/new.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "unit without a trailer")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #46 from x/unit", "unit")
+    named = git(root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:A'", (f"Merge-Repo: demo {named}",))
+    for run in (lambda: frozen(env, require_seats=False),
+                lambda: auto(env, require_seats=False)):
+        result = run()
+        assert result["closed"] == []
+        assert "deploy_pending" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_a_frozen_close_without_a_warm_deploy_scan_closes_nothing(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 47)
+    env.store.warm_merge_scan()  # no candidates: the indexes are warm, the deploy scan is not
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+
+
+def test_a_failed_history_read_is_not_an_empty_deploy_scan(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 48)
+    real = context_sources.plan_item_commits
+    broken = {"on": False}
+
+    def history(git_, project, key, **kw):
+        # Only the deploy scan's own read fails; the close's proof of the merge still sees the commits.
+        scan = sys._getframe(1).f_code.co_name == "_deploy_changes"
+        return None if broken["on"] and scan else real(git_, project, key, **kw)
+
+    monkeypatch.setattr(context_sources, "plan_item_commits", history)
+    broken["on"] = True
+    for run in (lambda: auto(env, require_seats=False),
+                lambda: frozen(env, require_seats=False)):  # frozen: the snapshot read the failure
+        result = run()
+        assert result["closed"] == []
+        assert "deploy_scan_unreadable" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
 
 
 def test_an_unreadable_deploy_scan_leaves_the_item_open_on_the_automatic_close(env, monkeypatch):  # noqa: F811

@@ -40,12 +40,14 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
 
 from . import context_sources
 from .errors import Refused
 from .evidence import deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
 from .evidence_types import valid_commit_ref
+from .store_runs import _WARM_S
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
@@ -429,38 +431,87 @@ class CloseMixin:
                 continue
         return heads
 
-    def _deploy_pending(self, item, *, named=True, strict=False):
-        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for.
+    def _deploy_changes(self, item, *, named=True, strict=False):
+        """``(status, path)`` pairs the landed PRs of the item's merged work shipped.
 
-        An item whose merged commits touch ``deploy/systemd`` or add a host binary
-        is not done until every host it names reports the unit active. ``named`` adds the
-        merge a ``Merge-Repo:`` line names (the automatic close ignores revisions and passes
-        False: naming one would fetch under its lock). An unreadable scan answers nothing,
-        unless ``strict``: then it refuses, so a gate that cannot look never lets an item close.
+        Reads the item's Plan-Item commits and, with ``named``, the commit a ``Merge-Repo:`` line
+        names (fetching). Raises when any input cannot be read, a failed history read (``None``)
+        included; with ``strict`` an unverifiable named merge raises too, otherwise it is left out.
         """
         git, project = self._adapter("git"), self._merge_project(item)
-        try:
-            commits = context_sources.plan_item_commits(
-                git, project, item["key"], fetch=False, limit=None)
-            shas = [commit.get("sha") for commit in commits or ()]
-            if named:
-                try:  # the landed commit of a named merge counts like a Plan-Item merge
-                    merge = self._named_merge_proof(item)
-                except Refused:
-                    merge = None
-                shas += [merge["landed"]] if merge else []
-            repo, ref = git.repo_path(project), git.repo_ref(project)
-            # The landed changes of each merged PR, not only the tagged commits.
-            changes = {c for sha in shas if valid_commit_ref(sha)
-                       for c in git.deploy_changes(repo, sha, ref)}
-        except Exception:  # noqa: BLE001 - see the docstring
-            if strict:
-                raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
-            return []
+        commits = context_sources.plan_item_commits(git, project, item["key"], fetch=False, limit=None)
+        if commits is None:
+            raise RuntimeError("commit history unreadable")
+        shas = [commit.get("sha") for commit in commits]
+        if named:
+            try:  # the landed commit of a named merge counts like a Plan-Item merge
+                merge = self._named_merge_proof(item)
+            except Refused:
+                if strict:
+                    raise
+                merge = None
+            shas += [merge["landed"]] if merge else []
+        repo, ref = git.repo_path(project), git.repo_ref(project)
+        # The landed changes of each merged PR, not only the tagged commits.
+        return {c for sha in shas if valid_commit_ref(sha) for c in git.deploy_changes(repo, sha, ref)}
+
+    def _deploy_pending(self, item, *, named=True, changes=None):
+        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for.
+
+        An item whose merged commits touch ``deploy/systemd`` or add a host binary is not done
+        until every host it names reports the unit active. ``changes`` is a scan taken earlier;
+        otherwise the scan runs here and an unreadable one answers nothing (the manual close).
+        """
+        if changes is None:
+            try:
+                changes = self._deploy_changes(item, named=named)
+            except Exception:  # noqa: BLE001 - an unreadable diff never blocks the manual close
+                return []
         targets = deploy_targets(changes)
         if not targets:
             return []
         return deploy_missing(targets, deploy_hosts(item), self._evidence(item["key"]))
+
+    @staticmethod
+    def _merge_text(item):
+        return f"{item.get('description') or ''}\n{item.get('note') or ''}"
+
+    def _snapshot_deploy(self, key):
+        """Scan one candidate's deploy changes outside the request lock; ``warm_merge_scan`` calls it.
+
+        The answer (``None`` when anything could not be read) is what the frozen automatic close
+        consumes, so it asks git and the forge nothing under the lock.
+        """
+        item = self.__dict__.get("_deploy_inputs", {}).get(key)
+        if item is None:
+            return
+        try:
+            changes = frozenset(self._deploy_changes(self._with_merge_repo(item), named=True, strict=True))
+        except Exception:  # noqa: BLE001 - recorded as unreadable
+            changes = None
+        self.__dict__.setdefault("_deploy_warm", {})[key] = {
+            "at": time.monotonic(), "text": self._merge_text(item), "changes": changes}
+
+    def _auto_deploy_pending(self, item):
+        """The deploy gate of the automatic close. It fails closed: no scan, no close.
+
+        A frozen run (under the request lock) reads only the snapshot taken outside the lock; an
+        unfrozen run scans here, the named merge included.
+        """
+        if self.__dict__.get("_frozen_lanes"):
+            hit = self.__dict__.get("_deploy_warm", {}).get(item["key"])
+            if (hit is None or time.monotonic() - hit["at"] >= _WARM_S
+                    or hit["text"] != self._merge_text(item)):
+                raise Refused("evidence_unverified", "deploy_scan_not_warm")
+            changes = hit["changes"]
+        else:
+            try:
+                changes = self._deploy_changes(item, named=True, strict=True)
+            except Exception:  # noqa: BLE001 - see the docstring
+                changes = None
+        if changes is None:
+            raise Refused("evidence_unverified", "deploy_scan_unreadable")
+        return self._deploy_pending(item, changes=changes)
 
     def _deploy_pending_result(self, item, pending, now):
         """Leave the item open: record the reason as an alert and report it."""

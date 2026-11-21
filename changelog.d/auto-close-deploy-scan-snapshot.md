@@ -1,0 +1,1 @@
+- The automatic merge close takes its deploy scan (the Plan-Item merges and the `Merge-Repo:` named merge) in `warm_merge_scan`, outside the request lock; the frozen run reads that snapshot and closes nothing without a warm, readable one (`deploy_scan_not_warm`, `deploy_scan_unreadable`), and a failed commit-history read is no longer an empty scan.
