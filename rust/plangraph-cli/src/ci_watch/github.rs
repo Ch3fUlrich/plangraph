@@ -9,6 +9,10 @@ pub trait Github {
     fn page(&mut self, endpoint: &str, field: Option<&str>) -> Result<Vec<Value>, String>;
     fn log(&mut self, job: u64) -> Result<String, String>;
     fn rerun(&mut self, run: u64) -> Result<(), String>;
+    /// One JSON object (not a row list), one REST call.
+    fn value(&mut self, _endpoint: &str) -> Result<Value, String> {
+        Err("single-object reads are not supported here".into())
+    }
 }
 pub struct Gh {
     pub repo: String,
@@ -104,6 +108,10 @@ impl Github for Gh {
             log.push_str("\n[log truncated at 1 MiB]");
         }
         Ok(log)
+    }
+    fn value(&mut self, endpoint: &str) -> Result<Value, String> {
+        let raw = command("gh", &["api", &format!("repos/{}/{endpoint}", self.repo)])?;
+        serde_json::from_str(&raw).map_err(|_| "invalid gh JSON".into())
     }
     fn rerun(&mut self, run: u64) -> Result<(), String> {
         command(

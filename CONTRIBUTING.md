@@ -92,7 +92,7 @@ CI runs the full suite once, on the merge candidate: a `batch/*` head, a merge q
 event, or a head a router GO row labels `ci-full` (push to main, dispatch and schedule also run it).
 Every other pull request, draft or ready, runs the affected selection
 (`tools/ci_select.py`, `full_run_required`); ci-gate refuses a candidate whose selection was not full.
-Marking a draft ready starts no run; `merge_batch land` names a pending required check and exits.
+Marking a draft ready starts no run; `merge_batch land` names a pending required check and exits. `land` also asks `plangraph main-state --admit` and refuses with `main_red`, `main_pending`, `state_unknown` or `ref_not_forward_only` while main is not green (`EXCEPTION:main-red-fix` passes only while red; see docs/ci-parallel.md).
 
 Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
 key, including subitems of a larger item. `ci_commit_gate.py check --base BASE

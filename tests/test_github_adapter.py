@@ -142,6 +142,24 @@ def test_ci_green_only_ci_gate_completed_success(tmp_path):
     )
     assert opener.calls[0][1] == expected
 
+@pytest.mark.parametrize("code, word, expected", [
+    (0, "", None), (3, "main_red", "main_red"), (3, "main_pending", "main_pending"),
+    (3, "surprise", "state_unknown"), (2, "main_red", "state_unknown")])
+def test_main_refusal_reads_the_state_function_and_fails_closed(tmp_path, monkeypatch, code, word, expected):
+    script = tmp_path / "main-state"
+    script.write_text(f"#!/bin/sh\necho {word} >&2\nexit {code}\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PLANGRAPH_BIN", str(script))
+    gh, _ = make_github(tmp_path, [])
+    assert gh.main_refusal() == expected
+
+
+def test_main_refusal_without_the_binary_is_state_unknown(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLANGRAPH_BIN", str(tmp_path / "missing"))
+    gh, _ = make_github(tmp_path, [])
+    assert gh.main_refusal() == "state_unknown"
+
+
 def test_merge_pr_sends_sha_and_maps_conflict(tmp_path):
     head = "d" * 40
     merge_sha = "a" * 40

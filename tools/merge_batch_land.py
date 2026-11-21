@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -292,26 +294,41 @@ def record_reruns(repo, number, reruns):
             gh("api", "--method", "POST", endpoint, "-F", f"body=@{path}")
 
 
-def require_main_green(repo, head, go_row=None):
-    """Freeze land while main has no completed green full run at its current tip."""
-    tip = gh_json("api", f"repos/{repo}/git/ref/heads/main")["object"]["sha"]
-    runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?branch=main&per_page=1")["workflow_runs"]
-    latest = runs[0] if runs else {}
-    if (latest.get("head_sha") == tip and latest.get("head_branch") == "main"
-            and latest.get("status") == "completed" and latest.get("conclusion") == "success"):
+def main_admission(repo, exception=None, binary=None):
+    """Ask ``plangraph main-state --admit`` (the one state function of main) and raise its refusal word.
+
+    ``exception`` is the GO row's ``EXCEPTION:main-red-fix`` token; the function honours it only while main is
+    red at this read. A missing binary or a failed read refuses as ``state_unknown``."""
+    binary = binary or os.environ.get("PLANGRAPH_BIN") or shutil.which("plangraph")
+    if not binary:
+        raise MergeBatchError("state_unknown: the plangraph binary is not on PATH (set PLANGRAPH_BIN)")
+    argv = [binary, "main-state", "--repo", repo, "--admit"] + (["--exception", exception] if exception else [])
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=600, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise MergeBatchError(f"state_unknown: main-state did not run: {exc}") from None
+    if proc.returncode == 0:
         return
+    word = (proc.stderr.strip().splitlines() or ["state_unknown"])[-1]
+    if proc.returncode != 3 or word not in ("main_red", "main_pending", "state_unknown", "ref_not_forward_only"):
+        word = "state_unknown"
+    raise MergeBatchError(f"{word}: main's state forbids landing (plangraph main-state --admit); "
+                          "only a GO row for this head with EXCEPTION:main-red-fix passes, and only while main is red")
+
+
+def require_main_green(repo, head, go_row=None):
+    """Freeze land while main is not green; the GO row exception is passed to the state function."""
+    exception = None
     if go_row:
         try:
             lines = Path(go_row).read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            raise MergeBatchError(f"main_red: cannot read GO row: {exc}") from None
+        except OSError:
+            lines = []
         for line in lines:
             tokens = line.split()
             if "GO" in tokens and head in tokens and "EXCEPTION:main-red-fix" in tokens:
-                print(f"main_red: GO exception for {head} from {go_row}", file=sys.stderr)
-                return
-    raise MergeBatchError("main_red: latest tests run on main is not completed green at its tip; "
-                          "only a GO row for this head with EXCEPTION:main-red-fix permits land")
+                exception = "EXCEPTION:main-red-fix"
+    main_admission(repo, exception)
 
 
 def settle(repo, recs, wait):

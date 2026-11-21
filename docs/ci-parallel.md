@@ -31,24 +31,37 @@ quarantine Plan-Item, rather than silently rerunning a known failure.
 
 ## Red main and runner switches
 
-Landing freezes unless main's latest tests run is completed green on main's
-current tip. A missing, queued, cancelled or failed run refuses with `main_red`.
-The only exception is a recorded GO row naming the exact batch SHA, `GO`, and
-`EXCEPTION:main-red-fix` as separate tokens; pass its file with `land --go-row`.
-It does not waive the batch's own full CI or review requirements.
+One function decides main's state: `plangraph main-state` (rust/plangraph-cli/src/land). It reads the tip of
+main, the `tests` runs on exactly that tip (push, schedule, workflow_dispatch) with every attempt and its job
+list, and the ref again; a ref or run listing that moved during the read starts the pass over, and three
+failed passes answer `state_unknown`. It answers `green`, `pending`, `red` (with the blocking runs and their
+failure sets) or `ref_not_forward_only` (main's protection must forbid force push and deletion). A run blocks
+until one of its own attempts is complete-green, so a green scheduled run never hides a failed push run; an
+attempt older than the bound T (twice the median of the last 20 green push runs, at least 30 minutes) counts
+as stalled.
+
+`tools/merge_batch_land.py land`, the keeper's phase finish and the router's `merge-part` call it before
+they merge and refuse an ordinary merge with `main_red`, `main_pending`, `state_unknown` or
+`ref_not_forward_only`. The one exception is a GO row for the exact head with `EXCEPTION:main-red-fix`;
+the function honours it only while it answers red at that read (`plangraph main-state --admit --exception
+EXCEPTION:main-red-fix`). It does not waive the batch's own full CI or review requirements. The train builder
+freezes no manifest while main is red or pending.
 
 `land` also refuses a head whose green run was tested on an older main: the head must be
 0 commits behind main's current tip (`stale_base`, from the compare of `main...HEAD`), so the
 tested tree is the tree that merges and two pull requests that are green alone but red together
 are caught at the second. The merge itself stays a pull request merge bound to the tested head.
 
-Trial runner changes on a non-main branch. Before changing `CI_SELF_HOSTED*`
-or `*_RUNNER_LABELS`, dispatch the full tests workflow on that branch using the
-proposed runners, require every job green, and record the run URL, head SHA and
-runner labels in the authorizing D-row. Only then switch the repository runner
-variables. A red trial is repaired on the branch; main is never the trial host.
-The router-owned `merge-part` command must perform the same main-tip check
-before using any single-PR exception.
+Runner or environment trials run on a branch, never on main. Procedure to change `CI_SELF_HOSTED*` or any
+`*_RUNNER_LABELS` variable:
+
+1. Dispatch the full `tests` workflow (`workflow_dispatch`) on a non-main branch that uses the proposed runners.
+2. Require every job green, none skipped.
+3. Record the run URL, head SHA and runner labels in the authorizing D-row.
+4. Only then change the repository runner variables, then rerun main's failed run if one is open.
+
+A red trial is repaired on the branch. `deploy/ci-watch/matrix.toml` lists the expected jobs of each tier;
+change it with the workflow.
 
 ## Bounded Python CI steps (D-6054)
 

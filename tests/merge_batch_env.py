@@ -63,6 +63,20 @@ def pr_json(number, ref, base="main", title=None, head=None, labels=("batch-read
             "statusCheckRollup": ROLLUP[ci], "mergeCommit": None}
 
 
+MAIN_STATE_STUB = """#!/usr/bin/env python3
+import json, os, sys
+state = json.load(open(os.path.join(os.environ["GH_STUB_DIR"], "state.json"))).get("main_state", "green")
+args = sys.argv[1:]
+exception = args[args.index("--exception") + 1] if "--exception" in args else None
+if args[:1] != ["main-state"] or "--admit" not in args:
+    sys.exit(2)
+if state == "green" or (state == "red" and exception == "EXCEPTION:main-red-fix"):
+    sys.exit(0)
+print("main_" + state if state in ("red", "pending") else state, file=sys.stderr)
+sys.exit(3)
+"""
+
+
 class Env:
     def __init__(self, tmp_path):
         self.tmp, self.origin, self.repo = tmp_path, tmp_path / "origin.git", tmp_path / "repo"
@@ -71,10 +85,15 @@ class Env:
             path.mkdir()
         shutil.copy(STUB, self.stubs / "gh")
         (self.stubs / "gh").chmod(0o755)
+        # `plangraph main-state --admit` as the tool calls it: state.json "main_state" is green, red, pending ...
+        # and the exception passes only while it is red (the real function is tested in Rust).
+        (self.stubs / "main-state").write_text(MAIN_STATE_STUB)
+        (self.stubs / "main-state").chmod(0o755)
         for tool in ("git", "sh", "env"):
             (self.bin / tool).symlink_to(shutil.which(tool))
         (self.bin / "python3").symlink_to(sys.executable)
         self.env = {"PATH": f"{self.stubs}:{self.bin}", "HOME": str(self.home), "GH_STUB_DIR": str(self.stubs),
+                    "PLANGRAPH_BIN": str(self.stubs / "main-state"),
                     "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
                     "GIT_AUTHOR_NAME": "tester", "GIT_AUTHOR_EMAIL": "tester",
                     "GIT_COMMITTER_NAME": "tester", "GIT_COMMITTER_EMAIL": "tester", "LC_ALL": "C"}

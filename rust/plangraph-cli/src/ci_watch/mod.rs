@@ -1,7 +1,7 @@
 //! One bounded CI scan; all external effects are behind the Github adapter.
-mod github;
+pub(crate) mod github;
 mod keeper;
-mod logs;
+pub(crate) mod logs;
 #[cfg(test)]
 mod tests;
 
