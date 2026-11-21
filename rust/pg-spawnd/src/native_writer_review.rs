@@ -9,6 +9,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The diff base of a review card: the previous review's head when the head moved on, else
+/// the batch base. A re-review of the same head (after a refuted finding) would otherwise
+/// ask for the empty delta head..head.
+pub(super) fn review_diff_base<'a>(
+    base: &'a str,
+    head: &str,
+    previous: Option<(&'a str, &str)>,
+) -> &'a str {
+    previous
+        .map(|p| p.0)
+        .filter(|prev| *prev != head)
+        .unwrap_or(base)
+}
+
 impl Host {
     /// Fast-checks stamp of `head`, in the worktree's own git directory.
     pub(super) fn stamp(&self, head: &str) -> Result<PathBuf, String> {
@@ -62,6 +76,7 @@ impl Host {
         let skill = self.skill("review").unwrap_or_default();
         let mut prompt = format!("{skill}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\n", self.brief);
         match previous {
+            Some((prev, text)) if prev == head => prompt.push_str(&format!("This is a later round on the same head {head}: the previous review (its text follows) judged it and the writer answered its findings with evidence. Review the whole change {base}..{head} (git diff {base} {head}) and check that every earlier HIGH and MED finding is fixed or refuted with evidence.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),
         }
@@ -121,7 +136,7 @@ impl Host {
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         let card = json!({"cwd":clone, "estimate_tokens":300000, "max_min":60, "stall_min":20,
-            "diff_ref":{"repo":clone, "base":prev.map_or(base, |p| p.0), "head":head}});
+            "diff_ref":{"repo":clone, "base":review_diff_base(base, head, prev), "head":head}});
         let printed = self
             .command(&self.review_cli[0])
             .args(&self.review_cli[1..])

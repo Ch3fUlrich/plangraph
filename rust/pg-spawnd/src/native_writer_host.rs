@@ -488,7 +488,7 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
 mod review;
 use review::review_cli;
 #[cfg(test)]
-use review::{review_run_text, review_verdict};
+use review::{review_diff_base, review_run_text, review_verdict};
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;

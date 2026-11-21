@@ -26,6 +26,28 @@ class InlineDiffError(Exception):
         self.chars, self.max_chars = chars, max_chars
 
 
+def _diff_command(diff_ref, *flags):
+    paths = tuple(diff_ref.get("paths") or ())
+    return ["git", "--literal-pathspecs", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
+            "--no-textconv", *flags, f"{diff_ref['base']}...{diff_ref['head']}", "--", *paths]
+
+
+def ensure_nonempty_diff(diff_ref, *, timeout: float = 60) -> None:
+    """Raise ``empty_diff`` when base...head changes nothing, so the card fails once before any leg.
+
+    A diff that cannot be read here (missing repo, unknown revision, timeout) is left to the
+    legs, which report their own cause."""
+    try:
+        _check_diff_ref(diff_ref)
+        proc = subprocess.run(_diff_command(diff_ref, "--quiet"), stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, check=False, **background_process_options())
+    except (SpawnRefused, OSError, subprocess.TimeoutExpired):
+        return
+    if proc.returncode == 0:
+        raise InlineDiffError(f"empty_diff: no change between base {diff_ref['base']} and head {diff_ref['head']}")
+
+
 def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
                        allow_document: bool = False) -> str:
     """The prompt with the diff inlined. ``diff_ref is None`` returns the prompt
@@ -40,11 +62,9 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     except SpawnRefused as exc:
         raise InlineDiffError(str(exc)) from None
     base, head = diff_ref["base"], diff_ref["head"]
-    paths = tuple(diff_ref.get("paths") or ())
     try:
         proc = subprocess.run(
-            ["git", "--literal-pathspecs", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
-             "--no-textconv", f"{base}...{head}", "--", *paths],
+            _diff_command(diff_ref),
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout, check=False,
             **background_process_options())

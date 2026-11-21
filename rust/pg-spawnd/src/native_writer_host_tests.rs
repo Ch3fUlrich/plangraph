@@ -449,3 +449,14 @@ fn card_refusals_exit_five_before_codex_starts() {
         assert!(!dir.path().join("state/runs/run-card/native.log").exists());
     }
 }
+
+#[test]
+fn same_head_re_review_diffs_against_the_batch_base() {
+    use super::review_diff_base;
+    let (base, old, head) = ("b".repeat(40), "a".repeat(40), "c".repeat(40));
+    // A later head reviews the delta from the previous review's head.
+    assert_eq!(review_diff_base(&base, &head, Some((&old, "text"))), old);
+    // The same head must never ask for the empty delta head..head.
+    assert_eq!(review_diff_base(&base, &head, Some((&head, "text"))), base);
+    assert_eq!(review_diff_base(&base, &head, None), base);
+}
