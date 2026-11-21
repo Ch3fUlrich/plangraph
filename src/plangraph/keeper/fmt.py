@@ -341,6 +341,15 @@ def snapshot_text(snap: dict) -> str:
             f"head {(snap.get('head') or '-')[:12]}")
 
 
+def flags_text(flags) -> str:
+    """``FLAGGED seats_missing: <run ids>`` for the flags a merged close stored."""
+    names = []
+    for name, flag in sorted(flags.items()):
+        runs = ",".join(flag.get("run_ids") or []) if isinstance(flag, dict) else ""
+        names.append(f"{name}: {runs}" if runs else name)
+    return "FLAGGED " + "; ".join(names)
+
+
 def result_text(verb: str, result) -> str:
     """The smallest useful line for a write verb's result."""
     if isinstance(result, dict):
@@ -364,6 +373,8 @@ def result_text(verb: str, result) -> str:
             return f"{result.get('key')} {result.get('state')}"
         if verb == "whoami":
             return whoami_text(result)
+        if verb == "close_merged" and result.get("flags"):
+            return f"{result.get('key')} {result.get('state')} {flags_text(result['flags'])}"
         if "state" in result:
             return f"{result.get('key')} {result.get('state')}"
         if "key" in result:

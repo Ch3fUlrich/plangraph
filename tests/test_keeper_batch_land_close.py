@@ -31,6 +31,7 @@ def batch(tmp_path):
     (tmp_path / "w").mkdir()
     (tmp_path / "repo").mkdir()
     w = World(tmp_path / "w", backend="sqlite")
+    w.store.require_seats = True  # the refusal tests below run with the seat gate on
     token = auth.add_principal(w.conn, "spawner", "spawner", [])
     w.principals["spawner"] = auth.authenticate(w.conn, token)
     w.store.create_items(w.p("router"), [
@@ -86,6 +87,26 @@ def test_a_part_without_a_seat_run_still_refuses_with_no_witness(batch):
     assert {c["key"] for c in result["closed"]} == {"demo:A", "demo:BATCH"}
     assert sorted(r["key"] for r in result["listed"]) == ["demo:B", "demo:C"]
     assert all("NO-WITNESS" in r["reason"] for r in result["listed"])
+
+
+def test_off_closes_a_part_without_a_seat_run_and_flags_it(batch):
+    batch.store.require_seats = False
+    land(batch, cited=("A",))
+    result = batch.store.close_merged_auto(batch.p("system"))
+    assert {c["key"] for c in result["closed"]} == {"demo:A", "demo:B", "demo:C", "demo:BATCH"}
+    assert result["listed"] == []
+    flagged = {c["key"] for c in result["closed"] if "seats_missing" in c.get("flags", {})}
+    assert flagged == {"demo:B", "demo:C"}
+
+
+def test_off_flag_cites_run_ids_from_the_landed_review_run_trailers(batch):
+    batch.store.require_seats = False
+    land(batch, cited=("A",))
+    (batch.mirror / "fixture/run-part-a-0/record.json").unlink()  # the cited review's record is gone
+    result = batch.store.close_merged_auto(batch.p("system"))
+    flags = {c["key"]: c["flags"]["seats_missing"]["run_ids"] for c in result["closed"] if "flags" in c}
+    assert flags["demo:A"] == ["run-part-a-0"]
+    assert flags["demo:B"] == []
 
 
 def test_a_citation_for_another_part_head_is_not_a_seat(batch):
