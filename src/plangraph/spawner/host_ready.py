@@ -157,14 +157,15 @@ def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
             keep = int(os.environ.get(CLI_TESTS_KEEP_ENV, CLI_TESTS_KEEP))
         except ValueError:
             keep = CLI_TESTS_KEEP
-    return prune_builds(target, 'cli-tests', keep, max_age, now)
+    return prune_builds(target, CLI_TESTS_ROOT, keep, max_age, now)
 
 
 # Cargo's own output is the evidence that a directory is a cargo target: a CACHEDIR.TAG with
 # the signature Cargo writes, or a .rustc_info.json holding a rustc fingerprint. File names alone
 # prove nothing, and neither does a bare debug/.
 CACHEDIR_SIGNATURE = b'Signature: 8a477f597d28d172789f06886806bc55'
-BUILD_ROOTS = ('cli-tests', 'policy-bin')
+CLI_TESTS_ROOT, POLICY_BIN_ROOT = 'cli-tests', 'policy-bin'
+BUILD_ROOTS = (CLI_TESTS_ROOT, POLICY_BIN_ROOT)
 
 
 def cargo_output(path):
@@ -223,11 +224,11 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
             wait = 30.0
         wait = wait if math.isfinite(wait) and wait >= 0 else 30.0
     with cargo_lease(exclusive=True, wait=wait):
-        for root in ('cli-tests', 'policy-bin'):   # refuse before any build root is pruned
+        for root in BUILD_ROOTS:   # refuse before any build root is pruned
             if (Path(target) / root).is_symlink():
                 raise ValueError(f'{Path(target) / root} is a symbolic link; build root not pruned')
         prune_cli_tests(target)
-        prune_builds(target, 'policy-bin', CLI_TESTS_KEEP)
+        prune_builds(target, POLICY_BIN_ROOT, CLI_TESTS_KEEP)
         if target.exists() and cargo_target_size_gb(target) >= cap:
             shutil.rmtree(target)
 
