@@ -44,16 +44,47 @@ def spawn(cfg_path):
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
 
 
-def wait_health(port, timeout=10.0):
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+# A loaded runner can take far longer than a normal start or stop. The waits below end on a
+# signal (health answers, process exits); this bound only catches a hang and is generous.
+DAEMON_WAIT_S = 90.0
+
+
+def daemon_failure(proc, what):
+    """Kill *proc* if still alive and build an error that carries its stderr."""
+    if proc.poll() is None:
+        proc.kill()
+    try:
+        _, err = proc.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        err = b""
+    return AssertionError(f"{what}; daemon stderr:\n{err.decode(errors='replace')}")
+
+
+def wait_health(port, timeout=DAEMON_WAIT_S, proc=None):
+    """Poll the health endpoint until it answers; fail early when *proc* has exited."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         try:
             with urllib.request.urlopen(
-                    f"http://127.0.0.1:{port}/v1/health", timeout=0.5) as resp:
+                    f"http://127.0.0.1:{port}/v1/health", timeout=2.0) as resp:
                 return json.loads(resp.read())
         except Exception:
+            if proc is not None and proc.poll() is not None:
+                raise daemon_failure(proc, f"daemon exited with {proc.returncode} before healthy")
             time.sleep(0.05)
+    if proc is not None:
+        raise daemon_failure(proc, "daemon did not become healthy")
     raise AssertionError("daemon did not become healthy")
+
+
+def stop_daemon(proc, timeout=DAEMON_WAIT_S):
+    """SIGTERM *proc*, wait for its exit and return ``(returncode, stderr)``."""
+    proc.send_signal(signal.SIGTERM)
+    try:
+        _, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise daemon_failure(proc, f"daemon did not exit within {timeout}s of SIGTERM") from None
+    return proc.returncode, err
 
 
 def test_daemon_serves_and_sigterm_is_clean(tmp_path):
@@ -61,13 +92,38 @@ def test_daemon_serves_and_sigterm_is_clean(tmp_path):
     _, cfg_path = make_db_and_config(tmp_path, port)
     proc = spawn(cfg_path)
     try:
-        assert wait_health(port)["status"] == "ok"
-        proc.send_signal(signal.SIGTERM)
-        assert proc.wait(timeout=10) == 0
+        assert wait_health(port, proc=proc)["status"] == "ok"
+        code, err = stop_daemon(proc)
+        assert code == 0, err.decode(errors="replace")
     finally:
         if proc.poll() is None:
             proc.kill()
             proc.wait(timeout=5)
+
+
+def test_stop_daemon_reports_a_daemon_that_ignores_sigterm():
+    code = "import signal,sys,time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nprint('up', flush=True)\ntime.sleep(60)"
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    try:
+        assert proc.stdout.readline() == b"up\n"   # handler is installed before SIGTERM goes out
+        with pytest.raises(AssertionError, match="did not exit within 1.0s of SIGTERM"):
+            stop_daemon(proc, timeout=1.0)
+        assert proc.poll() is not None
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def test_wait_health_fails_early_with_stderr_when_the_daemon_exits():
+    code = "import sys\nsys.stderr.write('boom-marker')\nsys.exit(3)"
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    started = time.monotonic()
+    with pytest.raises(AssertionError, match="(?s)exited with 3 before healthy.*boom-marker"):
+        wait_health(free_port(), proc=proc)
+    assert time.monotonic() - started < DAEMON_WAIT_S
 
 
 def test_daemon_refuses_when_lock_is_held(tmp_path):
@@ -76,8 +132,11 @@ def test_daemon_refuses_when_lock_is_held(tmp_path):
     lock = kdb.lock_keeper(db_path)
     try:
         proc = spawn(cfg_path)
-        assert proc.wait(timeout=10) != 0
-        _, err = proc.communicate()
+        try:
+            _, err = proc.communicate(timeout=DAEMON_WAIT_S)
+        except subprocess.TimeoutExpired:
+            raise daemon_failure(proc, "daemon did not refuse the held lock") from None
+        assert proc.returncode != 0
         assert b"locked" in err.lower()
     finally:
         lock.release()
