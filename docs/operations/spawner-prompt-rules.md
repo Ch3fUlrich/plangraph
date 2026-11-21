@@ -58,4 +58,7 @@ instead of run; the severity scale, the output lines and the verdict are always 
 because the review skill demands test runs and file reads and `origin/main` may serve a
 skill older than the header. The section "Inline seats" of `skills/review` states the same
 rules for readers. An inline diff over the leg's request limit is refused with
-`prompt_too_large: inline_diff_oversized`, never elided.
+`prompt_too_large: inline_diff_oversized`, never elided. The tool mode applies to the whole brief:
+sentences between `[tools-only]` and `[/tools-only]` (the native writer's review prompt puts its
+file-read and test-run instructions there) are dropped for an inline seat and only their markers
+are removed for any other leg.

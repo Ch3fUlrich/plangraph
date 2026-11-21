@@ -2,6 +2,7 @@
 from importlib import resources
 from pathlib import Path
 import json
+import re
 import os
 import subprocess
 
@@ -141,6 +142,15 @@ def read_skill(name: str, cwd: str | None) -> str | None:
     return None
 
 
+_TOOLS_ONLY = re.compile(r'\[tools-only\](.*?)\[/tools-only\]\s*', re.DOTALL)
+
+
+def apply_tool_mode(body: str, inline: bool) -> str:
+    """Apply the leg's tool mode to the whole caller brief: sentences between ``[tools-only]`` markers
+    (they ask for file reads or shell and test runs) go for a toolless inline seat, the markers go for the rest."""
+    return _TOOLS_ONLY.sub('' if inline else r'\1\n', body)
+
+
 def _without_review_skill(body: str, cwd: str | None) -> str:
     """A caller brief that starts with the review skill (origin/main's or this tree's copy) loses it."""
     texts = [read_skill('review', cwd)]
@@ -164,6 +174,8 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
     # A toolless inline seat gets the inline rules from its header only: the review skill below
     # it demands test runs and file reads, and origin/main may serve a skill older than the header.
     inline_review = tool_mode == INLINE_TOOL_MODE and _ROLE_KEY.get(role) == 'review'
+    if _ROLE_KEY.get(role) == 'review':
+        body = apply_tool_mode(body, inline_review)
     if inline_review:
         body = _without_review_skill(body, cwd)
     name = None if inline_review else skill_name(role, body)

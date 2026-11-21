@@ -23,6 +23,11 @@ pub(super) fn review_diff_base<'a>(
         .unwrap_or(base)
 }
 
+/// The sentences of a review prompt that need file and shell tools sit between these markers; the
+/// spawner (prompt_input.compose) drops the block for a toolless inline seat and the markers for the rest.
+pub(super) const TOOLS_ONLY_OPEN: &str = "[tools-only]";
+pub(super) const TOOLS_ONLY_CLOSE: &str = "[/tools-only]";
+
 impl Host {
     /// Fast-checks stamp of `head`, in the worktree's own git directory.
     pub(super) fn stamp(&self, head: &str) -> Result<PathBuf, String> {
@@ -72,9 +77,14 @@ impl Host {
     }
     /// Review prompt for `head`: review skill, writer brief, diff range (the delta from the
     /// previous review's head when it is an ancestor) and the required closing lines.
-    fn review_prompt(&mut self, base: &str, head: &str, previous: Option<(&str, &str)>) -> String {
+    pub(super) fn review_prompt(
+        &mut self,
+        base: &str,
+        head: &str,
+        previous: Option<(&str, &str)>,
+    ) -> String {
         let skill = self.skill("review").unwrap_or_default();
-        let mut prompt = format!("{skill}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\n", self.brief);
+        let mut prompt = format!("{skill}\n\nWriter brief (item keys and Done-when lines):\n{}\n\n{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.{TOOLS_ONLY_CLOSE}\n", self.brief);
         match previous {
             Some((prev, text)) if prev == head => prompt.push_str(&format!("This is a later round on the same head {head}: the previous review (its text follows) judged it and the writer answered its findings with evidence. Review the whole change {base}..{head} (git diff {base} {head}) and check that every earlier HIGH and MED finding is fixed or refuted with evidence.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
