@@ -131,7 +131,7 @@ def test_switch_off_keeps_registered_harness(tmp_path, monkeypatch):
     monkeypatch.delenv("PLANGRAPH_OWN_HARNESS")
     from plangraph.planner.legs import client_installed, service_probe
     assert service_probe(service) is client_installed
-    assert resolve_harness(CATALOG["cx-gpt-6.2-sol-medium"], None).harness == "codex"
+    assert resolve_harness(CATALOG["cx-gpt-6.2-sol-medium"], None).harness == "opencode"
 
 
 def test_native_legs_with_a_missing_client_fall_back_or_leave_the_route():

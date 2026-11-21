@@ -55,8 +55,7 @@ def test_leg_data():
     for leg_id, model in SOL.items():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.disabled) == (
-            'codex' if leg_id == 'cx-gpt-6.2-sol-medium' else 'opencode',
-            model, 'gpt', ('implement',), None), leg_id
+            'opencode', model, 'gpt', ('implement',), None), leg_id
     for leg_id, model in LUNA.items():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.tool_mode) == (

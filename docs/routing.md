@@ -180,7 +180,8 @@ Implementation routes prioritize `cx-gpt-6.2-sol-medium` (with `cx-gpt-6.2-sol-{
 explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 `opencode/deepseek-v4.1-flash-free` (200k) > `opencode-go/deepseek-v4.1-flash` (1M) >
 `opencode-go/glm-5.3-flash` (1M) on `opencode` as implementation fallback.
-D-6550 (rule 3.66) uses native Codex for the lead writer. Claude is eligible
+D-6550 (rule 3.66) uses native Codex for the lead writer. Explicit model calls
+can still use the registered OpenCode gateway leg. Claude is eligible
 for automatic writer and review fallback when both GPT Sol and Hydrogen are rate-limited.
 Credential, authentication and secrets changes prefer the Claude Sonnet high review
 seat, subject to availability and cross-family review.

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 from plangraph.routing_support.liveness import unavailable
 import json
 import os
@@ -267,13 +267,17 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
     ``installed`` (client name -> bool) puts each leg into its own harness before policy, seats and
-    ordering run (rule 3.53); None keeps the registered harnesses.
+    ordering run (rule 3.53); None skips host resolution.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
     from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT
     if native_review:
         legs = review_route_pool(legs)
+    if native_implement:
+        # The route picks Codex. Direct callers still resolve the registered gateway leg.
+        legs = tuple(replace(leg, harness="codex") if leg.id == LEAD_WRITER else leg
+                     for leg in legs)
     harness_skipped = []
     if installed is not None:
         from .legs import resolve_legs

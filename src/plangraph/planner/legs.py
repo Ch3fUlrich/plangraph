@@ -261,14 +261,12 @@ EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS
 
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
 _plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.2-sol")
-_sol_default = _replace(next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER), harness="codex")
+_sol_default = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
 DEFAULT_LEGS = tuple(_sol_default if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
 EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
 # Keeper readiness keeps its existing admission, but uses the current routed id.
 READINESS_LEGS = tuple(_sol_default if leg.id == _plain_sol.id else leg for leg in READINESS_LEGS)
-#: Claude writers the implement route serves only while every Codex leg is
-#: unavailable (rule 3.58 / D-6366); with any Codex leg available they are skipped
-#: as ``codex_available`` and stay explicit-only picks.
+#: D-6550 permits these Claude writers when GPT Sol and Hydrogen are rate-limited.
 CODEX_FALLBACK_WRITERS: tuple[str, ...] = ("agy-claude-sonnet-5-5-high",)
 #: Explicit legs the spawn service admits for ``implement`` besides LEAD_WRITER.
 EXPLICIT_WRITERS: frozenset[str] = frozenset(
