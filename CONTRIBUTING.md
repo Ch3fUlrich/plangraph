@@ -563,7 +563,7 @@ Rust test builds, including nested admission checks and Python placement fixture
 Local worker preflight runs library and binary unit tests offline. CI runs the full worker suite, including Temporal-dependent integrations, through `ci-temporal`.
 
 Install Git message validation with `tools/hooks/install_hooks.sh --git`
-(using the shared host `CARGO_TARGET_DIR`). Non-merge commits require a strict
+(using the shared host `CARGO_TARGET_DIR` and [compiler cache](docs/host-tools.md)). Non-merge commits require a strict
 `Writer:` or `Hand-Edit:` trailer. See `docs/rust-hooks.md`.
 
 Writer handoffs named `STATUS-*.txt` are ignored at every depth. Keep them

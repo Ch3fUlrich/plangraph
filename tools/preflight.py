@@ -362,7 +362,6 @@ def policy_baseline(root, fallback):
 # PLANGRAPH_PREFLIGHT_RUN_DIR: parent of the private target (default: parent of the shared target).
 # PLANGRAPH_SCCACHE: sccache binary (default: sccache on PATH); PLANGRAPH_SCCACHE_CACHE_SIZE (default 20G).
 MIN_FREE_GB_DEFAULT = "20"
-SCCACHE_SIZE_DEFAULT = "20G"
 PRIVATE_TARGET_PREFIX = "preflight-cargo-"
 STALE_TARGET_SECONDS = 12 * 3600
 
@@ -382,15 +381,6 @@ def prune_stale_targets(parent, now=None):
             continue
 
 
-def find_sccache(env):
-    search = env.get("PATH") or os.defpath
-    named = env.get("PLANGRAPH_SCCACHE")
-    found = shutil.which(named, path=search) if named else shutil.which("sccache", path=search)
-    if named and not found:
-        print(f"rust: PLANGRAPH_SCCACHE={named} not found, no sccache", flush=True)
-    return found
-
-
 def rust_target_env(env, cleanup):
     """Return env for the Rust family: private target when sccache is present and disk allows.
 
@@ -399,17 +389,13 @@ def rust_target_env(env, cleanup):
     RUSTC_WRAPPER is never replaced.
     """
     out = dict(env)
-    sccache = find_sccache(env)
-    if not sccache:
-        print("rust: shared CARGO_TARGET_DIR (no sccache; a private target would be cold)", flush=True)
-        return out
-    wrapper = env.get("RUSTC_WRAPPER")
-    if not wrapper:
-        out["RUSTC_WRAPPER"] = wrapper = sccache
-    out["SCCACHE_CACHE_SIZE"] = env.get("PLANGRAPH_SCCACHE_CACHE_SIZE") or env.get(
-        "SCCACHE_CACHE_SIZE") or SCCACHE_SIZE_DEFAULT
-    if Path(wrapper).name != Path(sccache).name and Path(wrapper).name != "sccache":
-        print(f"rust: shared CARGO_TARGET_DIR (RUSTC_WRAPPER={wrapper} is not sccache)", flush=True)
+    if not env.get("SCCACHE_DIR"):
+        if wrapper := env.get("RUSTC_WRAPPER"):
+            print(f"rust: shared CARGO_TARGET_DIR (RUSTC_WRAPPER={wrapper} is not sccache)", flush=True)
+        elif env.get("PLANGRAPH_SCCACHE"):
+            print("rust: shared CARGO_TARGET_DIR (configured PLANGRAPH_SCCACHE not found, no sccache)", flush=True)
+        else:
+            print("rust: shared CARGO_TARGET_DIR (no sccache; a private target would be cold)", flush=True)
         return out
     raw = env.get("PLANGRAPH_PREFLIGHT_MIN_FREE_GB", MIN_FREE_GB_DEFAULT)
     try:
@@ -571,10 +557,11 @@ def _main(argv, root, cleanup):
     policy_base = policy_baseline(root, args.base)
     policy_bases = dict(FILESIZE_REQUIRE_BASE=policy_base, NEWCODE_BASE=policy_base,
                         CHANGELOG_BASE=policy_base)
-    env = cargo_child_env(dict(os.environ, CARGO_BUILD_JOBS="4"))
+    env = dict(os.environ, CARGO_BUILD_JOBS="4")
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():
         env['PATH'] = str(cargo_bin) + os.pathsep + env.get('PATH', '')
+    env = cargo_child_env(env)
     # Nested test repositories own their revision history, not this checkout's base.
     for key in policy_bases:
         env.pop(key, None)

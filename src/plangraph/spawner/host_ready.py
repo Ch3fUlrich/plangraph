@@ -36,15 +36,29 @@ def _cargo_cache_env(env):
     global _sccache_missing_warned
     result = dict(env, CARGO_INCREMENTAL="0")
     home = Path.home()
-    wrapper = (shutil.which(str(home / '.local/bin/sccache'))
-               or shutil.which('sccache', path=env.get('PATH', os.defpath)))
+    search = env.get('PATH', os.defpath)
+    inherited = env.get('RUSTC_WRAPPER')
+    named = env.get('PLANGRAPH_SCCACHE') or os.environ.get('PLANGRAPH_SCCACHE')
+    inherited_sccache = inherited and Path(inherited).name.lower() in ('sccache', 'sccache.exe')
+    if named:
+        wrapper = shutil.which(named, path=search)
+    else:
+        wrapper = ((shutil.which(inherited, path=search) if inherited_sccache else None)
+                   or shutil.which(str(home / '.local/bin/sccache'))
+                   or shutil.which('sccache', path=search))
+    if inherited and not inherited_sccache and (
+            not wrapper or Path(inherited).absolute() != Path(wrapper).absolute()):
+        result.pop('SCCACHE_DIR', None)
+        return result
     if wrapper:
-        cap = env.get('PLANGRAPH_SCCACHE_CACHE_SIZE') or os.environ.get('PLANGRAPH_SCCACHE_CACHE_SIZE') or '20G'
+        cap = (env.get('PLANGRAPH_SCCACHE_CACHE_SIZE') or os.environ.get('PLANGRAPH_SCCACHE_CACHE_SIZE')
+               or env.get('SCCACHE_CACHE_SIZE') or '20G')
         result.update(RUSTC_WRAPPER=str(Path(wrapper).absolute()),
                       SCCACHE_DIR=str(home / '.cache/plangraph/sccache'),
                       SCCACHE_CACHE_SIZE=cap)
     else:
         result.pop('RUSTC_WRAPPER', None)
+        result.pop('SCCACHE_DIR', None)
         if not _sccache_missing_warned:
             _sccache_missing_warned = True
             logging.warning('sccache unavailable; Cargo will build without a compiler cache')

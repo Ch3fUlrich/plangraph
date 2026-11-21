@@ -14,7 +14,9 @@ fn sccache_environment_uses_one_host_cache_and_falls_back_when_missing() {
     let output = Command::new("python3")
         .env("PYTHONPATH", source)
         .env("HOME", home.path())
+        .env_remove("PLANGRAPH_SCCACHE")
         .env_remove("PLANGRAPH_SCCACHE_CACHE_SIZE")
+        .env_remove("SCCACHE_CACHE_SIZE")
         .arg("-c")
         .arg(
             r#"
