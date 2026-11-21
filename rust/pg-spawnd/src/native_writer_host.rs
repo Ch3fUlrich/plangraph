@@ -496,10 +496,10 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     );
     Ok(())
 }
-#[path = "native_writer_context.rs"]
-mod context;
 #[path = "native_writer_base.rs"]
 mod base;
+#[path = "native_writer_context.rs"]
+mod context;
 #[path = "native_writer_review.rs"]
 mod review;
 use review::review_cli;

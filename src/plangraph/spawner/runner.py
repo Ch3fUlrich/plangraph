@@ -1017,7 +1017,7 @@ def spawn_service(*args, **kwargs):
                     limits = thresholds(card, role=role)
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
-                    from .leg_probe import ProbeBudget
+                    from .leg_probe import ProbeBudget, before_launch
                     probe_budget = ProbeBudget(started=record.get('started'))  # one budget for every leg, net of admission time spent
                     for _ in range(len(plan.legs) + 2):
                         if (watchdog := leg_limits(record, limits)) is None:
@@ -1026,7 +1026,6 @@ def spawn_service(*args, **kwargs):
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
-                        from .leg_probe import before_launch
                         probe_skip = await before_launch(self.runner, chosen, role, dry_run, probe_budget)
                         if probe_skip:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped', skip_reason=probe_skip))
