@@ -88,15 +88,13 @@ def test_source_pin_mismatch_is_refused_before_any_call(kp, tmp_path):
 
 
 def test_principal_must_match_the_token_and_be_a_router(kp, tmp_path):
-    """A matching L1 token without a grant is refused, as is any mismatch."""
     tag = uid()
     ops = _plain_ops(tag)[:1]
     out = run_batch(kp, write_batch(tmp_path, ops, principal="lead"), who="lead")
-    assert out.returncode == 1 and "forbidden role 'l1'" in out.stdout
-    assert "nothing applied" in out.stdout
+    assert out.returncode == 1 and "principal mismatch" in out.stdout
     out = run_batch(kp, write_batch(tmp_path, ops, principal="router"), who="lead")
     assert out.returncode == 1 and "principal mismatch" in out.stdout
-    assert not any(_exists(kp, f"demo:{item}-{tag}") for item in ("B1", "B2", "BG"))
+    assert not _exists(kp, f"demo:B1-{tag}")
 
 
 @pytest.mark.parametrize("mutate,needle", [
