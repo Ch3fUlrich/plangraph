@@ -121,7 +121,8 @@ fn idle_writers_alert_for_open_work_and_use_the_status_path_at_launch() {
         writer("unreviewed", false, serde_json::json!({"head":"earlier-head","verdict":"ACCEPT"}), expected, ""),
         writer("wrong-status", false, accepted.clone(), "/fixture/old.status", "READY"),
         writer("working", true, changes, expected, ""),
-        writer("ready", false, accepted, expected, "READY fixture result"),
+        writer("ready", false, accepted.clone(), expected, "READY fixture result"),
+        writer("finished", false, accepted, expected, "fixture-batch DONE"),
     ]}});
     let pending = dir.path().join("pending.json");
     assert!(run(&snapshot, dir.path()).status.success());

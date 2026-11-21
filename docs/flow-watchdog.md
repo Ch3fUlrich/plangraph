@@ -32,7 +32,7 @@ session collector. Each writer supplies `host`, `session_id`, `parent`, `busy`,
 The collector includes the newest `review` with `head` and `verdict` and the
 observed `status` with `path` and `last_line`, or null for missing evidence.
 At 20 minutes of idleness, `writer-idle` reports REQUEST_CHANGES, an unreviewed
-head, or a missing READY, BLOCKED, or DONE line in the expected file. The alert
+head, or a missing READY, BLOCKED, DONE, or `<NAME> DONE` line in the expected file. The alert
 uses the parent session as its recipient and queues once per idle interval.
 
 Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).

@@ -35,6 +35,22 @@ struct Status {
     last_line: String,
 }
 
+impl Status {
+    fn is_report(&self) -> bool {
+        let mut words = self.last_line.split_whitespace();
+        match words.next() {
+            Some("READY" | "BLOCKED" | "DONE" | "READY:" | "BLOCKED:" | "DONE:") => true,
+            Some(name) => {
+                name.bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+                    && words.next() == Some("DONE")
+                    && words.next().is_none()
+            }
+            None => false,
+        }
+    }
+}
+
 impl Writer {
     fn reason(&self) -> Option<&'static str> {
         match self
@@ -47,12 +63,7 @@ impl Writer {
             _ => return Some("unreviewed_head"),
         }
         let reported = self.status.as_ref().is_some_and(|status| {
-            !self.status_path.is_empty()
-                && status.path == self.status_path
-                && matches!(
-                    status.last_line.split_whitespace().next(),
-                    Some("READY" | "BLOCKED" | "DONE" | "READY:" | "BLOCKED:" | "DONE:")
-                )
+            !self.status_path.is_empty() && status.path == self.status_path && status.is_report()
         });
         (!reported).then_some("missing_status")
     }
