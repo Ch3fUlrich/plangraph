@@ -98,12 +98,14 @@ class Env:
         config = self.home / ".config" / "plangraph" / "keeper.json"
         config.parent.mkdir(parents=True, exist_ok=True)
         mirror = self.tmp / "mirror"
+        mirror.mkdir(mode=0o700, exist_ok=True)
+        (mirror / "fixture").mkdir(mode=0o700, exist_ok=True)
         config.write_text(json.dumps({"spawner_records_dir": str(mirror)}))
         config.chmod(0o600)
         for index, key in enumerate(rec["items"]):
             run_id = f"run-part-{rec['pr']}-{index}"
             path = mirror / "fixture" / run_id / "record.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
+            path.parent.mkdir(mode=0o700, exist_ok=True)
             path.write_text(json.dumps({
                 "run_id": run_id, "host": "fixture", "item_key": key,
                 "role": "review", "status": "completed", "exit_code": 0,
@@ -111,6 +113,7 @@ class Env:
                 "head_sha": rec["head"], "completion": {"head_sha": rec["head"]},
                 "stdout_tail": "TEST_GAMING: no\nVERDICT: PASS\n",
             }))
+            path.chmod(0o600)
             result = self.run("review", "--name", batch, "--pr", str(rec["pr"]), "--run-id", run_id)
             assert result.returncode == 0, result.stderr
 
