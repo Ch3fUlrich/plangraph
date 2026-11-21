@@ -170,3 +170,22 @@ def test_the_controller_checks_the_shared_root_once_after_the_workers_finish(tmp
     worker = SimpleNamespace(config=SimpleNamespace(workerinput={}), exitstatus=0)
     plugin.pytest_sessionfinish(worker, 0)         # a worker never runs the check
     assert worker.exitstatus == 0
+
+
+def test_the_controller_also_watches_the_tree_above_the_workers_basetemps(tmp_path, monkeypatch):
+    import _stray_git_guard as guard
+    from types import SimpleNamespace
+    system_tmp, private, _ = _runs_dirs(tmp_path, monkeypatch)
+    root = tmp_path / 'controller' / 'pytest-of-user' / 'pytest-0'   # workers use root/popen-gwN
+    root.mkdir(parents=True)
+    lines = []
+    reporter = SimpleNamespace(write_line=lambda text, **kw: lines.append(text))
+    config = SimpleNamespace(pluginmanager=SimpleNamespace(get_plugin=lambda name: reporter if name != 'dsession' else object()),
+                             _tmp_path_factory=SimpleNamespace(getbasetemp=lambda: root))
+    session = SimpleNamespace(config=config, exitstatus=0)
+    plugin = guard.SharedTempCheck(strict=True)
+    plugin.pytest_sessionstart(session)
+    (root / '.git').mkdir()                        # gw1 leaks into the tree it shares with gw0, after gw0 finished
+    plugin.pytest_sessionfinish(session, 0)
+    assert session.exitstatus == 1 and str((root / '.git').resolve()) in lines[0]
+    assert (root / '.git').exists()

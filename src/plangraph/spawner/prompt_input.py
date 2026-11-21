@@ -144,22 +144,15 @@ def read_skill(name: str, cwd: str | None) -> str | None:
 
 _SKILL_FRONT = '---\nname: review\n'
 _BRIEF_START = 'Writer brief (item keys and Done-when lines):'
-_TOOLS_ONLY = re.compile(r'(?P<pre>(?:' + re.escape(_SKILL_FRONT) + r'.*?)?)(?P<ws>\s*)'
-                         r'\[tools-only\](?P<block>.*?)\[/tools-only\]\s*', re.DOTALL)
+_LEADING_TOOLS_BLOCK = re.compile(r'\s*\[tools-only\](?P<text>.*?)\[/tools-only\]\s*', re.DOTALL)
 
 
-def apply_tool_mode(body: str, inline: bool, cwd: str | None = None) -> str:
-    """Apply the leg's tool mode to the whole caller brief. A ``[tools-only]`` block (file-read and test-run
-    instructions) counts only when it is the first thing after the leading review skill, in whichever version
-    the caller embedded (recognised by its front matter, not by comparing text), and before the writer brief,
-    where the native writer puts it. For a toolless inline seat the skill and the block go; for the rest only
-    the markers go. Marker text anywhere later (item criteria, a quoted earlier finding) is the brief's own."""
-    found = _TOOLS_ONLY.match(body)
-    if found is None or _BRIEF_START in found.group('pre'):
-        return body
-    if inline:
-        return body[found.end():]
-    return found.group('pre') + found.group('ws') + found.group('block') + '\n' + body[found.end():]
+def split_tools_block(body: str) -> tuple[str, str]:
+    """``(block, rest)``: the ``[tools-only]`` block at the very start of a review prompt (file-read and
+    test-run instructions, where the native writer puts it) and the prompt after it. Marker text anywhere
+    else (item criteria, a quoted finding) belongs to the brief and is never touched."""
+    found = _LEADING_TOOLS_BLOCK.match(body)
+    return (body[:found.end()].strip(), body[found.end():]) if found else ('', body)
 
 
 def _tree_skill() -> str | None:
@@ -170,10 +163,15 @@ def _tree_skill() -> str | None:
 
 
 def _without_review_skill(body: str, cwd: str | None) -> str:
-    """A caller brief that starts with the review skill (origin/main's or this tree's copy) loses it."""
+    """A caller brief that starts with the review skill loses it: origin/main's or this tree's copy, or
+    any other version (recognised by its front matter) up to the native writer brief that follows it."""
     for text in (read_skill('review', cwd), _tree_skill()):
         if text and body.startswith(text):
             return body[len(text):].lstrip('\n')
+    if body.startswith(_SKILL_FRONT):
+        end = body.find('\n\n' + _BRIEF_START)
+        if end >= 0:
+            return body[end + 2:]
     return body
 
 
@@ -187,12 +185,15 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
     # A toolless inline seat gets the inline rules from its header only: the review skill below
     # it demands test runs and file reads, and origin/main may serve a skill older than the header.
     inline_review = tool_mode == INLINE_TOOL_MODE and _ROLE_KEY.get(role) == 'review'
+    block = ''
     if _ROLE_KEY.get(role) == 'review':
-        body = apply_tool_mode(body, inline_review, cwd)
+        block, body = split_tools_block(body)  # file and command instructions: only a tools leg keeps them
     if inline_review:
         body = _without_review_skill(body, cwd)
     name = None if inline_review else skill_name(role, body)
     skill = read_skill(name, cwd) if name else None
     if skill and not body.startswith(skill):
         body = skill + '\n' + body
+    if block and not inline_review:
+        body = block + '\n\n' + body
     return head + '\n\n' + body

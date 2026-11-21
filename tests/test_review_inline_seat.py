@@ -82,45 +82,49 @@ def test_a_brief_that_starts_with_the_review_skill_loses_it_on_an_inline_seat():
 
 TOOLS_BLOCK = ('[tools-only]Your working directory is a disposable checkout. Open callers, tests '
                'and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.'
-               '[/tools-only]\n\n')
-ITEMS = ('Writer brief:\nthe item says "[tools-only]keep this[/tools-only]" and quotes a finding: '
-         '[tools-only]run the tests[/tools-only]\nThe diff is base..head.\nName each finding as file:line.\n')
-NATIVE_BRIEF = TOOLS_BLOCK + ITEMS
+               '[/tools-only]')
+ITEMS = ('Writer brief (item keys and Done-when lines):\nthe item says "[tools-only]keep this[/tools-only]" and quotes a '
+         'finding: [tools-only]run the tests[/tools-only]\nThe diff is base..head.\nName each finding as file:line.\n')
+
+
+def native_brief(skill=SKILL):
+    """The native writer's review prompt: the tools-only block, the skill, then the writer brief."""
+    return TOOLS_BLOCK + '\n\n' + skill + '\n\n' + ITEMS
 
 
 def test_native_review_brief_loses_its_tool_instructions_on_an_inline_seat():
-    inline = prompt_input.compose(SKILL + '\n' + NATIVE_BRIEF, 'review', 'opencode', None, 'mimo-v2.6-pro',
-                                  tool_mode='inline-only')
-    for text in ('Open callers', 'run read-only commands', 'disposable checkout'):
+    inline = prompt_input.compose(native_brief(), 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only')
+    for text in ('Open callers', 'run read-only commands', 'disposable checkout', 'Run only the tests'):
         assert text not in inline, text
     # Marker text inside the items is the brief's own and stays.
     assert '"[tools-only]keep this[/tools-only]"' in inline and '[tools-only]run the tests[/tools-only]' in inline
     assert 'The diff is base..head.' in inline and inline.count('[tools-only]') == 2
 
 
-def test_native_review_brief_keeps_its_tool_instructions_without_markers_on_a_tools_leg(working_tree_skill):
-    tools = prompt_input.compose(SKILL + '\n' + NATIVE_BRIEF, 'review', 'opencode', None, 'mimo-v2.6-pro')
-    assert 'Open callers, tests and docs' in tools and 'never edit.' in tools
-    assert tools.count('[tools-only]') == 2 and tools.count(SKILL) == 1
-    assert tools.index('Open callers') < tools.index('Writer brief:')
-    # The marker block is only interpreted for a review prompt.
-    implement = prompt_input.compose(NATIVE_BRIEF, 'implement', 'claude', None, tool_mode='inline-only')
+def test_native_review_brief_keeps_its_block_once_and_the_skill_once_on_a_tools_leg(working_tree_skill):
+    tools = prompt_input.compose(native_brief(), 'review', 'opencode', None, 'mimo-v2.6-pro')
+    assert 'Open callers, tests and docs' in tools and tools.count(SKILL) == 1
+    assert tools.index('Open callers') < tools.index(SKILL[:40]) < tools.index('Writer brief')
+    again = prompt_input.compose(tools, 'review', 'opencode', None, 'mimo-v2.6-pro')
+    assert again == tools
+    # The block is only interpreted for a review prompt.
+    implement = prompt_input.compose(TOOLS_BLOCK + ITEMS, 'implement', 'claude', None, tool_mode='inline-only')
     assert implement.count('[tools-only]') == 3
 
 
-def test_a_skill_version_the_loader_does_not_know_is_still_recognised_by_its_front_matter():
-    # The writer embedded another version of the review skill than origin/main or this tree serve.
+def test_a_skill_version_the_loader_does_not_know_is_still_dropped_on_an_inline_seat():
     other = SKILL.replace('Run only the tests', 'Run just the tests of the touched crates').replace(
         'Independence', 'Independence of the reviewer')
     assert other != SKILL
-    brief = other + '\n' + NATIVE_BRIEF
-    inline = prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only')
+    inline = prompt_input.compose(native_brief(other), 'review', 'opencode', None, 'mimo-v2.6-pro',
+                                  tool_mode='inline-only')
     for text in ('Open callers', 'run read-only commands', 'Run just the tests', 'Independence of the reviewer'):
         assert text not in inline, text
     assert 'The diff is base..head.' in inline and 'tool mode inline' in inline
 
 
-def test_a_quoted_marker_without_a_block_after_the_skill_is_left_alone():
-    brief = SKILL + '\nWriter brief (item keys and Done-when lines):\nitem: "[tools-only]x[/tools-only]"\n'
+def test_quoted_markers_in_a_versioned_brief_without_a_leading_block_are_left_alone():
+    brief = SKILL + '\nWriter brief (item keys and Done-when lines):\nitem key X: "[tools-only]x[/tools-only]" criteria\n'
     inline = prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only')
-    assert '"[tools-only]x[/tools-only]"' in inline and 'Writer brief' in inline
+    assert 'item key X: "[tools-only]x[/tools-only]" criteria' in inline
+    assert prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro').count('item key X') == 1

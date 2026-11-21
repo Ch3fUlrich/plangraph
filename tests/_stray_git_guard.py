@@ -110,29 +110,41 @@ def no_git_outside_tmp_path(request):
 
 class SharedTempCheck:
     """Session plugin of the pytest controller (or the plain process, never a worker): the shared temp
-    root is checked once, after every worker has finished, so no worker's early exit can miss a leak."""
+    root and, under xdist, the tree above the workers' basetemps (shared by all of them) are checked once,
+    after every worker has finished, so no worker's early exit can miss a leak."""
 
-    def __init__(self, strict=None):
+    def __init__(self, strict=None, basetemp=None):
         self.strict = strict_mode() if strict is None else strict
-        self.before = shared_gits()
+        self.basetemp = basetemp
+        self.before = self._shared()
+
+    def _shared(self):
+        found = shared_gits()
+        if self.basetemp:
+            found |= temp_ancestor_gits(str(self.basetemp))
+        return found
+
+    def pytest_sessionstart(self, session):
+        factory = getattr(session.config, '_tmp_path_factory', None)
+        if factory is not None and session.config.pluginmanager.get_plugin('dsession') is not None:
+            self.basetemp = factory.getbasetemp()  # the controller's root: workers use its popen-gwN children
+            self.before = self._shared()
 
     def pytest_sessionfinish(self, session, exitstatus):
         if hasattr(session.config, 'workerinput'):
             return
-        try:
-            leaked = check_shared(self.before, self.strict)
-        except AssertionError as error:
+        leaked = sorted(self._shared() - self.before)
+        message = f'a .git appeared in a directory shared with other runs during this session: {leaked}'
+        if leaked and self.strict:
             session.exitstatus = 1
-            self._report(session, str(error))
-            return
         if leaked:
-            self._report(session, f'warning: {leaked} appeared in a directory shared with other runs')
+            self._report(session, message)
 
     @staticmethod
     def _report(session, text):
         reporter = session.config.pluginmanager.get_plugin('terminalreporter')
         if reporter is not None:
-            reporter.write_line(f'stray .git guard: {text}', red=text.startswith('a .git'))
+            reporter.write_line(f'stray .git guard: {text}', red=True)
 
 
 @pytest.fixture(scope='session', autouse=True)
