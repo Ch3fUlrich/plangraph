@@ -430,7 +430,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         detail = {"leg": leg.id, "tier": leg.tier,
                   "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
-                  "p_source": "measured" if row is not None and not row.get('imputed') else "prior"}
+                  "p_source": "measured" if row is not None else "prior"}
         if reason:
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)

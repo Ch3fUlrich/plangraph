@@ -128,14 +128,16 @@ CREATE TABLE IF NOT EXISTS catalog_benchmark_refresh_flags (
     PRIMARY KEY (model_id, effort, harness)
 ) STRICT;
 
-CREATE VIEW IF NOT EXISTS catalog_benchmark_rows AS
+-- Legacy observations identify the model and effort, with no measured harness.
+DROP VIEW IF EXISTS catalog_benchmark_rows;
+CREATE VIEW catalog_benchmark_rows AS
 WITH observations AS (
     SELECT model_id, effort, harness, score, score_se, n_runs, steps, cost_per_task_usd,
            tokens_per_task, imputed, effort_channel, index_version, source_url, source_date,
            source_record, measured_at, origin, 0 AS legacy, NULL AS verified_tok_per_s
     FROM catalog_benchmark_measurements
     UNION ALL
-    SELECT b.model_id, COALESCE(m.parameter_effort, ''), COALESCE(m.harness, ''),
+    SELECT b.model_id, COALESCE(m.parameter_effort, ''), '',
            b.aa_intelligence, NULL, NULL, NULL, b.cost_per_task_usd, NULL, 1,
            NULL, b.benchmark_source, NULL, NULL, NULL, b.updated_at, 'aa-index', 1, b.verified_tok_per_s
     FROM catalog_benchmarks b JOIN catalog_models m USING (model_id)
