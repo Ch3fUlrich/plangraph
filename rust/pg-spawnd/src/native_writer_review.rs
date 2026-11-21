@@ -406,6 +406,9 @@ pub(super) fn printed_record(stdout: &str) -> Option<Value> {
 /// Review text of a review run record: the rendered result of its live log, else the
 /// record's `stdout_tail` (OpenCode legs keep their answer text there).
 pub(super) fn review_run_text(state: &Path, record: &Value) -> Result<String, String> {
+    if let Some(error) = record["review_binding_error"].as_str() {
+        return Err(error.to_owned());
+    }
     let rendered = crate::review_artifacts::review_text(state, record)
         .map_err(|_| "review run record unreadable".to_owned())?;
     let canonical = |text: &str| {

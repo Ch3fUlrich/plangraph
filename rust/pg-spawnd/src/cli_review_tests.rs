@@ -59,7 +59,8 @@ fn precondition_binds_exact_stamped_head_and_rejects_dirty_tree() {
             &json!({"harness":"agy"})
         )
         .ok()
-        .unwrap(),
+        .unwrap()
+        .map(|review| review.head),
         Some(head)
     );
     assert!(launch.argv.iter().any(|s| s == "--settings"));
@@ -110,18 +111,17 @@ fn successful_agy_run_records_head_verdict_findings_and_cli_provenance() {
     let head = git(dir.path(), &["rev-parse", "HEAD"]).ok().unwrap();
     let id = new_run_id();
     let leg = json!({"id":"agy-gemini-4-hydrogen-high", "harness":"agy", "model":"gemini-4-hydrogen-high", "family":"gemini"});
-    let mut record = crate::runs::create(
-        dir.path(),
-        &id,
-        "fixture",
-        json!({
-            "role":"review", "head_sha":head, "cwd":dir.path(), "item_key":"demo:A", "exit_code":0,
-            "attempts":[{"leg":leg,"status":"running"}]
-        }),
-        Status::Completed,
-    )
-    .ok()
-    .unwrap();
+    let mut metadata = json!({
+        "role":"review", "cwd":dir.path(), "item_key":"demo:A", "exit_code":0,
+        "attempts":[{"leg":leg,"status":"running"}]
+    });
+    Dispatch::new(dir.path(), head.clone(), &json!({"base":"HEAD"}))
+        .ok()
+        .unwrap()
+        .apply(&mut metadata);
+    let mut record = crate::runs::create(dir.path(), &id, "fixture", metadata, Status::Completed)
+        .ok()
+        .unwrap();
     let log = record.path().with_file_name("live.log");
     let answer = "No findings in src/lib.rs:1.\nVERDICT: PASS\nTEST_GAMING: no\n";
     std::fs::write(
@@ -178,6 +178,31 @@ from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
 from plangraph.keeper.errors import Refused
 root = Path(sys.argv[1]); head = sys.argv[2]; merge = '1' * 40
+run_id = sys.argv[3]
+mirror = root / 'mirror'
+run_dir = mirror / 'fixture' / run_id
+reader = SpawnerRecordAdapter(mirror)
+record = json.loads((run_dir / 'record.json').read_text())
+binding = record['review_binding']
+item = {'key':'demo:A', 'run_ids':json.dumps([run_id]), 'review_binding':binding}
+assert len(reader.review_seats(item, head, '', allow_cli_reported=True)) == 1
+wrong = dict(binding, diff_sha256='0' * 64)
+try:
+    reader.review_seats(dict(item, review_binding=wrong), head, '', allow_cli_reported=True)
+except ValueError as exc:
+    assert 'review diff does not match expected binding' in str(exc)
+else:
+    raise AssertionError('keeper accepted a seat for another diff')
+sys.path.insert(0, str(Path.cwd() / 'tools'))
+from seat_record import evidence_from_record
+assert evidence_from_record(run_dir, record=record)[0]['review_binding'] == binding
+record['completion']['review_binding'] = wrong
+try:
+    evidence_from_record(run_dir, record=record)
+except ValueError as exc:
+    assert 'review diff binding mismatch' in str(exc)
+else:
+    raise AssertionError('seat reader accepted a completion for another diff')
 class MergedGit:
     def repo_path(self, project):
         assert project == 'demo'

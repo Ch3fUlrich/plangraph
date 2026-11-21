@@ -110,7 +110,7 @@ pub(crate) fn prepare_launch(
     leg: &Value,
     launch: &mut LaunchSpec,
     dry: bool,
-) -> Result<Option<String>, crate::errors::ToolError> {
+) -> Result<Option<crate::cli_review::Dispatch>, crate::errors::ToolError> {
     prepare_launch_group(args, leg, launch, dry, None)
 }
 
@@ -120,7 +120,7 @@ pub(crate) fn prepare_launch_group(
     launch: &mut LaunchSpec,
     dry: bool,
     group: Option<(usize, usize, &[String])>,
-) -> Result<Option<String>, crate::errors::ToolError> {
+) -> Result<Option<crate::cli_review::Dispatch>, crate::errors::ToolError> {
     let role = args
         .get("role")
         .and_then(Value::as_str)
