@@ -67,7 +67,8 @@ def _did_num(did):
         return -1
 
 
-def _merge_pr(subject):
+def subject_pr(subject):
+    """Read the trailing canonical PR number, falling back to the first reference."""
     text = subject.strip()
     match = _PR_SUFFIX_RE.search(text) or _PR_RE.search(text)
     return int(match[1]) if match else None
@@ -221,7 +222,7 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             introduced.append(sha)
             todo.extend(records.get(sha, ([],))[0])
         if len(parents) > 1:
-            pr = _merge_pr(commit["subject"])
+            pr = subject_pr(commit["subject"])
             merge = {"sha": landing, "subject": commit["subject"], "pr": pr}
             own_pr = len(parents) == 2 and pr
             for sha in introduced:
@@ -372,7 +373,7 @@ def _merge_of(git, repo, ref, sha):
     if own_merge:
         subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                    "--end-of-options", sha]) or "").strip()
-        return {"sha": sha, "subject": subject, "pr": _merge_pr(subject)}
+        return {"sha": sha, "subject": subject, "pr": subject_pr(subject)}
     # Combining --ancestry-path with --first-parent prunes paths through
     # second parents (nested batches and PR branches refreshed from main).
     # Walk ancestry separately, then intersect with the ref's landing merges.
@@ -393,7 +394,7 @@ def _merge_of(git, repo, ref, sha):
         return None
     subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                "--end-of-options", found[-1]]) or "").strip()
-    return {"sha": found[-1], "subject": subject, "pr": _merge_pr(subject)}
+    return {"sha": found[-1], "subject": subject, "pr": subject_pr(subject)}
 
 
 def _head_introduced_by_merge(git, repo, parents, head):
@@ -493,7 +494,7 @@ def named_merge(git, project, revision, *, head=None):
         return None
     parent_text, _, subject = shown.partition("\x1f")
     parents = parent_text.split()
-    return {"head": parents[1] if len(parents) == 2 else sha, "pr": _merge_pr(subject),
+    return {"head": parents[1] if len(parents) == 2 else sha, "pr": subject_pr(subject),
             "landed": landed}
 
 

@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS apply_grants (
 #: row per key, ``n`` counts its refusals inside the window (an alert from 2).
 #: ``alert_log`` is the telemetry: one row per raise (``alert_raised``), clear
 #: (``alert_cleared``) and backfill, kept out of ``audit_log`` whose contract is one
-#: row per call.  ``schema_pg`` Migration 14 is the logical twin; ``IF NOT EXISTS`` so
+#: row per call.  ``schema_pg`` Migration 17 is the logical twin; ``IF NOT EXISTS`` so
 #: ``db._upgrade`` installs it on an older database.
 ALERTS_DDL = """
 CREATE TABLE IF NOT EXISTS alerts (

@@ -37,7 +37,7 @@ def test_tip_merge_with_plan_item_trailers_closes_both_keys(w, tmp_path, monkeyp
         "-m", "Plan-Item: demo:A\nPlan-Item: demo:H", "fixture-pr")
     tip = git("rev-parse", "main")
     adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
-    assert context_sources.named_merge(adapter, "demo", tip) == {"head": head, "pr": 1087}
+    assert context_sources.named_merge(adapter, "demo", tip) == {"head": head, "pr": 1087, "landed": tip}
     w.store.ctx["git"] = adapter
     monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
     w.decision_path.write_text(f"| D-5504 | demo | GO {head} demo:A demo:H |\n")
@@ -602,7 +602,7 @@ def _part_table_world(world, monkeypatch, tmp_path, table):
         "| ID | PROJECT | DECISION | BY | DATE |\n| --- | --- | --- | --- | --- |\n" + row
         + "| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H demo:A | OPERATOR | 2026-11-14 |\n")
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", world.real_plan_item_commits)
-    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *args, **kwargs: [])
     world.store.ctx["git"] = GitAdapter({"demo": {"path": str(tmp_path / "train"), "ref": "main"}})
     return heads
 
