@@ -35,4 +35,6 @@ systemctl --user daemon-reload && systemctl --user enable --now pg-keeper-backup
 systemctl --user start pg-keeper-backup.service && journalctl --user -u pg-keeper-backup.service -n 5
 ```
 
+First real run (the only test against a real server; hermetic tests cannot run SQL): `pg-keeper-backup dump --verify --dir "$(mktemp -d)"` on the keeper host with the env file loaded, expecting `verified=yes` and `restore ok: seq <n> tables 43`; it reads the live schema and creates and drops one scratch database, nothing else.
+
 Test: `cargo test -p pg-keeper-backup`. Rules run against a fake `Pg`; `tests/cli.rs` runs the real command line against a fake `docker` executable that checks the commands, the `0600` modes and that a sentinel password never reaches output or logs; `tests/units.rs` runs `systemd-analyze verify` when it is installed. No test needs a Postgres server.
