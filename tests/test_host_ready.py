@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from conftest import use_projected_overflow_config
+from registry_route_util import use_projected_overflow_config
 
 from plangraph.spawner import host_ready as h
 from plangraph.spawner import host_ready_source as source

@@ -456,17 +456,3 @@ def admission_memory(monkeypatch):
         monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, megabytes))
         return megabytes
     return pin
-
-
-def use_projected_overflow_config(monkeypatch, path):
-    """Substitute the registry's consumer view in transport and admission fixtures."""
-    import json
-    from plangraph.spawner import overflow
-
-    def projection(registry, role=None):
-        try:
-            return json.loads(path.read_text())
-        except FileNotFoundError:
-            return {}
-
-    monkeypatch.setattr(overflow, 'placement_config', projection)

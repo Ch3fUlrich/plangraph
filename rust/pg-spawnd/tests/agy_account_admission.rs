@@ -26,16 +26,20 @@ def route(now, account='primary'):
 now = time.time() - 1
 record_harness_limit('agy/gemini-4-hydrogen-high', '429 Per-model quota reached. Resets in 2h',
                      'fixture', now=now, account='primary')
+def served(plan):
+    return [leg['id'] for leg in plan['legs']]
+
+# Rule 3.61 puts argon last in the review order: it is served (listed), not first.
 model = route(now)
-assert model['first_leg']['id'] == argon, model
+assert argon in served(model), model
 assert model['agy_quota_states']['agy:gemini-4-hydrogen']['evidence']['reset_at'] == now + 7200
 record_harness_limit('agy/gemini-4-hydrogen-high', '429 Individual quota reached. Resets in 3h',
                      'fixture', now=now, account='primary')
 account = route(now)
 assert not any(leg['id'].startswith('agy-') for leg in account['legs']), account
 assert next(s for s in account['skipped'] if s['leg'] == argon)['reason'].startswith('limited_until ')
-assert route(now, 'secondary')['first_leg']['id'] == argon
-assert route(now + 10800)['first_leg']['id'] == argon
+assert argon in served(route(now, 'secondary'))
+assert argon in served(route(now + 10800))
 
 # A sibling was selected in an earlier plan, before the failure was booked.
 try:

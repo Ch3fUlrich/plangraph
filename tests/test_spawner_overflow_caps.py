@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from conftest import use_projected_overflow_config
+from registry_route_util import use_projected_overflow_config
 
 from plangraph.spawner import overflow as o
 from plangraph.spawner.service import SpawnService

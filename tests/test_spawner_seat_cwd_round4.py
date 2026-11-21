@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from conftest import use_projected_overflow_config
+from registry_route_util import use_projected_overflow_config
 
 from plangraph.routing_errors import ParameterRefused
 from plangraph.spawner import overflow, seat_spawn

@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from conftest import use_projected_overflow_config
+from registry_route_util import use_projected_overflow_config
 
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan

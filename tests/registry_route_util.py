@@ -1,4 +1,8 @@
-"""Shared helpers for the SPAWNER-REGISTRY-ROUTE tests (test_registry_route, test_registry_seats)."""
+"""Shared helpers for the SPAWNER-REGISTRY-ROUTE tests and the registry overflow projection of the placement tests.
+
+use_projected_overflow_config lives here, not in conftest: `from conftest import` resolves to tests/contract/conftest.py
+when that one was imported first (full-suite collection).
+"""
 from __future__ import annotations
 
 import asyncio
@@ -123,3 +127,17 @@ def _repo(tmp_path):
     run("commit", "-qam", "head")
     head = run("rev-parse", "HEAD").stdout.strip()
     return repo, base, head
+
+
+def use_projected_overflow_config(monkeypatch, path):
+    """Substitute the registry's consumer view in transport and admission fixtures."""
+    import json
+    from plangraph.spawner import overflow
+
+    def projection(registry, role=None):
+        try:
+            return json.loads(path.read_text())
+        except FileNotFoundError:
+            return {}
+
+    monkeypatch.setattr(overflow, 'placement_config', projection)
