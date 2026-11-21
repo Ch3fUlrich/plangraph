@@ -398,7 +398,8 @@ def test_container_opencode_is_owned_but_orphan_still_alerts(seat, owner):
     else:
         process(pid=pid, cmd='opencode serve --stdio')
     if owner == 'scope':
-        (proc / str(pid) / 'cgroup').write_text('0::/system.slice/docker-' + 'a' * 64 + '.scope\n')
+        cgroup = '/system.slice/docker-' + 'a' * 64 + '.scope'
+        (proc / str(pid) / 'cgroup').write_text(':'.join(('0', '', cgroup)) + '\n')
     if owner == 'cgroupfs':
         (proc / str(pid) / 'cgroup').write_text('2:cpu:/docker/' + 'b' * 64 + '/child:fixture\n')
     check(0)
