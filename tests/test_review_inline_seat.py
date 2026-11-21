@@ -17,24 +17,21 @@ def working_tree_skill(monkeypatch):
     monkeypatch.setattr(prompt_input, 'read_skill', lambda name, cwd: SKILL if name == 'review' else None)
 
 
-def test_inline_header_is_self_sufficient_with_the_real_skill_loader():
-    # Whatever skill text the run checkout's origin/main serves, the header carries the inline rules.
+def test_inline_prompt_has_the_inline_rules_and_no_tool_run_demand_with_the_real_skill_loader():
+    # Whatever skill text origin/main serves, an inline seat's prompt holds the inline rules only.
     text = prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro',
                                 tool_mode='inline-only')
-    first = text.split('\n\n', 1)[0]
-    for rule in ('tool mode inline', 'no tools', 'quoted diff line', 'FILES READ: diff only', 'VERDICT:'):
-        assert rule in first, rule
-    assert 'Run tests' not in first and 'run tests' not in first
+    for rule in ('tool mode inline', 'no tools', 'quoted diff line', 'FILES READ: diff only', 'VERDICT: ACCEPT'):
+        assert rule in text, rule
+    for demand in ('Run tests', 'run tests', 'Run only the tests', 'run the tests', 'You may read the repository'):
+        assert demand not in text, demand
+    assert text.endswith('Review the change')
+    assert SKILL not in text
 
 
-def test_inline_leg_prompt_names_its_tool_mode_and_carries_the_inline_section(working_tree_skill):
-    text = prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro',
-                                tool_mode='inline-only')
-    first = text.split('\n\n', 1)[0]
-    assert 'tool mode inline' in first and 'no tools' in first
-    assert 'Run tests' not in first and 'run tests' not in first
-    assert '## Inline seats' in text and text.count(SKILL) == 1
-    assert 'VERDICT' in text.split('## Inline seats', 1)[1]
+def test_tools_prompt_keeps_the_full_skill(working_tree_skill):
+    text = prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro')
+    assert text.count(SKILL) == 1 and '## Inline seats' in text
 
 
 def test_tools_leg_prompt_is_unchanged(working_tree_skill):

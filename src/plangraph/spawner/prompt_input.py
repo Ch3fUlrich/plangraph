@@ -148,7 +148,9 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
     if head is None:
         return prompt
     body = prompt[len(head):].lstrip('\n') if prompt.startswith(head) else prompt
-    name = skill_name(role, body)
+    # A toolless inline seat gets the inline rules from its header only: the review skill below
+    # it demands test runs and file reads, and origin/main may serve a skill older than the header.
+    name = None if tool_mode == INLINE_TOOL_MODE and _ROLE_KEY.get(role) == 'review' else skill_name(role, body)
     skill = read_skill(name, cwd) if name else None
     if skill and not body.startswith(skill):
         body = skill + '\n' + body

@@ -55,19 +55,26 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     let repo = state.path().join("repo");
     std::fs::create_dir(&repo).unwrap();
     git(&repo, &["init", "-q"]);
-    git(
-        &repo,
-        &[
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.test",
-            "commit",
-            "--allow-empty",
-            "-qm",
-            "fixture",
-        ],
-    );
+    let commit = |message: &str| {
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                message,
+            ],
+        )
+    };
+    commit("base");
+    // The reviewed range must change something: an empty diff_ref is refused as empty_diff.
+    std::fs::write(repo.join("changed.txt"), "change\n").unwrap();
+    git(&repo, &["add", "changed.txt"]);
+    commit("fixture");
     let head = git(&repo, &["rev-parse", "HEAD"]);
     let leg = json!({"id":"agy-gemini-4-hydrogen-high", "model":"gemini-4-hydrogen-high", "harness":"agy", "family":"gemini"});
     let first = if sonnet {
@@ -144,7 +151,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     client.initialize();
     let mut request = json!({"name":"plangraph_agent_spawn", "arguments":{
         "role":"review", "writer_families":["openai"], "prompt":"review",
-        "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "cwd":repo, "diff_ref":{"repo":repo, "base":"HEAD", "head":"HEAD"}}, "wait_seconds":20
+        "card":{"item_key":"demo:AGY", "estimate_tokens":1000, "cwd":repo, "diff_ref":{"repo":repo, "base":"HEAD~1", "head":"HEAD"}}, "wait_seconds":20
     }});
     if sonnet {
         request["arguments"]["card"]

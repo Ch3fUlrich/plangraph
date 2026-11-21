@@ -48,6 +48,16 @@ def ensure_nonempty_diff(diff_ref, *, timeout: float = 60) -> None:
         raise InlineDiffError(f"empty_diff: no change between base {diff_ref['base']} and head {diff_ref['head']}")
 
 
+def refuse_empty_diff(card, role, *, dry_run=False) -> None:
+    """The one card-level empty diff check of a review spawn: ``SpawnRefused('empty_diff: ...')``."""
+    if role != "review" or dry_run or (card or {}).get("diff_ref") is None:
+        return
+    try:
+        ensure_nonempty_diff(card["diff_ref"])
+    except InlineDiffError as exc:
+        raise SpawnRefused(str(exc)) from None
+
+
 def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
                        allow_document: bool = False) -> str:
     """The prompt with the diff inlined. ``diff_ref is None`` returns the prompt

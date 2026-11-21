@@ -31,3 +31,16 @@ def test_empty_diff_fails_the_card_before_any_leg(tmp_path):
             asyncio.run(service.spawn(card=card, prompt='Review this change', role='review',
                                       writer_families=('claude',), seats=seats, wait_seconds=None))
     assert runner.calls == []
+
+
+def test_cli_spawn_refuses_before_routing(tmp_path, monkeypatch, capsys):
+    import json
+    from plangraph.spawner import cli
+    repo, _, head = _repo(tmp_path)
+    routed = []
+    monkeypatch.setattr(SpawnService, 'route', lambda *a, **k: routed.append(a))
+    card = {'estimate_tokens': 100, 'diff_ref': {'repo': str(repo), 'base': head, 'head': head}}
+    code = cli.main(['--state', str(tmp_path / 'state'), 'spawn', '--card', json.dumps(card), '--role', 'review',
+                     '--writer-family', 'claude', 'Review this change'])
+    assert code != 0 and routed == []
+    assert 'empty_diff' in capsys.readouterr().err
