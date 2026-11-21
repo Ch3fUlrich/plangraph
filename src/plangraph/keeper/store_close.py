@@ -439,10 +439,16 @@ class CloseMixin:
         try:
             commits = context_sources.plan_item_commits(
                 git, project, item["key"], fetch=False, limit=None)
+            shas = [commit.get("sha") for commit in commits or ()]
+            try:  # the merge a `Merge-Repo:` line names counts like a Plan-Item merge
+                named = self._named_merge_proof(item)
+            except Refused:
+                named = None
+            shas += [named["head"]] if named else []
             repo, ref = git.repo_path(project), git.repo_ref(project)
-            # The landed changes of each Plan-Item commit's PR, not only the tagged commits.
-            changes = {c for commit in commits or () if valid_commit_ref(commit.get("sha"))
-                       for c in git.deploy_changes(repo, commit["sha"], ref)}
+            # The landed changes of each merged PR, not only the tagged commits.
+            changes = {c for sha in shas if valid_commit_ref(sha)
+                       for c in git.deploy_changes(repo, sha, ref)}
         except Exception:  # noqa: BLE001 - an unreadable diff never blocks the close
             return []
         targets = deploy_targets(changes)

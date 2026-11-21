@@ -331,8 +331,7 @@ def _merge_of(git, repo, ref, sha):
         if chain is not None and sha in chain.split():
             subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                        "--end-of-options", sha]) or "").strip()
-            match = _PR_RE.search(subject)
-            return {"sha": sha, "subject": subject, "pr": int(match.group(1)) if match else None}
+            return {"sha": sha, "subject": subject, "pr": subject_pr(subject)}
     # Combining --ancestry-path with --first-parent prunes paths through
     # second parents (nested batches and PR branches refreshed from main).
     # Walk ancestry separately, then intersect with the ref's landing merges.
@@ -447,9 +446,7 @@ def named_merge(git, project, revision):
         return None
     parent_text, _, subject = shown.partition("\x1f")
     parents = parent_text.split()
-    match = _PR_RE.search(subject)
-    return {"head": parents[1] if len(parents) == 2 else sha,
-            "pr": int(match[1]) if match else None}
+    return {"head": parents[1] if len(parents) == 2 else sha, "pr": subject_pr(subject)}
 
 
 _REFS_LOCK = threading.Lock()

@@ -1,0 +1,77 @@
+"""The deploy gate reads the same merged work on every close path (LE-MERGED-UNIT-NEVER-DEPLOYED)."""
+import pytest
+
+from plangraph.keeper import context_sources
+from plangraph.keeper.evidence_git import GitAdapter
+from test_keeper_close_merged_scan import HEADER, _git, merged_repo
+from test_keeper_merge_close_auto import auto, env, git  # noqa: F401 - env is a fixture
+from test_keeper_close_merged import unseated_w, w  # noqa: F401 - the manual-close world fixtures
+
+
+def _land_with_unit(root, name="feat", pr=41, tagged=True):
+    """A PR whose tagged commit edits a note and whose untagged follow-up adds a unit."""
+    git(root, "checkout", "-q", "-b", name, "main")
+    (root / "NOTES.md").write_text("work\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "work" + ("\n\nPlan-Item: demo:A" if tagged else ""))
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/new.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "follow-up without a trailer")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", f"Merge pull request #{pr} from x/{name}", name)
+
+
+def test_the_automatic_close_waits_for_deploy_proof_in_preview_and_apply(env):  # noqa: F811
+    _land_with_unit(env.repo.root)
+    preview = auto(env, require_seats=False, apply=False)
+    assert preview["would_close"] == [] and preview["closed"] == []
+    assert [r["key"] for r in preview["listed"]] == ["demo:A"]
+    assert "deploy_pending" in preview["listed"][0]["reason"]
+    applied = auto(env, require_seats=False)
+    assert applied["closed"] == []
+    assert "deploy_pending" in applied["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+    codes = [f["code"] for f in env.store.alerts(env.p("reader"))["findings"] if f["key"] == "demo:A"]
+    assert codes == ["deploy_pending"]
+
+
+def test_the_automatic_close_still_closes_a_merge_that_ships_no_unit(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 42)
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+
+
+def test_the_manual_close_counts_the_merge_a_merge_repo_note_names(w, monkeypatch, tmp_path):  # noqa: F811
+    repo = tmp_path / "other-repo"
+    merged_repo(repo, [(165, None, "2026-11-01T12:00:00Z")])
+    _land_with_unit(repo, name="untagged", pr=166, tagged=False)
+    landed = _git(repo, "rev-parse", "main")
+    empty = tmp_path / "demo-repo"
+    heads = merged_repo(empty, [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
+                                     "other": {"path": str(repo), "ref": "main"}})
+    w.store.verifiers["deploy"] = __import__("plangraph.keeper.evidence", fromlist=["VERIFIERS"]).VERIFIERS["deploy"]
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    head = _git(repo, "rev-parse", "main^2")
+    w.decision_path.write_text(
+        HEADER + f"| D-5504 | demo | GO #166 demo:A; GO-HEAD {head} | ROUTER | 2026-11-05 |\n")
+    w.store.edit_definition(w.p("router"), "demo:A", {"note": f"Merge-Repo: other {landed}"})
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["closed"] is False and out["reason"] == "deploy_pending"
+    assert w.store._item("demo:A")["state"] == "in_review"
+
+
+@pytest.mark.parametrize("subject,pr", [("batch l1: #1 #2 #3 (#100)", 100), ("Fix #7 (#9)", 9)])
+def test_both_merge_subject_paths_read_the_trailing_pr(tmp_path, subject, pr):
+    """A merge that carries the trailers itself, and a merge named by its sha, give the PR of `(#N)`."""
+    repo = tmp_path / "repo"
+    merged_repo(repo, [])
+    git(repo, "checkout", "-q", "-b", "feat", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "work")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "--no-ff", "-q", "-m", f"{subject}\n\nPlan-Item: demo:A", "feat")
+    merge = git(repo, "rev-parse", "HEAD")
+    adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    r, ref = adapter.repo_path("demo"), adapter.repo_ref("demo")
+    assert context_sources._merge_of(adapter, r, ref, merge)["pr"] == pr
+    assert context_sources.named_merge(adapter, "demo", merge)["pr"] == pr

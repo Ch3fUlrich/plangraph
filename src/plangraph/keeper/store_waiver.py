@@ -679,6 +679,11 @@ class WaiverMixin:
         self._assert_unlocked(item)
         seated = require_seats and tier != "none"
         proofs = self._merged_auto_proofs(item)
+        pending = self._deploy_pending(item)  # read before the lock, in preview and apply alike
+        if pending:
+            if apply:
+                self._deploy_pending_result(item, pending, now)
+            raise Refused("evidence_unverified", "deploy_pending: " + ", ".join(pending))
         witnessed = self._merged_backfill(item, None, proofs[0]["head"], now, proofs) if seated else []
         if not apply:
             return {"key": key, "state": item["state"], "prs": proofs}
