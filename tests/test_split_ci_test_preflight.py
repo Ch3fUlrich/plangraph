@@ -121,7 +121,8 @@ def test_worker_only_preflight_runs_own_manifest(repo, monkeypatch, own_workspac
     monkeypatch.setattr(preflight.shutil, 'which', lambda *a, **kw: '/fake/cargo')
     calls = fake_runner(monkeypatch)
     assert preflight.main(['--base', 'HEAD~1', '--fast'], repo) == 0
-    cargo = [(cmd, cwd) for cmd, cwd, _ in calls if cmd[0] == 'cargo']
+    # The policy step's one pg-policy build runs from the checkout root, not rust/.
+    cargo = [(cmd, cwd) for cmd, cwd, _ in calls if cmd[0] == 'cargo' and cwd == rust]
     target = ['--manifest-path', str(worker / 'Cargo.toml')]
     assert cargo == [(cmd, rust) for cmd in [
         ['cargo', 'fmt', *target, '--check'],
