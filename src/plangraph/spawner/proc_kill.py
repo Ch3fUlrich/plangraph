@@ -392,13 +392,14 @@ def _test_watchdog():
 
         os.write(2, (f'HUNG {node}\n').encode('utf-8', 'backslashreplace'))
         if token is not None and alive(parent, token[4]):
-            # Stop forks while walking the subtree, including children that called setsid.
+            # Pytest adopts double-forked descendants as a subreaper. Freeze
+            # their tree before killing its root so they cannot race reparenting.
             os.kill(parent, signal.SIGSTOP)
             stopped = {parent: token[4]}
+            freeze_deadline = time.monotonic() + 0.25
             while True:
-                new = _descendants(_scan(), {parent}, {os.getpid()}).items() - stopped.items()
-                if not new:
-                    break
+                procs = _scan()
+                new = _descendants(procs, {parent}, {os.getpid()}).items() - stopped.items()
                 for pid, start in new:
                     if alive(pid, start):
                         try:
@@ -406,6 +407,12 @@ def _test_watchdog():
                         except ProcessLookupError:
                             pass
                 stopped.update(new)
+                if not new and (time.monotonic() >= freeze_deadline or all(
+                    pid not in procs or procs[pid][4] != start or procs[pid][0] in 'TtZX'
+                    for pid, start in stopped.items()
+                )):
+                    break
+                time.sleep(0.01)
             for pid, start in reversed(tuple(stopped.items())):
                 if alive(pid, start):
                     try:

@@ -1,0 +1,2 @@
+- Retry unreadable native review status records without cancelling the run, and allow the spawner's full cancellation grace before retaining a checkout.
+- Reap orphaned pytest test descendants on Linux and identify Rust kernel wait-channel output separately from debugger frames.

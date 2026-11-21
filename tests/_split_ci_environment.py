@@ -138,6 +138,24 @@ def pytest_collection_finish(session):
         _test_deadline(item)
 
 
+def _test_subreaper(enabled=None):
+    import ctypes
+
+    prctl = ctypes.CDLL(None, use_errno=True).prctl
+    prctl.argtypes = (ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong)
+    prctl.restype = ctypes.c_int
+    get_child_subreaper, set_child_subreaper = 37, 36
+    previous = ctypes.c_int()
+    if enabled is None:
+        # A worker adopts its orphaned grandchildren even across setsid().
+        if prctl(get_child_subreaper, ctypes.addressof(previous), 0, 0, 0) != 0:
+            raise OSError(ctypes.get_errno(), 'cannot read pytest child subreaper setting')
+        enabled = 1
+    if prctl(set_child_subreaper, enabled, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), 'cannot set pytest child subreaper')
+    return previous.value
+
+
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_protocol(item, nextitem):
     import faulthandler
@@ -145,6 +163,8 @@ def pytest_runtest_protocol(item, nextitem):
     import time
     config = item.config
     if not hasattr(config, '_pg_deadline_watchdog'):
+        if sys.platform.startswith('linux'):
+            config._pg_previous_subreaper = _test_subreaper()
         helper = Path(__file__).resolve().parents[1] / 'src/plangraph/spawner/proc_kill.py'
         config._pg_deadline_watchdog = subprocess.Popen(
             [sys.executable, str(helper), '--test-watchdog'],
@@ -169,5 +189,7 @@ def pytest_unconfigure(config):
     if watchdog is not None:
         watchdog.stdin.close()
         watchdog.wait(timeout=5)
+    if hasattr(config, '_pg_previous_subreaper'):
+        _test_subreaper(config._pg_previous_subreaper)
     if hasattr(config, '_pg_deadline_stderr'):
         os.close(config._pg_deadline_stderr)

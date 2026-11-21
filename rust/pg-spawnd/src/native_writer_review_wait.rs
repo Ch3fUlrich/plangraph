@@ -10,6 +10,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+// The spawner can spend 20 seconds waiting for its native cancellation marker
+// before escalating. Allow that wait, escalation, and final status publication.
+const CANCEL_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const CANCEL_CONFIRM_TIMEOUT: Duration = Duration::from_secs(40);
+const STATUS_ERROR_LIMIT: u8 = 3;
+
 pub(super) struct ReviewCheckout {
     pub path: std::path::PathBuf,
     pub removable: bool,
@@ -45,15 +51,15 @@ impl Host {
             .stdin(Stdio::null())
             .stdout(stdout.try_clone().map_err(|e| e.to_string())?)
             .stderr(stderr.try_clone().map_err(|e| e.to_string())?);
-        let seconds = match args.first() {
-            Some(&"status") => 5,
-            Some(&"cancel") => 15,
-            _ => 60,
+        let timeout = match args.first() {
+            Some(&"status") => Duration::from_secs(5),
+            Some(&"cancel") => CANCEL_REQUEST_TIMEOUT,
+            _ => Duration::from_secs(60),
         };
         supervise_redirected(
             command,
             &Opts {
-                timeout: Some(Duration::from_secs(seconds)),
+                timeout: Some(timeout),
                 grace: Duration::from_secs(1),
                 ..Opts::default()
             },
@@ -98,39 +104,43 @@ impl Host {
         let start = Instant::now();
         let mut interrupted = None;
         let mut cancel_at = None;
-        let mut status_error: Option<String> = None;
+        let mut status_errors = 0;
         while !terminal(record) {
             let reason = if self.cancelled() {
                 Some("review cancelled")
             } else if start.elapsed() >= timeout {
                 Some("review timed out")
             } else {
-                status_error.as_deref()
+                None
             };
             let verb = if interrupted.is_none() && reason.is_some() {
-                interrupted = reason.map(str::to_owned);
+                interrupted = reason;
                 cancel_at = Some(Instant::now());
                 "cancel"
             } else {
                 "status"
             };
-            if cancel_at.is_some_and(|at| at.elapsed() >= Duration::from_secs(15)) {
+            if cancel_at.is_some_and(|at| at.elapsed() >= CANCEL_CONFIRM_TIMEOUT) {
                 return Err(format!(
                     "{REVIEW_CLEANUP_UNCONFIRMED}: {id}; checkout retained"
                 ));
             }
             match self.review_request(&checkout.path, &[verb, id]) {
-                Ok(updated) if updated["run_id"] == id => *record = updated,
-                response => {
-                    let detail = response.err().unwrap_or_else(|| "unexpected run id".into());
-                    if interrupted.is_some() {
+                Ok(updated) if updated["run_id"] == id => {
+                    *record = updated;
+                    status_errors = 0;
+                }
+                response if verb == "status" => {
+                    status_errors += 1;
+                    if status_errors >= STATUS_ERROR_LIMIT {
+                        let detail = response.err().unwrap_or_else(|| "unexpected run id".into());
                         return Err(format!(
                             "{REVIEW_CLEANUP_UNCONFIRMED}: {id}: {detail}; checkout retained"
                         ));
                     }
-                    status_error = Some(detail);
-                    continue;
                 }
+                // A lost cancel reply can still be followed by a terminal status.
+                _ => {}
             }
             if !terminal(record) {
                 thread::sleep(Duration::from_secs(1));
@@ -146,7 +156,7 @@ impl Host {
             ));
         }
         checkout.removable = true;
-        interrupted.map_or(Ok(()), Err)
+        interrupted.map_or(Ok(()), |reason| Err(reason.into()))
     }
 }
 
@@ -158,14 +168,54 @@ mod tests {
 
     #[test]
     fn review_completion_timeout_and_cancel_own_checkout_until_terminal() {
+        for (mode, requests, kept, error) in [
+            ("exit", "status", false, None),
+            ("timeout", "cancel", false, Some("review timed out")),
+            ("cancel", "cancel", false, Some("review cancelled")),
+            (
+                "kill-incomplete",
+                "cancel",
+                true,
+                Some(REVIEW_CLEANUP_UNCONFIRMED),
+            ),
+        ] {
+            checkout_case(mode, requests, kept, error);
+        }
+    }
+
+    #[test]
+    fn status_errors_are_retried_without_cancelling() {
+        checkout_case("transient", "status status", false, None);
+        checkout_case(
+            "unreadable",
+            "status status status",
+            true,
+            Some(REVIEW_CLEANUP_UNCONFIRMED),
+        );
+    }
+
+    #[test]
+    fn cancellation_waits_past_the_spawners_twenty_second_grace() {
+        checkout_case("slow-cancel", "cancel", false, Some("review timed out"));
+    }
+
+    fn checkout_case(mode: &str, expected_requests: &str, kept: bool, error: Option<&str>) {
         let dir = tempfile::tempdir().unwrap();
         let cli = dir.path().join("fake-review");
         fs::write(
             &cli,
-            r#"import json, pathlib, sys
+            r#"import json, pathlib, sys, time
 verb, run = sys.argv[3:]
 assert pathlib.Path("checkout-marker").is_file()
-pathlib.Path("../request").write_text(verb)
+requests = pathlib.Path("../requests")
+with requests.open("a") as log:
+    print(verb, file=log)
+mode = pathlib.Path.cwd().name
+if verb == "status" and (mode == "unreadable" or
+                        (mode == "transient" and requests.read_text() == "status\n")):
+    raise SystemExit("record temporarily unreadable")
+if verb == "cancel" and mode == "slow-cancel":
+    time.sleep(20.2)
 status = "cancelled" if verb == "cancel" else "completed"
 result = {"run_id": run, "status": status}
 if pathlib.Path("leave-survivors").is_file():
@@ -192,47 +242,36 @@ print(json.dumps(result))
             review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
             python_src: None,
         };
-        for (mode, expected_verb, kept) in [
-            ("exit", "status", false),
-            ("timeout", "cancel", false),
-            ("cancel", "cancel", false),
-            ("kill-incomplete", "cancel", true),
-        ] {
-            let path = root.join(mode);
-            fs::create_dir(&path).unwrap();
-            fs::write(path.join("checkout-marker"), "").unwrap();
-            if mode == "cancel" {
-                fs::write(root.join("cancelled"), "").unwrap();
-            }
-            if kept {
-                fs::write(path.join("leave-survivors"), "").unwrap();
-            }
-            let mut checkout = ReviewCheckout {
-                path: path.clone(),
-                removable: false,
-            };
-            let mut record = json!({"run_id":"run-review","status":"running"});
-            let timeout = if expected_verb == "cancel" && mode != "cancel" {
-                Duration::ZERO
-            } else {
-                Duration::from_secs(10)
-            };
-            let finished = host.finish_review_in(&mut checkout, &mut record, "run-review", timeout);
-            assert_eq!(finished.is_ok(), mode == "exit", "{finished:?}");
-            if kept {
-                assert!(finished
-                    .unwrap_err()
-                    .starts_with(REVIEW_CLEANUP_UNCONFIRMED));
-            }
-            assert_eq!(
-                fs::read_to_string(root.join("request")).unwrap(),
-                expected_verb
-            );
-            drop(checkout);
-            assert_eq!(path.exists(), kept);
-            if mode == "cancel" {
-                fs::remove_file(root.join("cancelled")).unwrap();
-            }
+        let path = root.join(mode);
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("checkout-marker"), "").unwrap();
+        if mode == "cancel" {
+            fs::write(root.join("cancelled"), "").unwrap();
         }
+        if mode == "kill-incomplete" {
+            fs::write(path.join("leave-survivors"), "").unwrap();
+        }
+        let mut checkout = ReviewCheckout {
+            path: path.clone(),
+            removable: false,
+        };
+        let mut record = json!({"run_id":"run-review","status":"running"});
+        let timeout = if matches!(mode, "timeout" | "kill-incomplete" | "slow-cancel") {
+            Duration::ZERO
+        } else {
+            Duration::from_secs(10)
+        };
+        let finished = host.finish_review_in(&mut checkout, &mut record, "run-review", timeout);
+        match error {
+            Some(prefix) => assert!(finished.unwrap_err().starts_with(prefix)),
+            None => assert!(finished.is_ok(), "{finished:?}"),
+        }
+        let requests = fs::read_to_string(root.join("requests")).unwrap();
+        assert_eq!(
+            requests.split_whitespace().collect::<Vec<_>>().join(" "),
+            expected_requests
+        );
+        drop(checkout);
+        assert_eq!(path.exists(), kept);
     }
 }

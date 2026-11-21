@@ -12,7 +12,6 @@ use std::{
 const DEFAULT_SECONDS: u64 = 120;
 
 fn stack(pid: u32) {
-    eprintln!("stack for test process {pid}:");
     #[cfg(target_os = "linux")]
     {
         let mut debugger = Command::new("gdb");
@@ -33,34 +32,50 @@ fn stack(pid: u32) {
         };
         match supervise(debugger, &opts) {
             Ok(dump) => {
+                let has_frames = dump
+                    .output
+                    .split(|&byte| byte == b'\n')
+                    .any(|line| line.starts_with(b"#0 "));
+                if has_frames {
+                    eprintln!("stack for test process {pid}:");
+                }
                 let _ = io::stderr().write_all(&dump.output);
-                if dump.code == Some(0) {
+                if has_frames {
                     return;
                 }
             }
             Err(error) => eprintln!("gdb unavailable: {error}"),
         }
+        eprintln!("user-space stack unavailable for test process {pid}");
         if let Ok(threads) = std::fs::read_dir(format!("/proc/{pid}/task")) {
             for thread in threads.flatten() {
-                let stack = std::fs::read_to_string(thread.path().join("stack"))
-                    .or_else(|_| std::fs::read_to_string(thread.path().join("wchan")));
-                if let Ok(stack) = stack {
+                let tid = thread.file_name();
+                if let Ok(stack) = std::fs::read_to_string(thread.path().join("stack")) {
                     eprintln!(
-                        "thread {}: {}",
-                        thread.file_name().to_string_lossy(),
+                        "thread {} kernel stack: {}",
+                        tid.to_string_lossy(),
                         stack.trim()
+                    );
+                } else if let Ok(channel) = std::fs::read_to_string(thread.path().join("wchan")) {
+                    eprintln!(
+                        "thread {} kernel wait channel: {}",
+                        tid.to_string_lossy(),
+                        channel.trim()
                     );
                 }
             }
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    eprintln!("user-space stack unavailable for test process {pid}");
 }
 
 fn debug_child(cmd: &mut Command) {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
-        // The debugger will be a descendant of the supervisor. This also works with Yama.
+        // Yama permits the named ptracer and its descendants. GDB is launched
+        // by the test's parent, so it inherits that permission.
         unsafe {
             cmd.pre_exec(|| {
                 libc::prctl(libc::PR_SET_PTRACER, libc::getppid(), 0, 0, 0);

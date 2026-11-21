@@ -58,4 +58,17 @@ fn alerts_once_per_host_for_old_live_processes_with_deleted_cwd() {
     );
     fs::remove_dir_all(proc.join("1")).unwrap();
     assert_eq!(run().len(), 1);
+
+    let archived = proc.join("old");
+    fs::rename(proc.join("2"), &archived).unwrap();
+    assert_eq!(run().len(), 1);
+    assert_eq!(fs::read_to_string(state.join("active")).unwrap(), "");
+
+    fs::rename(archived, proc.join("2")).unwrap();
+    let events = run();
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[1]["message"],
+        "FLOW-WATCHDOG: deleted-cwd fixture-host 1 processes"
+    );
 }
