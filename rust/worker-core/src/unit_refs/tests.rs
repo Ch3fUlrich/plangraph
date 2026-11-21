@@ -1,0 +1,207 @@
+//! The unit-file contract: protection over-approximates, the report names only exact paths.
+use super::*;
+
+fn refs_of(text: &str) -> Vec<UnitRef> {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("t.service");
+    fs::write(path, text).unwrap();
+    unit_file_refs(tmp.path(), Path::new("/h")).unwrap()
+}
+fn protected(refs: &[UnitRef], path: &str) -> bool {
+    refs.iter().any(|r| r.path == Path::new(path))
+}
+fn exact(refs: &[UnitRef], path: &str) -> bool {
+    refs.iter().any(|r| r.exact && r.path == Path::new(path))
+}
+
+/// One line per shape the reviews raised, with the worktree it names: each must protect it.
+#[test]
+fn protection_reads_every_piece_of_every_word() {
+    let cases = [
+        ("ExecStart=/bin/sh -c 'cat <\"/wt/app-worktrees/pone/config\"'", "pone"),
+        ("ExecStart=/usr/bin/nice -n5 sh -c 'ROOT=/wt/app-worktrees/ptwo;true'", "ptwo"),
+        ("ExecStart=/bin/sh -c \"/bin/true;/wt/app-worktrees/pthree/run\"", "pthree"),
+        ("ExecStart=/usr/bin/env -- FOO=1 sh -c 'exec /wt/app-worktrees/pfour/run'", "pfour"),
+        ("ExecStart=/usr/bin/env -S 'sh -c \"exec /wt/app-worktrees/pfive/run\"'", "pfive"),
+        ("ExecStart=/bin/bash -O extglob -c 'exec /wt/app-worktrees/psix/run'", "psix"),
+        ("ExecStart=/bin/sh -c '/wt/app-worktrees/pseven/run # comment'", "pseven"),
+        ("ExecStart=/bin/sh -c '(/wt/app-worktrees/peight/run)&&/wt/app-worktrees/pnine/run|cat'", "pnine"),
+        ("ExecStart=:/bin/sh -c 'exec /wt/app-worktrees/pten/run'", "pten"),
+        ("ExecStart = /bin/sh -ce 'exec /wt/app-worktrees/peleven/run'", "peleven"),
+        ("Environment=\"PATH=/a/bin:/wt/app-worktrees/ptwelve/bin\"", "ptwelve"),
+        ("ExecStart=\"/wt/app-worktrees/my pthirteen/bin/run\" --x", "my pthirteen"),
+        ("ExecStart=/bin/sh -c 'exec /wt/app-worktrees/pfourteen/run' sh -ce \"/wt/app-worktrees/pfifteen/c\"", "pfifteen"),
+    ];
+    for (line, name) in cases {
+        let refs = refs_of(&format!("[Service]\n{line}\n"));
+        let tree = PathBuf::from("/wt/app-worktrees").join(name);
+        assert_eq!(
+            unit_names(&refs, &tree, &tree),
+            ["t.service"],
+            "{line}: {refs:?}"
+        );
+    }
+}
+
+#[test]
+fn the_report_names_only_whole_words_and_path_valued_fields() {
+    let refs = refs_of(
+        "[Service]\nExecStart=/wt/app-worktrees/dubone/bin/run --opt /wt/app-worktrees/dubtwo/x\n\
+         WorkingDirectory=\"/wt/app-worktrees/dubthree;blue dir\"\n\
+         ExecStart=/bin/sh -c 'exec /wt/app-worktrees/essone/run'\n\
+         ExecStart=\"/wt/app-worktrees/dubfour;blue/run\"\n\
+         ExecStart=\"/wt/app-worktrees/dubfive; blue/run\"\n\
+         ExecStart=\"/wt/app-worktrees/my dubsix/run\"\n\
+         Environment=A=/wt/app-worktrees/dubseven/x\n",
+    );
+    for path in [
+        "/wt/app-worktrees/dubone/bin/run",
+        "/wt/app-worktrees/dubtwo/x",
+        "/wt/app-worktrees/dubthree;blue dir",
+    ] {
+        assert!(exact(&refs, path), "{path}: {refs:?}");
+    }
+    // Shell text, separators, spaces outside a path field and assignments only protect.
+    for path in [
+        "/wt/app-worktrees/essone/run",
+        "/wt/app-worktrees/dubfour;blue/run",
+        "/wt/app-worktrees/dubfive; blue/run",
+        "/wt/app-worktrees/my dubsix/run",
+        "/wt/app-worktrees/dubseven/x",
+    ] {
+        assert!(!exact(&refs, path), "{path}: {refs:?}");
+    }
+    assert!(protected(&refs, "/wt/app-worktrees/essone/run"));
+    assert!(protected(&refs, "/wt/app-worktrees/dubseven/x"));
+}
+
+#[test]
+fn a_guess_never_reports_a_missing_worktree() {
+    let tmp = tempfile::tempdir().unwrap();
+    let trees = tmp.path().join("app-worktrees");
+    fs::create_dir_all(trees.join("alive")).unwrap();
+    let unit = |name: &str, path: PathBuf, exact: bool| UnitRef {
+        unit: name.into(),
+        path,
+        exact,
+    };
+    let refs = vec![
+        unit("a.service", trees.join("alive/run"), true),
+        unit("b.service", trees.join("gone/run"), true),
+        unit("c.service", trees.join("guess/run"), false),
+        unit("d.service", tmp.path().join("main/run"), true),
+    ];
+    assert_eq!(missing_worktree_refs(&refs), [refs[1].clone()]);
+}
+
+#[test]
+fn the_native_run_layout_is_a_worktree_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    fs::create_dir_all(tmp.path().join("state/runs/run-a/worktree")).unwrap();
+    let unit = |name: &str, path: PathBuf| UnitRef {
+        unit: name.into(),
+        path,
+        exact: true,
+    };
+    let refs = vec![
+        unit("a.service", tmp.path().join("state/runs/run-a/worktree/x")),
+        unit("b.service", tmp.path().join("state/runs/run-b/worktree/x")),
+    ];
+    assert_eq!(missing_worktree_refs(&refs), [refs[1].clone()]);
+}
+
+#[test]
+fn drop_ins_name_their_owner_and_a_missing_directory_names_nothing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let drop_in = dir.join("liveness-router.service.d");
+    fs::create_dir_all(&drop_in).unwrap();
+    fs::write(
+        drop_in.join("o.conf"),
+        "[Service]\nWorkingDirectory=/wt/live-liveness\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("md-sync.service"),
+        "[Service]\n# ExecStart=/ignored\nExecStart=%h/code/main/run\n",
+    )
+    .unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    assert!(refs
+        .iter()
+        .any(|r| r.unit == "liveness-router.service" && r.path == Path::new("/wt/live-liveness")));
+    assert!(refs
+        .iter()
+        .any(|r| r.unit == "md-sync.service" && r.path == Path::new("/h/code/main/run")));
+    assert!(!protected(&refs, "/ignored"));
+    assert!(unit_file_refs(&tmp.path().join("absent"), Path::new("/h"))
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn a_single_valued_path_field_keeps_its_whole_value_with_spaces() {
+    let refs = refs_of("[Service]\nWorkingDirectory=/wt/app-worktrees/team blue\n");
+    assert!(exact(&refs, "/wt/app-worktrees/team blue"), "{refs:?}");
+    let tree = Path::new("/wt/app-worktrees/team blue");
+    assert_eq!(unit_names(&refs, tree, tree), ["t.service"]);
+    // Quoted, or with a systemd prefix, it is the same one value.
+    let refs = refs_of("[Service]\nEnvironmentFile=-\"/wt/app-worktrees/env blue/e\"\n");
+    assert!(exact(&refs, "/wt/app-worktrees/env blue/e"), "{refs:?}");
+    // A list field names one path per word.
+    let refs =
+        refs_of("[Service]\nReadWritePaths=/wt/app-worktrees/ellone /wt/app-worktrees/elltwo\n");
+    assert!(
+        exact(&refs, "/wt/app-worktrees/ellone") && exact(&refs, "/wt/app-worktrees/elltwo"),
+        "{refs:?}"
+    );
+}
+
+#[test]
+fn the_percent_escape_is_a_literal_percent_in_a_path() {
+    let refs = refs_of("[Service]\nExecStart=/wt/app-worktrees/go%%ne/run\n");
+    assert!(exact(&refs, "/wt/app-worktrees/go%ne/run"), "{refs:?}");
+    // An unresolved specifier still names nothing.
+    let refs = refs_of("[Service]\nExecStart=/wt/app-worktrees/%n/run\n");
+    assert!(
+        !refs.iter().any(|r| r.path.to_string_lossy().contains("%n")),
+        "{refs:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_parent_is_not_a_missing_worktree() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let trees = tmp.path().join("app-worktrees");
+    fs::create_dir_all(trees.join("alive")).unwrap();
+    let refs = vec![UnitRef {
+        unit: "a.service".into(),
+        path: trees.join("alive/run"),
+        exact: true,
+    }];
+    fs::set_permissions(&trees, fs::Permissions::from_mode(0o000)).unwrap();
+    let reported = missing_worktree_refs(&refs);
+    fs::set_permissions(&trees, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(reported.is_empty(), "{reported:?}");
+}
+
+#[test]
+fn a_decoded_control_byte_is_not_confused_with_a_percent_escape() {
+    let refs = refs_of("[Service]\nExecStart=/wt/app-worktrees/a\\x01b/run\n");
+    assert!(exact(&refs, "/wt/app-worktrees/a\u{1}b/run"), "{refs:?}");
+    assert!(!protected(&refs, "/wt/app-worktrees/a%b/run"), "{refs:?}");
+}
+
+#[test]
+fn percent_percent_before_h_is_a_literal_percent_not_the_home_specifier() {
+    let refs = refs_of("[Service]\nExecStart=/wt/app-worktrees/release%%home/run\n");
+    assert!(
+        exact(&refs, "/wt/app-worktrees/release%home/run"),
+        "{refs:?}"
+    );
+    // %h is still the home directory, also right after a literal percent.
+    let refs = refs_of("[Service]\nExecStart=%h/code/run %%%h/x\n");
+    assert!(exact(&refs, "/h/code/run"), "{refs:?}");
+}

@@ -1,13 +1,32 @@
 use pg_worker_core::{
     merged_sweep::{self, Options},
     run::record_io,
+    sweep_facts,
 };
 use std::{
     env, fs, io,
     path::PathBuf,
     time::{Duration, SystemTime},
 };
+/// Fleet check: list every user unit whose worktree path no longer exists, naming the unit.
+fn check_units() -> io::Result<bool> {
+    let home = env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
+    let refs =
+        sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, &PathBuf::from(home))?;
+    let missing = sweep_facts::missing_worktree_refs(&refs);
+    for r in &missing {
+        println!("unit-worktree-missing {}: {}", r.unit, r.path.display());
+    }
+    Ok(missing.is_empty())
+}
 fn run() -> io::Result<()> {
+    if env::args().nth(1).as_deref() == Some("--check-units") {
+        return if check_units()? {
+            Ok(())
+        } else {
+            Err(io::Error::other("a user unit names a missing worktree"))
+        };
+    }
     let (mut repo, mut roots, mut pins) = (None, Vec::new(), None);
     let mut state = env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state/plangraph"));
     let mut reader = env::var_os("PG_SWEEP_CLAIMS_READER").map(PathBuf::from);
