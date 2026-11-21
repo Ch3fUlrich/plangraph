@@ -29,6 +29,12 @@ skipped and reported in status rather than aborting other run checks.
 for routerctl status to include. Routerctl lives outside this repository; its
 host integration must invoke this command or read `watchdog/status.txt`.
 
+A local planned run still waiting for its first dispatch is marked
+`stalled_no_leg` after ten minutes. Set `PLANGRAPH_WATCHDOG_NO_LEG_SECONDS` to
+change the threshold. The watchdog queues one alert to the parent or to
+routing when the parent is unknown. Runs in the admission queue continue to
+use the independent queue-expiry rule.
+
 The finished-child rule requires exit age and parent idle age over five minutes,
 with no parent activity after completion. The claim rule requires over thirty
 minutes idle and no live run. The next two-minute tick detects an eligible stall;

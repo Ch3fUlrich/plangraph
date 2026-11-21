@@ -100,7 +100,7 @@ def _resolve_launch(
 
 def is_terminal(status):
     """Only known final run states are terminal; unknown states remain visible."""
-    return status in ('completed', 'failed', 'cancelled', 'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped')
+    return status in ('completed', 'failed', 'cancelled', 'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped', 'stalled_no_leg')
 
 
 @dataclass
@@ -492,6 +492,13 @@ class SpawnerRunner:
             self._cargo_leases = getattr(self, '_cargo_leases', {})
             self._cargo_leases[job_id] = await asyncio.to_thread(cargo_lease)
             try:
+                if prompt_record is not None:
+                    _, spawn_record, save = prompt_record
+                    if isinstance(spawn_record.get('plan'), dict) and not spawn_record.get('dispatch_started'):
+                        spawn_record['dispatch_started'] = True
+                        save(spawn_record)
+                    if spawn_record.get('status') == 'stalled_no_leg':
+                        raise RuntimeError('first dispatch expired before launch')
                 proc = await self.process_factory(
                     resolved_exe,
                     *cmd[1:],
@@ -866,10 +873,10 @@ def spawn_service(*args, **kwargs):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
                         meta = attempt.get('leg')
                         attempt['skip_reason'] = redact(failure_reason(job, harness=meta.get('harness') if isinstance(meta, dict) else None))
-            terminal = record.get('ended') is not None and record.get('status') != 'running'
+            terminal = record.get('ended') is not None and record.get('status') not in ('running', 'stalled_no_leg')
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
-            if not retry:
-                super()._save(record)
+            if not retry and super()._save(record) is False:
+                return
             changed = False
             if terminal:
                 if 'completion' not in record:
@@ -917,6 +924,8 @@ def spawn_service(*args, **kwargs):
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
+                if record.get('status') == 'stalled_no_leg':
+                    continue  # The watchdog outbox owns delivery for this terminal state.
                 recipients = ['parent', 'keeper', 'verdict'] if record.get('role') == 'review' else ['parent', 'keeper']
                 markers = [r + '.delivered' for r in recipients]
                 if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):

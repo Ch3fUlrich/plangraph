@@ -67,6 +67,7 @@ class SpawnService(SeatSpawnMixin):
             if record.get('tree_sha') is None:
                 record.setdefault('tree_absent', 'spawner code checkout identity unavailable at process startup')
         from .private_io import atomic_write_private
+        from .notify import inbox_lock
         from .runner import redact
         from .seat_artifact import publish
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
@@ -131,7 +132,19 @@ class SpawnService(SeatSpawnMixin):
         for target in [record, *record.get('attempts', [])]:
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
-        atomic_write_private(self._path(record['run_id']), json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2))
+        path = self._path(record['run_id'])
+        payload = json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2)
+        with inbox_lock(path):
+            if isinstance(record.get('plan'), dict) and not record.get('pid'):
+                try:
+                    stored = json.loads(read_text_retry(path, attempts=1))
+                except (FileNotFoundError, ValueError):
+                    stored = None
+                if isinstance(stored, dict) and stored.get('status') == 'stalled_no_leg':
+                    record.clear()
+                    record.update(stored)
+                    return False
+            atomic_write_private(path, payload)
         publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)

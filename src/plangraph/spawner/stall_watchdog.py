@@ -39,6 +39,10 @@ def tick(runs, claims, activity, *, now=None, deliver=None, state=None, dry_run=
         except Exception as exc:
             findings.append(dict(rule='stuck-watch-error', reason=type(exc).__name__))
     for run in runs:
+        if run.get('status') == 'stalled_no_leg':
+            if '_no_leg_finding' in run:
+                findings.append(run['_no_leg_finding'])
+            continue
         if state is not None:
             finding = probe_run(state, run, now, dry_run=dry_run or (stuck and hung is None and run.get('status') == 'running') or (budget is not None and budget[0] <= 0), hung=hung)
             if finding:
@@ -120,8 +124,28 @@ def read_runs(state, *, dry_run=False):
     """Read run snapshots without expiry, diagnostics writes or delivery."""
     return _read_runs(state, dry_run=dry_run)
 
+def no_leg_finding(record, now):
+    """Require a planned run and affirmative absence of a dispatched attempt."""
+    if (record.get('status') != 'running' or record.get('ended') is not None
+            or record.get('run_kind') == 'native-codex' or record.get('overflow_remote')
+            or record.get('pid') or record.get('job_id') or record.get('dispatch_started')
+            or not isinstance(record.get('plan'), dict)):
+        return None
+    attempts = record.get('attempts')
+    if not isinstance(attempts, list) or any(
+            not isinstance(a, dict) or a.get('status') != 'skipped' for a in attempts):
+        return None
+    started = record.get('started')
+    limit = max(1, probe_setting('PLANGRAPH_WATCHDOG_NO_LEG_SECONDS', 600, 86400))
+    if type(started) in (int, float) and 0 <= started <= now - limit:
+        parent = record.get('parent_session')
+        return dict(rule='stalled_no_leg', kind='alert', run_id=record['run_id'],
+                    recipient=parent if isinstance(parent, str) and parent else 'routing',
+                    item_key=record.get('item_key'), stalled_at=started + limit)
+
+
 def sweep_runs(state, *, dry_run=False):
-    """Expire abandoned queues and report corrupt records during watchdog ticks."""
+    """Expire abandoned queues and detect runs that stalled before dispatch."""
     return _read_runs(state, dry_run=dry_run, sweep=True)
 
 def _read_runs(state, *, dry_run=False, sweep=False):
@@ -134,16 +158,32 @@ def _read_runs(state, *, dry_run=False, sweep=False):
             record = json.loads(read_text_retry(path))
             if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
                 raise ValueError('invalid run record')
-            expired = _expire_queue(record, time.time()) if sweep else record
-            if expired != record and not dry_run:
-                with inbox_lock(path):
-                    record = json.loads(read_text_retry(path))
-                    if not isinstance(record, dict) or not isinstance(record.get('run_id'), str):
-                        raise ValueError('invalid run record')
-                    expired = _expire_queue(record, time.time())
-                    if expired != record:
-                        atomic_write_private(path, json.dumps(expired, indent=2))
-            record = expired
+            if sweep:
+                now = time.time()
+                updated = _expire_queue(record, now)
+                no_leg = no_leg_finding(updated, now)
+                if (updated != record or no_leg) and not dry_run:
+                    with inbox_lock(path):
+                        record = json.loads(read_text_retry(path))
+                        if not isinstance(record, dict) or record.get('run_id') != path.parent.name:
+                            raise ValueError('invalid run record')
+                        now = time.time()
+                        updated = _expire_queue(record, now)
+                        no_leg = no_leg_finding(updated, now)
+                        if no_leg:
+                            if deliver_event(state, no_leg, now=now, budget=_budget.get()):
+                                updated = dict(updated, status='stalled_no_leg', reason='stalled_no_leg',
+                                               ended=now, exit_code=6)
+                            else:
+                                no_leg = None
+                        if updated != record:
+                            atomic_write_private(path, json.dumps(updated, indent=2))
+                elif no_leg:
+                    updated = dict(updated, status='stalled_no_leg', reason='stalled_no_leg',
+                                   ended=now, exit_code=6)
+                record = updated
+                if no_leg:
+                    record['_no_leg_finding'] = no_leg
             completion = record.get('completion') if isinstance(record.get('completion'), dict) else {}
             if completion.get('parent_session') and not record.get('parent_session'):
                 record['parent_session'] = completion['parent_session']
@@ -216,9 +256,11 @@ def deliver_event(state, event, *, now=None, interval=None, budget=None):
 
     An unacknowledged completion survives ticks and process restarts. A still
     stalled parent is re-alerted only after the configured interval.
+    Return true when the event is queued or its one-time stamp already exists.
     """
     from plangraph.spawner.private_io import atomic_write_private
-    if event.get('kind') == 'completion':
+    once = event.get('kind') == 'completion' or event.get('rule') == 'stalled_no_leg'
+    if once:
         event = dict(event, event_id=hashlib.sha256(json.dumps(
             [event.get('run_id'), event.get('rule'), event.get('cancelled'),
              event.get('episode')]).encode()).hexdigest())
@@ -233,7 +275,7 @@ def deliver_event(state, event, *, now=None, interval=None, budget=None):
                     path.unlink(missing_ok=True)
         return
     identity = {k: event.get(k) for k in ('rule', 'run_id', 'item_key', 'kind', 'recipient')}
-    if event.get('kind') == 'completion':
+    if once:
         identity['event_id'] = event['event_id']
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
     now = time.time() if now is None else now
@@ -242,8 +284,8 @@ def deliver_event(state, event, *, now=None, interval=None, budget=None):
     count = 0
     previous = _read_state(state, stamp, stamp=True)
     if previous is not None:
-        if event.get('kind') == 'completion':
-            return
+        if once:
+            return True
         count = previous.get('count', 1)
         if event.get('rule') == 'finished-child':
             interval = min(300 * 2 ** min(count - 1, 4), 3600)
@@ -259,6 +301,7 @@ def deliver_event(state, event, *, now=None, interval=None, budget=None):
     if event.get('rule') == 'run-silent':
         alert['kind'] = 'stall'
     atomic_write_private(stamp, json.dumps(alert))
+    return True
 
 def flush_outbox(state, command, *, run=subprocess.run):
     """Send JSON on stdin to the host event bridge; remove only on success."""
