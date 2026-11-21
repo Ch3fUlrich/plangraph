@@ -638,11 +638,12 @@ def windows_commands(workflow_text):
         raise MergeBatchError("tests.yml has no Windows job steps (rust-windows)") from exc
 
     commands = []
+    test_prefixes = ("cargo test ", "python ../tools/preflight.py --cargo-test ")
     try:
         for step in steps:
             value = step.get("run", "")
             commands.extend(shlex.split(line) for line in value.splitlines()
-                            if line.lstrip().startswith("cargo test "))
+                            if line.lstrip().startswith(test_prefixes))
     except (AttributeError, TypeError, ValueError) as exc:
         raise MergeBatchError(f"invalid run step in the Windows job of tests.yml: {exc}") from exc
     if not commands:

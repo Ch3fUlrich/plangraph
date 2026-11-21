@@ -49,8 +49,12 @@ def state(root, base, head, branch="batch/t"):
 
 
 def test_the_windows_selection_is_the_one_the_ci_windows_job_runs():
-    assert land.windows_commands(WORKFLOW) == [["cargo", "test", "-p", "pg-spawnd"],
-                                               ["cargo", "test", "-p", "pg-worker-core"]]
+    prefix = ["python", "../tools/preflight.py", "--cargo-test", "-p"]
+    commands = land.windows_commands(WORKFLOW)
+    assert commands == [prefix + ["pg-spawnd"], prefix + ["pg-worker-core"]]
+    script = land.windows_script("train.bundle", HEAD, commands, 20)
+    assert "python ../tools/preflight.py --cargo-test -p pg-spawnd --no-fail-fast" in script
+    assert "python ../tools/preflight.py --cargo-test -p pg-worker-core --no-fail-fast" in script
 
 
 def test_a_workflow_without_the_windows_job_is_an_error():
