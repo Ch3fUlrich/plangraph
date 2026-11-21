@@ -140,7 +140,7 @@ configuration; unmapped code selects a bounded smoke set (tests naming its direc
 at most 12, plus `tests/test_affected_tests.py`), and CI/main keep the full suite; documentation, `changelog.d/` fragments,
 build artifacts, and `.md`/`.rst`/`.txt` files no test names, select no tests. Under `docs/` and `status/` only documentation files (`.md`, `.rst`, images) select no tests; any other file there (`docs/conf.py`, `status/x.toml`) goes through the normal mapping. Do not bypass a conservative fallback on PRs.
 Pass `--head <revision>` for a committed-only comparison, excluding staged,
-worktree and untracked changes; omit it to include checkout changes.
+worktree and untracked changes; omit it to include checkout changes. The selector puts the tested checkout's `src/` before inherited `PYTHONPATH` entries for pytest.
 Reproduce speed measurements with `bash tools/measure-test-speed.sh both HEAD`;
 the fixed runner.py sample does not modify files, and the full run uses a 6 GiB
 systemd user scope. Use `affected` or `full` to measure each separately.

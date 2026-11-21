@@ -241,14 +241,14 @@ def _memory_access():
         return 'fail', 'og-memory probe unavailable'
     success = b'HealthOk AuthenticatedReadOk plangraph HTTP 0.13'
     if result.returncode == 0 and result.stdout.strip() == success and not result.stderr:
-        return 'pass', success.decode()
+        return 'pass', success.decode('ascii')
     reason = result.stderr.strip()
     if result.returncode == 1 and not result.stdout and reason in {
         b'HttpUnconfigured', b'HttpConfigurationUnavailable', b'HealthUnavailable',
         b'HealthTimeout', b'WrongGraph', b'MissingHub', b'Unauthorized', b'Forbidden',
         b'UnsupportedApi', b'ReadUnavailable', b'ReadTimeout',
     }:
-        return 'fail', reason.decode()
+        return 'fail', reason.decode('ascii')
     return 'fail', 'unexpected og-memory probe response'
 
 

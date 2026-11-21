@@ -597,6 +597,8 @@ def main(root=None):
         except (OSError, subprocess.SubprocessError):
             print('FAIL test-env: cannot discover Git repository bindings', file=sys.stderr)
             return 1
+        env["PYTHONPATH"] = os.pathsep.join(
+            part for part in (str(root / "src"), env.get("PYTHONPATH")) if part)
         start = time.monotonic()
         if args.collect_only:
             env.pop("PYTEST_SHARD", None)
