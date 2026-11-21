@@ -874,6 +874,8 @@ def spawn_service(*args, **kwargs):
             if terminal:
                 if 'completion' not in record:
                     record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
+                    if record.get('role') == 'review' and record['completion'].get('head_sha'):
+                        record.setdefault('head_sha', record['completion']['head_sha'])
                     if record.get('status') == 'needs_input':
                         record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                     changed = True

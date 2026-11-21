@@ -224,7 +224,7 @@ def read_record_identity(seat_dir, key=None):
         raise ValueError("cannot read record identity")
     if key is not None and "item_key" in record and record["item_key"] != key:
         raise ValueError("record item_key does not match --key")
-    return {"item_key": record["item_key"]} if "item_key" in record else {}
+    return {field: record[field] for field in ("item_key", "head_sha") if field in record}
 
 
 def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
@@ -265,12 +265,15 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
     writer_families = parse_writer_families(args.writer_family)
-    from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
+    paired = (args.seat_dir / "evidence.json").exists()
+    from_record = (not paired or args.head) and (args.seat_dir / "record.json").exists()
     if from_record:
         deadline = clock() + record_wait
         while True:
             try:
-                read_record_identity(args.seat_dir, args.key)
+                identity = read_record_identity(args.seat_dir, args.key)
+                if paired and not identity.get("head_sha"):
+                    raise ValueError("--head only for record seats bound to a checkout head")
                 evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
                 break
             except ValueError as exc:
