@@ -107,15 +107,21 @@ def head_writer_families(card):
         return []
     _check_diff_ref(ref)
     import subprocess
-    try:
-        proc = subprocess.run(
-            ["git", "-C", ref["repo"], "log", "-1", "--no-color", "--format=%(trailers:key=Writer,valueonly,unfold)", ref["head"], "--"],  # "--": head is a revision, never a path
-            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30, check=False)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: {type(exc).__name__}") from None
-    if proc.returncode != 0:
+
+    def git(*args):
+        try:
+            return subprocess.run(["git", "-C", ref["repo"], *args], stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace", timeout=30, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: {type(exc).__name__}") from None
+    # One commit: a path, a range (a..b), a negation or a missing revision is not a head to read.
+    sha = git("rev-parse", "--verify", "--quiet", "--end-of-options", ref["head"] + "^{commit}")
+    resolved = sha.stdout.strip()
+    if sha.returncode != 0 or len(resolved) not in (40, 64) or not all(c in "0123456789abcdef" for c in resolved):
         # An unreadable head is not an absent trailer: the head's writer could not be excluded.
+        raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: not a single commit")
+    proc = git("log", "-1", "--no-color", "--format=%(trailers:key=Writer,valueonly,unfold)", resolved, "--")
+    if proc.returncode != 0:
         raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: git exit {proc.returncode}")
     out = proc.stdout
     # "Writer: <model> <session> (<note>)": the model is the first word.

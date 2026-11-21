@@ -372,10 +372,11 @@ def test_seat_refusal_keeps_the_skip_list_in_its_own_field(tmp_path, monkeypatch
     assert record["error"] == "no eligible leg" and record["skipped"] == list(skipped)
 
 
-def test_head_that_is_a_tracked_filename_is_not_read_as_a_commit(tmp_path, monkeypatch):
+@pytest.mark.parametrize("head", ["f.txt", "HEAD..HEAD", "HEAD~1..HEAD", "HEAD...HEAD", "HEAD^@"])
+def test_head_that_is_not_a_single_commit_is_refused(tmp_path, monkeypatch, head):
     from plangraph.planner.seats import head_writer_families
     card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
-    card["diff_ref"]["head"] = "f.txt"   # a tracked path whose last commit carries a Writer trailer
+    card["diff_ref"]["head"] = head   # a tracked path, a range or a negation: never a commit to read
     with pytest.raises(SpawnRefused, match="cannot read the Writer trailer"):
         head_writer_families(card)
 
@@ -390,3 +391,29 @@ def test_flag_and_review_of_families_are_both_recorded(tmp_path, monkeypatch):
                        given_writer_families=["openai"], writer_family="openai"))
     assert service._given_writers(CARD, "review", ["mimo"], run_id) == ["mimo", "openai"]
     assert service._given_writers(CARD, "review", ["mimo"], None) == ["mimo"]
+
+
+@pytest.mark.parametrize("dispatch", [False, True])
+def test_flag_review_of_and_trailer_families_all_reach_the_spawned_record(tmp_path, monkeypatch, dispatch):
+    import asyncio
+    from registry_route_util import _Runner
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.runner import spawn_service as DispatchService
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    service = (DispatchService if dispatch else SpawnService)(_Runner(), state=tmp_path / "state")
+    run_id = "run-" + "d" * 12
+    service._save(dict(run_id=run_id, role="implement", status="completed", started=1.0, ended=2.0,
+                       attempts=[], stdout_tail="", exit_code=0, cwd=str(tmp_path),
+                       given_writer_families=["openai"], writer_family="openai"))
+    plan = SpawnPlan((next(l for l in DEFAULT_LEGS if l.family == "qwen"),), (), "test", (), ())
+    seen = []
+    monkeypatch.setattr(service, "_route", lambda *a, **kw: seen.append(a) or plan)
+    monkeypatch.setattr(service, "_leg_prompt", lambda *a, **kw: "review")
+
+    async def identity(plan, **kwargs):
+        return plan
+    monkeypatch.setattr("plangraph.spawner.resolver.plan_for_launch_async", identity)
+    record = asyncio.run(service.spawn(card=card, role="review", writer_families=["mimo"],
+                                       review_of=run_id, dry_run=True))
+    assert record["given_writer_families"] == ["mimo", "openai", "gemini-4-hydrogen-high"]
