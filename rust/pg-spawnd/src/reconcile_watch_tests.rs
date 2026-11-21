@@ -257,3 +257,60 @@ fn reconcile_warn_retry_key_and_attach_noop() {
     w.advance(&mut c, &root, &mut record, 1, 144_000).unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn reconcile_failed_warning_save_does_not_block_empty_probe_or_max_s() {
+    for empty in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let mut record = RunRecord::create(
+            root.path(),
+            "run-test",
+            "local",
+            json!({"role":"implement","proc":{"pid":123}})
+                .as_object()
+                .unwrap()
+                .clone(),
+            Status::Running,
+            1.0,
+        )
+        .unwrap();
+        let mut watch = Watch::new(
+            Role::Implement,
+            Limits::default(),
+            0,
+            (0, Some(200)),
+            policy(),
+            false,
+        );
+        watch.attach(&mut record, 1).unwrap();
+        let path = record.path().to_path_buf();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let mut child = Fake::default();
+        assert!(watch
+            .advance(&mut child, root.path(), &mut record, 1, 144_000)
+            .is_err());
+        assert!(watch
+            .advance(&mut child, root.path(), &mut record, 1, 190_000)
+            .is_err());
+        assert_eq!(child.term, 0);
+
+        if empty {
+            // Restore storage before the next tick so it can persist settlement.
+            std::fs::remove_dir(&path).unwrap();
+            std::fs::write(&path, bytes).unwrap();
+            child.empty = true;
+            assert!(matches!(
+                watch.advance(&mut child, root.path(), &mut record, 1, 195_000),
+                Ok(Step::Ended("ended_unobserved"))
+            ));
+        } else {
+            assert!(matches!(
+                watch.advance(&mut child, root.path(), &mut record, 1, 200_000),
+                Ok(Step::Held)
+            ));
+        }
+        assert_eq!(child.term, usize::from(!empty));
+    }
+}
