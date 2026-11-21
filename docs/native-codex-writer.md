@@ -45,7 +45,9 @@ at the head; `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
 line must be canonical, a `HEAD:` line naming another head or an ACCEPT that names
 no changed file is `no_verdict`, retried twice, then the run ends BLOCKED with
 exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.
-REQUEST_CHANGES resumes the same session with the review text; later rounds review
+REQUEST_CHANGES resumes the same session with a pointer to a private brief
+in the run directory. The file preserves the original brief byte for byte
+before the follow-up instructions and review text. Later rounds review
 the delta from the previous head. The HIGH+MED count of each round goes to
 `round_counts`; `native_writer::round_stop` applies the round progress rule of
 `round_progress.rs` to the round just finished and caps the run at that file's

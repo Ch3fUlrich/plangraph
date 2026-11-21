@@ -4,10 +4,8 @@ use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{BufRead, BufReader, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    time::Duration,
+    process::Command,
 };
 
 /// Lead writer leg cx-gpt-6.2-sol-medium (operator D-6397).
@@ -217,108 +215,8 @@ impl Driver for Host {
         self.git(&["merge", "--no-edit", "origin/main"])?;
         self.git(&["rev-parse", "origin/main"])
     }
-    fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
-        // The caller PATH recorded at admission selects Codex for every launch and resume.
-        let codex = crate::native_writer_tool::resolve(self.tool_path.as_ref(), &self.cwd)?;
-        let directory = self
-            .record_path
-            .parent()
-            .ok_or("record directory missing")?;
-        let log_path = directory.join("native.log");
-        let log = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .map_err(|e| e.to_string())?;
-        let log_start = log.metadata().map_err(|e| e.to_string())?.len();
-        let mut command = self.command(codex);
-        command.arg("exec");
-        if let Some(id) = session {
-            command.args(["resume", id]);
-        }
-        command
-            .env(
-                "CARGO_TARGET_DIR",
-                pg_worker_core::cargo_cache::shared_cache_roots()
-                    .map_err(|e| e.to_string())?
-                    .remove(0),
-            )
-            .env("CARGO_INCREMENTAL", "0")
-            .args(["--json"])
-            .args(model_args(&self.effort))
-            .args([
-                "-c",
-                "approval_policy=never",
-                "-c",
-                &format!(
-                    "sandbox_mode=\"{}\"",
-                    pg_worker_core::host_readiness::WRITER_SANDBOX
-                ),
-                "-o",
-            ])
-            .arg(directory.join("native.last"))
-            .arg("-")
-            .current_dir(&self.cwd)
-            .stdin(Stdio::piped())
-            .stdout(log.try_clone().map_err(|e| e.to_string())?)
-            .stderr(log);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        let mut child = command.spawn().map_err(|e| e.to_string())?;
-        let payload = format!("{prompt}\nReview directory: {}\n", self.reviews.display());
-        let mut stdin = child.stdin.take().ok_or("writer stdin missing")?;
-        // A reader failure or disk probe failure must terminate the child too.
-        let result = (|| {
-            stdin
-                .write_all(payload.as_bytes())
-                .map_err(|e| e.to_string())?;
-            drop(stdin);
-            loop {
-                if self.free()? < 2 {
-                    return Err("disk_low: under 2 GB stop floor".into());
-                }
-                if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                    if !status.success() {
-                        return Err(format!("codex failed: {status}"));
-                    }
-                    break;
-                }
-                std::thread::sleep(Duration::from_secs(1));
-            }
-            let mut log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
-            log.seek(SeekFrom::Start(log_start))
-                .map_err(|e| e.to_string())?;
-            let mut completed = false;
-            let mut thread_id = session.map(str::to_owned);
-            for line in BufReader::new(log).lines() {
-                let line = line.map_err(|e| e.to_string())?;
-                let Ok(event) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                if event["type"] == "turn.completed" {
-                    completed = true;
-                }
-                if event["type"] == "thread.started" {
-                    thread_id = event["thread_id"].as_str().map(str::to_owned);
-                }
-            }
-            if !completed {
-                return Err("codex ended without a result line".into());
-            }
-            thread_id.ok_or_else(|| "codex did not report a session id".into())
-        })();
-        if result.is_err() {
-            #[cfg(unix)]
-            unsafe {
-                libc::killpg(child.id() as i32, libc::SIGKILL);
-            }
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        result
+    fn execute(&mut self, session_id: Option<&str>, prompt: &str) -> Result<String, String> {
+        session::execute(self, session_id, prompt)
     }
     fn skill(&mut self, name: &str) -> Result<String, String> {
         let shown = self
@@ -502,6 +400,8 @@ mod base;
 mod context;
 #[path = "native_writer_review.rs"]
 mod review;
+#[path = "native_writer_session.rs"]
+mod session;
 use review::review_cli;
 #[cfg(test)]
 use review::{review_run_text, review_verdict};
