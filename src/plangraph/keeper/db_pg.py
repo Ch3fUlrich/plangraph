@@ -312,7 +312,10 @@ def migrate(raw, schema: str) -> list:
     raw.execute("BEGIN")
     try:
         raw.execute("SELECT pg_advisory_xact_lock(%s, hashtext(%s))", (_MIGRATE_LOCK, schema))
-        raw.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        exists = raw.execute("SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = %s)",
+                             (schema,)).fetchone()[0]
+        if not exists:
+            raw.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         raw.execute(f'SET search_path TO "{schema}"')
         raw.execute(schema_pg.BOOTSTRAP)
         have = {row[0] for row in raw.execute("SELECT version FROM schema_migrations")}

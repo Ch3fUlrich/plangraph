@@ -639,6 +639,8 @@ The keeper writes no backups itself; operators leave ad-hoc copies (`backup-pre-
 - Opt-in keeper hook (default off), in `keeper.json`: `"backup_prune": {"enabled": false, "dir": "<path>", "keep": 10, "daily_days": 7, "interval_s": 21600}`. When `enabled`, the daemon prunes (apply) once after startup and then every `interval_s` on a daemon thread that stops on shutdown; errors go to stderr and never stop the keeper. `enabled` without `dir` is a config error. If startup fails before the shutdown thread exists, `daemon.run()` independently attempts to stop the reaper and close the socket under `suppress(Exception)`, preserving the original startup error even if cleanup raises.
 - Alternative to the hook: run `pg admin prune-backups --dir DIR --apply` from a Semaphore playbook or cron job.
 
+For a Postgres schema advance, use the [migration-first keeper restart](keeper-postgres.md#schema-and-migrations) on the keeper host.
+
 ## Placement rules migration-gates
 Migration 11 requires operator GO naming the reviewed SHA and scope, verified
 backup and disposable-schema rehearsal before application through the migrate role.

@@ -1,6 +1,7 @@
 """Plumbing for tools/merge_batch.py: git/gh subprocess wrappers, batch state files, PR records."""
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -101,6 +102,40 @@ def items_in(text):
         if match.group(1) not in found:
             found.append(match.group(1))
     return found
+
+
+def keeper_migration(st):
+    """Read migration versions from the frozen Git trees without executing branch code."""
+    path = "src/plangraph/keeper/schema_pg.py"
+    base, head, cwd = st.get("base_head"), st["head"], st["worktree"]
+    if not base:
+        raise MergeBatchError("batch has no saved base head for keeper migration detection; rebuild the batch")
+    if not git("diff", "--name-only", base, head, "--", path, cwd=cwd).stdout:
+        return None
+
+    def latest(rev):
+        if not git("ls-tree", rev, "--", path, cwd=cwd).stdout:
+            return 0
+        try:
+            tree = ast.parse(git("show", f"{rev}:{path}", cwd=cwd).stdout)
+            registry, = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                         and any(isinstance(target, ast.Name) and target.id == "MIGRATIONS"
+                                 for target in node.targets)]
+            versions = [entry.args[0].value for entry in registry.elts
+                        if isinstance(entry, ast.Call) and isinstance(entry.func, ast.Name)
+                        and entry.func.id == "Migration"]
+            if (not versions or len(versions) != len(registry.elts)
+                    or any(type(version) is not int for version in versions)
+                    or versions != list(range(1, len(versions) + 1))):
+                raise ValueError("migration versions must be consecutive from 1")
+            return versions[-1]
+        except (SyntaxError, AttributeError, IndexError, ValueError) as exc:
+            raise MergeBatchError(f"keeper migration version is unreadable at {rev}: {exc}") from None
+
+    previous, current = latest(base), latest(head)
+    if current < previous:
+        raise MergeBatchError(f"keeper migration regressed from {previous} to {current}")
+    return current if current > previous else None
 
 
 # --- state: <git common dir>/merge-batch/<name>.json (same file from every worktree) ---------

@@ -7,6 +7,7 @@ when only the local-admin commands are used, and so tests can monkeypatch it.
 from __future__ import annotations
 
 import os
+import stat
 import sys
 
 from . import auth, config as config_mod, db as kdb
@@ -181,8 +182,38 @@ def _cmd_init(args, cfg) -> int:
 def _cmd_migrate(args, cfg) -> int:
     """Bring the schema to the current version (Postgres runs the pending migrations)."""
     postgres = kdb.select_backend(cfg.db_options.get("backend")) == "postgres"
-    _open(cfg, create=postgres).close()      # SQLite upgrades on every open; Postgres migrates here
+    if args.dsn_file:
+        if not postgres:
+            raise ValueError("a migration DSN requires the Postgres backend")
+        opts = {**cfg.db_options, "dsn": _migration_dsn(args.dsn_file)}
+        kdb.open_db(cfg.db, create=True, **opts).close()
+    else:
+        _open(cfg, create=postgres).close()  # SQLite upgrades on open
     print("schema up to date")
+    return 0
+
+
+def _migration_dsn(path):
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    with os.fdopen(os.open(path, flags), "r", encoding="utf-8") as file:
+        info = os.fstat(file.fileno())
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or (hasattr(os, "geteuid") and info.st_uid != os.geteuid())):
+            raise ValueError("migration DSN must be a regular file owned by the caller with mode 0600")
+        try:
+            dsn = file.read(16385).strip()
+        except UnicodeError:
+            raise ValueError("migration DSN must be UTF-8") from None
+    if not dsn or len(dsn) > 16384:
+        raise ValueError("migration DSN must be nonempty and at most 16384 characters")
+    return dsn
+
+
+def _cmd_check_schema(_args, cfg) -> int:
+    if kdb.select_backend(cfg.db_options.get("backend")) != "postgres":
+        raise ValueError("check-schema requires the Postgres backend")
+    _open(cfg).close()
+    print("runtime schema verified")
     return 0
 
 
@@ -376,6 +407,7 @@ _COMMANDS = {
     "verify-anchor": _cmd_verify_anchor,
     "init": _cmd_init,
     "migrate": _cmd_migrate,
+    "check-schema": _cmd_check_schema,
     "add-principal": _cmd_add_principal,
     "revoke": _cmd_revoke,
     "mint-oversight-token": _cmd_mint_oversight_token,

@@ -1,11 +1,19 @@
 use plangraph_cli::{base_fresh, env, feeder, setup};
 use std::path::PathBuf;
 
+mod keeper_restart;
+
 fn main() {
     std::process::exit(run());
 }
 fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|command| command == "keeper-restart")
+    {
+        return keeper_restart::run(&args[1..]);
+    }
     if args.first().map(String::as_str) == Some("fast-checks") {
         return plangraph_cli::fast_checks::run(&args[1..]);
     }

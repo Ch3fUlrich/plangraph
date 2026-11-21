@@ -56,6 +56,27 @@ applied_at)` records what ran. `open_db(create=True)` and `pg admin migrate` app
 lock; `open_db(create=False)` refuses a database that is behind (a runtime role has no DDL rights). A unit test compares the
 SQLite and Postgres table/column lists so the two schemas cannot drift.
 
+For a batch that advances the keeper schema, copy the GO request's standalone
+`MIGRATION <version>` field into the GO decision for the exact batch head.
+The landing command requires that field on the same GO statement.
+
+For the merged-unit restart, the access owner provisions a regular file owned by
+the deploy user with mode `0600`. It holds the migration role's DSN for the same
+database as the keeper configuration. The role needs schema ownership or its
+equivalent DDL and migration-table permissions. Creating a missing schema still
+requires database-level permission.
+
+On the keeper host, point the effective unit at the candidate checkout and use
+its runtime configuration:
+
+    plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE
+
+The command verifies the unit's working directory, runs `pg admin migrate`
+with the migration DSN file, then opens the candidate schema using the runtime
+role through `pg admin check-schema`. It requests the service restart only
+after both commands succeed. A migration or runtime schema failure leaves the
+existing keeper process running.
+
 ## Hash chain
 
 `events.hash` is computed in Python from canonical JSON (sorted keys, no whitespace, ASCII) over text values; nothing in it
