@@ -117,6 +117,9 @@ def test_url_refusal_does_not_echo_credentials(e2e):
     with pytest.raises(e2e.Fail) as exc:
         e2e._check_url("http://private:do-not-print@127.0.0.1:18787", "--keeper")
     assert "do-not-print" not in str(exc.value)
+# Some standalone CPython builds ship without os.memfd_create; CI Pythons have it,
+# so the test still runs where the e2e devstack runs.
+@pytest.mark.skipif(not hasattr(os, 'memfd_create'), reason='this Python build has no os.memfd_create')
 def test_define_token_is_memory_only(e2e, tmp_path, monkeypatch):
     def run(cmd, what, **kwargs):
         fd, = kwargs["pass_fds"]

@@ -256,7 +256,7 @@ def available_memory_mb():
     try:
         memory = next(int(line.split()[1]) // 1024 for line in Path('/proc/meminfo').read_text().splitlines()
                       if line.startswith('MemAvailable:'))
-    except StopIteration as exc:
+    except (StopIteration, IndexError) as exc:
         raise ValueError('MemAvailable missing') from exc
     return memory
 
