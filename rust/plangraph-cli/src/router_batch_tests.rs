@@ -169,6 +169,18 @@ fn a_review_file_that_is_missing_for_another_head_or_not_an_accept_refuses_the_p
             "{text}"
         );
     }
+    // A review that names two heads is refused whichever comes first.
+    for (first, second) in [(H, G), (G, H)] {
+        let mixed = go_row(&one, &|_| {
+            Ok(format!(
+                "HEAD: {first}\nVERDICT: ACCEPT\nHEAD: {second}\nVERDICT: ACCEPT\n"
+            ))
+        });
+        assert_eq!(
+            mixed.unwrap_err(),
+            "part alpha: review file is not for this head"
+        );
+    }
     let no_head = go_row(&one, &|_| Ok("VERDICT: ACCEPT\n".into()));
     assert!(no_head.unwrap_err().contains("not for this head"));
     // The same path through the real file reader: a missing path is refused.
@@ -188,9 +200,8 @@ fn the_generated_go_row_is_read_by_the_keepers_parser_as_a_go_bound_to_pr_and_he
         part("beta", G, "claude", "deepseek"),
     ]))
     .unwrap();
-    let dir = std::env::temp_dir().join(format!("pg-go-row-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let log = dir.join("DECISIONS.md");
+    let scratch = tempfile::tempdir().unwrap();
+    let log = scratch.path().join("DECISIONS.md");
     std::fs::write(
         &log,
         format!("| ID | project | decision | by | why |\n|---|---|---|---|---|\n{row}\n"),
@@ -209,7 +220,6 @@ fn the_generated_go_row_is_read_by_the_keepers_parser_as_a_go_bound_to_pr_and_he
         .arg(root.join("src"))
         .output()
         .unwrap();
-    std::fs::remove_dir_all(&dir).ok();
     assert!(
         out.status.success(),
         "{}",
