@@ -49,6 +49,7 @@ from .store_runs import RunsMixin
 from .store_support import SupportMixin, iso, parse_iso
 from .store_tokens import TokensMixin
 from .store_verbs import VerbsMixin
+from .store_deploy import DeployMixin
 from .store_waiver import WaiverMixin
 from .store_worker import WorkerMixin
 from .store_jev import JevMixin
@@ -75,7 +76,7 @@ ROUTER_ONLY_EVIDENCE_KINDS = frozenset({"commit"})
 
 
 class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
-            ReapMixin, ReadMixin, WaiverMixin, CloseMixin, LegacyMixin, OpsMixin,
+            ReapMixin, ReadMixin, WaiverMixin, DeployMixin, CloseMixin, LegacyMixin, OpsMixin,
             NamesMixin, RehomeMixin, RunsMixin, AnswerMixin, NeedsMixin,
             TokensMixin, OutboxMixin, WithdrawMixin, ReopenMixin, KindMixin,
             ChangelogMixin, AuditMetaMixin, CardsMixin, MetricsMixin,
