@@ -21,6 +21,28 @@ DSN = os.environ.get("PG_DSN")
 needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (Postgres service container)")
 
 
+def assert_plain_event_type(conn, backend):
+    """Read the persisted schema independently of the application's event vocabulary."""
+    if backend == "sqlite":
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'"
+        ).fetchone()[0]
+        column_types = {row[1]: row[2] for row in conn.execute("PRAGMA table_info(events)")}
+        assert column_types["type"] == "TEXT"
+        assert "CHECK" not in sql.upper(), sql
+    else:
+        column_type = conn.execute(
+            "SELECT format_type(atttypid, atttypmod) FROM pg_catalog.pg_attribute"
+            " WHERE attrelid='events'::regclass AND attname='type'"
+        ).fetchone()[0]
+        checks = conn.execute(
+            "SELECT pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint"
+            " WHERE conrelid='events'::regclass AND contype='c'"
+        ).fetchall()
+        assert column_type == "text"
+        assert checks == [], checks
+
+
 @pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=needs_pg)])
 def test_pre_audience_keeper_upgrade_appends_and_replays_all_four_event_types(
         tmp_path, monkeypatch, backend):
@@ -38,6 +60,7 @@ def test_pre_audience_keeper_upgrade_appends_and_replays_all_four_event_types(
                 prior.setattr(schema_pg, "MIGRATIONS",
                               tuple(step for step in schema_pg.MIGRATIONS if step.version <= 13))
             with closing(db.open_db(path, create=True, **options)) as old:
+                assert_plain_event_type(old, backend)
                 with Store(old)._write():
                     auth.add_principal(old, "router", "router", [])
                     auth.add_principal(old, "lead", "l1", ["demo"])
@@ -49,6 +72,7 @@ def test_pre_audience_keeper_upgrade_appends_and_replays_all_four_event_types(
             with psycopg.connect(DSN, autocommit=True) as raw:
                 assert db_pg.migrate(raw, namespace) == [14]
         with closing(db.open_db(path, **options)) as conn:
+            assert_plain_event_type(conn, backend)
             store = Store(conn)
             router = auth.get_principal(conn, "router")
             lead = auth.get_principal(conn, "lead")

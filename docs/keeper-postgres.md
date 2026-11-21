@@ -59,10 +59,11 @@ SQLite and Postgres table/column lists so the two schemas cannot drift.
 Migration 14 creates `event_audience` for the scoped replay feed. Run
 `pg --config CONFIG admin migrate` with the migration role before restarting
 the keeper. The runtime role needs SELECT and INSERT on `event_audience`.
-The event type column remains text across the upgrade. The application
-recognizes the four new grant and question kinds through `EVENT_TYPES`.
-The pre-audience database test appends and replays all four after upgrading
-each backend.
+The pre-audience database test checks `sqlite_master` and PostgreSQL
+`pg_constraint` before and after the upgrade. The catalog checks confirm
+that `events.type` is text with no CHECK. The test then appends and replays
+all four new grant and question kinds. `EVENT_TYPES` is the application
+fold vocabulary.
 
 ## Hash chain
 
