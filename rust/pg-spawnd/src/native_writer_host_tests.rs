@@ -22,7 +22,7 @@ fn final_head_review_ignores_old_head_and_requires_last_canonical_verdict() {
     let verdict = review_verdict(&changes, &head, &paths);
     assert_eq!(verdict["verdict"], "REQUEST_CHANGES");
     assert_eq!(verdict["head"], head.as_str());
-    let accept = format!("src/lib.rs:3 checked\nHEAD: {head}\nVERDICT: ACCEPT\n");
+    let accept = format!("FILES READ: src/lib.rs:3\nHEAD: {head}\nVERDICT: ACCEPT\n");
     assert_eq!(review_verdict(&accept, &head, &paths)["verdict"], "ACCEPT");
 }
 
@@ -44,6 +44,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -148,6 +149,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -211,10 +213,22 @@ fn stored_accept_without_reviewed_file_is_no_verdict() {
 }
 
 #[test]
+fn accept_requires_a_file_read_and_rejects_claimed_toollessness() {
+    let paths = ["src/lib.rs".into()];
+    for review in [
+        "Reviewed only the inline diff for src/lib.rs.\nVERDICT: ACCEPT\n",
+        "I had no repository, shell, or test tool available.\nFILES READ: src/lib.rs\nVERDICT: ACCEPT\n",
+        "FILES READ: none\nReviewed src/lib.rs.\nVERDICT: ACCEPT\n",
+    ] {
+        assert_eq!(review_verdict(review, "head", &paths)["verdict"], "no_verdict");
+    }
+}
+
+#[test]
 fn stored_accept_with_changed_path_or_file_line_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     for citation in ["Reviewed src/lib.rs", "Reviewed Makefile:12"] {
-        let text = format!("{citation}\nFINDING none\nVERDICT: ACCEPT\n");
+        let text = format!("FILES READ: {citation}\nFINDING none\nVERDICT: ACCEPT\n");
         let _ = &dir;
         assert_eq!(
             review_verdict(&text, "aaaaaaaaaaaaaaaa", &["src/lib.rs".into()])["verdict"],
@@ -423,10 +437,10 @@ assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() 
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'
 run.mkdir(parents=True)
-text = 'src/lib.rs:1 checked\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
+text = 'FILES READ: src/lib.rs:1\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type': 'result', 'is_error': False, 'result': text}) + '\n')
 print('banner line')
-print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'mimo-v2.6-pro'}}, indent=2))
+print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'agy-gemini-4-hydrogen-high', 'harness': 'agy', 'tool_mode': 'tools'}}, indent=2))
 "#,
     )
     .unwrap();
@@ -444,6 +458,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
             .into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
         python_src: Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")),
     };
@@ -475,7 +490,8 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert_eq!(review["verdict"], "ACCEPT", "{review}");
     assert_eq!(review["head"], head.as_str());
     assert_eq!(review["run_id"], "run-rv1");
-    assert_eq!(review["leg"], "mimo-v2.6-pro");
+    assert_eq!(review["leg"], "agy-gemini-4-hydrogen-high");
+    assert_eq!(review["harness"], "agy");
     assert!(Path::new(review["path"].as_str().unwrap()).is_file());
     assert!(!host
         .reviews
@@ -567,6 +583,7 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -633,6 +650,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     };

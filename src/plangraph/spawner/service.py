@@ -337,6 +337,12 @@ class SpawnService(SeatSpawnMixin):
                 chosen = codex_leg_effort(chosen, card)
             if role == 'implement' and role not in chosen.roles:
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
+            if role == 'review' and card.get('repository_review_required'):
+                from plangraph.planner.route_policy import has_repository_review_tools
+                if seat_family(chosen.family) in writers | writer_parts(reviewed):
+                    raise SpawnRefused('excluded writer family')
+                if not has_repository_review_tools(chosen):
+                    raise SpawnRefused('repository_review_tools_unavailable: ' + chosen.id)
             if chosen.tier == 'paid':
                 available = self._route(card, role, writer_families, review_of,
                     benchmark=benchmark, require_bench=require_bench)

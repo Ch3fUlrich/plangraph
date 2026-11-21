@@ -287,7 +287,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if field in card and (not isinstance(card[field], (list, tuple)) or
                               not all(isinstance(v, str) for v in card[field])):
             raise SpawnRefused(f'{field} must be a list of strings')
-    for field in ('has_tests', 'is_pure_doc', 'is_docs_only'):
+    for field in ('has_tests', 'is_pure_doc', 'is_docs_only', 'repository_review_required'):
         if field in card and type(card[field]) is not bool:
             raise SpawnRefused(f'{field} must be boolean')
     for field in ('estimate_tokens', 'reviewer_count', 'fanout'):
@@ -400,6 +400,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                for l in legs if role in l.roles and not leg_active(l, now=now)]
     skipped = list(harness_skipped)
     from plangraph.routing_support.resolver import score_model
+    from .route_policy import has_repository_review_tools
     from plangraph.routing_support.liveness import agy_limit_reason
     from plangraph.routing_support.quota_snapshots import skip_reason as quota_skip_reason
     candidate_details = []
@@ -424,6 +425,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "benchmark_unmeasured"
         elif leg.id in LOW_RISK_ONLY_LEGS and not low_risk:
             reason = "low_risk_only"
+        elif role == "review" and card.get("repository_review_required") and not has_repository_review_tools(leg):
+            reason = "repository_review_tools_unavailable"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
             reason = "inline_only_needs_diff"
         elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai" and not (
@@ -448,7 +451,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
-        "review_route_excluded", "low_risk_only", "claude_requires_gpt_and_hydrogen_limits", "benchmark_unmeasured")}
+        "review_route_excluded", "low_risk_only", "claude_requires_gpt_and_hydrogen_limits",
+        "repository_review_tools_unavailable", "benchmark_unmeasured")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role, now=now)

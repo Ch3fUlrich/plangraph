@@ -111,3 +111,14 @@ def test_d6550_spawn_dry_run_reads_credential_diff(tmp_path, monkeypatch, capsys
         assert main(args) == 0
         selected = json.loads(capsys.readouterr().out)["chosen_leg"]
         assert (selected["id"], selected["harness"]) == expected
+
+
+def test_native_review_route_requires_repository_tools():
+    plan = plan_spawn({"estimate_tokens": 1000, "repository_review_required": True},
+                      role="review", writer_families=("gpt",), installed=lambda _: True,
+                      leg_reader=lambda *_args, **_kwargs: {"state": "available", "evidence": None},
+                      catalog_rows=())
+    assert plan.first_leg.id == "agy-gemini-4-hydrogen-high"
+    assert all(leg.harness != "opencode" and leg.tool_mode == "tools" for leg in plan.legs)
+    reasons = {row["leg"]: row["reason"] for row in plan.skipped}
+    assert reasons["opencode-go-deepseek-v4-flash"] == "repository_review_tools_unavailable"

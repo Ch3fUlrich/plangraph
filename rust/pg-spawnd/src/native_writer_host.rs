@@ -62,6 +62,7 @@ struct Host {
     /// `refs/heads/...` that receives the accepted head; None keeps the head on the host.
     push_ref: Option<String>,
     reviews_started: usize,
+    review_override: Option<(String, String)>,
     /// Spawner CLI argv prefix that starts review runs (`review_cli`).
     review_cli: Vec<String>,
     /// Checkout of trusted plangraph sources for the family table; None uses the installed
@@ -465,6 +466,7 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         brief: request["prompt"].as_str().unwrap_or("").into(),
         push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
         reviews_started: 0,
+        review_override: None,
         review_cli: review_cli()?,
         python_src: None,
     };
@@ -486,6 +488,19 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             return host.save(&record);
         }
     }
+    match review_override(&request["card"]) {
+        Ok(override_) => host.review_override = override_,
+        Err(reason) => {
+            record["status"] = json!("failed");
+            record["exit_code"] = json!(5);
+            record["reason"] = json!(reason);
+            return host.save(&record);
+        }
+    }
+    if let Some((leg, reason)) = &host.review_override {
+        record["requested_review_leg"] = json!(leg);
+        record["review_override_reason"] = json!(reason);
+    }
     record["effort"] = json!(host.effort);
     record["cwd"] = json!(host.cwd);
     host.save(&record)?;
@@ -502,7 +517,7 @@ mod base;
 mod context;
 #[path = "native_writer_review.rs"]
 mod review;
-use review::review_cli;
+use review::{review_cli, review_override};
 #[cfg(test)]
 use review::{review_run_text, review_verdict};
 #[cfg(test)]
