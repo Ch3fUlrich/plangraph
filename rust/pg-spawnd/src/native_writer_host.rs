@@ -102,7 +102,8 @@ impl Host {
         let cargo_target = pg_worker_core::cargo_cache::shared_cache_roots()
             .map_err(|e| e.to_string())?
             .remove(0);
-        let git_dirs = crate::native_writer_sandbox::git_dirs(&self.cwd, &self.tool_path)?;
+        let git_dirs = crate::native_writer_sandbox::git_dirs(&self.cwd, Some(&self.tool_path))
+            .map_err(|e| e.to_string())?;
         let roots = crate::native_writer_sandbox::writable_roots(
             &cargo_target,
             &self.reviews,
@@ -121,7 +122,7 @@ impl Host {
             .args(["--json"])
             .args(model_args(&self.effort))
             .args(["-c", "approval_policy=never"])
-            .args(crate::native_writer_sandbox::sandbox_args(&roots)?)
+            .args(crate::native_writer_sandbox::sandbox_args(&roots).map_err(|e| e.to_string())?)
             .arg("-o")
             .arg(directory.join("native.last"))
             .arg("-")

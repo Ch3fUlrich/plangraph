@@ -78,15 +78,10 @@ fn a_variable_outside_the_allowlist_does_not_reach_the_child_process() {
 }
 
 /// Real Codex sandbox: a write inside a named root works, one outside every root is refused.
-/// Needs the Linux `codex sandbox` verb; a host without it cannot run the canary either.
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "live host check requiring a working Codex sandbox"]
 fn a_write_outside_the_named_roots_is_refused_in_a_fixture_run() {
-    let probe = Command::new("codex").args(["sandbox", "--help"]).output();
-    if !probe.is_ok_and(|o| o.status.success()) {
-        eprintln!("codex sandbox unavailable: fixture run skipped");
-        return;
-    }
     // Outside /tmp and $TMPDIR, which the mode keeps writable for builds.
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let (workspace, named, outside) = (
@@ -97,22 +92,19 @@ fn a_write_outside_the_named_roots_is_refused_in_a_fixture_run() {
     for d in [&workspace, &named, &outside] {
         std::fs::create_dir(d).unwrap();
     }
-    let script = format!(
-        "touch {n}/in && echo named-ok; touch {w}/in && echo workspace-ok; touch {o}/out || echo outside-refused",
-        n = named.display(),
-        w = workspace.display(),
-        o = outside.display()
-    );
+    let script = "touch \"$1/in\" && echo named-ok; touch in && echo workspace-ok; touch \"$2/out\" || echo outside-refused";
     let out = Command::new("codex")
         .arg("sandbox")
         .args(sandbox_args(std::slice::from_ref(&named)).unwrap())
-        .args(["--", "sh", "-c", &script])
+        .args(["--", "sh", "-c", script, "fixture"])
+        .arg(&named)
+        .arg(&outside)
         .current_dir(&workspace)
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
-        text.contains("named-ok") && text.contains("workspace-ok"),
+        out.status.success() && text.contains("named-ok") && text.contains("workspace-ok"),
         "{text}{}",
         String::from_utf8_lossy(&out.stderr)
     );
@@ -126,15 +118,8 @@ fn a_write_outside_the_named_roots_is_refused_in_a_fixture_run() {
 /// otherwise, which would stop the writer at its first commit.
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "live host check requiring a working Codex sandbox"]
 fn a_writer_worktree_can_commit_with_the_named_git_directories() {
-    if !Command::new("codex")
-        .args(["sandbox", "--help"])
-        .output()
-        .is_ok_and(|o| o.status.success())
-    {
-        eprintln!("codex sandbox unavailable: fixture run skipped");
-        return;
-    }
     let dir = tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).unwrap();
     let dir = std::fs::canonicalize(dir.path()).map(|p| (p, dir)).unwrap();
     let (root, _guard) = dir;
@@ -173,7 +158,7 @@ fn a_writer_worktree_can_commit_with_the_named_git_directories() {
     );
     let wt = root.join("wt");
     let path = std::env::var("PATH").unwrap();
-    let dirs = git_dirs(&wt, &path).unwrap();
+    let dirs = git_dirs(&wt, Some(&path)).unwrap();
     assert_eq!(dirs.len(), 2, "{dirs:?}");
     let roots = writable_roots(
         &root.join("target"),
@@ -191,7 +176,7 @@ fn a_writer_worktree_can_commit_with_the_named_git_directories() {
         .unwrap();
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(
-        text.contains("commit-ok"),
+        out.status.success() && text.contains("commit-ok"),
         "{text}{}",
         String::from_utf8_lossy(&out.stderr)
     );

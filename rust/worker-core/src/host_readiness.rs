@@ -7,11 +7,59 @@ use std::{
     time::Duration,
 };
 
-pub const WRITER_SANDBOX: &str = "danger-full-access";
+pub const WRITER_SANDBOX: &str = "workspace-write";
 const MAX_AGE_SECS: u64 = 120;
 
 pub fn valid_sandbox(sandbox: &str) -> bool {
-    matches!(sandbox, "workspace-write" | "read-only" | WRITER_SANDBOX)
+    matches!(sandbox, WRITER_SANDBOX | "read-only" | "danger-full-access")
+}
+
+/// Common and per-worktree Git directories that need write access for commits.
+pub fn writer_git_dirs(cwd: &Path, path: Option<&str>) -> io::Result<Vec<PathBuf>> {
+    let mut command = Command::new("git");
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    let out = host_command::output(
+        command.current_dir(cwd).args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+            "--absolute-git-dir",
+        ]),
+        Duration::from_secs(15),
+    )
+    .map_err(|e| io::Error::other(format!("git directory lookup failed: {e}")))?;
+    let text = std::str::from_utf8(&out).map_err(io::Error::other)?;
+    let dirs: Vec<_> = text.lines().map(PathBuf::from).collect();
+    if dirs.len() != 2 || dirs.iter().any(|p| !p.is_absolute()) {
+        return Err(io::Error::other(
+            "git directory lookup did not return two absolute paths",
+        ));
+    }
+    Ok(dirs)
+}
+
+/// The workspace-write overrides used by the native writer and its readiness probe.
+pub fn writer_sandbox_args(roots: &[PathBuf]) -> io::Result<Vec<String>> {
+    let list = roots
+        .iter()
+        .map(|root| {
+            let text = root
+                .to_str()
+                .ok_or_else(|| io::Error::other("writable root is not UTF-8"))?;
+            serde_json::to_string(text).map_err(io::Error::other)
+        })
+        .collect::<io::Result<Vec<_>>>()?
+        .join(",");
+    Ok([
+        format!("sandbox_mode=\"{WRITER_SANDBOX}\""),
+        "sandbox_workspace_write.network_access=true".to_owned(),
+        format!("sandbox_workspace_write.writable_roots=[{list}]"),
+    ]
+    .into_iter()
+    .flat_map(|value| ["-c".to_owned(), value])
+    .collect())
 }
 
 fn record_path(state: &Path, host: &str, sandbox: &str) -> io::Result<PathBuf> {
@@ -229,10 +277,13 @@ impl Runner for Native {
                         ],
                     )?;
                 }
-                cmd.current_dir(&worktree)
-                    .arg("sandbox")
-                    .args(["-c", &format!("sandbox_mode=\"{sandbox}\"")])
-                    .arg("--")
+                cmd.current_dir(&worktree).arg("sandbox");
+                if sandbox == WRITER_SANDBOX {
+                    cmd.args(writer_sandbox_args(&writer_git_dirs(&worktree, None)?)?);
+                } else {
+                    cmd.args(["-c", &format!("sandbox_mode=\"{sandbox}\"")]);
+                }
+                cmd.arg("--")
                     .arg(&self.executable)
                     .arg(if probe == Probe::Sandbox {
                         "--child-start"

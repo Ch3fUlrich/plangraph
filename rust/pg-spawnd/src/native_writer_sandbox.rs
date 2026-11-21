@@ -3,15 +3,14 @@
 //! The writer runs `sandbox_mode = "workspace-write"` with network access on (it fetches, builds
 //! and starts its own reviewers) and a named list of extra writable roots; its environment is an
 //! allowlist, so a host secret that is not named here never reaches Codex or its tools.
+pub(crate) use pg_worker_core::host_readiness::{
+    writer_git_dirs as git_dirs, writer_sandbox_args as sandbox_args,
+};
 use std::{
     ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Command,
 };
-
-/// The Codex sandbox mode of the writer child. Host readiness (`pg_worker_core::host_readiness::WRITER_SANDBOX`)
-/// still certifies `danger-full-access`: aligning it is a separate change.
-pub(crate) const WRITER_SANDBOX: &str = "workspace-write";
 
 /// Variables the writer child receives. `PATH` is set separately from the admitted tool path.
 /// Harness auth stays (`CODEX_HOME`, `OPENAI_*`); git, ssh, proxy and TLS settings stay because the
@@ -83,33 +82,6 @@ pub(crate) fn apply_env(
         .env("PATH", path);
 }
 
-/// The git directories the writer's commits land in: the repository's common directory and the
-/// worktree's own directory (Codex keeps a worktree's directory read-only unless it is named).
-pub(crate) fn git_dirs(cwd: &Path, path: &str) -> Result<Vec<PathBuf>, String> {
-    let out = Command::new("git")
-        .env("PATH", path)
-        .arg("-C")
-        .arg(cwd)
-        .args([
-            "rev-parse",
-            "--path-format=absolute",
-            "--git-common-dir",
-            "--absolute-git-dir",
-        ])
-        .output()
-        .map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        return Err(format!(
-            "git directory lookup failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
-    }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(PathBuf::from)
-        .collect())
-}
-
 /// Extra writable roots: the shared cargo target, the review directory, the run directory and the
 /// git directories (the worktree's commits land there). The worktree itself is the workspace root
 /// and is writable by the mode.
@@ -129,28 +101,6 @@ pub(crate) fn writable_roots(
         }
     }
     roots
-}
-
-/// `-c` overrides that select the mode, keep network access on and name the writable roots.
-pub(crate) fn sandbox_args(roots: &[PathBuf]) -> Result<Vec<String>, String> {
-    let list = roots
-        .iter()
-        .map(|root| {
-            let text = root
-                .to_str()
-                .ok_or_else(|| format!("writable root is not UTF-8: {}", root.display()))?;
-            serde_json::to_string(text).map_err(|e| e.to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .join(",");
-    Ok([
-        format!("sandbox_mode=\"{WRITER_SANDBOX}\""),
-        "sandbox_workspace_write.network_access=true".to_owned(),
-        format!("sandbox_workspace_write.writable_roots=[{list}]"),
-    ]
-    .into_iter()
-    .flat_map(|value| ["-c".to_owned(), value])
-    .collect())
 }
 
 #[cfg(test)]
