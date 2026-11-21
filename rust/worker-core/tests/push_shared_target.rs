@@ -31,7 +31,8 @@ def run(command, cwd, env):
     return 0, ''
 with patch.object(p, 'run', run), patch.object(p, 'rust_commands', return_value=[['cargo', 'test']]):
     assert p.main(['--base', 'HEAD', '--fast']) == 0
-assert seen == [['cargo', 'test']], seen
+# The policy step's one pg-policy build runs first, under the same shared lease.
+assert [c[:2] for c in seen] == [['cargo', 'build'], ['cargo', 'test']], seen
 assert not Path(os.environ['CARGO_TARGET_DIR']).exists()
 seen.clear()
 with patch.dict(os.environ, PLANGRAPH_CARGO_TARGET_CAP_GB='0'), patch.object(p, 'run', run), patch.object(p, 'rust_commands', return_value=[['cargo', 'test']]):
