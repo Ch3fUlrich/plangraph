@@ -19,6 +19,9 @@ host busy only while a recorded child or supervisor pid is alive (or it has surv
 not (ps marks the latter `stale`). Cleanup takes the exclusive cargo lease and waits up to
 `PLANGRAPH_CARGO_CLEANUP_WAIT_S` (default 30) for live builds before it refuses with `busy or cleanup
 unavailable`; it never deletes under a held lease.
+The same reclaim (`host_ready.reclaim_cargo_target`) also prunes `cli-tests/<checkout hash>` builds to
+the newest `PLANGRAPH_CLI_TESTS_KEEP` (default 3), none untouched for 24 h; `tools/preflight.py` runs it
+before the pre-push hook builds (lease wait 5 s, then skipped), so the push cache stays under the cap.
 An independent one-second runtime sample reaps runs at the shared cap or below
 2 GiB free (rule 7.1). Sampling permits transient overshoot between measurements;
 it is not a filesystem quota. Building artifacts are never deleted; idle admission
