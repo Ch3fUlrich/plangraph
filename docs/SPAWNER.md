@@ -129,9 +129,9 @@ cover the floor and role reservation. Of those candidates, the host with the
 most free memory above its floor wins. A host set to `placement_fallback` is
 considered after the ready workers. Spawn records carry `placement` with
 `host`, `reason`, and `free_mb`. Other eligible spawns try SSH overflow when
-local admission refuses. Dry runs stay local, and private or unknown
-repositories and local benchmark databases stay on the originating host.
-Route planning uses a supplied placement snapshot when one is available.
+local admission refuses. Dry runs, private or unknown repositories, and local
+benchmark databases stay local. Repository-required reviews keep the checkout local and
+apply the orchestration host's fallback health thresholds. Route planning accepts a placement snapshot.
 See [placement rules](placement-rules.md).
 
 SSH overflow uses `overflow.remote_spawn` with per-call nonce begin/end sentinel

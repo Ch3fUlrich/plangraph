@@ -250,6 +250,8 @@ def admit(service, options, *, card=None, preview=False):
                      and (native or role == 'review' and (card or {}).get('diff_ref') is not None))
     if placed or repository_review:
         config['hosts'] = {}
+    # A repository review stays local but still needs orchestration fallback health.
+    if placed and not repository_review:
         remote_first = False
     if preview and not (remote_first or compare_local):
         return None
