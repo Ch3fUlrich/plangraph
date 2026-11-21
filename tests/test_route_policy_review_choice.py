@@ -56,7 +56,7 @@ def test_d6550_routes_native_writer_hydrogen_and_sensitive_review():
 
     writer = plan("implement")
     review = plan("review")
-    sensitive = plan("review", dict(card, paths=["src/credential_store.rs"]))
+    sensitive = plan("review", dict(card, paths=["src/auth/session.rs"]))
     assert (writer.first_leg.id, writer.first_leg.harness) == ("cx-gpt-6.2-sol-medium", "codex")
     assert review.first_leg.id == "agy-gemini-4-hydrogen-high"
     assert all(not leg.claude_family for leg in (*writer.legs, *review.legs))
