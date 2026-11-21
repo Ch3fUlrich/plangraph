@@ -1,6 +1,8 @@
 //! Review rounds of the native writer: fast checks with a per-head stamp, then one
 //! spawner review run on the exact head, its verdict read from the run record.
 use super::{context, output, Host};
+#[path = "native_writer_review_wait.rs"]
+mod wait;
 use crate::native_writer::Driver;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
@@ -8,6 +10,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use wait::ReviewCheckout;
 
 /// The diff base of a review card: the previous review's head when the head moved on, else
 /// the batch base. A re-review of the same head (after a refuted finding) would otherwise
@@ -184,7 +187,7 @@ impl Host {
         } else {
             format!("[review-skill]\n{skill}\n[/review-skill]\n\n")
         };
-        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR. To read the review diff, use git diff {diff_base} {head}.{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR, the pytest checkout guard and the guarded Cargo runner (python3 tools/preflight.py --cargo-test with the relevant manifest and package). Wrap Unix test commands in timeout -k 10s with a wall limit. To read the review diff, use git diff {diff_base} {head}.{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
         match previous {
             Some((prev, text)) if prev == head => prompt.push_str(&format!("This is a later round on the same head {head}: the previous review (its text follows) judged it and the writer answered its findings with evidence. Review the whole change {base}..{head} and check that every earlier HIGH and MED finding is fixed or refuted with evidence.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head}, check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
@@ -213,19 +216,22 @@ impl Host {
                 .arg(&self.cwd)
                 .arg(&clone),
         )?;
-        let result = self.review_in(&clone, &tag, &origin, &base, head, previous);
-        let _ = fs::remove_dir_all(&clone);
-        result
+        let mut checkout = ReviewCheckout {
+            path: clone,
+            removable: true,
+        };
+        self.review_in(&mut checkout, &tag, &origin, &base, head, previous)
     }
     fn review_in(
         &mut self,
-        clone: &Path,
+        checkout: &mut ReviewCheckout,
         tag: &str,
         origin: &str,
         base: &str,
         head: &str,
         previous: Option<&Value>,
     ) -> Result<Value, String> {
+        let clone = &checkout.path;
         let git = |host: &Self, args: &[&str]| {
             output(host.command("git").arg("-C").arg(clone).args(args))
         };
@@ -273,16 +279,18 @@ impl Host {
         let prompt = self.review_prompt(base, head, prev, &families, &versioned, &skill);
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
-        let serialized_card = card.to_string();
-        let mut command = self.command(&self.review_cli[0]);
-        command
-            .args(&self.review_cli[1..])
-            .arg("--state")
-            .arg(&self.state)
-            .args(["spawn", "--card", &serialized_card, "--role", "review"])
-            .args(families.iter().flat_map(|f| ["--writer-family", f]));
+        if self.cancelled() {
+            return Err("review cancelled".into());
+        }
+        let card = card.to_string();
+        let mut args = vec!["spawn", "--card", &card, "--role", "review"];
+        args.extend(
+            families
+                .iter()
+                .flat_map(|f| ["--writer-family", f.as_str()]),
+        );
         if let Some((leg, reason)) = &self.review_override {
-            command.args([
+            args.extend([
                 "--leg",
                 leg,
                 "--override-reason",
@@ -290,22 +298,32 @@ impl Host {
                 "--no-fallthrough",
             ]);
         }
-        let printed = command
-            .arg("--cwd")
-            .arg(clone)
-            .arg("--prompt-file")
-            .arg(&prompt_path)
-            .args(["--wait", "3300", "--json"])
-            .current_dir(clone)
-            .output()
-            .map_err(|e| e.to_string())?;
-        let record =
-            printed_record(&String::from_utf8_lossy(&printed.stdout)).ok_or_else(|| {
+        args.extend([
+            "--cwd",
+            clone.to_str().ok_or("review checkout path is not UTF-8")?,
+            "--prompt-file",
+            prompt_path
+                .to_str()
+                .ok_or("review prompt path is not UTF-8")?,
+            "--wait",
+            "0",
+            "--json",
+        ]);
+        // A lost admission reply cannot prove the review stopped. Keep its checkout.
+        checkout.removable = false;
+        let admitted = self.review_request(clone, &args).map_err(|error| {
+            if error.admission_unknown {
                 format!(
-                    "review run returned no record: {}",
-                    String::from_utf8_lossy(&printed.stderr).trim()
+                    "{}: {}; checkout retained",
+                    crate::native_writer::REVIEW_CLEANUP_UNCONFIRMED,
+                    error.message
                 )
-            })?;
+            } else {
+                checkout.removable = true;
+                error.message
+            }
+        })?;
+        let record = self.finish_review(checkout, admitted)?;
         let chosen = &record["chosen_leg"];
         if let Some((leg, _)) = &self.review_override {
             if chosen["id"] != *leg {

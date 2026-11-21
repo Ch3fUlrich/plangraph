@@ -63,6 +63,7 @@ struct Host {
     push_ref: Option<String>,
     reviews_started: usize,
     review_override: Option<(String, String)>,
+    turn_timeout: Duration,
     /// Spawner CLI argv prefix that starts review runs (`review_cli`).
     review_cli: Vec<String>,
     /// Checkout of trusted plangraph sources for the family table; None uses the installed
@@ -101,6 +102,9 @@ impl Host {
             }
         }
         command
+    }
+    fn cancelled(&self) -> bool {
+        self.record_path.with_file_name("cancelled").exists()
     }
     fn git(&self, args: &[&str]) -> Result<String, String> {
         output(self.command("git").arg("-C").arg(&self.cwd).args(args))
@@ -179,6 +183,9 @@ impl Host {
     }
 }
 impl Driver for Host {
+    fn cancelled(&self) -> bool {
+        Host::cancelled(self)
+    }
     fn disk_gb(&mut self) -> Result<u64, String> {
         self.free()
     }
@@ -273,66 +280,57 @@ impl Driver for Host {
             .arg(directory.join("native.last"))
             .arg("-")
             .current_dir(&self.cwd)
-            .stdin(Stdio::piped())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        let mut child = command.spawn().map_err(|e| e.to_string())?;
         let payload = format!("{prompt}\nReview directory: {}\n", self.reviews.display());
-        let mut stdin = child.stdin.take().ok_or("writer stdin missing")?;
-        // A reader failure or disk probe failure must terminate the child too.
-        let result = (|| {
-            stdin
-                .write_all(payload.as_bytes())
-                .map_err(|e| e.to_string())?;
-            drop(stdin);
-            loop {
-                if self.free()? < 2 {
-                    return Err("disk_low: under 2 GB stop floor".into());
-                }
-                if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                    if !status.success() {
-                        return Err(format!("codex failed: {status}"));
-                    }
-                    break;
-                }
-                std::thread::sleep(Duration::from_secs(1));
-            }
-            let mut log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
-            log.seek(SeekFrom::Start(log_start))
-                .map_err(|e| e.to_string())?;
-            let mut completed = false;
-            let mut thread_id = session.map(str::to_owned);
-            for line in BufReader::new(log).lines() {
-                let line = line.map_err(|e| e.to_string())?;
-                let Ok(event) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                if event["type"] == "turn.completed" {
-                    completed = true;
-                }
-                if event["type"] == "thread.started" {
-                    thread_id = event["thread_id"].as_str().map(str::to_owned);
+        let mut input = tempfile::tempfile_in(directory).map_err(|e| e.to_string())?;
+        input
+            .write_all(payload.as_bytes())
+            .map_err(|e| e.to_string())?;
+        input.rewind().map_err(|e| e.to_string())?;
+        command.stdin(Stdio::from(input));
+        let opts = pg_worker_core::stall::Opts {
+            timeout: Some(self.turn_timeout),
+            grace: Duration::from_secs(1),
+            ..Default::default()
+        };
+        let mut disk_check = None;
+        let status = pg_worker_core::stall::supervise_redirected(command, &opts, || {
+            if disk_check
+                .is_none_or(|last: std::time::Instant| last.elapsed() >= Duration::from_secs(1))
+            {
+                disk_check = Some(std::time::Instant::now());
+                if self.free().map_err(std::io::Error::other)? < 2 {
+                    return Err(std::io::Error::other("disk_low: under 2 GB stop floor"));
                 }
             }
-            if !completed {
-                return Err("codex ended without a result line".into());
-            }
-            thread_id.ok_or_else(|| "codex did not report a session id".into())
-        })();
-        if result.is_err() {
-            #[cfg(unix)]
-            unsafe {
-                libc::killpg(child.id() as i32, libc::SIGKILL);
-            }
-            let _ = child.kill();
-            let _ = child.wait();
+            Ok(self.cancelled())
+        })
+        .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(format!("codex failed: {status}"));
         }
-        result
+        let mut log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
+        log.seek(SeekFrom::Start(log_start))
+            .map_err(|e| e.to_string())?;
+        let mut completed = false;
+        let mut thread_id = session.map(str::to_owned);
+        for line in BufReader::new(log).lines() {
+            let line = line.map_err(|e| e.to_string())?;
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if event["type"] == "turn.completed" {
+                completed = true;
+            }
+            if event["type"] == "thread.started" {
+                thread_id = event["thread_id"].as_str().map(str::to_owned);
+            }
+        }
+        if !completed {
+            return Err("codex ended without a result line".into());
+        }
+        thread_id.ok_or_else(|| "codex did not report a session id".into())
     }
     fn skill(&mut self, name: &str) -> Result<String, String> {
         let shown = self
@@ -481,6 +479,12 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
         reviews_started: 0,
         review_override: None,
+        turn_timeout: Duration::from_secs(
+            60 * request["card"]["max_min"]
+                .as_u64()
+                .filter(|minutes| (1..=1440).contains(minutes))
+                .unwrap_or(60),
+        ),
         review_cli: review_cli()?,
         python_src: None,
     };
@@ -540,6 +544,12 @@ use review_route::review_override;
 #[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;
+#[cfg(test)]
+#[path = "native_writer_host_review_tests.rs"]
+mod review_tests;
+#[cfg(test)]
+#[path = "native_writer_host_supervision_tests.rs"]
+mod supervision_tests;
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;

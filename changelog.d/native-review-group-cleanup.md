@@ -1,0 +1,2 @@
+- Supervise native writer tools and review launch commands in owned process groups. Cancel an active review before removing its checkout, and retain the checkout when cleanup cannot be confirmed.
+- Alert once per Linux host when live processes at least two hours old still have a deleted working directory.

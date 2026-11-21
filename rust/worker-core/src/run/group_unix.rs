@@ -34,8 +34,7 @@ fn configure(c: &mut Command, s: &LaunchSpec<'_>) {
             Stdio::piped()
         } else {
             Stdio::null()
-        })
-        .process_group(0);
+        });
 }
 pub fn scope_command(
     unit: &str,
@@ -56,6 +55,7 @@ pub fn scope_command(
     }
     c.arg("--").arg(spec.program).args(spec.args);
     configure(&mut c, spec);
+    c.process_group(0);
     for (k, v) in manager_env {
         if (k == "XDG_RUNTIME_DIR" || k == "DBUS_SESSION_BUS_ADDRESS")
             && !spec.env.iter().any(|(key, _)| key == k)
@@ -137,6 +137,27 @@ pub fn parse_cgroup_path(text: &str, unit: &str) -> Option<PathBuf> {
         .find(|p| p.starts_with('/') && p.ends_with(&format!("/{unit}.scope")))
         .map(PathBuf::from)
 }
+fn session_id(text: &str) -> Option<u32> {
+    text.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()
+}
+
+pub(crate) fn own_session(cmd: &mut Command) {
+    // SAFETY: only the async-signal-safe setsid syscall runs before exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 pub fn parse_stat(text: &str) -> Option<(char, u32, u64)> {
     let f: Vec<_> = text.rsplit_once(')')?.1.split_whitespace().collect();
     Some((
@@ -164,6 +185,7 @@ pub fn launch(
             let mut c = Command::new(spec.program);
             c.args(spec.args);
             configure(&mut c, spec);
+            own_session(&mut c);
             c
         }
         Confinement::Scope { slice } => {
@@ -282,6 +304,13 @@ impl RunGroup for UnixGroup {
         &self.identity
     }
     fn members(&self) -> io::Result<Vec<u32>> {
+        if self.identity.group.is_none()
+            && self.identity.start_time.is_some()
+            && proc_start_time(&self.roots.proc, self.identity.pid)
+                .is_some_and(|current| Some(current) != self.identity.start_time)
+        {
+            return Ok(vec![]);
+        }
         let pids: Vec<u32> = if let Some(dir) = &self.identity.group {
             match scope_members(Path::new(dir)) {
                 Ok(pids) => pids,
@@ -296,10 +325,17 @@ impl RunGroup for UnixGroup {
         let mut pids: Vec<_> = pids
             .into_iter()
             .filter(|&pid| {
-                stat(&self.roots.proc, pid).is_some_and(|(s, pg, _)| {
-                    s != 'Z'
-                        && s != 'X'
-                        && (self.identity.group.is_some() || pg == self.identity.pid)
+                let Ok(text) =
+                    fs::read_to_string(self.roots.proc.join(pid.to_string()).join("stat"))
+                else {
+                    return false;
+                };
+                parse_stat(&text).is_some_and(|(state, pgid, _)| {
+                    state != 'Z'
+                        && state != 'X'
+                        && (self.identity.group.is_some()
+                            || pgid == self.identity.pid
+                            || session_id(&text) == Some(self.identity.pid))
                 })
             })
             .collect();

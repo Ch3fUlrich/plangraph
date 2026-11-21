@@ -21,6 +21,14 @@ async def cancel_recorded(service, run_id):
         record = await asyncio.to_thread(native_result, record, verb='cancel')
         service._save(record)
         return record
+    if record.get('run_kind') == 'native-codex':
+        service._path(run_id).with_name('cancelled').touch()
+        until = time.monotonic() + 20
+        while time.monotonic() < until:
+            await asyncio.sleep(0.05)
+            record = service.result(run_id, attempts=SAVE_READ_ATTEMPTS)
+            if record['status'] != 'running':
+                return record
     survivors = list(record.get('survivors', []))
     if record.get('job_id') in service.runner.jobs:
         await service.runner.cancel(record['job_id'])

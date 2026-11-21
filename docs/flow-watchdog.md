@@ -29,6 +29,13 @@ behind count do not alert merely because the checkout is old. These two addition
 conditions emit stable per-host identities with JSON-escaped identifiers; no Git or host access
 is performed by the checker. Collectors must refresh origin/main before measuring.
 
+## Old processes in deleted working directories
+
+The Linux service scans local process metadata each time it runs. It queues one
+`deleted-cwd` alert per host when live processes at least two hours old still
+refer to deleted working directories. The alert reports the count at detection.
+An empty scan clears the alert so a later incident can notify again.
+
 ## Busy sessions with quiet transcripts (D-5225)
 
 The optional injectable `session_activity` snapshot reader adds one `busy-quiet`

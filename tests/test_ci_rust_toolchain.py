@@ -362,7 +362,7 @@ def test_rust_job_pg_jail_bin_follows_cargo_target_dir_with_and_without_it(tmp_p
     jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
     line = next(l.strip() for s in jobs["rust"]["steps"] for l in s.get("run", "").splitlines()
                 if l.strip().startswith('PG_JAIL_BIN="'))
-    expr = line.split("PG_JAIL_BIN=", 1)[1].split(" cargo ", 1)[0]
+    expr = re.match(r'PG_JAIL_BIN=("[^"]*")\s', line).group(1)
     base = {"PATH": "/usr/bin:/bin", "GITHUB_WORKSPACE": "/w"}
 
     def resolve(extra):
@@ -371,3 +371,17 @@ def test_rust_job_pg_jail_bin_follows_cargo_target_dir_with_and_without_it(tmp_p
 
     assert resolve({}) == "/w/rust/target/debug/pg-jail"
     assert resolve({"CARGO_TARGET_DIR": "/t/x"}) == "/t/x/debug/pg-jail"
+
+
+def test_ci_rust_jobs_route_tests_through_the_deadline_runner():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())["jobs"]
+    guarded = re.compile(r"\bpython(?:3)?\s+[^\s]*tools/preflight\.py\s+--cargo-test\b")
+    counts = {}
+    for name, job in jobs.items():
+        commands = "\n".join(
+            step.get("run", "") + "\n" + step.get("with", {}).get("command", "")
+            for step in job.get("steps", []))
+        assert not re.search(r"\bcargo\s+test\b", commands), name
+        if count := len(guarded.findall(commands)):
+            counts[name] = count
+    assert counts == {"rust": 2, "rust-windows": 2, "rust-worker": 1, "rust-spike": 1}

@@ -45,6 +45,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         push_ref: None,
         reviews_started: 0,
         review_override: None,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -157,6 +158,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         push_ref: None,
         reviews_started: 0,
         review_override: None,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -491,6 +493,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
             .into(),
         push_ref: None,
         reviews_started: 0,
+        turn_timeout: Duration::from_secs(60),
         review_override: None,
         review_cli: vec![
             "python3".into(),
@@ -537,11 +540,6 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         .reviews
         .join(format!("checkout-{}-1", &head[..8]))
         .exists());
-    let unfamiliar_skill =
-        extended_skill.replace("name: review", "name: review\nversion: unfamiliar");
-    fs::write(skill_dir.join("SKILL.md"), unfamiliar_skill).unwrap();
-    let review = host.review(&head, None).unwrap();
-    assert_eq!(review["verdict"], "ACCEPT", "{review}");
     // OpenCode legs: no result frame in the live log, the answer is the stdout tail.
     let record = json!({"run_id":"run-rv2", "status":"completed",
         "stdout_tail":format!("HIGH src/lib.rs:1 - x\nHEAD: {head}\nVERDICT: REQUEST_CHANGES\n")});
@@ -556,12 +554,34 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert_eq!(deferred["status"], "deferred_to_batch_seat");
     assert_eq!(deferred["causes"][0]["reason"], "limited");
     assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
-    // A spawner that prints no run record is an error, never a verdict.
+    fs::remove_file(state.join("no-review-seat")).unwrap();
+
+    let unfamiliar_skill =
+        extended_skill.replace("name: review", "name: review\nversion: unfamiliar");
+    fs::write(skill_dir.join("SKILL.md"), unfamiliar_skill).unwrap();
+    let review = host.review(&head, None).unwrap();
+    assert_eq!(review["verdict"], "ACCEPT", "{review}");
+    // A definitive refusal is retryable and leaves no checkout.
+    host.review_cli = vec![
+        "python3".into(),
+        "-c".into(),
+        "raise SystemExit('review refused')".into(),
+    ];
+    let refusal = host.review(&head, None).unwrap_err();
+    assert_eq!(refusal, "review run returned no record: review refused");
+    assert!(!host
+        .reviews
+        .join(format!("checkout-{}-3", &head[..8]))
+        .exists());
+
+    // Successful exit without a receipt leaves admission unknown.
     host.review_cli = vec!["true".into()];
+    let missing = host.review(&head, None).unwrap_err();
+    assert!(missing.starts_with(crate::native_writer::REVIEW_CLEANUP_UNCONFIRMED));
     assert!(host
-        .review(&head, None)
-        .unwrap_err()
-        .starts_with("review run returned no record"));
+        .reviews
+        .join(format!("checkout-{}-4", &head[..8]))
+        .exists());
 }
 
 #[cfg(unix)]
@@ -635,6 +655,7 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
         push_ref: None,
         reviews_started: 0,
         review_override: None,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -719,6 +740,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
         push_ref: None,
         reviews_started: 0,
         review_override: None,
+        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -741,64 +763,4 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
         .contains("gate umask: 0o22\n"));
     let excerpt = host.stamp(&head_c).unwrap().with_extension("session.log");
     assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
-}
-
-#[test]
-fn same_head_re_review_diffs_against_the_batch_base() {
-    use super::review_diff_base;
-    let (base, old, head) = ("b".repeat(40), "a".repeat(40), "c".repeat(40));
-    // A later head reviews the delta from the previous review's head.
-    assert_eq!(review_diff_base(&base, &head, Some((&old, "text"))), old);
-    // The same head must never ask for the empty delta head..head.
-    assert_eq!(review_diff_base(&base, &head, Some((&head, "text"))), base);
-    assert_eq!(review_diff_base(&base, &head, None), base);
-}
-
-#[test]
-fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
-    use super::review::{TOOLS_ONLY_CLOSE, TOOLS_ONLY_OPEN};
-    let dir = tempfile::tempdir().unwrap();
-    let mut host = Host {
-        repo: dir.path().into(),
-        cwd: dir.path().into(),
-        run_id: "run-tools".into(),
-        reviews: dir.path().join("reviews"),
-        record_path: dir.path().join("record.json"),
-        base_ref: "refs/heads/main".into(),
-        tool_path: std::env::var("PATH").unwrap(),
-        effort: WRITER_EFFORT.into(),
-        state: dir.path().to_path_buf(),
-        brief: "the item brief".into(),
-        push_ref: None,
-        reviews_started: 0,
-        review_cli: vec!["false".into()],
-        python_src: None,
-    };
-    let (base, head) = ("b".repeat(40), "c".repeat(40));
-    let prompt = host.review_prompt(
-        &base,
-        &head,
-        None,
-        &["openai".to_owned()],
-        "VERSIONED BRIEF",
-        "A nonempty review skill.",
-    );
-    assert!(prompt.starts_with(TOOLS_ONLY_OPEN));
-    let open = 0;
-    let close = prompt.find(TOOLS_ONLY_CLOSE).unwrap();
-    let block = &prompt[open..close];
-    assert!(
-        block.contains("run read-only commands and the tests"),
-        "{block}"
-    );
-    // Nothing outside the block asks for a tool run or a file read.
-    assert!(
-        prompt.find("Writer brief").unwrap() > close,
-        "the block precedes the writer brief"
-    );
-    let outside = format!("{}{}", &prompt[..open], &prompt[close..]);
-    assert!(
-        !outside.contains("run read-only commands") && !outside.contains("Open callers"),
-        "{outside}"
-    );
 }

@@ -1,0 +1,1 @@
+- Bound pytest and Rust libtest cases individually in CI and preflight. A timeout reports the case ID, emits diagnostics, and kills the running test and its children.

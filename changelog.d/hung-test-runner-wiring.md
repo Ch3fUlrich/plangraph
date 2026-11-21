@@ -1,0 +1,1 @@
+- Cover the push gate's Rust hang handling, pytest deadline validation, and the guarded test commands used by GitHub and Dell CI.

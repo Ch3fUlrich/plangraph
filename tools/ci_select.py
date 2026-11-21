@@ -127,6 +127,10 @@ RUST_INPUTS: tuple[str, ...] = (
     *RUST_WORKER_INPUTS,
     "tools/seat_verdict.py",
     "tools/preflight.py",
+    "pytest.ini",
+    "tests/conftest.py",
+    "tests/_split_ci_environment.py",
+    "src/plangraph/spawner/proc_kill.py",
     "tools/preflight_private_scrub.py",
 )
 

@@ -554,16 +554,27 @@ async def native_spawn(self, card, options):
     from .proc_kill import root_identity
     identity = root_identity(process.pid)
     async def finish():
+        communication = asyncio.create_task(process.communicate())
         try:
-            _, error = await process.communicate()
+            _, error = await asyncio.shield(communication)
             final = self.result(record['run_id'])
             if final.get('status') == 'running':
                 final.update(status='failed', exit_code=process.returncode or 6,
                              reason=error.decode(errors='replace')[-4096:], ended=time.time())
             self._save(final)
         except asyncio.CancelledError:
-            survivors = await self.runner.kill_recorded(process.pid, identity)
-            await process.wait()
+            # Give the driver time to cancel and reap its linked review before killing it.
+            (directory / 'cancelled').touch()
+            survivors = []
+            try:
+                await asyncio.wait_for(asyncio.shield(communication), timeout=20)
+            except asyncio.TimeoutError:
+                survivors = await self.runner.kill_recorded(process.pid, identity)
+                if survivors:
+                    from .reap import cancel_and_close
+                    await cancel_and_close(communication, process)
+                else:
+                    await communication
             record.update(self.result(record['run_id']))
             record.update(status='failed' if survivors else 'cancelled', exit_code=130, ended=time.time())
             if survivors: record.update(reason='kill_incomplete', survivors=survivors)
