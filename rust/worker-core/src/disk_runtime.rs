@@ -65,8 +65,8 @@ fn scan_processes(root: &Path) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
         match fs::read_to_string(path.join("comm")) {
             Ok(name) => {
                 building |= [
-                    "cargo", "rustc", "rustdoc", "sccache", "cc", "gcc", "clang", "ld", "npm",
-                    "make", "cmake", "ninja",
+                    "cargo", "rustc", "rustdoc", "cc", "gcc", "clang", "ld", "npm", "make",
+                    "cmake", "ninja",
                 ]
                 .contains(&name.trim())
             }

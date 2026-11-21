@@ -53,3 +53,15 @@ disk-hygiene user timer and the merged-worktree sweep timer. Configure their pin
 claims, run state and root paths. Inspect the dry run and record a real cleanup
 with freed bytes. Give the heartbeat collector the newest `disk-hygiene.json`
 report for that host and surface its `alarm` or failure.
+
+## Build caches
+
+NOTE Worker host sessions. Set `RUSTC_WRAPPER=sccache` and an explicit
+`SCCACHE_CACHE_SIZE` in the host environment read by the spawner and
+fleet launcher. Set `SCCACHE_DIR` on the build disk. Size the cache so that it
+and active Cargo targets leave the configured free-space floor. Check the
+effective wrapper, cache directory and cap with a small spawned Cargo build.
+
+NOTE Watchdog host session. Include the usage of configured work mounts in each
+host's `work_used_percent` array. On the single-disk worker, inspect the
+worktree and cache reports, reclaim eligible data and measure usage below 85%.

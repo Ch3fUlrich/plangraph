@@ -15,6 +15,11 @@ Test: `cargo test -p pg-reap` (hermetic boundary/protection/parser tests and sta
 
 ## Live merged-worktree sweep
 
+`pg-worktree-sweep --report-claude-jobs "$HOME/.claude/jobs"` lists stale Claude
+job directories and their sizes in JSON. A candidate needs a valid `done`
+record with an offset-aware `updatedAt` and no newer filesystem writes in
+the last seven days. The command only reports candidates.
+
 User units protect the worktrees they run from. The sweep reads every file and drop-in under
 `$XDG_CONFIG_HOME/systemd/user` (or `~/.config/systemd/user`) and every link target, splits each
 word of each value on whitespace, quotes and `; & | ( ) < > = , :` and refuses a worktree that is,

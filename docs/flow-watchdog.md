@@ -20,8 +20,10 @@ The seven condition groups produce 8 rule names: placement and host drift are se
 
 Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).
 Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
-`origin_main_head`, `behind_commits`, and `age_hours`. `host-disk` alerts strictly
-above 85% used on either `/tmp` or `/`. `host-code` alerts when the spawner checkout
+`origin_main_head`, `behind_commits`, and `age_hours`. Collectors can add
+`work_used_percent`, an array of usage percentages for configured work mounts.
+`host-disk` alerts once per host when any sampled filesystem exceeds 85% used.
+`host-code` alerts when the spawner checkout
 is behind origin/main by more than 10 commits **or** 24 hours. The collector must
 provide the ancestry-based behind count and age in hours since the first missing
 origin/main commit, not the checkout commit's timestamp. Equal heads or a zero

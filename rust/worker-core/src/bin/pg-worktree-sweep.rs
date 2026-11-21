@@ -20,6 +20,21 @@ fn check_units() -> io::Result<bool> {
     Ok(missing.is_empty())
 }
 fn run() -> io::Result<()> {
+    if env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--report-claude-jobs")) {
+        let mut args = env::args_os().skip(2);
+        let path = args
+            .next()
+            .filter(|path| !path.is_empty() && args.next().is_none())
+            .ok_or_else(|| {
+                io::Error::other("usage: pg-worktree-sweep --report-claude-jobs PATH")
+            })?;
+        let rows = pg_worker_core::claude_job_reports::candidates(
+            &PathBuf::from(path),
+            SystemTime::now(),
+        )?;
+        println!("{}", serde_json::to_string(&rows)?);
+        return Ok(());
+    }
     if env::args().nth(1).as_deref() == Some("--check-units") {
         return if check_units()? {
             Ok(())

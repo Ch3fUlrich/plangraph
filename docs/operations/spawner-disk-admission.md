@@ -9,6 +9,8 @@ receiving spawner also checks live disk before launching.
 
 Every harness child, including writers and fixers, receives `CARGO_TARGET_DIR`
 from `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`).
+Spawned builds also use host-configured cache variables. See the sccache
+settings in [Worker disk rollout](worker-disks.md).
 Caller and per-worktree target overrides are replaced; children also receive
 `CARGO_INCREMENTAL=0`. The cache cap is
 `PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB). Over-cap busy hosts refuse a building role with

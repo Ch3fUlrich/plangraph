@@ -27,7 +27,12 @@ def shared_cargo_target():
 
 
 def cargo_child_env(env):
-    return dict(env, CARGO_TARGET_DIR=str(shared_cargo_target()), CARGO_INCREMENTAL="0")
+    result = dict(env, CARGO_TARGET_DIR=str(shared_cargo_target()), CARGO_INCREMENTAL="0")
+    for name in ('RUSTC_WRAPPER', 'SCCACHE_CACHE_SIZE', 'SCCACHE_DIR', 'CARGO_HOME',
+                 'PIP_CACHE_DIR', 'npm_config_cache', 'UV_CACHE_DIR', 'TMPDIR'):
+        if value := os.environ.get(name):
+            result[name] = value
+    return result
 
 
 def disk_free_gb(path):
