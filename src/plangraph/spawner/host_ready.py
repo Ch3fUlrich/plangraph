@@ -14,15 +14,15 @@ import sys
 import time
 
 from .doctor import clean
-from .host_ready_source import check_sources
 from .private_io import atomic_write_private
-from .host_disk_roots import (
+from .host_ready_source import (
     configured_work_drives as _configured_work_drives,
     select_drive,
     legacy_cache_roots as _legacy_cache_roots,
     pool_slot_roots as _pool_slot_roots,
     record_disk_floor_alarm as _record_disk_floor_alarm,
     windows_cargo_lease as _windows_cargo_lease,
+    check_sources,
 )
 
 HOST_TIMEOUT = 120
@@ -320,7 +320,7 @@ def _cleanup_before_disk_refusal(worktree, service):
 
 
 def select_work_drive(drives, cleanup):
-    """The one drive decision (see host_disk_roots.select_drive), measured with ``disk_free_gb``."""
+    """The one drive decision (see host_ready_source.select_drive), measured with ``disk_free_gb``."""
     return select_drive(drives, cleanup, disk_free_gb)
 
 
