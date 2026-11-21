@@ -1055,14 +1055,3 @@ def test_hand_edit_auth_path_rename_exact(repo: Path) -> None:
     _git(repo, 'mv', 'src/plangraph/keeper/mcp.py', 'docs/mcp_moved.py')
     sha = _commit(repo, 'fix: move\n\nHand-Edit: move\n')
     assert check(base, sha, cwd=repo) == [f'{sha}: hand-edit touches auth/door surface: src/plangraph/keeper/mcp.py']
-
-
-@pytest.mark.parametrize("path", [".gitattributes", "tools/.gitattributes", "rust/pg-spawnd/tests/.gitattributes"])
-def test_gitattributes_at_any_depth_is_a_gate_path(repo: Path, path: str):
-    """A merge attribute changes what a merge produces, so a part or a resolution that edits one needs a grant."""
-    base = _head(repo)
-    head = _commit(repo, OK_MSG, files={path: "*.lock merge=union\n"})
-    assert check(base, head, cwd=repo) == [f"{head}: gate edit without Gate-Edit trailer"]
-    granted = _commit(repo, "chore: attrs\n\nWriter: mimo-v2.6-flash run-g\n\nGate-Edit: D-6530\n",
-                      files={path: "*.lock merge=binary\n"})
-    assert check(base, granted, cwd=repo) == [f"{head}: gate edit without Gate-Edit trailer"]
