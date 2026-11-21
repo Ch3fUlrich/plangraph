@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -37,6 +38,46 @@ def test_changed_source_refuses_real_spawn_before_dispatch(tmp_path, monkeypatch
     assert not (tmp_path / 'runs').exists()
 
 
+def test_changed_source_refuses_probe_before_dispatch(tmp_path, monkeypatch):
+    identity = Mock(return_value=OLD)
+    server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+    probe = AsyncMock(return_value={'status': 'complete'})
+    monkeypatch.setattr(mcp.leg_probe, 'probe_many', probe)
+    assert 'result' in rpc(server, 'probe', {'leg': ['fixture']})
+    identity.return_value = NEW
+    for arguments in ({}, {'dry_run': True}):
+        reply = rpc(server, 'probe', arguments)
+        assert reply['error']['code'] == -32000
+        assert reply['error']['message'] == RESTART
+        assert reply['error']['data']['type'] == 'SourceChanged'
+    probe.assert_awaited_once()
+
+
+def test_stale_server_can_inspect_and_cancel_its_running_task(tmp_path):
+    async def run():
+        identity = Mock(return_value=OLD)
+        server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
+        run_id = 'run-fixture'
+        server.service._save({'run_id': run_id, 'status': 'running'})
+        task = asyncio.create_task(asyncio.Event().wait())
+        server.service.tasks[run_id] = task
+        identity.return_value = NEW
+
+        async def request(verb):
+            reply = await server.handle_rpc_request({
+                'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+                'params': {'name': 'plangraph_agent_' + verb, 'arguments': {'run_id': run_id}}})
+            return json.loads(reply['result']['content'][0]['text'])
+
+        assert (await request('status'))['status'] == 'running'
+        assert (await request('result'))['status'] == 'running'
+        assert (await request('cancel'))['status'] == 'cancelled'
+        assert task.cancelled()
+        assert server.service.result(run_id)['status'] == 'cancelled'
+
+    asyncio.run(run())
+
+
 def test_health_reports_stale_and_reconnect_captures_new_identity(tmp_path):
     identity = Mock(return_value=OLD)
     server = mcp.MCPSpawnerServer(state=tmp_path, source_identity=identity)
@@ -58,11 +99,11 @@ def test_stale_source_preserves_non_launch_tools(tmp_path, monkeypatch):
     monkeypatch.setattr(remote_ps, 'list_runs', lambda rows: rows)
     monkeypatch.setattr(server.runner, 'cancel', AsyncMock(return_value={'cancelled': True}))
     monkeypatch.setattr(server.service, 'cancel', AsyncMock(return_value={'cancelled': True}))
-    monkeypatch.setattr(server.service, 'result', lambda run_id: {'run_id': run_id})
+    monkeypatch.setattr(server.runner, 'steer', AsyncMock(return_value={'steered': True}))
     cases = [('spawn', {'dry_run': True, 'prompt': 'task', 'card': {'estimate_tokens': 1}}),
              ('route', {'card': {'estimate_tokens': 1}}), ('ps', {}), ('status', {}),
-             ('status', {'run_id': 'run-test'}), ('cancel', {'job_id': 'test'}),
-             ('cancel', {'run_id': 'run-test'})]
+             ('steer', {'job_id': 'test', 'message': 'keep going'}),
+             ('cancel', {'job_id': 'test'}), ('cancel', {'run_id': 'run-test'})]
     for name, arguments in cases:
         assert 'result' in rpc(server, name, arguments)
     assert spawn.await_args.kwargs['dry_run'] is True

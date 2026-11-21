@@ -1,0 +1,8 @@
+[
+  {"name":"bad context guard","role":"review","args":["--ctx-guard","100,99"],"stderr":"fleet-launch: bad --ctx-guard '100,99': want N,M positive ints, hard > handoff\n"},
+  {"name":"L2 policy","role":"fixture-L2-0042","args":[],"stderr":"fleet-launch: role fixture-L2 is refused by policy ((^|-)L2(-|$)); no launch: dispatch the work as spawner runs from the L1\n"},
+  {"name":"invalid respawn session","role":"review","args":["--respawn","--session","../review-0042"],"stderr":"fleet-launch: invalid respawn session\n"},
+  {"name":"unknown host","role":"review","args":["--host","fixture-unknown"],"stderr":"fleet-launch: refused host fixture-unknown: unknown host\n"},
+  {"name":"disabled host","role":"review","args":["--host","fixture-disabled"],"stderr":"fleet-launch: refused host fixture-disabled: disabled\n"},
+  {"name":"missing MCP","role":"review","args":["--mcp","$ROOT/absent.json"],"stderr":"fleet-launch: mcp config $ROOT/absent.json not found\n"}
+]
