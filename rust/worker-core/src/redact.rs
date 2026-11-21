@@ -27,7 +27,7 @@ fn patterns() -> &'static [regex::Regex] {
             //    of the text. Second, so a complete block is always preferred.
             r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*",
             // 3. Authorization/Bearer headers: keep the word "Bearer", cut the value.
-            r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
+            r"(?i)\bbearer\s+(?:[A-Za-z0-9._~+/=-]{8,}|\[REDACTED\])",
             // 4a. Env-style assignments: keep the credential name, cut the
             //     value. Separator whitespace is horizontal Unicode whitespace
             //     only, never CR/LF, so it never crosses a newline. Complete
@@ -93,6 +93,7 @@ fn redact_inner(text: &str, assignments: bool, allow_shas: &BTreeSet<String>) ->
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
+    let out = super::redact_wrapped::redact_bearer_wrapped(&out);
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
     let out = if assignments {
         let out = super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5]);

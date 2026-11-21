@@ -195,3 +195,28 @@ def test_card_context_labels_are_not_source_blocks(monkeypatch, tmp_path):
 def test_source_scrub_failure_withholds_text(monkeypatch):
     monkeypatch.setattr(env_redact.re, 'sub', lambda *a, **k: (_ for _ in ()).throw(ValueError()))
     assert 'redaction failed; output withheld' in env_redact.redact_source(CODE)
+
+
+def _git(repo, *args):
+    import subprocess
+    subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                    '-c', 'commit.gpgsign=false', '-C', str(repo), *args],
+                   check=True, capture_output=True, stdin=subprocess.DEVNULL)
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_wrapped_token_in_real_git_diff_is_masked_in_final_prompt(monkeypatch, tmp_path, newline):
+    first, second = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    (tmp_path / 'a.txt').write_bytes(b'context\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'one')
+    _git(tmp_path, 'checkout', '-q', '-b', 'topic')
+    (tmp_path / 'a.txt').write_bytes(('context\n' + first + newline + second + newline
+                                      + 'next retained\n').encode())
+    _git(tmp_path, 'commit', '-q', '-am', 'two')
+    ref = {'repo': str(tmp_path), 'base': 'main', 'head': 'topic'}
+    prompt = inline_diff.inline_diff_prompt('review', ref, max_chars=100000)
+    out = capture(monkeypatch, tmp_path, prompt)
+    assert first not in out and second not in out
+    assert '+[REDACTED]' in out and '+next retained' in out

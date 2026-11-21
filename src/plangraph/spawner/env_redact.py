@@ -5,7 +5,8 @@ import re
 import subprocess
 from decimal import Decimal
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
-from .redact_tokens import redact_wide_assignments
+from .redact_tokens import redact_wide_assignments, redact_bearer_wrapped, open_wrapped_line_start
+from .redact_tokens import redact_diff_wrapped
 
 
 def _redact_pem(text):
@@ -154,7 +155,7 @@ def _redact(value, *, source):
             return [_redact(v, source=source) for v in value]
         if isinstance(value, str):
             value = _redact_pem(value)
-            value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
+            value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', redact_bearer_wrapped(value))
             if not source:
                 value = redact_wide_assignments(value, _ASSIGNMENT)
                 # P joins values behind shielded names, then main's order runs.
@@ -204,6 +205,11 @@ def _source_block(text):
     return _SourcePrompt(text, ((0, len(text)),))
 
 
+def _diff_block(text):
+    """Called only by the git-diff producer: wrapped tokens are joined across hunk markers."""
+    return _source_block(redact_diff_wrapped(text))
+
+
 def _redact_prompt(prompt, scrub):
     """Full strength outside exact producer spans, including imitated framing."""
     if type(prompt) is not _SourcePrompt:
@@ -236,6 +242,10 @@ class OutputLines:
             self.pending = self.pending[match.end():] if match else ''
             self.discarding = not bool(match)
         end = len(self.pending) if final else max(self.pending.rfind('\n'), self.pending.rfind('\r')) + 1
+        if not final:
+            # A wrapped credential may continue in a later read: keep its lines back.
+            held = open_wrapped_line_start(self.pending[:end])
+            end = end if held is None else held
         text, self.pending = self.pending[:end], self.pending[end:]
         if len(self.pending) > 65536:
             # An arbitrarily long credential cannot safely be partially emitted.

@@ -28,6 +28,36 @@ pub(crate) fn join_shielded_assignments(text: &str, rules: &[regex::Regex]) -> S
 }
 
 pub(crate) fn redact_wrapped(text: &str) -> String {
+    mask_spans(text, wrapped_spans(text).into_iter())
+}
+
+/// Mask wrapped tokens right after a Bearer word, before the word's own rule
+/// runs: that rule takes one word and would leave a continuation readable.
+pub(crate) fn redact_bearer_wrapped(text: &str) -> String {
+    static BEARER: OnceLock<regex::Regex> = OnceLock::new();
+    let re = BEARER.get_or_init(|| regex::Regex::new(r"(?i)\bbearer\s+").unwrap());
+    let starts: std::collections::BTreeSet<usize> = re.find_iter(text).map(|m| m.end()).collect();
+    mask_spans(
+        text,
+        wrapped_spans(text)
+            .into_iter()
+            .filter(|(start, _)| starts.contains(start)),
+    )
+}
+
+fn mask_spans(text: &str, spans: impl Iterator<Item = (usize, usize)>) -> String {
+    let mut out = String::new();
+    let mut copied = 0;
+    for (start, end) in spans {
+        out.push_str(&text[copied..start]);
+        out.push_str(crate::redact::REDACTED);
+        copied = end;
+    }
+    out.push_str(&text[copied..]);
+    out
+}
+
+fn wrapped_spans(text: &str) -> Vec<(usize, usize)> {
     static PREFIX: OnceLock<regex::Regex> = OnceLock::new();
     let re = PREFIX.get_or_init(prefix_regex);
     static BODIES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
@@ -37,7 +67,7 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
             .map(|s| regex::Regex::new(&format!("^{}$", s.body)).unwrap())
             .collect()
     });
-    let mut out = String::new();
+    let mut spans = Vec::new();
     let mut copied = 0;
     for captures in re.captures_iter(text) {
         let m = captures.get(0).unwrap();
@@ -104,13 +134,11 @@ pub(crate) fn redact_wrapped(text: &str) -> String {
         // Deliberately preserve joined bodies below the family floor: short
         // prefix-like prose is not classified as a secret by either path.
         if wrapped && count >= floor {
-            out.push_str(&text[copied..m.start()]);
-            out.push_str(crate::redact::REDACTED);
+            spans.push((m.start(), end));
             copied = end;
         }
     }
-    out.push_str(&text[copied..]);
-    out
+    spans
 }
 
 fn prefix_regex() -> regex::Regex {
@@ -178,6 +206,30 @@ mod tests {
             assert_eq!(redact_wrapped(&input), format!("[REDACTED]{nl}b"));
             let input = format!("{prefix}a{nl}a word");
             assert_eq!(redact_wrapped(&input), input);
+        }
+    }
+
+    #[test]
+    fn closing_quote_ends_a_wrapped_value_past_the_floor() {
+        let head = ["gh", "p_", &"A9".repeat(10)].concat();
+        for nl in ["\n", "\r\n"] {
+            for q in ['"', '\''] {
+                let input = format!(
+                    "API_KEY={q}{head}{nl}{}{q}{nl}next retained",
+                    "A9".repeat(4)
+                );
+                assert_eq!(
+                    crate::redact::redact(&input),
+                    format!("API_KEY=[REDACTED]{nl}next retained")
+                );
+                assert_eq!(
+                    redact_wrapped(&input),
+                    format!("API_KEY={q}[REDACTED]{q}{nl}next retained")
+                );
+                // A quote that did not open the value does not close it.
+                let input = format!("{head}{nl}{}{q}", "A9".repeat(4));
+                assert_eq!(redact_wrapped(&input), input);
+            }
         }
     }
 

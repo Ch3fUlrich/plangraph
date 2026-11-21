@@ -59,6 +59,12 @@ pub(crate) const SPECS: &[TokenSpec] = &[
         floor: 30,
         exact: false,
     },
+    TokenSpec {
+        prefix: "[sr]k_(?:live|test)_",
+        body: "[A-Za-z0-9]",
+        floor: 16,
+        exact: false,
+    },
 ];
 
 pub(crate) fn pattern() -> String {
@@ -201,6 +207,10 @@ mod tests {
             (3, "xo", "xs-"),
             (4, "AK", "IA"),
             (5, "AI", "za"),
+            (6, "sk", "_live_"),
+            (6, "sk", "_test_"),
+            (6, "rk", "_live_"),
+            (6, "rk", "_test_"),
         ];
         for (index, left, right) in families {
             let spec = &SPECS[index];

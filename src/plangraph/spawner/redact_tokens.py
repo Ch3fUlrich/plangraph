@@ -22,6 +22,7 @@ SPECS = (
     TokenSpec(r'xox[abprs]-', r'[A-Za-z0-9_-]', 10, False),
     TokenSpec(r'AKIA', r'[0-9A-Z]', 16, True),
     TokenSpec(r'AIza', r'[0-9A-Za-z_-]', 30, False),
+    TokenSpec(r'[sr]k_(?:live|test)_', r'[A-Za-z0-9]', 16, False),
 )
 
 
@@ -56,6 +57,60 @@ def redact_wrapped(text):
         out.extend((text[copied:start], '[REDACTED]'))
         copied = end
     return ''.join((*out, text[copied:]))
+
+
+_BEARER = re.compile(r'(?i)\bBearer\s+')
+
+
+def redact_bearer_wrapped(text):
+    """Mask wrapped tokens right after a Bearer word, before the word's own rule runs.
+
+    The Bearer rule takes one whitespace-free word and would leave a wrapped
+    continuation behind; this must run first (rust/worker-core redact_wrapped.rs).
+    """
+    starts = {m.end() for m in _BEARER.finditer(text)}
+    out, copied = [], 0
+    for start, end in _wrapped_spans(text):
+        if start in starts:
+            out.extend((text[copied:start], '[REDACTED]'))
+            copied = end
+    return ''.join((*out, text[copied:]))
+
+
+def open_wrapped_line_start(text):
+    """Offset of the line holding the earliest token that later lines may still extend.
+
+    ``text`` holds only complete lines. A token is open when its joined body
+    reaches the last line, so a stream must keep that line until more arrives
+    (same joining rules as _wrapped_spans).
+    """
+    for match in _PREFIX.finditer(text):
+        index = match.lastindex - 1
+        spec, body = SPECS[index], _BODY[index]
+        end, count = match.end(), 0
+        while end < len(text):
+            run = body.match(text, end)
+            if run:
+                count += run.end() - end
+                end = run.end()
+            if count >= MAX_WRAPPED_BODY or end >= len(text):
+                break
+            next_start = end + (2 if text.startswith('\r\n', end) else 1 if text[end] == '\n' else 0)
+            if next_start == end:
+                break
+            if next_start >= len(text):
+                return text.rfind('\n', 0, match.start()) + 1
+            next_run = body.match(text, next_start)
+            if count >= spec.floor:
+                line_end = next_run.end() if next_run else next_start
+                if (count + line_end - next_start > MAX_WRAPPED_BODY
+                        or not (line_end == len(text) or text.startswith('\n', line_end)
+                                or text.startswith('\r\n', line_end))):
+                    break
+            if not next_run:
+                break
+            end = next_start
+    return None
 
 
 def _wrapped_spans(text):
@@ -175,3 +230,39 @@ def redact_wide_assignments(text, assignment):
             while old is not None and old.start() < copied:
                 old = next(old_matches, None)
     return ''.join((*out, text[copied:]))
+
+
+def redact_diff_wrapped(text):
+    """Mask wrapped tokens in a unified diff, joining body lines across their markers.
+
+    The one-character +/-/space marker of each hunk line is not part of the
+    credential, so the scan runs on the marker-free lines; a line inside a masked
+    span disappears with its marker, the others keep theirs.
+    """
+    lines, marks, in_hunk = re.findall(r'[^\n]*\n|[^\n]+', text), [], False
+    for line in lines:
+        if line.startswith('diff --git '):
+            in_hunk = False
+        elif line.startswith('@@'):
+            in_hunk = True
+        marks.append(1 if in_hunk and line[:1] in ('+', '-', ' ') else 0)
+    stripped = ''.join(line[mark:] for line, mark in zip(lines, marks))
+    spans = list(_wrapped_spans(stripped))
+    if not spans:
+        return text
+    out, offset, spans_at = [], 0, 0
+    for line, mark in zip(lines, marks):
+        start, end = offset, offset + len(line) - mark
+        offset = end
+        while spans_at < len(spans) and spans[spans_at][1] <= start:
+            spans_at += 1
+        span = spans[spans_at] if spans_at < len(spans) else None
+        if span is None or span[0] >= end:
+            out.append(line)
+        elif span[0] >= start:
+            out.extend((line[:mark + span[0] - start], '[REDACTED]'))
+            if span[1] < end:
+                out.append(line[mark + span[1] - start:])
+        elif span[1] < end:
+            out.append(line[mark + span[1] - start:])
+    return ''.join(out)
