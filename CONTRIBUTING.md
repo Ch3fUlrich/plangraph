@@ -21,7 +21,7 @@ their owning `Cargo.toml` with `--manifest-path`, including excluded packages
 without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
 
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
-affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s), scaled up to 2 seconds per selected test path and capped at 1200 seconds for a large selection; it runs with pytest-xdist workers sized from the host (half the cores, at most one per 2 GiB of available memory, cores only when memory cannot be read, 2 to 16; `PREFLIGHT_TEST_WORKERS` overrides); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+file-only affected preflight has 240 seconds (`TEST_TIMEOUT`) for selection and pytest together. Preflight sizes pytest-xdist from the host using half the cores, at most one worker per 2 GiB of available memory, and between 2 and 16 workers. If available memory cannot be read, preflight uses the core count alone. `PREFLIGHT_TEST_WORKERS` overrides the count. A timeout reports the step, deadline, and selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 
 When the local affected selection includes the fleet projection tests, the selector
 builds `pg-spawnd` from the selected checkout before pytest starts.
@@ -39,17 +39,15 @@ and reruns the check there once. It uses that result and keeps the clean target 
 the remaining Rust checks in the run.
 
 The commit policy reads its exemptions from the base commit and checks the entire
-stack against `origin/main`, as the pre-push hook does. Within the policy family
-every check runs and all failures are printed, followed by a `policy: N check(s) failed:`
-block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
-to skip affected tests. The existing pre-push hook runs preflight too; set
-`PREFLIGHT_FAST=1` for its fast mode or, on `refs/heads/phase/*` pushes only
-(D-5843), `PREFLIGHT_SKIP=1` to bypass only that hook invocation (not the existing
-scrub/ref/file-size/commit gates or direct CLI runs; `PREFLIGHT_SKIP=1` on any
-other ref is refused). Private
-scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
+stack against `origin/main`.
+Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
+to skip affected tests in a direct run. The pre-push hook runs preflight with
+file-only affected tests for the pushed revision, using the pushing checkout's
+virtual environment when present.
+On landing train refs (`train/*` and `land/train-*`), `PREFLIGHT_FAST=1` forwards `--fast`.
+Private scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
 when neither is present, public rules still run but scrub reports SKIP with a reason.
-`PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.
+`PREFLIGHT_TOOLS_DIR` overrides tool paths in direct preflight runs.
 The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
 are scoped to policy checks. Other families receive none of these controls,
 including inherited values, so nested Git test fixtures own their revision bases.
@@ -547,14 +545,13 @@ shards, and any failing shard still fails `ci-gate`.
 The standalone fresh-base admission carry is listed as D-5848 in
 `tools/new_code_allowlist.txt` until the spawner Rust port.
 
-Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
+Local selection includes named consumers and bounds the file list at 39. CI covers the wider set. Policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
 
 Both pytest CI jobs validate collection once without `PYTEST_SHARD` on shard 0, using the PR
 affected selection or the full push/nightly suite. Empty individual shards remain
 valid; a nonempty file selection that collects no tests fails the job. Local
 preflight timeouts terminate the selector and its pytest descendants. Missing
-`tools/preflight.py` refuses pushes to main; `PREFLIGHT_SKIP=1` is allowed only when
-every pushed ref is `refs/heads/phase/*` (D-5843) and is refused on all other refs.
+`tools/preflight.py` refuses pushes to main.
 Topic and tag pushes without preflight still run the scrub, ref and file-size gates.
 
 The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy
@@ -596,7 +593,7 @@ base-revision OPERATOR authority; D-5840 and D-5830 do not count. See
 [the migration plan](docs/PY-TO-RUST-MIGRATION-PLAN.md) for the index and first ports.
 
 The pre-push hook checks commit trailers on `origin/main..head` before scrub and
-preflight, including when `PREFLIGHT_SKIP=1`. It queries open PR heads and checks
+preflight. It queries open PR heads and checks
 foreign merges when gh/network access is available; offline pushes still run the
 local trailer gate and explicitly report the skipped open-PR check.
 

@@ -8,14 +8,9 @@ import sys
 import pytest
 
 
-@pytest.mark.parametrize("ref,skip,expected,reason", [
-    ("refs/heads/main", False, 1, "pre-push: tools/preflight.py missing: push refused"),
-    ("refs/heads/main", True, 1,
-     "pre-push: PREFLIGHT_SKIP=1 is allowed only for refs/heads/phase/* (D-5843): push refused"),
-    ("refs/heads/phase/x", True, 0,
-     "pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"),
-])
-def test_missing_preflight_main(tmp_path, ref, skip, expected, reason):
+@pytest.mark.parametrize("skip", [False, True])
+def test_missing_preflight_main(tmp_path, skip):
+    ref = "refs/heads/main"
     root = Path(__file__).resolve().parents[1]
     tools = tmp_path / "tools"
     (tools / "hooks").mkdir(parents=True)
@@ -40,5 +35,5 @@ def test_missing_preflight_main(tmp_path, ref, skip, expected, reason):
         [sys.executable, str(tools / "hooks/pre-push")], cwd=tmp_path,
         env=env, input=f"{ref} {head} {ref} {head}\n",
         capture_output=True, text=True)
-    assert result.returncode == expected
-    assert result.stderr.splitlines().count(reason) == 1
+    assert result.returncode == 1
+    assert result.stderr.splitlines().count("pre-push: tools/preflight.py missing: push refused") == 1

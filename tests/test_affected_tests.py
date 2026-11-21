@@ -47,7 +47,7 @@ def test_local_fleet_selection_builds_pg_spawnd_before_pytest(tmp_path, monkeypa
     (["tests/test_api.py"], ["tests/test_api.py"]),
     (["tests/conftest.py"], ["tests"]),
     (["pyproject.toml"], ["tests"]),
-    ([".github/workflows/check.yml"], ["tests"]),
+    ([".github/workflows/check.yml"], ["tests/test_affected_tests.py"]),
     (["src/pkg/__init__.py"], ["tests/test_api.py"]),
     (["unknown.txt"], []),
     (["docs/guide.md", "status/card", "build/generated.py", "scratch.py"], []),
@@ -70,6 +70,8 @@ def test_selection(tmp_path, changed, expected):
         "tests/test_api.py": "from pkg import api",
         "tests/test_other.py": "import os",
     }
+    if changed == [".github/workflows/check.yml"]:
+        files["tests/test_affected_tests.py"] = ""
     for name, text in files.items():
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -100,8 +102,12 @@ def test_function_local_import_selects_caller(tmp_path, statement):
 
 def test_spawner_cli_change_selects_w9_local_caller():
     root = Path(__file__).resolve().parents[1]
-    plan = selector().select_tests(root, ['src/plangraph/spawner/cli.py'], local=True)
-    assert 'tests/test_w9_regressions.py' in plan['tests']
+    module = selector()
+    changed = ['src/plangraph/spawner/cli.py']
+    caller = 'tests/test_w9_regressions.py'
+    plan = module.select_tests(root, changed, local=True, files_only=True, within=[caller])
+    assert plan['tests'] == [caller]
+    assert caller in module.select_tests(root, changed)['tests']
 
 
 def test_changed_files_includes_worktree_and_untracked(tmp_path):
@@ -650,3 +656,42 @@ def test_shell_imports_survive_shell_syntax(tmp_path, command):
     })
     assert 'tests/test_process.py' in selector().select_tests(
         tmp_path, ['src/pkg/core.py'])['tests']
+
+def test_local_init_selects_explicit_imports_and_changed_exports(tmp_path):
+    initializer = "src/pkg/__init__.py"
+    _asset_repo(tmp_path, {
+        initializer: "from .core import VALUE as public\nfrom .api import VALUE as stable\n",
+        "src/pkg/other.py": "VALUE = 2",
+        "tests/test_package.py": "import pkg",
+        "tests/test_dynamic_package.py": 'importlib.import_module("pkg")',
+        "tests/test_project_name.py": 'PROJECT = "pkg"',
+        "tests/test_public.py": "from pkg import public",
+        "tests/test_stable.py": "from pkg import stable",
+        "tests/test_deep.py": "import pkg.api",
+        "tests/test_inherited.py": "from pkg.api import VALUE",
+    })
+    (tmp_path / initializer).write_text(
+        "from .other import VALUE as public\nfrom .api import VALUE as stable\n"
+    )
+    module = selector()
+    local = module.select_tests(tmp_path, [initializer], local=True, files_only=True)
+    assert local["tests"] == ["tests/test_dynamic_package.py", "tests/test_package.py",
+                              "tests/test_public.py"]
+    ci = module.select_tests(tmp_path, [initializer])
+    assert "tests/test_deep.py" in ci["tests"]
+    api = module.select_tests(tmp_path, ["src/pkg/api.py"], local=True, files_only=True)
+    assert api["tests"] == ["tests/test_api.py", "tests/test_deep.py", "tests/test_inherited.py"]
+
+
+@pytest.mark.parametrize("local", [False, True])
+def test_workflow_only_changes_select_ci_regressions(tmp_path, local):
+    regressions = {"test_ci_select.py", "test_ci_select_rust_inputs.py",
+                   "test_workflow_archive.py", "test_affected_tests.py",
+                   "test_affected_tests_head.py", "test_split_ci_test_affected_tests.py"}
+    directory = tmp_path / "tests"
+    directory.mkdir()
+    for name in regressions | {"test_other.py"}:
+        (directory / name).touch()
+    plan = selector().select_tests(tmp_path, [".github/workflows/tests.yml"],
+                                   local=local, files_only=local)
+    assert plan["tests"] == sorted(f"tests/{name}" for name in regressions)
