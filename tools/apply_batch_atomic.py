@@ -12,9 +12,12 @@ from apply_batch_transport import uncertain
 _OP_PREFIX = re.compile(r"^op (\d+) ")
 
 
-def payload(ops, start, source, digest, base_seq=None, dry_run=False):
-    """The ``apply_ops`` body for ``ops[start-1:]`` plus the hashed batch ref."""
+def payload(ops, start, source, digest, base_seq=None, dry_run=False, name=None):
+    """The ``apply_ops`` body for ``ops[start-1:]`` plus the hashed batch ref
+    (and the batch name, which a granted l1's report line to the router carries)."""
     body = {"ops": list(ops[start - 1:]), "batch_ref": f"{source}@{digest}"}
+    if name:
+        body["batch"] = name
     if base_seq is not None:
         body["base_seq"] = base_seq
     if dry_run:
@@ -97,7 +100,8 @@ def send(session, ops, start, source, digest, errors, op_key,
     try:
         raw = session.post("apply_ops",
                            payload(ops, start, source, digest,
-                                   base_seq=base_seq, dry_run=dry_run), timeout=session.mutation_timeout)
+                                   base_seq=base_seq, dry_run=dry_run,
+                                   name=batch_label), timeout=session.mutation_timeout)
     except errors as exc:
         if getattr(exc, "code", "") in ("unknown outcome", "unreachable"):
             return 1, uncertain(identity, submitted)

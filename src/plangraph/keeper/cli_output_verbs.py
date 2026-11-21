@@ -86,6 +86,18 @@ def cmd_priority(args, session):
                  lambda r: f"{r.get('key')} priority {r.get('priority')}")
 
 
+def cmd_grant_apply(args, session):
+    from .cli_verbs import _refuse, read, write
+    if args.list:
+        return read(session, "apply_grants", {}, fmt.apply_grants_text)
+    if not args.principal or not args.project:
+        return _refuse("grant-apply needs PRINCIPAL and PROJECT (or --list)")
+    verb = "revoke_apply" if args.revoke else "grant_apply"
+    return write(session, verb, {"principal": args.principal, "project": args.project},
+                 lambda r: f"{r['principal']} {'revoked' if args.revoke else 'granted'}"
+                           f" apply in {r['project']}")
+
+
 def cmd_define(args, session):
     from .cli_verbs import _refuse, write
     payload = json.loads(Path(args.file).read_text(encoding="utf-8"))

@@ -38,6 +38,15 @@ REQUIRED_MODE = 0o600
 # Ten years keeps lease date arithmetic far below year 9999.
 _MAX_LEASE_SECONDS = 315360000
 _DEFAULT_SNAPSHOT = "plan.snapshot.json"
+#: where the daemon writes its snapshot when the host is set up by the installer.
+_DEFAULT_STATE_SNAPSHOT = "~/.local/share/plangraph/plan.snapshot.json"
+
+
+def default_snapshot() -> Path:
+    """The snapshot a client with no config reads offline: the daemon's own file."""
+    return Path(_DEFAULT_STATE_SNAPSHOT).expanduser()
+
+
 _DEFAULT_DB = "keeper.db"
 
 

@@ -254,7 +254,7 @@ class ContextMixin:
         rows = [dict(row) for row in
                 views.ready(items, project=project, owner=owner, agent=agent)]
         inputs, activity = self._inputs(index), self._last_activity_map()
-        indexes = {p: src.work_index(self._adapter("git"), p)
+        indexes = {p: src.work_index_cached(self._adapter("git"), p)
                    for p in {r["project"] for r in rows}}
         for row in rows:
             ctx = self._task_context(row, index, inputs=inputs,
@@ -266,6 +266,12 @@ class ContextMixin:
                     "project": row["project"], "status": "stale",
                     "age_seconds": max(0, int(time.time() - verified)) if verified is not None else None,
                     "reason": work_index["reason"]}
+            if work_index and work_index.get("refreshing"):
+                row["work_index_note"] = {
+                    "project": row["project"], "status": "refreshing",
+                    "age_seconds": work_index["built_age_s"],
+                    "reason": "work index built "
+                              f"{work_index['built_age_s']}s ago, refresh running"}
             ctx["work_exists"] = src.indexed_work(work_index, row["key"])
             ctx["stale"] = self._stale_reason(row, ctx)
             row["context"] = ctx
@@ -290,7 +296,7 @@ class ContextMixin:
         groups = {"items": [], "needs_reconcile": [], "in_progress": [],
                   "unknown": [], "warnings": []}
         for row in rows:
-            warning = row.get("work_index")
+            warning = row.get("work_index") or row.get("work_index_note")
             if warning and not any(w["project"] == warning["project"]
                                    for w in groups["warnings"]):
                 groups["warnings"].append(warning)

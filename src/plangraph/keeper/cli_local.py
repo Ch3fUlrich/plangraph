@@ -120,7 +120,11 @@ def local_digest(items) -> dict:
     for name in counts:
         counts[name]["stalled"] = local_alerts(items, name)["stalled"]
     done = [it for it in items if it.get("state") == "done"]
-    return {"projects": counts,
+    levels = {str(n): 0 for n in range(10, -1, -1)}
+    for it in items:
+        if it.get("state") == "open":
+            levels[str(int(it.get("priority") or 0))] += 1
+    return {"projects": counts, "priority_levels": levels, "level10_warning": None,
             "done": [{"key": it["key"], "title": it.get("title"),
                       "evidence_kinds": [e.get("kind") for e in
                                          (it.get("evidence") or [])]}

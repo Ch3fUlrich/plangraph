@@ -658,3 +658,7 @@ denies:
 lines, a `SKILL.md` lacks frontmatter, or any skill text names a path under the
 retired routing folder. Skills read site values from the router
 config keys they name, never from absolute paths.
+
+`tools/apply_batch.py` also accepts a role-l1 token that holds a router-written apply grant
+(`pg grant-apply NAME PROJECT`); the keeper refuses any key outside the granted projects and posts
+one `granted_apply` report line per applied batch to `routing`.
