@@ -39,7 +39,10 @@ def test_tools_leg_prompt_is_unchanged(working_tree_skill):
     tools = prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro')
     assert tools == prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro',
                                          tool_mode='tools')
-    assert tools.split('\n\n', 1)[0].endswith('Run tests, never edit files, commit, push or change git config.')
+    assert tools.split('\n\n', 1)[0].endswith(
+        'Run tests, never edit files, commit, push or change git config. '
+        'Answer in plain text in this reply only; do not create a plan file.'
+    )
     assert prompt_input.compose('Do it', 'implement', 'claude', None, tool_mode='inline-only').split(
         '\n\n', 1)[0] == prompt_input.header('claude', 'implement')
 
