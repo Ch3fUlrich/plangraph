@@ -334,3 +334,28 @@ def test_masked_wrapped_removal_stays_one_line_and_the_addition_a_separate_one(n
     first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
     diff = newline.join(['@@ -1,2 +1,1 @@', '-' + first, '-' + rest, '+added words here', ''])
     assert redact_diff_wrapped(diff).split(newline) == ['@@ -1,2 +1,1 @@', '-[REDACTED]', '+added words here', '']
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_independently_masked_addition_after_a_masked_removal_keeps_its_marker(newline):
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    old, new = 'gh' + 'p_' + 'A9' * 10, 'gh' + 'p_' + 'B8' * 10
+    diff = newline.join(['@@ -1,4 +1,4 @@', '-' + old, '+' + new, ' A9A9', ' tail words', ''])
+    lines = redact_diff_wrapped(diff).split(newline)
+    assert lines[:3] == ['@@ -1,4 +1,4 @@', '-[REDACTED]', '+[REDACTED]']
+    assert 'A9' not in ''.join(lines) and 'B8' not in ''.join(lines) and ' tail words' in lines
+
+
+def test_real_git_diff_keeps_both_markers_of_two_masked_credentials(monkeypatch, tmp_path):
+    old, new = 'gh' + 'p_' + 'A9' * 10, 'gh' + 'p_' + 'B8' * 10
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    (tmp_path / 'a.txt').write_text('keep\n' + old + '\nA9A9\ntail words\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'one')
+    _git(tmp_path, 'checkout', '-q', '-b', 'topic')
+    (tmp_path / 'a.txt').write_text('keep\n' + new + '\nA9A9\ntail words\n')
+    _git(tmp_path, 'commit', '-q', '-am', 'two')
+    ref = {'repo': str(tmp_path), 'base': 'main', 'head': 'topic'}
+    out = capture(monkeypatch, tmp_path, inline_diff.inline_diff_prompt('review', ref, max_chars=100000))
+    assert old not in out and new not in out and 'A9A9' not in out
+    assert '\n-[REDACTED]\n+[REDACTED]\n' in out and '\n tail words\n' in out

@@ -123,7 +123,7 @@ pub(crate) fn is_computed(value: &str) -> bool {
     ) {
         return true;
     }
-    if value.is_empty() || value.contains('"') || value.contains('\'') {
+    if value.is_empty() || value.contains(['"', '\'']) {
         return false;
     }
     let chars: Vec<char> = value.chars().collect();
@@ -190,9 +190,6 @@ pub(crate) fn is_computed(value: &str) -> bool {
     true
 }
 
-/// Longest right-hand side a source-mode value is judged on; a longer one is masked.
-const MAX_JUDGED_VALUE: usize = 4096;
-
 /// Mask the value of every assignment `rule` finds. In source mode a value that is a
 /// computed expression, judged on the whole rest of its line, stays readable; any
 /// other unquoted value is masked through the end of the line, so nothing after the
@@ -204,10 +201,12 @@ pub(crate) fn replace_assignments(rule: &regex::Regex, text: &str, source: bool)
     let mut out = String::with_capacity(text.len());
     let mut copied = 0;
     // The line end of the last match is the line end of every later match before it.
+    // A computed value keeps its whole line, so nothing inside it is judged again.
     let mut line_end = 0;
+    let mut kept_until = 0;
     for m in rule.captures_iter(text) {
         let whole = m.get(0).unwrap();
-        if whole.start() < copied {
+        if whole.start() < copied.max(kept_until) {
             continue;
         }
         let value = m.get(4).unwrap();
@@ -217,7 +216,8 @@ pub(crate) fn replace_assignments(rule: &regex::Regex, text: &str, source: bool)
                 .map_or(text.len(), |i| value.start() + i);
         }
         let judged = &text[value.start()..line_end];
-        if judged.len() <= MAX_JUDGED_VALUE && is_computed(judged) {
+        if is_computed(judged) {
+            kept_until = line_end;
             continue;
         }
         let mut end = whole.end();

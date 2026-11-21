@@ -315,8 +315,10 @@ def redact_diff_wrapped(text):
 
 
 def _mask_hunk(lines):
+    """Lines of one hunk with wrapped tokens masked; masks carry the id of the span that made them."""
     marked = [bool(line[:1] in ('+', '-', ' ')) for line in lines]
-    masks = [bytearray(len(line) - 1) if mark else bytearray() for line, mark in zip(lines, marked)]
+    masks = [[0] * (len(line) - 1) if mark else [] for line, mark in zip(lines, marked)]
+    span_id = 0
     for side in ('-', '+'):
         members = [n for n, (line, mark) in enumerate(zip(lines, marked)) if mark and line[0] in (' ', side)]
         stream = ''.join(lines[n][1:] for n in members)
@@ -326,13 +328,14 @@ def _mask_hunk(lines):
             total += len(lines[n]) - 1
         at = 0
         for first, last in _wrapped_spans(stream):
+            span_id += 1
             while offsets[at] + len(masks[members[at]]) <= first:
                 at += 1
             cursor = at
             while cursor < len(members) and offsets[cursor] < last:
                 row = masks[members[cursor]]
                 low, high = max(first - offsets[cursor], 0), min(last - offsets[cursor], len(row))
-                row[low:high] = b'\x01' * (high - low)
+                row[low:high] = [span_id] * (high - low)
                 cursor += 1
     out, join = [], False
     for at, (line, mark, row) in enumerate(zip(lines, marked, masks)):
@@ -353,9 +356,9 @@ def _mask_hunk(lines):
                 out.append(char)
                 in_run = False
         terminator = line[1 + len(content):]
-        # The break goes only where the next line continues this masked run.
-        nxt = at + 1 < len(lines) and marked[at + 1] and masks[at + 1][:1] == b'\x01'
-        join = bool(terminator) and bool(row[-1:] == b'\x01') and in_run and nxt
+        # The break goes only where the next line continues this very span.
+        nxt = masks[at + 1][:1] if at + 1 < len(lines) and marked[at + 1] else []
+        join = bool(terminator) and in_run and bool(nxt) and nxt[0] != 0 and nxt[0] == row[-1]
         if not join:
             out.append(terminator)
     return out
