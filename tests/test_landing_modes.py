@@ -341,6 +341,7 @@ def test_tested_ff_needs_the_explicit_seat_acknowledgement(env, value, refused):
     ("train\n\nLand-Base: {base}\nLand-Base: {head}", True),     # conflicting trailers
     ("train\n\nLand-Base: {head}\n\nsigned off\n\nLand-Base: {base}", False),  # an earlier body line is no trailer
     ("train\nLand-Base: {base}\n\nno trailer block here", True),  # a body line only, no trailer paragraph
+    ("train\n\nLand-Base: {base}\nLand-Base:", True),            # a valid trailer and an empty one
 ])
 def test_tested_ff_reads_exactly_one_land_base_trailer(env, tools_importable, monkeypatch, message, refused):
     pushed(env)

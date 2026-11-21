@@ -126,45 +126,34 @@ def test_a_backfill_fills_unknown_columns_and_never_changes_a_live_row(util):
         "l1", "tested-ff", [1, 2, 3], 3, 1, "2026-11-21T10:03:00Z")
 
 
-def test_a_database_keyed_by_the_train_is_migrated_to_one_row_per_landing(util):
-    import sqlite3
-    path = util.landing_db_path()
-    old = util.LANDING_SCHEMA.replace("PRIMARY KEY (repo, landed_sha)", "PRIMARY KEY (repo, train, landed_sha)")
-    with sqlite3.connect(path) as db:
-        db.execute(old)
-        for train in ("l1", "pr100"):
-            db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts) VALUES ('owner/proj', ?, ?, 'tested-ff', '[1]')",
-                       (train, "a" * 40))
-    assert [r["train"] for r in util.landing_rows()] == ["l1"]  # the live lander's key wins over a backfill's pr<N>
-    util.record_landing(row(train="l3"))  # the same sha under a third train name no longer raises
-    assert len(util.landing_rows()) == 1
-
-
-def test_migration_keeps_the_live_values_and_fills_the_rest_from_the_backfill(util):
+def legacy_file(util, parts="'[1]'"):
     import sqlite3
     old = util.LANDING_SCHEMA.replace("PRIMARY KEY (repo, landed_sha)", "PRIMARY KEY (repo, train, landed_sha)")
     with sqlite3.connect(util.landing_db_path()) as db:
         db.execute(old)
-        db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts, fix_tasks) VALUES "
-                   "('owner/proj', 'l1', ?, 'tested-ff', '[1, 2]', 3)", ("a" * 40,))
-        db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts, ci_reruns) VALUES "
-                   "('owner/proj', 'pr100', ?, 'train-pr-merge', '[\"B1\"]', 4)", ("a" * 40,))
-    (only,) = util.landing_rows()
-    assert (only["train"], only["mode"], only["parts"], only["fix_tasks"], only["ci_reruns"]) == ("l1", "tested-ff", [1, 2], 3, 4)
-
-
-def test_an_interrupted_migration_leaves_the_old_table_and_its_rows(util):
-    import sqlite3
-    old = util.LANDING_SCHEMA.replace("PRIMARY KEY (repo, landed_sha)", "PRIMARY KEY (repo, train, landed_sha)").replace(
-        "parts TEXT NOT NULL", "parts TEXT")
-    with sqlite3.connect(util.landing_db_path()) as db:
-        db.execute(old)
-        db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts) VALUES ('owner/proj', 'l1', ?, 'tested-ff', NULL)",
+        db.execute(f"INSERT INTO landing (repo, train, landed_sha, mode, parts) VALUES ('owner/proj', 'l1', ?, 'tested-ff', {parts})",
                    ("a" * 40,))
-    with pytest.raises(sqlite3.IntegrityError):  # the copy into the new table fails half way
-        util.landing_db()
+
+
+def test_a_file_keyed_by_the_train_is_refused_and_left_untouched(util):
+    """No guess about which of several rows of one landing is authoritative: the old file is moved aside by hand."""
+    import sqlite3
+    legacy_file(util)
+    for call in (util.landing_rows, lambda: util.record_landing(row()), util.landing_report):
+        with pytest.raises(util.MergeBatchError, match="keyed by train"):
+            call()
     with sqlite3.connect(util.landing_db_path()) as db:
-        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        assert tables == {"landing"}
-        assert db.execute("SELECT train FROM landing").fetchall() == [("l1",)]
-        assert [c[1] for c in db.execute("PRAGMA table_info(landing)") if c[5]] == ["repo", "train", "landed_sha"]
+        assert db.execute("SELECT train, mode FROM landing").fetchall() == [("l1", "tested-ff")]
+        assert {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")} == {"landing"}
+
+
+def test_opening_a_current_database_takes_no_write_lock(util):
+    import sqlite3
+    util.record_landing(row())
+    blocker = sqlite3.connect(util.landing_db_path(), timeout=1)
+    blocker.execute("BEGIN IMMEDIATE")  # a writer holds the lock, as the lander does while it records
+    try:
+        assert len(util.landing_rows()) == 1  # a report still reads
+        assert util.landing_report()[0]["trains"] == 1
+    finally:
+        blocker.execute("ROLLBACK")

@@ -56,7 +56,7 @@ tree) runs only the fast jobs (`tools/ci_select.py landing_evidence`); every oth
 run of a pull request posts `ci-full` only when the tested tree is the head's tree.
 
 Every landing writes a receipt (`<git dir>/merge-batch/receipts/<train>-<sha>.json`) and one row in the telemetry
-database (a landing is identified by repository and landed sha, so a backfill never doubles a recorded landing, and a file keyed by train is migrated in one write transaction, the first writer's train, mode and parts kept; reports open a current file without a write lock; `merge-part` writes its row with `merge_batch.py landing-record` and fails the landing, exit 10, when it cannot) (`landing-telemetry.sqlite3` under `$XDG_DATA_HOME/plangraph`, or `PLANGRAPH_LANDING_DB`), both naming the
+database (a landing is identified by repository and landed sha, so a backfill never doubles a recorded landing, and a file keyed by train (an earlier draft) is refused and left untouched, never guessed at; reports open a current file without a write lock; `merge-part` writes its row with `merge_batch.py landing-record` and fails the landing, exit 10, when it cannot) (`landing-telemetry.sqlite3` under `$XDG_DATA_HOME/plangraph`, or `PLANGRAPH_LANDING_DB`), both naming the
 mode; a landing whose row is missing fails the lander. `merge_batch.py landing-report` compares the modes (trains, median
 and worst minutes READY to landed and landed to green, test minutes per part, reruns, red main, fix tasks per train),
 `landing-settle` fills the green and red-main columns from GitHub (`--train T --fix-tasks N` records fix tasks) and

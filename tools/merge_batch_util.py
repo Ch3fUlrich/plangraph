@@ -389,49 +389,32 @@ def landing_db_path():
     return Path(data) / "plangraph" / "landing-telemetry.sqlite3"
 
 
-def _legacy_rows(rows):
-    """One row per (repo, landed sha) from rows of a file keyed by train: the first writer of a landing keeps
-    its train, mode and part list (a train name says nothing about who wrote it: ``pr42`` is a valid live name),
-    and every other column takes the latest known value."""
-    merged = {}
-    for row in rows:
-        merged.setdefault((row["repo"], row["landed_sha"]), []).append(row)
-    out = []
-    for group in merged.values():
-        out.append({k: (group[0][k] if k in ("train", "mode", "parts") else
-                        next((r[k] for r in reversed(group) if r[k] is not None), None)) for k in group[0]})
-    return out
-
-
-def _needs_schema_work(db):
-    info = list(db.execute("PRAGMA table_info(landing)"))
-    return not info or "train" in [c["name"] for c in info if c["pk"]]
-
-
 def landing_db():
-    """The open telemetry database. A readable, current file is opened without any write lock (a report runs
-    beside the lander). A missing table is created, and a table keyed by train is migrated to the key (repo,
-    landed sha), inside one write transaction whose schema check is repeated under the lock, so an interrupted
-    migration leaves the old table and its rows untouched and two openers never both migrate."""
+    """The open telemetry database. A missing table is created (one write transaction, the check repeated under
+    the lock); a current file is opened without any write lock, so a report runs beside the lander. A file whose
+    table is keyed by train (written by an earlier draft) is refused and left untouched: its rows say nothing
+    about which writer of one landing is authoritative, so nothing is guessed; move the file aside."""
     path = landing_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
-    if _needs_schema_work(db):
+
+    def table():
+        return list(db.execute("PRAGMA table_info(landing)"))
+
+    if not table():
         db.execute("BEGIN IMMEDIATE")
         try:
-            if _needs_schema_work(db):
-                legacy = ([dict(r) for r in db.execute("SELECT * FROM landing ORDER BY rowid")]
-                          if list(db.execute("PRAGMA table_info(landing)")) else [])
-                db.execute("DROP TABLE IF EXISTS landing")
+            if not table():
                 db.execute(LANDING_SCHEMA)
-                for row in _legacy_rows(legacy):
-                    db.execute(f"INSERT INTO landing ({','.join(row)}) VALUES ({','.join('?' * len(row))})",
-                               list(row.values()))
             db.execute("COMMIT")
         except BaseException:
             db.execute("ROLLBACK")
             raise
+    if "train" in [c["name"] for c in table() if c["pk"]]:
+        db.close()
+        raise MergeBatchError(f"landing telemetry {path} is keyed by train (an earlier draft): move it aside, "
+                              "a landing is now identified by repository and landed sha")
     db.isolation_level = ""  # the callers use ``with db`` transactions
     return db
 

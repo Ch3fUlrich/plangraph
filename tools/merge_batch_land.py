@@ -437,8 +437,11 @@ def require_tested_ff_evidence(st):
         if not any(plan in plan_items(body) for body in bodies):
             raise MergeBatchError(f"tested-ff: the batch plan key {plan} is no Plan-Item trailer of a batch commit "
                                   "(it was built without it): build the batch again, or land in train-pr-merge")
-    trailers = git("log", "-1", "--format=%(trailers:key=Land-Base,valueonly)", st["head"], cwd=st["worktree"]).stdout
-    if [line for line in trailers.splitlines() if line.strip()] != [st["base_head"]]:
+    # git's own parse, entries joined by a unit separator and counted before anything is dropped: a blank or a second
+    # Land-Base trailer is a mismatch, a body line is no trailer
+    trailers = git("log", "-1", "--format=%(trailers:key=Land-Base,valueonly,separator=%x1f)", st["head"],
+                   cwd=st["worktree"]).stdout.rstrip("\n")
+    if trailers != st["base_head"]:
         raise MergeBatchError(f"tested-ff: the batch head must carry exactly one Land-Base trailer, the recorded base "
                               f"{short(st['base_head'])} (it was built without it, by hand, or with another): "
                               "build the batch again")
