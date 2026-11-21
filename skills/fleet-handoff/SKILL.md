@@ -3,7 +3,9 @@ name: fleet-handoff
 description: Use when the context guard prints HANDOFF-NOW or HARD-CAP, or before an L1/L2 session stops. Writes the full handoff file plus the fixed status card next to it, checks the card with handoff-check, then runs the guard's ready step.
 ---
 
-Site keys (file `router/config` in the router data checkout; source it): `ROUTER_HOME` is the router directory; the handoff checker is `bin/handoff-check` below it. The card check writes to `ROUTER_WORKLOG`.
+Source `router/config` in the router data checkout. Resolve
+`bin/handoff-check` under `ROUTER_HOME`. It writes to `FLEET_WORKLOG` when
+set and otherwise uses the fleet state worklog documented by the wrapper.
 
 # Fleet handoff (every L1/L2)
 
@@ -30,7 +32,7 @@ Site keys (file `router/config` in the router data checkout; source it): `ROUTER
 
 `## Done` lists everything finished since your previous card: one line each, UTC stamp, id, evidence. Write `-` for the sha only when nothing was committed.
 
-3. Run `$ROUTER_HOME/bin/handoff-check <card> --log`. On exit 1 it prints one reason per line: fix the card and rerun until it exits 0. `--log` adds the new Done lines to `ROUTER_WORKLOG`, each once.
+3. Run `$ROUTER_HOME/bin/handoff-check <card> --log`. On exit 1 it prints one reason per line: fix the card and rerun until it exits 0. `--log` adds the new Done lines to `FLEET_WORKLOG`, each once.
 4. Then run the guard's `ready` step: the command from the HANDOFF-NOW message (`python3 <context_guard.py> ready <handoff-path>`). The watchdog relaunches you only from a fresh handoff plus card.
 5. Close out as your brief says (for example CARD-READY or RECYCLE-READY with the paths) and stop. Start no new work.
 

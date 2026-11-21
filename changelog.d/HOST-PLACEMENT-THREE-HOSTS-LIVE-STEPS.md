@@ -1,0 +1,1 @@
+Added `pg-spawnd steps`, a shell-free runner for one JSON plan on stdin: argv steps with an environment file, working directory, exact-mode file writes, a commit-presence fallback fetch and a bracketed receipt, exiting with the first failing step's code. The WSL hop uses it in place of a shell launcher.

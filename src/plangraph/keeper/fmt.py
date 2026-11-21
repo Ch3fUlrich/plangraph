@@ -176,6 +176,9 @@ def _context_lines(info: dict) -> list:
             for c in commits) or "-"
     lines.append(f"merged_on_default {merged} | open_lanes "
                  + ("unknown" if lanes is None else ", ".join(lanes) or "-"))
+    if work.get("closed_pr_lanes"):
+        lines.append("closed_pr_lanes " + ", ".join(
+            f"{lane['branch']} PR#{lane['pr']}" for lane in work["closed_pr_lanes"]))
     if info.get("stale"):
         lines.append(f"STALE {info['stale']}")
     return lines
@@ -265,6 +268,13 @@ def aliases_text(rows) -> str:
         or "no aliases"
 
 
+def apply_grants_text(data) -> str:
+    rows = (data or {}).get("grants") or []
+    return "\n".join(f"{r['principal']} | {r['project']} | granted by "
+                     f"{r['granted_by']} {r['granted_at']}" for r in rows) \
+        or "no apply grants"
+
+
 def needs_you_text(rows) -> str:
     return "\n".join(
         f"{r['key']} | {r['title']} | {r['kind']} {r.get('wait') or '-'} | "
@@ -308,6 +318,14 @@ def digest_text(digest: dict) -> str:
         state = f" ({waiver['state']})" if waiver.get("state") else ""
         lines.append(
             f"waiver {waiver['key']} {waiver.get('decision_id')}{state}")
+    levels = {int(n): c for n, c in (digest.get("priority_levels") or {}).items() if c}
+    if levels:
+        lines.append("priority " + " ".join(
+            f"{n}={levels[n]}" for n in sorted(levels, reverse=True)))
+    warn = digest.get("level10_warning")
+    if warn:
+        lines.append(f"WARN level 10 holds {warn['open']} open items, more than the "
+                     f"{warn['lanes_closed_7d']} lanes closed in the last 7 days")
     return "\n".join(lines) if lines else "empty"
 
 

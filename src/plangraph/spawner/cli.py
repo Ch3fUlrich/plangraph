@@ -21,7 +21,8 @@ def _wait_runs(service, result, wait):
     deadline = time.monotonic() + max(0, wait)
     runs = spawn_runs(result)
     while any(r.get('status') == 'running' for r in runs) and time.monotonic() < deadline:
-        time.sleep(min(.02, max(0, deadline - time.monotonic())))
+        interval = 2 if any(run.get('overflow_remote') for run in runs) else .02
+        time.sleep(min(interval, max(0, deadline - time.monotonic())))
         for run in runs:
             if run.get('status') == 'running': run.update(_read_result(service, run['run_id']))
 
@@ -57,6 +58,43 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
     pending += decoder.decode(b'', final=True).encode('utf-8')
     if pending:
         write(clean(pending.decode('utf-8')))
+
+def _rotate_log(path):
+    """Move the full log to `path.1` (best effort) and empty `path`, which stays present throughout."""
+    import shutil
+    mode = 0o600
+    tmp = path + '.1.tmp'
+    try:
+        with open(path, 'rb') as source, os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), 'wb') as target:
+            shutil.copyfileobj(source, target)
+        os.replace(tmp, path + '.1')
+    except OSError:
+        pass
+    os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode))
+
+def _private_rotating_log(path, max_bytes=1024 * 1024):
+    """Private (0600) size-rotating stderr handler; rotation goes through `_rotate_log`."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+    class PrivateLog(RotatingFileHandler):
+        def _open(self): return os.fdopen(os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'a', encoding='utf-8', newline='')
+        def shouldRollover(self, record): return self.stream.tell() + len(self.format(record).encode('utf-8')) + 1 > self.maxBytes
+        def doRollover(self):
+            self.stream.close()
+            try:
+                _rotate_log(self.baseFilename)
+            finally:
+                self.stream = self._open()
+    logging.raiseExceptions = False
+    handler = PrivateLog(path, maxBytes=max_bytes, backupCount=1)
+    handler.terminator = ''
+    return handler
+
+def _rotation_source(handler=True):
+    """Rotation helpers as source for the supervisor bootstrap (the run tree's own cli may predate them).
+    The `-c` argument stays small, so a bootstrap that needs only the rotation passes handler=False."""
+    import inspect
+    return inspect.getsource(_rotate_log) + (inspect.getsource(_private_rotating_log) if handler else '')
 
 def _prune_supervisor_logs(state):
     logs = []
@@ -110,7 +148,14 @@ def _read_result(service, run_id):
     from .service import remote_native_running
     record = service.result(run_id)
     from .exit_outcome import with_stale
-    return asyncio.run(service.refresh_result(run_id)) if remote_native_running(record) else with_stale(record)
+    if not remote_native_running(record):
+        return with_stale(record)
+    if record.get('role') == 'review' and record.get('run_kind') != 'native-codex':
+        from .remote_ps import native_result
+        updated = native_result(record)
+        service._save(updated)
+        return with_stale(updated)
+    return asyncio.run(service.refresh_result(run_id))
 
 
 def main(argv=None):
@@ -145,6 +190,8 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps').add_argument('--all-hosts', action='store_true',
                                            help='no-op alias: plain ps already includes configured SSH hosts')
+    p = commands.add_parser('harness-report', help='runs, failures and no-verdict reviews per harness')
+    p.add_argument('--hours', type=float, default=24)
     commands.add_parser('catalog')
     p = commands.add_parser('quota-result')
     p.add_argument('--model', required=True)
@@ -302,7 +349,7 @@ def main(argv=None):
                 _prune_supervisor_logs(service.state)
                 bootstrap = '''import os, pathlib, sys, threading
 from plangraph.spawner import cli as supervisor
-from plangraph.spawner.env_redact import redact_env_values
+''' + _rotation_source(handler=False) + '''from plangraph.spawner.env_redact import redact_env_values
 from plangraph.routing_support.host_keys import redaction_env
 # The parent env never holds a file key; compute the redaction env once at
 # bootstrap top, not per emitted line (D-2759).
@@ -338,10 +385,7 @@ def drain():
                 if output.tell() + len(data) > 1024 * 1024:
                     output.close()
                     output = None
-                    try:
-                        os.replace(path, path + ".1")
-                    except FileNotFoundError:
-                        pass
+                    _rotate_log(path)
                     output = open_log()
                 output.write(data)
             except OSError:
@@ -423,6 +467,9 @@ raise SystemExit(code)
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
+        elif args.verb == 'harness-report':
+            from .exit_outcome import harness_report
+            result = harness_report(service.ps()['runs'], hours=args.hours)
         elif args.verb == 'cancel':
             result = asyncio.run(service.cancel(args.run_id))
         elif args.verb == 'wait':

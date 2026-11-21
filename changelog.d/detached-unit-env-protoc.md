@@ -1,0 +1,1 @@
+- A detached `plangraph watcher-launch` unit inherits the caller's whole login environment by name (`systemd-run -E NAME`), the pre-push Rust step resolves `protoc` (`PROTOC`, `~/.local/bin`, `PATH`) and refuses in a second with a named message when it is missing, and a `not_served_on_host` exit is no longer booked as a provider 429 down window.

@@ -395,3 +395,86 @@ def test_gate_cancelled_selected_suite_is_a_problem():
     needs = {"select": {"result": "success", "outputs": outs}, "pytest": {"result": "cancelled"}}
     needs.update({j: {"result": "success"} for j in ci_select.ALWAYS})
     assert gate(needs) == ["pytest: cancelled"]
+
+
+# CI-FULL-RUN-ONCE-BEFORE-MERGE: the full suite runs only for the merge candidate.
+full_run_required = ci_select.full_run_required
+
+
+def test_ready_or_draft_lane_pr_to_main_gets_the_selection():
+    assert not full_run_required("pull_request", "main", "lane/some-item", [])
+
+
+def test_batch_head_gets_the_full_suite():
+    assert full_run_required("pull_request", "main", "batch/batch9", [])
+
+
+def test_go_labelled_head_gets_the_full_suite():
+    assert full_run_required("pull_request", "main", "lane/some-item", ["batch-ready", ci_select.FULL_LABEL])
+
+
+def test_label_does_not_matter_off_main_and_stacked_batch_is_selection():
+    assert not full_run_required("pull_request", "lane/base", "lane/x", [ci_select.FULL_LABEL])
+    assert not full_run_required("pull_request", "lane/base", "batch/x", [])
+
+
+@pytest.mark.parametrize("event", ["push", "merge_group", "workflow_dispatch", "schedule"])
+def test_record_and_queue_events_run_full(event):
+    assert full_run_required(event)
+
+
+def _selection_only_needs():
+    outs = {s: "false" for s in SUITES} | {"full": "false", "pytest": "true"}
+    needs = {"select": {"result": "success", "outputs": outs}, "pytest": {"result": "success"}}
+    needs.update({j: {"result": "success"} for j in ci_select.ALWAYS})
+    return needs
+
+
+def test_gate_refuses_a_candidate_that_ran_only_the_selection():
+    needs = _selection_only_needs()
+    assert gate(needs) == []
+    assert gate(needs, require_full=True) == [
+        "select: merge candidate ran the affected selection, not the full suite"]
+
+
+def test_cli_select_event_picks_full_for_batch_head_and_selection_for_lane(capsys, monkeypatch):
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    args = ["select", "--event", "pull_request", "--base-ref", "main", "--labels", "[]",
+            "--files", "docs/a.md"]
+    assert main(args + ["--head-ref", "batch/x"]) == 0
+    assert "full=true" in capsys.readouterr().out
+    assert main(args + ["--head-ref", "lane/x"]) == 0
+    assert "full=true" not in capsys.readouterr().out
+
+
+def test_cli_gate_event_requires_full_for_a_go_labelled_head(capsys):
+    import json
+    needs = json.dumps(_selection_only_needs())
+    base = ["gate", "--needs", needs, "--event", "pull_request", "--base-ref", "main", "--head-ref", "lane/x"]
+    assert main(base + ["--labels", "[]"]) == 0
+    assert main(base + ["--labels", '["ci-full"]']) == 1
+    assert "not the full suite" in capsys.readouterr().err
+
+
+def test_cli_rejects_non_list_labels(capsys):
+    assert main(["select", "--event", "pull_request", "--labels", "{}"]) == 1
+
+
+def test_workflow_routes_the_decision_through_ci_select():
+    import yaml
+    wf = yaml.safe_load((MODULE_PATH.parents[1] / ".github" / "workflows" / "tests.yml").read_text())
+    triggers = wf[True] if True in wf else wf["on"]
+    assert "labeled" in triggers["pull_request"]["types"] and "merge_group" in triggers
+    step = [s for s in wf["jobs"]["select"]["steps"] if s.get("id") == "sel"][0]
+    assert "--event" in step["run"] and "draft" not in step["run"]
+    assert "--event" in [s for s in wf["jobs"]["ci-gate"]["steps"] if s.get("name") == "Gate"][0]["run"]
+
+
+def test_undraft_starts_no_run_and_a_label_run_never_cancels_a_running_one():
+    import yaml
+    wf = yaml.safe_load((MODULE_PATH.parents[1] / ".github" / "workflows" / "tests.yml").read_text())
+    triggers = wf[True] if True in wf else wf["on"]
+    assert "ready_for_review" not in triggers["pull_request"]["types"]
+    assert "synchronize" in triggers["pull_request"]["types"]
+    cancel = wf["concurrency"]["cancel-in-progress"]
+    assert "github.event.action != 'labeled'" in cancel

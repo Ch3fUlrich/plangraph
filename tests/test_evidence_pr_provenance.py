@@ -257,6 +257,7 @@ def test_non_pr_preserves_verifier_guards(topology, monkeypatch, case, detail):
     ctx = make_ctx(git=git, ci=ci)
     if case == "trailer":
         monkeypatch.setattr(git, "trailers", lambda *args: {})
+        monkeypatch.setattr(git, "merge_plan_items", lambda *args: [])  # no trailer in the merge's range either
     elif case == "floor":
         ctx.bind_floor_required = True
         ctx.bind_floor_sha = lane
@@ -267,3 +268,18 @@ def test_non_pr_preserves_verifier_guards(topology, monkeypatch, case, detail):
         ctx.merge_principals = ("disallowed",)
     result = verify("commit+ci", {"commit": outer}, ctx)
     assert not result.ok and detail in result.detail
+
+
+def test_non_pr_merge_opt_in_survives_keeper_config(topology, tmp_path):
+    from plangraph.keeper.config import load_config, verifier_context
+    from plangraph.keeper.evidence_pr import non_pr_merge
+
+    git, _, outer = topology
+    path = tmp_path / 'keeper.json'
+    path.write_text(json.dumps({
+        'repos': {'routing': {'path': git.repo_path('routing'), 'ref': 'main', 'non_pr': True}},
+        'ci': {'routing': 'owner/repo'},
+    }))
+    path.chmod(0o600)
+    ctx = verifier_context(load_config(path))
+    assert non_pr_merge(ctx, 'routing', outer, 'main')

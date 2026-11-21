@@ -1,4 +1,11 @@
 """Shared route exclusion predicate for quota and liveness evidence."""
+import time
+
+
+def agy_limit_reason(model, state):
+    reset = (state.get('evidence') or {}).get('reset_at')
+    if model.startswith(('agy:', 'agy/')) and state['state'] == 'limited' and reset:
+        return 'limited_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset))
 
 
 def unavailable(state):
@@ -12,7 +19,7 @@ def provider_exhausted(skipped):
     policy = {'banned_family', 'off_family', 'paused_harness', 'excluded_family',
               'inline_only_needs_diff', 'no_verdict_seat', 'explicit_only',
               'review_route_excluded', 'low_risk_only'}
-    limited = lambda r: r in states or r.startswith('quota_until ')
+    limited = lambda r: r in states or r.startswith(('quota_until ', 'limited_until '))
     return any(limited(r) for r in reasons) and all(
         limited(r) or r in policy or r.startswith('disabled:') for r in reasons)
 
@@ -23,6 +30,7 @@ def require_available(leg, reader, card):
     from plangraph.planner.routing import SpawnRefused
     from .leg_state import leg_key as key
     read = getattr(reader, 'leg_status', reader) or leg_status
-    state = read(key(leg), account=card.get('account'), combo=card.get('combo'))
+    model = key(leg)
+    state = read(model, account=card.get('account'), combo=card.get('combo'))
     if unavailable(state):
-        raise SpawnRefused('leg ' + state['state'] + ': ' + leg.id)
+        raise SpawnRefused((agy_limit_reason(model, state) or 'leg ' + state['state']) + ': ' + leg.id)

@@ -15,6 +15,10 @@ mod health_cli;
 mod health_report;
 mod health_report_rows;
 mod jobs;
+mod land_go;
+mod land_go_shell;
+#[cfg(test)]
+mod land_go_tests;
 mod launch;
 mod leg_ref;
 mod manage_key_alert;

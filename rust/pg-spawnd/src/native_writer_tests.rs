@@ -20,6 +20,10 @@ struct Fake {
     review_head: Option<&'static str>,
     /// Fast-check runs that fail before the first green one.
     fast_failures: usize,
+    /// HEAD seen at each call count (indexed by calls so far, the last entry repeats); overrides the default.
+    head_script: Vec<&'static str>,
+    /// Turns after which HEAD is still the base (no commit yet).
+    uncommitted_turns: usize,
     /// When false, green fast checks leave no stamp.
     stamps: bool,
     stamped: Vec<String>,
@@ -57,7 +61,23 @@ impl Driver for Fake {
     }
     fn head(&mut self) -> Result<String, String> {
         self.heads += 1;
-        Ok("final-head".into())
+        if let Some(head) = self
+            .head_script
+            .get(self.calls.len())
+            .or(self.head_script.last())
+        {
+            return Ok((*head).into());
+        }
+        // Every writer turn after the uncommitted ones commits: the head changes per turn.
+        Ok(
+            if self.calls.is_empty() || self.calls.len() <= self.uncommitted_turns {
+                "base".into()
+            } else if self.calls.len() <= self.uncommitted_turns + 1 {
+                "final-head".into()
+            } else {
+                format!("final-head-{}", self.calls.len())
+            },
+        )
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         if self.fast_failures > 0 {
@@ -131,7 +151,7 @@ fn native_missing_final_review_resumes_same_session_and_records_host_head() {
     assert_eq!(driver.reviews[1].as_ref().unwrap()["run_id"], "run-review1");
     assert_eq!(record["host"], "other-host");
     assert_eq!(record["base_sha"], "base");
-    assert_eq!(record["final_head"], "final-head");
+    assert_eq!(record["final_head"], "final-head-2");
     assert_eq!(record["review_rounds"], 2);
     assert_eq!(record["round_counts"], json!([1]));
     assert_eq!(record["reviews"][0]["verdict"], "REQUEST_CHANGES");
@@ -242,7 +262,7 @@ with tempfile.TemporaryDirectory() as directory:
     config.write_text(json.dumps({'hosts':{'other':{'repo':'/repo','spawner_src':'/src','ssh':'fixture','env_file':'/env'}}}))
     receipt = dict(run_id='run-abc', run_kind='native-codex', host='other', status='running', overflow_remote=True)
     final = dict(receipt, status='completed', final_head='head', base_sha='base', exit_code=0, review={'verdict':'ACCEPT','text':'VERDICT: ACCEPT'})
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(final) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
+    with patch('plangraph.spawner.overflow.placement_config', return_value=json.loads(config.read_text())), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(final) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
         result = native_result(receipt)
     assert result['final_head'] == 'head' and result['review']['verdict'] == 'ACCEPT', result
     assert result['host'] == 'other' and result['exit_code'] == 0, result
@@ -278,7 +298,7 @@ with tempfile.TemporaryDirectory() as directory:
     config = pathlib.Path(directory)/'hosts.json'
     config.write_text(json.dumps({'hosts':{'other':{'repo':'/repo','spawner_src':'/src','ssh':'fixture','env_file':'/env'}}}))
     receipt = dict(run_id='run-abc', run_kind='native-codex', host='other', status='running', overflow_remote=True, started=time.time(), pid=os.getpid(), pid_start=99, supervisor_pid_start=88, supervisor_stderr_path='/remote/log')
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(receipt) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
+    with patch('plangraph.spawner.overflow.placement_config', return_value=json.loads(config.read_text())), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(receipt) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=0)):
         running = native_result(receipt)
     assert 'pid' not in running and 'pid_start' not in running and not any(k.startswith('supervisor_') for k in running), running
     persisted = dict(receipt)
@@ -293,13 +313,13 @@ with tempfile.TemporaryDirectory() as directory:
     runner = SimpleNamespace(jobs={}, kill_recorded=AsyncMock(side_effect=AssertionError('remote pid reached local killer')))
     saved = []
     service = SimpleNamespace(result=lambda *a, **kw: receipt, runner=runner, tasks={}, _save=saved.append)
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(cancelled) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=1)) as ssh:
+    with patch('plangraph.spawner.overflow.placement_config', return_value=json.loads(config.read_text())), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', return_value=SimpleNamespace(stdout='shell banner\nPLANGRAPH_RECEIPT_fixture_BEGIN\n' + json.dumps(cancelled) + '\nPLANGRAPH_RECEIPT_fixture_END\ntrailer', returncode=1)) as ssh:
         result = asyncio.run(cancel_recorded(service, receipt['run_id']))
         assert 'plangraph.spawner.cli cancel run-abc' in ssh.call_args.args[0][-1], ssh.call_args
         assert '. /env >/dev/null 2>&1' in ssh.call_args.args[0][-1], ssh.call_args
     runner.kill_recorded.assert_not_called()
     assert result['status'] == 'cancelled' and 'pid' not in result and saved[-1] == result, result
-    with patch.dict(os.environ, PLANGRAPH_OVERFLOW_HOSTS=str(config)), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', side_effect=TimeoutError):
+    with patch('plangraph.spawner.overflow.placement_config', return_value=json.loads(config.read_text())), patch('plangraph.spawner.remote_ps.secrets.token_hex', return_value='fixture'), patch('plangraph.spawner.remote_ps.subprocess.run', side_effect=TimeoutError):
         result = asyncio.run(cancel_recorded(service, receipt['run_id']))
     assert result['status'] == 'running' and result['remote_query_error'] == 'host query failed', result
 "#]).output().unwrap();
@@ -689,3 +709,7 @@ fn round_stop_is_the_round_progress_rule_capped_at_max_rounds() {
         2
     );
 }
+#[path = "native_writer_idle_tests.rs"]
+mod idle;
+#[path = "native_writer_placement_tests.rs"]
+mod placement;

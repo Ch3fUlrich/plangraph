@@ -355,6 +355,16 @@ def test_go_req_checks_each_workflow_touching_commit(env, trailer, accepted):
         assert "Gate-Edit" in result.stderr and result.stdout == ""
 
 
+@pytest.mark.parametrize("trailer,accepted", [("", False), ("\n\nGate-Edit: D-5952", True)])
+def test_build_refuses_a_pr_head_with_an_unauthorized_workflow_edit(env, trailer, accepted):
+    env.branch_pr(1, {".github/workflows/tests.yml": "on: push\n"}, trailer=trailer)
+    result = env.run("build", "--name", "w1", "--prs", "1")
+    assert (result.returncode == 0) == accepted, result.stderr
+    if not accepted:
+        assert "Gate-Edit" in result.stderr and "#1" not in result.stdout
+        assert not env.state_file("w1").exists()
+
+
 @pytest.mark.parametrize("text", ["HEAD: {head}\nVERDICT: PASS\n", "HEAD: {batch}\nVERDICT: ACCEPT\n",
                                   "VERDICT: REQUEST_CHANGES\nHEAD: {head}\nVERDICT: ACCEPT\n",
                                   "HEAD: {head}\nVERDICT: ACCEPT\nextra\n"])

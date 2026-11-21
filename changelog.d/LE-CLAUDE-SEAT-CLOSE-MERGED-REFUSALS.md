@@ -1,0 +1,1 @@
+`close-merged` counts only recorded writers for the seat-family rule (the claimant and delegate principals stand in only when no writer is recorded), accepts `claude-seat` evidence for every merged part head of an item, and closes a high-tier item on one claude-seat plus one other seat; a claude-written diff stays refused.

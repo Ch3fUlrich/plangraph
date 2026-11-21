@@ -1,0 +1,1 @@
+- Supervisor stderr rotation copies the full log to `.1` and truncates in place, so the log path is never absent while a reader polls it.

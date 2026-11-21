@@ -1,0 +1,1 @@
+- `docs/SPAWNER.md` keeps 60 lines under its 728-line cap: the MiMo seat and run-tree sections moved to `docs/operations/`. `tools/check_file_size.py` names the cap and headroom (`DOC_CAPS`, `DOC_HEADROOM`) and refuses a doc over its cap naming the file and the cap, so a writer sees it before the push gate.

@@ -45,6 +45,10 @@ import subprocess
 import sys
 
 LIMIT = 800
+#: Docs with a cap below LIMIT, and the headroom main keeps under it so a spawner change
+#: can add its docs line (tools/check_changelog_docs.py) without a push-gate failure.
+DOC_CAPS = {"docs/SPAWNER.md": 728}
+DOC_HEADROOM = 60
 BASELINE_NAME = ".filesize-baseline"
 ALLOW_NAME = ".filesize-allow"
 #: Vendored / generated trees; both vendor spellings are covered.
@@ -247,6 +251,12 @@ def limit_violations(measured, counts):
             problems.append(
                 "FAIL %s: %d lines > %d - split it by responsibility, or add "
                 "a reasoned %s entry" % (path, lines, LIMIT, ALLOW_NAME))
+    for path, cap in sorted(DOC_CAPS.items()):
+        if measured.get(path, 0) > cap:
+            problems.append(
+                "FAIL %s: %d lines > doc cap %d - move a self-contained section "
+                "into docs/operations/ and link it (main keeps %d lines of headroom)"
+                % (path, measured[path], cap, DOC_HEADROOM))
     return problems
 
 

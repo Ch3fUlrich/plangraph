@@ -131,8 +131,10 @@ def test_normal_base_launch_keeps_original_schema(launch_leg_case):
                                      job_name='owned', escapees=[], extra_owned='private')
     before = dict(record)
     asyncio.run(seat._launch_leg(record, chosen, prompt_record=None))
+    stamped = {key: record[key] for key in ('harness', 'harness_version', 'harness_fallback', 'host')}
+    assert stamped['harness'] == chosen.harness   # the launch writes the harness fields (HARNESS-RECORDED-PER-RUN)
     assert record == dict(before, job_id='first', pid=None, pid_start=2, job_name='owned',
-                          escapees=[], cwd=seat.runner.default_cwd)
+                          escapees=[], cwd=seat.runner.default_cwd, **stamped)
 
 
 @pytest.mark.parametrize('cancel', ['outer', 'inner'])
