@@ -1,4 +1,5 @@
 //! Native CLI writer lifecycle, independent of placement and transport.
+use crate::writer_control::STOPPED;
 use serde_json::{json, Value};
 #[path = "native_writer_stage.rs"]
 mod stage;
@@ -71,15 +72,13 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
         record["final_head"] = json!(head);
     }
     record["exit_code"] = json!(exit);
-    record["status"] = json!(
-        if reason.as_deref() == Some(crate::writer_control::STOPPED) {
-            "stopped"
-        } else if exit == 0 {
-            "completed"
-        } else {
-            "failed"
-        }
-    );
+    record["status"] = json!(if reason.as_deref() == Some(STOPPED) {
+        "stopped"
+    } else if exit == 0 {
+        "completed"
+    } else {
+        "failed"
+    });
     record["reason"] = json!(reason);
     if exit == 9 {
         record["result"] = json!("BLOCKED");
@@ -137,7 +136,7 @@ fn lifecycle(
             None => prompt.clone(),
         };
         match writer_attempt(driver, record, &launch, saved_session.take().as_deref()) {
-            Err((_, error)) if error == crate::writer_control::STOPPED => return Err((10, error)),
+            Err((_, error)) if error == STOPPED => return Err((10, error)),
             Err((6, error)) => {
                 record["last_writer_failure"] = json!(error);
                 driver.save(record).map_err(|e| (9, e))?;
@@ -148,7 +147,9 @@ fn lifecycle(
                     ));
                 }
                 admit_disk(driver).map_err(|(_, e)| (9, e))?;
-                record["base_sha"] = json!(driver.refresh_base().map_err(|e| (9, e))?);
+                record["base_sha"] = json!(driver
+                    .refresh_base()
+                    .map_err(|e| (if e == STOPPED { 10 } else { 9 }, e))?);
                 for key in ["session_id", "final_head", "resumes"] {
                     record.as_object_mut().unwrap().remove(key);
                 }
@@ -256,6 +257,9 @@ fn writer_attempt(
         turn_start = head.clone();
         let started = stage::now();
         let checked = driver.fast_checks(&head);
+        if matches!(&checked, Err(error) if error == STOPPED) {
+            return Err((10, STOPPED.into()));
+        }
         stage::record(record, "fast_checks", &head, started);
         if let Err(failure) = checked {
             record["fast_checks"] = json!({"head":head, "status":"failed", "output":failure});

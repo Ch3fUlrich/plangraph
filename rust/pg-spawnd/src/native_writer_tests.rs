@@ -12,6 +12,7 @@ struct Fake {
     failures: usize,
     refreshes: usize,
     refresh_error: bool,
+    stop_on_refresh: bool,
     prompts: Vec<String>,
     skill: Option<String>,
     /// Verdict and HIGH count of each review run, in order; then ACCEPT.
@@ -20,6 +21,7 @@ struct Fake {
     review_head: Option<&'static str>,
     /// Fast-check runs that fail before the first green one.
     fast_failures: usize,
+    stop_on_fast_checks: bool,
     /// HEAD seen at each call count (indexed by calls so far, the last entry repeats); overrides the default.
     head_script: Vec<&'static str>,
     /// Turns after which HEAD is still the base (no commit yet).
@@ -43,6 +45,9 @@ impl Driver for Fake {
     }
     fn refresh_base(&mut self) -> Result<String, String> {
         self.refreshes += 1;
+        if self.stop_on_refresh {
+            return Err(crate::writer_control::STOPPED.into());
+        }
         if self.refresh_error {
             return Err("merge conflict".into());
         }
@@ -83,6 +88,9 @@ impl Driver for Fake {
         if self.fast_failures > 0 {
             self.fast_failures -= 1;
             return Err("check_file_size.py: too large".into());
+        }
+        if self.stop_on_fast_checks {
+            return Err(crate::writer_control::STOPPED.into());
         }
         if self.stamps {
             self.stamped.push(head.into());
@@ -615,6 +623,51 @@ fn batch_driver_resumes_on_fast_check_failure_then_fails() {
     assert_eq!(record["exit_code"], 7);
     assert!(driver.reviews.is_empty());
     assert_eq!(driver.calls.len(), 1 + FAST_CHECK_FIXES);
+}
+
+#[test]
+fn native_writer_stop_during_fast_checks_preserves_the_session_without_another_fix_turn() {
+    for fast_failures in [0, FAST_CHECK_FIXES] {
+        let mut driver = Fake {
+            fast_failures,
+            stop_on_fast_checks: true,
+            ..fake()
+        };
+        let record = run(&mut driver, json!({}), "brief");
+        assert_eq!(record["status"], "stopped");
+        assert_eq!(record["exit_code"], 10);
+        assert_eq!(record["reason"], crate::writer_control::STOPPED);
+        assert_eq!(record["session_id"], "same-session");
+        assert!(record["result"].is_null());
+        assert_ne!(
+            record["fast_checks"]["output"],
+            crate::writer_control::STOPPED
+        );
+        assert_eq!(driver.calls.len(), fast_failures + 1);
+        assert!(driver.reviews.is_empty());
+        assert!(driver.pushed.is_empty());
+    }
+}
+
+#[test]
+fn native_writer_stop_during_base_refresh_is_not_blocked() {
+    let mut driver = Fake {
+        failures: 1,
+        stop_on_refresh: true,
+        ..fake()
+    };
+    let record = run(
+        &mut driver,
+        json!({"landing_resume": true, "session_id": "saved-session"}),
+        "brief",
+    );
+    assert_eq!(record["status"], "stopped");
+    assert_eq!(record["exit_code"], 10);
+    assert_eq!(record["reason"], crate::writer_control::STOPPED);
+    assert_eq!(record["session_id"], "saved-session");
+    assert!(record["result"].is_null());
+    assert_eq!(driver.refreshes, 1);
+    assert_eq!(driver.calls, vec![Some("saved-session".into())]);
 }
 #[test]
 fn batch_driver_retries_weak_or_other_head_reviews_then_blocks() {
