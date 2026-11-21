@@ -7,6 +7,8 @@
 //! and a PEM private-key block the drain had to cut through is swallowed up to
 //! its footer, so no continuation of it survives as a fragment.
 
+/// The wrapper's end marker, on a line of its own (`"\n"` + [`crate::check::END_MARKER`]).
+pub(super) const END_LINE: &[u8] = b"\nPG-CHECK-DONE:";
 const HEADER: &[u8] = b"-----BEGIN ";
 const FOOTER: &[u8] = b"-----END ";
 const KEY: &[u8] = b"PRIVATE KEY-----";
@@ -65,6 +67,17 @@ fn outside_key_block(buf: &[u8], split: usize, cut: usize) -> usize {
         .fold(split, usize::max)
 }
 
+/// Start of the wrapper's end-marker line when it is the buffer's last line.
+fn marker_start(buf: &[u8]) -> Option<usize> {
+    let at = rfind(buf, END_LINE)?;
+    let rest = &buf[at + END_LINE.len()..];
+    let digits = rest
+        .iter()
+        .take_while(|b| b.is_ascii_digit() || **b == b'-')
+        .count();
+    (digits > 0 && rest[digits..].iter().all(u8::is_ascii_whitespace)).then_some(at)
+}
+
 /// Where a mid-stream redaction pass may stop: `MARGIN` bytes before the end,
 /// moved back to whitespace and to a character boundary.
 fn margin_split(buf: &[u8]) -> usize {
@@ -119,20 +132,43 @@ impl Capture {
         let skip = seen.len();
         seen.extend_from_slice(data);
         let mut from = 0;
+        // The wrapper's end marker ends the swallow too: it proves the command is over
+        // and must survive an unterminated block.
+        let marker = find(&seen, END_LINE);
+        let mut footer = None;
         while let Some(rel) = find(&seen[from..], KEY) {
             let at = from + rel;
             let before = &seen[at.saturating_sub(FOOTER.len() + 32)..at];
             if find(before, FOOTER).is_some() {
-                return Some((at + KEY.len()).saturating_sub(skip));
+                footer = Some(at + KEY.len());
+                break;
             }
             from = at + 1;
+        }
+        match (footer, marker) {
+            (Some(end), m) if m.is_none_or(|m| end <= m) => return Some(end.saturating_sub(skip)),
+            (_, Some(at)) => {
+                // The part of the marker an earlier read carried over belongs to the output.
+                if at < skip {
+                    self.buf.extend_from_slice(&seen[at..skip]);
+                }
+                return Some(at.saturating_sub(skip));
+            }
+            _ => {}
         }
         self.carry = seen[seen.len().saturating_sub(CARRY)..].to_vec();
         None
     }
 
-    /// Shrink the buffer to `max` bytes, scrubbing first when redacting.
+    /// Shrink the buffer to `max` bytes, scrubbing first when redacting. The wrapper's
+    /// end marker line, if the buffer ends with it, is set aside raw and put back after:
+    /// it carries no secret and an unterminated block must not redact it away.
     fn make_room(&mut self, closing: bool) {
+        let suffix = match self.redact.then(|| marker_start(&self.buf)).flatten() {
+            Some(at) => self.buf.split_off(at),
+            None => Vec::new(),
+        };
+        let max = self.max.saturating_sub(suffix.len());
         if self.redact {
             let open = open_key_start(&self.buf);
             let split = match (closing, open) {
@@ -141,7 +177,7 @@ impl Capture {
                 (false, None) => outside_key_block(
                     &self.buf,
                     margin_split(&self.buf),
-                    self.buf.len().saturating_sub(self.max),
+                    self.buf.len().saturating_sub(max),
                 ),
             };
             let valid = match std::str::from_utf8(&self.buf[..split]) {
@@ -153,16 +189,17 @@ impl Capture {
             let open_at = open.filter(|_| !closing).map(|_| out.len());
             out.extend_from_slice(&self.buf[valid..]);
             self.buf = out;
-            if open_at.is_some_and(|at| self.buf.len().saturating_sub(self.max) > at) {
+            if open_at.is_some_and(|at| self.buf.len().saturating_sub(max) > at) {
                 let at = open_at.unwrap_or(0);
                 // The cut passes the open header: drop the whole block and
-                // everything that follows of it, until its footer.
+                // everything that follows of it, until its footer or the end marker.
                 self.buf.truncate(at);
                 self.swallowing = true;
                 self.carry.clear();
             }
         }
-        let cut = self.buf.len().saturating_sub(self.max);
+        let cut = self.buf.len().saturating_sub(max);
         self.buf.drain(..cut);
+        self.buf.extend_from_slice(&suffix);
     }
 }

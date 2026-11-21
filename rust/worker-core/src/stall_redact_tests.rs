@@ -177,3 +177,41 @@ fn encrypted_key_footer_ends_the_swallow_and_later_output_survives() {
         assert!(out.contains("visible-after"), "size {size}: {out:?}");
     }
 }
+
+const END: &str = "PG-CHECK-DONE:1";
+
+#[test]
+fn end_marker_survives_an_unterminated_pem_diagnostic_at_the_final_cut() {
+    let (block, mark) = pem(30);
+    // The check's own output opens a block and never closes it; the wrapper's end
+    // marker follows. The capture is over its limit, so the final cut redacts.
+    let open = block.split("-----END").next().unwrap().to_string();
+    let data = ["x\n".repeat(400), open, format!("\n{END}\n")].concat();
+    let out = tail(data.into_bytes(), 4096, 200, true);
+    assert!(!scrubbed(&out).contains(mark), "{out:?}");
+    assert_eq!(out.trim_end().lines().last(), Some(END), "{out:?}");
+}
+
+#[test]
+fn end_marker_survives_a_swallowed_pem_block_that_never_closes() {
+    let (block, mark) = pem(400);
+    let open = block.split("-----END").next().unwrap().to_string();
+    let data = [open, format!("\n{END}\n")].concat();
+    for size in [5, 16, 4096] {
+        let out = tail(data.clone().into_bytes(), size, 200, true);
+        assert!(!scrubbed(&out).contains(mark), "size {size}: {out:?}");
+        assert_eq!(
+            out.trim_end().lines().last(),
+            Some(END),
+            "size {size}: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn the_capture_and_the_check_agree_on_the_end_marker() {
+    assert_eq!(
+        super::stall_capture::END_LINE,
+        format!("\n{}", crate::check::END_MARKER).as_bytes()
+    );
+}
