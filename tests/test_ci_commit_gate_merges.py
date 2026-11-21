@@ -208,3 +208,40 @@ def test_a_fatal_merge_tree_error_is_not_an_unsupported_fallback(repo: Path):
     module = ci_commit_gate_module()
     with pytest.raises(module.GateError, match="merge-tree failed"):
         module._auto_merge(["0" * 40, "1" * 40], repo)
+
+
+def test_without_merge_tree_a_skipped_rename_detection_fails_closed(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ci_commit_gate_module(), "_auto_merge", lambda parents, cwd: None)
+    # Two inexact renames per side exceed a rename limit of 1: git skips exhaustive detection.
+    for key, value in (("GIT_CONFIG_COUNT", "1"), ("GIT_CONFIG_KEY_0", "diff.renameLimit"),
+                       ("GIT_CONFIG_VALUE_0", "1")):
+        monkeypatch.setenv(key, value)
+    repo = tmp_path / "limit"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit(repo, BASE_MSG)
+    body = {name: "".join(f"{name} line{n}\n" for n in range(20)) for name in ("a", "b")}
+    _commit(repo, OK_LANE_MSG, files={f"ci/{name}.yml": text for name, text in body.items()})
+    base = _head(repo)
+
+    def rename_all(tag: str) -> None:
+        (repo / ".github/workflows").mkdir(parents=True, exist_ok=True)
+        for name in body:
+            _git(repo, "mv", f"ci/{name}.yml", f".github/workflows/{name}-{tag}.yml")
+            with open(repo / f".github/workflows/{name}-{tag}.yml", "a", encoding="utf-8") as handle:
+                handle.write("extra\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-q", "-m", GATE_MSG)
+
+    _git(repo, "checkout", "-q", "-b", "side")
+    rename_all("side")
+    _git(repo, "checkout", "-q", "-")
+    rename_all("lane")
+    subprocess.run(["git", "merge", "--no-ff", "--no-commit", "side"], cwd=repo, env=_git_env(), capture_output=True)
+    for name in body:
+        _git(repo, "checkout", "--theirs", f".github/workflows/{name}-side.yml")
+        _git(repo, "rm", "-q", "-f", f".github/workflows/{name}-lane.yml")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "Merge side")
+    head = _head(repo)
+    assert check(base, head, cwd=repo) == [f"{head}: gate edit without Gate-Edit trailer"]

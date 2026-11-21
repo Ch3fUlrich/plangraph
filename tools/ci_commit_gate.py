@@ -199,10 +199,20 @@ def _iter_merges(base: str, head: str, cwd: str | Path | None = None) -> list[tu
     return merges
 
 
-def _changed_since(base: str, parent: str, cwd: str | Path | None) -> tuple[set[str], list[tuple[str, str]]]:
-    '''(paths changed base..parent with renames split into delete + add, the (old, new) renames).'''
+def _changed_since(
+    base: str, parent: str, cwd: str | Path | None
+) -> tuple[set[str], list[tuple[str, str]], bool]:
+    '''(paths changed base..parent with renames split into delete + add, the (old, new) renames,
+    whether git's rename detection ran to completion).'''
     plain = set(_git_text(['diff', '--name-only', '--no-renames', '-z', base, parent], cwd=cwd).split('\0')) - {''}
-    fields = _git_text(['diff', '--name-status', '-M', '-z', base, parent], cwd=cwd).split('\0')
+    proc = subprocess.run(
+        ['git', 'diff', '--name-status', '-M', '-z', base, parent], cwd=cwd, capture_output=True
+    )
+    if proc.returncode != 0:
+        raise GateError(f"git diff failed: {proc.stderr.decode('utf-8', errors='replace').strip()}")
+    # Past diff.renameLimit git skips exhaustive rename detection and says so on stderr.
+    complete = b'rename detection was skipped' not in proc.stderr
+    fields = proc.stdout.decode('utf-8', errors='replace').split('\0')
     renames, index = [], 0
     while index < len(fields) and fields[index]:
         status = fields[index]
@@ -211,7 +221,7 @@ def _changed_since(base: str, parent: str, cwd: str | Path | None) -> tuple[set[
             index += 3
         else:
             index += 2
-    return plain, renames
+    return plain, renames, complete
 
 
 def _auto_merge(parents: list[str], cwd: str | Path | None) -> tuple[str, list[str]] | None:
@@ -260,9 +270,13 @@ def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
             sides = [_changed_since(base, parent, cwd) for parent in parents]
             both = sides[0][0] & sides[1][0]
             paths |= both
-            # A path both sides renamed away conflicts at each destination, which may be a workflow.
-            for _, renames in sides:
-                paths |= {new for old, new in renames if old in both}
+            if all(complete for _, _, complete in sides):
+                # A path both sides renamed away conflicts at each destination (maybe a workflow).
+                for _, renames, _ in sides:
+                    paths |= {new for old, new in renames if old in both}
+            elif both:
+                # Rename detection was skipped: any destination may hide a conflict. Fail closed.
+                paths |= sides[0][0] | sides[1][0]
         return sorted(paths)
     tree, conflicts = merged
     out = _git_text(
