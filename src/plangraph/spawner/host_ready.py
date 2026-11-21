@@ -174,7 +174,8 @@ def cargo_output(path):
         if tag.is_file() and not tag.is_symlink() and tag.read_bytes().startswith(CACHEDIR_SIGNATURE):
             return True
         if info.is_file() and not info.is_symlink() and info.stat().st_size <= 1 << 20:
-            return 'rustc_fingerprint' in json.loads(info.read_text())
+            data = json.loads(info.read_text())
+            return isinstance(data, dict) and 'rustc_fingerprint' in data
     except (OSError, ValueError, TypeError):
         pass
     return False
@@ -222,6 +223,9 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
             wait = 30.0
         wait = wait if math.isfinite(wait) and wait >= 0 else 30.0
     with cargo_lease(exclusive=True, wait=wait):
+        for root in ('cli-tests', 'policy-bin'):   # refuse before any build root is pruned
+            if (Path(target) / root).is_symlink():
+                raise ValueError(f'{Path(target) / root} is a symbolic link; build root not pruned')
         prune_cli_tests(target)
         prune_builds(target, 'policy-bin', CLI_TESTS_KEEP)
         if target.exists() and cargo_target_size_gb(target) >= cap:

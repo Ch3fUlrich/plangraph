@@ -252,3 +252,27 @@ def test_policy_bin_builds_are_pruned_with_cli_tests(tmp_path, monkeypatch):
     (target / "CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode())
     h.reclaim_cargo_target(target, cap=100, checkout=tmp_path / "checkout", wait=0, identified=True)
     assert sorted(p.name for p in (target / "policy-bin").iterdir()) == ["k0", "k1", "k2"]
+
+
+@pytest.mark.parametrize("payload", ['["rustc_fingerprint"]', '"rustc_fingerprint"', '[{"rustc_fingerprint": 1}]', "null"])
+def test_only_a_json_object_with_the_fingerprint_is_evidence(tmp_path, payload):
+    (tmp_path / "notes.txt").write_text("x" * 50_000)
+    (tmp_path / ".rustc_info.json").write_text(payload)
+    assert not h.identified_cargo_target(tmp_path)
+    with pytest.raises(ValueError, match="not an identified cargo target"):
+        h.reclaim_cargo_target(tmp_path, cap=1e-9, checkout=tmp_path.parent / "checkout", wait=0, identified=True)
+    assert (tmp_path / "notes.txt").exists()
+
+
+def test_both_build_roots_are_checked_before_either_is_pruned(tmp_path, monkeypatch):
+    target = tmp_path / "t"
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    (target / "CACHEDIR.TAG").parent.mkdir(parents=True)
+    (target / "CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode())
+    expired = build(target, "expired", 100 * 3600, now=__import__("time").time())
+    outside = tmp_path / "outside"
+    (outside / "h0").mkdir(parents=True)
+    (target / "policy-bin").symlink_to(outside)
+    with pytest.raises(ValueError, match="symbolic link"):
+        h.reclaim_cargo_target(target, cap=100, checkout=tmp_path / "checkout", wait=0, identified=True)
+    assert expired.exists() and (outside / "h0").exists()
