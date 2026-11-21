@@ -191,6 +191,10 @@ mod tests {
         use std::time::{Duration, Instant};
 
         const CHILD: &str = "PG_TEST_LARGE_SHA_LOOKUP_CHILD";
+        const LOOKUPS: usize = 4000;
+        // A deadlock never finishes, so this is only a hang watchdog, far above
+        // the slowest honest run (git needs seconds for thousands of misses on Windows).
+        const WATCHDOG: Duration = Duration::from_secs(300);
         if std::env::var_os(CHILD).is_some() {
             let repo = tempfile::tempdir().unwrap();
             let git = |args: &[&str]| {
@@ -213,7 +217,11 @@ mod tests {
                 "init",
             ]);
             let head = git(&["rev-parse", "HEAD"]);
-            let mut prompt: String = (0..16000).map(|index| format!("{index:040x}\n")).collect();
+            // About 200 KB each way: past a Linux pipe buffer (64 KiB) and far past
+            // a Windows one (4 KiB), so a lookup that does not drain deadlocks.
+            let mut prompt: String = (0..LOOKUPS)
+                .map(|index| format!("{index:040x}\n"))
+                .collect();
             prompt.push_str(&head);
             assert_eq!(
                 super::collect_prompt_commit_shas(repo.path(), &prompt),
@@ -231,7 +239,7 @@ mod tests {
             .env(CHILD, "1")
             .spawn()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + WATCHDOG;
         loop {
             if let Some(status) = child.try_wait().unwrap() {
                 assert!(status.success());
@@ -240,7 +248,9 @@ mod tests {
             if Instant::now() >= deadline {
                 child.kill().unwrap();
                 child.wait().unwrap();
-                panic!("git batch lookup blocked while draining pipes");
+                panic!(
+                    "git batch lookup did not finish within {WATCHDOG:?}: pipes are not drained"
+                );
             }
             std::thread::sleep(Duration::from_millis(10));
         }
