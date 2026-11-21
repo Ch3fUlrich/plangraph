@@ -260,8 +260,15 @@ fn auth(app: u64, state: &str, text: &str) -> Value {
     json!({"context": "land-auth", "state": state, "creator": {"id": app}, "description": text})
 }
 
+const CI_BOT: u64 = 41_898_282;
+
 fn ci_full(run: u64, attempt: u32, tree: &str) -> Value {
-    json!({"context": "ci-full", "state": "success", "description": format!("run {run} attempt {attempt} tree {tree}")})
+    ci_full_by(CI_BOT, "success", run, attempt, tree)
+}
+
+fn ci_full_by(creator: u64, state: &str, run: u64, attempt: u32, tree: &str) -> Value {
+    json!({"context": "ci-full", "state": state, "creator": {"id": creator},
+           "description": format!("run {run} attempt {attempt} tree {tree}")})
 }
 
 const APP_TEXT: &str = "attempt 9 evidence run 5 attempt 2";
@@ -396,5 +403,127 @@ fn a_partial_job_list_without_evidence_reads_red_not_green() {
         matches!(answer.state, State::Red { .. }),
         "{:?}",
         answer.state
+    );
+}
+
+#[test]
+fn only_the_ci_publishers_ci_full_statuses_count_and_the_evidence_attempt_must_have_succeeded() {
+    // A status from another identity names the tree but is not evidence.
+    let forged = vec![
+        auth(77, "success", APP_TEXT),
+        ci_full_by(5, "success", 5, 2, TREE),
+    ];
+    let runs = fast_source(forged, Some(77)).runs(TIP).unwrap();
+    assert!(!by_id(&runs, 3).unwrap().fast && by_id(&runs, 5).is_none());
+    // The publisher's status says the evidence attempt failed: nothing is fast, the failure is still read.
+    let failed = vec![
+        auth(77, "success", APP_TEXT),
+        ci_full_by(CI_BOT, "failure", 5, 2, TREE),
+    ];
+    let runs = fast_source(failed, Some(77)).runs(TIP).unwrap();
+    assert!(!by_id(&runs, 3).unwrap().fast);
+    assert!(
+        by_id(&runs, 5).is_some(),
+        "a trusted failure is kept for recovery"
+    );
+}
+
+#[test]
+fn a_pull_request_run_is_never_exempt_from_the_tree_check_whatever_its_branch_is_called() {
+    // A fork pull request whose head branch is also called main tests a merge ref.
+    struct Fork(FastListing);
+    impl Github for Fork {
+        fn pages(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>, String> {
+            self.0.pages(e, f)
+        }
+        fn page(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>, String> {
+            if e.starts_with("actions/workflows/tests.yml/runs?head_sha") {
+                return Ok(vec![
+                    json!({"id": 6, "head_sha": TIP, "head_branch": "main", "event": "pull_request", "run_attempt": 1}),
+                ]);
+            }
+            self.0.page(e, f)
+        }
+        fn log(&mut self, j: u64) -> Result<String, String> {
+            self.0.log(j)
+        }
+        fn rerun(&mut self, r: u64) -> Result<(), String> {
+            self.0.rerun(r)
+        }
+        fn value(&mut self, e: &str) -> Result<Value, String> {
+            self.0.value(e)
+        }
+    }
+    let src = |statuses| GhSource {
+        gh: Fork(FastListing {
+            statuses,
+            tree: TREE,
+        }),
+        branch: "main".into(),
+        now: || 1_800_000_000,
+        land_app: None,
+    };
+    assert!(
+        src(vec![]).runs(TIP).unwrap().is_empty(),
+        "no tree evidence: the run does not decide main's state"
+    );
+    let runs = src(vec![ci_full(6, 1, TREE)]).runs(TIP).unwrap();
+    assert_eq!(
+        runs.len(),
+        1,
+        "with a ci-full status naming the tip's tree it counts"
+    );
+}
+
+#[test]
+fn a_newer_attempt_without_evidence_keeps_the_state_pending_instead_of_vanishing() {
+    struct Rerun(FastListing);
+    impl Github for Rerun {
+        fn pages(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>, String> {
+            self.0.pages(e, f)
+        }
+        fn page(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>, String> {
+            if e.starts_with("actions/workflows/tests.yml/runs?head_sha") {
+                return Ok(vec![
+                    json!({"id": 5, "head_sha": TIP, "head_branch": "land/train", "event": "push", "run_attempt": 3}),
+                ]);
+            }
+            self.0.page(e, f)
+        }
+        fn log(&mut self, j: u64) -> Result<String, String> {
+            self.0.log(j)
+        }
+        fn rerun(&mut self, r: u64) -> Result<(), String> {
+            self.0.rerun(r)
+        }
+        fn value(&mut self, e: &str) -> Result<Value, String> {
+            if e.contains("/attempts/3") {
+                return Ok(
+                    json!({"status": "in_progress", "run_started_at": "2026-11-21T01:00:00Z"}),
+                );
+            }
+            self.0.value(e)
+        }
+    }
+    let statuses = vec![ci_full(5, 2, TREE)];
+    let mut src = GhSource {
+        gh: Rerun(FastListing {
+            statuses,
+            tree: TREE,
+        }),
+        branch: "main".into(),
+        now: || 1_800_000_000,
+        land_app: None,
+    };
+    let runs = src.runs(TIP).unwrap();
+    let attempts: Vec<(u32, &str)> = runs[0]
+        .attempts
+        .iter()
+        .map(|a| (a.number, a.status.as_str()))
+        .collect();
+    assert_eq!(
+        attempts,
+        vec![(2, "completed"), (3, "in_progress")],
+        "attempt 1 is dropped, the newer attempt 3 stays unverified"
     );
 }

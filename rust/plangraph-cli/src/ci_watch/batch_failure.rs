@@ -8,6 +8,14 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+/// A delivery in flight: the writer, when it was claimed and a unique token its completion must match.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Claim {
+    pub writer: String,
+    pub at: i64,
+    pub token: String,
+}
+
 /// A delivery claim older than this is stale and the record is sent again (seconds).
 pub const CLAIM_SECS: i64 = 300;
 
@@ -60,7 +68,7 @@ pub struct FailureRecord {
     pub escalated: bool,
     /// A delivery in flight: (writer, claimed at). A second pass does not send what is claimed.
     #[serde(default)]
-    pub claim: Option<(String, i64)>,
+    pub claim: Option<Claim>,
 }
 
 pub trait Deliver {
@@ -111,11 +119,7 @@ pub fn pending_deliveries(
     records
         .iter()
         .filter(|r| !r.acked)
-        .filter(|r| {
-            r.claim
-                .as_ref()
-                .is_none_or(|(_, at)| now - at >= CLAIM_SECS)
-        })
+        .filter(|r| r.claim.as_ref().is_none_or(|c| now - c.at >= CLAIM_SECS))
         .filter_map(|r| {
             let writer = owners.writer_of(&r.batch)?;
             (r.delivered_to.as_deref() != Some(writer.as_str())).then(|| (r.id.clone(), writer))
@@ -123,18 +127,32 @@ pub fn pending_deliveries(
         .collect()
 }
 
-/// Claims a delivery under the lock so no other pass sends the same record meanwhile.
-pub fn claim(records: &mut [FailureRecord], id: &str, writer: &str, now: i64) {
-    if let Some(r) = records.iter_mut().find(|r| r.id == id) {
-        r.claim = Some((writer.to_owned(), now));
-    }
+/// Claims a delivery under the lock so no other pass sends the same record meanwhile; returns the claim's
+/// unique token, which the completion must present.
+pub fn claim(records: &mut [FailureRecord], id: &str, writer: &str, now: i64) -> Option<String> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let token = format!("{}-{nanos}-{n}", std::process::id());
+    let r = records.iter_mut().find(|r| r.id == id)?;
+    r.claim = Some(Claim {
+        writer: writer.to_owned(),
+        at: now,
+        token: token.clone(),
+    });
+    Some(token)
 }
 
-/// Settles a claim: a delivered record keeps its writer, a failed one is released for the next pass.
-/// An acknowledgement that arrived meanwhile is kept.
-pub fn settle(records: &mut [FailureRecord], id: &str, writer: &str, delivered: bool) {
+/// Settles a claim. Only the holder of the record's current claim token clears it, so an expired delivery
+/// cannot release its replacement's claim; a delivery that did happen is recorded either way. An
+/// acknowledgement that arrived meanwhile is kept.
+pub fn settle(records: &mut [FailureRecord], id: &str, writer: &str, token: &str, delivered: bool) {
     if let Some(r) = records.iter_mut().find(|r| r.id == id) {
-        r.claim = None;
+        if r.claim.as_ref().is_some_and(|c| c.token == token) {
+            r.claim = None;
+        }
         if delivered {
             r.delivered_to = Some(writer.to_owned());
         }

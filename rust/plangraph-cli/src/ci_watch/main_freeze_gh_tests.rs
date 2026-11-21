@@ -6,6 +6,9 @@ use crate::land::main_state::{Answer, Blocking, Failure, State};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 
+/// `CI_WATCH_DELIVER_CMD` is process-wide: the tests that set it take this lock.
+static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Recorded GitHub replies for run 5: attempt 1 failed in job 11 whose log names a known flake.
 struct Recorded {
     verbs: Vec<(u64, String)>,
@@ -175,7 +178,7 @@ fn a_train_failure_reaches_its_recorded_writer_and_defines_no_fix_lane() {
     std::fs::write(&script, "#!/bin/sh\necho \"$1\" > \"$2.sent\"\n").unwrap();
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    // The delivery command is process-wide; this is the only test that sets it.
+    let _env = ENV.lock().unwrap();
     std::env::set_var("CI_WATCH_DELIVER_CMD", &script);
     let mut task = Task {
         key: "plangraph:CI-FIX-1".into(),
@@ -441,17 +444,96 @@ fn a_failed_delivery_releases_its_claim_and_a_stale_claim_is_retried() {
     };
     let mut records = vec![];
     let id = super::batch_failure::record_failure(&mut records, &owners, &task, 0).unwrap();
-    claim(&mut records, &id, "w1", 100);
+    let _ = claim(&mut records, &id, "w1", 100);
     assert!(pending_deliveries(&records, &owners, 100 + CLAIM_SECS - 1).is_empty());
     assert_eq!(
         pending_deliveries(&records, &owners, 100 + CLAIM_SECS).len(),
         1,
         "the claim went stale"
     );
-    super::batch_failure::settle(&mut records, &id, "w1", false);
+    let token = records[0].claim.as_ref().unwrap().token.clone();
+    super::batch_failure::settle(&mut records, &id, "w1", &token, false);
     assert_eq!(
         pending_deliveries(&records, &owners, 101).len(),
         1,
         "a failed delivery is released"
+    );
+}
+
+#[test]
+fn an_expired_delivery_cannot_clear_its_replacements_claim() {
+    use super::batch_failure::{claim, pending_deliveries, settle, Owners, CLAIM_SECS};
+    let owners = Owners {
+        prs: [("7".to_owned(), "b".to_owned())].into(),
+        writers: [("b".to_owned(), "w1".to_owned())].into(),
+        successors: Default::default(),
+    };
+    let task = Task {
+        key: "k".into(),
+        head: "pr-7".into(),
+        pr: Some(7),
+        run_id: 1,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        priority: 10,
+        keeper_defined: false,
+        keeper_key: None,
+    };
+    let mut records = vec![];
+    let id = super::batch_failure::record_failure(&mut records, &owners, &task, 0).unwrap();
+    let first = claim(&mut records, &id, "w1", 100).unwrap();
+    // The first delivery overruns; its claim goes stale and a replacement takes the record.
+    let later = 100 + CLAIM_SECS;
+    assert_eq!(pending_deliveries(&records, &owners, later).len(), 1);
+    let second = claim(&mut records, &id, "w1", later).unwrap();
+    assert_ne!(first, second);
+    // The overrun delivery finishes (unsuccessfully): it must not release the replacement's claim.
+    settle(&mut records, &id, "w1", &first, false);
+    assert!(records[0].claim.is_some());
+    assert!(
+        pending_deliveries(&records, &owners, later + 1).is_empty(),
+        "no third send while the replacement holds it"
+    );
+    // The replacement settles its own claim.
+    settle(&mut records, &id, "w1", &second, true);
+    assert!(records[0].claim.is_none() && records[0].delivered_to.as_deref() == Some("w1"));
+}
+
+#[test]
+fn a_delivery_command_is_killed_at_its_lease() {
+    use super::batch_failure::{Deliver, FailureRecord};
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("slow.sh");
+    std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _env = ENV.lock().unwrap();
+    std::env::set_var("CI_WATCH_DELIVER_CMD", &script);
+    let record = FailureRecord {
+        id: "f1".into(),
+        batch: "b".into(),
+        pr: 1,
+        run_id: 1,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        created_at: 0,
+        delivered_to: None,
+        acked: false,
+        escalated: false,
+        claim: None,
+    };
+    let started = std::time::Instant::now();
+    let r = CommandDeliver {
+        dir: dir.path(),
+        lease_secs: 1,
+    }
+    .send("w1", &record);
+    std::env::remove_var("CI_WATCH_DELIVER_CMD");
+    assert!(r.unwrap_err().contains("lease"));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "it did not wait for the 30 second command"
     );
 }

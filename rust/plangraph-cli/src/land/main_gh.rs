@@ -5,7 +5,7 @@ use crate::ci_watch::github::{self, Gh, Github};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 /// The expected jobs per tier; one file for the watcher, the gates and the tests.
@@ -50,6 +50,14 @@ pub struct GhSource<G: Github> {
     /// The id of the identity whose `land-auth` commit status is trusted landing evidence; without it no
     /// run is ever treated as fast-only and the full suite is expected on every tip.
     pub land_app: Option<u64>,
+}
+
+/// The identity that publishes `ci-full` statuses (the Actions bot by default; `PLANGRAPH_CI_APP_ID` overrides).
+pub fn ci_publisher() -> u64 {
+    std::env::var("PLANGRAPH_CI_APP_ID")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(41_898_282)
 }
 
 /// `PLANGRAPH_LAND_APP_ID`: the trusted creator of `land-auth` statuses.
@@ -100,19 +108,26 @@ impl<G: Github> GhSource<G> {
         &mut self,
         tip: &str,
         statuses: &[Value],
-    ) -> Result<BTreeMap<u64, BTreeSet<u32>>, String> {
+    ) -> Result<BTreeMap<u64, BTreeMap<u32, bool>>, String> {
         let tree = self.gh.value(&format!("git/commits/{tip}"))?["tree"]["sha"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
-        let mut out: BTreeMap<u64, BTreeSet<u32>> = BTreeMap::new();
-        for s in statuses.iter().filter(|s| s["context"] == "ci-full") {
+        let publisher = ci_publisher();
+        let mut out: BTreeMap<u64, BTreeMap<u32, bool>> = BTreeMap::new();
+        // Only the CI publisher's statuses count; a later failure is kept for recovery, success is `true`.
+        for s in statuses
+            .iter()
+            .filter(|s| s["context"] == "ci-full" && s["creator"]["id"].as_u64() == Some(publisher))
+        {
             let text = s["description"].as_str().unwrap_or_default();
             let w: Vec<&str> = text.split_whitespace().collect();
             if let ["run", run, "attempt", n, "tree", sha] = w[..] {
                 if sha == tree {
                     if let (Ok(run), Ok(n)) = (run.parse(), n.parse()) {
-                        out.entry(run).or_default().insert(n);
+                        out.entry(run)
+                            .or_default()
+                            .insert(n, s["state"] == "success");
                     }
                 }
             }
@@ -178,7 +193,7 @@ impl<G: Github> Source for GhSource<G> {
         )?;
         let mut out = Vec::new();
         #[allow(clippy::type_complexity)]
-        let mut cache: Option<(Option<(u64, u32)>, BTreeMap<u64, BTreeSet<u32>>)> = None;
+        let mut cache: Option<(Option<(u64, u32)>, BTreeMap<u64, BTreeMap<u32, bool>>)> = None;
         for row in rows {
             // Runs of any ref on this commit are read: a fast-only tip is judged by the latest full attempt
             // of any ref (the evidence run ran on the train's branch); the evaluation filters by ref.
@@ -186,7 +201,13 @@ impl<G: Github> Source for GhSource<G> {
                 continue;
             }
             let id = row["id"].as_u64().ok_or("run without id")?;
-            let own_ref = row["head_branch"] == self.branch.as_str();
+            // Only events that test the protected ref directly are exempt from the tree check: a pull request run
+            // tests a merge ref whatever its head branch is called (a fork can name its branch `main`).
+            let own_ref = row["head_branch"] == self.branch.as_str()
+                && !matches!(
+                    row["event"].as_str(),
+                    Some("pull_request" | "pull_request_target")
+                );
             let latest = row["run_attempt"].as_u64().unwrap_or(1) as u32;
             let mut attempts = Vec::new();
             for n in 1..=latest {
@@ -201,9 +222,20 @@ impl<G: Github> Source for GhSource<G> {
             let (evidence, tested) = cache.clone().unwrap_or_default();
             if !own_ref {
                 // A run of another ref decides only through a ci-full status that names the tip's tree.
-                match tested.get(&id) {
-                    Some(listed) => attempts.retain(|a| listed.contains(&a.number)),
-                    None => continue,
+                let Some(listed) = tested.get(&id) else {
+                    continue;
+                };
+                let newest = listed.keys().max().copied().unwrap_or(0);
+                // Attempts without evidence older than the newest listed one are dropped; a newer one is
+                // unverified: it keeps the state pending (and stalls at T) instead of vanishing.
+                attempts.retain(|a| listed.contains_key(&a.number) || a.number > newest);
+                for a in attempts
+                    .iter_mut()
+                    .filter(|a| !listed.contains_key(&a.number))
+                {
+                    a.status = "in_progress".into();
+                    a.conclusion = None;
+                    a.concluded = 0;
                 }
             }
             // Fast-only needs the trusted landing evidence, not just a short job list: a partial rerun of a
@@ -214,7 +246,7 @@ impl<G: Github> Source for GhSource<G> {
                 && own_ref
                 && row["event"] == "push"
                 && evidence.is_some_and(|(run, n)| {
-                    run != id && tested.get(&run).is_some_and(|l| l.contains(&n))
+                    run != id && tested.get(&run).and_then(|l| l.get(&n)) == Some(&true)
                 });
             if looks_fast && !fast {
                 for a in attempts.iter_mut().filter(|a| a.tier == "fast") {

@@ -144,6 +144,8 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
 /// every delivery fails and the open record escalates to plan-order.
 pub struct CommandDeliver<'a> {
     pub dir: &'a Path,
+    /// Seconds a delivery may run: shorter than the claim's staleness.
+    pub lease_secs: u64,
 }
 
 impl Deliver for CommandDeliver<'_> {
@@ -151,16 +153,25 @@ impl Deliver for CommandDeliver<'_> {
         let cmd = std::env::var("CI_WATCH_DELIVER_CMD").map_err(|_| "no delivery command")?;
         let path = self.dir.join(format!("{}.delivery.json", record.id));
         save(&path, record)?;
-        let ok = std::process::Command::new(cmd)
+        let mut child = std::process::Command::new(cmd)
             .arg(writer)
             .arg(&path)
-            .status()
-            .map_err(|e| e.to_string())?
-            .success();
-        if ok {
-            Ok(())
-        } else {
-            Err("delivery command failed".into())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        // The command is bound to its claim's lease: past it, the claim may be taken over, so it is killed.
+        let lease = std::time::Duration::from_secs(self.lease_secs);
+        let started = std::time::Instant::now();
+        loop {
+            match child.try_wait().map_err(|e| e.to_string())? {
+                Some(status) if status.success() => return Ok(()),
+                Some(_) => return Err("delivery command failed".into()),
+                None if started.elapsed() >= lease => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("delivery command exceeded its lease".into());
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
         }
     }
 }
@@ -232,7 +243,10 @@ pub fn pass(
     out.extend(deliver_pending(
         dir,
         &owners,
-        &mut CommandDeliver { dir },
+        &mut CommandDeliver {
+            dir,
+            lease_secs: (batch_failure::CLAIM_SECS as u64).saturating_sub(60),
+        },
         now,
     )?);
     update_failures(dir, |records| {
@@ -279,30 +293,31 @@ pub fn deliver_pending(
     now: i64,
 ) -> Result<Vec<String>> {
     // Claimed under the lock: a concurrent pass does not pick the same record.
-    let todo: Vec<(String, String, FailureRecord)> = update_failures(dir, |records| {
+    let todo: Vec<(String, String, String, FailureRecord)> = update_failures(dir, |records| {
         let work: Vec<(String, String)> = batch_failure::pending_deliveries(records, owners, now);
         let mut out = Vec::new();
         for (id, writer) in work {
-            batch_failure::claim(records, &id, &writer, now);
-            if let Some(rec) = records.iter().find(|r| r.id == id) {
-                out.push((id, writer, rec.clone()));
+            if let Some(token) = batch_failure::claim(records, &id, &writer, now) {
+                if let Some(rec) = records.iter().find(|r| r.id == id) {
+                    out.push((id, writer, token, rec.clone()));
+                }
             }
         }
         Ok(out)
     })?;
     let mut results = Vec::new();
-    for (id, writer, record) in todo {
+    for (id, writer, token, record) in todo {
         let ok = deliver.send(&writer, &record).is_ok();
-        results.push((id, writer, ok));
+        results.push((id, writer, token, ok));
     }
     let lines = results
         .iter()
-        .filter(|r| r.2)
-        .map(|(id, w, _)| format!("delivered {id} to {w}"))
+        .filter(|r| r.3)
+        .map(|(id, w, _, _)| format!("delivered {id} to {w}"))
         .collect();
     update_failures(dir, |records| {
-        for (id, writer, ok) in &results {
-            batch_failure::settle(records, id, writer, *ok);
+        for (id, writer, token, ok) in &results {
+            batch_failure::settle(records, id, writer, token, *ok);
         }
         Ok(())
     })?;
@@ -322,7 +337,15 @@ pub fn route_or_define(
         Ok(batch_failure::record_failure(records, &owners, task, now))
     })?;
     if routed.is_some() {
-        deliver_pending(dir, &owners, &mut CommandDeliver { dir }, now)?;
+        deliver_pending(
+            dir,
+            &owners,
+            &mut CommandDeliver {
+                dir,
+                lease_secs: (batch_failure::CLAIM_SECS as u64).saturating_sub(60),
+            },
+            now,
+        )?;
         // The record is open and addressed to the batch: no unassigned fix lane is created.
         return Ok(true);
     }
