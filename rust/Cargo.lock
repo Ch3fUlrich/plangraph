@@ -2223,6 +2223,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-receipts"
+version = "0.1.0"
+
+[[package]]
 name = "pg-repo-sync"
 version = "0.1.0"
 dependencies = [
