@@ -55,9 +55,12 @@ fn passthrough_names(vars: impl Iterator<Item = std::ffi::OsString>) -> Vec<Stri
     let mut names: Vec<String> = vars
         .filter_map(|name| name.into_string().ok())
         .filter(|name| {
-            !name.is_empty()
-                && !name.contains('=')
-                && !name.bytes().any(|b| b == 0)
+            // systemd accepts only [A-Za-z_][A-Za-z0-9_]*: an exported bash function
+            // (BASH_FUNC_x%%) would make systemd-run refuse the whole launch.
+            name.bytes()
+                .next()
+                .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
+                && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
                 && !MANAGER_VARS.contains(&name.as_str())
         })
         .collect();
@@ -284,6 +287,9 @@ mod tests {
                 "INVOCATION_ID",
                 "JOURNAL_STREAM",
                 "A=B",
+                "BASH_FUNC_example%%",
+                "1BAD",
+                "with space",
             ]
             .into_iter()
             .map(std::ffi::OsString::from),

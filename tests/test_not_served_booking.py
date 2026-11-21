@@ -29,6 +29,12 @@ def test_not_served_on_host_is_reported_but_not_booked_as_a_429(tmp_path):
     assert events == [] and status['state'] == 'ok'
 
 
+@pytest.mark.parametrize('stderr', ['Error: NOT_SERVED_ON_HOST: x', 'Error: Not_Served_On_Host', 'error: not_served_on_host: x'])
+def test_the_marker_is_not_case_sensitive(tmp_path, stderr):
+    reason, events, status = _run(tmp_path, stderr)
+    assert reason and events == [] and status['state'] == 'ok'
+
+
 @pytest.mark.parametrize('stderr', ['Error: unknown model', 'Error: model unavailable'])
 def test_a_provider_side_unavailable_model_is_still_booked(tmp_path, stderr):
     reason, events, status = _run(tmp_path, stderr)
