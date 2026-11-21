@@ -37,15 +37,15 @@ class ReadyCommandInLine(HookCase):
             line = guard.emit_line(level, 310000, 300000)
             self.assertTrue(line.startswith(marker), line)
             self.assertEqual(ready_command(line), expected)
-            self.assertTrue(os.path.isabs(ready_command(line).split()[1]))
+            self.assertTrue(os.path.isabs(shlex.split(ready_command(line))[1]))
             self.assertNotIn("\n", line)
 
     def test_without_a_private_destination_the_command_keeps_a_handoff_placeholder(self):
         guard = load_module("context_guard")
         os.environ.pop(guard.HANDOFF_PATH_ENV, None)
         line = guard.emit_line("handoff", 280000, 270000)
-        self.assertTrue(ready_command(line).endswith(" ready <handoff-path>"), line)
-        self.assertIn(str(GUARD.resolve()), line)
+        argv = shlex.split(ready_command(line))
+        self.assertEqual(argv, ["python3", str(GUARD.resolve()), "ready", "<handoff-path>"])
 
     def test_the_named_command_is_one_the_ready_lock_lets_through(self):
         guard = load_module("context_guard")
@@ -72,6 +72,24 @@ class WrapperHasNoReadyCommand(HookCase):
         self.assertIn("python3 %s ready" % shlex.quote(str(GUARD.resolve())), proc.stderr)
         self.assertIn(HANDOFF, proc.stderr)
         self.assertFalse((self.state / "autoos" / "ctx-guard").exists())  # no marker from the wrapper
+
+    def test_wrapper_called_with_status_exits_2_and_names_the_guard_command(self):
+        proc = self.run_hook(WRAPPER, "", args=("status",))
+        self.assertEqual((proc.returncode, proc.stdout), (2, ""))
+        self.assertIn("python3 %s status" % shlex.quote(str(GUARD.resolve())), proc.stderr)
+
+    def test_a_checkout_path_with_spaces_stays_one_quoted_argument(self):
+        import shutil
+        spaced = self.tmp / "dir with space" / "hooks"
+        spaced.mkdir(parents=True)
+        for name in ("context_guard.py", "hook_common.py"):
+            shutil.copyfile(HOOKS / name, spaced / name)
+        self.write(usage_line(read=280000))
+        proc = self.run_hook(spaced / "context_guard.py", {"transcript_path": str(self.transcript), "session_id": SID,
+                                                          "cwd": "/w/x"})
+        text = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        argv = shlex.split(ready_command(text))
+        self.assertEqual(argv[:2], ["python3", os.path.realpath(spaced / "context_guard.py")])
 
     def test_wrapper_called_with_ready_and_no_path_still_names_the_guard(self):
         proc = self.run_hook(WRAPPER, "", args=("ready",))

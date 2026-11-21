@@ -9,6 +9,7 @@ state dir are the live guard's contract; they stay until the cutover item G13.
 """
 import io
 import json
+import shlex
 import sys
 import unittest
 from pathlib import Path
@@ -98,7 +99,7 @@ class Output(MoreCase):
         """Now: the line names `python3` plus the absolute guard script, and never the interpreter path."""
         self.write(usage_line(read=275000))
         text = self.text(self.hook())
-        self.assertIn("then run `python3 %s ready <handoff-path>`" % SCRIPT.resolve(), text)
+        self.assertIn("then run `python3 %s ready <handoff-path>`" % shlex.quote(str(SCRIPT.resolve())), text)
         self.assertNotIn(sys.executable, text)
 
     def test_line_needs_no_interpreter_or_script_path(self):
