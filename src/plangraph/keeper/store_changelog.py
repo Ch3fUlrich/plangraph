@@ -39,10 +39,10 @@ class ChangelogMixin:
         return changelog.build(log, since, titles, texts, head)
 
 
-def record_audience(conn, seq, key, kind, payload, recipient):
+def record_audience(conn, seq, key, kind, payload, recipient, prior_holders):
     """Capture recipients inside the event transaction, before a claim can end."""
     project = None
-    names = {recipient}
+    names = {recipient, *prior_holders}
     if key is not None:
         item = conn.execute(
             "SELECT project, owner, claimed_by, delegate, agent_id FROM items WHERE key=?",

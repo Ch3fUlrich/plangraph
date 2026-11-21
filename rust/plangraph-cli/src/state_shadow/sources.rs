@@ -1,5 +1,6 @@
 use super::{github, local, Config, Event, Observation, Result};
 use crate::keeper_events::Client;
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{Read, Seek, SeekFrom};
 use std::process::{Command, Stdio};
@@ -43,23 +44,35 @@ pub(super) fn command(mut command: Command, deadline: Instant) -> Result<String>
     Ok(text)
 }
 
-pub(super) fn authorize(config: &Config, keeper: &Client) -> Result<()> {
-    let identity: Value = keeper.get("v1/whoami")?;
-    if identity["name"] != config.principal {
+#[derive(Deserialize)]
+pub(super) struct Identity {
+    name: String,
+    role: String,
+    projects: Vec<String>,
+}
+
+impl Identity {
+    fn includes_item(&self, key: &str) -> bool {
+        self.role == "router"
+            || key.split_once(':').is_some_and(|(project, _)| {
+                self.projects.iter().any(|candidate| candidate == project)
+            })
+    }
+}
+
+pub(super) fn authorize(config: &Config, keeper: &Client) -> Result<Identity> {
+    let identity: Identity = keeper.get("v1/whoami")?;
+    if identity.name != config.principal {
         return Err("keeper token does not match the configured role principal".into());
     }
-    if identity["role"] != "router"
-        && config.item_keys.iter().any(|key| {
-            !key.split_once(':').is_some_and(|(project, _)| {
-                identity["projects"]
-                    .as_array()
-                    .is_some_and(|projects| projects.iter().any(|candidate| candidate == project))
-            })
-        })
+    if config
+        .item_keys
+        .iter()
+        .any(|key| !identity.includes_item(key))
     {
         return Err("configured run item is outside the keeper token project scope".into());
     }
-    Ok(())
+    Ok(identity)
 }
 
 fn rows<'a>(value: &'a Value, field: &str) -> Result<&'a [Value]> {
@@ -69,10 +82,12 @@ fn rows<'a>(value: &'a Value, field: &str) -> Result<&'a [Value]> {
         .ok_or_else(|| format!("missing {field} rows"))
 }
 
-fn in_scope(config: &Config, row: &Value) -> bool {
-    row["item_key"]
-        .as_str()
-        .is_some_and(|key| config.item_keys.iter().any(|k| k == key))
+fn in_scope(config: &Config, identity: &Identity, row: &Value) -> bool {
+    identity.role == "router"
+        || row["role"] == config.role
+        || row["item_key"]
+            .as_str()
+            .is_some_and(|key| identity.includes_item(key))
 }
 
 fn messages(config: &Config, value: &Value, mut cursor: u64) -> Result<Observation> {
@@ -136,7 +151,12 @@ fn item_levels(config: &Config, value: &Value, previous: Value, now: i64) -> Res
     Ok((state, events, false))
 }
 
-fn read_runs(config: &Config, cursor: Value, deadline: Instant) -> Result<Observation> {
+fn read_runs(
+    config: &Config,
+    identity: &Identity,
+    cursor: Value,
+    execute: impl FnOnce(Command) -> Result<String>,
+) -> Result<Observation> {
     let mut cmd = Command::new("plangraph-spawn");
     let cursor = if cursor.is_null() {
         "{}".to_owned()
@@ -144,8 +164,7 @@ fn read_runs(config: &Config, cursor: Value, deadline: Instant) -> Result<Observ
         cursor.to_string()
     };
     cmd.args(["runs", "--changed-since", &cursor]);
-    let value: Value =
-        serde_json::from_str(&command(cmd, deadline)?).map_err(|_| "invalid runs response")?;
+    let value: Value = serde_json::from_str(&execute(cmd)?).map_err(|_| "invalid runs response")?;
     let hosts = value["hosts"].as_object().ok_or("invalid host page")?;
     let mut events = Vec::new();
     let mut failed = false;
@@ -157,7 +176,7 @@ fn read_runs(config: &Config, cursor: Value, deadline: Instant) -> Result<Observ
             continue;
         }
         for row in rows(page, "rows")? {
-            if in_scope(config, row) {
+            if in_scope(config, identity, row) {
                 let mut event = Event::new(
                     "runs",
                     row["phase"].as_str().ok_or("missing run phase")?,
@@ -252,7 +271,9 @@ pub(super) fn read(
             );
             Ok(level(source, "levels", current, cursor))
         }
-        "runs" => read_runs(config, cursor, deadline),
+        "runs" => read_runs(config, &authorize(config, keeper)?, cursor, |cmd| {
+            command(cmd, deadline)
+        }),
         "inbox" => local::lines(config, source, &config.inbox, cursor),
         "transcript" => local::lines(config, source, &config.transcript, cursor),
         "decisions" => local::decisions(config, cursor, deadline),
@@ -265,6 +286,56 @@ pub(super) fn read(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_source_admits_project_and_role_scope_without_item_keys() {
+        let mut config = super::super::fixture(std::path::Path::new("."));
+        config.item_keys.clear();
+        let mut identity = Identity {
+            name: config.principal.clone(),
+            role: "l1".into(),
+            projects: vec!["demo".into()],
+        };
+        let page = json!({
+            "local":{"rows":[
+                {"phase":"ended","status":"failed","run_id":"new-item","item_key":"demo:NEW","role":"review"},
+                {"phase":"ended","status":"completed","run_id":"private","item_key":"elsewhere:A","role":"review"}
+            ]},
+            "hosts":{"fixture":{"rows":[
+                {"phase":"started","status":"running","run_id":"role-only","role":"routing"},
+                {"phase":"started","status":"running","run_id":"unknown-scope","role":"review"}
+            ]}},
+            "next_cursor":{"local":2,"hosts":{"fixture":2}}
+        });
+        let execute = |cmd: Command| {
+            assert_eq!(cmd.get_program(), "plangraph-spawn");
+            assert_eq!(
+                cmd.get_args().collect::<Vec<_>>(),
+                ["runs", "--changed-since", "{}"]
+            );
+            Ok(page.to_string())
+        };
+        let (cursor, events, failed) = read_runs(&config, &identity, Value::Null, execute).unwrap();
+        assert_eq!(cursor, page["next_cursor"]);
+        assert!(!failed);
+        assert_eq!(
+            events
+                .iter()
+                .map(|row| row.data["transition"]["run_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["new-item", "role-only"]
+        );
+        assert!(events[0].urgent);
+        identity.role = "router".into();
+        identity.projects.clear();
+        assert_eq!(
+            read_runs(&config, &identity, Value::Null, execute)
+                .unwrap()
+                .1
+                .len(),
+            4
+        );
+    }
 
     #[test]
     fn records_lease_margin_crossing_without_a_write() {

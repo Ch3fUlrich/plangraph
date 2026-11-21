@@ -310,9 +310,12 @@ class ReviewMixin:
             + " WHERE key=? AND state='in_review' AND epoch=?",
             (principal.name, self._iso(now), key, item["epoch"]))
         self._race_guard(cursor, key, "in_review", item["epoch"])
+        # The verdict event locks the item. Carry holders cleared by the guarded update.
+        prior_holders = (item["claimed_by"], item["delegate"]) if release else ()
         self._append(principal, key, "review_passed",
                      {"reason": reason, **({"released": True} if release else {}),
-                      **({"flags": flags} if flags else {})}, now)
+                      **({"flags": flags} if flags else {})}, now,
+                     prior_holders=prior_holders)
         return {"key": key, "state": "done", "reviews_passed": reviews_passed,
                 **({"flags": flags} if flags else {})}
 

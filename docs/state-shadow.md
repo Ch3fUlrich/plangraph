@@ -22,7 +22,7 @@ the collector owner.
 | `github_repo` | Authorized repository in owner/repo format |
 | `github_since` | Initial lower bound for main runs, as an RFC 3339 instant |
 | `pull_requests` | Optional list of authorized held or train PR numbers |
-| `item_keys` | Optional role-authorized keys for lifecycle and decision rows |
+| `item_keys` | Optional role-authorized keys for decision rows |
 | `quota` | Role-visible JSON file with live quota levels |
 | `lease_margin_seconds` | Optional lead time for lease warnings, default 600 |
 
@@ -33,8 +33,11 @@ Set `PLANGRAPH_LIFECYCLE_PUBLISHER` to the installed `pg-spawnd` binary. The ini
 positions should cover the shadow observation window. The source checkout
 synchronizer refreshes `origin/main`. Configure the next transcript path on
 session replacement. Decision rows are included when they address the role or
-reference one of its explicitly scoped item keys. Only messages addressed to
-the role or principal are written from the keeper message feed.
+reference one of its explicitly scoped item keys. Run transitions are included
+when the run's role matches the collector or its item belongs to a project
+authorized by the current keeper identity. A router identity covers every run.
+Only messages addressed to the role or principal are written from the keeper
+message feed.
 
 The role subdirectory contains `events.jsonl`, `digest-N.txt` (up to 6000
 characters including the first-line range), and `digest-N.full.txt`. Treat

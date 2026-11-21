@@ -155,13 +155,15 @@ class SupportMixin:
     def verify_integrity(self):
         return events.verify_integrity(self.conn)
 
-    def _append(self, principal, key, type, payload, now, *, audience_key=None, recipient=None):
+    def _append(self, principal, key, type, payload, now, *,
+                audience_key=None, recipient=None, prior_holders=()):
         from .store_changelog import record_audience
         out = events.append_event(
             self.conn, iso(now), getattr(principal, "name", None),
             getattr(principal, "audit_role", None) or getattr(principal, "role", None),
             None, key, type, payload)
-        record_audience(self.conn, out[0], audience_key or key, type, payload, recipient)
+        record_audience(self.conn, out[0], audience_key or key, type, payload,
+                        recipient, prior_holders)
         self._revoke_for_event(principal, key, type, now, payload)
         return out
 
