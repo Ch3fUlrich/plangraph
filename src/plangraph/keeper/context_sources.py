@@ -398,7 +398,11 @@ def pr_merge_of(git, project, head, *, fallback_pr=None):
 
 
 def named_merge(git, project, revision):
-    """Verify a named merge on the default ref. Refuse a PR known to be unmerged."""
+    """Verify a named merge on the default ref. Refuse a PR known to be unmerged.
+
+    Returns ``head`` (the PR head), ``pr`` and ``landed``: the commit that is on the default ref,
+    which the deploy scan reads (a squash merge leaves the PR head off the ref).
+    """
     repo, ref = _repo_ref(git, project)
     if repo is None:
         return None
@@ -431,7 +435,7 @@ def named_merge(git, project, revision):
             git, repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, ref])[0] != 0:
         return None
     if pr is not None:
-        return {"head": pr_head, "pr": pr}
+        return {"head": pr_head, "pr": pr, "landed": sha}
     introduced = _merge_of(git, repo, ref, sha)
     landed = sha
     if introduced:
@@ -446,7 +450,8 @@ def named_merge(git, project, revision):
         return None
     parent_text, _, subject = shown.partition("\x1f")
     parents = parent_text.split()
-    return {"head": parents[1] if len(parents) == 2 else sha, "pr": subject_pr(subject)}
+    return {"head": parents[1] if len(parents) == 2 else sha, "pr": subject_pr(subject),
+            "landed": landed}
 
 
 _REFS_LOCK = threading.Lock()

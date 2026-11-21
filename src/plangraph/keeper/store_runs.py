@@ -338,7 +338,8 @@ class RunsMixin:
         except Exception:  # noqa: BLE001 - unreadable GO row falls back to None
             pass
         named = self._named_merge_proof(item)
-        proofs = ({named["head"]: named} if named and named["pr"] else {})
+        proofs = ({named["head"]: {"pr": named["pr"], "head": named["head"]}}
+                  if named and named["pr"] else {})
         repo = git.repo_path(project)
         ref = git.repo_ref(project)
         for commit in commits or ():

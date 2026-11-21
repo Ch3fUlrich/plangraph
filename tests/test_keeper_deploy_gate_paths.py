@@ -75,3 +75,68 @@ def test_both_merge_subject_paths_read_the_trailing_pr(tmp_path, subject, pr):
     r, ref = adapter.repo_path("demo"), adapter.repo_ref("demo")
     assert context_sources._merge_of(adapter, r, ref, merge)["pr"] == pr
     assert context_sources.named_merge(adapter, "demo", merge)["pr"] == pr
+
+
+def test_the_automatic_close_never_resolves_a_named_merge_while_it_holds_its_lock(env, monkeypatch):  # noqa: F811
+    head = env.repo.land("docs", "Plan-Item: demo:A", 43)
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:A'", (f"Merge-Repo: demo {merge}",))
+
+    resolved = []
+    monkeypatch.setattr(env.store, "_named_merge_proof", lambda *a, **k: resolved.append(a))
+    assert head and [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+    assert resolved == [], "a named merge needs a fetch: not under the automatic close's lock"
+
+
+def test_an_unreadable_deploy_scan_leaves_the_item_open_on_the_automatic_close(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 44)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("cannot read commit changes")
+
+    monkeypatch.setattr(env.store.ctx["git"], "deploy_changes", broken)
+    for apply in (False, True):
+        result = auto(env, require_seats=False, apply=apply)
+        assert result["closed"] == [] and result["would_close"] == []
+        assert "deploy_scan_unreadable" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_a_squash_merged_hosted_pr_is_scanned_at_its_landed_commit_not_its_topic_head(w, monkeypatch, tmp_path):  # noqa: F811
+    import json
+    import subprocess
+    repo = tmp_path / "other"
+    merged_repo(repo, [])
+    # The PR's topic head never reaches main; main gets one squash commit that adds the unit.
+    _git(repo, "checkout", "-q", "-b", "topic")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "topic work")
+    topic = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "deploy/systemd").mkdir(parents=True)
+    (repo / "deploy/systemd/new.service").write_text("[Service]\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feature (#166)")
+    squash = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "remote", "add", "origin", "https://github.com/example/other")
+    empty = tmp_path / "demo"
+    merged_repo(empty, [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
+                                     "other": {"path": str(repo), "ref": "main"}})
+    w.store.verifiers["deploy"] = __import__("plangraph.keeper.evidence", fromlist=["VERIFIERS"]).VERIFIERS["deploy"]
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    w.decision_path.write_text(
+        HEADER + f"| D-5504 | demo | GO other PR #166 demo:A; GO-HEAD {topic} | ROUTER | 2026-11-05 |\n")
+    run = subprocess.run
+
+    def hosted(args, **kwargs):
+        if args[0] != "gh":
+            return run(args, **kwargs)
+        info = {"state": "MERGED", "mergeCommit": {"oid": squash}, "headRefOid": topic}
+        return subprocess.CompletedProcess(args, 0, json.dumps(info))
+
+    monkeypatch.setattr(subprocess, "run", hosted)
+    router = w.p("router")
+    w.store.edit_definition(router, "demo:A", {"note": "Merge-Repo: other #166"})
+    out = w.store.close_merged(router, "demo:A", "D-5504", ["google"])
+    assert out["closed"] is False and out["reason"] == "deploy_pending"
+    assert out["missing"] == ["(hosts unnamed)"]

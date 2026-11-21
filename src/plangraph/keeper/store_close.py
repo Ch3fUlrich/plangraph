@@ -429,27 +429,33 @@ class CloseMixin:
                 continue
         return heads
 
-    def _deploy_pending(self, item):
+    def _deploy_pending(self, item, *, named=True, strict=False):
         """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for.
 
         An item whose merged commits touch ``deploy/systemd`` or add a host binary
-        is not done until every host it names reports the unit active.
+        is not done until every host it names reports the unit active. ``named`` adds the
+        merge a ``Merge-Repo:`` line names (the automatic close ignores revisions and passes
+        False: naming one would fetch under its lock). An unreadable scan answers nothing,
+        unless ``strict``: then it refuses, so a gate that cannot look never lets an item close.
         """
         git, project = self._adapter("git"), self._merge_project(item)
         try:
             commits = context_sources.plan_item_commits(
                 git, project, item["key"], fetch=False, limit=None)
             shas = [commit.get("sha") for commit in commits or ()]
-            try:  # the merge a `Merge-Repo:` line names counts like a Plan-Item merge
-                named = self._named_merge_proof(item)
-            except Refused:
-                named = None
-            shas += [named["head"]] if named else []
+            if named:
+                try:  # the landed commit of a named merge counts like a Plan-Item merge
+                    merge = self._named_merge_proof(item)
+                except Refused:
+                    merge = None
+                shas += [merge["landed"]] if merge else []
             repo, ref = git.repo_path(project), git.repo_ref(project)
             # The landed changes of each merged PR, not only the tagged commits.
             changes = {c for sha in shas if valid_commit_ref(sha)
                        for c in git.deploy_changes(repo, sha, ref)}
-        except Exception:  # noqa: BLE001 - an unreadable diff never blocks the close
+        except Exception:  # noqa: BLE001 - see the docstring
+            if strict:
+                raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
             return []
         targets = deploy_targets(changes)
         if not targets:
