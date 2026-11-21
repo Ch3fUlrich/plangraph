@@ -244,11 +244,14 @@ def admit(service, options, *, card=None, preview=False):
     local, remote_first = overflow.placement_policy(registry, config)
     native = (card or {}).get('run_kind') == 'native-codex'
     placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
+    repository_review = role == 'review' and (card or {}).get('repository_review_required') is True
     explicit_cwd = options.get('cwd') is not None or 'cwd' in (card or {})
-    compare_local = (config.get('registry') and not (placed or explicit_cwd)
+    compare_local = (config.get('registry') and not (placed or explicit_cwd or repository_review)
                      and (native or role == 'review' and (card or {}).get('diff_ref') is not None))
-    if placed:
+    if placed or repository_review:
         config['hosts'] = {}
+    # A repository review stays local but still needs orchestration fallback health.
+    if placed and not repository_review:
         remote_first = False
     if preview and not (remote_first or compare_local):
         return None

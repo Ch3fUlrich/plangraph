@@ -28,6 +28,7 @@ struct Fake {
     stamps: bool,
     stamped: Vec<String>,
     reviews: Vec<Option<serde_json::Value>>,
+    no_repository_seat: bool,
     pushed: Vec<String>,
 }
 impl Driver for Fake {
@@ -98,6 +99,11 @@ impl Driver for Fake {
         previous: Option<&serde_json::Value>,
     ) -> Result<serde_json::Value, String> {
         self.reviews.push(previous.cloned());
+        if self.no_repository_seat {
+            return Ok(json!({"status":"deferred_to_batch_seat","head":head,
+                "causes":[{"leg":"mimo-v2.6-pro","reason":"repository_review_tools_unavailable"},
+                          {"leg":"agy-gemini-4-hydrogen-high","reason":"limited"}]}));
+        }
         let (verdict, high) = if self.verdicts.is_empty() {
             ("ACCEPT", 0)
         } else {
@@ -583,6 +589,27 @@ fn batch_driver_reaches_done_on_accept_and_pushes_once() {
     assert!(driver.reviews[0].is_none());
     assert!(!driver.prompts[0].contains("configured review directory"));
 }
+#[test]
+fn native_defers_when_the_host_offers_no_repository_review_seat() {
+    let mut driver = Fake {
+        no_repository_seat: true,
+        ..fake()
+    };
+    let record = run(&mut driver, json!({}), "brief");
+    assert_eq!(record["exit_code"], 0);
+    assert_eq!(record["status"], "completed");
+    assert_eq!(record["review_status"], "deferred_to_batch_seat");
+    assert_eq!(record["final_head"], "final-head");
+    assert_eq!(
+        record["review_causes"][0]["reason"],
+        "repository_review_tools_unavailable"
+    );
+    assert_eq!(record["review_causes"][1]["reason"], "limited");
+    assert_eq!(record["review_rounds"], 0);
+    assert_eq!(driver.reviews.len(), 1);
+    assert!(driver.pushed.is_empty());
+}
+
 #[test]
 fn batch_driver_refuses_review_without_fast_checks_stamp() {
     let mut driver = Fake {

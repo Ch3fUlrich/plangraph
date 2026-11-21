@@ -193,3 +193,43 @@ def test_async_admission_preserves_render_refusal(monkeypatch):
         {'model': 'mimo/mimo-v2.6-flash', 'harness': 'opencode'}))
     assert reason == REFUSAL_TOO_LARGE
     probe.assert_not_awaited()
+
+
+def test_hydrogen_review_uses_private_home_without_global_mcp(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    original = tmp_path / "operator"
+    mcp = original / ".gemini/config/mcp_config.json"
+    mcp.parent.mkdir(parents=True)
+    mcp.write_text('{"mcpServers":{"stalling":{"command":"false"}}}')
+    login = Path(".gemini") / "antigravity-cli" / "antigravity-oauth-token"
+    (original / login).parent.mkdir()
+    (original / login).write_text("fixture account material")
+    monkeypatch.setenv("HOME", str(original))
+    monkeypatch.setattr('plangraph.spawner.target.resolve_target', lambda model: (model, None))
+    monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: None)
+    monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', AsyncMock(return_value=None))
+
+    async def run():
+        proc = AsyncMock(pid=None, returncode=0)
+        proc.communicate = AsyncMock(return_value=(
+            b'{"event":"result","result":{"status":"SUCCESS","response":"OK"}}\n', b''))
+        homes = []
+
+        async def launch(*args, env, **kwargs):
+            home = Path(env["HOME"])
+            homes.append(home)
+            assert home != original
+            assert not (home / mcp.relative_to(original)).exists()
+            assert (home / login).read_text() == "fixture account material"
+            assert not (home / login).is_symlink()
+            return proc
+
+        runner = SpawnerRunner(process_factory=launch)
+        job = await runner.spawn("Reply OK", "gemini-4-hydrogen-high", client="agy",
+                                 role="review", wait_seconds=2)
+        assert (job.status, job.stdout) == ("completed", "OK")
+        assert len(homes) == 1 and not homes[0].exists()
+
+    asyncio.run(run())
+    assert "stalling" in mcp.read_text()

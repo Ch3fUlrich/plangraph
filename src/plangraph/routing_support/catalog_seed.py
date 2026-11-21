@@ -9,6 +9,7 @@ from typing import Any
 # SEED_MODELS moved to plangraph.catalog_data (neutral module); re-exported
 # here so spawner importers keep working unchanged.
 from plangraph.catalog_data import SEED_MODELS
+from plangraph.planner.legs import REVIEW_ORDER, WRITER_ORDER
 
 # 5-rung tier ladder ordering contract:
 # trial (0) < free (1) < credit (2) < subscription (3) < paid (4)
@@ -25,31 +26,10 @@ LEGACY_ROUTE_REPLACEMENTS = {
     'gemini-3.8-flash': 'gemini-4-hydrogen', 'gpt-6-luna': 'gpt-6.1-terra',
     'gpt-6.1-sol': 'gpt-6.2-sol',
 }
+# D-6550: opt-in catalog ordering shares the live planner's priority tables.
 OPERATOR_ROUTE_ORDERS = {
-    'implement': (
-        'cx-gpt-6.2-sol-medium', 'cx-gpt-6.2-astra', 'agy-gemini-4-hydrogen-high',
-        'opencode-deepseek-v4.1-flash-free', 'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
-    ),
-    'review': {
-        'standard': (
-            'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-            'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
-            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash',
-            'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium',
-        ),
-        'high': (
-            'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-            'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
-            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash',
-            'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium',
-        ),
-        'complex': (
-            'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
-            'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash',
-            'agy-gemini-4-neon-medium', 'claude-sonnet-5-5-high', 'mimo-v2.6-flash',
-            'agy-gemini-4-argon-low', 'agy-gemini-4-argon-medium',
-        ),
-    },
+    'implement': WRITER_ORDER,
+    'review': dict.fromkeys(('standard', 'high', 'complex'), REVIEW_ORDER),
     'planning': ('claude-fable-5.2-high',),
 }
 OPERATOR_REVIEW_CHEAP_LEGS = (
