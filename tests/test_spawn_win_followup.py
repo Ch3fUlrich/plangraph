@@ -195,8 +195,12 @@ def test_async_admission_preserves_render_refusal(monkeypatch):
     probe.assert_not_awaited()
 
 
-def test_hydrogen_review_uses_private_home_without_global_mcp(tmp_path, monkeypatch):
+@pytest.fixture
+def hydrogen_review(tmp_path, monkeypatch):
     from pathlib import Path
+
+    from plangraph.routing_support.leg_state import LegStateStore
+    from plangraph.spawner.service import SpawnService
 
     original = tmp_path / "operator"
     mcp = original / ".gemini/config/mcp_config.json"
@@ -206,35 +210,105 @@ def test_hydrogen_review_uses_private_home_without_global_mcp(tmp_path, monkeypa
     (original / login).parent.mkdir()
     (original / login).write_text("fixture account material")
     monkeypatch.setenv("HOME", str(original))
-    monkeypatch.setattr('plangraph.spawner.target.resolve_target', lambda model: (model, None))
-    monkeypatch.setattr('plangraph.planner.routing.validate_model', lambda model: None)
+    monkeypatch.setenv("USERPROFILE", str(original))
     monkeypatch.setattr('plangraph.spawner.resolver.host_skip_reason_async', AsyncMock(return_value=None))
+    monkeypatch.setattr('plangraph.spawner.service.admit_base', AsyncMock(return_value=True))
 
-    async def run():
-        proc = AsyncMock(pid=None, returncode=0)
-        proc.communicate = AsyncMock(return_value=(
-            b'{"event":"result","result":{"status":"SUCCESS","response":"OK"}}\n', b''))
-        homes = []
+    proc = AsyncMock(pid=None, returncode=0)
+    launches = []
 
-        async def launch(*args, env, **kwargs):
-            mode_index = args.index("--mode")
-            assert args[mode_index:mode_index + 2] == ("--mode", "plan")
-            home = Path(env["HOME"])
-            homes.append(home)
-            assert home != original
-            assert not (home / mcp.relative_to(original)).exists()
-            assert (home / login).read_text() == "fixture account material"
-            assert not (home / login).is_symlink()
-            return proc
+    async def launch(*args, env, cwd, **kwargs):
+        launches.append((args, env, cwd, kwargs))
+        home = Path(env["HOME"])
+        assert home != original
+        assert not (home / mcp.relative_to(original)).exists()
+        assert (home / login).read_text() == "fixture account material"
+        assert not (home / login).is_symlink()
+        return proc
 
-        runner = SpawnerRunner(process_factory=launch)
-        job = await runner.spawn("Reply OK", "gemini-4-hydrogen-high", client="agy",
-                                 role="review", wait_seconds=2)
-        assert (job.status, job.stdout) == ("completed", "OK")
-        payload = proc.communicate.call_args.kwargs["input"]
-        assert "Answer in plain text in this reply only; do not create a plan file" in (
-            json.loads(payload)["message"]["content"])
-        assert len(homes) == 1 and not homes[0].exists()
-
-    asyncio.run(run())
+    runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=launch)
+    service = SpawnService(runner, state=tmp_path / "state", leg_reader=LegStateStore(tmp_path / "legs.sqlite"))
+    monkeypatch.setattr(service, "admit_spawn", lambda *args, **kwargs: None)
+    yield service, proc, launches
     assert "stalling" in mcp.read_text()
+
+
+def assert_hydrogen_wire(proc, launches, prompt, probe=False):
+    from pathlib import Path
+
+    from plangraph.spawner.prompt_input import compose
+
+    ((exe, *argv), env, cwd, kwargs), = launches
+    assert Path(exe).name.removesuffix(".exe") == "agy"
+    mode, flag, settings, *transport = argv[1:]
+    assert (argv[0], mode, flag) == ("--mode", "plan", "--settings")
+    assert json.loads(settings) == {"permissions": {"allow": [
+        "command(*)", "read_file(*)", "list_dir(*)", "grep_search(*)", "find_by_name(*)"]}}
+    assert transport == ["--model", "gemini-4-hydrogen-high", "-p", "",
+                         "--input-format", "stream-json", "--output-format", "stream-json"]
+    assert kwargs["stdin"] == asyncio.subprocess.PIPE
+    assert not Path(env["HOME"]).exists()
+    wire = proc.communicate.call_args.kwargs["input"]
+    content = compose(prompt, "review", "agy", cwd, "agy-gemini-4-hydrogen-high")
+    envelope = {"event": "user", "message": {"role": "user", "content": content}}
+    assert wire == (json.dumps(envelope, ensure_ascii=False) + "\n").encode()
+    sentence = "Answer in plain text in this reply only; do not create a plan file"
+    assert sentence + "." in content.splitlines()[0]
+    if probe:
+        assert sentence + " or any other file." in content
+
+
+def test_hydrogen_review_completes_with_the_result_reply(hydrogen_review):
+    service, proc, _ = hydrogen_review
+    proc.communicate = AsyncMock(return_value=(
+        b'{"event":"result","result":{"status":"SUCCESS","response":"OK"}}\n', b''))
+    record = asyncio.run(service.spawn(
+        card={"estimate_tokens": 1000}, prompt="Reply OK", role="review", writer_families=("gpt",),
+        leg="agy-gemini-4-hydrogen-high", override_reason="D-6550 Hydrogen review fixture",
+        no_fallthrough=True, wait_seconds=None))
+    assert (record["status"], record["stdout_tail"]) == ("completed", "OK")
+
+
+def test_hydrogen_artifact_without_result_records_no_verdict(hydrogen_review):
+    service, proc, launches = hydrogen_review
+    proc.communicate = AsyncMock(return_value=(
+        b'{"event":"init"}\n'
+        b'{"event":"step_update","step_update":{"step_type":"agent_response",'
+        b'"text_delta":"I have created implementation_plan.md. Please review and approve it."}}\n', b''))
+    prompt = "Review the proposed change."
+    record = asyncio.run(service.spawn(
+        card={"estimate_tokens": 1000}, prompt=prompt, role="review", writer_families=("gpt",),
+        leg="agy-gemini-4-hydrogen-high", override_reason="D-6550 Hydrogen review fixture",
+        no_fallthrough=True, wait_seconds=None))
+    assert record["status"] == "failed" and record["exit_code"] == 1
+    assert record["reason"] == "no_verdict"
+    assert record["review_reason"] == "agy_stream_missing_result"
+    assert record["stdout_tail"] == ""
+    assert "agy_stream_missing_result" in record["stderr_tail"]
+    assert_hydrogen_wire(proc, launches, prompt)
+
+
+@pytest.mark.parametrize("response,exit_code,reason", [
+    ("OK", 0, ""), (None, 7, "exit 7: agy_stream_missing_result"),
+    ("I have created implementation_plan.md.", 0, "unexpected review answer"),
+])
+def test_named_hydrogen_probe_runs_review_transport(hydrogen_review, monkeypatch, capsys,
+                                                   response, exit_code, reason):
+    from plangraph.spawner import cli, leg_probe
+
+    service, proc, launches = hydrogen_review
+    proc.returncode = exit_code
+    stream = b'{"event":"init"}\n'
+    if response is not None:
+        stream += json.dumps({"event": "result", "result": {
+            "status": "SUCCESS", "response": response}}).encode() + b"\n"
+    proc.communicate = AsyncMock(return_value=(stream, b''))
+    monkeypatch.setattr(cli, "SpawnService", lambda **kwargs: service)
+    monkeypatch.setattr(leg_probe.shutil, "which", lambda *args, **kwargs: "agy")
+    result = cli.main(["--state", str(service.state), "probe", "--leg",
+                       "agy-gemini-4-hydrogen-high", "--json", "--timeout", "5"])
+    row, = json.loads(capsys.readouterr().out)["probes"]
+    assert result == (1 if reason else 0)
+    assert row["ok"] == (not reason) and not row["infra"]
+    assert row["reason"] == reason
+    assert_hydrogen_wire(proc, launches, leg_probe.REVIEW_PROMPT, probe=True)

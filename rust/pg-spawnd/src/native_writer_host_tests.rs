@@ -548,9 +548,9 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         review_verdict(&text, &head, &[])["verdict"],
         "REQUEST_CHANGES"
     );
-    host.reviews_started = 0;
     fs::write(state.join("no-review-seat"), "").unwrap();
-    let deferred = host.review(&head, None).unwrap();
+    let previous = json!({"head":head, "text":"VERDICT: REQUEST_CHANGES"});
+    let deferred = host.review(&head, Some(&previous)).unwrap();
     assert_eq!(deferred["status"], "deferred_to_batch_seat");
     assert_eq!(deferred["causes"][0]["reason"], "limited");
     assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
@@ -561,6 +561,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     fs::write(skill_dir.join("SKILL.md"), unfamiliar_skill).unwrap();
     let review = host.review(&head, None).unwrap();
     assert_eq!(review["verdict"], "ACCEPT", "{review}");
+    host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
     // A definitive refusal is retryable and leaves no checkout.
     host.review_cli = vec![
         "python3".into(),
@@ -571,7 +572,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert_eq!(refusal, "review run returned no record: review refused");
     assert!(!host
         .reviews
-        .join(format!("checkout-{}-3", &head[..8]))
+        .join(format!("checkout-{}-4", &head[..8]))
         .exists());
 
     // Successful exit without a receipt leaves admission unknown.
@@ -580,7 +581,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert!(missing.starts_with(crate::native_writer::REVIEW_CLEANUP_UNCONFIRMED));
     assert!(host
         .reviews
-        .join(format!("checkout-{}-4", &head[..8]))
+        .join(format!("checkout-{}-5", &head[..8]))
         .exists());
 }
 

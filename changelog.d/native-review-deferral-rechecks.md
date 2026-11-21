@@ -1,0 +1,1 @@
+- Recheck repository-capable review seats before each automatic review attempt. Defer a gated native head when the route empties during a retry or after requested changes.
