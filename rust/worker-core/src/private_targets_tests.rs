@@ -246,3 +246,16 @@ fn worktree_target_older_than_last_commit_is_reclaimed_immediately() {
     .unwrap();
     assert!(target.exists(), "recent target newer than commit must stay");
 }
+
+#[test]
+fn vanished_entries_are_skipped_and_other_errors_stay_errors() {
+    use super::skip_vanished;
+    let gone = skip_vanished(std::fs::read_dir("/nonexistent/vanished-entry")).unwrap();
+    assert!(gone.is_none());
+    let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        skip_vanished::<()>(Err(denied)).unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(skip_vanished(Ok(3)).unwrap(), Some(3));
+}

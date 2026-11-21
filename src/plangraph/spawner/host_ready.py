@@ -611,6 +611,13 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
             record['disk_free_gb'] = measure_argv('disk', ['df', '-Pk', '--', config['repo']],
                 lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
+            if config.get('work_drives'):
+                def free_gb(s):
+                    return int(s.splitlines()[-1].split()[3]) // (1024 * 1024)
+                record['work_drives'] = [
+                    dict(path=d['path'], disk_floor_gb=d.get('disk_floor_gb', config.get('disk_floor_gb', 5)),
+                         disk_free_gb=measure_argv('disk', ['df', '-Pk', '--', d['path']], free_gb))
+                    for d in config['work_drives']]
             def sha(s):
                 value = s.strip()
                 if not re.fullmatch(r'[0-9a-f]{40,64}', value):
@@ -671,7 +678,12 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                                           **spawner(run_probe))
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
                 fail('memory', 'below_floor')
-            if record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):
+            drives = record.get('work_drives')
+            if drives:
+                # A host with work drives is ready while one drive meets its own floor.
+                if not any(d['disk_free_gb'] is not None and d['disk_free_gb'] >= d['disk_floor_gb'] for d in drives):
+                    fail('disk', f"disk_low: free {drives[0]['disk_free_gb']} GB")
+            elif record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):
                 fail('disk', f"disk_low: free {record['disk_free_gb']} GB")
         else:
             reachability_failed = True

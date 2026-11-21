@@ -237,6 +237,8 @@ def ready_records(config, role='implement'):
             row = dict(host)
             data = read_readiness(name)
             row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb', 'fresh')})
+            if data.get('work_drives') is not None:
+                row['work_drives'] = data['work_drives']
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
         caps = host_caps(registry, name, role)

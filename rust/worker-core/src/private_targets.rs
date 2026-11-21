@@ -26,6 +26,15 @@ fn owned(path: &Path) -> io::Result<bool> {
     }
 }
 
+/// `Ok(None)` when the entry vanished meanwhile; any other error stays an error.
+fn skip_vanished<T>(result: io::Result<T>) -> io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Walk only two levels in the host temporary directory. Worktree targets are
 /// supplied separately from Git's authoritative worktree inventory.
 pub fn sweep(
@@ -56,16 +65,24 @@ fn sweep_using(
     let mut targets = vec![];
     for entry in fs::read_dir(temporary)? {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() || !owned(&entry.path())? {
+        // Another process may remove an entry between listing and inspection.
+        let Some(is_dir) = skip_vanished(entry.file_type().map(|t| t.is_dir()))? else {
+            continue;
+        };
+        if !is_dir || !skip_vanished(owned(&entry.path()))?.unwrap_or(false) {
             continue;
         }
         let path = entry.path();
         if cargo_target(&path) {
             targets.push((path, None));
-        } else {
-            for child in fs::read_dir(path)? {
-                let child = child?;
-                if child.file_type()?.is_dir() && cargo_target(&child.path()) {
+        } else if let Some(children) = skip_vanished(fs::read_dir(&path))? {
+            for child in children {
+                let Some(child) = skip_vanished(child)? else {
+                    continue;
+                };
+                if skip_vanished(child.file_type().map(|t| t.is_dir()))? == Some(true)
+                    && cargo_target(&child.path())
+                {
                     targets.push((child.path(), None));
                 }
             }

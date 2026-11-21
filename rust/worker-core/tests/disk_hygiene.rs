@@ -484,6 +484,7 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
     let state = tmp.path().join("state");
     fs::create_dir_all(&state).unwrap();
     fs::create_dir_all(tmp.path().join("home")).unwrap();
+    fs::create_dir_all(tmp.path().join("tmp-sweep")).unwrap();
     // Hosts without readable /proc entries fall back to this reader: no process cwds.
     let reader = tmp.path().join("process-cwds");
     fs::write(&reader, "#!/bin/sh\necho '[[],false]'\n").unwrap();
@@ -495,6 +496,8 @@ fn disk_hygiene_cli_trims_over_cap_idle_pool_slots_beside_the_shared_target() {
         .arg(&root)
         .arg("--pins")
         .arg(&pins)
+        .arg("--tmp-root")
+        .arg(tmp.path().join("tmp-sweep"))
         .arg("--state")
         .arg(&state)
         .env("HOME", tmp.path().join("home"))

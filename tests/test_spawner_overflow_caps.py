@@ -621,6 +621,26 @@ def test_cargo_cap_refusal_binds_a_standalone_build_not_a_running_run(tmp_path, 
     assert h.running_disk_refusal(str(tmp_path / 'checkout')) is None
 
 
+def test_readiness_work_drives_reach_the_placement_decision(registry, monkeypatch):
+    from plangraph.spawner import host_ready as h
+    write_registry(registry, {'max_runs': 10, 'mem_floor_mb': 4096})
+    monkeypatch.setattr(h, 'fresh', lambda record: True)
+    readiness = o.readiness_dir()
+    readiness.mkdir(parents=True)
+    drives = [{'path': '/d1', 'disk_free_gb': 2, 'disk_floor_gb': 5},
+              {'path': '/d2', 'disk_free_gb': 12, 'disk_floor_gb': 5}]
+    (readiness / 'remote.json').write_text(json.dumps(dict(
+        host='remote', ok=True, live_runs=0, mem_available_mb=20000, disk_free_gb=2, work_drives=drives)))
+    rows = o.ready_records({'hosts': {'remote': {'ssh': 'r'}}})
+    assert rows['remote']['work_drives'] == drives
+    assert o.decide(10000, 2048, 3000, rows, True, local_refusal='disk_low: free 2 GB').host == 'remote'
+    drives[1]['disk_free_gb'] = 3
+    (readiness / 'remote.json').write_text(json.dumps(dict(
+        host='remote', ok=True, live_runs=0, mem_available_mb=20000, disk_free_gb=2, work_drives=drives)))
+    rows = o.ready_records({'hosts': {'remote': {'ssh': 'r'}}})
+    assert o.decide(10000, 2048, 3000, rows, True, local_refusal='disk_low: free 2 GB').host is None
+
+
 def test_remote_work_drives_selects_eligible_drive_or_overflows(tmp_path):
     low_drive_only = dict(
         ssh='a', ok=True, fresh=True, live_runs=0, mem_available_mb=10000,

@@ -9,7 +9,7 @@ use std::{
 };
 
 fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
-    let (mut repo, mut root, mut pins) = (None, None, None);
+    let (mut repo, mut root, mut pins, mut tmp_root) = (None, None, None, PathBuf::from("/tmp"));
     let (mut apply, mut dry) = (false, false);
     let mut thresholds = Thresholds::default();
     let mut cap = pg_worker_core::cargo_pool::configured_cap_bytes();
@@ -30,7 +30,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
             }
             "--apply" => apply = true,
             "--dry-run" => dry = true,
-            "--repo" | "--root" | "--pins" | "--state" => {
+            "--repo" | "--root" | "--pins" | "--tmp-root" | "--state" => {
                 let value = PathBuf::from(
                     args.next()
                         .ok_or_else(|| io::Error::other("missing option value"))?,
@@ -39,6 +39,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
                     "--repo" => repo = Some(value),
                     "--root" => root = Some(value),
                     "--pins" => pins = Some(value),
+                    "--tmp-root" => tmp_root = value,
                     _ => {}
                 }
             }
@@ -98,7 +99,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
             .pinned
             .extend(pg_worker_core::cargo_cache::shared_cache_roots()?);
         if let Err(error) = pg_worker_core::private_targets::sweep(
-            &PathBuf::from("/tmp"),
+            &tmp_root,
             &worktrees,
             &private_guards,
             apply,

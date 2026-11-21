@@ -221,3 +221,20 @@ fn pool_discovery_counts_slots_and_enforce_pool_trims_idle_slots_without_slot_lo
     assert!(scan(&found[1]).map_or(0, |x| x.0) <= 2048);
     assert!(scan(&found[2]).map_or(0, |x| x.0) <= 2048);
 }
+
+#[test]
+fn configured_cap_ignores_non_finite_and_negative_values() {
+    use pg_worker_core::cargo_pool::{configured_cap_bytes, DEFAULT_CARGO_TARGET_CAP_GB};
+    let default = DEFAULT_CARGO_TARGET_CAP_GB * 1024 * 1024 * 1024;
+    // The variable is read only by this test in this process.
+    for (value, expected) in [
+        ("inf", default),
+        ("-1", default),
+        ("nan", default),
+        ("2", 2 << 30),
+    ] {
+        std::env::set_var("PLANGRAPH_CARGO_TARGET_CAP_GB", value);
+        assert_eq!(configured_cap_bytes(), expected, "{value}");
+    }
+    std::env::remove_var("PLANGRAPH_CARGO_TARGET_CAP_GB");
+}

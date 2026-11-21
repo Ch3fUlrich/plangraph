@@ -57,7 +57,7 @@ pub fn configured_cap_bytes() -> u64 {
     let raw = std::env::var("PLANGRAPH_CARGO_TARGET_CAP_GB").ok();
     raw.as_deref()
         .and_then(|s| s.trim().parse::<f64>().ok())
-        .filter(|gb| *gb >= 0.0)
+        .filter(|gb| gb.is_finite() && *gb >= 0.0)
         .map(|gb| (gb * GIB as f64).round() as u64)
         .unwrap_or(DEFAULT_CARGO_TARGET_CAP_GB * GIB)
 }
