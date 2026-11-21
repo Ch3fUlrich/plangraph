@@ -57,8 +57,8 @@ reply that lists what was applied and what was refused.
    hex, CI is not green, a family is missing, the reviewer family is the writer's, or the
    review file is missing, names another head than the part's, or does not end in
    `VERDICT: ACCEPT`. It prints the one GO row in the decisions-log columns (`| ID | project |
-   decision | by | why |`, the GO and its `GO-HEAD` in the decision cell, the per-part table in the
-   why cell); add that row to the decisions file in one commit.
+   decision | by | why |`, the GO and its `GO-HEAD` in the decision cell, the per-part evidence table in
+   the why cell); add that row to the decisions file in one commit.
 3. **Grants for several lanes.** `plangraph router grant-rows INPUT.json OUT` writes one decisions-log row per
    grant (lane, grantee, scope; the input names the project) under one D-id into one row file; the grants land in one
    decision PR. A lane listed twice refuses the file.
