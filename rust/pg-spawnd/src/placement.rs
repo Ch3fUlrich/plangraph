@@ -94,7 +94,7 @@ pub(crate) fn route_args(args: &Args) -> Result<Vec<String>, ToolError> {
         "--role".into(),
         role.into(),
     ];
-    strings(args, "writer_families", "--writer-family", &mut argv)?;
+    strings(args, "writer_families", "--exclude-family", &mut argv)?;
     if let Some(value) = args.get("review_of") {
         argv.extend([
             "--review-of".into(),

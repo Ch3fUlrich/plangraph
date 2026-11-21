@@ -165,7 +165,8 @@ if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in pro
         pathlib.Path('partial.txt').write_text('preserved writer work')
         subprocess.run(['git','add','partial.txt'], check=True)
         subprocess.run(['git','commit','-m','partial writer work'], check=True, stdout=subprocess.DEVNULL)
-        checkout = pathlib.Path(os.environ['FIXTURE_DIR'])/'checkout'
+        # FIXTURE_DIR is not in the writer's environment allowlist: find the repository from the worktree.
+        checkout = pathlib.Path(subprocess.check_output(['git','rev-parse','--path-format=absolute','--git-common-dir'], text=True).strip()).parent
         (checkout/'fresh.txt').write_text('new main base')
         subprocess.run(['git','-C',str(checkout),'add','fresh.txt'], check=True)
         subprocess.run(['git','-C',str(checkout),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fresh main'], check=True, stdout=subprocess.DEVNULL)
@@ -209,7 +210,7 @@ print('tokens used\n1,234')
     fs::write(&review_cli, r#"import json, pathlib, sys, uuid
 argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
-assert value('--role') == 'review' and value('--writer-family') == 'openai', argv
+assert value('--role') == 'review' and value('--exclude-family') == 'openai', argv
 card = json.loads(value('--card'))
 head = card['diff_ref']['head']
 prompt = pathlib.Path(value('--prompt-file')).read_text()

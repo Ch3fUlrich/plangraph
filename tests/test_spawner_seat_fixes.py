@@ -242,3 +242,32 @@ def test_orphaned_windows_guard_precedes_process_stat_and_signal():
     signal = next(node for node in ast.walk(function)
                   if isinstance(node, ast.Call) and ast.unparse(node.func) == 'os.kill')
     assert guard.end_lineno < process_import.lineno < signal.lineno
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='supervisor orphan detection is POSIX-only')
+def test_orphaned_keeps_the_real_exit_when_the_child_exit_was_recorded(tmp_path, monkeypatch):
+    path = tmp_path / 'supervisor.stderr.log'
+    path.with_suffix(path.suffix + '.pid').write_text('12345')
+    monkeypatch.setattr(os, 'kill', Mock(side_effect=ProcessLookupError))
+    for code, status in ((0, 'completed'), (3, 'failed')):
+        record = dict(status='running', ended=None, supervisor_stderr_path=str(path),
+                      exit_code=code, stdout_tail='VERDICT: PASS')
+        result = exit_outcome.orphaned(record, 200)
+        assert result['status'] == status and result['exit_code'] == code
+        assert result.get('reason') != 'orphaned' and result['stdout_tail'] == 'VERDICT: PASS'
+    gone = exit_outcome.orphaned(dict(status='running', ended=None, supervisor_stderr_path=str(path)), 200)
+    assert gone['reason'] == 'orphaned'
+
+
+def test_refusal_record_keeps_the_skip_list_out_of_error(tmp_path, monkeypatch):
+    from plangraph.planner.routing import SpawnPlan, SpawnRefused
+    from plangraph.spawner.service import SpawnService
+    service = SpawnService(state=tmp_path)
+    skipped = ({'leg': 'a', 'reason': 'excluded_family'}, {'leg': 'b', 'reason': 'limited'})
+    monkeypatch.setattr(service, '_route', lambda *a, **kw: SpawnPlan((), skipped, 'x', (), (), error='no eligible leg'))
+    with pytest.raises(SpawnRefused) as caught:
+        service.route({'estimate_tokens': 1}, 'implement')
+    assert 'skip a: excluded_family' in str(caught.value)   # the operator still sees the list
+    record = service.ps()['runs'][0]
+    assert record['error'] == 'no eligible leg' and record['skipped'] == list(skipped)
+    assert 'excluded_family' not in json.dumps({k: v for k, v in record.items() if k != 'skipped'})

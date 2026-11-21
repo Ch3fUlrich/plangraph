@@ -214,7 +214,7 @@ fn run_route(
     cmd.args(["route", "--card", &format!("@{}", card_path.display())]);
     cmd.args(["--role", "review"]);
     for fam in families {
-        cmd.args(["--writer-family", fam]);
+        cmd.args(["--exclude-family", fam]);
     }
     cmd.arg("--json");
     let out = cmd
@@ -393,7 +393,7 @@ fn spawn_one_seat(
     cmd.args(["spawn", "--card", &format!("@{}", card_path.display())]);
     cmd.args(["--role", "review"]);
     for fam in families {
-        cmd.args(["--writer-family", fam]);
+        cmd.args(["--exclude-family", fam]);
     }
     cmd.args(["--prompt-file", &prompt_path.display().to_string()]);
     cmd.args(["--cwd", &repo_root.display().to_string()]);

@@ -54,7 +54,7 @@ def test_forward_options_and_save(setup):
                                  'writer_families': ['family'], 'seats': True}, card=card)
     assert result['host'] == 'ash' and result['overflow_remote']
     assert remote.call_args.args[2:] == (card, 'task', [
-        '--role', 'review', '--model', 'model', '--writer-family', 'family', '--seats'])
+        '--role', 'review', '--model', 'model', '--exclude-family', 'family', '--seats'])
     service._save.assert_called_once_with(result)
 
 

@@ -392,7 +392,7 @@ argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
 assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
-families = [argv[i + 1] for i, a in enumerate(argv) if a == '--writer-family']
+families = [argv[i + 1] for i, a in enumerate(argv) if a == '--exclude-family']
 # The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
 assert sorted(families) == ['anthropic', 'google', 'openai'], families
 assert 'cwd' not in card
@@ -651,4 +651,60 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     host.fast_checks(&head_c).unwrap();
     let excerpt = host.stamp(&head_c).unwrap().with_extension("session.log");
     assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
+}
+
+#[test]
+fn writer_command_is_workspace_write_and_never_danger_full_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    let host = Host {
+        repo: repo.clone(),
+        run_id: "run-sandbox".into(),
+        cwd: repo.clone(),
+        reviews: dir.path().join("reviews"),
+        record_path: dir.path().join("run/record.json"),
+        base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.path().to_path_buf(),
+        brief: "brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
+        python_src: None,
+    };
+    host.git(&["init"]).unwrap();
+    for session in [None, Some("session-1")] {
+        let command = host
+            .writer_command("codex", session, &dir.path().join("run"))
+            .unwrap();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let line = args.join(" ");
+        assert!(line.contains("sandbox_mode=\"workspace-write\""), "{line}");
+        assert!(
+            line.contains("sandbox_workspace_write.network_access=true"),
+            "{line}"
+        );
+        assert!(!line.contains("danger-full-access"), "{line}");
+        let roots = args
+            .iter()
+            .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
+            .unwrap();
+        for named in [
+            dir.path().join("reviews"),
+            dir.path().join("run"),
+            repo.join(".git"),
+        ] {
+            let named = fs::canonicalize(&named).unwrap_or(named);
+            assert!(
+                roots.contains(named.to_str().unwrap()),
+                "{roots} lacks {named:?}"
+            );
+        }
+        assert_eq!(args.contains(&"resume".to_owned()), session.is_some());
+    }
 }

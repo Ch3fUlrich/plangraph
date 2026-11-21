@@ -67,6 +67,7 @@ if sys.platform.startswith('linux'):
     from plangraph.spawner.proc_kill import _stat
     tree['supervisor_pid_start'] = (_stat(os.getpid()) or (None,) * 5)[4]
 tree['supervisor_stderr_path'] = path
+tree['supervisor_pid'] = os.getpid()
 read_fd, write_fd = os.pipe()
 os.dup2(write_fd, 2)
 os.close(write_fd)
@@ -107,7 +108,7 @@ raise SystemExit(code)
         payload.update(state=str(state), _tree=tree, _admitted=True,
                        _cwd=getattr(service.runner, 'default_cwd', None) or os.getcwd())
         with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
-            child = cli._start_supervisor([sys.executable, '-c', bootstrap, str(log)],
+            child = cli._start_supervisor(cli.scope_argv([sys.executable, '-c', bootstrap, str(log)]),
                 cwd=tree['tree_path'], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=errors, **background_process_options(new_session=True, platform=os.name))
         def handshake():
@@ -295,7 +296,7 @@ def admit(service, options, *, card=None, preview=False):
         if options.get(key) is not None:
             flags.extend(('--' + key.replace('_', '-'), str(options[key])))
     for family in options.get('writer_families', ()):
-        flags.extend(('--writer-family', family))
+        flags.extend(('--exclude-family', family))
     for key in ('seats', 'no_fallthrough', 'require_bench', 'run_worktree'):
         if options.get(key):
             flags.append('--' + key.replace('_', '-'))
@@ -655,9 +656,11 @@ class SeatSpawnMixin:
         plan = self._route(card, role, writer_families, review_of,
                            benchmark=options.pop('benchmark'), require_bench=options.pop('require_bench'))
         if plan.error:
-            raise SpawnRefused(plan.error)
-        from plangraph.planner.seats import seat_family
-        writers = list(writer_families)
+            refused = SpawnRefused(plan.error)
+            refused.reason, refused.skipped = plan.error, [dict(row) for row in plan.skipped]
+            raise refused
+        from plangraph.planner.seats import seat_family, with_head_writers
+        writers = with_head_writers(card, role, writer_families)
         if review_of:
             source = self.result(review_of)
             writers.extend(source.get('given_writer_families') or [source.get('writer_family')])

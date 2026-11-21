@@ -57,6 +57,17 @@ gates on the clean final head, then pushes it once to the card's optional
 The card's `review_dir` selects a target-host directory; the default is
 `<worktree>/reviews`.
 
+The writer child runs Codex with `sandbox_mode="workspace-write"`, never `danger-full-access`
+(`native_writer_sandbox.rs`; AGENT-JAIL step 1, rule 6.7). Network access stays on because the
+writer fetches and builds. Beyond the worktree the writable roots are named: the shared cargo
+target, the review directory, the run directory and the repository's and worktree's git
+directories (Codex keeps a worktree's git directory read-only unless it is named, so a commit
+would fail). The child's environment is an allowlist (`ENV_ALLOW`: home, locale, harness auth,
+git identity, ssh agent, proxy and TLS settings, cargo and rustup homes); every other variable of
+the supervisor, including host secrets, is dropped. A canary run on a worker host comes first
+after a change to either list.
+Host readiness (`pg-host-readiness`, package placement) still certifies `danger-full-access`; aligning it with this mode is a separate change.
+
 Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
 final head, resume count, fast-check result, every review round, the last review
 path/text/verdict/run ID, pushed ref and exit code. Exits are 0 accepted, 3 review

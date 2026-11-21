@@ -19,6 +19,11 @@ import pytest
 from plangraph.routing_support import leg_state
 from plangraph.routing_support.leg_state import LegStateStore
 
+@pytest.fixture(autouse=True)
+def no_head_trailer_lookup(monkeypatch):
+    """These cards name placeholder repositories: the head Writer trailer lookup is not under test."""
+    monkeypatch.setattr("plangraph.planner.seats.head_writer_families", lambda card: [])
+
 
 def _leg():
     return SimpleNamespace(model='agy/model', harness='agy')

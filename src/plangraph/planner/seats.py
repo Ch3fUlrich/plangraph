@@ -94,3 +94,53 @@ def pick_seats(ordered, writer_families, *, high):
     coverage = tuple({"leg": leg.id, "covers": [w for w in writers if w != seat_family(leg.family)]}
                      for leg in seats)
     return seats, coverage, uncovered(writers, families, need=need, sensitive=high)
+
+
+def head_writer_families(card):
+    """Families named by the ``Writer`` trailer(s) of the head commit of ``card["diff_ref"]``.
+
+    Empty without a ``diff_ref`` or a trailer. A trailer naming an unknown writer refuses (fail
+    closed, like ``writer_parts``): the head's writer must never review its own work.
+    """
+    ref = card.get("diff_ref") if isinstance(card, Mapping) else None
+    if ref is None:
+        return []
+    _check_diff_ref(ref)
+    import subprocess
+
+    def git(*args):
+        try:
+            return subprocess.run(["git", "-C", ref["repo"], *args], stdin=subprocess.DEVNULL, capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace", timeout=30, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: {type(exc).__name__}") from None
+    # One commit: a path, a range (a..b), a negation or a missing revision is not a head to read.
+    sha = git("rev-parse", "--verify", "--quiet", "--end-of-options", ref["head"] + "^{commit}")
+    resolved = sha.stdout.strip()
+    if sha.returncode != 0 or len(resolved) not in (40, 64) or not all(c in "0123456789abcdef" for c in resolved):
+        # An unreadable head is not an absent trailer: the head's writer could not be excluded.
+        raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: not a single commit")
+    proc = git("log", "-1", "--no-color", "--format=%(trailers:key=Writer,valueonly,unfold)", resolved, "--")
+    if proc.returncode != 0:
+        raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: git exit {proc.returncode}")
+    out = proc.stdout
+    # "Writer: <model> <session> (<note>)": the model is the first word.
+    models = [line.split()[0] for line in out.splitlines() if line.strip()]
+    from plangraph.review.family import FamilyError, writer_key
+    families = []
+    for model in models:
+        try:
+            writer_key(model)
+        except FamilyError:
+            raise SpawnRefused(f"unknown writer in Writer trailer of {ref['head'][:12]}: {model[:64]}") from None
+        families.append(model)
+    return families
+
+
+def with_head_writers(card, role, families):
+    """``families`` plus the head ``Writer`` trailer families of a review card (each once): the one
+    set used for planning, launch headers and the run record."""
+    families = list(families)
+    if role == "review":
+        families += [f for f in head_writer_families(card) if f not in families]
+    return families

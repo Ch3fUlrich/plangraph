@@ -15,6 +15,11 @@ IDS = ('agy-gemini-3.8-flash', 'gemini-3.8-flash-medium',
        'omniroute/gemini-3.8-flash', 'vertex/gemini-2.5-flash', 'GEMINI-9-FLASH-high')
 CAUSE = 'gemini_flash_retired.*retired by operator order.*agy-gemini-4-hydrogen'
 
+@pytest.fixture(autouse=True)
+def no_head_trailer_lookup(monkeypatch):
+    """These cards name placeholder repositories: the head Writer trailer lookup is not under test."""
+    monkeypatch.setattr("plangraph.planner.seats.head_writer_families", lambda card: [])
+
 
 @pytest.mark.parametrize('target', IDS)
 def test_model_refused_even_with_catalog_admission(target):
