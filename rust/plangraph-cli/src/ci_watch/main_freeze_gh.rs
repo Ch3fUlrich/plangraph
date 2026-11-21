@@ -153,22 +153,39 @@ impl Deliver for CommandDeliver<'_> {
         self.send_within(writer, record, self.lease_secs)
     }
     fn send_within(&mut self, writer: &str, record: &FailureRecord, remaining: u64) -> Result<()> {
+        // One deadline for payload preparation, the launch and the wait: it starts here.
+        let started = std::time::Instant::now();
+        let budget = std::time::Duration::from_secs(self.lease_secs.min(remaining));
+        self.run_bounded(writer, record, started, budget)
+    }
+}
+
+impl CommandDeliver<'_> {
+    /// Runs the delivery command so that the preparation, the launch and the wait all end by `started + budget`.
+    pub(super) fn run_bounded(
+        &self,
+        writer: &str,
+        record: &FailureRecord,
+        started: std::time::Instant,
+        budget: std::time::Duration,
+    ) -> Result<()> {
         let cmd = std::env::var("CI_WATCH_DELIVER_CMD").map_err(|_| "no delivery command")?;
         let path = self.dir.join(format!("{}.delivery.json", record.id));
         save(&path, record)?;
+        if started.elapsed() >= budget {
+            return Err("delivery budget spent before the launch".into());
+        }
         let mut child = std::process::Command::new(cmd)
             .arg(writer)
             .arg(&path)
             .spawn()
             .map_err(|e| e.to_string())?;
-        // The command is bound to its claim's lease: past it, the claim may be taken over, so it is killed.
-        let lease = std::time::Duration::from_secs(self.lease_secs.min(remaining));
-        let started = std::time::Instant::now();
+        // Past the deadline the claim may be taken over, so the command is killed.
         loop {
             match child.try_wait().map_err(|e| e.to_string())? {
                 Some(status) if status.success() => return Ok(()),
                 Some(_) => return Err("delivery command failed".into()),
-                None if started.elapsed() >= lease => {
+                None if started.elapsed() >= budget => {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err("delivery command exceeded its lease".into());

@@ -755,3 +755,57 @@ fn the_deliverys_deadline_comes_from_its_claim_and_a_launch_after_it_is_skipped(
         );
     }
 }
+
+#[test]
+fn preparation_time_counts_against_the_deliverys_deadline_and_a_spent_budget_never_launches() {
+    use super::batch_failure::{Deliver, FailureRecord};
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join("ran");
+    let script = dir.path().join("mark.sh");
+    std::fs::write(&script, format!("#!/bin/sh\ntouch {}\n", marker.display())).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _env = ENV.lock().unwrap();
+    std::env::set_var("CI_WATCH_DELIVER_CMD", &script);
+    let record = FailureRecord {
+        id: "f1".into(),
+        batch: "b".into(),
+        pr: 1,
+        run_id: 1,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        created_at: 0,
+        delivered_to: None,
+        acked: false,
+        escalated: false,
+        claim: None,
+    };
+    let deliver = CommandDeliver {
+        dir: dir.path(),
+        lease_secs: 240,
+    };
+    // The budget started 2 seconds ago and is 1 second: the preparation already used it, nothing is launched.
+    let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(2);
+    let spent = deliver.run_bounded("w1", &record, long_ago, std::time::Duration::from_secs(1));
+    assert!(spent.unwrap_err().contains("budget spent"));
+    assert!(!marker.exists(), "the command was not launched");
+    // With budget left it runs, and a zero budget through the public entry point never launches either.
+    assert!(deliver
+        .run_bounded(
+            "w1",
+            &record,
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(5)
+        )
+        .is_ok());
+    assert!(marker.exists());
+    std::fs::remove_file(&marker).unwrap();
+    let mut zero = CommandDeliver {
+        dir: dir.path(),
+        lease_secs: 240,
+    };
+    assert!(zero.send_within("w1", &record, 0).is_err());
+    std::env::remove_var("CI_WATCH_DELIVER_CMD");
+    assert!(!marker.exists());
+}
