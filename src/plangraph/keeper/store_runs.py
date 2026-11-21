@@ -15,6 +15,7 @@ from .errors import Refused
 from .evidence_git import plan_items
 from .evidence_runs import RunRecordAdapter
 from .evidence_types import valid_commit_ref
+from ..review.family import model_family
 
 __all__ = ["RunsMixin", "normalise_run"]
 
@@ -119,6 +120,10 @@ def normalise_run(run) -> dict:
         raise Refused("validation", "item_key must be a string or null")
     return {"run_id": run_id, "phase": phase, "rc": rc,
             "writer": writer, "seats": seats, "item_key": item_key}
+
+
+#: Refusal codes of the seat proof that the keeper setting ``require_seats`` (off) turns into a flag.
+_SEAT_REFUSALS = ("evidence_unverified", "coverage", "same_family")
 
 
 class RunsMixin:
@@ -485,3 +490,62 @@ class RunsMixin:
         return {"key": key, "run_id": run_id, "phase": phase,
                 "writer_model": writer_model, "seat_models": seat_models,
                 "run_ids": ordered}
+
+    # --- the seat gate of the merged closes: the proof, or with ``require_seats`` off the flag ---
+    def _seats_required(self, requested=None):
+        """A request's explicit bool, else the keeper setting ``require_seats``."""
+        if requested is not None and type(requested) is not bool:
+            raise Refused("validation", "require_seats must be a boolean")
+        return self.require_seats if requested is None else requested
+
+    @staticmethod
+    def _flags_of(flags):
+        """``{"flags": flags}`` for a stored flag, else nothing."""
+        return {"flags": flags} if flags else {}
+
+    def _seat_flag(self, item, refusal, heads, text=""):
+        """The ``seats_missing`` flag: the runs the close could cite (item, decision row, landed trailers) and why."""
+        try:
+            cited = json.loads(item.get("run_ids") or "[]")
+        except (ValueError, TypeError):
+            cited = []
+        cited = [r for r in cited if isinstance(r, str)] + re.findall(r"\brun-[\w.-]+", text)
+        try:
+            cited += [r for by_part in self._merged_cited_parts(item, heads).values()
+                      for runs in by_part.values() for r in runs]
+        except Exception:  # noqa: BLE001 - an unreadable citation names no run
+            pass
+        return {"seats_missing": {"run_ids": list(dict.fromkeys(cited)),
+                                  "reason": f"{refusal.code}: {refusal.msg}"}}
+
+    def _flaggable(self, item, refusal, now, required):
+        """Refuse again unless the gate is off and only a seat is missing; an unknown writer still refuses."""
+        if (required or refusal.code not in _SEAT_REFUSALS
+                or self._card_requires_non_anthropic_seats(item)):
+            raise refusal
+        self._merged_writer_families(item, now)
+
+    def _seats_or_flag(self, item, decision_id, head, now, prs, families, backfill, required):
+        """``(witnessed, seats, flags)``: the seat proof, or with the gate off the flag in its place."""
+        try:
+            witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
+            families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
+            return witnessed, self._merged_seats(item, families, now, witnessed), None
+        except Refused as exc:
+            self._flaggable(item, exc, now, required)
+            text = ""
+            if decision_id is not None:
+                try:
+                    text = " ".join(self._ctx(item, now).decisions.text(p["decision_id"]) for p in prs) if prs \
+                        else self._ctx(item, now).decisions.text(decision_id)
+                except Exception:  # noqa: BLE001 - an unreadable decision cites no run
+                    text = ""
+            return [], [], self._seat_flag(item, exc, [p["head"] for p in prs] or [head], text)
+
+    def _auto_seats(self, item, proofs, now, required):
+        """``(witnessed, flags)`` of the automatic close: the backfilled seats, or the flag with the gate off."""
+        try:
+            return self._merged_backfill(item, None, proofs[0]["head"], now, proofs), None
+        except Refused as exc:
+            self._flaggable(item, exc, now, required)
+            return [], self._seat_flag(item, exc, [p["head"] for p in proofs])

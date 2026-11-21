@@ -311,7 +311,8 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                     # Omission requests recovery; explicit JSON null is malformed.
                     body.get("families") if body.get("families", ()) is not None else (),
                     from_open=body.get("from_open", False), apply=body.get("apply", False),
-                    waive_seats=body.get("waive_seats"), dry_run=body.get("dry_run", False)),
+                    waive_seats=body.get("waive_seats"), dry_run=body.get("dry_run", False),
+                    require_seats=body.get("require_seats")),
                 "replay": _replay,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,
@@ -332,7 +333,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
-                          principal, body.get("project"), require_seats=body.get("require_seats", True),
+                          principal, body.get("project"), require_seats=body.get("require_seats"),
                           apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True),
                       "close_on_decision": _close_on_decision,
                       "governor_override": _governor_override,

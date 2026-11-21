@@ -296,7 +296,7 @@ class ReviewMixin:
                 "family": auth.norm_family(principal.family),
                 "ok": True, "epoch": item["epoch"], "round": item["round"]}
 
-    def _pass(self, principal, key, reason, item, now, reviews_passed, release=False):
+    def _pass(self, principal, key, reason, item, now, reviews_passed, release=False, flags=None):
         """Write ``done`` (and lock it) plus ``review_passed``, under the lock.
 
         Reached from either tier: one standard verdict, or one waived/two high
@@ -311,8 +311,10 @@ class ReviewMixin:
             (principal.name, self._iso(now), key, item["epoch"]))
         self._race_guard(cursor, key, "in_review", item["epoch"])
         self._append(principal, key, "review_passed",
-                     {"reason": reason, **({"released": True} if release else {})}, now)
-        return {"key": key, "state": "done", "reviews_passed": reviews_passed}
+                     {"reason": reason, **({"released": True} if release else {}),
+                      **({"flags": flags} if flags else {})}, now)
+        return {"key": key, "state": "done", "reviews_passed": reviews_passed,
+                **({"flags": flags} if flags else {})}
 
     def _verdict_changes(self, principal, key, reason, item, now):
         """``ok=False``: return to claimed (or open on a second change)."""
