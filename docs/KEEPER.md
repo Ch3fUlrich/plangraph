@@ -143,7 +143,8 @@ worker that is not the recorded owner, a card whose observed state fails the liv
 | `submit(p, key, epoch)` | claimant or delegate | `claimed`→`in_review` iff every kind in `evidence_kinds` has verified evidence; lease frozen (cleared) |
 | `request_changes` / `pass_review` as `verdict(p, key, ok, reason)` | reviewer | `in_review`: ok → records `review_verdict` and re-verifies ALL evidence; on a `standard` item this one cross-family verdict → `done` (event `review_passed`, locks), on a `high` item a second distinct reviewer (two distinct resolved families unless waived) is required; not ok → `claimed` (same epoch; 2nd time in a row → `open` + audit_finding). Refused: reviewer == claimant/delegate (`same_principal`); reviewer.family == delegate-or-claimant family (`same_family`); either family NULL (`family_unknown`, fail closed) |
 | `waive_second_family(p, key, D-NNN)` | router | **`high` items only (D-228)** — `claimed`/`in_review`: runs the `decision` verifier on `{id: D-NNN}` **and** requires that D-row to contain the whole token `Waives: <key>` (X6c3); on success emits `waiver_set` and sets `items.review_waiver`. An active D-id waiver permits one passing verdict to close, with writer independence and single-seat sensitive coverage intact (D-5658), **except cards tagged `auth` or `secrets` still require two distinct non-Anthropic families (`need=2`)**. Refused: non-router (`forbidden`), unverified decision or a D-row that does not name the key (`evidence_unverified`), `standard` or `none` tiers (`bad_state`), DONE (`locked`), other states (`bad_state`) |
-| `apply_ops(p, ops, batch_ref=None)` | router only | B1: BATCH.md ops in one transaction, all or nothing (`store_ops.py`; paragraph below) |
+| `apply_ops(p, ops, batch_ref=None)` | router; a granted l1 (ops `create`/`edit`/`cancel`/`priority`/`add_evidence`/`close_on_decision`/`legacy_state`); oversight narrow grant | B1: BATCH.md ops in one transaction, all or nothing (`store_ops.py`; paragraph below) |
+| `grant_apply(p, name, project)` / `revoke_apply` / `apply_grants(p)` | router (`apply_grants`: router, or an l1 for its own) | KEEPER-PROJECT-SCOPED-L1-APPLY: the `apply_grants` table (principal, project) says which projects a role-l1 principal may batch-apply in; `pg grant-apply NAME PROJECT [--revoke\|--list]`. One key outside the granted projects (item, `depends_on`, `under`, `corrects`, `fixes`, target) refuses the whole batch naming it with `forbidden`; `rehome`/`set_kind`/dep ops stay router-only; every applied batch posts one `granted_apply` line (batch, source, sha256, ops_sha256, op count) to `routing` |
 | `close_on_decision(p, key, batch_ref)` | router only | **`review_tier='none'` items only (X7b)** — see "Legacy and decision closes" |
 | `cancel(p, key, reason)` | router; l1 own project | `open|claimed|in_review`→`cancelled`; refused from `done` (`locked`) |
 | `reap(now)` | system | `claimed` with `lease_until < now` → `open` (`lease_expired`); `in_review` stuck > 4 h → audit_finding `review_overdue` (no state change) |
@@ -319,7 +320,7 @@ zero item, audit, evidence, or event writes.
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, `merge_scan` (optional list of `repos` projects the merged-on-default scan reads; default every repo; `plangraph merge-close --repos` prints the scanned repositories), repos
-{project: path} or {project: {path, ref, non_pr: true}}: router-owned `non_pr` opts into merge-commit-on-target-ref proof instead of a hosted PR association (for non-PR repositories); direct pushes remain refused, green CI is required (`ci: none` cannot use this proof), and principal, trailer, time and floor guards remain. Also runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
+{project: path} or {project: {path, ref, non_pr: true}}: the router-owned boolean `non_pr: true` opts into merge-commit-on-target-ref proof instead of a hosted PR association (for non-PR repositories); direct pushes remain refused, green CI is required (`ci: none` cannot use this proof), and principal, trailer, time and floor guards remain. Also runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
 for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), `review_overdue_s` (14400), `alert_window_s` (604800; `alerts` lists findings and repeated refusals only for open, claimed or in_review items and only inside this window; the JSON `history` holds the counts left out, no row is deleted), each a JSON integer from 1 to 315360000 seconds. Applied to the daemon's Store at start; restart to change. Secret config values are never printed.
 
 ## CLI `pg`
@@ -733,3 +734,14 @@ are not witnesses. Missing, changed or mismatched evidence gets a named refusal.
 transaction, and counts it with spawner seats. Existing writer-family, high-tier,
 sensitive-card and lane-specific witness requirements continue to apply.
 Lanes citing D-4504 retain their witness rule; a GO row must explicitly say `Witness: claude-seat` to use this kind.
+
+**Priority levels and aging (KEEPER-PRIORITY-LEVELS-AND-AGING).** 10 = in flight or stops all
+work; 9 = operator order of the last 2 days, a lesson that happened twice, or unblocks 2+ lanes;
+8 = a lesson that happened once or unblocks one lane; 7 = planned work. An `LE-` item created
+without a `priority` starts at 8; a new `INCIDENT LOG` line added to an `LE-` item's description
+or note raises it one level (10 at most). The reaper drops an open, unclaimed item one level when
+it stood at 10 for 3 days or at 9 for 7 days since its last `priority_set`/`item_created` event
+and was not claimed since; `priority KEY <same value>` re-confirms and restarts the clock. Each
+change is a `priority_set` event with `was` and `reason`. `digest` carries `priority_levels` (open
+items per level) and `level10_warning` when level 10 holds more open items than lanes closed in
+the last 7 days.

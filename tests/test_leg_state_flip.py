@@ -27,8 +27,8 @@ def boundary(tmp_path, monkeypatch):
     flag.default_reader.cache_clear()
     monkeypatch.delenv('PLANGRAPH_OMNIROUTE_LEG_STATE', raising=False)
     monkeypatch.setattr(leg_state, '_default_store', lambda: leg_state.LegStateStore(tmp_path / 'state'))
-    from plangraph.routing_support import omniroute_state
-    monkeypatch.setattr(omniroute_state, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
+    from plangraph.routing_support import quota_snapshots
+    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
     monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: []))
     monkeypatch.setattr(subprocess, 'run', lambda *a, **k: pytest.fail('unexpected subprocess'))
     yield
@@ -122,8 +122,8 @@ def test_cache_path_resolved(boundary, tmp_path, monkeypatch):
 
 def test_service_fixture_never_constructs_live_reader(tmp_path, monkeypatch):
     monkeypatch.setattr(leg_state, 'LegAdapter', lambda *a, **k: pytest.fail('live adapter'))
-    from plangraph.routing_support import omniroute_state
-    monkeypatch.setattr(omniroute_state, 'from_env', lambda: pytest.fail('live provider'))
+    from plangraph.routing_support import quota_snapshots
+    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: pytest.fail('live provider'))
     s = service(tmp_path)
     assert s.leg_reader is not None and s.leg_reader.enabled
     assert s.hung.reader is s.runner.leg_reader is s.leg_reader

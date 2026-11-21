@@ -61,14 +61,23 @@ pub fn collect_prompt_commit_shas(cwd: &Path, prompt: &str) -> BTreeSet<String> 
     else {
         return BTreeSet::new();
     };
-    if let Some(mut stdin) = child.stdin.take() {
-        for sha in &candidates {
-            if writeln!(stdin, "{sha}^{{commit}}").is_err() {
-                break;
+    let stdin = child.stdin.take();
+    let out = std::thread::scope(|scope| {
+        let candidates = &candidates;
+        let writer = scope.spawn(move || {
+            let mut stdin = stdin?;
+            for sha in candidates {
+                writeln!(stdin, "{sha}^{{commit}}").ok()?;
             }
-        }
-    }
-    let Ok(out) = child.wait_with_output() else {
+            Some(())
+        });
+        // Git emits a line per input. Drain its stdout while pumping stdin so
+        // neither side can block waiting for the other pipe to empty.
+        let output = child.wait_with_output();
+        writer.join().ok()??;
+        output.ok()
+    });
+    let Some(out) = out else {
         return BTreeSet::new();
     };
     if !out.status.success() {
@@ -176,6 +185,77 @@ mod tests {
             "{out}"
         );
     }
+    #[test]
+    fn commit_lookup_drains_large_git_batch() {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
+
+        const CHILD: &str = "PG_TEST_LARGE_SHA_LOOKUP_CHILD";
+        const LOOKUPS: usize = 4000;
+        // A deadlock never finishes, so this is only a hang watchdog, far above
+        // the slowest honest run (git needs seconds for thousands of misses on Windows).
+        const WATCHDOG: Duration = Duration::from_secs(300);
+        if std::env::var_os(CHILD).is_some() {
+            let repo = tempfile::tempdir().unwrap();
+            let git = |args: &[&str]| {
+                let out = crate::git_test_support::command(repo.path())
+                    .args(args)
+                    .output()
+                    .unwrap();
+                assert!(out.status.success());
+                String::from_utf8(out.stdout).unwrap().trim().to_owned()
+            };
+            git(&["init", "-q"]);
+            git(&[
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "init",
+            ]);
+            let head = git(&["rev-parse", "HEAD"]);
+            // About 200 KB each way: past a Linux pipe buffer (64 KiB) and far past
+            // a Windows one (4 KiB), so a lookup that does not drain deadlocks.
+            let mut prompt: String = (0..LOOKUPS)
+                .map(|index| format!("{index:040x}\n"))
+                .collect();
+            prompt.push_str(&head);
+            assert_eq!(
+                super::collect_prompt_commit_shas(repo.path(), &prompt),
+                std::collections::BTreeSet::from([head])
+            );
+            return;
+        }
+
+        // Isolate the lookup so a blocked pipe cannot hang the test runner.
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "run::scrub::tests::commit_lookup_drains_large_git_batch",
+            ])
+            .env(CHILD, "1")
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + WATCHDOG;
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success());
+                break;
+            }
+            if Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!(
+                    "git batch lookup did not finish within {WATCHDOG:?}: pipes are not drained"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     #[test]
     fn allowlist_resolution_and_scrubbing() {
         let dir = tempfile::tempdir().unwrap();

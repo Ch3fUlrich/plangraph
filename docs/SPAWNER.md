@@ -36,7 +36,7 @@ Python and Rust order: complete/truncated PEM, Bearer, then plain-mode pre-pass 
 shield every matched assignment's name/quote/separator with an indexed marker
 `U+E000 + decimal index + U+E001`, leaving values untouched; run the wrapped join,
 then restore the names.
-P is skipped entirely if either shield character already occurs in the text.
+P escapes literal opening markers before shielding so they stay readable and cannot disable the wrapped join.
 Then main's order runs: full assignments, wrapped prefixed tokens, URL userinfo,
 token catalog and JWT. P protects only OLD matched names; the unchanged joins can still eat wider names.
 Source mode (`redact_source`) skips P and both assignment stages; its order is unchanged.
@@ -45,7 +45,7 @@ Exact new double-quoted colon keys remain open gap A2, the JSON-key rule. Next-l
 JSON-tail limit-loss: a wider plain assignment hides the rest of its line, including later limit evidence inside JSON strings or dict-style text. Structured 429/402 JSON readers can lose limit evidence after scrubbing; dict-style lines are not read even raw, while raw streaming refusal detection and raw step accounting still run before scrubbing.
 Slice A2 also owns three known gaps: a wider name starting where an older-rule match ends is not masked yet; a wider name hides the whole rest of its line, including a later older-rule label; and quoted keys with blanks before the colon stay as on main.
 Under D-5703, fixture-known readable credential portions are compared against local git-loaded pre-A1 e7964367 modules and tagged with their owner, not endorsed as correct. A2 owns below-floor wrapped assignment continuation a1-J04 (5); slice C owns remaining join gaps; Rust-readable expectations belong to slice B `plangraph:REDACT-RUST-NAME-SCOPE-ALIGN`. The old Python assignment rule already consumes the stray closing bracket in `API_KEY=[REDACTED]]`.
-D-5751 pins both historical modules to full commit `e7964367542646ea603a1fc84f67f7036b298bcb` and checks helper identity plus an A1-only behavior difference, preventing absolute imports from silently using the current scanner. The LF/CRLF-before-separator rows and wrapped U+E000/U+E001/indexed-marker rows are equally readable before and after A1, so their fixture rows retain slice C ownership; no production or Rust change is warranted. Mask-growth tests preserve literal placeholders and reject ambiguous alignments. Both Python modules' work is counted, with a separate child CPU limit covering C-regex blank-run work.
+D-5751 pins both historical modules to full commit `e7964367542646ea603a1fc84f67f7036b298bcb` and checks helper identity plus an A1-only behavior difference, preventing absolute imports from silently using the current scanner. The LF/CRLF-before-separator fixture rows retain slice C ownership. The Python and Rust parity tests require wrapped assignments to be masked even when the input carries literal U+E000, U+E001 or indexed markers. Mask-growth tests preserve literal placeholders and reject ambiguous alignments. Both Python modules' work is counted, with a separate child CPU limit covering C-regex blank-run work.
 Secrecy-safe over-masks remain unchanged: mismatched or half quotes around wider names, Unicode line and paragraph separators counted as blanks, and a comparison sign after a subscript name.
 The catalog covers OpenAI, GitHub, Slack, AWS and Google prefixes; wrapped bodies
 share its alphabets/floors and bounded 4096-byte LF/CRLF joins.
@@ -169,6 +169,12 @@ for `.pid` targets or exact `pgrep -x --` otherwise.
 Set `env.PG_SESSION_UNIT` in a host registry entry to a systemd unit, a
 `.pid` file path, or the exact process name (`comm`) to include that session
 in readiness checks.
+Migration note: a legacy `overflow-hosts.json` `session_unit` is no longer read; readiness
+takes the session from `env.PG_SESSION_UNIT` in the host's registry entry, and without it the
+session probe is skipped. Move the old value there, and replace a `pgrep -f` command-line
+substring (no longer matched under `pgrep -x --`) with a systemd unit name
+(`.service`/`.scope`/etc.), a `.pid` file path, or the exact process name (`comm`).
+A queued admission is rechecked for cancellation before placement, removed when a host accepts it, and finalized as failed if admission raises an exception.
 `--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
 Review/seat routes record each failed, limited or not-served attempt with its reason
 and try the next leg in the same run, failing only after route exhaustion. Ordinary
@@ -234,7 +240,7 @@ with that tag. The witness proves the model served for tagged gateway calls;
 it does not prove independence from the child or bind a response to its answer.
 The management log credential stays in the parent. The child-writable OpenCode
 store remains review-only request-side evidence.
-The provider-state snapshot behind leg routing (`routing_support/omniroute_state.py`)
+The provider-state snapshot behind leg routing (`routing_support/quota_snapshots.py`)
 reads `/api/providers` with the same parent-only management token from
 `routing_support/opencode_render.py::load_token` (re-exported by `gateway_witness`), never with the
 gateway client key; without a management
@@ -338,13 +344,10 @@ An explicitly supplied `benchmark=` mapping (model or leg id to resolver metric
 row), or sequence of rows with `model_id`, ranks measured legs only inside their
 existing tier. Legs without rows go **last inside their tier**, retaining their
 relative operator order. `plan.gaps` (also in `to_dict()`) records each missing
-role-policy leg as `{leg, model, reason: "no benchmark row"}`; reasons name each
-gap, including legs filtered by eligibility or provider state. With `benchmark=None`,
-all role-policy legs are gaps, `p_source` is `operator-order`, and reasons explicitly
-say `benchmark data absent` (the legacy `no benchmark p` reason remains compatible).
-`plan_spawn(..., strict=True)` refuses any missing role-policy row with
-`SpawnRefused("benchmark rows missing: <legs>")`. This is the routing hook for the
-production CLI's `--require-bench`.
+role-policy leg with its leg ID, model and reason. Reasons name each gap, including legs filtered by eligibility or provider state.
+With `benchmark=None`, all role-policy legs are gaps, `p_source` is `operator-order`, and reasons include `benchmark data absent` and `no benchmark p`.
+Strict routing (`--require-bench`) raises `BenchRequired` for a missing required row. The `agy-gpt-oss-120b` review leg is explicitly unmeasured until its exact medium-effort row is available.
+It can run with prior ranking in ordinary mode. Strict routing skips it with `benchmark_unmeasured` while routing among the measured legs; an exact row makes it eligible in strict mode.
 
 Operator safety rules and `route_card` tier order come first; U_core permutes measured inputs within a tier for every role, including implement (D-5092). Same-family review inputs keep table order; free inputs never move behind subscriptions. The generic resolver retains its utility/epsilon-band algorithm without a model-name or post-ranking tier pin.
 CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cache/plangraph/spawner_catalog.db`), unless `--bench-db`/`bench_db` overrides it.

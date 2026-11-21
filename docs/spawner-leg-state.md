@@ -98,8 +98,9 @@ Successful probe evidence, including passes during an unreadable snapshot, canno
 probe. Booked provider limits and quota pauses still take precedence; dry runs
 remain read/probe-free. This slice changes neither seat ordering nor route slots.
 The default service reader retains its declared-state fallback for snapshot read
-errors (as for the former `unknown` reason), preserving the detailed reason so
-`before_launch` still retries and probes instead of mistaking fallback for a read.
+errors. The service plan exposes the detailed error on the matching candidate
+as `leg_state_reason`. The launch boundary still retries the snapshot and probes
+the leg when the retry fails.
 
 A `running` record on the same model/harness wins over a failed probe when its
 nonempty `live.log` grew within `LIVE_RUN_WRITE_WINDOW_S` (120 seconds).

@@ -70,6 +70,7 @@ pub mod remote_steps;
 mod shared_target;
 pub mod sweep_facts;
 mod sweep_runs;
+pub mod unit_refs;
 /// Minimum body length redacted for the `gh[pousr]_` token family.
 pub const GITHUB_TOKEN_BODY_FLOOR: usize = redact_tokens::SPECS[1].floor;
 mod redact_wrapped;

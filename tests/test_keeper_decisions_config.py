@@ -1,14 +1,13 @@
 """Install-time decisions mapping and a non-fatal startup warning."""
 import json
 import os
-import signal
 import stat
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from test_keeper_daemon import free_port, make_db_and_config, spawn, wait_health
+from test_keeper_daemon import free_port, make_db_and_config, spawn, stop_daemon, wait_health
 
 from plangraph.keeper import config
 
@@ -58,10 +57,9 @@ def test_startup_decisions_warning_is_nonfatal(tmp_path, configured):
         path.write_text(json.dumps(raw))
     proc = spawn(path)
     try:
-        assert wait_health(port)['status'] == 'ok'
-        proc.send_signal(signal.SIGTERM)
-        _, stderr = proc.communicate(timeout=10)
-        assert proc.returncode == 0
+        assert wait_health(port, proc=proc)['status'] == 'ok'
+        code, stderr = stop_daemon(proc)
+        assert code == 0
         lines = [line for line in stderr.decode().splitlines() if 'repos.decisions' in line]
         assert len(lines) == (0 if configured else 1)
         if lines:

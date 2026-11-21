@@ -30,7 +30,8 @@ TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_
           "messages", "message_nonces", "message_envelopes",
           # BUS-REGISTRY-PERSIST: the host registry; absent in an older source,
           # which skips it like every other table the source does not have.
-          "bus_hosts", "placement_rule_revision", "placement_rule_values", "placement_rule_audit")
+          "bus_hosts", "placement_rule_revision", "placement_rule_values", "placement_rule_audit",
+          "apply_grants")
 _BATCH = 500
 
 
