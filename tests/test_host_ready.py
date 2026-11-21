@@ -63,6 +63,20 @@ def test_green_atomic(tmp_path):
     assert not h.fresh(result, datetime.now(timezone.utc) + timedelta(minutes=11))
 
 
+def test_readiness_checks_configured_worktree_disk(tmp_path):
+    root = '/mnt/work disk'
+
+    def fake(argv, **kwargs):
+        if 'df -Pk' in argv[-1] and root in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout='header\nfake 9000000 7000000 2000000 80% /mnt/work\n')
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', dict(CONFIG, work_mounts=[root]), tmp_path, fake)
+    assert not result['ok']
+    assert result['work_mounts'] == {root: 1}
+    assert result['failures'] == [f'disk: disk_low: {root}: free 1 GB']
+
+
 @pytest.mark.parametrize('payload', [{'ok': True}, {'checks': []}])
 def test_doctor_missing_keys(tmp_path, payload):
     def fake(argv, **kwargs):

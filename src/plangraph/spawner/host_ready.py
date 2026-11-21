@@ -549,6 +549,19 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
             record['disk_free_gb'] = measure_argv('disk', ['df', '-Pk', '--', config['repo']],
                 lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
+            for mount in config.get('work_mounts', []):
+                if not isinstance(mount, str) or not mount.startswith('/') or mount == '/':
+                    fail('disk', 'invalid work mount')
+                    continue
+                if command_argv('disk.mount', 'mountpoint', '-q', '--', mount) is None:
+                    fail('disk', f'work mount unavailable: {mount}')
+                    continue
+                free = measure_argv('disk', ['df', '-Pk', '--', mount],
+                    lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
+                if free is not None:
+                    record.setdefault('work_mounts', {})[mount] = free
+                    if free < config.get('disk_floor_gb', 5):
+                        fail('disk', f'disk_low: {mount}: free {free} GB')
             def sha(s):
                 value = s.strip()
                 if not re.fullmatch(r'[0-9a-f]{40,64}', value):
@@ -644,6 +657,7 @@ def main(argv=None):
         print(json.dumps(pre_push_report(args.test_tools, args.unit)))
         return 0
     from .overflow import host_config, placement_config, readiness_dir, registry_caps
+    from plangraph.fleet_sync.genconfig import work_mounts
     registry = registry_caps()
     hosts = placement_config(registry).get('hosts', {})
     local = host_config(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry['self'])
@@ -655,6 +669,7 @@ def main(argv=None):
             hosts[local['id']] = dict(local=True, registry=True, repo=repo,
                 spawner_src=repo + '/src', floor_mb=local['caps']['mem_floor_mb'],
                 state_dir=local.get('state_dir'),
+                work_mounts=work_mounts(local),
                 session_unit=local.get('env', {}).get('PG_SESSION_UNIT'))
     if not hosts and not args.host:
         parser.error('hosts.json has no readiness candidates')
