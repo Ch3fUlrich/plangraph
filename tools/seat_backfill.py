@@ -20,6 +20,8 @@ def _add_src():
     src = str(Path(__file__).resolve().parents[1] / "src")
     if src not in sys.path:
         sys.path.insert(0, src)
+        return src
+    return None
 
 
 def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
@@ -110,6 +112,7 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
 def repost_transport(args, poster):
     """Recheck a record through the verifier under the shared outbox lock."""
     row = {"reasons": []}
+    added_src = _add_src() if "plangraph" not in sys.modules else None
     try:
         if (args.seat_dir / "evidence.json").exists():
             print("seat_verdict: repost refused: evidence.json exists; record-only seat required", file=sys.stderr)
@@ -122,6 +125,9 @@ def repost_transport(args, poster):
                        retry_reason="keeper verdict transport not configured")
     except (Exception, SystemExit) as exc:
         row["reasons"].append(type(exc).__name__)
+    finally:
+        if added_src is not None:
+            sys.path.remove(added_src)
     if row.get("delivery") != "delivered": print("seat_verdict: repost refused: " + "; ".join(row["reasons"]), file=sys.stderr)
     return int(row.get("delivery") != "delivered")
 

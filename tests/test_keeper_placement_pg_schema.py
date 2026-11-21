@@ -88,7 +88,7 @@ def test_keeper_migration_gates_documented():
 
 def test_upgrade_idempotent(pg):
     raw, name = pg
-    assert db_pg.migrate(raw, name) == [11, 12]
+    assert db_pg.migrate(raw, name) == [11, 12, 13]
     assert db_pg.migrate(raw, name) == []
     for table in rules.TABLES:
         assert raw.execute(f'SELECT count(*) FROM {table}').fetchone() == (0,)

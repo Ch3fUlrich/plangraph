@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from test_run_watchdog import _job
 
-from plangraph.routing_support import leg_state, leg_state_flag as flag, omniroute_state, quota_snapshots
+from plangraph.routing_support import leg_state, leg_state_flag as flag, quota_snapshots
 from plangraph.routing_support.leg_state import LegStateStore, RESET_CAP_S
 from plangraph.routing_support.quota_snapshots import QuotaGate, fetch_snapshot_rows, pool_of
 from plangraph.spawner.env_redact import early_refusal, harness_limit_line
@@ -265,7 +265,7 @@ def test_production_reader_applies_the_snapshot_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(flag, 'default_reader', _production_reader)
     flag.default_reader.cache_clear()
     monkeypatch.setattr(leg_state, '_default_store', lambda: LegStateStore(tmp_path / 'state'))
-    monkeypatch.setattr(omniroute_state, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
+    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=lambda: {}))
     monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: []))
     monkeypatch.setattr(quota_snapshots, 'fetch_snapshot_rows', lambda: [_row(0, '2099-01-01T00:00:00Z')])
     try:

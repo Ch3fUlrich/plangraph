@@ -12,6 +12,7 @@
       "max_request_tokens": 100000,
       "trains_on_data": false,
       "claude_family": false,
+      "benchmark_optional": false,
       "note": "",
       "roles": [
         "implement"
@@ -35,6 +36,7 @@
       "max_request_tokens": 100000,
       "trains_on_data": false,
       "claude_family": false,
+      "benchmark_optional": false,
       "note": "",
       "roles": [
         "implement"
@@ -58,6 +60,7 @@
       "max_request_tokens": 100000,
       "trains_on_data": false,
       "claude_family": false,
+      "benchmark_optional": false,
       "note": "",
       "roles": [
         "implement"

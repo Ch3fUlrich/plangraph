@@ -74,8 +74,12 @@ def test_every_json_leg_field_is_preserved(tmp_path, field):
     row = sol_row(claude_family=True, note="operator JSON preservation regression",
                   roles=["review", "implement"], tool_mode="inline-only",
                   disabled="operator policy", trains_on_data=True, effort="high", expires=123,
-                  harness_fallback="client_missing")
+                  benchmark_optional=True, harness_fallback="client_missing")
     leg = load_row(tmp_path, row)
     assert set(row) == {field.name for field in dataclasses.fields(Leg)}
     expected = tuple(row[field]) if field in ("windows", "roles") else row[field]
     assert getattr(leg, field) == expected
+
+def test_json_benchmark_optional_requires_boolean(tmp_path):
+    with pytest.raises(ValueError, match=r"legs\[0\]\.benchmark_optional"):
+        load_row(tmp_path, sol_row(benchmark_optional="false"))

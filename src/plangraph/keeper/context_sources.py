@@ -254,6 +254,51 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     return result
 
 
+_REFRESHING = set()
+_REFRESH_LOCK = threading.Lock()
+
+
+def work_index_cached(git, project):
+    """The ready read's index: never rebuilt inside a request once one exists.
+
+    ``work_index`` fetches origin, lists open PRs (``gh``, up to 30 s) and walks
+    ``git log --all``: 24 s held under the keeper lock on the live plan, and the
+    10 s cache expired between any two reads, so every ``ready`` paid it.  A read
+    now serves the last built index whatever its age and starts ONE background
+    rebuild when it is older than ``_REFS_TTL``; only the very first read after a
+    start (nothing to serve) builds in the request.  ``verified_at`` still
+    carries the index's age, so a stale answer says so.
+    """
+    repo, ref = _repo_ref(git, project)
+    if repo is None:
+        return work_index(git, project)         # no repo: answers at once
+    key = (repo, ref)
+    hit = getattr(git, "_context_work_index", {}).get(key)
+    if hit is None:
+        return work_index(git, project)
+    age = time.monotonic() - hit[0]
+    if age >= _REFS_TTL:
+        # The served index says it is expired, so the reader can warn.
+        served = dict(hit[1], refreshing=True, built_age_s=int(age))
+        with _REFRESH_LOCK:
+            if key in _REFRESHING:
+                return served
+            _REFRESHING.add(key)
+
+        def refresh():
+            try:
+                work_index(git, project, fresh=True)
+            except Exception:           # the old index keeps serving
+                pass
+            finally:
+                with _REFRESH_LOCK:
+                    _REFRESHING.discard(key)
+        threading.Thread(target=refresh, name="work-index-refresh",
+                         daemon=True).start()
+        return served
+    return hit[1]
+
+
 def indexed_work(index, key):
     """Resolve full/bare trailers and lane names without I/O."""
     if index is None or index.get("origin_stale"):

@@ -19,7 +19,7 @@ from .messages_schema import SQLITE as MESSAGES_DDL
 __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL",
            "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "METRICS_DDL", "LOCKS_DDL", "JEV_DDL", "ALERTS_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
+           "METRICS_DDL", "LOCKS_DDL", "GRANTS_DDL", "JEV_DDL", "ALERTS_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
 #: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
@@ -232,13 +232,26 @@ CREATE TABLE IF NOT EXISTS jev_shadow (
 CREATE INDEX IF NOT EXISTS idx_jev_shadow_key ON jev_shadow(key);
 """
 
+#: KEEPER-PROJECT-SCOPED-L1-APPLY: which projects a role-l1 principal may apply
+#: batches in.  Written only by role router (``grant_apply``/``revoke_apply``);
+#: a stored row, never an env var.  ``schema_pg`` Migration 13 is the logical twin.
+GRANTS_DDL = """
+CREATE TABLE IF NOT EXISTS apply_grants (
+    principal  TEXT NOT NULL,
+    project    TEXT NOT NULL,
+    granted_by TEXT NOT NULL,
+    granted_at TEXT NOT NULL,
+    PRIMARY KEY (principal, project)
+);
+"""
+
 #: KEEPER-ALERTS-TABLE-ON-RAISE-CLEAR: the alerts a keeper currently holds, written
 #: when an alert is raised or cleared (``store_alerts``) so the ``alerts`` verb never
 #: scans ``audit_log``.  ``kind`` finding: one row per (key, code); kind refusal: one
 #: row per key, ``n`` counts its refusals inside the window (an alert from 2).
 #: ``alert_log`` is the telemetry: one row per raise (``alert_raised``), clear
 #: (``alert_cleared``) and backfill, kept out of ``audit_log`` whose contract is one
-#: row per call.  ``schema_pg`` Migration 13 is the logical twin; ``IF NOT EXISTS`` so
+#: row per call.  ``schema_pg`` Migration 14 is the logical twin; ``IF NOT EXISTS`` so
 #: ``db._upgrade`` installs it on an older database.
 ALERTS_DDL = """
 CREATE TABLE IF NOT EXISTS alerts (
@@ -378,4 +391,4 @@ CREATE TABLE audit_findings (
 
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
-          + ALERTS_DDL)
+          + GRANTS_DDL + ALERTS_DDL)

@@ -3,11 +3,13 @@ name: router-core
 description: Use at the start of every router session turn and whenever a message, report or operator order arrives. The router's operating checklist: what to do with each kind of input, the hard rules, and how to log. Holds the batch-mode procedure (rule 3.58 (3)) for any step that touches more than one item: a keeper plan batch, the GO for a batch PR, grants for several lanes, a group of asks to plan-order. Load router-accept-record for seat records and router-launch for sessions.
 ---
 
-Site keys (file `router/config` in the router data checkout; source it): `ROUTER_HOME` is the router directory. `DECISIONS.md`, `CHANGELOG.md`, `QUESTIONS.md`, `ANSWERS.md`, `docs/` and `bin/` below are relative to it. Also used here: `ROUTER_SESSION_ID`, `ROUTER_L1_SERVER`, `ROUTER_SERVER_BRANCH`, `ROUTER_L1_INFRA`, `ROUTER_DESIGN_DOC`, `ROUTER_OPERATOR_ROUNDS`.
+Source `router/config` in the router data checkout. Use `ROUTER_HOME` for paths
+under the router directory and `ROUTER_SESSION_NAME` for the session label.
+Get lane owners and merge targets from the lane handoff or keeper item.
 
-> **Target architecture = the rethink design (operator D-1834):** the file `ROUTER_DESIGN_DOC`, with the operator's answers word for word in `ROUTER_OPERATOR_ROUNDS`. Goal: as flat as possible, least Claude: no persistent L0/L1/L2 LLM sessions; keeper (state) + Temporal (execution) + Rust worker + code accepts; Claude only as attended planner and on-demand judge; rules decide routing, Jev in shadow (RT-P5-JEV); one card per worker session on free or subscription legs. The L0-L3 layer text below is transitional operation while PH-RT-* is built, never the plan. Explain the plan only from the design file; every new item or rule moves toward it.
+> **Target architecture = the rethink design (operator D-1834):** read the design and operator answer rounds cited by the D-1834 keeper decision. Goal: as flat as possible, least Claude: no persistent L0/L1/L2 LLM sessions; keeper (state) + Temporal (execution) + Rust worker + code accepts; Claude only as attended planner and on-demand judge; rules decide routing, Jev in shadow (RT-P5-JEV); one card per worker session on free or subscription legs. The L0-L3 layer text below is transitional operation while PH-RT-* is built, never the plan. Explain the plan only from the design file; every new item or rule moves toward it.
 
-# Router core (`ROUTER_SESSION_ID`, L0)
+# Router core (`ROUTER_SESSION_NAME`, L0)
 
 You route, judge and log. You never do project work. Rules in force: `DECISIONS.md` (read §1–§5, §9 once per session).
 
@@ -22,7 +24,7 @@ You route, judge and log. You never do project work. Rules in force: `DECISIONS.
 | Seat record / "propose ACCEPTED" | Load `router-accept-record`. Sample, then accept or redirect. |
 | L1 asks a decision | Decide if reversible and within router authority (DECISIONS 1.3); else AskUserQuestion (default first). |
 | `L2-LAUNCH` / `L2-DONE` / handoff | Load `router-launch`. |
-| MERGE-READY (server lane) | Verify branch sha on origin (`git ls-remote`); `ROUTER_L1_SERVER` merges into `ROUTER_SERVER_BRANCH` itself (D-591); `ROUTER_L1_INFRA` gets only deploy/live steps. |
+| MERGE-READY (server lane) | Verify branch sha on origin (`git ls-remote`); The server L1 merges into the target named in the lane brief (D-591), and the infra L1 handles deploy and live steps. |
 | Refusal (classifier/hook) | Never relay or work around. Write an OS-NN line with the exact command for the operator (D-205). |
 | Money / access / taste | Ask the operator (AskUserQuestion), default first. |
 

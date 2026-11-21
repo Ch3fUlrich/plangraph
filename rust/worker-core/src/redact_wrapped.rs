@@ -3,11 +3,10 @@ use std::sync::OnceLock;
 
 /// P: join untouched values without crossing or eating a credential name.
 pub(crate) fn join_shielded_assignments(text: &str, rules: &[regex::Regex]) -> String {
-    if text.contains(['\u{e000}', '\u{e001}']) {
-        return text.to_owned();
-    }
+    // Escape literal openers before assigning indexes to protected names.
+    let escaped = text.replace('\u{e000}', "\u{e000}\u{e001}");
     let mut names = Vec::new();
-    let shielded = rules.iter().fold(text.to_owned(), |out, rule| {
+    let shielded = rules.iter().fold(escaped, |out, rule| {
         rule.replace_all(&out, |m: &regex::Captures| {
             let index = names.len();
             names.push(format!("{}{}{}", &m[1], &m[2], &m[3]));
@@ -17,9 +16,13 @@ pub(crate) fn join_shielded_assignments(text: &str, rules: &[regex::Regex]) -> S
     });
     static SHIELD: OnceLock<regex::Regex> = OnceLock::new();
     SHIELD
-        .get_or_init(|| regex::Regex::new(r"\x{e000}([0-9]+)\x{e001}").unwrap())
+        .get_or_init(|| regex::Regex::new(r"\x{e000}([0-9]*)\x{e001}").unwrap())
         .replace_all(&redact_wrapped(&shielded), |m: &regex::Captures| {
-            names[m[1].parse::<usize>().unwrap()].clone()
+            if m[1].is_empty() {
+                "\u{e000}".to_owned()
+            } else {
+                names[m[1].parse::<usize>().unwrap()].clone()
+            }
         })
         .into_owned()
 }

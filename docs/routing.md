@@ -22,6 +22,9 @@ unless it is a writer-prefix leg; a tier-less or id-less leg never raises.
 This pure ordering core does not check serving state or change admission.
 Main's registered implementation fallbacks retain their roles, permanent disables,
 expiry/re-probe behavior and benchmark ranking within the remaining cost tiers.
+A leg marked `benchmark_optional` with no row remains eligible in ordinary
+routes and is skipped in strict benchmark routes. See
+[spawner benchmark routing](SPAWNER.md#card-driven-routing-core).
 Exhausting all eligible legs still yields no route; writer priority never bypasses
 availability. Role-neutral keeper readiness retains its narrower admission, using
 the current Sol xhigh id so an unavailable default table cannot resurrect plain Sol.

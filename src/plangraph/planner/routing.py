@@ -336,10 +336,15 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l, now=now))
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
-    gaps = tuple({"leg": l.id, "model": l.model, "reason": "no benchmark row"}
-                 for l in candidates if l.model not in rows and l.id not in rows)
-    if strict and gaps:
-        raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps), gaps)
+    missing = tuple(leg for leg in candidates if leg.model not in rows and leg.id not in rows)
+    gaps = tuple({"leg": leg.id, "model": leg.model,
+                  "reason": "explicitly unmeasured" if leg.benchmark_optional else "no benchmark row"}
+                 for leg in missing)
+    if strict:
+        required_gaps = tuple(gap for leg, gap in zip(missing, gaps) if not leg.benchmark_optional)
+        if required_gaps:
+            raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in required_gaps),
+                                required_gaps)
     if native_implement:   # Claude writers join the route behind Codex (rule 3.58); see codex_out.
         from .legs import EXPLICIT_LEGS   # Added after the strict gap check: explicit legs carry no benchmark row.
         fallbacks = tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
@@ -349,7 +354,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             fallbacks, skips = resolve_legs(fallbacks, installed)
             harness_skipped.extend(skips)
         candidates += fallbacks
-    bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
+    bench_reasons = [f"{g['leg']} ({g['model']}): {g['reason']}" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
     # Review writers are keeper families (fail closed on an unknown name).
@@ -390,6 +395,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidate_details = []
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
     for leg in candidates:
+        row = rows.get(leg.model, rows.get(leg.id))
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if native_implement and leg.id in CODEX_FALLBACK_WRITERS and not codex_out and not reason:
             reason = "codex_available"
@@ -403,6 +409,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             pass
         elif leg.family in excluded:
             reason = "excluded_family"
+        elif strict and leg.benchmark_optional and row is None:
+            reason = "benchmark_unmeasured"
         elif leg.id in LOW_RISK_ONLY_LEGS and not low_risk:
             reason = "low_risk_only"
         elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
@@ -419,7 +427,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if reason:
             skipped.append({"leg": leg.id, "reason": reason,
                             "evidence": states[leg.id]["evidence"]})
-        row = rows.get(leg.model, rows.get(leg.id))
         detail = {"leg": leg.id, "tier": leg.tier,
                   "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
@@ -430,7 +437,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
-        "review_route_excluded", "low_risk_only", "codex_available")}
+        "review_route_excluded", "low_risk_only", "codex_available", "benchmark_unmeasured")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role, now=now)

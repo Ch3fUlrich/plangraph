@@ -61,7 +61,10 @@ skill text names the role in its first lines: follow that role's skill.
 - `skills/router-core/SKILL.md`: at router start and before any router step on more than one item
   (keeper plan batch, GO of a batch PR, grants for several lanes, grouped asks).
 
-Router skills (site values come from the router config keys named in each skill):
+Router skills use `router/config` in the router data checkout. It provides
+`ROUTER_HOME`, `ROUTING_SRC`, `ROUTER_SESSION_NAME`, `ROUTER_CARD`,
+`ROUTER_STATE_DIR` and `COMPAT_LOG`. Read lane handoffs and keeper items
+for placement, ownership and other site inputs.
 
 - `skills/router-core/SKILL.md`: the router's per-input checklist and hard rules.
 - `skills/router-heartbeat/SKILL.md`: the hourly status digest and read-only verification.

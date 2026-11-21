@@ -155,11 +155,16 @@ def test_unavailable_stdin_records_failure(closed):
         job = JobInfo('test', 'running', '', 'fixture/model', role='review')
         runner = SimpleNamespace(jobs={'test': job}, _child_envs={}, _stdin_payloads={'test': b'prompt'})
         proc = SimpleNamespace(stdin=ClosedPipe() if closed else None,
-                               stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader())
-        with pytest.raises(RuntimeError, match='stdin_delivery_failed'):
-            await collect(runner, 'test', proc)
-        assert (job.status, job.exit_code) == ('failed', 1)
-        assert 'stdin_delivery_failed' in job.stderr
+                               stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader(),
+                               returncode=7)
+        proc.stderr.feed_data(b'Error: HTTP 429 rate limited\n')
+        proc.stderr.feed_eof()
+        proc.stdout.feed_eof()
+        stdout, stderr = await collect(runner, 'test', proc)
+        assert stdout == b''
+        assert stderr == b'Error: HTTP 429 rate limited\n'
+        assert (job.status, job.exit_code) == ('failed', 7)
+        assert '429' in job.refusal
         assert job.events == [{'event': 'stdin_delivery_failed'}]
     asyncio.run(run())
 

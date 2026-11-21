@@ -415,7 +415,8 @@ def main(argv=None, out=None, err=None):
                                           for name in sorted(counts))
                                  or "no ops") + " (no calls made)")
             return _done(0)
-        atomic_body = atomic.payload(ops, start, source, digest, base_seq, opts.preview)
+        atomic_body = atomic.payload(ops, start, source, digest, base_seq, opts.preview,
+                                    name=data["batch"])
         identity = transport.operation_identity(data["principal"], "apply_ops", atomic_body, digest, f"slice {start}-{total}")
         session = Session(url, token)
         session.mutation_timeout = mutation_timeout
@@ -428,13 +429,30 @@ def main(argv=None, out=None, err=None):
         who = session.get("whoami")
         who_name, who_role = who.get("name"), who.get("role")
         line(f"acting as {who_name} ({who_role})")
-        if who_name != data["principal"] or who_role != "router":
+        # A role-l1 token passes only with an apply grant; the keeper still
+        # refuses every key outside the granted projects.
+        grants = (session.get("apply_grants").get("grants")
+                  if who_role == "l1" else None)
+        if who_name != data["principal"] or not (
+                who_role == "router" or (who_role == "l1" and grants)):
             line(f"error: principal mismatch: batch wants "
-                 f"{data['principal']!r} (router), token acts as "
+                 f"{data['principal']!r} (router or granted l1), token acts as "
                  f"{who_name!r} ({who_role}) (refusing before any call)",
                  refusal=True)
             return _done(1)
+        if who_role == "l1" and opts.per_op:
+            # --per-op sends single verbs outside the grant gate and the report line.
+            line("error: a granted l1 token needs the atomic mode (drop --per-op; "
+                 "refusing before any call)", refusal=True)
+            return _done(2)
     except ApiError as exc:
+        if opts.allow_no_whoami and opts.per_op:
+            # --per-op sends single verbs outside the grant gate: it needs the
+            # identity (and any apply grant) verified, so a lookup error stops it.
+            msg = f" ({exc.msg})" if exc.msg else ""
+            line(f"error: identity lookup failed: {exc.code}{msg}; --per-op needs a "
+                 "verified router or l1 identity (refusing before any call)", refusal=True)
+            return _done(2)
         if opts.allow_no_whoami:
             msg = f" ({exc.msg})" if exc.msg else ""
             err.write(f"warning: whoami failed ({exc.code}){msg}, continuing due to --allow-no-whoami\n")

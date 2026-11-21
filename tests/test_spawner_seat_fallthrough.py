@@ -391,3 +391,29 @@ def test_recorded_capture_matches_registered_provider_identity(recorded_plan):
     assert unlaunched == [leg.id for leg in recorded_plan.legs[1:]]
     assert [a['leg'] for a in CAPTURE['attempts'] if a['skip_reason'] == 'unknown'] == [
         'agy-gemini-4-argon', 'agy-sonnet-5.5']
+
+
+@pytest.mark.parametrize('phase', ['first', 'fallback'])
+def test_cancel_marker_prevents_next_leg_launch(replay, monkeypatch, phase):
+    service = replay.service
+    if type(service) is SpawnService:
+        pytest.skip('cancel marker belongs to the routed supervisor')
+    if phase == 'first':
+        save = service._save
+
+        def mark(record):
+            save(record)
+            if not record.get('attempts') and record['status'] == 'running':
+                service._path(record['run_id']).with_name('cancelled').touch()
+
+        monkeypatch.setattr(service, '_save', mark)
+    else:
+        async def mark(plan, **kwargs):
+            if replay.run_ids:
+                service._path(replay.run_ids[0]).with_name('cancelled').touch()
+            return plan
+
+        monkeypatch.setattr('plangraph.spawner.resolver.plan_for_launch_async', mark)
+    record = replay.run(include_skips=False, provider_stop='failed')
+    assert record['status'] == record['reason'] == 'cancelled'
+    assert len(replay.calls) == (0 if phase == 'first' else 1)

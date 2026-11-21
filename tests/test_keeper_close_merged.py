@@ -67,6 +67,7 @@ def unseated_w(tmp_path, monkeypatch):
     tokens = count()
     monkeypatch.setattr(auth, "_mint_token", lambda: f"fixture-token-{next(tokens)}")
     world = World(tmp_path, backend="sqlite")
+    world.store.require_seats = True  # the refusal tests below run with the seat gate on
     token = auth.add_principal(world.conn, "spawner", "spawner", [])
     world.principals["spawner"] = auth.authenticate(world.conn, token)
     world.store.create_items(world.p("router"), [

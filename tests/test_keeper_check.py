@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from keeper_util import World, defn, to_done
-from plangraph.keeper import cli, cli_check
+from plangraph.keeper import cli, cli_check, config
 from plangraph.keeper.cli_verbs import Unreachable
 
 
@@ -28,7 +28,11 @@ def create(world, *definitions):
 
 def run_main(world, tmp_path, monkeypatch, argv=()):
     """``pg check`` through the real CLI, reading the local plan snapshot."""
-    snapshot = tmp_path / "plan.snapshot.json"
+    # No client config: the offline copy is the daemon's default snapshot file
+    # under HOME (never the cwd), so HOME is the test's own directory.
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    snapshot = config.default_snapshot()
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
     snapshot.write_text(
         json.dumps(world.store.snapshot(world.p("router"))), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -220,6 +224,7 @@ def test_cmd_check_unreachable_session_strict_true(capsys):
 
 
 def test_cmd_check_unreachable_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("PG_CONFIG", raising=False)
     assert cli.main(["check"]) == 3

@@ -21,6 +21,8 @@ def cmd_close_merged(args, session):
     try:
         result = session.call("POST", "close_merged", body=body, timeout=SLOW_TIMEOUT)
         classification = "WOULD-CLOSE" if result.get("would_close") else "CLOSED"
+        if result.get("flags"):
+            classification = "FLAGGED"
         prs = ",".join(f"#{p['pr']}@{p['head']}" for p in result.get("prs", []))
         print(f"{args.key}\t{classification}\tmerged PRs with GO and seats {prs}")
         return 0
@@ -84,6 +86,18 @@ def cmd_priority(args, session):
     from .cli_verbs import write
     return write(session, "set_priority", {"key": args.key, "n": args.n},
                  lambda r: f"{r.get('key')} priority {r.get('priority')}")
+
+
+def cmd_grant_apply(args, session):
+    from .cli_verbs import _refuse, read, write
+    if args.list:
+        return read(session, "apply_grants", {}, fmt.apply_grants_text)
+    if not args.principal or not args.project:
+        return _refuse("grant-apply needs PRINCIPAL and PROJECT (or --list)")
+    verb = "revoke_apply" if args.revoke else "grant_apply"
+    return write(session, verb, {"principal": args.principal, "project": args.project},
+                 lambda r: f"{r['principal']} {'revoked' if args.revoke else 'granted'}"
+                           f" apply in {r['project']}")
 
 
 def cmd_define(args, session):

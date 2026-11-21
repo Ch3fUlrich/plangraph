@@ -165,7 +165,8 @@ class SupportMixin:
     def _append(self, principal, key, type, payload, now):
         out = events.append_event(
             self.conn, iso(now), getattr(principal, "name", None),
-            getattr(principal, "role", None), None, key, type, payload)
+            getattr(principal, "audit_role", None) or getattr(principal, "role", None),
+            None, key, type, payload)
         self._revoke_for_event(principal, key, type, now, payload)
         if key is not None and (type in _TERMINAL_EVENTS or (
                 type in ("legacy_state_set", "state_set")

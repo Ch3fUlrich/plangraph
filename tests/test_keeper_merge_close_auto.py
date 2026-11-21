@@ -55,6 +55,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(auth, "_mint_token", iter(f"fixture-token-{i}" for i in range(99)).__next__)
     (tmp_path / "w").mkdir()
     world = World(tmp_path / "w", backend="sqlite")
+    world.store.require_seats = True  # the seat tests below run with the gate on
     router = world.p("router")
     world.store.create_items(router, [defn(i) for i in "ABCPSNH"] + [
         defn("G", list("ABCPSNH"), kind="goal")])
@@ -501,3 +502,40 @@ def test_a_revision_qualified_hint_is_held_to_the_warm_index_and_the_proof_never
         finally:
             env.store.__dict__["_frozen_lanes"] = False
     assert recorder.fetches == []
+
+
+def test_off_closes_a_merge_without_a_review_run_and_flags_it(env):
+    """Train case: the merge commit carries Plan-Item trailers and no Review-Run line."""
+    set_states(env)
+    env.store.require_seats = False
+    env.repo.land("c", "Plan-Item: demo:C", 1090)
+    result = auto(env)
+    assert [c["key"] for c in result["closed"]] == ["demo:C"]
+    flag = result["closed"][0]["flags"]["seats_missing"]
+    assert flag["run_ids"] == [] and "NO-WITNESS" in flag["reason"]
+    assert result["require_seats"] is False
+    assert state(env, "demo:C")["state"] == "done"
+    assert env.store._evidence("demo:C")[-1]["ref"]["flags"] == result["closed"][0]["flags"]
+    assert env.store.verify_integrity() == []
+
+
+def test_an_explicit_require_seats_true_overrides_the_off_setting(env):
+    set_states(env)
+    env.store.require_seats = False
+    env.repo.land("c", "Plan-Item: demo:C", 1090)
+    result = auto(env, require_seats=True)
+    assert result["closed"] == [] and result["require_seats"] is True
+    assert "NO-WITNESS" in result["listed"][0]["reason"]
+    assert state(env, "demo:C")["state"] == "in_review"
+
+
+def test_off_closes_witnessed_merges_without_a_flag_and_leaves_sensitive_cards(env):
+    set_states(env)
+    env.store.require_seats = False
+    head = env.repo.land("c", "Plan-Item: demo:C", 1)
+    seat(env, "demo:C", head)
+    env.repo.land("s", "Plan-Item: demo:S", 2)
+    result = auto(env)
+    assert [c["key"] for c in result["closed"]] == ["demo:C"] and "flags" not in result["closed"][0]
+    assert [r["key"] for r in result["listed"]] == ["demo:S"]
+    assert state(env, "demo:S")["state"] == "in_review"

@@ -100,6 +100,8 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         self.review_overdue_s = REVIEW_OVERDUE_S
         self.lease_warn_s = LEASE_WARN_S
         self.alert_window_s = ALERT_WINDOW_S
+        # Seat gate of the merged closes; the keeper setting ``require_seats`` (off by default).
+        self.require_seats = False
 
     # ------------------------------------------------------------ time
     def now(self):

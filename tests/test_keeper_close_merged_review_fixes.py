@@ -458,3 +458,61 @@ def test_subjectless_merge_refuses_bad_pr_or_head(w, tmp_path, monkeypatch, case
         w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
                              from_open=True, apply=True)
     assert w.store._item("demo:A")["state"] == "open"
+
+
+def _passed_payload(world, key):
+    row = world.conn.execute("SELECT payload FROM events WHERE key=? AND type='review_passed' "
+                             "ORDER BY seq DESC LIMIT 1", (key,)).fetchone()
+    return json.loads(row[0])
+
+
+def test_off_closes_a_merge_without_seat_runs_and_flags_it(unseated_w):
+    """Train 1 case: merge with GO row and Plan-Item, but no Review-Runs: closes, flag seats_missing."""
+    w = unseated_w
+    w.store.require_seats = False
+    result = w.store.close_merged(w.p("router"), "demo:H", "D-5504")
+    assert result["state"] == "done"
+    flag = result["flags"]["seats_missing"]
+    assert flag["run_ids"] == [] and "NO-WITNESS" in flag["reason"]
+    assert _passed_payload(w, "demo:H")["flags"] == result["flags"]
+    assert w.store._evidence("demo:H")[-1]["ref"]["flags"] == result["flags"]
+    assert w.store.verify_integrity() == []
+
+
+def test_off_flags_cited_run_ids_of_an_unwitnessed_review(unseated_w, tmp_path):
+    w = unseated_w
+    root = mirrored_reviews(w, tmp_path)
+    path = root / "fixture/run-two/record.json"
+    record = json.loads(path.read_text())
+    record["stdout_tail"] = "TEST_GAMING: yes\nVERDICT: PASS"
+    path.write_text(json.dumps(record))
+    w.store.require_seats = False
+    result = w.store.close_merged(w.p("router"), "demo:H", "D-5504")
+    assert result["state"] == "done"
+    assert result["flags"]["seats_missing"]["run_ids"] == ["run-one", "run-two"]
+
+
+def test_on_still_refuses_the_same_merge_without_seats(unseated_w):
+    w = unseated_w
+    w.store.require_seats = True
+    with pytest.raises(Refused, match="NO-WITNESS"):
+        w.store.close_merged(w.p("router"), "demo:H", "D-5504")
+    assert w.store._item("demo:H")["state"] == "in_review"
+
+
+def test_witnessed_seats_close_without_a_flag_when_off(unseated_w, tmp_path):
+    w = unseated_w
+    mirrored_reviews(w, tmp_path)
+    w.store.require_seats = False
+    result = w.store.close_merged(w.p("router"), "demo:H", "D-5504")
+    assert result["state"] == "done" and "flags" not in result
+
+
+@pytest.mark.parametrize("risk", ["auth", "secrets"])
+def test_off_never_flags_away_the_credential_lane_seat_rule(unseated_w, risk):
+    w = unseated_w
+    w.store.require_seats = False
+    w.store.put_card(w.p("router"), "demo:H", {"outcome": "fixture", "risk_tags": [risk]})
+    with pytest.raises(Refused, match="NO-WITNESS|insufficient_non_anthropic"):
+        w.store.close_merged(w.p("router"), "demo:H", "D-5504")
+    assert w.store._item("demo:H")["state"] == "in_review"
