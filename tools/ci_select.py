@@ -41,6 +41,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_errors.py",
     "deploy/feeder/**",
     "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
+    "deploy/systemd/pg-ci-watch.service",  # a ci_watch test pins its flags.
+    "docs/ci-watch.md",  # the same test pins the documented command.
     "deploy/systemd/pg-feeder.service",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
