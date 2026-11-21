@@ -110,20 +110,16 @@ class OutboxMixin:
         stored = json.loads(row["result"])
         return {"id": eid, **stored, "first": stored["result"], "result": "duplicate"}
 
-    def read_receipt_for_bearer(self, bearer, entry):
-        """A revoked bearer can retrieve an exact outcome without regaining write authority."""
-        if not bearer:
+    def read_revoked_write_receipt(self, principal, entry):
+        """Read an exact receipt for a verified, revoked run credential."""
+        try:
+            eid, verb, body, digest = self._receipt_entry(entry)
+        except Refused:
             return None
-        if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) \
-                or not _ID_RE.fullmatch(entry["id"]):
-            return None
-        token = self.conn.execute(
-            "SELECT id FROM run_tokens WHERE token_sha256=?",
-            (auth.hash_token(bearer),)).fetchone()
-        if token is None:
-            return None
-        eid, verb, _, digest = self._receipt_entry(entry)
-        return self._find_receipt(eid, token["id"], verb, digest)
+        if verb == "verdict":
+            reply = self.read_revoked_seat_verdict(principal, body)
+            return {"id": eid, "result": "ok", "reply": reply} if reply is not None else None
+        return self._find_receipt(eid, principal.token_id, verb, digest)
 
     def write_receipt(self, principal, entry):
         eid, verb, body, digest = self._receipt_entry(entry)
@@ -303,21 +299,15 @@ class OutboxMixin:
         if item is not None:
             self._check_seat_round(item, binding)
 
-    def read_revoked_seat_verdict(self, bearer, body):
+    def read_revoked_seat_verdict(self, principal, body):
         """Return only the exact settled verdict for its original reviewer run."""
-        if not bearer or not isinstance(body, dict) or not isinstance(body.get("binding"), dict):
+        if (principal.token_role != "reviewer" or not isinstance(body, dict)
+                or not isinstance(body.get("binding"), dict)):
             return None
-        token = self.conn.execute(
-            "SELECT id,run_id,key FROM run_tokens WHERE token_sha256=?"
-            " AND role='reviewer' AND revoked_at IS NOT NULL",
-            (auth.hash_token(bearer),)).fetchone()
-        if token is None or token["run_id"] != body["binding"].get("seat_run") or token["key"] != body.get("key"):
+        if principal.run_id != body["binding"].get("seat_run") or principal.key != body.get("key"):
             return None
-        outcome = self._seat_row(token["run_id"], "outcome")
-        if outcome is None:
+        if self._seat_row(principal.run_id, "outcome") is None:
             return None
-        principal = auth.RunPrincipal(auth.RUN_PREFIX + token["run_id"], "reviewer", [], None,
-                                      token_id=token["id"], run_id=token["run_id"])
         try:
             self._seat_delivery(principal, body["key"], body.get("ok"), body.get("reason", ""),
                                 body["binding"])
@@ -325,8 +315,8 @@ class OutboxMixin:
             return settled.result
         return None
 
-    def read_revoked_seat_replay(self, bearer, body):
-        """Read a replay batch only if each entry already settled for this bearer."""
+    def read_revoked_seat_replay(self, principal, body):
+        """Read a replay batch only if each entry already settled for this reviewer."""
         entries = body.get("entries") if isinstance(body, dict) else None
         if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_ENTRIES:
             return None
@@ -338,7 +328,7 @@ class OutboxMixin:
                 return None
             if verb != "verdict":
                 return None
-            reply = self.read_revoked_seat_verdict(bearer, decision)
+            reply = self.read_revoked_seat_verdict(principal, decision)
             if reply is None:
                 return None
             results.append({"id": eid, "result": "ok", "reply": reply})

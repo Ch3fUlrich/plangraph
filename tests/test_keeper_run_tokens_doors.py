@@ -324,6 +324,7 @@ def test_reviewer_run_token_cannot_cross_seats_and_replays_exact_receipt(d):
     receipt = {"id": entry["id"], "result": "ok", "reply": committed}
     assert d.http("seat", "POST", "/v1/verdict", decision) == (200, committed)
     assert d.http("seat", "POST", "/v1/write_receipt", entry) == (200, receipt)
+    assert d.http("seat", "POST", "/v1/write_receipt", {"verb": "verdict"})[0] == 401
     assert d.http("seat", "POST", "/v1/replay", {"entries": [entry]}) == (
         200, {"results": [receipt], "recovery": []})
     assert d.http("other", "POST", "/v1/replay", {"entries": [entry]})[0] == 401

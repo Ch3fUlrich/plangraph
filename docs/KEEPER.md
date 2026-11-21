@@ -647,8 +647,10 @@ writes. The client saves a fresh invocation ID and one file per write before sen
 its entries in order. With no override, the client uses its local state directory and a queue
 bound to the run credential.
 
-`pg replay` resumes the same queue with the original run credential. The keeper commits the
-mutation and its result together, so the same invocation can recover the result after a lost reply
+`pg replay` resumes the same queue with the original run credential. The keeper authenticates
+before reading request bodies. A verified revoked run credential only permits exact receipt
+readback on the receipt routes. The keeper commits the mutation and its result together, so the
+same invocation can recover the result after a lost reply
 even if a submit revoked its token. A submit carries its source review round and waits for
 earlier evidence to be verified or explicitly resolved. An imported entry with no historical
 outcome stays queued for routing recovery. A router can record a disposition with
