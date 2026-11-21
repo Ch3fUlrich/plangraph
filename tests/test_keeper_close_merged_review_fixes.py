@@ -36,6 +36,7 @@ def test_tip_merge_with_plan_item_trailers_closes_both_keys(w, tmp_path, monkeyp
         "-m", "Plan-Item: demo:A\nPlan-Item: demo:H", "fixture-pr")
     tip = git("rev-parse", "main")
     adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    assert context_sources.named_merge(adapter, "demo", tip) == {"head": head, "pr": 1087}
     w.store.ctx["git"] = adapter
     monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
     w.decision_path.write_text(f"| D-5504 | demo | GO {head} demo:A demo:H |\n")

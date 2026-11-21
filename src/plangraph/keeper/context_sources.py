@@ -68,7 +68,8 @@ def _did_num(did):
 
 
 def _merge_pr(subject):
-    match = _PR_SUFFIX_RE.search(subject) or _PR_RE.search(subject)
+    text = subject.strip()
+    match = _PR_SUFFIX_RE.search(text) or _PR_RE.search(text)
     return int(match[1]) if match else None
 
 
