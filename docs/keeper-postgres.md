@@ -71,11 +71,16 @@ its runtime configuration:
 
     plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE
 
-The command verifies the unit's working directory, runs `pg admin migrate`
-with the migration DSN file, then opens the candidate schema using the runtime
-role through `pg admin check-schema`. It requests the service restart only
-after both commands succeed. A migration or runtime schema failure leaves the
-existing keeper process running.
+The command reloads the user systemd manager before reading the unit. It checks
+the unit's working directory and expects a direct Python `-m plangraph.keeper.daemon
+--config PATH` command. Both admin commands use that interpreter and the user
+manager's environment, including the unit's `Environment`, `EnvironmentFile`
+and `UnsetEnvironment` settings.
+
+The command runs `pg admin migrate` with the migration DSN file, then opens
+the candidate schema with the runtime role through `pg admin check-schema`.
+It requests the restart only after both commands succeed. A reload, migration
+or runtime schema-check failure leaves the existing keeper process running.
 
 ## Hash chain
 
