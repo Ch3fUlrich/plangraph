@@ -5,7 +5,7 @@ use crate::ci_watch::github::{self, Gh, Github};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The expected jobs per tier; one file for the watcher, the gates and the tests.
@@ -62,16 +62,17 @@ pub fn land_app_from_env() -> Option<u64> {
 }
 
 impl<G: Github> GhSource<G> {
-    /// The evidence run a trusted `land-auth` success names (`evidence=<run id> attempt <n>`), if the commit
-    /// carries one created by the trusted identity.
-    fn land_evidence(&mut self, tip: &str) -> Result<Option<u64>, String> {
-        let Some(app) = self.land_app else {
-            return Ok(None);
-        };
-        let rows = self
-            .gh
-            .page(&format!("commits/{tip}/statuses?per_page=100"), None)?;
-        Ok(rows
+    /// The statuses of the commit, read once per pass.
+    fn statuses(&mut self, tip: &str) -> Result<Vec<Value>, String> {
+        self.gh
+            .page(&format!("commits/{tip}/statuses?per_page=100"), None)
+    }
+
+    /// The evidence a trusted `land-auth` success names: the App writes the description
+    /// `attempt <id> evidence run <run id> attempt <n>`; only the configured identity counts.
+    fn land_evidence(&self, statuses: &[Value]) -> Option<(u64, u32)> {
+        let app = self.land_app?;
+        statuses
             .iter()
             .filter(|s| {
                 s["context"] == "land-auth"
@@ -80,12 +81,43 @@ impl<G: Github> GhSource<G> {
             })
             .find_map(|s| {
                 let text = s["description"].as_str()?;
-                text.strip_prefix("evidence=")?
-                    .split_whitespace()
-                    .next()?
-                    .parse()
-                    .ok()
-            }))
+                let mut words = text.split_whitespace().skip_while(|w| *w != "evidence");
+                let (_, kw, run, kw2, n) = (
+                    words.next()?,
+                    words.next()?,
+                    words.next()?,
+                    words.next()?,
+                    words.next()?,
+                );
+                (kw == "run" && kw2 == "attempt").then_some((run.parse().ok()?, n.parse().ok()?))
+            })
+    }
+
+    /// The runs and attempts whose `ci-full` status names the tree of the tip itself (`run <id> attempt <n>
+    /// tree <sha>`): the only full attempts of other refs that may decide main's state. A pull request run
+    /// reports the tip as its head but may have tested a merge ref of another tree.
+    fn tested_tree(
+        &mut self,
+        tip: &str,
+        statuses: &[Value],
+    ) -> Result<BTreeMap<u64, BTreeSet<u32>>, String> {
+        let tree = self.gh.value(&format!("git/commits/{tip}"))?["tree"]["sha"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let mut out: BTreeMap<u64, BTreeSet<u32>> = BTreeMap::new();
+        for s in statuses.iter().filter(|s| s["context"] == "ci-full") {
+            let text = s["description"].as_str().unwrap_or_default();
+            let w: Vec<&str> = text.split_whitespace().collect();
+            if let ["run", run, "attempt", n, "tree", sha] = w[..] {
+                if sha == tree {
+                    if let (Ok(run), Ok(n)) = (run.parse(), n.parse()) {
+                        out.entry(run).or_default().insert(n);
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn attempt(&mut self, run: u64, number: u32) -> Result<Attempt, String> {
@@ -145,6 +177,8 @@ impl<G: Github> Source for GhSource<G> {
             Some("workflow_runs"),
         )?;
         let mut out = Vec::new();
+        #[allow(clippy::type_complexity)]
+        let mut cache: Option<(Option<(u64, u32)>, BTreeMap<u64, BTreeSet<u32>>)> = None;
         for row in rows {
             // Runs of any ref on this commit are read: a fast-only tip is judged by the latest full attempt
             // of any ref (the evidence run ran on the train's branch); the evaluation filters by ref.
@@ -152,25 +186,36 @@ impl<G: Github> Source for GhSource<G> {
                 continue;
             }
             let id = row["id"].as_u64().ok_or("run without id")?;
+            let own_ref = row["head_branch"] == self.branch.as_str();
             let latest = row["run_attempt"].as_u64().unwrap_or(1) as u32;
             let mut attempts = Vec::new();
             for n in 1..=latest {
                 attempts.push(self.attempt(id, n)?);
             }
-            // Fast-only needs the trusted landing evidence, not just a short job list: a partial rerun of a
-            // full run lists few jobs too and must still be judged against the full matrix.
-            // And only the push run of the branch itself can be it: the evidence run, and any rerun of a full
-            // run, stay in the full generation even when their job list is short.
             let looks_fast = attempts.last().is_some_and(|a| a.tier == "fast");
-            let evidence = if looks_fast {
-                self.land_evidence(tip)?
-            } else {
-                None
-            };
+            if (!own_ref || looks_fast) && cache.is_none() {
+                let statuses = self.statuses(tip)?;
+                let tested = self.tested_tree(tip, &statuses)?;
+                cache = Some((self.land_evidence(&statuses), tested));
+            }
+            let (evidence, tested) = cache.clone().unwrap_or_default();
+            if !own_ref {
+                // A run of another ref decides only through a ci-full status that names the tip's tree.
+                match tested.get(&id) {
+                    Some(listed) => attempts.retain(|a| listed.contains(&a.number)),
+                    None => continue,
+                }
+            }
+            // Fast-only needs the trusted landing evidence, not just a short job list: a partial rerun of a
+            // full run lists few jobs too and must still be judged against the full matrix. Only the branch's
+            // own push run can be it, the evidence attempt must be a full attempt of the tip's tree, and the
+            // evidence run itself stays in the full generation however short its job list.
             let fast = looks_fast
+                && own_ref
                 && row["event"] == "push"
-                && row["head_branch"] == self.branch.as_str()
-                && evidence.is_some_and(|e| e != id);
+                && evidence.is_some_and(|(run, n)| {
+                    run != id && tested.get(&run).is_some_and(|l| l.contains(&n))
+                });
             if looks_fast && !fast {
                 for a in attempts.iter_mut().filter(|a| a.tier == "fast") {
                     a.tier = "hosted".into();

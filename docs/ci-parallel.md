@@ -40,7 +40,7 @@ until one of its own attempts is complete-green, so a green scheduled run never 
 attempt older than the bound T (twice the median of the last 20 green push runs, at least 30 minutes) counts
 as stalled.
 
-A tip that reached main by a tested fast-forward runs only the fast jobs on main (matrix tier `fast`); a run counts as fast-only only when it is the branch's own push run, the commit carries a `land-auth` success status created by the identity named in `PLANGRAPH_LAND_APP_ID`, and that status names (`evidence=<run id> attempt <n>`) another run as the evidence, otherwise a short job list is judged against the full matrix and reads red; its full CI
+A full attempt of another ref counts only when a `ci-full` status of the commit names its run, attempt and the tip's own tree (`run <id> attempt <n> tree <sha>`); a pull request run reports the tip as its head but may have tested a merge ref. A tip that reached main by a tested fast-forward runs only the fast jobs on main (matrix tier `fast`); a run counts as fast-only only when it is the branch's own push run, the commit carries a `land-auth` success status created by the identity named in `PLANGRAPH_LAND_APP_ID`, and that status (description `attempt <id> evidence run <run id> attempt <n>`, the App's format) names another run as the evidence, otherwise a short job list is judged against the full matrix and reads red; its full CI
 ran before it became the tip. Its state is the latest applicable generation: the latest concluded full attempt on the
 commit (any ref, so the evidence run on the train's branch and every later full rerun count) together with the latest fast
 run. Green when both are green, red when either is red, pending while the latest started attempt of either is not

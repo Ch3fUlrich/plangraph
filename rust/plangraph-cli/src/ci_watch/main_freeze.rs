@@ -413,6 +413,8 @@ pub fn step(
                 // leave a task nobody closes when main turns green.
                 let key = fx.fix_task_key(b.run, episode, &diagnosis);
                 state.fix_tasks.insert(key.clone(), b.run);
+                // The run's budget entry exists with the intent, so closing it can advance the episode.
+                state.budgets.entry(b.run).or_default();
                 save(state)?;
                 match fx.fix_task(b.run, episode, &diagnosis) {
                     Ok(_) => {

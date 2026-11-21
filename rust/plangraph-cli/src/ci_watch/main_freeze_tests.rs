@@ -677,3 +677,31 @@ fn a_fix_task_whose_creation_reply_was_lost_is_still_closed_when_main_turns_gree
     assert_eq!(fx.closed, vec!["plangraph:CI-FIX-7".to_owned()]);
     assert!(state.fix_tasks.is_empty());
 }
+
+#[test]
+fn a_lost_first_creation_reply_still_advances_the_episode_so_the_next_red_gets_a_fresh_task() {
+    let mut fx = Fake {
+        fix_fails: true,
+        ..Fake::default()
+    };
+    fx.diagnosis.insert(
+        7,
+        Diagnosis {
+            tests: vec!["real::bug".into()],
+            incomplete: false,
+        },
+    );
+    let mut state = FreezeState::default();
+    let red7 = |at| red(vec![blocking(7, 1, vec![suite(&["real::bug"])], false)], at);
+    run_step(&mut state, &red7(100), &mut fx);
+    run_step(&mut state, &answer(State::Green, 200), &mut fx);
+    assert_eq!(fx.closed, vec!["plangraph:CI-FIX-7".to_owned()]);
+    fx.fix_fails = false;
+    run_step(&mut state, &red7(300), &mut fx);
+    let keys: Vec<&String> = state.fix_tasks.keys().collect();
+    assert_eq!(
+        keys,
+        vec!["plangraph:CI-FIX-7-e1"],
+        "the cancelled task is not reused by the second episode"
+    );
+}

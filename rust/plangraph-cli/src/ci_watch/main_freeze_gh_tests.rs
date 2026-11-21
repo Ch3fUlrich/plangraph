@@ -234,6 +234,7 @@ fn intake_sweep_and_acknowledgement_share_one_locked_update_so_none_is_lost() {
         delivered_to: None,
         acked: false,
         escalated: false,
+        claim: None,
     };
     let path = dir.path().to_owned();
     let threads: Vec<_> = (0..12)
@@ -351,11 +352,106 @@ fn delivery_runs_outside_the_lock_so_a_command_that_acknowledges_at_once_works()
         ))
     })
     .unwrap();
-    deliver_pending(dir.path(), &owners, &mut AckingDeliver(dir.path())).unwrap();
+    deliver_pending(dir.path(), &owners, &mut AckingDeliver(dir.path()), 0).unwrap();
     let records = load_failures(dir.path()).unwrap();
     assert!(
         records[0].acked,
         "the acknowledgement made during delivery is preserved"
     );
     assert_eq!(records[0].delivered_to.as_deref(), Some("w1"));
+}
+
+#[test]
+fn two_passes_never_send_the_same_record_twice() {
+    use super::batch_failure::{Deliver, FailureRecord, Owners};
+    use std::sync::{Arc, Mutex};
+    #[derive(Clone)]
+    struct Counting(Arc<Mutex<Vec<String>>>);
+    impl Deliver for Counting {
+        fn send(&mut self, _: &str, record: &FailureRecord) -> Result<(), String> {
+            self.0.lock().unwrap().push(record.id.clone());
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let owners = Owners {
+        prs: [("7".to_owned(), "b".to_owned())].into(),
+        writers: [("b".to_owned(), "w1".to_owned())].into(),
+        successors: Default::default(),
+    };
+    let task = Task {
+        key: "k".into(),
+        head: "pr-7".into(),
+        pr: Some(7),
+        run_id: 1,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        priority: 10,
+        keeper_defined: false,
+        keeper_key: None,
+    };
+    update_failures(dir.path(), |records| {
+        Ok(super::batch_failure::record_failure(
+            records, &owners, &task, 0,
+        ))
+    })
+    .unwrap();
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let path = dir.path().to_owned();
+    let owners = Arc::new(owners);
+    let passes: Vec<_> = (0..2)
+        .map(|_| {
+            let (p, o, s) = (path.clone(), owners.clone(), sent.clone());
+            std::thread::spawn(move || deliver_pending(&p, &o, &mut Counting(s), 10).unwrap())
+        })
+        .collect();
+    for t in passes {
+        t.join().unwrap();
+    }
+    assert_eq!(
+        sent.lock().unwrap().len(),
+        1,
+        "the claim keeps the second pass from sending it again"
+    );
+    let r = &load_failures(dir.path()).unwrap()[0];
+    assert!(r.claim.is_none() && r.delivered_to.as_deref() == Some("w1"));
+}
+
+#[test]
+fn a_failed_delivery_releases_its_claim_and_a_stale_claim_is_retried() {
+    use super::batch_failure::{claim, pending_deliveries, Owners, CLAIM_SECS};
+    let owners = Owners {
+        prs: [("7".to_owned(), "b".to_owned())].into(),
+        writers: [("b".to_owned(), "w1".to_owned())].into(),
+        successors: Default::default(),
+    };
+    let task = Task {
+        key: "k".into(),
+        head: "pr-7".into(),
+        pr: Some(7),
+        run_id: 1,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        priority: 10,
+        keeper_defined: false,
+        keeper_key: None,
+    };
+    let mut records = vec![];
+    let id = super::batch_failure::record_failure(&mut records, &owners, &task, 0).unwrap();
+    claim(&mut records, &id, "w1", 100);
+    assert!(pending_deliveries(&records, &owners, 100 + CLAIM_SECS - 1).is_empty());
+    assert_eq!(
+        pending_deliveries(&records, &owners, 100 + CLAIM_SECS).len(),
+        1,
+        "the claim went stale"
+    );
+    super::batch_failure::settle(&mut records, &id, "w1", false);
+    assert_eq!(
+        pending_deliveries(&records, &owners, 101).len(),
+        1,
+        "a failed delivery is released"
+    );
 }

@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+/// A delivery claim older than this is stale and the record is sent again (seconds).
+pub const CLAIM_SECS: i64 = 300;
+
 /// An unacknowledged failure escalates to plan-order after this long (seconds).
 pub const ESCALATE_SECS: i64 = 15 * 60;
 
@@ -55,6 +58,9 @@ pub struct FailureRecord {
     pub delivered_to: Option<String>,
     pub acked: bool,
     pub escalated: bool,
+    /// A delivery in flight: (writer, claimed at). A second pass does not send what is claimed.
+    #[serde(default)]
+    pub claim: Option<(String, i64)>,
 }
 
 pub trait Deliver {
@@ -90,16 +96,26 @@ pub fn record_failure(
             delivered_to: None,
             acked: false,
             escalated: false,
+            claim: None,
         });
     }
     Some(id)
 }
 
 /// The open records that still have to reach their batch's current writer: (record id, writer).
-pub fn pending_deliveries(records: &[FailureRecord], owners: &Owners) -> Vec<(String, String)> {
+pub fn pending_deliveries(
+    records: &[FailureRecord],
+    owners: &Owners,
+    now: i64,
+) -> Vec<(String, String)> {
     records
         .iter()
         .filter(|r| !r.acked)
+        .filter(|r| {
+            r.claim
+                .as_ref()
+                .is_none_or(|(_, at)| now - at >= CLAIM_SECS)
+        })
         .filter_map(|r| {
             let writer = owners.writer_of(&r.batch)?;
             (r.delivered_to.as_deref() != Some(writer.as_str())).then(|| (r.id.clone(), writer))
@@ -107,10 +123,21 @@ pub fn pending_deliveries(records: &[FailureRecord], owners: &Owners) -> Vec<(St
         .collect()
 }
 
-/// Records a delivery; an acknowledgement that arrived meanwhile is kept.
-pub fn mark_delivered(records: &mut [FailureRecord], id: &str, writer: &str) {
+/// Claims a delivery under the lock so no other pass sends the same record meanwhile.
+pub fn claim(records: &mut [FailureRecord], id: &str, writer: &str, now: i64) {
     if let Some(r) = records.iter_mut().find(|r| r.id == id) {
-        r.delivered_to = Some(writer.to_owned());
+        r.claim = Some((writer.to_owned(), now));
+    }
+}
+
+/// Settles a claim: a delivered record keeps its writer, a failed one is released for the next pass.
+/// An acknowledgement that arrived meanwhile is kept.
+pub fn settle(records: &mut [FailureRecord], id: &str, writer: &str, delivered: bool) {
+    if let Some(r) = records.iter_mut().find(|r| r.id == id) {
+        r.claim = None;
+        if delivered {
+            r.delivered_to = Some(writer.to_owned());
+        }
     }
 }
 
@@ -148,8 +175,9 @@ fn deliver_open(
     record: &mut FailureRecord,
     owners: &Owners,
     deliver: &mut impl Deliver,
+    now: i64,
 ) -> Option<String> {
-    let (_, writer) = pending_deliveries(std::slice::from_ref(record), owners)
+    let (_, writer) = pending_deliveries(std::slice::from_ref(record), owners, now)
         .into_iter()
         .next()?;
     match deliver.send(&writer, record) {
@@ -175,7 +203,7 @@ pub fn route(
     };
     save(records)?;
     if let Some(record) = records.iter_mut().find(|r| r.id == id) {
-        deliver_open(record, owners, deliver);
+        deliver_open(record, owners, deliver, now);
     }
     save(records)?;
     Ok(Some(id))
@@ -200,7 +228,7 @@ pub fn sweep(
 ) -> Vec<String> {
     let mut out = Vec::new();
     for record in records.iter_mut() {
-        out.extend(deliver_open(record, owners, deliver));
+        out.extend(deliver_open(record, owners, deliver, now));
     }
     out.extend(escalate_overdue(records, now, alerts));
     out

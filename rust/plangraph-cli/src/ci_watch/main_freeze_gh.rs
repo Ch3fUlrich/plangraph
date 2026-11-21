@@ -229,7 +229,12 @@ pub fn pass(
     let owners = load_owners(dir)?;
     let mut escalations = BTreeMap::new();
     let mut out = Vec::new();
-    out.extend(deliver_pending(dir, &owners, &mut CommandDeliver { dir })?);
+    out.extend(deliver_pending(
+        dir,
+        &owners,
+        &mut CommandDeliver { dir },
+        now,
+    )?);
     update_failures(dir, |records| {
         out.extend(batch_failure::escalate_overdue(
             records,
@@ -271,29 +276,33 @@ pub fn deliver_pending(
     dir: &Path,
     owners: &Owners,
     deliver: &mut impl Deliver,
+    now: i64,
 ) -> Result<Vec<String>> {
+    // Claimed under the lock: a concurrent pass does not pick the same record.
     let todo: Vec<(String, String, FailureRecord)> = update_failures(dir, |records| {
-        Ok(batch_failure::pending_deliveries(records, owners)
-            .into_iter()
-            .filter_map(|(id, writer)| {
-                let rec = records.iter().find(|r| r.id == id)?.clone();
-                Some((id, writer, rec))
-            })
-            .collect())
-    })?;
-    let mut done = Vec::new();
-    for (id, writer, record) in todo {
-        if deliver.send(&writer, &record).is_ok() {
-            done.push((id, writer));
+        let work: Vec<(String, String)> = batch_failure::pending_deliveries(records, owners, now);
+        let mut out = Vec::new();
+        for (id, writer) in work {
+            batch_failure::claim(records, &id, &writer, now);
+            if let Some(rec) = records.iter().find(|r| r.id == id) {
+                out.push((id, writer, rec.clone()));
+            }
         }
+        Ok(out)
+    })?;
+    let mut results = Vec::new();
+    for (id, writer, record) in todo {
+        let ok = deliver.send(&writer, &record).is_ok();
+        results.push((id, writer, ok));
     }
-    let lines = done
+    let lines = results
         .iter()
-        .map(|(id, w)| format!("delivered {id} to {w}"))
+        .filter(|r| r.2)
+        .map(|(id, w, _)| format!("delivered {id} to {w}"))
         .collect();
     update_failures(dir, |records| {
-        for (id, writer) in &done {
-            batch_failure::mark_delivered(records, id, writer);
+        for (id, writer, ok) in &results {
+            batch_failure::settle(records, id, writer, *ok);
         }
         Ok(())
     })?;
@@ -313,7 +322,7 @@ pub fn route_or_define(
         Ok(batch_failure::record_failure(records, &owners, task, now))
     })?;
     if routed.is_some() {
-        deliver_pending(dir, &owners, &mut CommandDeliver { dir })?;
+        deliver_pending(dir, &owners, &mut CommandDeliver { dir }, now)?;
         // The record is open and addressed to the batch: no unassigned fix lane is created.
         return Ok(true);
     }

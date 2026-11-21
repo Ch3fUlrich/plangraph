@@ -3,6 +3,7 @@ use super::main_state::*;
 use crate::ci_watch::github::Github;
 use serde_json::{json, Value};
 
+const TREE: &str = "2222222222222222222222222222222222222222";
 const TIP: &str = "1111111111111111111111111111111111111111";
 
 #[test]
@@ -68,6 +69,9 @@ impl Github for Fixture {
                 json!({"id": 8, "head_sha": TIP, "head_branch": "feature", "event": "push", "run_attempt": 1}),
             ]);
         }
+        if endpoint.starts_with("commits/") {
+            return Ok(vec![]);
+        }
         if endpoint.starts_with("actions/workflows/tests.yml/runs?branch") {
             return Ok(vec![
                 json!({"run_started_at": "2026-11-21T00:00:00Z", "updated_at": "2026-11-21T00:20:00Z"}),
@@ -85,6 +89,9 @@ impl Github for Fixture {
         self.calls.push(endpoint.to_owned());
         if endpoint == "git/ref/heads/main" {
             return Ok(json!({"object": {"sha": TIP}}));
+        }
+        if endpoint.starts_with("git/commits/") {
+            return Ok(json!({"tree": {"sha": TREE}}));
         }
         if endpoint.ends_with("/protection") {
             return Ok(self.protection.clone());
@@ -123,9 +130,8 @@ fn protected() -> Value {
 fn the_recorded_listing_becomes_runs_with_their_attempts_and_tier() {
     let mut s = source(protected());
     let runs = s.runs(TIP).unwrap();
-    // Runs of every ref on the commit are read; the evaluation ignores other refs on a full tip.
-    assert_eq!(runs.len(), 2);
-    assert_eq!(runs[1].refname, "feature");
+    // A run of another ref decides only through a ci-full status that names the tip's tree: run 8 has none.
+    assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].attempts.len(), 2);
     assert_eq!(runs[0].attempts[0].tier, "hosted");
     assert_eq!(
@@ -188,13 +194,22 @@ fn the_whole_function_reads_the_recorded_listing_to_green() {
     assert_eq!(answer.tip, TIP);
 }
 
-/// A recorded listing of a run that lists only the fast jobs (a partial rerun, or a landed tip's own run).
+/// A recorded listing: run 3 is the branch's own push run listing only the fast jobs; run 4 is a pull
+/// request run of another ref on the same commit; run 5 is the evidence run on the train's branch.
 struct FastListing {
     statuses: Vec<Value>,
+    tree: &'static str,
 }
 
 impl Github for FastListing {
-    fn pages(&mut self, _: &str, _: Option<&str>) -> Result<Vec<Value>, String> {
+    fn pages(&mut self, endpoint: &str, _: Option<&str>) -> Result<Vec<Value>, String> {
+        let full = endpoint.contains("/runs/4/") || endpoint.contains("/runs/5/");
+        if full {
+            return Ok(vec![
+                json!({"name": "Python tests, SQLite keeper (shard 1 of 3)", "conclusion": "success"}),
+                json!({"name": "Rust workspace on Linux: fmt, clippy, tests", "conclusion": "failure"}),
+            ]);
+        }
         Ok(["Select suites for this change", "ci-gate"]
             .iter()
             .map(|n| json!({"name": n, "conclusion": "success"}))
@@ -204,6 +219,8 @@ impl Github for FastListing {
         if endpoint.starts_with("actions/workflows/tests.yml/runs?head_sha") {
             return Ok(vec![
                 json!({"id": 3, "head_sha": TIP, "head_branch": "main", "event": "push", "run_attempt": 1}),
+                json!({"id": 4, "head_sha": TIP, "head_branch": "pr-branch", "event": "pull_request", "run_attempt": 1}),
+                json!({"id": 5, "head_sha": TIP, "head_branch": "land/train", "event": "push", "run_attempt": 2}),
             ]);
         }
         if endpoint.starts_with("commits/") {
@@ -217,7 +234,10 @@ impl Github for FastListing {
     fn rerun(&mut self, _: u64) -> Result<(), String> {
         Err("none".into())
     }
-    fn value(&mut self, _: &str) -> Result<Value, String> {
+    fn value(&mut self, endpoint: &str) -> Result<Value, String> {
+        if endpoint.starts_with("git/commits/") {
+            return Ok(json!({"tree": {"sha": self.tree}}));
+        }
         Ok(
             json!({"status": "completed", "conclusion": "success", "run_started_at": "2026-11-21T00:00:00Z"}),
         )
@@ -226,47 +246,125 @@ impl Github for FastListing {
 
 fn fast_source(statuses: Vec<Value>, land_app: Option<u64>) -> GhSource<FastListing> {
     GhSource {
-        gh: FastListing { statuses },
+        gh: FastListing {
+            statuses,
+            tree: TREE,
+        },
         branch: "main".into(),
         now: || 1_800_000_000,
         land_app,
     }
 }
 
+fn auth(app: u64, state: &str, text: &str) -> Value {
+    json!({"context": "land-auth", "state": state, "creator": {"id": app}, "description": text})
+}
+
+fn ci_full(run: u64, attempt: u32, tree: &str) -> Value {
+    json!({"context": "ci-full", "state": "success", "description": format!("run {run} attempt {attempt} tree {tree}")})
+}
+
+const APP_TEXT: &str = "attempt 9 evidence run 5 attempt 2";
+
+fn by_id(runs: &[Run], id: u64) -> Option<&Run> {
+    runs.iter().find(|r| r.id == id)
+}
+
 #[test]
-fn a_run_with_only_fast_jobs_is_fast_only_with_trusted_landing_evidence() {
-    let trusted = json!({"context": "land-auth", "state": "success", "creator": {"id": 77}, "description": "evidence=5 attempt 1"});
-    let runs = fast_source(vec![trusted.clone()], Some(77))
-        .runs(TIP)
-        .unwrap();
-    assert!(runs[0].fast);
-    assert_eq!(runs[0].attempts[0].tier, "fast");
-    // Evidence from another identity, a failed status, or no configured identity: not fast.
-    let other = json!({"context": "land-auth", "state": "success", "creator": {"id": 5}});
-    let failed = json!({"context": "land-auth", "state": "failure", "creator": {"id": 77}});
-    for (statuses, app) in [
-        (vec![other], Some(77)),
-        (vec![failed], Some(77)),
-        (vec![trusted], None),
+fn a_run_is_fast_only_with_the_apps_status_format_and_a_full_attempt_of_the_tips_tree() {
+    let statuses = vec![auth(77, "success", APP_TEXT), ci_full(5, 2, TREE)];
+    let runs = fast_source(statuses, Some(77)).runs(TIP).unwrap();
+    let fast = by_id(&runs, 3).unwrap();
+    assert!(fast.fast && fast.attempts[0].tier == "fast");
+    // The evidence attempt of the train's branch is a full attempt of the same tree: it is read, only that attempt.
+    let evidence = by_id(&runs, 5).unwrap();
+    assert!(!evidence.fast);
+    assert_eq!(
+        evidence
+            .attempts
+            .iter()
+            .map(|a| a.number)
+            .collect::<Vec<_>>(),
+        vec![2]
+    );
+    // The pull request run has no ci-full status for this tree: it does not decide main's state.
+    assert!(by_id(&runs, 4).is_none());
+}
+
+#[test]
+fn evidence_that_is_untrusted_unnamed_or_for_another_tree_makes_nothing_fast() {
+    let other_tree = "3".repeat(40);
+    let cases: Vec<(Vec<Value>, Option<u64>)> = vec![
+        (
+            vec![auth(5, "success", APP_TEXT), ci_full(5, 2, TREE)],
+            Some(77),
+        ),
+        (
+            vec![auth(77, "failure", APP_TEXT), ci_full(5, 2, TREE)],
+            Some(77),
+        ),
+        (
+            vec![
+                auth(77, "success", "evidence=5 attempt 2"),
+                ci_full(5, 2, TREE),
+            ],
+            Some(77),
+        ),
+        (
+            vec![auth(77, "success", APP_TEXT), ci_full(5, 2, &other_tree)],
+            Some(77),
+        ),
+        (
+            vec![auth(77, "success", APP_TEXT), ci_full(5, 1, TREE)],
+            Some(77),
+        ),
+        (
+            vec![
+                auth(77, "success", "attempt 9 evidence run 3 attempt 1"),
+                ci_full(3, 1, TREE),
+            ],
+            Some(77),
+        ),
+        (
+            vec![auth(77, "success", APP_TEXT), ci_full(5, 2, TREE)],
+            None,
+        ),
         (vec![], Some(77)),
-    ] {
-        let runs = fast_source(statuses, app).runs(TIP).unwrap();
+    ];
+    for (statuses, app) in cases {
+        let runs = fast_source(statuses.clone(), app).runs(TIP).unwrap();
+        let own = by_id(&runs, 3).unwrap();
         assert!(
-            !runs[0].fast,
-            "a partial job list alone does not make a run fast"
+            !own.fast,
+            "a short job list alone does not make a run fast: {statuses:?}"
         );
         assert_eq!(
-            runs[0].attempts[0].tier, "hosted",
+            own.attempts[0].tier, "hosted",
             "it is judged against the full matrix"
         );
     }
 }
 
 #[test]
+fn a_full_attempt_of_another_tree_never_decides_main() {
+    let other_tree = "3".repeat(40);
+    let runs = fast_source(vec![ci_full(4, 1, &other_tree)], Some(77))
+        .runs(TIP)
+        .unwrap();
+    assert!(by_id(&runs, 4).is_none() && by_id(&runs, 5).is_none());
+    let runs = fast_source(vec![ci_full(4, 1, TREE)], Some(77))
+        .runs(TIP)
+        .unwrap();
+    assert!(
+        by_id(&runs, 4).is_some(),
+        "a pull request run whose ci-full names the tip's tree counts"
+    );
+}
+
+#[test]
 fn a_partial_job_list_without_evidence_reads_red_not_green() {
     let matrix = matrix_from_toml(MATRIX).unwrap();
-    let mut dir = tempfile::tempdir().unwrap();
-    let _ = &mut dir;
+    let dir = tempfile::tempdir().unwrap();
     let mut ledger = FileLedger {
         path: dir.path().join("l.json"),
         descends: |_: &str, _: &str| true,
