@@ -86,3 +86,19 @@ def test_push_without_protoc_refuses_before_any_cargo_command(tree, monkeypatch,
     out = capsys.readouterr().out
     assert "rust: FAIL: protoc not found" in out
     assert not any(command[0] == "cargo" for command in calls)
+
+
+def test_a_bare_protoc_name_resolves_on_the_cargo_path(tree):
+    found = fake_protoc(tree / "bin")
+    env = {"PATH": str(tree / "bin"), "PROTOC": "protoc"}
+    preflight.require_protoc(tree, [worker_test(tree)], env)
+    assert env["PROTOC"] == str(found)
+    with pytest.raises(preflight.FailFamily, match=r"PROTOC=protoc.*not an executable"):
+        preflight.require_protoc(tree, [worker_test(tree)], {"PATH": "", "PROTOC": "protoc"})
+
+
+def test_a_relative_protoc_path_is_taken_from_the_cargo_working_directory(tree):
+    found = fake_protoc(tree / "rust/tools")
+    env = {"PATH": "", "PROTOC": "tools/protoc"}
+    preflight.require_protoc(tree, [worker_test(tree)], env)
+    assert env["PROTOC"] == str(found)

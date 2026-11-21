@@ -294,8 +294,15 @@ def require_protoc(root, commands, env):
         return
     given = env.get('PROTOC')
     if given:
-        if not (Path(given).is_file() and os.access(given, os.X_OK)):
+        # Cargo runs in rust/: a relative path is taken from there, a bare name from the child's PATH.
+        if '/' in given:
+            resolved = Path(given) if Path(given).is_absolute() else Path(root) / 'rust' / given
+            found = str(resolved) if resolved.is_file() and os.access(resolved, os.X_OK) else None
+        else:
+            found = shutil.which(given, path=env.get('PATH', ''))
+        if not found:
             raise FailFamily(f"PROTOC={given} is not an executable file: fix or unset PROTOC")
+        env['PROTOC'] = found
         return
     local = Path.home() / '.local/bin/protoc'
     found = str(local) if local.is_file() and os.access(local, os.X_OK) else shutil.which('protoc', path=env.get('PATH', ''))
