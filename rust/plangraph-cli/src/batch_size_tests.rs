@@ -234,3 +234,56 @@ fn the_command_prints_the_brief_with_dash_dash_brief_and_the_plan_json_without()
     assert_eq!(value["count"], 3);
     assert_eq!(execute(&[path, "--other".into()], &mut Vec::new()), 2);
 }
+
+#[test]
+fn a_repeated_item_key_refuses_the_brief_and_the_plan() {
+    let (mut input, plan) = briefed(&[1_000; 3], writer(Some(60.0), Some(500_000)));
+    input.items[1].key = "k0".into();
+    input.items[1].text = None;
+    assert_eq!(
+        brief(&input, &plan).unwrap_err(),
+        "item key k0 is listed twice"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("input.json");
+    let item = |text: Option<&str>| serde_json::json!({"key": "same", "kind": "lane", "expected_bytes": 1000, "text": text});
+    std::fs::write(
+        &file,
+        serde_json::json!({"writer": {"aa_intelligence": 60.0, "context_window": 500000},
+            "items": [item(Some("Why: a")), item(None)]})
+        .to_string(),
+    )
+    .unwrap();
+    let path = file.to_string_lossy().into_owned();
+    for args in [vec![path.clone()], vec![path.clone(), "--brief".into()]] {
+        let mut out = Vec::new();
+        assert_eq!(execute(&args, &mut out), 2);
+        assert!(out.is_empty());
+    }
+}
+
+struct FullDisk;
+impl std::io::Write for FullDisk {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("no space left on device"))
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_output_that_cannot_be_written_is_a_failure_not_a_success() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("input.json");
+    std::fs::write(
+        &file,
+        serde_json::json!({"writer": {"aa_intelligence": 60.0, "context_window": 500000},
+            "items": [{"key": "k0", "kind": "lane", "expected_bytes": 1000, "text": "Why: a"}]})
+        .to_string(),
+    )
+    .unwrap();
+    let path = file.to_string_lossy().into_owned();
+    assert_eq!(execute(std::slice::from_ref(&path), &mut FullDisk), 2);
+    assert_eq!(execute(&[path, "--brief".into()], &mut FullDisk), 2);
+}

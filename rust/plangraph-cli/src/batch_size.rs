@@ -179,10 +179,20 @@ pub fn plan(input: &Input) -> Plan {
     }
 }
 
+/// Item keys name the items of the brief: a repeated key would put one item's text twice.
+fn check_unique_keys(input: &Input) -> Result<(), String> {
+    let mut seen = std::collections::BTreeSet::new();
+    match input.items.iter().find(|i| !seen.insert(i.key.as_str())) {
+        Some(item) => Err(format!("item key {} is listed twice", item.key)),
+        None => Ok(()),
+    }
+}
+
 /// The batch brief of the plan: a size block (how many of how many items and why, what waits
 /// for the next batch), the selected items in order with their text, and the run values. The
 /// `# Items` and `# Run values` headings are the ones the spawner recognises as a batch brief.
 pub fn brief(input: &Input, plan: &Plan) -> Result<String, String> {
+    check_unique_keys(input)?;
     let mut out = format!(
         "# Batch size\n{} of {} item(s): {}\n",
         plan.count,
@@ -234,6 +244,7 @@ fn execute(args: &[String], out: &mut dyn std::io::Write) -> i32 {
         .map_err(|e| e.to_string())
         .and_then(|b| serde_json::from_slice::<Input>(&b).map_err(|e| e.to_string()));
     let result = parsed.and_then(|input| {
+        check_unique_keys(&input)?;
         let plan = plan(&input);
         if as_brief {
             brief(&input, &plan)
@@ -242,10 +253,13 @@ fn execute(args: &[String], out: &mut dyn std::io::Write) -> i32 {
         }
     });
     match result {
-        Ok(text) => {
-            let _ = out.write_all(text.as_bytes());
-            0
-        }
+        Ok(text) => match out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("batch-size: output not written: {error}");
+                2
+            }
+        },
         Err(error) => {
             eprintln!("batch-size: {error}");
             2
