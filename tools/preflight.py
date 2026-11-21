@@ -627,8 +627,8 @@ def _main(argv, root, cleanup):
     families = [("scrub", scrubs),
                 ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),
-                            python("ci_commit_gate.py", "check", "--base", args.base,
-                                   "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt"))]),
+                            python("ci_commit_gate.py", "check", "--base", policy_base,
+                                   "--head", args.head)]),
                 ("rust", None), ("tests", [] if args.fast else [tests])]
     summary, exit_code, stopped, scrub_bad = [], 0, False, False
     trim_shared_target(root)
