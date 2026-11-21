@@ -1,0 +1,1 @@
+Seed sourced effort-level priors for GPT-6.2 Sol, Claude Fable 5.2 and Gemini 4 Argon, plus available MiMo and DeepSeek results. Keep the publisher record and source date. Preserve subsequently imported or refreshed rows when the catalog initializes.

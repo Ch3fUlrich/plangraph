@@ -28,6 +28,23 @@ from plangraph.spawner.mcp import MCPSpawnerServer
 with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     db.init_and_seed()
     model = 'mimo/mimo-v2.6-pro'
+    required_priors = {
+        ('omniroute/cx-gpt-6.2-sol-medium', 'medium', 'opencode'),
+        ('omniroute/cx-gpt-6.2-sol-high', 'high', 'opencode'),
+        ('omniroute/cx-gpt-6.2-sol-xhigh', 'xhigh', 'opencode'),
+        ('codex/gpt-6.2-sol-medium', 'medium', 'codex'),
+        ('claude/claude-fable-5-2', 'low', 'claude'),
+        ('claude/claude-fable-5-2', 'medium', 'claude'),
+        ('claude/claude-fable-5-2', 'high', 'claude'),
+        ('agy/gemini-4-argon-medium', 'medium', 'agy'),
+        ('mimo/mimo-v2.6-pro', '', 'opencode'),
+        ('mimo/mimo-v2.6-flash', '', 'opencode'),
+    }
+    seeded = {(r['model_id'], r['effort'], r['harness']): r for r in db.conn.execute(
+        'SELECT * FROM catalog_benchmark_rows WHERE legacy = 0')}
+    assert required_priors <= seeded.keys(), required_priors - seeded.keys()
+    assert all(r['source_date'] and r['source_record'] and r['source_url'] for r in seeded.values())
+    assert all(seeded[key]['imputed'] for key in required_priors)
     def record(effort, harness, origin, score, cost=None, at='2000-01-01'):
         db.conn.execute('''INSERT INTO catalog_benchmark_measurements
             (model_id, effort, harness, origin, score, cost_per_task_usd, measured_at, source_url)
@@ -73,6 +90,7 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
             patch('plangraph.spawner.mcp.leg_status', leg_status):
         queried = asyncio.run(MCPSpawnerServer.call_tool(server, 'plangraph_agent_query_catalog', {}))
     assert next(row for row in queried['models'] if row['id'] == model)['benchmark_rows'] == list(rows.values())
+    assert {(r['model_id'], r['effort'], r['harness']) for r in queried['benchmark_rows']} >= required_priors
     db.init_and_seed()
     assert any(row['origin'] == 'own' for row in db.get_model(model)['benchmark_rows'])
     export = db.export_json()

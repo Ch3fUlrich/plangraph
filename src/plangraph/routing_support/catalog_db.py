@@ -73,7 +73,8 @@ class CatalogDB:
     def init_and_seed(self) -> None:
         """Initialize schema and seed catalog tables idempotently."""
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
-        self.conn.executescript(schema_sql)
+        priors = SCHEMA_PATH.with_name('catalog_benchmark_seed.sql').read_text(encoding='utf-8')
+        self.conn.executescript(schema_sql + '\n' + priors)
         registry_columns.migrate(self.conn)
 
         self._insert_records("catalog_quota_pools", SEED_QUOTA_POOLS)

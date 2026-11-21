@@ -64,6 +64,9 @@ DeepSWE, CursorBench, FrontierSWE, then the Artificial Analysis index prior.
 Missing measurements remain null. The view marks observations older than 45
 days and rows without a measurement date as stale. Utility resolves the same
 view against the leg's effort and harness. Legacy databases remain readable.
+The top-level `benchmark_rows` also includes sourced identities that have no
+legacy model row. `source_date` records when a publisher's result was checked.
+A separate `measured_at` records the task run date when the source reports it.
 
 ### Offline benchmark data contract (BENCH-DATA-TEST, slice 1)
 
