@@ -221,15 +221,19 @@ _CALL_HEAD = re.compile(r'[A-Za-z_][\w.]*[^\S\r\n]*')
 _CLOSER = {'(': ')', '[': ']', '{': '}'}
 
 
-def is_computed(value):
+def is_computed(value, assignment=None):
     """True for None/True/False/null or an already masked value, or for one call, subscript or
     bracketed expression (with attribute/call chains) holding no string literal.
 
     Spawner-read source keeps these readable; anything else after a credential
-    name, such as a literal or a call followed by more text, is masked (the Rust
+    name, such as a literal or a call followed by more text, is masked, as is an
+    expression holding another credential-name assignment (the Rust
     redactor mirrors this as is_computed and must be given the whole right-hand side).
     """
     value = value.strip()
+    # A credential-name assignment nested in the expression is judged by itself, so it is no computed value.
+    if assignment is not None and (assignment.search(value) or next(_name_headers(value), None)):
+        return False
     if re.fullmatch(r'None|True|False|null|["\']?\[REDACTED\][\"\']?', value):
         return True
     if '"' in value or "'" in value or not value:

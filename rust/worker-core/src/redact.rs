@@ -109,8 +109,8 @@ fn redact_inner(text: &str, mode: Mode, allow_shas: &BTreeSet<String>) -> String
     } else {
         super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5])
     };
-    let out = super::redact_tokens::replace_assignments(&rs[3], &out, source);
-    let out = super::redact_tokens::replace_assignments(&rs[4], &out, source);
+    let out = super::redact_tokens::replace_assignments(&rs[3], &rs[3..5], &out, source);
+    let out = super::redact_tokens::replace_assignments(&rs[4], &rs[3..5], &out, source);
     let out = super::redact_wrapped::redact_wrapped(&out);
     let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();

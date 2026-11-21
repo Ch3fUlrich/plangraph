@@ -72,10 +72,14 @@ _ASSIGNMENT = re.compile(
     r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
 
 
+def _computed(value):
+    return is_computed(value, _ASSIGNMENT)
+
+
 def _redact_assignments(text, source=False):
     def replace(m):
         value = m[0][len(m[1]):]
-        if source and is_computed(value):
+        if source and _computed(value):
             return m[0]
         return m[1] + (value[0] + '[REDACTED]' + value[-1]
                        if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
@@ -204,7 +208,7 @@ def _redact(value, *, source):
                 # Source masks wrapped tokens first, as before, so no name survives them.
                 value = redact_wrapped(value)
             # Source keeps only computed expressions readable; literals are masked.
-            value = redact_wide_assignments(value, _ASSIGNMENT, is_computed if source else None)
+            value = redact_wide_assignments(value, _ASSIGNMENT, _computed if source else None)
             if not source:
                 # P joins values behind shielded names, then main's order runs.
                 value = join_shielded_assignments(value, _ASSIGNMENT)

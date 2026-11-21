@@ -115,8 +115,12 @@ pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
 /// string literal. Spawner-read source keeps these readable; anything else after a
 /// credential name is masked (src/plangraph/spawner/redact_tokens.py is_computed).
 /// `value` must be the whole right-hand side, to the end of the line.
-pub(crate) fn is_computed(value: &str) -> bool {
+pub(crate) fn is_computed(value: &str, nested: &[regex::Regex]) -> bool {
     let value = value.trim();
+    // A credential-name assignment nested in the expression is judged by itself.
+    if nested.iter().any(|rule| rule.is_match(value)) {
+        return false;
+    }
     if matches!(
         value,
         "None" | "True" | "False" | "null" | "[REDACTED]" | "\"[REDACTED]\"" | "'[REDACTED]'"
@@ -194,7 +198,12 @@ pub(crate) fn is_computed(value: &str) -> bool {
 /// computed expression, judged on the whole rest of its line, stays readable; any
 /// other unquoted value is masked through the end of the line, so nothing after the
 /// first closing delimiter can survive.
-pub(crate) fn replace_assignments(rule: &regex::Regex, text: &str, source: bool) -> String {
+pub(crate) fn replace_assignments(
+    rule: &regex::Regex,
+    nested: &[regex::Regex],
+    text: &str,
+    source: bool,
+) -> String {
     if !source {
         return rule.replace_all(text, "$1$2$3[REDACTED]").into_owned();
     }
@@ -216,7 +225,7 @@ pub(crate) fn replace_assignments(rule: &regex::Regex, text: &str, source: bool)
                 .map_or(text.len(), |i| value.start() + i);
         }
         let judged = &text[value.start()..line_end];
-        if is_computed(judged) {
+        if is_computed(judged, nested) {
             kept_until = line_end;
             continue;
         }
@@ -347,7 +356,7 @@ mod tests {
             "None",
             "\"[REDACTED]\"",
         ] {
-            assert!(is_computed(yes), "{yes}");
+            assert!(is_computed(yes, &[]), "{yes}");
         }
         for no in [
             "load(x) + literal",
@@ -363,7 +372,7 @@ mod tests {
             "os.environ[\"X\"]",
             "",
         ] {
-            assert!(!is_computed(no), "{no}");
+            assert!(!is_computed(no, &[]), "{no}");
         }
     }
 
