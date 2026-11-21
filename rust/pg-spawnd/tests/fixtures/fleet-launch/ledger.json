@@ -1,0 +1,21 @@
+{
+  "result": "started",
+  "enforce": false,
+  "missing": [],
+  "policy_error": null,
+  "cap": {"handoff":110000,"hard":170000},
+  "cap_source": "override",
+  "cap_error": null,
+  "fields": {
+    "role": "review",
+    "owner": "fixture",
+    "card": null,
+    "track": "parity",
+    "host": "fixture-local",
+    "reason": "fixture",
+    "effort": "high",
+    "cap": "declared",
+    "handoff": "handoff.md"
+  },
+  "session_name": "review-0001"
+}
