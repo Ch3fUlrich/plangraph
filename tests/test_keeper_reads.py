@@ -1,5 +1,7 @@
 """Read verbs: ready, show, blocked, waves, critical_path, percent, alerts,
 digest, snapshot, whoami — all built on plangraph.views."""
+import json
+
 import pytest
 
 from keeper_util import World, seed, to_claimed, to_done, to_in_review
@@ -295,6 +297,54 @@ def test_backfill_orders_its_bounds_by_time_when_the_clock_went_back(w):
     w.store.backfill_alerts()
     row = w.conn.execute("SELECT first_seen, last_seen, msg FROM alerts").fetchone()
     assert row["first_seen"] < row["last_seen"] and row["msg"] == "later"
+
+
+def test_backfill_keeps_a_raised_alert_in_the_history_when_a_refusal_aged_out(w):
+    window = w.store.alert_window_s
+    for n in range(2):
+        if n:
+            w.clock.advance(window * 0.5)
+        with pytest.raises(Refused):
+            w.store.claim(w.p("reader"), "demo:A")
+    w.clock.advance(window * 0.75)  # the first refusal has left the window
+    before = w.store.alerts(w.p("reader"))
+    assert before["refusals"] == [] and before["history"]["refusal_keys"] == 1
+    w.store.backfill_alerts()
+    after = w.store.alerts(w.p("reader"))
+    assert after["refusals"] == [] and after["history"]["refusal_keys"] == 1
+
+
+def test_backfill_keeps_the_precise_times_of_a_live_row(w):
+    window = w.store.alert_window_s
+    w.clock.advance(0.9)  # a time with a fraction: the audit log only holds whole seconds
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    w.clock.advance(window - 0.5)  # the second refusal lands half a second before the first leaves
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    assert [r["count"] for r in w.store.alerts(w.p("reader"))["refusals"]] == [2]
+    w.store.backfill_alerts()
+    assert [r["count"] for r in w.store.alerts(w.p("reader"))["refusals"]] == [2]
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 2)]
+
+
+def test_backfill_sorts_out_of_order_refusals_before_the_cap_and_the_bounds(w):
+    from plangraph.keeper.store_support import REFUSAL_TIMES_CAP, iso
+    now = w.store.now()
+    total = REFUSAL_TIMES_CAP + 4
+    # Newest first in insertion order: row order is not time order (a clock set back).
+    for k in range(total):
+        w.conn.execute(
+            "INSERT INTO audit_log(ts,actor,role,action,key,ok) VALUES(?,?,?,?,?,0)",
+            (iso(now - k), "reader", "reader", "claim", "demo:A"))
+    w.store.backfill_alerts()
+    row = w.conn.execute(
+        "SELECT msg, first_seen, last_seen, n FROM alerts WHERE kind='refusal'").fetchone()
+    times = json.loads(row["msg"])
+    assert times == sorted(times) and len(times) == row["n"] == REFUSAL_TIMES_CAP
+    # The cap keeps the newest refusals, not the last ones inserted.
+    assert int(times[-1]) == int(now) and int(times[0]) == int(now) - (REFUSAL_TIMES_CAP - 1)
+    assert row["first_seen"] == iso(now - (total - 1)) and row["last_seen"] == iso(now)
 
 
 def test_alerts_reads_the_refusals_inside_the_window_not_the_stored_count(w):

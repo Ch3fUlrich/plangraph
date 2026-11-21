@@ -322,34 +322,42 @@ class SupportMixin:
                 if key not in state:
                     continue
                 stamps = sorted(stamps)
-                times = [t.timestamp() for t in (parse_iso(s) for s in stamps)
-                         if t is not None and t.timestamp() >= cutoff][-REFUSAL_TIMES_CAP:]
-                current = state[key] in open_states and len(times) >= 2
+                audited = [t.timestamp() for t in (parse_iso(x) for x in stamps)
+                           if t is not None and t.timestamp() >= cutoff]
                 first, last, total = stamps[0], stamps[-1], len(stamps)
                 have = self._alert_row("refusal", key, "refused")
+                live_open = have is not None and have["state"] == "open"
+                # A live row keeps its precise times; the audit log (whole seconds) only adds
+                # the refusals the row does not already hold.
+                live = ([t for t in self._refusal_times(have) if t >= cutoff]
+                        if live_open else [])
+                held = {int(t) for t in live}
+                times = sorted(live + [t for t in audited if int(t) not in held]
+                               )[-REFUSAL_TIMES_CAP:]
+                current = state[key] in open_states and len(times) >= 2
                 if have is None:
                     self.conn.execute(
                         "INSERT INTO alerts(kind,key,code,msg,first_seen,last_seen,n,state)"
                         " VALUES('refusal',?,'refused',?,?,?,?,?)",
                         (key, json.dumps(times) if current else None, first, last,
                          len(times) if current else total, "open" if current else "resolved"))
+                    continue
+                bounds = (min(have["first_seen"] or first, first),
+                          max(have["last_seen"] or "", last))
+                if live_open:
+                    # The count stays what the row had raised, so the history of an alert that
+                    # lost a refusal to the window stays in `history.refusal_keys`.
+                    self.conn.execute(
+                        "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=? WHERE id=?",
+                        (json.dumps(times), *bounds, max(have["n"], len(times)), have["id"]))
                 elif current:
                     self.conn.execute(
                         "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=?, state='open'"
-                        " WHERE id=?",
-                        (json.dumps(times), min(have["first_seen"] or first, first),
-                         max(have["last_seen"] or "", last), len(times), have["id"]))
-                elif have["state"] == "open":
-                    # A live open row counts what is current: the history never raises it.
-                    self.conn.execute(
-                        "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=? WHERE id=?",
-                        (json.dumps(times), min(have["first_seen"] or first, first),
-                         max(have["last_seen"] or "", last), len(times), have["id"]))
+                        " WHERE id=?", (json.dumps(times), *bounds, len(times), have["id"]))
                 else:
                     self.conn.execute(
                         "UPDATE alerts SET first_seen=?, last_seen=?, n=? WHERE id=?",
-                        (min(have["first_seen"] or first, first),
-                         max(have["last_seen"] or "", last), max(have["n"], total), have["id"]))
+                        (*bounds, max(have["n"], total), have["id"]))
             self.conn.execute(
                 "INSERT INTO alert_log(ts,action,msg) VALUES(?,?,?)",
                 (iso(now), "alerts_backfill",
