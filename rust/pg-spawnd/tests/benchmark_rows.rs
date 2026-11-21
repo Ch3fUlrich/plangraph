@@ -25,14 +25,15 @@ import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from plangraph.planner.benchmarks import BenchRequired, benchmark_for_leg
+from plangraph.planner.benchmarks import BenchRequired, benchmark_for_leg, benchmark_rows_from_db
 from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
 from plangraph.planner.routing import plan_spawn
 from plangraph.routing_support.catalog_db import CatalogDB
 from plangraph.spawner.bench_entry import benchmark_options
 from plangraph.spawner.mcp import MCPSpawnerServer
 
-with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
+catalog_path = Path(os.environ['PLANGRAPH_CATALOG_DB'])
+with CatalogDB(catalog_path) as db:
     db.init_and_seed()
     model = 'mimo/mimo-v2.6-pro'
     def record(effort, harness, origin, score, cost=None, at='2000-01-01', model_id=model):
@@ -126,13 +127,35 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     db.init_and_seed()
     assert any(row['origin'] == 'own' for row in db.get_model(model)['benchmark_rows'])
     export = db.export_json()
-with CatalogDB() as restored:
+restored_path = catalog_path.with_name('restored.sqlite')
+assert not restored_path.exists()
+with CatalogDB(restored_path) as restored:
     restored.init_and_seed()
+    assert not any(row['origin'] == 'own' for row in restored.get_model(model)['benchmark_rows'])
     restored.import_json(export)
-    assert any(row['origin'] == 'own' for row in restored.get_model(model)['benchmark_rows'])
-with CatalogDB() as legacy:
+    assert [row for row in restored.get_model(model)['benchmark_rows'] if row['origin'] == 'own'] == [own]
+legacy_path = catalog_path.with_name('legacy.sqlite')
+legacy_model = 'fixture/legacy-only'
+with CatalogDB(legacy_path) as legacy:
     legacy.conn.executescript(Path('src/plangraph/spawner/catalog_schema.sql').read_text(encoding='utf-8'))
-    assert legacy.export_json()['benchmarks'] == []
+    with legacy.conn:
+        legacy.conn.execute("""INSERT INTO catalog_providers
+            (provider_id, tier, transport, updated_at) VALUES ('fixture', 'free', 'cli', '2000-01-01')""")
+        legacy.conn.execute("""INSERT INTO catalog_models
+            (model_id, provider_id, upstream_id, family, context_tokens, max_output_tokens, status)
+            VALUES (?, 'fixture', 'legacy-only', 'fixture', 1000, 100, 'active')""", (legacy_model,))
+        legacy.conn.execute("""INSERT INTO catalog_benchmarks
+            (model_id, aa_intelligence, verified_tok_per_s, cost_per_task_usd, updated_at)
+            VALUES (?, 42.5, 13.0, 0.0, '2000-01-01')""", (legacy_model,))
+    assert legacy.conn.execute("SELECT 1 FROM sqlite_master WHERE name='catalog_benchmark_rows'").fetchone() is None
+before = legacy_path.read_bytes()
+legacy_rows, errors = benchmark_rows_from_db(legacy_path)
+assert not errors, errors
+assert set(legacy_rows) == {legacy_model}
+legacy_row = legacy_rows[legacy_model]
+assert legacy_row['aa_intelligence'] == 42.5 and legacy_row['verified_tok_per_s'] == 13.0
+assert legacy_row['cost_per_task_usd'] == 0.0 and legacy_row['benchmark_row_count'] == 1
+assert legacy_path.read_bytes() == before
 "#,
         ])
         .output()
