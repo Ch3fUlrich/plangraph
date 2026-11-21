@@ -204,3 +204,37 @@ def test_an_interleaved_build_of_another_checkout_cannot_replace_the_staged_arti
     code, text, staged_a = preflight.build_policy(a, env, [])
     assert code == 0
     assert "A-SOURCES" in Path(staged_a).read_text() and "B-SOURCES" not in Path(staged_a).read_text()
+
+
+def test_sources_are_hashed_even_when_the_checkout_lives_under_a_target_directory(rig, tmp_path):
+    a = checkout_with_policy(tmp_path / "target", "a", "A-SOURCES")
+    b = checkout_with_policy(tmp_path / "target", "b", "B-SOURCES")
+    assert preflight.policy_target(a) != preflight.policy_target(b)
+    same = checkout_with_policy(tmp_path / "target", "c", "A-SOURCES")
+    assert preflight.policy_target(a) == preflight.policy_target(same)
+
+
+def test_build_output_inside_the_crate_does_not_change_the_key(rig, tmp_path):
+    a = checkout_with_policy(tmp_path, "a", "A-SOURCES")
+    before = preflight.policy_target(a)
+    (a / "rust/pg-policy/target/debug").mkdir(parents=True)
+    (a / "rust/pg-policy/target/debug/artifact").write_text("built")
+    assert preflight.policy_target(a) == before
+
+
+def test_interleaved_builds_stay_apart_under_a_target_ancestor(rig, tmp_path, monkeypatch):
+    repo, log, seen = rig
+    a = checkout_with_policy(tmp_path / "target", "a", "A-SOURCES")
+    b = checkout_with_policy(tmp_path / "target", "b", "B-SOURCES")
+    env = dict(os.environ, CARGO_TARGET_DIR=str(shared_target(repo)))
+    real_stage = preflight.stage_policy_binary
+
+    def interleave(executable, cleanup):
+        monkeypatch.setattr(preflight, "stage_policy_binary", real_stage)   # once
+        assert preflight.build_policy(b, env, [])[0] == 0
+        return real_stage(executable, cleanup)
+
+    monkeypatch.setattr(preflight, "stage_policy_binary", interleave)
+    code, text, staged_a = preflight.build_policy(a, env, [])
+    assert code == 0
+    assert "A-SOURCES" in Path(staged_a).read_text() and "B-SOURCES" not in Path(staged_a).read_text()

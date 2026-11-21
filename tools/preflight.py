@@ -429,7 +429,11 @@ def policy_target(root):
     (a warm build for every later clone); different sources never do."""
     import hashlib
     rust, digest = Path(root) / 'rust', hashlib.sha256()
-    names = sorted(p for p in (rust / 'pg-policy').rglob('*') if p.is_file() and 'target' not in p.parts)
+    crate = rust / 'pg-policy'
+    # Build output under the crate is not source; the exclusion is relative to the crate, so a
+    # checkout that lives under a directory named target still hashes its sources.
+    names = sorted(p for p in crate.rglob('*')
+                   if p.is_file() and 'target' not in p.relative_to(crate).parts)
     names += [p for p in (rust / 'Cargo.toml', rust / 'Cargo.lock', Path(root) / 'rust-toolchain.toml',
                           rust / 'rust-toolchain.toml') if p.is_file()]
     for path in names:
