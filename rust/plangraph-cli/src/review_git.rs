@@ -163,8 +163,11 @@ fn short(sha: &str) -> &str {
     &sha[..12.min(sha.len())]
 }
 
-/// Extract canonical writer families from `Writer`, `Hand-Edit`, and fallback author info in `base..head`.
-pub fn writer_families(repo: &Path, base_sha: &str, head_sha: &str) -> Result<Vec<String>, String> {
+/// The writer families of one commit set: one writer family set per commit of `base..head`.
+type CommitFamilies = Vec<(String, BTreeSet<String>)>;
+
+/// Read `base..head` and map every commit's `Writer`, `Hand-Edit` and fallback author info to families.
+fn commit_families(repo: &Path, base_sha: &str, head_sha: &str) -> Result<CommitFamilies, String> {
     let range = format!("{base_sha}..{head_sha}");
     let format = "--format=%H%n%an%n%ae%n%(trailers:separator=%x0a)";
     let mut raw = git_stdout(repo, &["log", "--no-merges", "-z", format, &range])?;
@@ -222,8 +225,9 @@ pub fn writer_families(repo: &Path, base_sha: &str, head_sha: &str) -> Result<Ve
     let table = resolve_families(&texts, repo)?;
     let family_of = |text: &str| table.get(text).cloned().flatten();
 
-    let mut families = BTreeSet::new();
+    let mut per_commit = Vec::new();
     for c in &commits {
+        let mut families = BTreeSet::new();
         let mut explicit = !c.writers.is_empty();
         for w in &c.writers {
             match family_of(w) {
@@ -247,25 +251,59 @@ pub fn writer_families(repo: &Path, base_sha: &str, head_sha: &str) -> Result<Ve
                 fallback.push(h.clone());
             }
         }
-        if explicit {
-            continue;
+        if !explicit {
+            let found: Vec<String> = fallback.iter().filter_map(|t| family_of(t)).collect();
+            if found.is_empty() {
+                families.extend(family_of(&c.author));
+            } else {
+                families.extend(found);
+            }
         }
-        let found: Vec<String> = fallback.iter().filter_map(|t| family_of(t)).collect();
-        if found.is_empty() {
-            families.extend(family_of(&c.author));
-        } else {
-            families.extend(found);
-        }
+        per_commit.push((c.sha.clone(), families));
     }
-
-    if families.is_empty() {
+    if per_commit.iter().all(|(_, families)| families.is_empty()) {
         return Err(format!(
             "refused: could not determine any writer family from trailers/authors in {}..{}",
             short(base_sha),
             short(head_sha)
         ));
     }
-    Ok(families.into_iter().collect())
+    Ok(per_commit)
+}
+
+/// The commits of one writer-family set: the review seat for them comes from outside `families`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriterGroup {
+    pub families: Vec<String>,
+    pub commits: Vec<String>,
+}
+
+/// Group commits by their writer family set, in first-seen order. Commits with no resolved
+/// family belong to no group. One family exclusion applies per group, never per range.
+pub fn group_by_families(per_commit: &[(String, BTreeSet<String>)]) -> Vec<WriterGroup> {
+    let mut groups: Vec<WriterGroup> = Vec::new();
+    for (sha, families) in per_commit.iter().filter(|(_, f)| !f.is_empty()) {
+        let families: Vec<String> = families.iter().cloned().collect();
+        match groups.iter_mut().find(|g| g.families == families) {
+            Some(group) => group.commits.push(sha.clone()),
+            None => groups.push(WriterGroup {
+                families,
+                commits: vec![sha.clone()],
+            }),
+        }
+    }
+    groups
+}
+
+/// The writer groups of `base..head`; one group when a single writer family set wrote the range.
+pub fn writer_groups(
+    repo: &Path,
+    base_sha: &str,
+    head_sha: &str,
+) -> Result<Vec<WriterGroup>, String> {
+    Ok(group_by_families(&commit_families(
+        repo, base_sha, head_sha,
+    )?))
 }
 
 // Same flags as pg-spawnd's inline diff (prompt_git.rs), so the CLI measures what the seat gets.
@@ -314,4 +352,45 @@ pub fn measure_diff_files(
         out.push((path, bytes));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(sha: &str, families: &[&str]) -> (String, BTreeSet<String>) {
+        (sha.into(), families.iter().map(|f| f.to_string()).collect())
+    }
+
+    #[test]
+    fn commits_group_by_writer_family_set_in_first_seen_order() {
+        let groups = group_by_families(&[
+            commit("c1", &["openai"]),
+            commit("c2", &["google"]),
+            commit("c3", &["openai"]),
+            commit("c4", &["anthropic", "google"]),
+            commit("c5", &[]),
+        ]);
+        let got: Vec<(Vec<&str>, Vec<&str>)> = groups
+            .iter()
+            .map(|g| {
+                (
+                    g.families.iter().map(String::as_str).collect(),
+                    g.commits.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (vec!["openai"], vec!["c1", "c3"]),
+                (vec!["google"], vec!["c2"]),
+                (vec!["anthropic", "google"], vec!["c4"]),
+            ]
+        );
+        assert_eq!(
+            group_by_families(&[commit("a", &["openai"]), commit("b", &["openai"])]).len(),
+            1
+        );
+    }
 }
