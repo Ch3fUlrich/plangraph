@@ -1,7 +1,7 @@
 use super::*;
 use std::cell::RefCell;
 
-fn leg(name: &str, intelligence: u32, planning: bool, available: bool) -> Leg {
+fn leg(name: &str, intelligence: f64, planning: bool, available: bool) -> Leg {
     Leg {
         name: name.into(),
         intelligence,
@@ -36,10 +36,10 @@ impl Fixture {
 impl Ports for Fixture {
     fn legs(&self) -> Result<Vec<Leg>, ToolError> {
         Ok(vec![
-            leg("weak", 30, true, true),
-            leg("strong-down", 90, true, false),
-            leg("strong", 70, true, true),
-            leg("not-planning", 99, false, true),
+            leg("weak", 30.0, true, true),
+            leg("strong-down", 90.0, true, false),
+            leg("strong", 70.0, true, true),
+            leg("not-planning", 99.0, false, true),
         ])
     }
     fn pr_files(&self, _pr: &str) -> Result<Vec<FileChange>, ToolError> {
@@ -147,9 +147,9 @@ fn history(dir: &Path, counts: &[u64]) -> crate::placement::Args {
 fn strongest_available_planning_leg_wins_and_none_is_refused() {
     let legs = Fixture::default().legs().ok().unwrap();
     assert_eq!(strongest_leg(&legs).unwrap().name, "strong");
-    assert!(strongest_leg(&[leg("a", 5, false, true), leg("b", 5, true, false)]).is_none());
+    assert!(strongest_leg(&[leg("a", 5.0, false, true), leg("b", 5.0, true, false)]).is_none());
     // A tie goes to the lower name, so a replay picks the same leg.
-    let tie = [leg("zed", 50, true, true), leg("amy", 50, true, true)];
+    let tie = [leg("zed", 50.0, true, true), leg("amy", 50.0, true, true)];
     assert_eq!(strongest_leg(&tie).unwrap().name, "amy");
 }
 

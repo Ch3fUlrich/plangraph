@@ -161,8 +161,11 @@ impl Ports for CommandPorts<'_> {
             .filter_map(|leg| {
                 let name = leg["id"].as_str()?.to_string();
                 Some(Leg {
-                    intelligence: route["leg_scores"][&name].as_f64().unwrap_or(0.0).max(0.0)
-                        as u32,
+                    intelligence: route["leg_scores"][&name]
+                        .as_f64()
+                        .filter(|n| n.is_finite())
+                        .unwrap_or(0.0)
+                        .max(0.0),
                     name,
                     planning: leg["roles"]
                         .as_array()
@@ -271,13 +274,28 @@ impl Ports for CommandPorts<'_> {
             &strings(&["send", "--msg-id", key, "routing", line]),
         )?;
         // `fleet-msg` exits 0 for a line it only queued locally ("queued <id> (will retry)");
-        // the receiver's receipt is "sent <id> seq=<n>". Anything else is not an acknowledgment.
-        if out.starts_with("sent ") {
+        // the receiver's receipt is "sent <id> seq=<n>" with the id we sent and a numeric
+        // sequence. Anything else is not an acknowledgment.
+        if is_receipt(&out, key) {
             Ok(())
         } else {
             Err(parameter("replan_bus_unacknowledged: no receiver receipt"))
         }
     }
+}
+
+/// `sent <key> seq=<digits>`: the receipt of a line the receiver took under `key`.
+fn is_receipt(out: &str, key: &str) -> bool {
+    let mut words = out.split_whitespace();
+    let (Some("sent"), Some(id), Some(seq), None) =
+        (words.next(), words.next(), words.next(), words.next())
+    else {
+        return false;
+    };
+    id == key
+        && seq
+            .strip_prefix("seq=")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
 }
 
 /// One pass over the queued jobs with `exec`.

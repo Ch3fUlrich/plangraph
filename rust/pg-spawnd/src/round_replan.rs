@@ -27,7 +27,7 @@ pub(crate) const TRIGGERS: [&str; 2] = ["no_progress", "round_cap"];
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Leg {
     pub name: String,
-    pub intelligence: u32,
+    pub intelligence: f64,
     pub planning: bool,
     pub available: bool,
 }
@@ -83,7 +83,7 @@ pub(crate) fn strongest_leg(legs: &[Leg]) -> Option<&Leg> {
         .filter(|l| l.planning && l.available)
         .max_by(|a, b| {
             a.intelligence
-                .cmp(&b.intelligence)
+                .total_cmp(&b.intelligence)
                 .then_with(|| b.name.cmp(&a.name))
         })
 }

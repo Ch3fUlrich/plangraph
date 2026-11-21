@@ -9,6 +9,7 @@ struct Recorder {
     known: RefCell<Vec<String>>,
     close_fails: RefCell<bool>,
     bus_queues: RefCell<bool>,
+    bus_incomplete: RefCell<bool>,
 }
 impl Recorder {
     fn count(&self, prefix: &str) -> usize {
@@ -30,10 +31,11 @@ impl Exec for Recorder {
             (Tool::Spawner, "route", _) => Ok(json!({"legs":[
                 {"id":"first-listed", "roles":["implement","orchestrate"]},
                 {"id":"strongest", "roles":["orchestrate"]},
+                {"id":"a-just-below", "roles":["orchestrate"]},
                 {"id":"unscored", "roles":["orchestrate"]},
                 {"id":"review-only", "roles":["review"]}],
-                "leg_scores":{"first-listed":10.0, "strongest":90.0, "unscored":null,
-                    "review-only":99.0}})
+                "leg_scores":{"first-listed":10.0, "strongest":46.8, "a-just-below":46.0,
+                    "unscored":null, "review-only":99.0}})
             .to_string()),
             (Tool::Gh, "pr", "view") => Ok(json!({"files":[
                 {"path":"a/one.rs", "additions":700, "deletions":200},
@@ -65,6 +67,9 @@ impl Exec for Recorder {
             }
             (Tool::Bus, "send", "--msg-id") if *self.bus_queues.borrow() => {
                 Ok(format!("queued {} (will retry)", args[2]))
+            }
+            (Tool::Bus, "send", "--msg-id") if *self.bus_incomplete.borrow() => {
+                Ok(format!("sent {} seq=None", args[2]))
             }
             (Tool::Bus, "send", "--msg-id") => Ok(format!("sent {} seq=1", args[2])),
             _ => panic!("unexpected command {tool:?} {args:?}"),
@@ -164,6 +169,53 @@ fn the_spawn_server_starts_the_replan_runner() {
 }
 
 #[test]
+fn only_a_receipt_with_the_sent_id_and_a_numeric_sequence_is_an_acknowledgment() {
+    let key = "ab".repeat(16);
+    assert!(is_receipt(&format!("sent {key} seq=7\n"), &key));
+    for bad in [
+        format!("sent {key} seq=None"),
+        format!("sent {key} seq="),
+        format!("sent {key}"),
+        format!("sent {} seq=7", "cd".repeat(16)),
+        format!("queued {key} (will retry)"),
+        format!("sent {key} seq=7 extra"),
+        String::new(),
+    ] {
+        assert!(!is_receipt(&bad, &key), "{bad}");
+    }
+}
+
+#[test]
+fn an_incomplete_receipt_leaves_the_job_in_sending() {
+    let dir = tempfile::tempdir().unwrap();
+    replan::tests::refused_run(dir.path());
+    let exec = Recorder::default();
+    *exec.bus_incomplete.borrow_mut() = true;
+    assert!(pass(dir.path(), &exec)[0]
+        .1
+        .contains("replan_bus_unacknowledged"));
+    *exec.bus_incomplete.borrow_mut() = false;
+    assert_eq!(pass(dir.path(), &exec)[0].1, "done");
+}
+
+#[test]
+fn a_leg_scoring_a_fraction_higher_wins_and_the_name_does_not_decide() {
+    let dir = tempfile::tempdir().unwrap();
+    replan::tests::refused_run(dir.path());
+    let exec = Recorder::default();
+    let legs = CommandPorts {
+        exec: &exec,
+        state: dir.path(),
+    }
+    .legs()
+    .ok()
+    .unwrap();
+    let score = |name: &str| legs.iter().find(|l| l.name == name).unwrap().intelligence;
+    assert!(score("strongest") > score("a-just-below"));
+    assert_eq!(replan::strongest_leg(&legs).unwrap().name, "strongest");
+}
+
+#[test]
 fn a_locally_queued_line_is_not_an_acknowledgment_and_the_retry_reuses_the_id() {
     let dir = tempfile::tempdir().unwrap();
     replan::tests::refused_run(dir.path());
@@ -193,9 +245,19 @@ fn a_locally_queued_line_is_not_an_acknowledgment_and_the_retry_reuses_the_id() 
 fn findings_come_from_the_latest_validated_round_of_the_pr() {
     let dir = tempfile::tempdir().unwrap();
     replan::tests::refused_run(dir.path()); // rounds 1-3, five HIGH each
-    let add = |id: &str, round: u64, status, extra: Value| {
+                                            // A valid verdict with distinct findings: only the void filter keeps it out.
+    let verdict = dir.path().join("voided-verdict.json");
+    std::fs::write(
+        &verdict,
+        json!({"writer_run_id":"run-r4", "item_key":"p:I", "pr":"https://forge/p/1",
+            "verdict":"REQUEST_CHANGES", "findings":[{"severity":"MED", "confirmed":true,
+            "clear_fix":true, "text":"from the voided attempt"}]})
+        .to_string(),
+    )
+    .unwrap();
+    let add = |id: &str, round: u64, status, extra: Value, file: PathBuf| {
         let mut base = json!({"role":"implement", "item_key":"p:I", "round_pr":"https://forge/p/1",
-            "writer_round":round, "round_verdict_file":dir.path().join("missing.json")});
+            "writer_round":round, "round_verdict_file":file});
         base.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());
@@ -204,8 +266,20 @@ fn findings_come_from_the_latest_validated_round_of_the_pr() {
             .unwrap();
     };
     use pg_worker_core::run::record::Status;
-    add("run-r4", 4, Status::Failed, json!({"round_void":true}));
-    add("run-r5", 5, Status::Completed, json!({}));
+    add(
+        "run-r4",
+        4,
+        Status::Failed,
+        json!({"round_void":true}),
+        verdict,
+    );
+    add(
+        "run-r5",
+        5,
+        Status::Completed,
+        json!({}),
+        dir.path().join("missing.json"),
+    );
     let found = last_round_findings(dir.path(), "p:I", "https://forge/p/1")
         .ok()
         .unwrap();
