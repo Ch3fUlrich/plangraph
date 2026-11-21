@@ -73,7 +73,19 @@ pub struct FailureRecord {
 
 pub trait Deliver {
     fn send(&mut self, writer: &str, record: &FailureRecord) -> Result<(), String>;
+    /// As `send`, but the delivery must end within `remaining` seconds (what is left of its claim).
+    fn send_within(
+        &mut self,
+        writer: &str,
+        record: &FailureRecord,
+        _remaining: u64,
+    ) -> Result<(), String> {
+        self.send(writer, record)
+    }
 }
+
+/// A delivery must end this long before its claim goes stale (seconds).
+pub const CLAIM_MARGIN_SECS: i64 = 30;
 
 pub fn record_id(batch: &str, pr: u64, test: &str, run_id: u64) -> String {
     let digest = Sha256::digest(format!("{batch}\0{pr}\0{test}\0{run_id}").as_bytes());

@@ -150,6 +150,9 @@ pub struct CommandDeliver<'a> {
 
 impl Deliver for CommandDeliver<'_> {
     fn send(&mut self, writer: &str, record: &FailureRecord) -> Result<()> {
+        self.send_within(writer, record, self.lease_secs)
+    }
+    fn send_within(&mut self, writer: &str, record: &FailureRecord, remaining: u64) -> Result<()> {
         let cmd = std::env::var("CI_WATCH_DELIVER_CMD").map_err(|_| "no delivery command")?;
         let path = self.dir.join(format!("{}.delivery.json", record.id));
         save(&path, record)?;
@@ -159,7 +162,7 @@ impl Deliver for CommandDeliver<'_> {
             .spawn()
             .map_err(|e| e.to_string())?;
         // The command is bound to its claim's lease: past it, the claim may be taken over, so it is killed.
-        let lease = std::time::Duration::from_secs(self.lease_secs);
+        let lease = std::time::Duration::from_secs(self.lease_secs.min(remaining));
         let started = std::time::Instant::now();
         loop {
             match child.try_wait().map_err(|e| e.to_string())? {
@@ -318,12 +321,19 @@ pub fn deliver_pending(
             Ok(records
                 .iter()
                 .find(|r| r.id == id)
-                .map(|r| (token, r.clone())))
+                .map(|r| (token, r.clone(), at)))
         })?;
-        let Some((token, record)) = claimed else {
+        let Some((token, record, claimed_at)) = claimed else {
             continue;
         };
-        let ok = deliver.send(&writer, &record).is_ok();
+        // The command's deadline derives from the claim's timestamp: what is left of the claim, less a margin.
+        // A launch that would come after that deadline is skipped and the claim released for the next pass.
+        let remaining =
+            claimed_at + batch_failure::CLAIM_SECS - batch_failure::CLAIM_MARGIN_SECS - clock();
+        let ok = remaining > 0
+            && deliver
+                .send_within(&writer, &record, remaining as u64)
+                .is_ok();
         update_failures(dir, |records| {
             batch_failure::settle(records, &id, &writer, &token, ok);
             Ok(())

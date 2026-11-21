@@ -684,3 +684,74 @@ fn every_claim_is_stamped_with_the_clock_read_for_that_claim() {
         "the third claim is stamped after the two earlier commands"
     );
 }
+
+#[test]
+fn the_deliverys_deadline_comes_from_its_claim_and_a_launch_after_it_is_skipped() {
+    use super::batch_failure::{Deliver, FailureRecord, Owners, CLAIM_MARGIN_SECS, CLAIM_SECS};
+    use std::cell::{Cell, RefCell};
+    struct Recording(RefCell<Vec<u64>>);
+    impl Deliver for Recording {
+        fn send(&mut self, _: &str, _: &FailureRecord) -> Result<(), String> {
+            unreachable!("deliver_pending bounds every send")
+        }
+        fn send_within(
+            &mut self,
+            _: &str,
+            _: &FailureRecord,
+            remaining: u64,
+        ) -> Result<(), String> {
+            self.0.borrow_mut().push(remaining);
+            Ok(())
+        }
+    }
+    let owners = Owners {
+        prs: [("7".to_owned(), "b".to_owned())].into(),
+        writers: [("b".to_owned(), "w1".to_owned())].into(),
+        successors: Default::default(),
+    };
+    let task = Task {
+        key: "k".into(),
+        head: "pr-7".into(),
+        pr: Some(7),
+        run_id: 1,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        priority: 10,
+        keeper_defined: false,
+        keeper_key: None,
+    };
+    for (delay, expect) in [
+        (61, Some((CLAIM_SECS - CLAIM_MARGIN_SECS - 61) as u64)),
+        (CLAIM_SECS - CLAIM_MARGIN_SECS, None),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        update_failures(dir.path(), |records| {
+            Ok(super::batch_failure::record_failure(
+                records, &owners, &task, 0,
+            ))
+        })
+        .unwrap();
+        // Clock reads: candidates (0), the claim (0), then the read before launch, `delay` seconds later.
+        let calls = Cell::new(0);
+        let clock = || {
+            calls.set(calls.get() + 1);
+            if calls.get() <= 2 {
+                0
+            } else {
+                delay
+            }
+        };
+        let mut deliver = Recording(RefCell::new(vec![]));
+        deliver_pending(dir.path(), &owners, &mut deliver, &clock).unwrap();
+        let seen = deliver.0.borrow().first().copied();
+        assert_eq!(seen, expect, "delay {delay}");
+        let record = &load_failures(dir.path()).unwrap()[0];
+        assert!(record.claim.is_none(), "the claim is settled or released");
+        assert_eq!(
+            record.delivered_to.is_some(),
+            expect.is_some(),
+            "a skipped launch leaves it for the next pass"
+        );
+    }
+}
