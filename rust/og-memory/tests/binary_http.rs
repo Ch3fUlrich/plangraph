@@ -110,3 +110,32 @@ fn configured_binary_uses_pinned_http_recall() {
     assert!(output.stderr.is_empty());
     assert!(!String::from_utf8_lossy(&output.stdout).contains("offline-"));
 }
+
+#[test]
+fn checks_retired_mcp_url_without_opening_transport() {
+    for (base, expected) in [
+        (None, 0),
+        (Some("http://LOCALHOST:8080"), 1),
+        (Some("http://127.0.0.1:8080/"), 1),
+        (Some("http://[::1]:8080"), 1),
+        (Some("http://127.0.0.1:8081"), 0),
+        (Some("https://local.example:8080"), 0),
+    ] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_og-memory"));
+        cmd.arg("check-mcp-url")
+            .env_remove("OG_MEMORY_BASE_URL")
+            .env_remove("OG_MEMORY_TOKEN_FILE")
+            .env_remove("OMNIGRAPH_BASE_URL");
+        if let Some(base) = base {
+            cmd.env("OMNIGRAPH_BASE_URL", base);
+        }
+        let result = cmd.output().unwrap();
+        assert_eq!(result.status.code(), Some(expected));
+        assert!(result.stdout.is_empty());
+        if expected == 1 {
+            assert_eq!(result.stderr, b"RetiredOmnigraphMcpUrl\n");
+        } else {
+            assert!(result.stderr.is_empty());
+        }
+    }
+}

@@ -206,6 +206,15 @@ impl Http {
     }
 }
 
+/// Identify the retired local MCP listener without querying it.
+pub fn retired_mcp_url(base: &str) -> bool {
+    base.parse::<ureq::http::Uri>().is_ok_and(|uri| {
+        uri.scheme_str() == Some("http")
+            && uri.port_u16() == Some(8080)
+            && uri.host().is_some_and(loopback)
+    })
+}
+
 fn loopback(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host
