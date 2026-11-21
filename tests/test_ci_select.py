@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+import json
 import subprocess
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "tools" / "ci_select.py"
@@ -478,3 +479,40 @@ def test_undraft_starts_no_run_and_a_label_run_never_cancels_a_running_one():
     assert "synchronize" in triggers["pull_request"]["types"]
     cancel = wf["concurrency"]["cancel-in-progress"]
     assert "github.event.action != 'labeled'" in cancel
+
+
+# LAND-PART-ENTRY-CHECKS: a part runs the affected selection, the train and the merge candidate run everything.
+def test_a_labelled_part_on_a_batch_head_runs_the_affected_selection():
+    assert not full_run_required("pull_request", "main", "batch/part-x", [ci_select.PART_LABEL])
+    assert full_run_required("pull_request", "main", "batch/batch9", [])      # the hand-built candidate
+
+
+def test_a_train_runs_everything_whatever_its_labels():
+    assert full_run_required("pull_request", "main", "land/train-20261121-3", [])
+    assert full_run_required("pull_request", "main", "land/train-20261121-3", [ci_select.PART_LABEL])
+    assert not full_run_required("pull_request", "lane/base", "land/train-x", [])
+
+
+def test_the_full_label_still_makes_a_part_a_candidate():
+    assert full_run_required("pull_request", "main", "batch/part-x", [ci_select.PART_LABEL, ci_select.FULL_LABEL])
+
+
+def test_a_part_run_is_selection_in_the_gate_and_a_train_run_must_be_full(capsys):
+    needs = json.dumps(_selection_only_needs())
+    base = ["gate", "--needs", needs, "--event", "pull_request", "--base-ref", "main"]
+    assert ci_select.main(base + ["--head-ref", "batch/part-x", "--labels", '["land-part"]']) == 0
+    assert ci_select.main(base + ["--head-ref", "land/train-1", "--labels", '["land-part"]']) == 1
+    assert "merge candidate ran the affected selection" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("path", [
+    "src/plangraph/planner/provider_stop.py", "src/plangraph/planner/measured_down.py",
+    "src/plangraph/routing_support/liveness.py"])
+def test_a_python_only_quota_change_selects_rust_and_so_the_windows_job(path):
+    assert ci_select.select([path])["rust"] is True
+
+
+def test_the_windows_job_runs_whenever_rust_is_selected():
+    import yaml
+    jobs = yaml.safe_load((Path(__file__).resolve().parents[1] / ".github/workflows/tests.yml").read_text())["jobs"]
+    assert jobs["rust-windows"]["if"] == "needs.select.outputs.rust == 'true'"

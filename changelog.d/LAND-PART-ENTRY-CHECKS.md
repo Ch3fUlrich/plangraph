@@ -1,0 +1,5 @@
+A part enters a train only after its seconds-fast checks and its entry set passed on its head
+(`ci_select.py entry-set`, native Windows for any change that selects Rust CI, latest-attempt and flake
+disposition rule); part pull requests (label `land-part`) run affected-only CI and `land/train-*` heads the
+full suite; `pg-policy --part-entry` refuses imported_history, undeclared_dependency and shared_history;
+`.gitattributes` is a gate path; the cost per part is written to telemetry.

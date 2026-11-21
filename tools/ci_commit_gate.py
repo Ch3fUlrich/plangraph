@@ -101,6 +101,9 @@ GATE_PATHS: tuple[str, ...] = (
     'tools/ci_commit_exempt.txt*',
     '.github/workflows/*',
     'tools/gate_wiring_check.py*',
+    # A merge attribute changes what a merge produces: the root file and nested ones alike.
+    '.gitattributes',
+    '*/.gitattributes',
 )
 
 EXEMPT_SHA_RE = re.compile(r'^[0-9a-fA-F]{40}$')
