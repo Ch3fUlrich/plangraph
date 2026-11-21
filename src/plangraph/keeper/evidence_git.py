@@ -504,6 +504,16 @@ class GitAdapter:
         return [(fields[i][:1], fields[i + 1]) for i in range(0, len(fields) - 1, 2)
                 if fields[i] and fields[i + 1]]
 
+    def ref_commit(self, repo: str, ref: str) -> str:
+        """The commit *ref* names now; raises when git cannot say."""
+        if not valid_ref(ref):
+            raise ValueError("invalid ref")
+        proc = self._run(repo, ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"])
+        sha = proc.stdout.strip() if proc.returncode == 0 else ""
+        if not valid_commit_ref(sha):
+            raise RuntimeError("cannot read the ref")
+        return sha
+
     def _on_first_parent_chain(self, repo: str, sha: str, ref: str) -> bool:
         """True when *sha* is on *ref*'s first-parent chain; raises when git cannot say."""
         if not valid_ref(ref):

@@ -244,3 +244,24 @@ def test_a_direct_commit_on_the_ref_has_no_merge_to_find(tmp_path):
     # An older direct commit, with newer work after it, is still on the chain.
     _git(repo, "commit", "-q", "--allow-empty", "-m", "later")
     assert ("A", "deploy/systemd/direct.service") in adapter.deploy_changes(r, sha, ref)
+
+
+def test_a_snapshot_of_a_rebuilt_ref_is_stale_even_with_the_same_tagged_commit(env):  # noqa: F811
+    tagged = env.repo.land("docs", "Plan-Item: demo:A", 53)
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    # The default ref is rebuilt: the same tagged commit comes in through a different merge that
+    # also brings an untagged unit commit.
+    root = env.repo.root
+    git(root, "reset", "-q", "--hard", "HEAD^")
+    git(root, "checkout", "-q", "-b", "redo", tagged)
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/redo.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "unit without a trailer")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #54 from x/redo", "redo")
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+    again = frozen(env, require_seats=False)
+    assert again["closed"] == [] and "deploy_pending" in again["listed"][0]["reason"]

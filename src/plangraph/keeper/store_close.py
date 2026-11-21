@@ -487,12 +487,17 @@ class CloseMixin:
         if item is None:
             return
         try:
-            shas, changes = self._deploy_changes(self._with_merge_repo(item), named=True, strict=True)
+            tagged = self._with_merge_repo(item)
+            git, project = self._adapter("git"), self._merge_project(tagged)
+            # The ref head first: a scan of a ref that moved while it ran is stale by comparison.
+            head = git.ref_commit(git.repo_path(project), git.repo_ref(project))
+            shas, changes = self._deploy_changes(tagged, named=True, strict=True)
             changes = frozenset(changes)
         except Exception:  # noqa: BLE001 - recorded as unreadable
-            shas, changes = None, None
+            head, shas, changes = None, None, None
         self.__dict__.setdefault("_deploy_warm", {})[key] = {
-            "at": time.monotonic(), "text": self._merge_text(item), "shas": shas, "changes": changes}
+            "at": time.monotonic(), "text": self._merge_text(item), "head": head, "shas": shas,
+            "changes": changes}
 
     def _auto_deploy_pending(self, item):
         """The deploy gate of the automatic close. It fails closed: no scan, no close.
@@ -506,13 +511,19 @@ class CloseMixin:
                     or hit["text"] != self._merge_text(item)):
                 raise Refused("evidence_unverified", "deploy_scan_not_warm")
             changes = hit["changes"]
-            # The snapshot belongs to the commits this close proves: work that landed after the
-            # warm-up (a newer tagged merge) makes it stale, however young it is.
-            now_tagged = context_sources.plan_item_commits(
-                self._adapter("git"), self._merge_project(item), item["key"], fetch=False, limit=None)
-            if changes is not None and (
-                    now_tagged is None or frozenset(c.get("sha") for c in now_tagged) != hit["shas"]):
-                raise Refused("evidence_unverified", "deploy_scan_not_warm")
+            # The snapshot belongs to the ref and the commits this close proves: a ref that moved
+            # (a newer merge, a rebuilt history) or other tagged commits make it stale, however young.
+            if changes is not None:
+                git, project = self._adapter("git"), self._merge_project(item)
+                try:
+                    head = git.ref_commit(git.repo_path(project), git.repo_ref(project))
+                    now_tagged = context_sources.plan_item_commits(
+                        git, project, item["key"], fetch=False, limit=None)
+                except Exception:  # noqa: BLE001 - what cannot be read cannot confirm the snapshot
+                    head, now_tagged = None, None
+                if (head != hit["head"] or now_tagged is None
+                        or frozenset(c.get("sha") for c in now_tagged) != hit["shas"]):
+                    raise Refused("evidence_unverified", "deploy_scan_not_warm")
         else:
             try:
                 changes = self._deploy_changes(item, named=True, strict=True)[1]
