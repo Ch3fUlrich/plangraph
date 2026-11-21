@@ -107,8 +107,9 @@ def big(w):
                              + [defn(f"BG{chunk}", ids[chunk:chunk + 100],
                                      kind="gate", under="GOAL")])
     w.store.create_items(w.p("router"), [defn("BIG", [], kind="gate", under="GOAL")])
-    w.conn.executemany("INSERT INTO edges(src,dst,rel) VALUES(?,?,'depends_on')",
-                       [("demo:BIG", f"demo:{i}") for i in ids])
+    for i in ids:     # one execute per row: PgConnection has no executemany
+        w.conn.execute("INSERT INTO edges(src,dst,rel) VALUES(?,?,'depends_on')",
+                       ("demo:BIG", f"demo:{i}"))
     w.conn.execute("UPDATE items SET state='cancelled' WHERE key='demo:B7'")
     return w
 
