@@ -41,6 +41,30 @@ fn open_key_start(buf: &[u8]) -> Option<usize> {
     find(rest, FOOTER).is_none().then_some(at)
 }
 
+/// End of the first footer after `from` (just past its `PRIVATE KEY-----`).
+fn footer_end_after(buf: &[u8], from: usize) -> Option<usize> {
+    let foot = from + find(&buf[from..], FOOTER)?;
+    let key = foot + find(&buf[foot..], KEY)?;
+    Some(key + KEY.len())
+}
+
+/// End of the complete PEM private-key block that contains position `at`, if any.
+fn key_block_end_containing(buf: &[u8], at: usize) -> Option<usize> {
+    let head = rfind(&buf[..at.min(buf.len())], HEADER)?;
+    let line = &buf[head..buf.len().min(head + HEADER.len() + 48)];
+    find(line, KEY)?;
+    footer_end_after(buf, head).filter(|end| *end > at)
+}
+
+/// Widen `split` so a complete PEM private-key block under the redaction split or
+/// under the front cut is scrubbed whole, never cut in two by either.
+fn outside_key_block(buf: &[u8], split: usize, cut: usize) -> usize {
+    [split, cut]
+        .into_iter()
+        .filter_map(|at| key_block_end_containing(buf, at))
+        .fold(split, usize::max)
+}
+
 /// Where a mid-stream redaction pass may stop: `MARGIN` bytes before the end,
 /// moved back to whitespace and to a character boundary.
 fn margin_split(buf: &[u8]) -> usize {
@@ -97,7 +121,7 @@ impl Capture {
         let mut from = 0;
         while let Some(rel) = find(&seen[from..], KEY) {
             let at = from + rel;
-            let before = &seen[at.saturating_sub(FOOTER.len() + 8)..at];
+            let before = &seen[at.saturating_sub(FOOTER.len() + 32)..at];
             if find(before, FOOTER).is_some() {
                 return Some((at + KEY.len()).saturating_sub(skip));
             }
@@ -114,7 +138,11 @@ impl Capture {
             let split = match (closing, open) {
                 (true, _) => self.buf.len(),
                 (false, Some(at)) => at,
-                (false, None) => margin_split(&self.buf),
+                (false, None) => outside_key_block(
+                    &self.buf,
+                    margin_split(&self.buf),
+                    self.buf.len().saturating_sub(self.max),
+                ),
             };
             let valid = match std::str::from_utf8(&self.buf[..split]) {
                 Err(e) if e.error_len().is_none() => e.valid_up_to(),

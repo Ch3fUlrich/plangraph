@@ -1,6 +1,6 @@
 //! Outcome probe: run before retrying an attempt to see what it left behind.
 
-use crate::check::{run_check_scoped, CheckResult};
+use crate::check::run_check_scoped;
 use crate::git::{check_rev, git, GitError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -25,15 +25,13 @@ pub enum ProbeError {
     Check(#[from] std::io::Error),
 }
 
-/// Whether a jailed check died because the jail helper could not set itself up
-/// (unsupported kernel, bad path, no exec: `pg-jail` exits 64, 78, 126 or 127 and
-/// names itself on stderr), not because the card's check failed.
-fn jail_setup_failed(jailed: bool, r: &CheckResult) -> bool {
-    jailed
-        && matches!(r.exit_code, Some(64 | 78 | 126 | 127))
-        && r.tail
-            .lines()
-            .any(|l| l.trim_start().starts_with("pg-jail:"))
+/// Written by the jailed check's own shell before the card's command runs. A
+/// jailed check that never wrote it did not start (the launcher or the jail
+/// helper refused), which is a probe error, not a failed check.
+const STARTED: &str = ".pg-check-started";
+
+fn marked(cmd: &str) -> String {
+    format!(": > \"$TMPDIR/{STARTED}\"; {cmd}")
 }
 
 /// Number of commits on HEAD of `dir` beyond `base`.
@@ -69,11 +67,21 @@ pub fn probe_scoped(
     if commits_beyond(dir, base)? == 0 {
         return Ok(ProbeOutcome::Nothing);
     }
-    let r = run_check_scoped(check_cmd, dir, timeout, tail_n, jail, &|| false)?;
-    if jail_setup_failed(jail.is_some(), &r) {
-        return Err(ProbeError::Check(std::io::Error::other(
-            "the attempt jail could not be applied",
-        )));
+    let cmd = if jail.is_some() {
+        marked(check_cmd)
+    } else {
+        check_cmd.to_string()
+    };
+    if let Some((_, _, tmp)) = jail {
+        let _ = std::fs::remove_file(tmp.join(STARTED));
+    }
+    let r = run_check_scoped(&cmd, dir, timeout, tail_n, jail, &|| false)?;
+    if let Some((_, _, tmp)) = jail {
+        if !tmp.join(STARTED).exists() {
+            return Err(ProbeError::Check(std::io::Error::other(
+                "the jailed check never started (launcher or jail setup failed)",
+            )));
+        }
     }
     Ok(if r.passed() {
         ProbeOutcome::AlreadyDone
@@ -89,31 +97,45 @@ mod tests {
 
     const T: Duration = Duration::from_secs(20);
 
-    fn result(code: i32, tail: &str) -> CheckResult {
-        CheckResult {
-            exit_code: Some(code),
-            signal: None,
-            timed_out: false,
-            cancelled: false,
-            tail: tail.into(),
-            output_hash: String::new(),
-        }
+    #[test]
+    fn the_start_marker_is_written_before_the_card_command_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(marked("exit 3"))
+            .env("TMPDIR", tmp.path())
+            .status()
+            .unwrap();
+        assert_eq!(out.code(), Some(3), "the card's own exit code is kept");
+        assert!(tmp.path().join(STARTED).exists());
     }
 
     #[test]
-    fn a_jail_that_cannot_apply_is_not_a_failed_check() {
-        let setup = result(78, "pg-jail: Landlock ABI 3 is not supported");
-        assert!(jail_setup_failed(true, &setup));
-        // An unjailed run, a plain failing check and a different exit are checks.
-        assert!(!jail_setup_failed(false, &setup));
-        assert!(!jail_setup_failed(true, &result(78, "make: *** error")));
-        assert!(!jail_setup_failed(true, &result(1, "pg-jail: boom")));
-        for code in [64, 126, 127] {
-            assert!(jail_setup_failed(
-                true,
-                &result(code, "out\npg-jail: refused")
-            ));
-        }
+    fn a_jailed_check_that_never_starts_is_an_error_not_a_partial() {
+        let (d, base) = repo();
+        write(d.path(), "work.txt", "x");
+        commit_all(d.path(), "work");
+        let tmp = tempfile::tempdir().unwrap();
+        // The helper exists but refuses (as an unsupported kernel does); whether the
+        // launcher in front of it is missing, broken or working, the check never runs.
+        let bin = tmp.path().join("refusing-jail");
+        std::fs::write(
+            &bin,
+            "#!/bin/sh\necho 'pg-jail: unsupported' >&2\nexit 78\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let limits = crate::scope::ScopeLimits::default();
+        let r = probe_scoped(
+            d.path(),
+            &base,
+            "test -f work.txt",
+            T,
+            10,
+            Some((&bin, &limits, tmp.path())),
+        );
+        assert!(matches!(r, Err(ProbeError::Check(_))), "{r:?}");
     }
 
     #[test]

@@ -97,9 +97,9 @@ fn pem(lines: usize) -> (String, &'static str) {
     const MARK: &str = "Qm7xLp3Rt9Vw1Yc5Nb8";
     let mut text = ["-----BEGIN ", "PRIVATE", " KEY-----\n"].concat();
     for i in 0..lines {
-        // 64-character lines, as PEM wraps them: a read boundary inside a line leaves
-        // two halves that are each too short for the long-blob rule.
-        text.push_str(&format!("Zk{i:03}{MARK}{MARK}{MARK}ab\n"));
+        // Spaces keep every run below the long-blob rule and stop wrapped-line joining,
+        // so only the PEM rules (not luck) decide whether a body line is scrubbed.
+        text.push_str(&format!("Zk{i:03} {MARK} {MARK} ab\n"));
     }
     text.push_str(&["-----END ", "PRIVATE", " KEY-----\n"].concat());
     (text, MARK)
@@ -114,7 +114,7 @@ fn pem_block_split_across_midstream_drains_leaves_no_body_line() {
     let (block, mark) = pem(40);
     let data = [" filler\n".repeat(60), block, "tail\n".repeat(60)].concat();
     // Small reads and a small capture: the drains land inside the block.
-    for size in [7, 13, 16, 29, 50] {
+    for size in [7, 13, 16, 29, 50, 8192] {
         let out = tail(data.clone().into_bytes(), size, 300, true);
         assert!(!scrubbed(&out).contains(mark), "size {size}: {out:?}");
         assert!(!out.contains("Zk0"), "size {size}: raw body kept: {out:?}");
@@ -155,4 +155,25 @@ fn pem_block_open_at_a_drain_stays_whole_until_its_footer_arrives() {
     let data = ["x\n".repeat(1750), block, "tail\n".repeat(400)].concat();
     let out = tail(data.into_bytes(), 64, 2000, true);
     assert!(!scrubbed(&out).contains(mark), "{out:?}");
+}
+
+#[test]
+fn complete_pem_block_straddling_the_redaction_split_leaves_no_body() {
+    let (block, mark) = pem(40);
+    // One read holds the whole block, and the 512-byte margin falls inside it.
+    let data = ["x\n".repeat(1200), block, "tail\n".repeat(90)].concat();
+    let out = tail(data.into_bytes(), 8192, 2000, true);
+    assert!(!scrubbed(&out).contains(mark), "{out:?}");
+}
+
+#[test]
+fn encrypted_key_footer_ends_the_swallow_and_later_output_survives() {
+    let (block, mark) = pem(400);
+    let block = block.replace("PRIVATE KEY", "ENCRYPTED PRIVATE KEY");
+    let data = [block, "visible-after\n".repeat(5)].concat();
+    for size in 1..=12 {
+        let out = tail(data.clone().into_bytes(), size, 120, true);
+        assert!(!scrubbed(&out).contains(mark), "size {size}: {out:?}");
+        assert!(out.contains("visible-after"), "size {size}: {out:?}");
+    }
 }
