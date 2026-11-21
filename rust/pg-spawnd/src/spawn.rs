@@ -141,6 +141,7 @@ pub(crate) fn spawn(
         }
     };
     let args = &admitted;
+    crate::empty_diff::check(args)?;
     let plan: Value = serde_json::from_str(&placement::route(state, args)?)
         .map_err(|_| ToolError::Internal("route adapter returned invalid output".into()))?;
     let leg = &plan["first_leg"];

@@ -4,16 +4,16 @@ use pg_worker_core::{hosts::RepoEntry, workspace::DiffRef, workspace_resolver};
 use std::{
     io::Read,
     path::Path,
-    process::Stdio,
+    process::{Command, Stdio},
     sync::mpsc,
     time::{Duration, Instant},
 };
 
-pub(crate) fn read_diff(
+fn diff_command(
     repo: &RepoEntry,
     diff: &DiffRef,
-    cap: usize,
-) -> Result<Vec<u8>, InlineDiffError> {
+    options: &[&str],
+) -> Result<Command, InlineDiffError> {
     validate(diff)?;
     for sha in [&diff.base_sha, &diff.head_sha] {
         workspace_resolver::ensure_commit(repo, sha, Duration::from_secs(10))
@@ -29,10 +29,9 @@ pub(crate) fn read_diff(
         "diff",
         "--no-ext-diff",
         "--no-textconv",
-        "--binary",
-        &format!("{}...{}", diff.base_sha, diff.head_sha),
-        "--",
     ]);
+    cmd.args(options)
+        .args([&format!("{}...{}", diff.base_sha, diff.head_sha), "--"]);
     if let Some(paths) = &diff.paths {
         cmd.args(paths);
     }
@@ -42,6 +41,36 @@ pub(crate) fn read_diff(
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
+    Ok(cmd)
+}
+
+pub(crate) fn has_diff(repo: &RepoEntry, diff: &DiffRef) -> Result<bool, InlineDiffError> {
+    let mut cmd = diff_command(repo, diff, &["--quiet"])?;
+    let mut child = cmd
+        .stdout(Stdio::null())
+        .spawn()
+        .map_err(|_| InlineDiffError::Git)?;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let completed = wait_before_deadline(deadline, Instant::now, std::thread::sleep, || {
+        child.try_wait().map(|status| status.is_some())
+    });
+    if !matches!(completed, Ok(true)) {
+        let _ = reap_after_kill(&mut child, std::process::Child::kill);
+        return Err(InlineDiffError::Git);
+    }
+    match child.wait().ok().and_then(|status| status.code()) {
+        Some(0) => Ok(false),
+        Some(1) => Ok(true),
+        _ => Err(InlineDiffError::Git),
+    }
+}
+
+pub(crate) fn read_diff(
+    repo: &RepoEntry,
+    diff: &DiffRef,
+    cap: usize,
+) -> Result<Vec<u8>, InlineDiffError> {
+    let mut cmd = diff_command(repo, diff, &["--binary"])?;
     collect_diff(
         cmd.spawn().map_err(|_| InlineDiffError::Git)?,
         cap,
@@ -53,36 +82,7 @@ pub(crate) fn list_changed_files(
     repo: &RepoEntry,
     diff: &DiffRef,
 ) -> Result<Vec<String>, InlineDiffError> {
-    validate(diff)?;
-    for sha in [&diff.base_sha, &diff.head_sha] {
-        workspace_resolver::ensure_commit(repo, sha, Duration::from_secs(10))
-            .map_err(|_| InlineDiffError::Git)?;
-    }
-    let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
-    cmd.args([
-        "--literal-pathspecs",
-        "-c",
-        "core.hooksPath=",
-        "-c",
-        "core.fsmonitor=false",
-        "diff",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-renames",
-        "--name-only",
-        "-z",
-        &format!("{}...{}", diff.base_sha, diff.head_sha),
-        "--",
-    ]);
-    if let Some(paths) = &diff.paths {
-        cmd.args(paths);
-    }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
+    let mut cmd = diff_command(repo, diff, &["--no-renames", "--name-only", "-z"])?;
     let bytes = collect_diff(
         cmd.spawn().map_err(|_| InlineDiffError::Git)?,
         16 * 1024 * 1024,

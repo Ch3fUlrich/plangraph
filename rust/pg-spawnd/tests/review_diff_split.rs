@@ -19,6 +19,10 @@ struct ReviewFixture {
 
 impl ReviewFixture {
     fn new(max_request_tokens: u64, command: &str) -> Self {
+        Self::with_daemon(binary::spawnd(), max_request_tokens, command)
+    }
+
+    fn with_daemon(daemon: &str, max_request_tokens: u64, command: &str) -> Self {
         let state = TempDir::new();
         let repo = state.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
@@ -111,7 +115,7 @@ impl ReviewFixture {
         std::fs::write(cfg_dir.join("hosts.json"), hosts.to_string()).unwrap();
 
         let socket = state.path().join("socket");
-        let mut cmd = std::process::Command::new(binary::spawnd());
+        let mut cmd = std::process::Command::new(daemon);
         cmd.args(["serve", "--no-scope", "--socket"])
             .arg(&socket)
             .arg("--state")
@@ -426,4 +430,60 @@ fi
     assert_eq!(row["passed"], false, "{row}");
     let seats = row["seats"].as_array().unwrap();
     assert_eq!(seats.len(), 2, "{row}");
+}
+
+#[test]
+fn unfetched_empty_registry_range_is_refused_before_routing() {
+    let mut f = ReviewFixture::with_daemon(env!("CARGO_BIN_EXE_pg-spawnd"), 5000, "exit 99");
+    let base = f.git(&["rev-parse", "HEAD"]);
+    let upstream = f.state.path().join("remote");
+    std::fs::create_dir(&upstream).unwrap();
+    let git = |args: &[&str]| {
+        let output = pg_worker_core::git_test_support::command(&upstream)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    };
+    git(&["clone", "--no-local", f.repo.to_str().unwrap(), "."]);
+    git(&["commit", "--allow-empty", "-qm", "same tree"]);
+    let head = git(&["rev-parse", "HEAD"]);
+    f.git(&["remote", "add", "origin", upstream.to_str().unwrap()]);
+    assert!(!pg_worker_core::git_test_support::command(&f.repo)
+        .args(["cat-file", "-e", &head])
+        .status()
+        .unwrap()
+        .success());
+
+    let config = f.state.path().join("xdg/plangraph/hosts.json");
+    let mut hosts: Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+    hosts["hosts"][0]["repos"]["demo"]["remote"] = json!(upstream);
+    std::fs::write(config, hosts.to_string()).unwrap();
+
+    let route = f.state.path().join("route");
+    std::fs::write(
+        &route,
+        "#!/bin/sh\ntouch \"$(dirname \"$0\")/routed\"\nexit 1\n",
+    )
+    .unwrap();
+
+    let reply = f.spawn_review(json!({
+        "repo_id": "demo", "base_sha": base, "head_sha": head
+    }));
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("empty review diff"),
+        "{reply}"
+    );
+    assert_eq!(f.git(&["cat-file", "-t", &head]), "commit");
+    assert!(!f.state.path().join("routed").exists());
+    let runs = f.state.path().join("runs");
+    assert!(!runs.exists() || runs.read_dir().unwrap().next().is_none());
 }
