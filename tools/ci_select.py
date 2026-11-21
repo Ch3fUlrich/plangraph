@@ -53,6 +53,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/routing_support/__init__.py",
     "src/plangraph/routing_support/catalog_schema.sql",
     "src/plangraph/routing_support/catalog_benchmark_seed.sql",
+    "configuration/benchmark_data_pending.json",
     "src/plangraph/routing_support/opencode_overlay.py",
     "src/plangraph/routing_support/opencode_render.py",
     "src/plangraph/routing_support/resolver.py",

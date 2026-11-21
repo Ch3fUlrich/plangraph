@@ -1,2 +1,3 @@
 Interpret provider connection health independently. An OmniRoute connection pending, refreshing, expired or with a null test status no longer makes healthy neighboring connections unreadable. Malformed snapshots still use the existing retry and probe path.
 Dispatch uses the routing snapshot error when a qualified launch key would otherwise miss the bare model read. The archived Gemini, Sonnet and Opus attempts exercise retry, failure details and witnessed fallthrough.
+The replay keys candidates by leg ID and asserts the bare-model read on both snapshot attempts before each probe.

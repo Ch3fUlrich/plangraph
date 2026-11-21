@@ -9,18 +9,23 @@ fn benchmark_rows_keep_effort_harness_provenance_and_missing_values() {
         .current_dir(&repo)
         .env("PYTHONPATH", repo.join("src"))
         .env("PLANGRAPH_CATALOG_DB", state.path().join("catalog.sqlite"))
+        .env(
+            "PLANGRAPH_BENCH_PENDING",
+            repo.join("configuration/benchmark_data_pending.json"),
+        )
         .args([
             "-c",
             r#"
 import asyncio
 from dataclasses import replace
+import json
 import os
 from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from plangraph.planner.benchmarks import benchmark_for_leg
+from plangraph.planner.benchmarks import BenchRequired, benchmark_for_leg
 from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
 from plangraph.planner.routing import plan_spawn
 from plangraph.routing_support.catalog_db import CatalogDB
@@ -100,7 +105,8 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     assert {leg.effort for leg in luna_legs} == {'low', 'medium', 'high', 'xhigh', 'max'}
     assert all(benchmark_for_leg(data, leg)['imputed'] for leg in luna_legs)
     base = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
-    assert benchmark_for_leg(data, replace(base, effort='high')) is None
+    missing = replace(base, effort='high')
+    assert benchmark_for_leg(data, missing) is None
     leg = replace(base, effort='low')
     def leg_status(*args, **kwargs):
         return {'state': 'ok', 'evidence': None}
@@ -108,6 +114,14 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
                       legs=(leg,), benchmark=data, strict=True, leg_reader=leg_status,
                       catalog_rows=db.list_models())
     assert not plan.gaps and plan.candidates[0]['u_core'] is not None
+    try:
+        plan_spawn({'estimate_tokens': 1000}, role='review', writer_families=('gpt',),
+                   legs=(missing,), benchmark=data, strict=True, leg_reader=leg_status,
+                   catalog_rows=db.list_models())
+    except BenchRequired as error:
+        assert error.gaps == [{'leg': missing.id, 'model': missing.model, 'reason': 'no benchmark row'}]
+    else:
+        raise AssertionError('strict route accepted a missing effort cell')
 
     # Call the public catalog query with a deterministic live-state reader.
     server = SimpleNamespace(_source_guard=SimpleNamespace(check=lambda *a: None))
@@ -116,6 +130,11 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
         queried = asyncio.run(MCPSpawnerServer.call_tool(server, 'plangraph_agent_query_catalog', {}))
     assert next(row for row in queried['models'] if row['id'] == model)['benchmark_rows'] == list(rows.values())
     assert {(r['model_id'], r['effort'], r['harness']) for r in queried['benchmark_rows']} >= required_priors
+    muse_row = next(row for row in queried['benchmark_rows'] if row['model_id'] == muse.model)
+    if not (muse_row['source_url'] and muse_row['source_date']):
+        pending = json.loads(Path(os.environ['PLANGRAPH_BENCH_PENDING']).read_text(encoding='utf-8'))
+        entry = next(row for row in pending if row['subject'] == muse.model and row['effort'] == muse_row['effort'])
+        assert 'Muse Amber' in entry['reason'] and 'publisher' in entry['reason']
     db.init_and_seed()
     assert any(row['origin'] == 'own' for row in db.get_model(model)['benchmark_rows'])
     export = db.export_json()

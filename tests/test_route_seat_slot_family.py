@@ -193,15 +193,23 @@ def test_recorded_snapshot_skips_probe_before_unwitnessed_opus_fallback(service,
     reason = 'leg_state_snapshot_error: OmniRouteUnreachable: bad_snapshot'
     svc = service()
     plan = svc._route(CARD, 'review', ['gpt'], benchmark={})
+    snapshot_skips = {leg_id for leg_id, skip in recorded if skip}
     plan = replace(plan, legs=legs, candidates=tuple(
-        dict(leg=leg, leg_state_reason=reason) for leg, skip in recorded if skip))
+        dict(leg=leg.id, leg_state_reason=reason) for leg in legs if leg.id in snapshot_skips))
     monkeypatch.setattr(svc, '_route', lambda *a, **kw: plan)
     raw_models = {leg.model for leg in legs[:2]}
-    svc.runner.leg_reader.leg_status = lambda model, **kw: dict(
-        state='ok', evidence=None, reason=reason if model in raw_models else 'ok')
+    reads = []
+
+    def leg_status(model, **kwargs):
+        reads.append(model)
+        return dict(state='ok', evidence=None, reason=reason if model in raw_models else 'ok')
+
+    svc.runner.leg_reader.leg_status = leg_status
     probes = []
 
     async def probe(runner, leg, **kwargs):
+        assert reads[-2:] == [leg_probe.key(leg), leg.model]
+        assert reads.count(leg.model) == 2
         probes.append(leg.id)
         return dict(ok=leg == SONNET, reason='fixture timeout')
 

@@ -3,3 +3,5 @@ Add subscription quota alarms: a 15-minute user timer reads the gateway quota_sn
 Local push checks select affected files against origin/main and refuse full-suite execution (operator package R2).
 
 - Quota alarms normalize SQLite timestamps, escape read-only database URIs, and retain poll checkpoints and null-reset observations so refills rearm after downtime. The timer quotes its database path; contributor notes use the existing section.
+
+SKIPPED plangraph:QUOTA-ALARMS-50-75-90 in batch 57. D-5812 calls for alarms and D-5830 accepts the existing Python implementation. The timer, read-only snapshot reader, threshold deduplication, and burn-rate and projection tests are already in the base tree.

@@ -70,6 +70,9 @@ A separate `measured_at` records the task run date when the source reports it.
 Publisher results for named model efforts are priors for the serving harness.
 The legacy contract and its pending list still track the original seed rows and
 their provenance. No publisher result was established for the Muse Amber name.
+The pending Muse Spark contributor entry records the unresolved identity and
+provenance. The catalog contract checks that entry when its legacy row lacks a
+publisher link or source date.
 
 `python tools/bench_gate.py --refresh --db PATH` runs the Rust `plangraph`
 refresh command. It imports DeepSWE, CursorBench and FrontierSWE observations

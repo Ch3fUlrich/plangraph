@@ -30,11 +30,13 @@ fn refresh_reuses_both_validators_and_writes_no_rows_on_304() {
         .args(["-c", r#"
 import io, sys, zipfile
 data = io.BytesIO()
+models = ['claude-fable-5-2'] + [f'fixture-model-{i}' for i in range(59)]
+efforts = ('low', 'medium', 'high', 'xhigh', 'max')
 with zipfile.ZipFile(data, 'w') as archive:
     archive.writestr('cursorbench_external.csv',
         'Model version,Name,Reasoning level,Score,Cost per task,Source,Date of evaluation\n' +
-        ''.join(f'claude-fable-5-2_{level},Claude Fable 5.2 ({level}),{level},0.55,,https://example.invalid/bench,2026-11-20\n'
-                for level in ('low','medium','high','xhigh','max')))
+        ''.join(f'{model}_{level},{model} ({level}),{level},0.55,,https://example.invalid/bench,2026-11-20\n'
+                for model in models for level in efforts))
     archive.writestr('aider_polyglot_external.csv', 'Model version,Score\nforbidden_high,100\n')
 sys.stdout.buffer.write(data.getvalue())
 "#])
@@ -95,8 +97,17 @@ sys.stdout.buffer.write(data.getvalue())
         );
         serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap()
     };
-    assert_eq!(refresh()["rows_written"], 6);
+    assert_eq!(refresh()["rows_written"], 301);
     let catalog = rusqlite::Connection::open(&db).unwrap();
+    let effort_rows: u32 = catalog
+        .query_row(
+            "SELECT count(*) FROM catalog_benchmark_rows
+         WHERE origin='cursorbench' AND harness='cursor' AND effort != ''",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(effort_rows, 300);
     let seeded: bool = catalog.query_row(
         "SELECT EXISTS(SELECT 1 FROM catalog_benchmark_price_inputs WHERE openrouter_id='xiaomi/mimo-v2.6-pro')",
         [], |r| r.get(0)).unwrap();
@@ -106,6 +117,16 @@ sys.stdout.buffer.write(data.getvalue())
          WHERE model_id='claude-fable-5-2' AND measured_at='2026-11-20' AND effort_channel='publisher'",
         [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
     assert_eq!((rows, null_costs), (5, 5));
+    let mut fable = catalog.prepare(
+        "SELECT effort FROM catalog_benchmark_rows WHERE model_id='claude-fable-5-2' ORDER BY effort"
+    ).unwrap();
+    let fable_efforts = fable
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(fable_efforts, ["high", "low", "max", "medium", "xhigh"]);
+    drop(fable);
     let effort: String = catalog
         .query_row(
             "SELECT effort FROM catalog_benchmark_rows WHERE model_id='anthropic/claude-fable-5.2'",
