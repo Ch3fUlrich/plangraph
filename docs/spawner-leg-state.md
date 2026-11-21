@@ -148,3 +148,14 @@ Scheduled review probes (`--all-reviewers`, `caller='review-probe'`, source `rev
 An `Individual quota reached` harness refusal with a future reset applies to all AGY models on the account. A model-specific refusal applies only to that model and its effort variants. Native Claude subscription legs do not share AGY quota state.
 
 Launch admission rereads quota evidence rather than trusting an earlier plan. `QuotaGate` reads the configured local `QUOTA_SNAPSHOT_DB` read-only on every check, even when gateway liveness discovery is disabled; only management API reads are cached for 60 seconds. A provider pool is skipped while every account is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1), until the earliest account reset. A reset-less row holds for 30 minutes from its timestamp or first observation.
+
+The remote reader uses `GET /api/usage/provider-limits` for cached subscription
+windows and joins the active connection IDs returned by `GET /api/providers`.
+The OmniRoute MCP quota tool reads `/api/usage/quota`, which can report learned
+rate limits or infer quota from queue pressure. The direct REST cache preserves
+the subscription window and observation time. Older gateways returning HTTP
+404 on the provider-limits endpoint use the legacy utilization endpoint. Missing
+configuration, credentials or unreadable responses leave quota unknown.
+
+`plangraph quota [--db PATH]` prints usage by provider, account and window with the
+recorded observation time. `--db` selects an explicit read-only snapshot store.

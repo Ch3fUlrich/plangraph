@@ -120,7 +120,7 @@ def test_management_redirect_never_forwards_key(monkeypatch, reader, status):
         else:
             with pytest.raises(LookupError, match='^quota snapshots unreadable$'):
                 quota_snapshots.fetch_snapshot_rows(env)
-            path = quota_snapshots.URL_PATH
+            path = quota_snapshots.LIMITS_PATH
         assert seen == [(path, 'Bearer fixture-key')]
     finally:
         server.shutdown()

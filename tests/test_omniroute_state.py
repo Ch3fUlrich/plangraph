@@ -158,6 +158,46 @@ def test_provider_check_in_progress_does_not_invalidate_healthy_connection(statu
     assert snapshot["unrelated"].reason == "inactive"
 
 
+def test_provider_limits_join_live_accounts_and_keep_observation_time():
+    requests = []
+    replies = {
+        '/api/usage/provider-limits': {'caches': {
+            'codex-account': {'fetchedAt': '2026-11-21T19:00:00Z', 'quotas': {
+                'weekly': {'remainingPercentage': 0, 'resetAt': '2026-11-24T19:00:00Z'},
+                'daily': {'remaining': 9, 'total': 12},
+            }},
+            'retired-account': {'fetchedAt': '2026-11-21T19:00:00Z', 'quotas': {
+                'weekly': {'remainingPercentage': 100},
+            }},
+        }},
+        '/api/providers': {'connections': [
+            {'id': 'codex-account', 'provider': 'codex', 'isActive': True},
+            {'id': 'agy-account', 'provider': 'agy', 'isActive': True},
+            {'id': 'retired-account', 'provider': 'codex', 'isActive': False},
+        ]},
+    }
+    def endpoint(url, headers, timeout):
+        assert headers == {'Authorization': 'Bearer synthetic'}
+        requests.append(url.removeprefix('https://gw.example'))
+        return 200, json.dumps(replies[requests[-1]])
+
+    rows = quota_snapshots.fetch_snapshot_rows({'OMNIROUTE_BASE_URL': 'https://gw.example/v1',
+                               'PLANGRAPH_GATEWAY_LOG_TOKEN': 'synthetic'}, fetch=endpoint)
+    assert requests == ['/api/usage/provider-limits', '/api/providers']
+    by_window = {(row['provider'], row['window_key']): row for row in rows}
+    assert set(by_window) == {('codex', 'daily'), ('codex', 'weekly'), ('agy', 'unknown')}
+    assert by_window['codex', 'daily']['remaining_percentage'] == 75
+    weekly = by_window['codex', 'weekly']
+    assert weekly['remaining_percentage'] == 0
+    assert weekly['created_at'] == '2026-11-21T19:00:00Z'
+    assert weekly['next_reset_at'] == '2026-11-24T19:00:00Z'
+    assert by_window['agy', 'unknown']['remaining_percentage'] is None
+    gate = quota_snapshots.QuotaGate(lambda: rows)
+    status = gate.apply('omniroute/cx-gpt-test', {'state': 'ok'},
+                        quota_snapshots._ts(weekly['created_at']))
+    assert status['state'] == 'limited'
+
+
 def test_from_env_injected_resolution():
     calls = []
     def resolve(env):

@@ -1,0 +1,1 @@
+Use cached subscription windows from `GET /api/usage/provider-limits` for the shared quota reader. Join active accounts and retain reset and observation times. The OmniRoute MCP quota tool reads `/api/usage/quota`, whose learned limits and queue-pressure estimates represent different signals. A gateway without the provider-limits endpoint keeps the legacy utilization read.

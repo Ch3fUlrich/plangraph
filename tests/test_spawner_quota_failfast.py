@@ -89,7 +89,10 @@ def test_resetless_api_refresh_does_not_extend_hold_forever(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: clock[0])
     data = [dict(provider='codex:a1', remainingPct=0)]
-    fetch = lambda *a: (200, json.dumps({'data': data}).encode())
+    def fetch(url, *_):
+        if url.endswith(quota_snapshots.LIMITS_PATH):
+            return 404, b'{}'
+        return 200, json.dumps({'data': data}).encode()
     gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: clock[0])
     assert gate.apply(SOL, OK)['evidence']['reset_at'] == 2800
     clock[0] = 2000
@@ -166,7 +169,9 @@ def test_api_reset_and_resetless_observation_holds(monkeypatch):
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda env: 'k')
     monkeypatch.setattr(quota_snapshots.time, 'time', lambda: 1000.0)
     for extra, until in [('', 2800.0), (', "next_reset_at": "1970-01-01T02:00:00Z"', 7200.0)]:
-        def fetch(*args):
+        def fetch(url, *_):
+            if url.endswith(quota_snapshots.LIMITS_PATH):
+                return 404, b'{}'
             return 200, ('{"data":[{"provider":"codex:a1","remainingPct":0' + extra + '}]}').encode()
         gate = QuotaGate(lambda: fetch_snapshot_rows({}, fetch=fetch), clock=lambda: 1000.0)
         assert gate.apply(SOL, OK, 1001)['evidence']['reset_at'] == until
@@ -242,11 +247,14 @@ def test_snapshot_fetch_is_read_only_json_and_unreadable_is_a_lookup_error(monke
     seen = []
     def fetch(url, headers, timeout):
         seen.append((url, headers))
+        if url.endswith(quota_snapshots.LIMITS_PATH):
+            return 404, b'{}'
         return 200, b'{"data": [{"provider": "codex:a1", "remainingPct": 0}]}'
     rows = fetch_snapshot_rows({}, fetch=fetch)
     assert rows[0]['provider'] == 'codex:a1' and rows[0]['remainingPct'] == 0
     assert 'created_at' not in rows[0]  # observation time belongs to the gate, not each fetch
-    assert seen[0][0].startswith('https://gw/api/usage/utilization?') and seen[0][1] == {'Authorization': 'Bearer k'}
+    assert seen == [(f'https://gw{path}', {'Authorization': 'Bearer k'})
+                    for path in (quota_snapshots.LIMITS_PATH, quota_snapshots.LEGACY_PATH)]
     for bad in (lambda u, h, t: (500, b'{}'), lambda u, h, t: (200, b'nope'), lambda u, h, t: (_ for _ in ()).throw(OSError())):
         with pytest.raises(LookupError):
             fetch_snapshot_rows({}, fetch=bad)

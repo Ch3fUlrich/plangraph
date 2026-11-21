@@ -267,7 +267,9 @@ def test_management_urls_preserve_authority(endpoint, management, monkeypatch):
     assert state.base_url == management
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda _: 'synthetic')
     def fetch(url, headers, timeout):
-        assert url == management + quota_snapshots.URL_PATH
+        if url == management + quota_snapshots.LIMITS_PATH:
+            return 404, '{}'
+        assert url == management + quota_snapshots.LEGACY_PATH
         return 200, '[]'
     assert quota_snapshots.fetch_snapshot_rows(secrets, fetch=fetch) == []
 
