@@ -59,7 +59,7 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
         write(clean(pending.decode('utf-8')))
 
 def _rotate_log(path):
-    """Move the full log to `path.1` and empty `path`, which stays present throughout."""
+    """Move the full log to `path.1` (best effort) and empty `path`, which stays present throughout."""
     import shutil
     mode = 0o600
     tmp = path + '.1.tmp'
@@ -67,7 +67,7 @@ def _rotate_log(path):
         with open(path, 'rb') as source, os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), 'wb') as target:
             shutil.copyfileobj(source, target)
         os.replace(tmp, path + '.1')
-    except FileNotFoundError:
+    except OSError:
         pass
     os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode))
 
@@ -80,8 +80,10 @@ def _private_rotating_log(path, max_bytes=1024 * 1024):
         def shouldRollover(self, record): return self.stream.tell() + len(self.format(record).encode('utf-8')) + 1 > self.maxBytes
         def doRollover(self):
             self.stream.close()
-            _rotate_log(self.baseFilename)
-            self.stream = self._open()
+            try:
+                _rotate_log(self.baseFilename)
+            finally:
+                self.stream = self._open()
     logging.raiseExceptions = False
     handler = PrivateLog(path, maxBytes=max_bytes, backupCount=1)
     handler.terminator = ''

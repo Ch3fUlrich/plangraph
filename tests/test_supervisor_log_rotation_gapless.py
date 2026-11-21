@@ -68,3 +68,18 @@ def test_rotation_source_is_self_contained_for_an_older_run_tree(tmp_path):
 def test_rotation_only_source_leaves_the_handler_out():
     assert '_private_rotating_log' not in cli._rotation_source(handler=False)
     assert 'def _rotate_log' in cli._rotation_source(handler=False)
+
+
+def test_a_failed_backup_still_empties_the_log_and_logging_resumes(tmp_path):
+    log = tmp_path / 'supervisor-v.stderr.log'
+    (tmp_path / 'supervisor-v.stderr.log.1.tmp').mkdir()  # blocks the backup copy
+    handler = cli._private_rotating_log(str(log), max_bytes=64)
+    for index in range(4):
+        handler.emit(logging.makeLogRecord(dict(msg=f'line {index} ' + 'x' * 30 + '\n', args=())))
+    handler.close()
+    (tmp_path / 'supervisor-v.stderr.log.1.tmp').rmdir()
+    handler = cli._private_rotating_log(str(log), max_bytes=64)
+    handler.emit(logging.makeLogRecord(dict(msg='after\n', args=())))
+    handler.close()
+    text = log.read_text()
+    assert 'line 3' in text and 'after' in text and log.stat().st_size <= 64
