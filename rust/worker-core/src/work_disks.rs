@@ -1,5 +1,5 @@
 //! Admission for a configured pool of mounted worktree filesystems.
-use crate::disk_runtime::{disk_space, DiskSpace};
+use crate::disk_runtime::DiskSpace;
 use std::{
     env, io,
     path::{Path, PathBuf},
@@ -86,7 +86,7 @@ fn mounted_space(mount: &Path) -> io::Result<DiskSpace> {
             "worktree root is outside its work filesystem",
         ));
     }
-    disk_space(&root)
+    crate::disk_runtime::disk_space(&root)
 }
 
 #[cfg(not(unix))]

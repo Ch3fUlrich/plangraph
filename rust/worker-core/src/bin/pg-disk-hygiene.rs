@@ -141,6 +141,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
         private_guards
             .pinned
             .extend(pg_worker_core::cargo_cache::shared_cache_roots()?);
+        private_guards.pinned.extend(roots.keys().cloned());
         let temp = env::temp_dir();
         let tmp = Path::new("/tmp");
         for path in std::iter::once(temp.as_path()).chain((temp != tmp).then_some(tmp)) {
