@@ -4,3 +4,4 @@ projects the stored inventory again with the secret redactor and the current pri
 (an unusable list hides every host, the timestamp and the unavailable reasons are allowlisted),
 and the scheduled `--local` run lists configured remote hosts as unknown (`not_collected`)
 instead of dropping them.
+The agent-view tests build `pg-spawnd` in the tree's own `rust/target` and use the path Cargo reports.

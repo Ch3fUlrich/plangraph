@@ -20,13 +20,10 @@ def home(tmp_path):
 
 @pytest.fixture(autouse=True)
 def spawnd(monkeypatch):
-    """Publication runs the built spawner binary (``agents-view --publish``)."""
-    from _spawnd import built_rust_binary
+    """Publication runs the spawner binary built for this tree (``agents-view --publish``)."""
+    from _spawnd import build_spawnd
     from plangraph import fleet_snapshot
-    binary = built_rust_binary('pg-spawnd', 'release')
-    if not binary.is_file():
-        binary = built_rust_binary('pg-spawnd')
-    assert binary.is_file(), f'build pg-spawnd before running fleet tests: {binary}'
+    binary = build_spawnd()
     monkeypatch.setattr(fleet_snapshot, '_projection_binary', lambda: str(binary))
     return binary
 
@@ -295,3 +292,16 @@ def test_scheduled_local_write_keeps_configured_hosts_unknown_through_render(
     view = _published_view(render({'items': []}, tmp_path, cdn=True, live_agents=True))
     far = [h for h in view['hosts'] if h['host'] == 'far-host']
     assert far and far[0]['readable'] is False and far[0]['reason'] == 'not_collected'
+
+
+def test_cargo_artifact_report_names_the_exact_binary():
+    from _spawnd import artifact_executable
+    lines = [json.dumps(dict(reason='compiler-artifact', target=dict(name='pg-spawnd', kind=['lib']),
+                             executable=None)),
+             'not json',
+             json.dumps(dict(reason='compiler-artifact', target=dict(name='other', kind=['bin']),
+                             executable='/t/other')),
+             json.dumps(dict(reason='compiler-artifact', target=dict(name='pg-spawnd', kind=['bin']),
+                             executable='/per-run/debug/pg-spawnd'))]
+    assert artifact_executable(lines, 'pg-spawnd') == '/per-run/debug/pg-spawnd'
+    assert artifact_executable(lines[:3], 'pg-spawnd') is None

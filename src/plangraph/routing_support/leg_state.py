@@ -404,22 +404,29 @@ class LegAdapter:
     def __init__(self, store, provider, models=None, *, enabled=False,
                  clock=time.monotonic, ttl_s=60):
         self.store, self.provider = store, provider
-        self.models = self.standalone_models if models is None else models
+        # A failed discovery raises into the snapshot-error path (retry, then probe); it is
+        # never an empty list, which would read as every model being unlisted.
+        self.models = self.discover_standalone if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
     def __getattr__(self, name):
         return getattr(self.store, name)
     @staticmethod
-    def standalone_models():
+    def discover_standalone():
+        """Standalone model ids from ``opencode models``; raises when discovery itself fails."""
         import subprocess
         from .opencode_render import drop_parent_only_env
+        result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
+                                text=True, timeout=8, shell=False, check=True,
+                                env=drop_parent_only_env(dict(os.environ)))
+        return result.stdout.splitlines()
+    @staticmethod
+    def standalone_models():
+        import subprocess
         try:
-            result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
-                                    text=True, timeout=8, shell=False, check=True,
-                                    env=drop_parent_only_env(dict(os.environ)))
+            return LegAdapter.discover_standalone()
         except (OSError, subprocess.SubprocessError):
             return []
-        return result.stdout.splitlines()
     @staticmethod
     def identity(model):
         return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
