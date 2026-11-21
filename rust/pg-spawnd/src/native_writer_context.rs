@@ -79,21 +79,31 @@ pub(super) fn invariants(brief: &str) -> Option<String> {
     joined(sections(brief, &["invariants:", "invariant:", "how:"]))
 }
 
-/// A definition line: its indent, name and whether it is public (Rust `pub ...`, Python
+/// A public symbol the diff touches: its name and whether it declares a type (Rust struct,
+/// enum, trait or type alias; Python class), the only kind a path `Name::item` can use.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Symbol {
+    pub(super) name: String,
+    pub(super) type_like: bool,
+}
+
+/// A definition line: its indent, symbol and whether it is public (Rust `pub ...`, Python
 /// names without a leading underscore).
-fn definition(line: &str, python: bool) -> Option<(usize, String, bool)> {
+fn definition(line: &str, python: bool) -> Option<(usize, Symbol, bool)> {
     let indent = line.len() - line.trim_start().len();
     let rest = line.trim_start();
     if python {
         let rest = rest.strip_prefix("async ").unwrap_or(rest);
-        let name = rest
-            .strip_prefix("def ")
-            .or_else(|| rest.strip_prefix("class "))?;
+        let (type_like, name) = match rest.strip_prefix("def ") {
+            Some(name) => (false, name),
+            None => (true, rest.strip_prefix("class ")?),
+        };
         let name: String = name
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect();
-        return (!name.is_empty()).then(|| (indent, name.clone(), !name.starts_with('_')));
+        let public = !name.starts_with('_');
+        return (!name.is_empty()).then_some((indent, Symbol { name, type_like }, public));
     }
     let (public, mut rest) = match rest.strip_prefix("pub") {
         Some(after) if after.starts_with([' ', '(']) => {
@@ -111,14 +121,15 @@ fn definition(line: &str, python: bool) -> Option<(usize, String, bool)> {
             }
         }
     }
-    let name = ["fn ", "struct ", "enum ", "trait ", "const ", "type "]
+    let (keyword, name) = ["fn ", "struct ", "enum ", "trait ", "const ", "type "]
         .iter()
-        .find_map(|kw| rest.strip_prefix(kw))?;
+        .find_map(|kw| Some((*kw, rest.strip_prefix(kw)?)))?;
     let name: String = name
         .chars()
         .take_while(|c| c.is_alphanumeric() || *c == '_')
         .collect();
-    (!name.is_empty()).then_some((indent, name, public))
+    let type_like = ["struct ", "enum ", "trait ", "type "].contains(&keyword);
+    (!name.is_empty()).then_some((indent, Symbol { name, type_like }, public))
 }
 
 /// Whether the body of a definition at `indent` is still open at line `at`: no later
@@ -127,7 +138,7 @@ fn definition(line: &str, python: bool) -> Option<(usize, String, bool)> {
 fn scope_open(between: &[&str], indent: usize) -> bool {
     between.iter().all(|line| {
         let text = line.trim_start();
-        let continuation = text.starts_with([')', '{', ']']) || text.starts_with("where");
+        let continuation = text.starts_with([')', '{', ']']) || is_where(text);
         text.is_empty() || line.len() - text.len() > indent || continuation
     })
 }
@@ -135,20 +146,29 @@ fn scope_open(between: &[&str], indent: usize) -> bool {
 /// Whether `text` continues or closes a definition at its own indent (`)`, `}`, `]`, `{`,
 /// `where`).
 fn closes_or_continues(text: &str) -> bool {
-    text.starts_with([')', '{', '}', ']']) || text.starts_with("where")
+    text.starts_with([')', '{', '}', ']']) || is_where(text)
 }
 
-/// The indent that places line `index` in a scope: its own indent, or for a blank line the
-/// smaller indent of its neighbouring non-blank lines (none at either end: no scope).
+/// The Rust `where` keyword at the start of `text`, not an identifier that begins with it.
+fn is_where(text: &str) -> bool {
+    text.strip_prefix("where")
+        .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+}
+
+/// The indent that places line `index` in a scope: its own indent. A blank line takes the
+/// indent of the line before it (that line's block, or the block around it when it closes
+/// one), lowered to the next line's indent when that line leaves the block without closing
+/// it; none before the first or after the last non-blank line.
 fn scope_indent(lines: &[&str], index: usize) -> Option<usize> {
-    let indent = |line: &&str| line.len() - line.trim_start().len();
+    let indent = |line: &str| line.len() - line.trim_start().len();
     if !lines[index].trim().is_empty() {
-        return Some(indent(&lines[index]));
+        return Some(indent(lines[index]));
     }
-    let blank = |line: &&&str| line.trim().is_empty();
-    let before = lines[..index].iter().rev().find(|l| !blank(l))?;
-    let after = lines[index..].iter().find(|l| !blank(l))?;
-    Some(indent(before).min(indent(after)))
+    let before = lines[..index].iter().rev().find(|l| !l.trim().is_empty())?;
+    let after = lines[index..].iter().find(|l| !l.trim().is_empty())?;
+    let own = indent(before);
+    let leaves = !closes_or_continues(after.trim_start()) && indent(after) < own;
+    Some(if leaves { indent(after) } else { own })
 }
 
 /// The nearest enclosing public definition of line `at` (1-based) of `source`: only
@@ -156,23 +176,23 @@ fn scope_indent(lines: &[&str], index: usize) -> Option<usize> {
 /// indent is outside its body unless it wraps the signature or closes the body, so a line
 /// after a closed `impl`, after a one-line function or a module-level assignment belongs to
 /// none of them.
-fn enclosing_public(source: &str, at: usize, python: bool) -> Option<String> {
+fn enclosing_public(source: &str, at: usize, python: bool) -> Option<Symbol> {
     let lines: Vec<&str> = source.lines().collect();
     let line = *lines.get(at.checked_sub(1)?)?;
-    if let Some((_, name, true)) = definition(line, python) {
-        return Some(name);
+    if let Some((_, symbol, true)) = definition(line, python) {
+        return Some(symbol);
     }
     let own = scope_indent(&lines, at - 1)?;
     let closing = closes_or_continues(line.trim_start());
     let mut scope = own + 1;
     for (index, earlier) in lines[..at - 1].iter().enumerate().rev() {
-        let Some((indent, name, public)) = definition(earlier, python) else {
+        let Some((indent, symbol, public)) = definition(earlier, python) else {
             continue;
         };
         let inside = indent < own || (closing && indent == own);
         if inside && indent < scope && scope_open(&lines[index + 1..at - 1], indent) {
             if public {
-                return Some(name);
+                return Some(symbol);
             }
             scope = indent;
         }
@@ -183,7 +203,7 @@ fn enclosing_public(source: &str, at: usize, python: bool) -> Option<String> {
 /// Public symbols a unified diff (`-U0`) touches: the nearest enclosing public Rust or
 /// Python definition of every changed line of a `.rs`/`.py` file, so a changed body counts
 /// as well as an added declaration. `read(path)` returns that file's text at the reviewed head.
-pub(super) fn changed_symbols(diff: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
+pub(super) fn changed_symbols(diff: &str, read: &dyn Fn(&str) -> Option<String>) -> Vec<Symbol> {
     let hunk = regex::Regex::new(r"^@@ -\S+ \+(\d+)(?:,(\d+))? @@");
     let mut found = BTreeSet::new();
     let (mut path, mut source): (Option<String>, Option<String>) = (None, None);
@@ -209,10 +229,12 @@ pub(super) fn changed_symbols(diff: &str, read: &dyn Fn(&str) -> Option<String>)
 
 /// Whether a `git grep -n` line is a use of `symbol` worth naming: a `.rs`/`.py` code line
 /// that is neither a comment nor the symbol's own definition and holds the symbol as code
-/// (outside a string literal) in call or path position: `symbol(`, `symbol::<`, `Type::`
-/// (an uppercase symbol; a lowercase `name::` is a module path, not a use of the function),
+/// (outside a string literal) in call or path position: `symbol(`, `symbol::<`, `symbol::`
+/// (only a type; after a function or constant the name is a module path, not a use),
 /// `symbol {`, `symbol<` or `symbol!(`; `mod symbol;` is a declaration, not a use.
-fn is_caller(symbol: &str, line: &str) -> bool {
+fn is_caller(symbol: &Symbol, line: &str) -> bool {
+    let type_like = symbol.type_like;
+    let symbol = symbol.name.as_str();
     let mut parts = line.splitn(3, ':');
     let (Some(path), Some(_), Some(code)) = (parts.next(), parts.next(), parts.next()) else {
         return false;
@@ -239,7 +261,7 @@ fn is_caller(symbol: &str, line: &str) -> bool {
             && !in_string
             && (rest.starts_with(['(', '<', '{'])
                 || rest.starts_with("::<")
-                || (rest.starts_with("::") && symbol.starts_with(|c: char| c.is_uppercase()))
+                || (rest.starts_with("::") && type_like)
                 || rest.starts_with(" {")
                 || rest.starts_with("!("))
     });
@@ -252,7 +274,7 @@ fn is_caller(symbol: &str, line: &str) -> bool {
 }
 
 /// `symbol: file:line, ...` for the first few real uses of each symbol, from `git grep -n -w`.
-pub(super) fn callers_line(symbol: &str, grep: &str) -> Option<String> {
+pub(super) fn callers_line(symbol: &Symbol, grep: &str) -> Option<String> {
     let hits: Vec<String> = grep
         .lines()
         .filter(|line| is_caller(symbol, line))
@@ -262,7 +284,7 @@ pub(super) fn callers_line(symbol: &str, grep: &str) -> Option<String> {
         })
         .take(MAX_CALLERS_PER_SYMBOL)
         .collect();
-    (!hits.is_empty()).then(|| format!("{symbol}: {}", hits.join(", ")))
+    (!hits.is_empty()).then(|| format!("{}: {}", symbol.name, hits.join(", ")))
 }
 
 #[cfg(test)]

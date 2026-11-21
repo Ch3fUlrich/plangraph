@@ -90,12 +90,13 @@ impl Host {
             self.git(&["show", &format!("{head}:{path}")]).ok()
         });
         if !symbols.is_empty() {
-            context["public_symbols"] = json!(symbols.join(", "));
+            let names: Vec<&str> = symbols.iter().map(|s| s.name.as_str()).collect();
+            context["public_symbols"] = json!(names.join(", "));
             let callers: Vec<String> = symbols
                 .iter()
                 .filter_map(|symbol| {
                     let grep = self
-                        .git(&["grep", "-n", "-w", "--", symbol, "--", "*.rs", "*.py"])
+                        .git(&["grep", "-n", "-w", "--", &symbol.name, "--", "*.rs", "*.py"])
                         .unwrap_or_default();
                     context::callers_line(symbol, &grep)
                 })
