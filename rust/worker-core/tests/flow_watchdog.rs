@@ -4,12 +4,83 @@ use std::{fs, process::Command};
 fn run(snapshot: &serde_json::Value, dir: &std::path::Path) -> std::process::Output {
     let input = dir.join("input.json");
     fs::write(&input, snapshot.to_string()).unwrap();
-    Command::new(env!("CARGO_BIN_EXE_flow-watchdog"))
+    let mut watchdog = Command::new(env!("CARGO_BIN_EXE_flow-watchdog"));
+    watchdog.env_remove("PLANGRAPH_WATCHDOG_PROC_ROOT");
+    if dir.join("proc").exists() {
+        watchdog.env("PLANGRAPH_WATCHDOG_PROC_ROOT", dir.join("proc"));
+    }
+    watchdog
         .env_remove("PLANGRAPH_WATCHDOG_DELIVERY")
         .env_remove("PLANGRAPH_FLOW_PUSH")
         .args([input.to_str().unwrap(), dir.to_str().unwrap()])
         .output()
         .unwrap()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn watchdog_reports_only_old_live_shells_in_deleted_directories() {
+    use std::{
+        io::{BufRead, BufReader},
+        os::unix::fs::symlink,
+        process::Stdio,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let deleted = tempfile::tempdir().unwrap();
+    let mut child = Command::new("sh")
+        .args(["-c", "printf 'ready\\n'; read wake"])
+        .current_dir(deleted.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut ready = String::new();
+    BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert_eq!(ready, "ready\n");
+    deleted.close().unwrap();
+    let proc = dir.path().join("proc");
+    fs::create_dir(&proc).unwrap();
+    let linked = dir.path().join("linked (deleted)");
+    fs::create_dir(&linked).unwrap();
+    fs::write(proc.join("uptime"), "10000.25 10000.00\n").unwrap();
+    let deleted_cwd = format!("/proc/{}/cwd", child.id());
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    for (pid, name, state, started, cwd) in [
+        (101, "bash", "S", 2800, deleted_cwd.as_str()),
+        (102, "bash", "S", 2801, deleted_cwd.as_str()),
+        (103, "bash", "Z", 1, deleted_cwd.as_str()),
+        (104, "python3", "S", 1, deleted_cwd.as_str()),
+        (105, "zsh", "S", 1, linked.to_str().unwrap()),
+    ] {
+        let entry = proc.join(pid.to_string());
+        fs::create_dir(&entry).unwrap();
+        let fields = vec!["0"; 18].join(" ");
+        fs::write(
+            entry.join("stat"),
+            format!("{pid} ({name}) {state} {fields} {}\n", started * hz),
+        )
+        .unwrap();
+        symlink(cwd, entry.join("cwd")).unwrap();
+    }
+    let snapshot = serde_json::json!({"pace":1,"budget":2,"ci_failed":0,"ci_total":0,
+        "infra_failed":0,"review_age_hours":0,"review_rounds":0,"critical_idle_hours":0,
+        "coding_vm_runs":0,"worker_idle":false,"host_drift":false,
+        "closes_recent":0,"closes_previous":0});
+    let output = run(&snapshot, dir.path());
+    assert!(output.status.success(), "{output:?}");
+    let queue = fs::read_to_string(dir.path().join("queue.json"));
+    drop(child.stdin.take());
+    child.wait().unwrap();
+    let queue = queue.unwrap();
+    let events: Vec<serde_json::Value> = serde_json::from_str(&queue).unwrap();
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(events[0]["message"]
+        .as_str()
+        .unwrap()
+        .contains("deleted-cwd-shell pid=101 shell=bash"));
 }
 
 #[test]

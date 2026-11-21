@@ -35,6 +35,11 @@ At 20 minutes of idleness, `writer-idle` reports REQUEST_CHANGES, an unreviewed
 head, or a missing READY, BLOCKED, DONE, or `<NAME> DONE` line in the expected file. The alert
 uses the parent session as its recipient and queues once per idle interval.
 
+The Linux service sets `PLANGRAPH_WATCHDOG_PROC_ROOT=/proc`. Each tick reports
+live shells older than two hours whose current directory has been unlinked.
+`deleted-cwd-shell` includes the PID, shell name, and process age. The process
+start time keeps the alert stable across ticks and distinguishes PID reuse.
+
 Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).
 Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
 `origin_main_head`, `behind_commits`, and `age_hours`. `host-disk` alerts strictly

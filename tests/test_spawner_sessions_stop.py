@@ -124,6 +124,44 @@ def test_stop_argv_is_never_rm_or_kill(site):
     assert stops == [["claude", "stop", UUID1[:8]]]  # claude stop is the only stop mechanism
 
 
+@pytest.mark.parametrize("state", ["running", "done"])
+def test_stop_reaps_session_tools_without_signalling_other_sessions(site, state):
+    import os
+    import signal
+    import subprocess
+    import sys
+    from uuid import uuid4
+    from plangraph.spawner.proc_kill import alive
+
+    if sys.platform != "linux":
+        pytest.skip("requires Linux process identities")
+    code = ("import subprocess,sys; "
+            "child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
+            "env={}, start_new_session=True); print(child.pid, flush=True); child.wait()")
+    processes = []
+    session_id, unrelated = str(uuid4()), str(uuid4())
+    try:
+        for sid in (session_id, unrelated):
+            tool = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True,
+                                    env={**os.environ, "CLAUDE_CODE_SESSION_ID": sid})
+            processes.append((tool, int(tool.stdout.readline())))
+        run = FakeRun(stdout="session " + session_id, agents_rows=[
+            {"id": session_id[:8], "sessionId": session_id, "name": "alpha", "kind": "background",
+             "state": state, "startedAt": 1_000_000}])
+        s = make(site, run, now=lambda: 2000.0)
+        go(site, s)
+        assert s.stop(name="alpha")["ok"] is True
+        owned = (processes[0][0].pid, processes[0][1])
+        assert all(not alive(pid, None) for pid in owned), owned
+        assert all(alive(pid, None) for pid in (processes[1][0].pid, processes[1][1]))
+    finally:
+        for tool, child in processes:
+            if alive(child, None):
+                os.kill(child, signal.SIGKILL)
+            tool.wait(timeout=5)
+            tool.stdout.close()
+
+
 def test_win32_stop_argv_uses_resolved_exe(site):
     exe = str(site.tmp_path / "claude.exe")
     run = FakeRun(stdout="session " + UUID1, agents_rows=[  # r7 adapt: live row

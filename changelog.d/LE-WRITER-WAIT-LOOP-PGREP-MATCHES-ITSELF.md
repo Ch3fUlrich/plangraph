@@ -1,1 +1,1 @@
-- Refuse Bash sleep loops whose `pgrep -f` condition can match the loop's own shell command line.
+- Refuse self-matching Bash wait loops, reap verified Linux session tools on stop, and alert on stale shells with deleted working directories.

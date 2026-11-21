@@ -106,7 +106,7 @@ credential ID. This selection also applies to mixed legacy/v2 stores. A failed q
 Moved to [doctor checks](operations/spawner-doctor.md); session names, admission window: [queue](operations/spawner-admission-queue.md); landing a batch on a GO row: [land-go](operations/spawner-land-go.md).
 
 ## Spawn by card
-Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
+Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged. See [session stop and Linux tool cleanup](spawner-sessions.md).
 
 CLI and overflow admission use the worker-core memory rule:
 `effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as

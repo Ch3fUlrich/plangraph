@@ -86,6 +86,11 @@ marked stopped by `stop` or `relaunch` even though the session may still be star
 `claude agents --json` and `claude stop` run in the spawner server's own cwd (the session's `cwd`
 applies only to the launch); the launch smoke checks that `claude agents` lists sessions started in
 other cwds.
+On Linux, stop snapshots local processes with the resolved full Claude session ID
+and their descendants before calling Claude. After confirmation it signals surviving
+members through PID file descriptors and checks for late session tools. A cleanup
+failure leaves the record retryable. An orphan that lost its session ID before the
+snapshot has no ownership evidence and remains eligible for stale-shell reporting.
 Concurrent actions on one name are serialised by a per-name lock covering `launch`, `relaunch`,
 `stop` (an id-only stop locks the name its record file carries) and `mark_ready`; names that differ
 only in case share one lock.
@@ -95,8 +100,8 @@ marker's handoff; with neither, the relaunch is refused. The freshness check (ha
 newer than the last successful launch, `launched_ts` - stamped only by a launch that resolved an
 id) and path containment always apply, and the
 record's old handoff is never reused.
-The stored launch spec is re-validated before the old session is stopped (`claude stop`, never
-`rm`/`kill`), the previous session id is excluded when resolving the new one (UUID in launcher
+The stored launch spec is re-validated before the old session is stopped.
+The previous session id is excluded when resolving the new one (UUID in launcher
 stdout, else a short id on a `background` row of the same name, else the newest `background` row by
 name + startedAt near launch), and a post-stop launch failure keeps the record and marker for a
 retry. When the record is already marked

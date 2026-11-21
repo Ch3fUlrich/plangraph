@@ -4,6 +4,9 @@ mod hosts;
 mod quiet;
 #[path = "flow_watchdog_review/mod.rs"]
 mod review;
+#[cfg(target_os = "linux")]
+#[path = "flow_watchdog_stale_shells/mod.rs"]
+mod stale_shells;
 #[path = "flow_watchdog_stuck/mod.rs"]
 mod stuck;
 #[path = "flow_watchdog_writer/mod.rs"]
@@ -197,6 +200,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(_) => vec![Alert::from("invalid snapshot".to_owned())],
     };
+    #[cfg(target_os = "linux")]
+    if let Some(root) = std::env::var_os("PLANGRAPH_WATCHDOG_PROC_ROOT") {
+        messages.extend(stale_shells::alerts(Path::new(&root)));
+    }
     if let Some(state) = std::env::var_os("PLANGRAPH_TURN_BUDGET_STATE_DIR") {
         let now = std::env::var("PLANGRAPH_TURN_BUDGET_NOW")
             .ok()

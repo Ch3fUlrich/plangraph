@@ -68,6 +68,46 @@ def _scan(proc_root='/proc'):
     return out
 
 
+def descendants(procs, seeds):
+    found = set(seeds)
+    while True:
+        children = {pid for pid, entry in procs.items() if entry[1] in found} - found
+        if not children:
+            return found
+        found |= children
+
+
+def kill_identities(members):
+    """Signal Linux PID/start-time pairs without a PID reuse window."""
+    import signal
+
+    open_pid = getattr(os, 'pidfd_open', None)
+    if open_pid is None:
+        import ctypes
+        libc = ctypes.CDLL(None, use_errno=True)
+        native_open = getattr(libc, 'pidfd_open', None)
+        if native_open is None:
+            raise OSError('pidfd_open is unavailable')
+
+        def open_pid(pid):
+            fd = native_open(pid, 0)
+            if fd < 0:
+                error = ctypes.get_errno()
+                raise OSError(error, os.strerror(error))
+            return fd
+
+    for pid, start in members.items():
+        try:
+            fd = open_pid(pid)
+            try:
+                if alive(pid, start):
+                    signal.pidfd_send_signal(fd, signal.SIGKILL)
+            finally:
+                os.close(fd)
+        except ProcessLookupError:
+            continue
+
+
 def group_alive(pgid):
     """True while any non-zombie member of the process group survives."""
     return any(s[0] != 'Z' and s[2] == pgid for s in _scan().values())
@@ -191,11 +231,7 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
     if root in procs and procs[root][4] != ident:
         return {}  # the root pid was reused by a foreign process
     found = {p for p in found if p != root or procs[p][4] == ident}
-    grew = True
-    while grew:
-        kids = {p for p, s in procs.items() if s[1] in found and p not in found and p != root}
-        grew = bool(kids)
-        found |= kids
+    found = descendants({p: s for p, s in procs.items() if p != root}, found)
     return {p: procs[p][4] for p in found if procs[p][0] != 'Z'}
 
 
