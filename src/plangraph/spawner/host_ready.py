@@ -130,6 +130,8 @@ def prune_builds(target, subdir, keep, max_age=CLI_TESTS_MAX_AGE_S, now=None):
     Call it only under the exclusive cargo lease. Returns the removed directory names."""
     now = time.time() if now is None else now
     root, builds = Path(target) / subdir, []
+    if root.is_symlink():
+        raise ValueError(f'{root} is a symbolic link; build root not pruned')
     try:
         for entry in root.iterdir():
             if entry.is_dir() and not entry.is_symlink():
@@ -158,8 +160,24 @@ def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
     return prune_builds(target, 'cli-tests', keep, max_age, now)
 
 
-# Files Cargo writes itself, and the build roots this module creates; a bare debug/ proves nothing.
-CARGO_TARGET_MARKERS = ('CACHEDIR.TAG', '.rustc_info.json', 'cli-tests', 'policy-bin')
+# Cargo's own output is the evidence that a directory is a cargo target: a CACHEDIR.TAG with
+# the signature Cargo writes, or a .rustc_info.json holding a rustc fingerprint. File names alone
+# prove nothing, and neither does a bare debug/.
+CACHEDIR_SIGNATURE = b'Signature: 8a477f597d28d172789f06886806bc55'
+BUILD_ROOTS = ('cli-tests', 'policy-bin')
+
+
+def cargo_output(path):
+    """True when ``path`` holds a regular CACHEDIR.TAG with Cargo's signature or a real .rustc_info.json."""
+    tag, info = Path(path) / 'CACHEDIR.TAG', Path(path) / '.rustc_info.json'
+    try:
+        if tag.is_file() and not tag.is_symlink() and tag.read_bytes().startswith(CACHEDIR_SIGNATURE):
+            return True
+        if info.is_file() and not info.is_symlink() and info.stat().st_size <= 1 << 20:
+            return 'rustc_fingerprint' in json.loads(info.read_text())
+    except (OSError, ValueError, TypeError):
+        pass
+    return False
 
 
 def unsafe_cache_dir(target, checkout):
@@ -171,9 +189,22 @@ def unsafe_cache_dir(target, checkout):
 
 
 def identified_cargo_target(target):
-    """Only an empty directory or one holding Cargo's own markers may be removed whole."""
-    names = {entry.name for entry in Path(target).iterdir()}
-    return not names or ('.git' not in names and bool(names & set(CARGO_TARGET_MARKERS)))
+    """An empty directory, or one with Cargo's own output at its top or in a build root's builds; never a Git checkout."""
+    target = Path(target)
+    names = {entry.name for entry in target.iterdir()}
+    if not names:
+        return True
+    if '.git' in names:
+        return False
+    if cargo_output(target):
+        return True
+    for root in BUILD_ROOTS:
+        base = target / root
+        if root in names and base.is_dir() and not base.is_symlink():
+            if any(build.is_dir() and not build.is_symlink() and cargo_output(build)
+                   for build in base.iterdir()):
+                return True
+    return False
 
 
 def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):

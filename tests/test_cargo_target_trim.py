@@ -15,7 +15,8 @@ def build(target, name, age_s, now=NOW):
     path = target / "cli-tests" / name
     (path / "debug").mkdir(parents=True)
     (path / "debug/pg-spawnd").write_text("x" * 100)
-    for entry in (path / "debug/pg-spawnd", path / "debug", path):
+    (path / "CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode())   # Cargo writes it in every target
+    for entry in (path / "debug/pg-spawnd", path / "CACHEDIR.TAG", path / "debug", path):
         os.utime(entry, (now - age_s, now - age_s))
     return path
 
@@ -75,7 +76,7 @@ def test_preflight_trims_an_over_cap_target_before_the_first_build(rig, monkeypa
     target = shared_target(repo)
     (target / "debug").mkdir(parents=True)
     (target / "debug/old-artifact").write_text("x" * 100_000)
-    (target / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
+    (target / "CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode())
     build(target, "old", 40 * 3600, now=__import__("time").time())
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "0.00005")   # about 50 KB
     # The stub cargo records what it finds in the target when the build starts.
@@ -140,7 +141,7 @@ def test_a_directory_without_cargo_markers_is_not_removed_whole(tmp_path, monkey
     with pytest.raises(ValueError, match="not an identified cargo target"):
         h.reclaim_cargo_target(target, cap=1e-9, checkout=tmp_path / "checkout", wait=0, identified=True)
     assert (target / "notes.txt").exists()
-    (target / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
+    (target / "CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode())
     h.reclaim_cargo_target(target, cap=1e-9, checkout=tmp_path / "checkout", wait=0, identified=True)
     assert not target.exists()
 
@@ -170,8 +171,73 @@ def test_a_git_checkout_with_a_debug_directory_is_not_a_cargo_target(tmp_path, m
 def test_a_bare_debug_directory_is_not_enough(tmp_path):
     (tmp_path / "debug").mkdir()
     assert not h.identified_cargo_target(tmp_path)
-    (tmp_path / ".rustc_info.json").write_text("{}")
+    (tmp_path / ".rustc_info.json").write_text('{"rustc_fingerprint": 1}')
     assert h.identified_cargo_target(tmp_path)
+
+
+@pytest.mark.parametrize("marker", ["CACHEDIR.TAG", ".rustc_info.json", "cli-tests", "policy-bin"])
+def test_marker_names_alone_are_placeholders_not_evidence(tmp_path, marker):
+    """Ordinary data with a marker's name as a plain file or empty directory is not a cargo target."""
+    (tmp_path / "notes.txt").write_text("x")
+    if marker in ("cli-tests", "policy-bin"):
+        (tmp_path / marker / "h0").mkdir(parents=True)
+    else:
+        (tmp_path / marker).write_text("placeholder")
+    assert not h.identified_cargo_target(tmp_path)
+
+
+def test_only_cargos_own_content_identifies_a_target(tmp_path):
+    (tmp_path / "CACHEDIR.TAG").write_text("Signature: something-else")
+    (tmp_path / ".rustc_info.json").write_text("{}")
+    assert not h.identified_cargo_target(tmp_path)
+    (tmp_path / ".rustc_info.json").write_text("not json")
+    assert not h.identified_cargo_target(tmp_path)
+    (tmp_path / "CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode() + "\n# created by cargo")
+    assert h.identified_cargo_target(tmp_path)
+
+
+def test_a_linked_marker_is_not_evidence(tmp_path):
+    real = tmp_path / "real.tag"
+    real.write_text(h.CACHEDIR_SIGNATURE.decode())
+    target = tmp_path / "t"
+    target.mkdir()
+    (target / "CACHEDIR.TAG").symlink_to(real)
+    assert not h.identified_cargo_target(target)
+
+
+def test_a_build_root_counts_when_a_build_inside_holds_cargo_output(tmp_path):
+    (tmp_path / "policy-bin/k0").mkdir(parents=True)
+    assert not h.identified_cargo_target(tmp_path)
+    (tmp_path / "policy-bin/k0/CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode())
+    assert h.identified_cargo_target(tmp_path)
+
+
+@pytest.mark.parametrize("subdir", ["cli-tests", "policy-bin"])
+def test_a_symlinked_build_root_is_not_pruned(tmp_path, subdir):
+    outside = tmp_path / "outside"
+    for name in ("h0", "h1", "h2"):
+        (outside / name).mkdir(parents=True)
+        os.utime(outside / name, (NOW - 100 * 3600, NOW - 100 * 3600))
+    target = tmp_path / "t"
+    target.mkdir()
+    (target / subdir).symlink_to(outside)
+    with pytest.raises(ValueError, match="symbolic link"):
+        h.prune_builds(target, subdir, keep=1, now=NOW)
+    assert sorted(p.name for p in outside.iterdir()) == ["h0", "h1", "h2"]
+
+
+def test_reclaim_leaves_everything_alone_behind_a_symlinked_build_root(tmp_path, monkeypatch):
+    outside = tmp_path / "outside"
+    (outside / "h0").mkdir(parents=True)
+    os.utime(outside / "h0", (NOW - 100 * 3600, NOW - 100 * 3600))
+    target = tmp_path / "t"
+    (target / "debug").mkdir(parents=True)
+    (target / "CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode())
+    (target / "cli-tests").symlink_to(outside)
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    with pytest.raises(ValueError, match="symbolic link"):
+        h.reclaim_cargo_target(target, cap=1e-9, checkout=tmp_path / "checkout", wait=0, identified=True)
+    assert (outside / "h0").exists() and (target / "debug").exists()
 
 
 def test_policy_bin_builds_are_pruned_with_cli_tests(tmp_path, monkeypatch):
@@ -183,6 +249,6 @@ def test_policy_bin_builds_are_pruned_with_cli_tests(tmp_path, monkeypatch):
         (path / "debug").mkdir(parents=True)
         os.utime(path / "debug", (now - index * 60, now - index * 60))
         os.utime(path, (now - index * 60, now - index * 60))
-    (target / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
+    (target / "CACHEDIR.TAG").write_text(h.CACHEDIR_SIGNATURE.decode())
     h.reclaim_cargo_target(target, cap=100, checkout=tmp_path / "checkout", wait=0, identified=True)
     assert sorted(p.name for p in (target / "policy-bin").iterdir()) == ["k0", "k1", "k2"]
