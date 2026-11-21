@@ -70,7 +70,7 @@ DEFAULTS = {
     "allow_ipv4_prefixes": ["127.", "0.0.0.0", "255.255.255.255",
                             "192.0.2.", "198.51.100.", "203.0.113."],
     # Loopback and the RFC 3849 documentation range, as ipv4 allows 127. and the TEST-NETs.
-    "allow_ipv6": ["::1/128", "2001:db8::/32"],
+    "allow_ipv6": [f"{_CC}1/128", f"2001:db8{_CC}/32"],
     "entropy_min": 4.0,
 }
 
@@ -175,7 +175,7 @@ def _ipv6_networks(entries):
     try:
         return [ipaddress.IPv6Network(e, strict=False) for e in entries]
     except (ValueError, TypeError):
-        raise ValueError("allow_ipv6: every entry must be an IPv6 network such as 2001:db8::/32") from None
+        raise ValueError("allow_ipv6: every entry must be an IPv6 network in CIDR form") from None
 
 
 def _ipv6_ok(text, cfg):

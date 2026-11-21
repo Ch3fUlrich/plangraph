@@ -175,13 +175,14 @@ def test_ipv6_compressed_forms_detected_times_not(tmp_path):
 
 def test_ipv6_loopback_and_documentation_range_are_allowed(tmp_path):
     cc = ":" * 2
+    full = ":".join(["2001", "db8", "0", "0", "0", "0", "0", "1"])
+    last = ":".join(["2001", "0db8"] + ["ffff"] * 6)
     for fixture in (cc + "1", "[" + cc + "1]", "addr " + cc + "1 up", "2001:db8" + cc + "1",
-                    "2001:DB8" + cc, "[2001:db8" + cc + "ab:1]", "2001:db8:0:0:0:0:0:1",
-                    "2001:0db8:ffff:ffff:ffff:ffff:ffff:ffff"):
+                    "2001:DB8" + cc, "[2001:db8" + cc + "ab:1]", full, last):
         assert "ipv6" not in _hits(tmp_path, "x = " + fixture), fixture
     for global_address in ("2001:db9" + cc + "1", "2001:db80" + cc + "1", "2606:4700" + cc + "1111",
                            "2001:4860:4860" + cc + "8888", "[2606:4700" + cc + "1111]",
-                           "2001:db8:0:0:0:0:0:1 2606:4700" + cc + "1111"):
+                           full + " 2606:4700" + cc + "1111"):
         assert "ipv6" in _hits(tmp_path, "x = " + global_address), global_address
 
 

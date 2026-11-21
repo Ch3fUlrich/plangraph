@@ -327,7 +327,7 @@ only.
 
 Fast checks must run `python3 tools/preflight.py --base origin/main --head HEAD --fast`
 on the exact committed head. Public rules from `manifest.toml` and `scrub_ci.toml`,
-credential shapes and the configured private words run together (ipv6 `::1` and `2001:db8::/32` are allowed like the ipv4 test ranges). The legacy
+credential shapes and the configured private words run together (the ipv6 loopback address and the RFC 3849 documentation range are allowed, like the ipv4 test ranges). The legacy
 `tools/preflight_private_scrub.py --base origin/main --head HEAD --words FILE`
 entry point also runs all these rules. Hook, CI and fast checks share
 `scrub_check.scan_content`; committed checks exclude inherited line occurrences.
