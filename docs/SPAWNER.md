@@ -79,7 +79,7 @@ size, prefixed with `prompt_too_large`. Seat assembly maps that refusal to
 the base `InlineDiffError` is not itself a context/bound error. Whole-prompt admission retains `inline_prompt_oversized`
 for oversized instructions/framing, both under the named `prompt_too_large`
 reason regardless of `PLANGRAPH_CONTEXT_STRICT`. Neither truncates;
-missing diff references, empty diffs and failed `git diff` calls fail explicitly.
+missing diff references, empty diffs (one `empty_diff` card error before any leg) and failed `git diff` calls fail explicitly.
 
 In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
 with no finish frame or after `tool-calls`, unless an earlier finish blocked it.
