@@ -12,6 +12,7 @@ def test_slow_passing_check(repo, monkeypatch, capsys, command, family):
     # Scale seconds by 1/1000: the fake command outlives the old 60 s limit.
     monkeypatch.setattr(preflight, "CHECK_TIMEOUT", 0.06)
     monkeypatch.setattr(preflight, "RUST_TIMEOUT", 0.6)
+    monkeypatch.setattr(preflight, "host_load", lambda: (0.0, 32))   # the bound scales with load
     monkeypatch.setattr(preflight, "TEST_TIMEOUT", 0.9)
     real_subprocess = subprocess.run
     original = preflight.run
@@ -126,4 +127,4 @@ def test_worker_only_preflight_runs_own_manifest(repo, monkeypatch, own_workspac
     assert cargo == [(cmd, rust) for cmd in [
         ['cargo', 'fmt', *target, '--check'],
         ['cargo', 'clippy', *target, '--all-targets', '--', '-D', 'warnings'],
-        ['cargo', 'test', *target, '--lib', '--bins']]]
+        ['cargo', 'test', '--no-fail-fast', *target, '--lib', '--bins']]]

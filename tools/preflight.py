@@ -246,6 +246,19 @@ def selected_count(partial):
         return "unknown"
 
 
+def with_no_fail_fast(command):
+    """cargo test stops at the first failing binary unless told not to: every binary runs in one pass."""
+    if command[:2] == ["cargo", "test"] and "--no-fail-fast" not in command:
+        return command[:2] + ["--no-fail-fast"] + command[2:]
+    return command
+
+
+def failing_tests(output):
+    """Ids of every test cargo reported as FAILED, in order, without repeats."""
+    ids = re.findall(r"^test (\S+) \.\.\. FAILED$", output, re.M)
+    return list(dict.fromkeys(ids))
+
+
 def first_error(output):
     lines = [line.strip() for line in output.splitlines() if line.strip()]
     marked = [line for line in lines if re.search(r"FAIL|error|exceeded", line, re.I)]
@@ -575,7 +588,7 @@ def _main(argv, root, cleanup):
     if words:
         scrub.extend(["--words", words])
     tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
-                   "--root", str(root), "--files-only", "--local", "--run")
+                   "--root", str(root), "--files-only", "--local", "--parts-union", "--run")
     if importlib.util.find_spec("xdist") is not None:
         tests += ["--workers", str(affected_workers())]
     families = [("scrub", scrubs),
@@ -617,6 +630,7 @@ def _main(argv, root, cleanup):
                         command_env = dict(family_env)
                         command_env.setdefault("PG_JAIL", "off")
                         command_env.setdefault("PG_TEST_ALLOW_UNJAILED", "1")
+                    command = with_no_fail_fast(command)
                     code, output = invoke(command, cwd, command_env)
                     print(output, end="", flush=True)
                     infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
@@ -626,14 +640,18 @@ def _main(argv, root, cleanup):
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")
-                    if code and family == "policy":
-                        failed.append((status, Path(command[1]).name, first_error(output)))
+                    if code and family in ("policy", "rust"):
+                        # Every check of these families runs, and every failure is reported in one pass.
+                        name = Path(command[1]).name if family == "policy" else " ".join(command[:2])
+                        failed.append((status, name, first_error(output)))
+                        failed.extend(("FAIL", "failing test", test_id) for test_id in failing_tests(output)
+                                      if family == "rust")
                         continue
                     if code:
                         break
                 if failed:
                     status = "FAIL" if any(f[0] == "FAIL" for f in failed) else "INFRA"
-                    print(f"policy: {len(failed)} check(s) failed:", flush=True)
+                    print(f"{family}: {len(failed)} check(s) failed:", flush=True)
                     for _, name, line in failed:
                         print(f"  {name}: {line}", flush=True)
                 if family == "scrub" and not words and status == "PASS":
