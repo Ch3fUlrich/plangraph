@@ -602,6 +602,13 @@ def seats_acknowledged():
     return os.environ.get("PG_MERGE_CLOSE_REQUIRE_SEATS", "").strip().lower() in ("0", "false", "off")
 
 
+def frozen_landing(st):
+    """Read the saved landing attempt only for the currently pushed head."""
+    attempt = st.get("landing_attempt") or {}
+    head = st.get("head")
+    return attempt if head and attempt.get("head") == head else {}
+
+
 def landing_journal(repo, action, **fields):
     response = run(["plangraph", "landing", "journal"],
                    input=json.dumps(dict(fields, repo=repo, action=action)), timeout=35)

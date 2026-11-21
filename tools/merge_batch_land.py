@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 from merge_batch_build import (
-    cmd_consumed, exclude_consumed, in_history, landing_journal, landing_lease, landing_mode_of,
+    cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
     landing_report, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
     require_tested_ff_evidence, run_timing_import, wait_marked_merged,
 )
@@ -106,8 +106,6 @@ def adopt_open_pr(st):
             return
 
 
-# --- Windows tests of the merged head before the push (LAND-TRAIN-WINDOWS-TESTS-BEFORE-PUSH) ------------------
-#: Env: the ssh host with native Windows (ws-build); unset skips the gate and says so.
 def cmd_push(args):
     st = load_state(args.name)
     wt = st["worktree"]
@@ -467,13 +465,19 @@ def settle_train(train, lease, st=None, landed=None):
     if not merge:
         raise MergeBatchError(f"train #{number} is {state}; settlement remains pending")
     train = landing_journal(repo, "landed", pr=number, merge=merge, **lease)
-    if st is not None:
-        write_landing(st, landing_mode_of(st), merge, st.get("landing_reruns", []), st.get("landing_go_row"))
+    attempt = frozen_landing(st) if st is not None else {}
+    if st is not None and train["open_steps"]:
+        write_landing(st, attempt.get("mode") or landing_mode_of(st), merge,
+                      attempt.get("reruns", []), attempt.get("go_row"))
+    if landed is None and "included" in attempt:
+        landed = [rec for rec in st["merged"] if rec["pr"] in attempt["included"]]
+    included = {rec["pr"] for rec in landed} if landed is not None else None
     for step in train["open_steps"]:
         receipt = {}
         if step == "evidence":
             for part in train["parts"]:
-                print(f"MERGED {part['pr']} {merge} {','.join(part['items']) or '-'}")
+                if included is None or part["pr"] in included:
+                    print(f"MERGED {part['pr']} {merge} {','.join(part['items']) or '-'}")
         elif step == "close_parts":
             result = run(["plangraph", "merge-close"], timeout=330)
             sys.stderr.write(result.stdout + result.stderr)
@@ -520,15 +524,15 @@ def cmd_settle(args):
 
 def cmd_land(args):
     st = load_state(args.name)
-    if keeper_landing_configured() and landing_mode_of(st) != TESTED_FF:
+    mode = frozen_landing(st).get("mode") or landing_mode_of(st)
+    if keeper_landing_configured() and mode != TESTED_FF:
         with landing_lease(st["repo"]) as lease:
-            return land_with_lease(args, lease, st)
-    return land_with_lease(args, None, st)
+            return land_with_lease(args, lease, st, mode)
+    return land_with_lease(args, None, st, mode)
 
 
-def land_with_lease(args, lease, st):
+def land_with_lease(args, lease, st, mode):
     repo, number = st["repo"], args.batch_pr
-    mode = landing_mode_of(st)
     if mode == "single-pr" and len(st["merged"]) != 1:
         raise MergeBatchError(f"single-pr mode lands one pull request on its own GO: batch {st['name']!r} has "
                               f"{len(st['merged'])} parts (set landing.mode to tested-ff or train-pr-merge)")
@@ -566,7 +570,7 @@ def land_with_lease(args, lease, st):
                 main = gh_json("api", f"repos/{repo}/git/ref/heads/main")
                 if (main.get("object") or {}).get("sha") != st["base_head"]:
                     raise MergeBatchError("stale_base: main moved from the frozen landing base")
-                st.update(landing_reruns=reruns, landing_go_row=args.go_row)
+                st["landing_attempt"] = dict(head=st["head"], mode=mode, reruns=reruns, go_row=args.go_row)
                 save_state(st)
                 train = prepare_train(st, lease)
                 if st.get("go_requested_head") == st["head"]:
@@ -616,6 +620,10 @@ def land_with_lease(args, lease, st):
     if lease:
         if train is None:
             train = prepare_train(st, lease)
+        attempt = frozen_landing(st) or dict(head=st["head"], mode=mode)
+        attempt["included"] = [rec["pr"] for rec in landed]
+        st["landing_attempt"] = attempt
+        save_state(st)
         settle_train(train, lease, st, landed)
         return 0
     write_landing(st, mode, merge, reruns, args.go_row)

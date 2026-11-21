@@ -144,6 +144,7 @@ import io, json
 from argparse import Namespace
 from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
+import merge_batch_build as build
 import merge_batch_land as landing
 
 head = 'a'*40
@@ -160,7 +161,7 @@ with (patch.object(landing, 'load_state', return_value=state),
       patch.object(landing, 'require_part_seats', return_value={5: ['run-fixture']}),
       patch.object(landing, 'batch_workflow_gate'),
       patch.object(landing, 'keeper_landing_configured', return_value=True),
-      patch.object(landing, 'run', report),
+      patch.object(build, 'run', report),
       patch.object(landing, 'save_state', save),
       redirect_stdout(output)):
     assert landing.cmd_go_req(Namespace(name='train-1')) == 0

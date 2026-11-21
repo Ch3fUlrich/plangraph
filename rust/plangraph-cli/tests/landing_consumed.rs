@@ -12,7 +12,7 @@ from plangraph.keeper.auth import Principal, add_principal
 from plangraph.keeper.db import open_db
 from plangraph.keeper.store import Store
 from unittest.mock import patch
-import merge_batch_land as land
+import merge_batch_build as land
 
 with TemporaryDirectory() as tmp:
     conn = open_db(Path(tmp) / 'stage.db', create=True, backend='sqlite')

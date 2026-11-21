@@ -62,6 +62,7 @@ from plangraph.keeper.db import open_db
 from plangraph.keeper.store import Store
 from plangraph.keeper.errors import Refused
 from unittest.mock import patch, Mock
+import merge_batch_build as build
 import merge_batch_land as landing
 
 with TemporaryDirectory() as tmp:
@@ -90,14 +91,19 @@ with TemporaryDirectory() as tmp:
     def effect(args, **kwargs):
         calls.append(args)
         return Mock(stdout=json.dumps({'verified': proof}) if 'verify-hosts' in args else '', stderr='')
-    st = {'merged': []}
+    st = dict(merged=train['parts'], head=train['head'], landing_attempt=dict(
+        head=train['head'], mode='train-pr-merge', reruns=['rerun'], go_row='go-row', included=[5]))
+    telemetry = Mock()
     with (patch.object(landing, 'landing_journal', journal),
+          patch.object(build, 'landing_journal', journal),
+          patch.object(landing, 'write_landing', telemetry),
           patch.object(landing, 'read_verified_merge', return_value=('d'*40, 'merged')),
           patch.object(landing, 'run', effect),
           patch.object(landing, 'cleanup_landed', side_effect=lambda *args, **kw: calls.append('cleanup')),
           patch.object(landing, 'drop_state', side_effect=lambda st: calls.append('drop_state'))):
         landing.settle_train(pending[0], lease, st)
         landing.settle_train(pending[0], lease, st)
+    telemetry.assert_called_once_with(st, 'train-pr-merge', 'd'*40, ['rerun'], 'go-row')
     assert calls == [['plangraph', 'merge-close'], ['plangraph', 'landing', 'verify-hosts', 'example/repo', 'd'*40],
                      'cleanup', 'drop_state'], calls
     recorded = store.land(principal, dict(identity, action='show'))['train']
