@@ -121,6 +121,27 @@ def test_pg_partition_function_is_not_executable_by_public(world):
         raw.execute("RESET ROLE")
 
 
+def test_pg_migration_grants_the_runtime_role_the_partition_function(world, tmp_path):
+    """With ``keeper_rt`` present at upgrade time, migration 14 itself installs its EXECUTE."""
+    from keeper_util import World
+    world.conn._raw.execute(
+        "DO $$ BEGIN CREATE ROLE keeper_rt; EXCEPTION WHEN duplicate_object THEN NULL; END $$")
+    upgraded = World(tmp_path / "upgraded", backend="postgres", dsn=DSN)
+    try:
+        raw, schema = upgraded.conn._raw, upgraded.conn.schema
+        raw.execute(f'GRANT USAGE ON SCHEMA "{schema}" TO keeper_rt')
+        raw.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "{schema}" TO keeper_rt')
+        raw.execute("SET ROLE keeper_rt")  # no explicit EXECUTE grant here
+        try:
+            upgraded.store.maintain_host_samples()
+            upgraded.clock.advance(86400)
+            upgraded.store.maintain_host_samples()
+        finally:
+            raw.execute("RESET ROLE")
+    finally:
+        upgraded.close()
+
+
 def test_keeper_daemon_owns_maintenance_loop():
     source = inspect.getsource(daemon)
     assert "_host_samples_loop" in source

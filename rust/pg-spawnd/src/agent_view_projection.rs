@@ -27,6 +27,10 @@ pub(super) fn mask_words(data: &mut Value, path: &Path) {
             .ok()
     });
     let mask = |text: &str| {
+        // The secret redactor runs first, on the original text: private words must not
+        // remove the context (a keyword, a name) it matches on.
+        let redacted = pg_worker_core::redact::redact(text);
+        let text = redacted.as_str();
         let mut spans = Vec::new();
         for (regex, token) in patterns.as_ref().into_iter().flatten() {
             for hit in regex.find_iter(text) {
@@ -58,8 +62,7 @@ pub(super) fn mask_words(data: &mut Value, path: &Path) {
         for (start, end) in merged.into_iter().rev() {
             result.replace_range(start..end, "[redacted]");
         }
-        // The shared secret redactor runs on every stored and printed string.
-        pg_worker_core::redact::redact(&result)
+        result
     };
     for host in data["hosts"].as_array_mut().into_iter().flatten() {
         if patterns.is_none() {
@@ -102,11 +105,37 @@ pub(super) fn project_view(data: &Value) -> Value {
             {
                 Some(rows) => json!({"host":host,"readable":true,"reason":null,
                 "agents":rows.iter().map(|r| project(r,host,None,None)).collect::<Vec<_>>()}),
-                None => unavailable(host, "unreadable"),
+                None => unavailable(host, &kept_reason(entry)),
             }
         })
         .collect();
-    json!({"generated_at":data["generated_at"].as_str(),"hosts":hosts})
+    json!({"generated_at":data["generated_at"].as_str().filter(|s| valid_stamp(s)),"hosts":hosts})
+}
+/// The collector's own timestamp shape; anything else is dropped, never published.
+fn valid_stamp(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    bytes.len() == 20
+        && bytes.iter().enumerate().all(|(i, b)| match i {
+            4 | 7 => *b == b'-',
+            10 => *b == b'T',
+            13 | 16 => *b == b':',
+            19 => *b == b'Z',
+            _ => b.is_ascii_digit(),
+        })
+}
+/// An unavailable host keeps its reason only when the shared schema allowlists it.
+fn kept_reason(entry: &Value) -> String {
+    let schema: Value = serde_json::from_str(include_str!(
+        "../../../src/plangraph/web/agents_schema.json"
+    ))
+    .expect("schema");
+    let reason = entry["reason"].as_str().unwrap_or("");
+    let allowed = schema["reasons"].as_array().into_iter().flatten();
+    if allowed.into_iter().any(|r| r.as_str() == Some(reason)) {
+        reason.to_owned()
+    } else {
+        "unreadable".to_owned()
+    }
 }
 #[cfg(test)]
 #[path = "agent_view_projection_tests.rs"]

@@ -82,3 +82,34 @@ fn secret_shaped_strings_are_redacted_with_an_empty_word_list() {
     assert!(!view.to_string().contains(&secret), "{view}");
     assert_eq!(view["hosts"][0]["agents"][0]["model"], "model");
 }
+#[test]
+fn secret_redaction_sees_the_text_before_private_words_remove_context() {
+    let path = std::env::temp_dir().join(format!("pg-secret-first-{}", std::process::id()));
+    std::fs::write(&path, "Bearer\n").unwrap();
+    let secret = ["synthetic", "Credential", "0123456789"].concat();
+    let mut view = json!({"hosts":[{"host":"local","readable":true,"agents":[{
+        "name":format!("Authorization: Bearer {secret}")}]}]});
+    mask_words(&mut view, &path);
+    std::fs::remove_file(&path).unwrap();
+    assert!(!view.to_string().contains(&secret), "{view}");
+}
+#[test]
+fn unavailable_reasons_and_timestamps_are_allowlisted() {
+    let view = project_view(&json!({"generated_at":"private-label","hosts":[
+        {"host":"a","readable":false,"reason":"not_collected"},
+        {"host":"b","readable":false,"reason":"scrub_words_unavailable"},
+        {"host":"c","readable":false,"reason":"private-label"}]}));
+    assert!(view["generated_at"].is_null());
+    let reasons: Vec<_> = view["hosts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["reason"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        reasons,
+        ["not_collected", "scrub_words_unavailable", "unreadable"]
+    );
+    let kept = project_view(&json!({"generated_at":"2026-11-21T06:30:00Z","hosts":[]}));
+    assert_eq!(kept["generated_at"], "2026-11-21T06:30:00Z");
+}
