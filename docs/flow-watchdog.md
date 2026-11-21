@@ -26,6 +26,15 @@ review and no reviews served by the first leg queues one `review-leg-unserved`
 alert. The active identity is the leg, so refreshes with new counts in the same
 outage do not repeat the alert.
 
+`writer_activity` takes a Unix-seconds `now` and a `writers` list from the fleet
+session collector. Each writer supplies `host`, `session_id`, `parent`, `busy`,
+`idle_since`, `head`, `last_commit`, and the launch record's `status_path`.
+The collector includes the newest `review` with `head` and `verdict` and the
+observed `status` with `path` and `last_line`, or null for missing evidence.
+At 20 minutes of idleness, `writer-idle` reports REQUEST_CHANGES, an unreviewed
+head, or a missing READY, BLOCKED, or DONE line in the expected file. The alert
+uses the parent session as its recipient and queues once per idle interval.
+
 Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).
 Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
 `origin_main_head`, `behind_commits`, and `age_hours`. `host-disk` alerts strictly
@@ -146,7 +155,7 @@ adding a timer, cancelling work or making any live deployment change.
 ## Delivery
 
 Routing uses the existing `PLANGRAPH_WATCHDOG_DELIVERY` JSON argv bridge contract
-(see stall-watchdog.md): one JSON alert on stdin with recipient `routing` and one
+(see stall-watchdog.md): one JSON alert on stdin with recipient `routing` by default and one
 message line per condition/session (the original eight rules share one line).
 `PLANGRAPH_FLOW_PUSH` is an explicit
 JSON argv push hook receiving the same event. No existing push implementation or

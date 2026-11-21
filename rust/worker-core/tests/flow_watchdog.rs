@@ -98,3 +98,54 @@ fn ruled_review_leg_alerts_once_after_an_hour_of_reviews_elsewhere() {
     assert!(run(&snapshot, dir.path()).status.success());
     assert_eq!(fs::read_to_string(dir.path().join("active")).unwrap(), "");
 }
+
+#[test]
+fn idle_writers_alert_for_open_work_and_use_the_status_path_at_launch() {
+    let dir = tempfile::tempdir().unwrap();
+    let writer = |id: &str, busy, review: serde_json::Value, status_path: &str, line: &str| {
+        serde_json::json!({"host":"fixture-host","session_id":id,"parent":"fixture-parent",
+            "busy":busy,"idle_since":0,"head":"fixture-head","last_commit":60,
+            "review":review,"status_path":"/fixture/expected.status",
+            "status":{"path":status_path,"last_line":line}})
+    };
+    let expected = "/fixture/expected.status";
+    let accepted = serde_json::json!({"head":"fixture-head","verdict":"ACCEPT"});
+    let changes = serde_json::json!({"head":"fixture-head","verdict":"REQUEST_CHANGES"});
+    let mut snapshot = serde_json::json!({"pace":66.0,"budget":66.0,
+    "ci_failed":1,"ci_total":10,"infra_failed":0,
+    "review_age_hours":24.0,"review_rounds":3,"critical_idle_hours":12.0,
+    "coding_vm_runs":0,"worker_idle":false,"host_drift":false,
+    "closes_recent":4,"closes_previous":4,
+    "writer_activity":{"now":1199,"writers":[
+        writer("changes", false, changes.clone(), expected, ""),
+        writer("unreviewed", false, serde_json::json!({"head":"earlier-head","verdict":"ACCEPT"}), expected, ""),
+        writer("wrong-status", false, accepted.clone(), "/fixture/old.status", "READY"),
+        writer("working", true, changes, expected, ""),
+        writer("ready", false, accepted, expected, "READY fixture result"),
+    ]}});
+    let pending = dir.path().join("pending.json");
+    assert!(run(&snapshot, dir.path()).status.success());
+    assert!(!pending.exists());
+    snapshot["writer_activity"]["now"] = 1200.into();
+    assert!(run(&snapshot, dir.path()).status.success());
+    let queue = dir.path().join("queue.json");
+    let original = fs::read_to_string(&queue).unwrap();
+    let events: Vec<serde_json::Value> = serde_json::from_str(&original).unwrap();
+    assert_eq!(events.len(), 3, "{events:?}");
+    for (id, reason) in [
+        ("changes", "request_changes"),
+        ("unreviewed", "unreviewed_head"),
+        ("wrong-status", "missing_status"),
+    ] {
+        assert!(events.iter().any(|event| {
+            let line = event["message"].as_str().unwrap();
+            line.lines().count() == 1
+                && line.contains(&format!("session=\"{id}\""))
+                && line.contains(&format!("reason={reason}"))
+                && event["recipient"] == "fixture-parent"
+        }));
+    }
+    snapshot["writer_activity"]["now"] = 1260.into();
+    assert!(run(&snapshot, dir.path()).status.success());
+    assert_eq!(fs::read_to_string(queue).unwrap(), original);
+}
