@@ -10,6 +10,7 @@ landed; train-pr-merge that no longer merges; single-pr that lands a train of se
 that lands; a landing with no mode in its receipt or telemetry row; a changed setting that changes nothing.
 """
 import json
+import shutil
 import sqlite3
 import sys
 
@@ -207,3 +208,57 @@ def test_landing_report_and_settle_commands(env):
     assert res.returncode == 0 and "tested-ff" in res.stdout and "trains" in res.stdout, res.stderr
     assert json.loads(env.run("landing-report", "--json").stdout)[0]["mode"] == "tested-ff"
     assert env.run("landing-mode", "--repo", "owner/proj").stdout == "tested-ff\n"
+
+
+@pytest.mark.parametrize("where", ["inside", "unrelated"])
+def test_tested_ff_lease_refuses_a_main_that_moves_between_the_read_and_the_push(env, where):
+    """A git that moves origin's main right before the push: the lease on the tested base refuses it, also when
+    main moved into a commit the batch contains (which the head could still fast-forward from)."""
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    state = json.loads(env.state_file("l1").read_text())
+    if where == "inside":
+        target = env.git("rev-parse", f"{state['head']}~1", cwd=env.repo)
+    else:
+        env.git("checkout", "-q", "-b", "other", state["base_head"], cwd=env.repo)
+        (env.repo / "other.txt").write_text("other\n")
+        env.git("add", "other.txt", cwd=env.repo)
+        env.git("commit", "-q", "-m", "someone else landed", cwd=env.repo)
+        target = env.git("rev-parse", "HEAD", cwd=env.repo)
+        env.git("checkout", "-q", "main", cwd=env.repo)
+    real = shutil.which("git")
+    wrap = env.tmp / "wrap"
+    wrap.mkdir()
+    (wrap / "git").write_text(f'#!/bin/sh\nfor a in "$@"; do if [ "$a" = push ]; then '
+                              f'{real} --git-dir {env.origin} fetch -q {env.repo} {target}:refs/heads/moved && '
+                              f'{real} --git-dir {env.origin} update-ref refs/heads/main {target}; fi; done\nexec {real} "$@"\n')
+    (wrap / "git").chmod(0o755)
+    env.env["PATH"] = f"{wrap}:{env.env['PATH']}"
+    res = land(env, approval)
+    assert res.returncode == 1 and "base_moved" in res.stderr, res.stderr
+    assert main_tip(env) == target and env.state_file("l1").exists() and rows(env) == []
+
+
+def test_a_merged_pull_request_is_no_tested_ff_landing_unless_its_head_is_in_main(env):
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    env.load()
+    env.state["prs"]["100"].update(state="MERGED", mergeCommit={"oid": "c" * 40})  # merged another way (squash)
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and "merged another way" in res.stderr, res.stderr
+    assert rows(env) == [] and env.state_file("l1").exists()
+
+
+def test_landing_record_writes_the_row_for_a_landing_made_by_another_tool(env):
+    res = env.run("landing-record", "--repo", "owner/proj", "--mode", "tested-ff", "--train", "pr9", "--pr", "9",
+                  "--sha", "a" * 40, "--parts", "9")
+    assert res.returncode == 0, res.stderr
+    (row,) = rows(env)
+    assert (row["mode"], row["train"], row["landed_sha"], row["parts"]) == ("tested-ff", "pr9", "a" * 40, "[9]")
+    blocker = env.tmp / "blocked"
+    blocker.write_text("a file")
+    env.env["PLANGRAPH_LANDING_DB"] = str(blocker / "x.sqlite3")
+    res = env.run("landing-record", "--repo", "owner/proj", "--mode", "tested-ff", "--train", "pr9", "--pr", "9",
+                  "--sha", "a" * 40, "--parts", "9")
+    assert res.returncode == 1 and "telemetry row not written" in res.stderr

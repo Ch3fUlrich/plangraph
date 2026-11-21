@@ -415,6 +415,9 @@ def push_tested(st):
             tip = main_tip(st)  # a late landing of this very head counts
             if in_history(st, head, tip):
                 return
+            if tip != st["base_head"]:  # the lease did its work: main moved after the read
+                raise MergeBatchError(f"base_moved: {base} moved to {short(tip)} while the push was sent, the tested "
+                                      f"base was {short(st['base_head'])}; build the batch again")
             raise MergeBatchError(f"refused: origin rejected the push of {short(head)} to {base} while it was "
                                   f"at {short(st['base_head'])}: {first_line((proc.stderr or '') + (proc.stdout or ''))}"
                                   " (the batch stays, land again after the cause is fixed)")
@@ -467,6 +470,7 @@ def write_landing(st, mode, merge, reruns, go_row):
     window = ci_window(repo, st["head"])
     window.pop("ci_reruns", None)  # the lander counts the reruns it recorded on the pull request
     row.update(window)
+    receipt = {"plan_item": st.get("plan"), "review_runs": {str(r["pr"]): r.get("review_runs") or {} for r in st["merged"]}}
     if mode == TESTED_FF:
         row["green_at"] = row.get("ci_ended_at")  # the green run is the run on the landed commit itself
     try:
@@ -474,7 +478,7 @@ def write_landing(st, mode, merge, reruns, go_row):
         require_landing_row(repo, st["name"], merge, mode)
         receipts = state_dir() / "receipts"
         receipts.mkdir(parents=True, exist_ok=True)
-        (receipts / f"{st['name']}-{merge}.json").write_text(json.dumps(row, indent=2, sort_keys=True) + "\n",
+        (receipts / f"{st['name']}-{merge}.json").write_text(json.dumps({**row, **receipt}, indent=2, sort_keys=True) + "\n",
                                                              encoding="utf-8")
     except (sqlite3.Error, OSError) as exc:
         raise MergeBatchError(f"landing telemetry row not written: {exc}") from None
@@ -502,6 +506,10 @@ def cmd_land(args):
     checks, green main) main is pushed to the batch head under a lease on the tested base (push_tested); no
     merge commit, no ``gh pr merge``; GitHub marks the pull requests merged because their heads are in main.
     ``train-pr-merge``: the batch pull request is merged with a merge commit (rule 3.39), as before.
+    A ``MERGED`` batch pull request is no landing in ``tested-ff`` unless its head is in main's history.
+    The batch has no merge commit there, so the ``Review-Run`` citations of the merge body do not exist: the
+    receipt keeps them, the part commits keep their ``Plan-Item`` trailers, and merge-close closes on that merge
+    evidence with the seat flag of the keeper setting ``require_seats``.
     ``single-pr``: as train-pr-merge, for a batch of exactly one part (one pull request on its own GO);
     several parts are refused. Every landing then reports each part (MERGED lines), writes the landing
     receipt and the telemetry row naming the mode (write_landing), cleans up and runs merge-close."""
@@ -541,6 +549,9 @@ def cmd_land(args):
     elif pr["state"] not in ("MERGED", "OPEN"):
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
     if mode == TESTED_FF:
+        if not in_history(st, st["head"], main_tip(st)):  # a MERGED pull request proves nothing: read the branch
+            raise MergeBatchError(f"batch PR #{number} is {pr['state']} but its head {short(st['head'])} is not in "
+                                  f"{st['base']}: it was merged another way, so this is no tested-ff landing")
         merge = st["head"]  # the tested commit itself is on main
         wait_marked_merged(repo, number, args.wait)
     else:

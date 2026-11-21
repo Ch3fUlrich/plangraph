@@ -25,7 +25,14 @@ mode or table refuses the land before any call to GitHub. No landing path was de
   from main: the head in main's history is landed (also after a lost answer or an earlier run: no second push); main
   at another commit is `base_moved`; a refusal by the server is final and keeps the batch; an unknown delivery sends
   the same push again while main is `B`, at most three times. GitHub marks the pull requests merged because their
-  heads are in main. Main's protection must accept the push of a commit whose required checks passed (the operator's
+  heads are in main. A pull request that GitHub shows merged but whose head is not in main (merged another way) is no
+  landing in this mode. The batch has no merge commit, so the `Review-Run` citations of the merge body do not exist:
+  the receipt keeps them with the batch plan key, the part commits keep their `Plan-Item` trailers, and merge-close
+  closes on that merge evidence with the seat flag of the keeper setting `require_seats`. The router's `merge-part`
+  does the same push from the clone `PG_LAND_CHECKOUT` with the lease on the tested base (`PG_LAND_BASE`, else the base
+  GitHub records for the pull request): it needs the pull request to target main, a `ci-full` success status on the
+  exact head, and main exactly at that base (main at any other commit, a commit the head contains included, is
+  `base_moved`). Main's protection must accept the push of a commit whose required checks passed (the operator's
   change; the land App design is in the settlement note), so until then the server refuses and the batch stays.
 - `train-pr-merge`: the batch pull request is merged with a merge commit (rule 3.39), as before.
 - `single-pr`: one pull request merged on its own GO; a batch of several parts is refused.
@@ -41,7 +48,7 @@ tree) runs only the fast jobs (`tools/ci_select.py landing_evidence`); every oth
 run of a pull request posts `ci-full` only when the tested tree is the head's tree.
 
 Every landing writes a receipt (`<git dir>/merge-batch/receipts/<train>-<sha>.json`) and one row in the telemetry
-database (`landing-telemetry.sqlite3` under `$XDG_DATA_HOME/plangraph`, or `PLANGRAPH_LANDING_DB`), both naming the
+database (a landing is identified by repository and landed sha, so a backfill never doubles a recorded landing; `merge-part` writes its row with `merge_batch.py landing-record` and fails the landing, exit 10, when it cannot) (`landing-telemetry.sqlite3` under `$XDG_DATA_HOME/plangraph`, or `PLANGRAPH_LANDING_DB`), both naming the
 mode; a landing whose row is missing fails the lander. `merge_batch.py landing-report` compares the modes (trains, median
 and worst minutes READY to landed and landed to green, test minutes per part, reruns, red main, fix tasks per train),
 `landing-settle` fills the green and red-main columns from GitHub (`--train T --fix-tasks N` records fix tasks) and

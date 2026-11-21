@@ -666,18 +666,6 @@ jobs:
         run: |
           python3 tools/ci_select.py gate --needs "$NEEDS_JSON" --event "$EVENT" \
             --base-ref "$PR_BASE_REF" --head-ref "$PR_HEAD_REF" --labels "$PR_LABELS"
-      # Evidence for the landing mode tested-ff: the full run of a train pull request says which tree it
-      # tested. `ci-full` is posted only when that tree is the head commit's tree (tools/ci_select.py ci-full);
-      # it is evidence for the lander, never a required check.
-      - name: Post ci-full evidence
-        if: ${{ github.event_name == 'pull_request' && needs.select.outputs.full == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          text=$(python3 tools/ci_select.py ci-full --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
-            --tested-tree "$(git rev-parse 'HEAD^{tree}')" --head-tree "$(git rev-parse "$PR_HEAD^{tree}")") || exit 0
-          gh api "repos/${{ github.repository }}/statuses/$PR_HEAD" -f state=success -f context=ci-full -f description="$text"
       # Use BASE: a PR cannot weaken the gate that judges it; L1 needs green ci-gate at merge.
       - name: Commit trailers
         if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
@@ -702,3 +690,17 @@ jobs:
           fi
           git show "$BASE:tools/ci_commit_gate.py" > "$RUNNER_TEMP/ci_commit_gate_base.py"
           python3 "$RUNNER_TEMP/ci_commit_gate_base.py" check --base "$BASE" --head "$HEAD" --exempt tools/ci_commit_exempt.txt
+      # Evidence for the landing mode tested-ff: the full run of a train pull request says which tree it
+      # tested. `ci-full` is posted only when that tree is the head commit's tree (tools/ci_select.py ci-full);
+      # it is evidence for the lander, never a required check: the step runs after the required checks and
+      # cannot fail the gate (a read-only token on a fork pull request just posts nothing).
+      - name: Post ci-full evidence
+        if: ${{ success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          text=$(python3 tools/ci_select.py ci-full --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --tested-tree "$(git rev-parse 'HEAD^{tree}')" --head-tree "$(git rev-parse "$PR_HEAD^{tree}")") || exit 0
+          gh api "repos/${{ github.repository }}/statuses/$PR_HEAD" -f state=success -f context=ci-full -f description="$text"

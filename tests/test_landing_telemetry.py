@@ -40,6 +40,14 @@ def test_the_same_landing_twice_is_one_row(util):
     assert len(util.landing_rows()) == 1 and util.landing_rows()[0]["ci_reruns"] == 2
 
 
+def test_a_landing_is_identified_by_repo_and_sha_not_by_the_train_key(util):
+    util.record_landing(row(train="l1", ci_reruns=1, mode="train-pr-merge"))
+    util.record_landing(row(train="pr100", mode="train-pr-merge", first_ready_at=None, ci_reruns=None, go_at="2026-11-21T10:02:30Z"))
+    (only,) = util.landing_rows()  # the backfill of an already recorded landing adds, never blanks or doubles it
+    assert (only["train"], only["ci_reruns"], only["first_ready_at"], only["go_at"]) == (
+        "pr100", 1, "2026-11-21T09:00:00Z", "2026-11-21T10:02:30Z")
+
+
 def test_an_unknown_mode_is_not_recorded(util):
     with pytest.raises(util.MergeBatchError, match="mode"):
         util.record_landing(row(mode="merge"))

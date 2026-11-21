@@ -368,7 +368,7 @@ LANDING_SCHEMA = """CREATE TABLE IF NOT EXISTS landing (
     repo TEXT NOT NULL, train TEXT NOT NULL, landed_sha TEXT NOT NULL, mode TEXT NOT NULL, pr INTEGER,
     parts TEXT NOT NULL, first_ready_at TEXT, build_started_at TEXT, ci_run_id INTEGER, ci_started_at TEXT,
     ci_ended_at TEXT, go_at TEXT, landed_at TEXT, green_at TEXT, ci_reruns INTEGER, fit_commits INTEGER,
-    left_out INTEGER, red_main INTEGER, fix_tasks INTEGER, PRIMARY KEY (repo, train, landed_sha))"""
+    left_out INTEGER, red_main INTEGER, fix_tasks INTEGER, PRIMARY KEY (repo, landed_sha))"""
 
 
 def landing_modes():
@@ -399,7 +399,8 @@ def landing_db():
 
 
 def record_landing(row):
-    """Write the one telemetry row of a landing; the same (repo, train, landed_sha) again replaces it.
+    """Write the one telemetry row of a landing, identified by (repo, landed_sha); a second write for it adds
+    what the first did not know and never blanks a known value.
 
     ``row`` needs repo, train, landed_sha and a mode of LANDING_MODES; ``parts`` is a list of PR numbers.
     A column the lander cannot know yet stays NULL (``landing-settle`` fills the green and red-main
@@ -409,12 +410,17 @@ def record_landing(row):
     for key in ("repo", "train", "landed_sha"):
         if not row.get(key):
             raise MergeBatchError(f"landing telemetry: row has no {key}")
-    values = {name: row.get(name) for name in LANDING_COLUMNS}
+    values = {name: row.get(name) for name in LANDING_COLUMNS} | {"train": row["train"]}
     values["parts"] = json.dumps(sorted(row.get("parts") or [], key=str))
-    names = ("repo", "train", "landed_sha", *LANDING_COLUMNS)
+    columns = ("train", *LANDING_COLUMNS)
     with landing_db() as db:
-        db.execute(f"INSERT OR REPLACE INTO landing ({','.join(names)}) VALUES ({','.join('?' * len(names))})",
-                   [row[k] for k in names[:3]] + [values[k] for k in LANDING_COLUMNS])
+        db.execute("INSERT OR IGNORE INTO landing (repo, landed_sha, train, mode, parts) VALUES (?, ?, ?, ?, ?)",
+                   (row["repo"], row["landed_sha"], row["train"], row["mode"], values["parts"]))
+        # a landing is identified by (repo, landed sha): a later writer (backfill after the lander, or the reverse)
+        # fills what it knows and never blanks what an earlier one recorded
+        known = {k: v for k, v in values.items() if k in columns and v is not None}
+        db.execute(f"UPDATE landing SET {', '.join(f'{k}=?' for k in known)} WHERE repo=? AND landed_sha=?",
+                   [*known.values(), row["repo"], row["landed_sha"]])
 
 
 def landing_rows():
@@ -429,8 +435,7 @@ def landing_rows():
 def require_landing_row(repo, train, sha, mode):
     """The lander's own check: the landing has its telemetry row, naming the mode it landed in."""
     with landing_db() as db:
-        found = db.execute("SELECT mode FROM landing WHERE repo=? AND train=? AND landed_sha=?",
-                           (repo, train, sha)).fetchone()
+        found = db.execute("SELECT mode FROM landing WHERE repo=? AND landed_sha=?", (repo, sha)).fetchone()
     if found is None or found["mode"] != mode:
         raise MergeBatchError(f"landing of {train} at {short(sha)} has no telemetry row for mode {mode}: "
                               "the landing is not counted (landing-report would miss it)")
@@ -512,8 +517,8 @@ def settle_landings(fetch_runs):
             green_at = found["green_at"] or (wins[0] if wins else None)
             red_main = 1 if red else 0
             if (green_at, red_main) != (found["green_at"], found["red_main"]):
-                db.execute("UPDATE landing SET green_at=?, red_main=? WHERE repo=? AND train=? AND landed_sha=?",
-                           (green_at, red_main, found["repo"], found["train"], found["landed_sha"]))
+                db.execute("UPDATE landing SET green_at=?, red_main=? WHERE repo=? AND landed_sha=?",
+                           (green_at, red_main, found["repo"], found["landed_sha"]))
                 changed += 1
     return changed
 

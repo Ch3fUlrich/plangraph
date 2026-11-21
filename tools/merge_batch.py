@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -52,7 +53,7 @@ import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
 from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, refresh_diff, fetch_pr,
                               gh_json, landing_report, norm_pr, parse_prs, record_landing, render_landing_report,
-                              repo_info, set_fix_tasks, settle_landings)
+                              repo_info, require_landing_row, set_fix_tasks, settle_landings)
 
 
 def cmd_plan(args):
@@ -128,6 +129,28 @@ def cmd_landing_backfill(args):
            "go_at": args.go_at, "landed_at": pr["mergedAt"], "fit_commits": None, "left_out": None, **window}
     record_landing(row)
     print(f"recorded {args.mode} train #{args.pr}: {len(parts)} part(s), landed {pr['mergedAt']}")
+    return 0
+
+
+def cmd_landing_record(args):
+    """Write the telemetry row of a landing another tool made (the router's merge-part): repo, mode, train key,
+    the pull request, the landed commit and the head whose full run counts as the test window. The row is read
+    back; a row that cannot be written exits 1, so the caller can fail the landing."""
+    from datetime import datetime, timezone
+
+    window = land.ci_window(args.repo, args.head) if args.head else {}
+    parts = [int(n) for n in args.parts.split(",") if n]
+    row = {"repo": args.repo, "mode": args.mode, "train": args.train, "pr": args.pr, "parts": parts,
+           "landed_sha": args.sha, "first_ready_at": land.first_ready(args.repo, [{"pr": n} for n in parts]),
+           "landed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **window}
+    if args.mode == "tested-ff":
+        row["green_at"] = window.get("ci_ended_at")
+    try:
+        record_landing(row)
+        require_landing_row(args.repo, args.train, args.sha, args.mode)
+    except (sqlite3.Error, OSError) as exc:
+        raise MergeBatchError(f"landing telemetry row not written: {exc}") from None
+    print(f"landing row recorded: mode={args.mode} sha={args.sha}")
     return 0
 
 
@@ -212,6 +235,14 @@ def parser():
     cmd.add_argument("--mode", required=True, choices=("tested-ff", "train-pr-merge", "single-pr"))
     cmd.add_argument("--ready-at", help="ISO time the first part was READY, when known")
     cmd.add_argument("--go-at", help="ISO time of the GO, when known")
+    cmd = add("landing-record", cmd_landing_record, "write the telemetry row of a landing made by another tool")
+    cmd.add_argument("--repo", required=True)
+    cmd.add_argument("--mode", required=True, choices=("tested-ff", "train-pr-merge", "single-pr"))
+    cmd.add_argument("--train", required=True)
+    cmd.add_argument("--pr", required=True, type=positive)
+    cmd.add_argument("--sha", required=True, help="the commit that is main's tip after the landing")
+    cmd.add_argument("--head", help="the pull request head whose full run is the test window")
+    cmd.add_argument("--parts", default="", help="comma separated part pull request numbers")
     add("status", land.cmd_status, "batches in progress").add_argument("--json", action="store_true")
     add("abort", build.cmd_abort, "drop a batch: worktree, branch and state").add_argument("--name", required=True)
     return top
