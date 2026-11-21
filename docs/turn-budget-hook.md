@@ -22,6 +22,11 @@ for `UserPromptSubmit`, `Notification`, `PreToolUse`, `PostToolUse` and `Stop`.
 Pre/post matchers must include all tools so model responses with non-Bash tools
 are counted; only Bash pre-tool events are candidates for polling refusals.
 
+For A2 shadow measurement, append `--measure-only` to the command. Both
+polling checks run for accounting while the hook returns success and emits no
+tool decision. The measurements go under `<state>/shadow-turn-budget/status`.
+The live watchdog reads only `<state>/status`.
+
 ## State and accounting contract
 
 - State root: `FLEET_STATE_DIR`, else `$HOME/.local/state/fleet`, matching the

@@ -1,0 +1,14 @@
+[Unit]
+Description=plangraph shadow state collector for %i
+After=network-online.target
+
+[Service]
+Type=simple
+UMask=0077
+EnvironmentFile=%h/.config/plangraph/state-shadow/%i.env
+ExecStart=%h/.local/bin/plangraph state wait --role %i
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=default.target

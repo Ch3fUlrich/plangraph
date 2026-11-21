@@ -15,5 +15,6 @@ pub mod review;
 mod review_git;
 pub mod runner;
 pub mod setup;
+pub mod state_shadow;
 pub mod wait_pid;
 pub mod watchers;
