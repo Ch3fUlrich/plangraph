@@ -68,3 +68,30 @@ fn real_stdio_handshake_launches_without_model_or_live_host() {
     );
     assert!(matches!(result, Launch::Started(_)));
 }
+
+#[test]
+fn a_confirmed_link_outage_queues_the_launch_with_a_named_reason() {
+    use pg_worker_core::{host_launch::launch_with_state, host_link::observe_ssh};
+
+    let state = tempfile::tempdir().unwrap();
+    let registry = pg_worker_core::hosts::HostRegistry {
+        version: 1,
+        public_repos: Default::default(),
+        self_host: "local".into(),
+        hosts: vec![],
+    };
+    let host = pg_worker_core::package_placement::Candidate {
+        id: "worker".into(),
+        workstation: false,
+        ssh: Some("worker.invalid".into()),
+        sample: None,
+        readiness: None,
+    };
+    for now in [100, 160] {
+        observe_ssh(state.path(), "worker.invalid", now, false, || json!({})).unwrap();
+    }
+    assert!(matches!(
+        launch_with_state(&registry, &host, &json!({}), state.path()),
+        Launch::Waiting(reason) if reason == "worker unreachable since 100"
+    ));
+}

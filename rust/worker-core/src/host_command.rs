@@ -2,7 +2,7 @@
 use std::{
     fs::File,
     io::{self, Read, Seek},
-    process::{Command, Stdio},
+    process::{Command, Output, Stdio},
     time::{Duration, Instant},
 };
 
@@ -59,9 +59,35 @@ pub fn isolate_git(command: &mut Command) {
     command.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
 }
 pub fn output(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
-    let mut file: File = tempfile::tempfile()?;
+    let stdout = tempfile::tempfile()?;
+    command.stdout(stdout.try_clone()?).stderr(Stdio::null());
+    if !run_bounded(command, timeout)?.is_some_and(|status| status.success()) {
+        return Err(io::Error::other("command failed or timed out"));
+    }
+    read_bounded(stdout)
+}
+
+/// Run one command within the supplied deadline and preserve its exit status.
+pub fn capture(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+    let stdout = tempfile::tempfile()?;
+    let stderr = tempfile::tempfile()?;
+    command
+        .stdout(stdout.try_clone()?)
+        .stderr(stderr.try_clone()?);
+    let status = run_bounded(command, timeout)?
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "command timed out"))?;
+    Ok(Output {
+        status,
+        stdout: read_bounded(stdout)?,
+        stderr: read_bounded(stderr)?,
+    })
+}
+
+fn run_bounded(
+    command: &mut Command,
+    timeout: Duration,
+) -> io::Result<Option<std::process::ExitStatus>> {
     isolate_git(command);
-    command.stdout(file.try_clone()?).stderr(Stdio::null());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -87,9 +113,10 @@ pub fn output(command: &mut Command, timeout: Duration) -> io::Result<Vec<u8>> {
         let _ = child.kill();
     }
     let _ = child.wait();
-    if !status.is_some_and(|s| s.success()) {
-        return Err(io::Error::other("command failed or timed out"));
-    }
+    Ok(status)
+}
+
+fn read_bounded(mut file: File) -> io::Result<Vec<u8>> {
     file.rewind()?;
     let mut bytes = Vec::new();
     file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;

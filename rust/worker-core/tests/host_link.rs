@@ -157,3 +157,176 @@ fn cli_failed_peer_queues_bridge_event_and_healthy_peer_resets_state() {
     assert!(value["down_since"].is_null());
     assert_eq!(events(&root).len(), 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn ssh_watch_alerts_once_with_peer_and_ip_evidence_then_recovers() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state");
+    let ssh = dir.path().join("ssh");
+    symlink("/usr/bin/false", &ssh).unwrap();
+    for (program, line) in [
+        (
+            "tailscale",
+            r#"{"Peer":{"node":{"HostName":"peer-a","Online":false,"Active":true,"Relay":"fra"}}}"#,
+        ),
+        (
+            "journalctl",
+            "portmap: monitor: gateway and self IP changed: fixture",
+        ),
+    ] {
+        let path = dir.path().join(program);
+        fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{line}'\n")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let tick = || {
+        let result = Command::new(env!("CARGO_BIN_EXE_pg-host-link"))
+            .args(["ssh-tick"])
+            .arg(&root)
+            .args(["observer", "worker", "user@worker", "peer-a"])
+            .env("PATH", dir.path())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        String::from_utf8(result.stdout).unwrap()
+    };
+
+    tick();
+    tick();
+    assert!(
+        events(&root).is_empty(),
+        "remote nonzero exit proves SSH connected"
+    );
+    fs::remove_file(&ssh).unwrap();
+    fs::write(&ssh, "#!/bin/sh\nexit 255\n").unwrap();
+    fs::set_permissions(&ssh, fs::Permissions::from_mode(0o700)).unwrap();
+
+    tick();
+    assert!(events(&root).is_empty());
+    let alert_line = tick();
+    assert!(alert_line.contains("worker unreachable since "));
+    assert!(!tick().contains("unreachable since "));
+    let status = || {
+        Command::new(env!("CARGO_BIN_EXE_pg-host-link"))
+            .arg("ssh-status")
+            .arg(&root)
+            .arg("user@worker")
+            .output()
+            .unwrap()
+    };
+    let unavailable = status();
+    assert!(!unavailable.status.success());
+    assert!(String::from_utf8_lossy(&unavailable.stderr).contains("user@worker unreachable since "));
+    let alerts = events(&root);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0]["rule"], "host-ssh-down");
+    assert_eq!(alerts[0]["peer_state"]["Online"], false);
+    assert_eq!(alerts[0]["peer_state"]["Relay"], "fra");
+    assert!(alerts[0]["last_ip_change"]
+        .as_str()
+        .unwrap()
+        .contains("gateway and self IP changed"));
+    fs::remove_file(&ssh).unwrap();
+    symlink("/usr/bin/true", &ssh).unwrap();
+    assert!(tick().contains("worker recovered"));
+    assert!(!tick().contains("worker recovered"));
+    assert!(status().status.success());
+    assert_eq!(
+        events(&root)
+            .iter()
+            .filter(|event| event["rule"] == "host-ssh-recovered")
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ssh_wait_retries_255_then_succeeds_and_names_a_persistent_outage() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    let dir = tempfile::tempdir().unwrap();
+    let ssh = dir.path().join("ssh");
+    fs::write(
+        &ssh,
+        "#!/bin/sh\nread n < attempts\nn=$((n + 1))\nprintf '%s\\n' \"$n\" > attempts\nif test \"$n\" = \"$RECOVER_ON\"; then printf 'ready\\n'; exit 0; fi\nexit 255\n",
+    ).unwrap();
+    fs::set_permissions(ssh, fs::Permissions::from_mode(0o700)).unwrap();
+    let run = |recover_on: &str| {
+        fs::write(dir.path().join("attempts"), "0\n").unwrap();
+        Command::new(env!("CARGO_BIN_EXE_pg-host-link"))
+            .arg("ssh-wait")
+            .arg(dir.path())
+            .args(["worker", "--", "true"])
+            .env("PATH", dir.path())
+            .env("RECOVER_ON", recover_on)
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+    };
+    let recovered = run("2");
+    assert!(recovered.status.success(), "{recovered:?}");
+    assert_eq!(recovered.stdout, b"ready\n");
+    let failed = run("0");
+    assert_eq!(failed.status.code(), Some(255));
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("worker unreachable since "));
+    assert_eq!(
+        fs::read_to_string(dir.path().join("attempts")).unwrap(),
+        "3\n"
+    );
+}
+
+#[test]
+fn bridge_reads_a_queued_outage_before_its_recovery() {
+    use pg_worker_core::host_link::observe_ssh;
+    let dir = tempfile::tempdir().unwrap();
+    for (now, reachable) in [(101, false), (161, false), (221, true)] {
+        observe_ssh(dir.path(), "user@worker", now, reachable, || {
+            serde_json::json!({})
+        })
+        .unwrap();
+    }
+    let mut entries: Vec<_> = fs::read_dir(dir.path().join("watchdog/outbox"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    entries.sort();
+    let rules: Vec<_> = entries
+        .iter()
+        .map(|path| {
+            let event: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            event["rule"].as_str().unwrap().to_owned()
+        })
+        .collect();
+    assert_eq!(rules, ["host-ssh-down", "host-ssh-recovered"]);
+}
+
+#[test]
+fn incomplete_ssh_subcommand_prints_usage() {
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_pg-host-link"))
+        .args(["ssh-wait", "state", "worker"])
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("usage:"));
+}
+
+#[test]
+fn peer_and_ssh_probes_keep_independent_observation_history() {
+    use pg_worker_core::host_link::observe_ssh;
+
+    let state = tempfile::tempdir().unwrap();
+    observe(state.path(), "ssh", "worker", 100, false).unwrap();
+    assert_eq!(
+        observe_ssh(state.path(), "worker", 110, false, || serde_json::json!({})).unwrap(),
+        None
+    );
+    assert_eq!(
+        observe_ssh(state.path(), "worker", 170, false, || serde_json::json!({})).unwrap(),
+        Some(110)
+    );
+}

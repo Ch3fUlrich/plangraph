@@ -50,6 +50,7 @@ class Watchdog:
         self.limits, self.start, self.edit, self.writer = limits, start, edit, writer
         self.edited, self.edit_baseline_known = False, edit is not None
         self.cpu = None
+        self.children = None
         self.cpu_idle_since = None
         self.progress = dict(edit=start, activity=start, cpu=start)
 
@@ -69,12 +70,19 @@ class Watchdog:
                                        if self.writer and not self.edited and self.edit is not None
                                        else 0)
 
-    def decide(self, now, edit, activity, cpu, *, stdout_activity=None, waiting=False):
-        # A live child defers only CPU-based stuck detection, never output/progress stalls.
+    def stuck_deadline(self, stdout_activity):
+        if self.cpu_idle_since is not None:
+            return (max(self.cpu_idle_since, stdout_activity)
+                    + self.limits.get('stuck_s', self.limits['stall_s'] + 300))
+        return float('inf')
+
+    def decide(self, now, edit, activity, cpu, *, stdout_activity=None, children=None):
+        # Existing descendants can stay alive indefinitely. Only observed changes defer stuck.
         if cpu is None:
             self.cpu_idle_since = None
-        elif waiting or self.cpu is None or cpu != self.cpu:
+        elif self.cpu is None or cpu != self.cpu or (children is not None and children != self.children):
             self.cpu_idle_since = now
+        self.children = children
         if edit is not None:
             if self.edit is None:
                 # Q7/M4: the spawn baseline was unreadable; adopt the first
@@ -93,9 +101,7 @@ class Watchdog:
         rule = None
         if now - self.start >= self.budget():
             rule = 'max'
-        elif (self.cpu_idle_since is not None
-              and now - max(self.cpu_idle_since, stdout_activity if stdout_activity is not None else activity or self.start)
-              >= self.limits.get('stuck_s', stall + 300)):
+        elif now >= self.stuck_deadline(stdout_activity if stdout_activity is not None else activity or self.start):
             rule = 'stuck'
         elif not self.writer:
             pass
@@ -348,20 +354,25 @@ async def collect(runner, job_id, proc):
         sample_interval = min(limits['interval'], 30)
         async def sample_cpu():
             # A short review cannot reach the stuck threshold; its hard wall has priority.
-            remaining = job.start_time + w.budget() - time.time()
+            now = time.time()
+            remaining = job.start_time + w.budget() - now
             if (not w.writer and w.budget() <= limits.get('stuck_s', limits['stall_s'] + 300)) or remaining <= 0:
                 return None
+            # A deadline can split a sampling bucket. Use recent CPU evidence then.
+            period = min(sample_interval, 1) if now >= w.stuck_deadline(stdout_at) else sample_interval
+            tick = period, int(now / period)
             try:
-                return await asyncio.wait_for(cpu_seconds(runner, job_id, getattr(proc, 'pid', None),
-                    int(time.time() / sample_interval)), min(1, remaining))
+                return await asyncio.wait_for(cpu_seconds(runner, job_id, getattr(proc, 'pid', None), tick),
+                                              min(1, remaining))
             except asyncio.TimeoutError:
                 return None
         w.decide(time.time(), baseline, job.last_activity_ts,
                  await sample_cpu(),
-                 stdout_activity=stdout_at, waiting=getattr(job, '_watchdog_child_active', False))
+                 stdout_activity=stdout_at, children=getattr(job, '_watchdog_children', None))
         while not task.done():
             # Deadlines stay accurate even with the default 120s sample interval.
-            delay = quota.delay(min(sample_interval, max(.001, job.start_time + w.budget() - time.time())))
+            deadline = min(job.start_time + w.budget(), w.stuck_deadline(stdout_at))
+            delay = quota.delay(min(sample_interval, max(.001, deadline - time.time())))
             if limits.get('hard_first_edit') and w.writer and not w.edited and w.edit_baseline_known and w.edit is not None:
                 delay = min(delay, max(.001, job.start_time + limits['first_edit_s'] - time.time()))
             if w.writer and w.edit is None:
@@ -403,7 +414,7 @@ async def collect(runner, job_id, proc):
                         if w.writer else None)
                 now = time.time()
                 cpu = await sample_cpu()
-                event = w.decide(now, edit, job.last_activity_ts, cpu, stdout_activity=stdout_at, waiting=getattr(job, '_watchdog_child_active', False))
+                event = w.decide(now, edit, job.last_activity_ts, cpu, stdout_activity=stdout_at, children=getattr(job, '_watchdog_children', None))
             gate.progress(w.progress['edit'])   # REMOVE-AT-R10 (D-3769)
             try:
                 callback = getattr(runner, 'on_sample', None)

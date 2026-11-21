@@ -1,0 +1,1 @@
+- Schedule worker Tailscale probes, deliver host link events to the keeper message bus, and retry SSH transport failures in read-only waiters within a fixed bound.
