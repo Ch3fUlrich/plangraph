@@ -25,6 +25,13 @@ CHECK_TIMEOUT = 60
 # Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
 # Leave ample room for slower hosts, multiple affected crates and test suites.
 RUST_TIMEOUT = 600
+# The rust stage bound scales with the planned test binaries and the host load: binaries x
+# RUST_PER_BINARY_TIMEOUT seconds (never below RUST_TIMEOUT), times 1 + load/cores, capped at
+# MAX_RUST_TIMEOUT. Train 1 ran 414 s on an idle host and 655 s at load ~27.
+RUST_PER_BINARY_TIMEOUT = 15
+MAX_RUST_TIMEOUT = 3600
+# CARGO_BUILD_JOBS follows the free cores (cores minus load), never below MIN_BUILD_JOBS.
+MIN_BUILD_JOBS = 4
 # The affected-test step is bounded well under the 5 minute push target; the
 # measured normal run is about 50 s.
 TEST_TIMEOUT = 240
@@ -77,9 +84,73 @@ def scaled_test_timeout(count):
     return min(MAX_TEST_TIMEOUT, max(TEST_TIMEOUT, count * TEST_PER_PATH_TIMEOUT))
 
 
+def host_load():
+    """(1-minute load average, cores); load 0 where the platform has none."""
+    try:
+        load = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        load = 0.0
+    return load, os.cpu_count() or 2
+
+
+def build_jobs(env, cores, load):
+    """CARGO_BUILD_JOBS: the configured positive value, else the free cores, floor MIN_BUILD_JOBS."""
+    configured = env.get("CARGO_BUILD_JOBS", "")
+    if configured.isascii() and configured.isdigit() and int(configured) > 0:
+        return int(configured)
+    if configured:
+        return MIN_BUILD_JOBS
+    return max(MIN_BUILD_JOBS, min(cores, int(cores - load)))
+
+
+def rust_bound(binaries, load, cores):
+    base = max(RUST_TIMEOUT, binaries * RUST_PER_BINARY_TIMEOUT)
+    saturation = min(max(load, 0.0), cores) / max(cores, 1)
+    return min(MAX_RUST_TIMEOUT, base * (1 + saturation))
+
+
+def planned_test_binaries(commands, root):
+    """Test binaries the cargo test commands build: one lib/bin target plus every tests/*.rs per crate."""
+    root = Path(root)
+    if root.name == "rust":   # cargo commands run inside rust/
+        root = root.parent
+    owners = {}
+    for manifest in (root / "rust").rglob("Cargo.toml"):
+        if "target" in manifest.parts:
+            continue
+        try:
+            name = tomllib.loads(manifest.read_text()).get("package", {}).get("name")
+        except (OSError, ValueError):
+            continue
+        if name:
+            owners[name] = manifest.parent
+        owners[str(manifest.resolve())] = manifest.parent
+    total = 0
+    for command in commands:
+        if command[:2] != ["cargo", "test"]:
+            continue
+        crates = [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
+        crates += [str(Path(command[i + 1]).resolve()) for i, arg in enumerate(command[:-1])
+                   if arg == "--manifest-path"]
+        for crate in crates or list({str(d): d for n, d in owners.items() if n and not n.endswith("Cargo.toml")}):
+            directory = owners.get(crate, Path(crate) if Path(crate).is_dir() else None)
+            if directory is not None:
+                total += 1 + len(list((directory / "tests").glob("*.rs")))
+    return total
+
+
+def running_test_binary(partial):
+    """The test binary named by the last cargo "Running" line of the output so far, else None."""
+    if isinstance(partial, bytes):
+        partial = partial.decode("utf-8", "replace")
+    found = re.findall(r"^\s*Running (\S+(?: \S+)?) \(", partial or "", re.M)
+    return found[-1] if found else None
+
+
 def check_timeout(command, cwd=None, env=None):
     if command[:2] in (["cargo", "clippy"], ["cargo", "test"]):
-        return RUST_TIMEOUT
+        load, cores = host_load()
+        return rust_bound(planned_test_binaries([command], cwd or Path.cwd()), load, cores)
     if is_affected_step(command):
         return scaled_test_timeout(planned_paths(command, cwd, env))
     return CHECK_TIMEOUT
@@ -158,7 +229,9 @@ def run(command, cwd, env):
         if is_affected_step(command):
             return 1, (f"tests: affected-tests step exceeded its {timeout} second bound "
                        f"({selected_count(exc.stdout)} selected test paths)\n")
-        return 1, f"check exceeded {timeout} second timeout\n"
+        binary = running_test_binary(exc.stdout)
+        named = f" (running test binary: {binary})" if binary else ""
+        return 1, f"check exceeded {timeout} second timeout{named}\n"
     except OSError as exc:
         return 1, f"unable to start check: {type(exc).__name__}\n"
 
@@ -464,7 +537,8 @@ def _main(argv, root, cleanup):
     policy_base = policy_baseline(root, args.base)
     policy_bases = dict(FILESIZE_REQUIRE_BASE=policy_base, NEWCODE_BASE=policy_base,
                         CHANGELOG_BASE=policy_base)
-    env = cargo_child_env(dict(os.environ, CARGO_BUILD_JOBS="4"))
+    load, cores = host_load()
+    env = cargo_child_env(dict(os.environ, CARGO_BUILD_JOBS=str(build_jobs(os.environ, cores, load))))
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():
         env['PATH'] = str(cargo_bin) + os.pathsep + env.get('PATH', '')
