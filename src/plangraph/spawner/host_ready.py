@@ -1,6 +1,5 @@
 """Durable, bounded host readiness: python -m plangraph.spawner.host_ready."""
 import argparse
-from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
@@ -232,30 +231,6 @@ def _cargo_lease_for(target, exclusive=False, wait=0.0):
 def cargo_lease(exclusive=False, wait=0.0):
     """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
     return _cargo_lease_for(shared_cargo_target(), exclusive=exclusive, wait=wait)
-
-
-@contextmanager
-def capped_cargo_lease(worktree):
-    """Trim an over-cap idle target before leasing it for a standalone build."""
-    from types import SimpleNamespace
-    target = shared_cargo_target()
-    if not _safe_cache_dir(target, worktree):
-        raise ValueError('cargo_target_cap: unsafe cache directory')
-    floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
-    cap = cargo_target_cap_gb()
-    if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
-        raise ValueError('invalid disk limits')
-    service = SimpleNamespace(ps=lambda: {'runs': []})
-    if cap > 0:
-        _clean_single_cache(target, service, cap=cap)
-    with cargo_lease():
-        free = min(disk_free_gb(path) for path in (target, worktree))
-        if free < floor:
-            raise ValueError(f'disk_low: free {free:.2f} GB, floor {floor:g} GB')
-        size = cargo_target_size_gb(target)
-        if size >= cap:
-            raise ValueError(f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB')
-        yield
 
 
 def cargo_run_busy(record):
