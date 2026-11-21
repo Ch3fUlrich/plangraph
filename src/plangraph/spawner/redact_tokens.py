@@ -212,7 +212,7 @@ def is_computed(value):
     """True for None/True/False/null or an already masked value, or a call, subscript or bracketed expression with no string literal.
 
     Spawner-read source keeps these readable; a quoted or bare literal after a
-    credential name is a credential (rust/worker-core redact.rs is_computed).
+    credential name is masked (mirrored by is_computed in rust/worker-core).
     """
     value = value.strip()
     if re.fullmatch(r'None|True|False|null|["\']?\[REDACTED\]["\']?', value):
