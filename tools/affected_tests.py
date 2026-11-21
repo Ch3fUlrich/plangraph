@@ -598,6 +598,19 @@ def main(root=None):
             print('FAIL test-env: cannot discover Git repository bindings', file=sys.stderr)
             return 1
         start = time.monotonic()
+        if args.local and not args.collect_only and 'tests/test_fleet_snapshot.py' in plan['tests']:
+            # Push preflight runs in a detached checkout, even when the writer
+            # already built pg-spawnd in the worktree that launched the hook.
+            print('fleet tests: building pg-spawnd from the selected checkout', flush=True)
+            try:
+                build = subprocess.run(
+                    ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml', '-p', 'pg-spawnd'],
+                    cwd=root, env=env)
+            except OSError as error:
+                print(f'CARGO FAIL: could not start the pg-spawnd build ({error})', file=sys.stderr)
+                return 1
+            if build.returncode:
+                return build.returncode
         if args.collect_only:
             env.pop("PYTEST_SHARD", None)
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
