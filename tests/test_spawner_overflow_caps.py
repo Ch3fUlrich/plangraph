@@ -447,6 +447,18 @@ def test_disk_low_runs_cleanup_once_and_raises_floor_alarm(tmp_path, monkeypatch
     assert h.local_disk_refusal(tmp_path / 'checkout', service) is None
 
 
+def test_conftest_replaces_an_inherited_real_shared_target(tmp_path):
+    from plangraph.spawner import host_ready as h
+    sandbox = tmp_path.parent  # pytest's base temp directory
+    assert all(p.is_relative_to(sandbox) for p in h._shared_cache_roots())
+
+
+def test_select_work_drive_needs_a_drive():
+    from plangraph.spawner import host_ready as h
+    with pytest.raises(ValueError):
+        h.select_work_drive([], lambda: None)
+
+
 def test_cleanup_touches_only_the_pinned_cache_roots(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from plangraph.spawner import host_ready as h

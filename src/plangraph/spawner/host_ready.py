@@ -298,6 +298,9 @@ def select_work_drive(drives, cleanup):
     and every drive is measured again. Returns ``(path, None)`` for the selected
     drive, or ``(None, (free_gb, floor_gb))`` of the first drive when all stay low.
     """
+    if not drives:
+        raise ValueError('select_work_drive needs at least one drive')
+
     def pick():
         return next((p for p, floor in drives if disk_free_gb(p) >= floor), None)
     selected = pick()

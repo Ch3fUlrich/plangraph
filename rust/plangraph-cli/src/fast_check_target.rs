@@ -77,6 +77,15 @@ pub(super) fn resolve_cargo_target(
     primary: &Path,
     run: &str,
 ) -> Result<cargo_pool::SlotLease> {
+    resolve_with_cap(root, primary, run, cargo_pool::configured_cap_bytes())
+}
+
+fn resolve_with_cap(
+    root: &Path,
+    primary: &Path,
+    run: &str,
+    cap_bytes: u64,
+) -> Result<cargo_pool::SlotLease> {
     let worktree = root.canonicalize().map_err(|e| e.to_string())?;
     let count = cargo_pool::configured_slot_count(primary);
     let slots = cargo_pool::pool_slots(primary, count).map_err(|e| e.to_string())?;
@@ -95,12 +104,7 @@ pub(super) fn resolve_cargo_target(
         }
     }
     let mut report = pg_worker_core::disk_hygiene::Report::default();
-    let _ = cargo_pool::enforce_pool(
-        primary,
-        cargo_pool::configured_cap_bytes(),
-        true,
-        &mut report,
-    );
+    let _ = cargo_pool::enforce_pool(primary, cap_bytes, true, &mut report);
     cargo_pool::acquire_slot(primary, slots.len(), run, None)
         .map_err(|e| format!("cargo pool: {e}"))
 }
@@ -179,4 +183,20 @@ fn run_step_records_lock_wait_sample_only_for_cargo_steps() {
     run_step(&mut other, "true", &lease).unwrap();
     let after = cargo_pool::summarize_lock_waits(&state).unwrap();
     assert_eq!(after.values().next().unwrap().builds, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_cargo_target_trims_an_over_cap_idle_slot_before_leasing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let primary = tmp.path().join("cache/cargo-target");
+    let idle = tmp.path().join("cache/cargo-target-pool/slot-1");
+    std::fs::create_dir_all(idle.join("debug")).unwrap();
+    std::fs::write(idle.join("debug/blob"), vec![0u8; 16384]).unwrap();
+
+    let lease = resolve_with_cap(&worktree, &primary, "fc-trim", 2048).unwrap();
+    assert!(!idle.join("debug/blob").exists());
+    assert_eq!(lease.path, primary);
 }

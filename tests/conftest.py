@@ -192,8 +192,8 @@ def hermetic_cargo_caches(monkeypatch, tmp_path_factory):
     """Cache cleanup deletes whole directories: never let a test reach the host's real caches."""
     from plangraph.spawner import host_ready
     root = tmp_path_factory.mktemp('cargo-caches')
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', os.environ.get(
-        'PLANGRAPH_CARGO_TARGET_DIR') or str(root / 'cargo-target'))
+    # Always replaced: a harness child carries the real shared target in this variable.
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(root / 'cargo-target'))
     monkeypatch.setattr(host_ready, '_legacy_cache_roots',
                         lambda: [root / 'pg-target-po', root / 'pg-target-warm'])
 

@@ -35,13 +35,7 @@ impl LockWaitSummary {
 }
 
 pub fn count_cargo_lock_waits(stderr: &str) -> u64 {
-    stderr
-        .lines()
-        .filter(|line| {
-            line.contains("Blocking waiting for file lock on build directory")
-                || line.contains("Blocking waiting for file lock on artifact directory")
-        })
-        .count() as u64
+    stderr.lines().filter(|line| is_blocking(line)).count() as u64
 }
 
 pub fn record_lock_wait(state: &Path, sample: &LockWaitSample) -> io::Result<()> {

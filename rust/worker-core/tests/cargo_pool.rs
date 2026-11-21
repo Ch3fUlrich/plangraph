@@ -212,7 +212,7 @@ fn pool_discovery_counts_slots_and_enforce_pool_trims_idle_slots_without_slot_lo
     let leased = acquire_slot(&primary, 3, "run-live", None).unwrap();
     let found = existing_pool_slots(&primary);
     assert_eq!(found, pool_slots(&primary, 3).unwrap());
-    assert!(configured_slot_count(&primary) >= 1);
+    assert_eq!(configured_slot_count(&primary), 3);
 
     let mut report = Report::default();
     let total = enforce_pool(&primary, 2048, true, &mut report).unwrap();
