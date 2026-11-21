@@ -117,9 +117,11 @@ pub enum Action {
 pub struct Session {
     next: u32,
     cands: BTreeMap<String, Candidate>,
-    halves: Option<(String, String)>,
+    /// Sibling pairs of halves, by candidate id (a half can be split again into its own pair).
+    pairs: Vec<(String, String)>,
     green: BTreeSet<String>,
-    held_second: Option<Candidate>,
+    /// The second half of a pair whose first half was released, by the first half's id.
+    held: BTreeMap<String, Candidate>,
     /// Candidates already released for landing: each lands at most once.
     landed: BTreeSet<String>,
     deferred: Vec<PartIn>,
@@ -188,7 +190,8 @@ impl Session {
         let mut released = Vec::new();
         if cand.kind == Kind::Half {
             // A sibling that passed alone while this half was running lands now; this half goes on alone.
-            if let Some((a, b)) = self.halves.take() {
+            if let Some(i) = self.pairs.iter().position(|(a, b)| a == id || b == id) {
+                let (a, b) = self.pairs.remove(i);
                 let sibling = if id == a { b } else { a };
                 if self.green.contains(&sibling) {
                     released.extend(self.land_once(&sibling));
@@ -248,7 +251,7 @@ impl Session {
             let a: Vec<PartIn> = groups[..cut].iter().flatten().cloned().collect();
             let b: Vec<PartIn> = groups[cut..].iter().flatten().cloned().collect();
             let (ca, cb) = (self.make(a, Kind::Half), self.make(b, Kind::Half));
-            self.halves = Some((ca.id.clone(), cb.id.clone()));
+            self.pairs.push((ca.id.clone(), cb.id.clone()));
             return vec![Action::Freeze(ca), Action::Freeze(cb)];
         }
         let chain = &groups[0];
@@ -275,15 +278,18 @@ impl Session {
         if !self.green.insert(id.to_owned()) {
             return vec![];
         }
-        let Some((a, b)) = self.halves.clone() else {
-            // The sibling went red first and the halves were released: this half lands alone.
+        let Some(i) = self.pairs.iter().position(|(a, b)| a == id || b == id) else {
+            // The sibling went red first and the pair was released: this half lands alone.
             return self.land_once(id).into_iter().collect();
         };
+        let (a, b) = self.pairs[i].clone();
         let sibling = if id == a { &b } else { &a };
         if self.green.contains(sibling) {
             // Both passed against the old base: the first lands, the other is rebuilt after it.
-            self.held_second = self.cands.get(&b).cloned();
-            self.halves = None;
+            self.pairs.remove(i);
+            if let Some(second) = self.cands.get(&b).cloned() {
+                self.held.insert(a.clone(), second);
+            }
             return self.land_once(&a).into_iter().collect();
         }
         if !self.cands.contains_key(sibling) {
@@ -302,7 +308,7 @@ impl Session {
         let Some(cand) = self.cands.get(id).cloned() else {
             return vec![];
         };
-        if let Some(second) = self.held_second.take() {
+        if let Some(second) = self.held.remove(id) {
             let c = self.make(second.parts, Kind::Second);
             self.cands.remove(&second.id);
             return vec![Action::Rebuild(c)];

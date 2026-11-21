@@ -27,6 +27,28 @@ pub struct Build {
     pub open: BuildOpen,
 }
 
+/// The artifacts of one proof must belong together: the build record, the freeze, the manifest and the
+/// result carry the same build, base and policy version (before any replay is trusted).
+pub fn bind_artifacts(
+    open: &BuildOpen,
+    freeze: &Freeze,
+    manifest: &Manifest,
+    result: &BuildResult,
+) -> Result<(), String> {
+    let same = open.build == manifest.build
+        && open.build == result.build
+        && open.base == manifest.base
+        && freeze.base == manifest.base
+        && open.policy_version == POLICY_VERSION
+        && manifest.policy.version == POLICY_VERSION
+        && freeze.policy_version == POLICY_VERSION;
+    if same {
+        Ok(())
+    } else {
+        Err("artifacts of different builds, bases or policies: the open record, freeze, manifest and result must match".into())
+    }
+}
+
 /// The tip of main that was read must be the base the train is built on.
 pub fn require_base_is_tip(tip: &str, base: &str) -> Result<(), String> {
     if tip == base {
@@ -211,6 +233,7 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
                 Some(p) => adopted_from_log(p, &manifest.build)?,
                 None => vec![],
             };
+            bind_artifacts(&open, &freeze, &manifest, &result)?;
             check_freeze(&open, &result.snapshot, &freeze)
                 .map_err(|e| format!("freeze refused: {e:?}"))?;
             if freeze.selection != parts {

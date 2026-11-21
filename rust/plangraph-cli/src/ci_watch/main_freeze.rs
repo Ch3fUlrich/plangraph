@@ -140,6 +140,8 @@ pub trait Effects {
     fn diagnose(&mut self, run: u64, attempt: u32) -> Diagnosis;
     fn latest_conclusion(&mut self, run: u64) -> Option<String>;
     fn request(&mut self, run: u64, kind: Kind) -> Result<(), String>;
+    /// The key the fix task of this run, red episode and diagnosis has; known before it is created.
+    fn fix_task_key(&self, run: u64, episode: u32, diagnosis: &Diagnosis) -> String;
     /// Creates (or finds) the fix task for the run; returns its key.
     fn fix_task(&mut self, run: u64, episode: u32, diagnosis: &Diagnosis)
         -> Result<String, String>;
@@ -407,10 +409,14 @@ pub fn step(
             Decision::FixTask => {
                 // The budget is spent only once the keeper confirmed the task; a failed creation is retried.
                 let episode = budget.episodes;
+                // The intended identity is persisted before the keeper is asked: a lost reply must not
+                // leave a task nobody closes when main turns green.
+                let key = fx.fix_task_key(b.run, episode, &diagnosis);
+                state.fix_tasks.insert(key.clone(), b.run);
+                save(state)?;
                 match fx.fix_task(b.run, episode, &diagnosis) {
-                    Ok(key) => {
+                    Ok(_) => {
                         state.budgets.entry(b.run).or_default().fix_task = true;
-                        state.fix_tasks.insert(key, b.run);
                         save(state)?;
                         out.push(format!("fix task: run {}", b.run));
                     }

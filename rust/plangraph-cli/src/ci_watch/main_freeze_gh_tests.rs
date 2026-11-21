@@ -281,3 +281,81 @@ fn the_supplied_service_runs_recovery_and_keeper_delivery() {
         "the documented command carries both flags"
     );
 }
+
+#[test]
+fn two_blocking_runs_with_the_same_diagnosis_have_distinct_fix_task_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut gh = Recorded {
+        verbs: vec![],
+        latest: 1,
+    };
+    let fx = GhEffects {
+        gh: &mut gh,
+        repo: "o/r".into(),
+        dir: dir.path(),
+        define: |_: &mut Task| Ok(false),
+        close: |_: &str| Ok(()),
+    };
+    let d = Diagnosis {
+        tests: vec!["same::test".into()],
+        incomplete: false,
+    };
+    let (a, b) = (fx.fix_task_key(5, 0, &d), fx.fix_task_key(6, 0, &d));
+    assert_ne!(a, b);
+    assert_ne!(
+        a,
+        fx.fix_task_key(5, 1, &d),
+        "another episode of the same run is another task"
+    );
+    assert_eq!(
+        a,
+        fx.fix_task_key(5, 0, &d),
+        "the key is stable across retries"
+    );
+}
+
+#[test]
+fn delivery_runs_outside_the_lock_so_a_command_that_acknowledges_at_once_works() {
+    use super::batch_failure::{Deliver, FailureRecord, Owners};
+    struct AckingDeliver<'a>(&'a std::path::Path);
+    impl Deliver for AckingDeliver<'_> {
+        fn send(&mut self, _: &str, record: &FailureRecord) -> Result<(), String> {
+            // The writer acknowledges synchronously: the same locked update `--ack` uses.
+            update_failures(self.0, |records| {
+                super::batch_failure::acknowledge(records, &record.id);
+                Ok(())
+            })
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let owners = Owners {
+        prs: [("7".to_owned(), "b".to_owned())].into(),
+        writers: [("b".to_owned(), "w1".to_owned())].into(),
+        successors: Default::default(),
+    };
+    let task = Task {
+        key: "k".into(),
+        head: "pr-7".into(),
+        pr: Some(7),
+        run_id: 1,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        priority: 10,
+        keeper_defined: false,
+        keeper_key: None,
+    };
+    update_failures(dir.path(), |records| {
+        Ok(super::batch_failure::record_failure(
+            records, &owners, &task, 0,
+        ))
+    })
+    .unwrap();
+    deliver_pending(dir.path(), &owners, &mut AckingDeliver(dir.path())).unwrap();
+    let records = load_failures(dir.path()).unwrap();
+    assert!(
+        records[0].acked,
+        "the acknowledgement made during delivery is preserved"
+    );
+    assert_eq!(records[0].delivered_to.as_deref(), Some("w1"));
+}

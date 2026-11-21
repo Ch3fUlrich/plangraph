@@ -739,3 +739,44 @@ fn an_adopted_result_of_another_build_or_position_is_neither_used_nor_accepted()
             .starts_with("resolution"));
     }
 }
+
+#[test]
+fn the_open_record_freeze_manifest_and_result_must_belong_to_one_build_base_and_policy() {
+    use super::cli::bind_artifacts;
+    let fx = Fx::new();
+    let a = fx.commit(&fx.base(), "a.txt", "a\n");
+    let out = build(&fx.input(vec![part(1, &a, None)], "", None)).unwrap();
+    let m = out.manifest.unwrap();
+    let open = BuildOpen {
+        build: "b1".into(),
+        policy_version: git::POLICY_VERSION.into(),
+        base: fx.base(),
+        grant_digest: "g".into(),
+        snapshot_position: 1,
+    };
+    let freeze = Freeze {
+        policy_version: open.policy_version.clone(),
+        base: open.base.clone(),
+        grant_digest: "g".into(),
+        selection: vec![part(1, &a, None)],
+    };
+    assert!(bind_artifacts(&open, &freeze, &m, &out.result).is_ok());
+    let mut other_build = open.clone();
+    other_build.build = "b2".into();
+    assert!(bind_artifacts(&other_build, &freeze, &m, &out.result).is_err());
+    let mut other_base = open.clone();
+    other_base.base = "0".repeat(40);
+    let mut other_freeze_base = freeze.clone();
+    other_freeze_base.base = "0".repeat(40);
+    assert!(bind_artifacts(&other_base, &freeze, &m, &out.result).is_err());
+    assert!(bind_artifacts(&open, &other_freeze_base, &m, &out.result).is_err());
+    let mut other_policy = open.clone();
+    other_policy.policy_version = "other".into();
+    let mut other_freeze_policy = freeze.clone();
+    other_freeze_policy.policy_version = "other".into();
+    assert!(bind_artifacts(&other_policy, &freeze, &m, &out.result).is_err());
+    assert!(bind_artifacts(&open, &other_freeze_policy, &m, &out.result).is_err());
+    let mut other_result = out.result.clone();
+    other_result.build = "b9".into();
+    assert!(bind_artifacts(&open, &freeze, &m, &other_result).is_err());
+}

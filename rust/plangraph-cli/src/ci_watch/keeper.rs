@@ -57,6 +57,10 @@ impl Keeper for Http {
 /// Cancels the fix task `key` in the keeper (main is green again).
 pub fn cancel(env: &BTreeMap<String, String>, key: &str) -> Result<()> {
     let mut http = http(env)?;
+    // A task whose creation reply was lost may not exist: there is nothing to close then.
+    if http.show(key)?.is_none() {
+        return Ok(());
+    }
     http.cancel(key, "main is green again")
 }
 

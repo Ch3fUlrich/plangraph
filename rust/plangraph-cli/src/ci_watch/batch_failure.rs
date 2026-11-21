@@ -66,40 +66,15 @@ pub fn record_id(batch: &str, pr: u64, test: &str, run_id: u64) -> String {
     format!("batch-failure-{:x}", digest)[..30].to_owned()
 }
 
-fn deliver_open(
-    record: &mut FailureRecord,
-    owners: &Owners,
-    deliver: &mut impl Deliver,
-) -> Option<String> {
-    if record.acked {
-        return None;
-    }
-    let writer = owners.writer_of(&record.batch)?;
-    if record.delivered_to.as_deref() == Some(writer.as_str()) {
-        return None;
-    }
-    match deliver.send(&writer, record) {
-        Ok(()) => {
-            record.delivered_to = Some(writer.clone());
-            Some(format!("delivered {} to {writer}", record.id))
-        }
-        Err(_) => None,
-    }
-}
-
-/// Records the failure of a batch's pull request (persisted before any delivery), then tries to deliver it.
-/// Returns false when the pull request belongs to no recorded batch (the unchanged intake path applies).
-pub fn route(
+/// Inserts the failure of a batch's pull request if it is not recorded yet; returns its id, or `None` when the
+/// pull request belongs to no recorded batch (the unchanged intake path applies). Nothing is delivered here.
+pub fn record_failure(
     records: &mut Vec<FailureRecord>,
     owners: &Owners,
     task: &Task,
     now: i64,
-    deliver: &mut impl Deliver,
-    mut save: impl FnMut(&[FailureRecord]) -> Result<(), String>,
-) -> Result<Option<String>, String> {
-    let Some(batch) = task.pr.and_then(|pr| owners.batch_of(pr)) else {
-        return Ok(None);
-    };
+) -> Option<String> {
+    let batch = task.pr.and_then(|pr| owners.batch_of(pr))?;
     let pr = task.pr.unwrap_or(0);
     let id = record_id(batch, pr, &task.test, task.run_id);
     if !records.iter().any(|r| r.id == id) {
@@ -116,36 +91,37 @@ pub fn route(
             acked: false,
             escalated: false,
         });
-        save(records)?;
     }
-    if let Some(record) = records.iter_mut().find(|r| r.id == id) {
-        deliver_open(record, owners, deliver);
-    }
-    save(records)?;
-    Ok(Some(id))
+    Some(id)
 }
 
-/// Acknowledges a failure; the writer calls this when it took the failure up.
-pub fn acknowledge(records: &mut [FailureRecord], id: &str) -> bool {
+/// The open records that still have to reach their batch's current writer: (record id, writer).
+pub fn pending_deliveries(records: &[FailureRecord], owners: &Owners) -> Vec<(String, String)> {
     records
-        .iter_mut()
-        .find(|r| r.id == id)
-        .map(|r| r.acked = true)
-        .is_some()
+        .iter()
+        .filter(|r| !r.acked)
+        .filter_map(|r| {
+            let writer = owners.writer_of(&r.batch)?;
+            (r.delivered_to.as_deref() != Some(writer.as_str())).then(|| (r.id.clone(), writer))
+        })
+        .collect()
 }
 
-/// Retries delivery to the current writer of every open record and escalates the ones that stayed
-/// unacknowledged for 15 minutes to plan-order. Nothing is launched.
-pub fn sweep(
+/// Records a delivery; an acknowledgement that arrived meanwhile is kept.
+pub fn mark_delivered(records: &mut [FailureRecord], id: &str, writer: &str) {
+    if let Some(r) = records.iter_mut().find(|r| r.id == id) {
+        r.delivered_to = Some(writer.to_owned());
+    }
+}
+
+/// Escalates the records that stayed unacknowledged for 15 minutes to plan-order, once. Nothing is launched.
+pub fn escalate_overdue(
     records: &mut [FailureRecord],
-    owners: &Owners,
     now: i64,
-    deliver: &mut impl Deliver,
     alerts: &mut BTreeMap<String, Alert>,
 ) -> Vec<String> {
     let mut out = Vec::new();
     for record in records.iter_mut().filter(|r| !r.acked) {
-        out.extend(deliver_open(record, owners, deliver));
         if now - record.created_at >= ESCALATE_SECS && !record.escalated {
             record.escalated = true;
             let id = format!("batch_failure_unacked:{}", record.id);
@@ -165,5 +141,67 @@ pub fn sweep(
             out.push(format!("escalated {} to plan-order", record.id));
         }
     }
+    out
+}
+
+fn deliver_open(
+    record: &mut FailureRecord,
+    owners: &Owners,
+    deliver: &mut impl Deliver,
+) -> Option<String> {
+    let (_, writer) = pending_deliveries(std::slice::from_ref(record), owners)
+        .into_iter()
+        .next()?;
+    match deliver.send(&writer, record) {
+        Ok(()) => {
+            record.delivered_to = Some(writer.clone());
+            Some(format!("delivered {} to {writer}", record.id))
+        }
+        Err(_) => None,
+    }
+}
+
+/// Records the failure (persisted before any delivery), then tries to deliver it.
+pub fn route(
+    records: &mut Vec<FailureRecord>,
+    owners: &Owners,
+    task: &Task,
+    now: i64,
+    deliver: &mut impl Deliver,
+    mut save: impl FnMut(&[FailureRecord]) -> Result<(), String>,
+) -> Result<Option<String>, String> {
+    let Some(id) = record_failure(records, owners, task, now) else {
+        return Ok(None);
+    };
+    save(records)?;
+    if let Some(record) = records.iter_mut().find(|r| r.id == id) {
+        deliver_open(record, owners, deliver);
+    }
+    save(records)?;
+    Ok(Some(id))
+}
+
+/// Acknowledges a failure; the writer calls this when it took the failure up.
+pub fn acknowledge(records: &mut [FailureRecord], id: &str) -> bool {
+    records
+        .iter_mut()
+        .find(|r| r.id == id)
+        .map(|r| r.acked = true)
+        .is_some()
+}
+
+/// Retries delivery to the current writer of every open record and escalates the overdue ones.
+pub fn sweep(
+    records: &mut [FailureRecord],
+    owners: &Owners,
+    now: i64,
+    deliver: &mut impl Deliver,
+    alerts: &mut BTreeMap<String, Alert>,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for record in records.iter_mut() {
+        out.extend(deliver_open(record, owners, deliver));
+    }
+    out.extend(escalate_overdue(records, now, alerts));
     out
 }

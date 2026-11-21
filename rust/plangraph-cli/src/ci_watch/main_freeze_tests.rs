@@ -76,16 +76,19 @@ impl Effects for Fake {
         self.requests.push((run, kind));
         Ok(())
     }
-    fn fix_task(&mut self, run: u64, episode: u32, _: &Diagnosis) -> Result<String, String> {
+    fn fix_task_key(&self, run: u64, episode: u32, _: &Diagnosis) -> String {
+        if episode == 0 {
+            format!("plangraph:CI-FIX-{run}")
+        } else {
+            format!("plangraph:CI-FIX-{run}-e{episode}")
+        }
+    }
+    fn fix_task(&mut self, run: u64, episode: u32, d: &Diagnosis) -> Result<String, String> {
         if self.fix_fails {
             return Err("keeper delivery pending".into());
         }
         self.fixes.push(run);
-        Ok(if episode == 0 {
-            format!("plangraph:CI-FIX-{run}")
-        } else {
-            format!("plangraph:CI-FIX-{run}-e{episode}")
-        })
+        Ok(self.fix_task_key(run, episode, d))
     }
     fn close_fix_task(&mut self, key: &str) -> Result<(), String> {
         if self.close_fails {
@@ -573,7 +576,15 @@ fn a_fix_task_the_keeper_did_not_confirm_keeps_its_budget_and_is_retried() {
     let red7 = |at| red(vec![blocking(7, 1, vec![suite(&["real::bug"])], false)], at);
     let out = run_step(&mut state, &red7(100), &mut fx);
     assert!(out.iter().any(|l| l.starts_with("fix task pending")));
-    assert!(state.fix_tasks.is_empty() && !state.budgets.get(&7).is_some_and(|b| b.fix_task));
+    assert!(
+        !state.budgets.get(&7).is_some_and(|b| b.fix_task),
+        "the budget is not spent"
+    );
+    assert_eq!(
+        state.fix_tasks.len(),
+        1,
+        "the intended identity is recorded before the keeper answers"
+    );
     fx.fix_fails = false;
     run_step(&mut state, &red7(200), &mut fx);
     assert_eq!(fx.fixes, vec![7], "created once the keeper accepts it");
@@ -637,4 +648,32 @@ fn an_unknown_request_outcome_stays_pending_and_only_a_definitive_refusal_releas
     run_step(&mut state, &both(100 + RECONCILE_SECS), &mut fx);
     assert_eq!(state.unresolved.len(), 1);
     assert_eq!(fx.requests, vec![(9, Kind::RerunFailed)]);
+}
+
+#[test]
+fn a_fix_task_whose_creation_reply_was_lost_is_still_closed_when_main_turns_green() {
+    let mut fx = Fake {
+        fix_fails: true,
+        ..Fake::default()
+    };
+    fx.diagnosis.insert(
+        7,
+        Diagnosis {
+            tests: vec!["real::bug".into()],
+            incomplete: false,
+        },
+    );
+    let mut state = FreezeState::default();
+    run_step(
+        &mut state,
+        &red(
+            vec![blocking(7, 1, vec![suite(&["real::bug"])], false)],
+            100,
+        ),
+        &mut fx,
+    );
+    // The keeper may have created the task although the reply never came; main turns green before the retry.
+    run_step(&mut state, &answer(State::Green, 200), &mut fx);
+    assert_eq!(fx.closed, vec!["plangraph:CI-FIX-7".to_owned()]);
+    assert!(state.fix_tasks.is_empty());
 }

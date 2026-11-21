@@ -82,15 +82,24 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()
         };
         self.gh.run_verb(run, verb)
     }
+    fn fix_task_key(&self, run: u64, episode: u32, diagnosis: &Diagnosis) -> String {
+        let test = diagnosis
+            .tests
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "<job-failure>".into());
+        // Each red episode of a run and test is its own task, and two runs never share one.
+        let digest =
+            Sha256::digest(format!("{}\0main\0{run}\0{test}\0{episode}", self.repo).as_bytes());
+        format!("plangraph:CI-FIX-{digest:x}")
+    }
     fn fix_task(&mut self, run: u64, episode: u32, diagnosis: &Diagnosis) -> Result<String> {
         let test = diagnosis
             .tests
             .first()
             .cloned()
             .unwrap_or_else(|| "<job-failure>".into());
-        // Each red episode of the same run and test is its own task: a cancelled one is never reused.
-        let digest = Sha256::digest(format!("{}\0main\0{test}\0{episode}", self.repo).as_bytes());
-        let key = format!("plangraph:CI-FIX-{digest:x}");
+        let key = self.fix_task_key(run, episode, diagnosis);
         let task_path = self.dir.join("tasks.jsonl");
         let mut tasks = super::load_tasks(&task_path)?;
         let old = tasks.get(&key).cloned();
@@ -220,14 +229,13 @@ pub fn pass(
     let owners = load_owners(dir)?;
     let mut escalations = BTreeMap::new();
     let mut out = Vec::new();
+    out.extend(deliver_pending(dir, &owners, &mut CommandDeliver { dir })?);
     update_failures(dir, |records| {
-        out = batch_failure::sweep(
+        out.extend(batch_failure::escalate_overdue(
             records,
-            &owners,
             now,
-            &mut CommandDeliver { dir },
             &mut escalations,
-        );
+        ));
         Ok(())
     })?;
     let records = load_failures(dir)?;
@@ -256,6 +264,42 @@ pub fn pass(
     Ok(out)
 }
 
+/// Delivers every open record to its batch's current writer. The lock is held to pick the work and to record
+/// the result, never while the delivery command runs, so a command that acknowledges synchronously works and
+/// an acknowledgement that arrives meanwhile is preserved.
+pub fn deliver_pending(
+    dir: &Path,
+    owners: &Owners,
+    deliver: &mut impl Deliver,
+) -> Result<Vec<String>> {
+    let todo: Vec<(String, String, FailureRecord)> = update_failures(dir, |records| {
+        Ok(batch_failure::pending_deliveries(records, owners)
+            .into_iter()
+            .filter_map(|(id, writer)| {
+                let rec = records.iter().find(|r| r.id == id)?.clone();
+                Some((id, writer, rec))
+            })
+            .collect())
+    })?;
+    let mut done = Vec::new();
+    for (id, writer, record) in todo {
+        if deliver.send(&writer, &record).is_ok() {
+            done.push((id, writer));
+        }
+    }
+    let lines = done
+        .iter()
+        .map(|(id, w)| format!("delivered {id} to {w}"))
+        .collect();
+    update_failures(dir, |records| {
+        for (id, writer) in &done {
+            batch_failure::mark_delivered(records, id, writer);
+        }
+        Ok(())
+    })?;
+    Ok(lines)
+}
+
 /// Intake path: a failing batch head goes to the batch, everything else to the keeper fix lane.
 pub fn route_or_define(
     dir: &Path,
@@ -264,17 +308,12 @@ pub fn route_or_define(
     keeper: impl FnOnce(&mut Task) -> Result<bool>,
 ) -> Result<bool> {
     let owners = load_owners(dir)?;
+    // Recorded under the lock first; the delivery command runs outside it.
     let routed = update_failures(dir, |records| {
-        batch_failure::route(
-            records,
-            &owners,
-            task,
-            now,
-            &mut CommandDeliver { dir },
-            |r| save_failures(dir, r),
-        )
+        Ok(batch_failure::record_failure(records, &owners, task, now))
     })?;
     if routed.is_some() {
+        deliver_pending(dir, &owners, &mut CommandDeliver { dir })?;
         // The record is open and addressed to the batch: no unassigned fix lane is created.
         return Ok(true);
     }

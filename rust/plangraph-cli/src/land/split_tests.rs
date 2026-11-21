@@ -284,3 +284,41 @@ fn a_duplicate_green_never_lands_twice_or_skips_the_second_halfs_rebuild() {
     assert_eq!(one.green(&first.id).len(), 1);
     assert!(one.green(&first.id).is_empty());
 }
+
+#[test]
+fn a_nested_split_tracks_each_pair_by_candidate_id() {
+    // Eight independent parts: halves A=[1..4], B=[5..8]; A goes red and is split again into A1, A2.
+    let train: Vec<PartIn> = (1..=8).map(|n| part(n, None)).collect();
+    let (mut s, first) = Session::new(train);
+    let outer: Vec<Candidate> = freeze(&s.red(&first.id, &[], "log"))
+        .into_iter()
+        .cloned()
+        .collect();
+    let (a, b) = (outer[0].clone(), outer[1].clone());
+    let inner: Vec<Candidate> = freeze(&s.red(&a.id, &[], "log"))
+        .into_iter()
+        .cloned()
+        .collect();
+    assert_eq!(inner.len(), 2);
+    // The outer sibling B passes: it must not stand for either inner half.
+    let b_green = s.green(&b.id);
+    assert!(
+        matches!(&b_green[..], [Action::Land(c)] if c.id == b.id),
+        "B lands alone (its pair was released): {b_green:?}"
+    );
+    // Inner half 2 passes first: it waits for inner half 1, B's result is not its sibling's.
+    assert!(s.green(&inner[1].id).is_empty());
+    let both = s.green(&inner[0].id);
+    assert!(
+        matches!(&both[..], [Action::Land(c)] if c.id == inner[0].id),
+        "{both:?}"
+    );
+    // The second inner half is rebuilt only after the first landed, and lands only after its own CI.
+    let rebuild = s.landed(&inner[0].id, true);
+    let Action::Rebuild(second) = &rebuild[0] else {
+        panic!("{rebuild:?}")
+    };
+    assert_eq!(second.kind, Kind::Second);
+    assert_eq!(prs(&second.parts), prs(&inner[1].parts));
+    assert!(matches!(&s.green(&second.id)[..], [Action::Land(c)] if c.id == second.id));
+}

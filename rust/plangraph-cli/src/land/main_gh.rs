@@ -62,19 +62,30 @@ pub fn land_app_from_env() -> Option<u64> {
 }
 
 impl<G: Github> GhSource<G> {
-    /// A `land-auth` success on the commit, created by the trusted identity.
-    fn trusted_fast(&mut self, tip: &str) -> Result<bool, String> {
+    /// The evidence run a trusted `land-auth` success names (`evidence=<run id> attempt <n>`), if the commit
+    /// carries one created by the trusted identity.
+    fn land_evidence(&mut self, tip: &str) -> Result<Option<u64>, String> {
         let Some(app) = self.land_app else {
-            return Ok(false);
+            return Ok(None);
         };
         let rows = self
             .gh
             .page(&format!("commits/{tip}/statuses?per_page=100"), None)?;
-        Ok(rows.iter().any(|s| {
-            s["context"] == "land-auth"
-                && s["state"] == "success"
-                && s["creator"]["id"].as_u64() == Some(app)
-        }))
+        Ok(rows
+            .iter()
+            .filter(|s| {
+                s["context"] == "land-auth"
+                    && s["state"] == "success"
+                    && s["creator"]["id"].as_u64() == Some(app)
+            })
+            .find_map(|s| {
+                let text = s["description"].as_str()?;
+                text.strip_prefix("evidence=")?
+                    .split_whitespace()
+                    .next()?
+                    .parse()
+                    .ok()
+            }))
     }
 
     fn attempt(&mut self, run: u64, number: u32) -> Result<Attempt, String> {
@@ -148,8 +159,18 @@ impl<G: Github> Source for GhSource<G> {
             }
             // Fast-only needs the trusted landing evidence, not just a short job list: a partial rerun of a
             // full run lists few jobs too and must still be judged against the full matrix.
+            // And only the push run of the branch itself can be it: the evidence run, and any rerun of a full
+            // run, stay in the full generation even when their job list is short.
             let looks_fast = attempts.last().is_some_and(|a| a.tier == "fast");
-            let fast = looks_fast && self.trusted_fast(tip)?;
+            let evidence = if looks_fast {
+                self.land_evidence(tip)?
+            } else {
+                None
+            };
+            let fast = looks_fast
+                && row["event"] == "push"
+                && row["head_branch"] == self.branch.as_str()
+                && evidence.is_some_and(|e| e != id);
             if looks_fast && !fast {
                 for a in attempts.iter_mut().filter(|a| a.tier == "fast") {
                     a.tier = "hosted".into();

@@ -235,7 +235,7 @@ fn fast_source(statuses: Vec<Value>, land_app: Option<u64>) -> GhSource<FastList
 
 #[test]
 fn a_run_with_only_fast_jobs_is_fast_only_with_trusted_landing_evidence() {
-    let trusted = json!({"context": "land-auth", "state": "success", "creator": {"id": 77}});
+    let trusted = json!({"context": "land-auth", "state": "success", "creator": {"id": 77}, "description": "evidence=5 attempt 1"});
     let runs = fast_source(vec![trusted.clone()], Some(77))
         .runs(TIP)
         .unwrap();
