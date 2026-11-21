@@ -23,26 +23,16 @@ from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_ta
 from plangraph.spawner.overflow import available_memory_mb
 
 CHECK_TIMEOUT = 60
-# Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
-# Leave ample room for slower hosts, multiple affected crates and test suites.
+# Train 1 took 414 s when idle and 655 s at load ~27 on the same host.
 RUST_TIMEOUT = 600
-# The rust stage bound scales with the planned test binaries and the host load: binaries x
-# RUST_PER_BINARY_TIMEOUT seconds (never below RUST_TIMEOUT), times 1 + load/cores, capped at
-# MAX_RUST_TIMEOUT. Train 1 ran 414 s on an idle host and 655 s at load ~27.
 RUST_PER_BINARY_TIMEOUT = 15
 MAX_RUST_TIMEOUT = 3600
-# CARGO_BUILD_JOBS follows the free cores (cores minus load), never below MIN_BUILD_JOBS.
 MIN_BUILD_JOBS = 4
-# The affected-test step is bounded well under the 5 minute push target; the
-# measured normal run is about 50 s.
+# A normal affected run takes around 50 s, with a larger bound for hundreds of test paths.
 TEST_TIMEOUT = 240
-# A large selection (spawner core selects hundreds of test paths) scales the bound:
-# paths x PER_PATH seconds, never below TEST_TIMEOUT and capped at MAX_TEST_TIMEOUT.
 TEST_PER_PATH_TIMEOUT = 2
 MAX_TEST_TIMEOUT = 1200
-# pytest-xdist workers of the affected-test step: half the cores, at most one per
-# TEST_WORKER_GIB of available memory (the spawner's probe, Linux and Windows), between 2 and
-# MAX_TEST_WORKERS; cores only when memory cannot be read; PREFLIGHT_TEST_WORKERS overrides.
+# Cap xdist by available memory as well as cores on both Linux and Windows.
 TEST_WORKER_GIB = 2
 MAX_TEST_WORKERS = 16
 
