@@ -30,7 +30,14 @@ git and hook output to stderr while the hook enforces its per-step bounds.
 The Rust step resolves `protoc` (`PROTOC`, then `~/.local/bin/protoc`, then `PATH`) before cargo when a target pulls a protobuf build script, and refuses within a second with a named message when it is missing. The shared subprocess runner kills the process group on a caller-supplied
 timeout or interruption, including nested worker sessions on Linux, then reaps
 git before reporting the failure.
-Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
+When a Rust compile check fails in the shared target, preflight logs the clean target
+and reruns the check there once. It uses that result and keeps the clean target for
+the remaining Rust checks in the run.
+
+The commit policy reads its exemptions from the base commit and checks the entire
+stack against `origin/main`, as the pre-push hook does. Within the policy family
+every check runs and all failures are printed, followed by a `policy: N check(s) failed:`
+block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or, on `refs/heads/phase/*` pushes only
 (D-5843), `PREFLIGHT_SKIP=1` to bypass only that hook invocation (not the existing
