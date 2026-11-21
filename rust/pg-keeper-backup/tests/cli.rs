@@ -1,10 +1,13 @@
 //! The real command line against a fake `docker`: the commands that would reach
 //! Postgres are built, run and checked end to end, and no password leaks.
 
+use pg_keeper_backup::names;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// A fixed time for dump names built in the tests.
+const DAY: u64 = 1_794_000_000;
 const SECRET: &str = "s3ntinel-pw";
 
 fn run(args: &[&str], log: &Path, collide: bool) -> Output {
@@ -90,9 +93,7 @@ fn a_database_name_collision_is_reported_without_the_password_and_without_a_drop
 fn restore_test_refuses_an_old_dump_without_calling_docker() {
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("docker.log");
-    let old = tmp
-        .path()
-        .join("keeper-schema-seq19095-20261113T1535Z.dump");
+    let old = tmp.path().join(names::dump_name(19095, DAY));
     std::fs::write(&old, "x").unwrap();
     let out = run(
         &["restore-test", "--file", old.to_str().unwrap()],
@@ -108,9 +109,7 @@ fn restore_test_refuses_an_old_dump_without_calling_docker() {
 fn restore_test_rejects_a_file_that_is_not_an_archive() {
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("docker.log");
-    let junk = tmp
-        .path()
-        .join("keeper-schema-seq19200-20261113T1535Z.dump");
+    let junk = tmp.path().join(names::dump_name(19200, DAY));
     std::fs::write(&junk, "not an archive").unwrap();
     let out = run(
         &["restore-test", "--file", junk.to_str().unwrap()],
@@ -123,9 +122,7 @@ fn restore_test_rejects_a_file_that_is_not_an_archive() {
         "{}",
         text(&out)
     );
-    let good = tmp
-        .path()
-        .join("keeper-schema-seq19200-20261114T1535Z.dump");
+    let good = tmp.path().join(names::dump_name(19200, DAY + 86_400));
     std::fs::write(&good, "PGDMP seq=19200").unwrap();
     let ok = run(
         &["restore-test", "--file", good.to_str().unwrap()],
@@ -139,9 +136,7 @@ fn restore_test_rejects_a_file_that_is_not_an_archive() {
 fn restore_test_rejects_an_archive_whose_content_is_older_than_its_name() {
     let tmp = tempfile::tempdir().unwrap();
     let log = tmp.path().join("docker.log");
-    let renamed = tmp
-        .path()
-        .join("keeper-schema-seq19200-20261114T1535Z.dump");
+    let renamed = tmp.path().join(names::dump_name(19200, DAY + 86_400));
     std::fs::write(&renamed, "PGDMP seq=18000").unwrap();
     let out = run(
         &["restore-test", "--file", renamed.to_str().unwrap()],

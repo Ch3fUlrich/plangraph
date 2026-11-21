@@ -3,9 +3,18 @@ use pg_keeper_backup::{ledger, names, restore_test, retention, run_dump, Verify}
 use std::cell::RefCell;
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const NOW: u64 = 1_794_000_000; // 2026-11-06T21:20Z
+
+/// A dump name built at run time: `seq` at `NOW` plus `day` days.
+fn dump_at(seq: u64, day: u64) -> String {
+    names::dump_name(seq, NOW + day * 86_400)
+}
+
+fn path_at(seq: u64, day: u64) -> PathBuf {
+    Path::new("/x").join(dump_at(seq, day))
+}
 
 struct Fake {
     seq: u64,
@@ -120,8 +129,10 @@ fn a_dump_run_writes_a_0600_file_and_one_ledger_line() {
     assert_eq!(text.lines().count(), 1);
     // sha256 of "PGDMP-fake"
     let want = format!(
-        "20261106T2120Z seq=19200 size=10 sha256={} verified=skipped file=keeper-schema-seq19200-20261106T2120Z.dump",
-        out.entry.sha256
+        "{} seq=19200 size=10 sha256={} verified=skipped file={}",
+        names::stamp(NOW),
+        out.entry.sha256,
+        dump_at(19200, 0)
     );
     assert_eq!(text.trim(), want);
     assert_eq!(out.entry.sha256.len(), 64);
@@ -165,15 +176,12 @@ fn retention_deletes_the_fifteenth_oldest_and_keeps_fourteen() {
 fn retention_plan_orders_by_stamp_then_seq_and_ignores_foreign_names() {
     let names_in = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
     let all = names_in(&[
-        "keeper-schema-seq19109-20261113T1535Z.dump",
-        "keeper-schema-seq19300-20261115T0240Z.dump",
-        "keeper-schema-seq19200-20261114T0240Z.dump",
+        &dump_at(19109, 0),
+        &dump_at(19300, 2),
+        &dump_at(19200, 1),
         "other.dump",
     ]);
-    assert_eq!(
-        retention::plan(&all, 2),
-        vec!["keeper-schema-seq19109-20261113T1535Z.dump"]
-    );
+    assert_eq!(retention::plan(&all, 2), vec![dump_at(19109, 0)]);
     assert!(retention::plan(&all, 3).is_empty());
     assert!(retention::plan(&all, 0).len() == 3);
 }
@@ -223,8 +231,8 @@ fn a_failed_dump_leaves_no_file_and_no_ledger_line() {
 #[test]
 fn restore_test_refuses_a_dump_older_than_seq_19096_before_touching_postgres() {
     let fake = Fake::new(19096);
-    let old = Path::new("/nowhere/keeper-schema-seq19095-20261113T1535Z.dump");
-    let err = restore_test(&fake, old, "keeper", 43, names::MIN_SEQ)
+    let old = path_at(19095, 0);
+    let err = restore_test(&fake, &old, "keeper", 43, names::MIN_SEQ)
         .err()
         .unwrap();
     assert!(err.contains("older than 19096"), "{err}");
@@ -234,24 +242,24 @@ fn restore_test_refuses_a_dump_older_than_seq_19096_before_touching_postgres() {
 #[test]
 fn restore_test_passes_on_a_fresh_dump_and_drops_the_scratch() {
     let fake = Fake::new(19096);
-    let name = "/x/keeper-schema-seq19096-20261113T1535Z.dump";
-    let report = restore_test(&fake, Path::new(name), "keeper", 43, names::MIN_SEQ).unwrap();
+    let name = path_at(19096, 0);
+    let report = restore_test(&fake, &name, "keeper", 43, names::MIN_SEQ).unwrap();
     assert_eq!((report.seq, report.tables), (19096, 43));
     assert_eq!(*fake.calls.borrow(), ["list", "create", "restore", "drop"]);
 }
 
 #[test]
 fn restore_test_rejects_wrong_table_count_and_stale_content_and_still_drops() {
-    let name = Path::new("/x/keeper-schema-seq19200-20261113T1535Z.dump");
+    let name = path_at(19200, 0);
     let mut few = Fake::new(19200);
     few.tables = 42;
-    assert!(restore_test(&few, name, "keeper", 43, names::MIN_SEQ)
+    assert!(restore_test(&few, &name, "keeper", 43, names::MIN_SEQ)
         .unwrap_err()
         .contains("42 tables"));
     // a renamed old dump: the scratch content is older than the name says
     let mut renamed = Fake::new(19200);
     renamed.scratch_seq = 18000;
-    let err = restore_test(&renamed, name, "keeper", 43, names::MIN_SEQ).unwrap_err();
+    let err = restore_test(&renamed, &name, "keeper", 43, names::MIN_SEQ).unwrap_err();
     assert!(err.contains("below"), "{err}");
     assert_eq!(
         renamed.calls.borrow().last().map(String::as_str),
@@ -314,8 +322,8 @@ const VERIFY: Verify = Verify {
 fn a_name_collision_never_drops_a_database_this_run_did_not_create() {
     let mut fake = Fake::new(19200);
     fake.collide = true;
-    let name = Path::new("/x/keeper-schema-seq19200-20261113T1535Z.dump");
-    assert!(restore_test(&fake, name, "keeper", 43, names::MIN_SEQ).is_err());
+    let name = path_at(19200, 0);
+    assert!(restore_test(&fake, &name, "keeper", 43, names::MIN_SEQ).is_err());
     assert_eq!(*fake.calls.borrow(), ["list", "create"]);
 }
 
@@ -371,8 +379,8 @@ fn a_dump_that_fails_its_restore_test_is_quarantined_and_prunes_nothing() {
 
 #[test]
 fn unverified_dumps_are_capped_and_never_counted_as_backups() {
-    let all: Vec<String> = (1..=5)
-        .map(|d| format!("keeper-schema-seq19200-2026111{d}T0240Z.dump.unverified"))
+    let all: Vec<String> = (1..=5u64)
+        .map(|d| format!("{}{}", dump_at(19200, d), names::UNVERIFIED))
         .collect();
     assert_eq!(retention::plan(&all, 14), all[..2].to_vec());
 }
@@ -420,7 +428,7 @@ fn a_failed_candidate_never_has_a_dump_name_and_an_existing_quarantine_is_not_ov
         .unwrap();
     let kept = dir
         .path()
-        .join("keeper-schema-seq19200-20261106T2120Z.dump.unverified");
+        .join(format!("{}{}", dump_at(19200, 0), names::UNVERIFIED));
     std::fs::write(&kept, "first").unwrap();
     let err = run_dump(&bad, dir.path(), "keeper", 14, NOW + 10, Some(&VERIFY))
         .err()

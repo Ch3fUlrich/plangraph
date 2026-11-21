@@ -23,7 +23,7 @@ The scratch is a database, not a schema in the live database: `pg_restore` canno
 
 ## Secrets
 
-The connection comes from `PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE PGSSLMODE` in the process environment, handed to the container by name (`-e PGPASSWORD`), so no value is on a command line. The container runs with `--log-driver none` (the docker daemon keeps no copy of its output), and its stderr is redacted for the `PGPASSWORD` value before it is printed. The values live in `~/.config/plangraph/keeper-backup.env` (mode `0600`, template `deploy/systemd/keeper-backup.env.example`), read by `EnvironmentFile=`.
+The values live in `~/.config/plangraph/keeper-backup.env` (mode `0600`, template `deploy/systemd/keeper-backup.env.example`), read by `EnvironmentFile=`. The connection comes from the standard libpq variables of the process environment (the list is `PG_ENV` in `docker.rs`), handed to the container by name only (`-e NAME`, no `=value`), so no value is on a command line. The container runs with `--log-driver none` (the docker daemon keeps no copy of its output), and its stderr is redacted for the password value before it is printed.
 
 ## Install (keeper host, after the merge)
 

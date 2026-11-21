@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage: pg-keeper-backup dump --dir DIR [--verify] [--schema keeper] [--keep 14] [--image postgres:17] [--docker PATH]\n       \
 pg-keeper-backup restore-test --file DUMP [--schema keeper] [--tables 43] [--image postgres:17]\n\
-The connection comes from PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE in the environment.";
+The connection comes from the libpq environment variables (see docs/keeper-backup.md).";
 
 struct Opts {
     dir: Option<PathBuf>,
