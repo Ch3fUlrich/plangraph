@@ -1,3 +1,4 @@
+use super::busy_fixture::BusyFixture;
 use super::*;
 use crate::{
     activity::*,
@@ -162,7 +163,8 @@ fn parsing_long_silent_tool_survives_byte_deadline() {
 #[test]
 fn no_first_activity_ignorer_gone_within_f_confirm_grace_two_second_proof() {
     let start = Instant::now();
-    let r = run("trap '' TERM; while :; do :; done", false, b"", false);
+    let fixture = BusyFixture::new();
+    let r = run(&fixture.term_ignorer(), false, b"", false);
     assert_eq!(
         r.decisions.last().unwrap().outcome,
         KillOutcome::HangNoActivity
@@ -237,13 +239,9 @@ fn escaped_holder_guard_cleans_up_on_unwind() {
 #[test]
 fn empty_proof_does_not_wait_for_escaped_pipe_holder() {
     let holder = EscapedHolder::new();
+    let busy = BusyFixture::new();
     let start = Instant::now();
-    let r = run(
-        &holder.script("trap '' TERM; while :; do :; done"),
-        false,
-        b"",
-        false,
-    );
+    let r = run(&holder.script(&busy.term_ignorer()), false, b"", false);
     assert_eq!(r.proof, KillProof::Empty);
     assert_eq!(
         r.decisions.last().unwrap().outcome,
@@ -270,8 +268,9 @@ fn nineteen_good_lines_eof_has_no_bad_frame() {
 }
 #[test]
 fn late_signal_during_term_grace_is_recorded() {
+    let fixture = BusyFixture::new();
     let r = run(
-        "trap 'printf \"{\\\"content\\\":true}\\n\"; exit 0' TERM; while :; do :; done",
+        &fixture.script("'printf \"{\\\"content\\\":true}\\n\"; exit 0' TERM"),
         false,
         b"",
         false,
@@ -318,7 +317,8 @@ fn slow_but_alive_survives() {
 #[test]
 fn sigterm_ignorer_reaped() {
     let start = Instant::now();
-    let r = run("trap '' TERM; while :; do :; done", false, b"", false);
+    let fixture = BusyFixture::new();
+    let r = run(&fixture.term_ignorer(), false, b"", false);
     assert_eq!(r.run.signal, Some(libc::SIGKILL));
     assert_eq!(r.proof, KillProof::Empty);
     assert!(

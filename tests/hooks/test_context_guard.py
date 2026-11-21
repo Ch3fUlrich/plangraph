@@ -55,7 +55,8 @@ class Thresholds(GuardCase):
     def test_handoff_message_names_ready_command(self):
         self.write(usage_line(read=275000))
         t = self.ctx_text(self.hook())
-        self.assertIn("then run ready", t)
+        self.assertIn("then run `python3 ", t)
+        self.assertIn(" ready ", t)
         self.assertIn("RECYCLE-READY", t)
         self.assertNotIn("\n", t)
 

@@ -402,16 +402,25 @@ def write_state(session_id: str, state: dict) -> None:
     _write_json(directory / ("%s.json" % session_id), state)
 
 
-def emit_line(level: str, ctx: int, threshold: int) -> str:
-    """The single-line `additionalContext` names `ready` without paths.
+def ready_command(handoff_path: str | None = None) -> str:
+    """The absolute ready command: this script, not the hook wrapper (which has no ready step)."""
+    target = shlex.quote(handoff_path) if handoff_path else "<handoff-path>"
+    return "python3 %s ready %s" % (shlex.quote(os.path.realpath(__file__)), target)
 
-    No newline is embedded: the whole message is one line. Do not expose the
-    interpreter or checkout path: neither belongs in the handoff guidance.
+
+def emit_line(level: str, ctx: int, threshold: int) -> str:
+    """The single-line `additionalContext` names the absolute `ready` command.
+
+    No newline is embedded: the whole message is one line. The command carries
+    the guard's own path, because a session that follows only this text must not
+    run the hook wrapper (it has no ready step) and exit 0 without a marker.
     """
     n = ctx // 1000
     h = threshold // 1000
-    tail = "then run ready (and SendMessage RECYCLE-READY <path> to your parent if your brief says so)"
-    path = os.environ.get(HANDOFF_PATH_ENV) or "your private handoff path"
+    handoff = os.environ.get(HANDOFF_PATH_ENV)
+    path = handoff or "your private handoff path"
+    tail = ("then run `%s` (and SendMessage RECYCLE-READY <path> to your parent if your brief says so)"
+            % ready_command(handoff))
     marker = "HARD-CAP" if level == "hard" else "HANDOFF-NOW"
     return ("%s ctx=%dk >= %dk: at the next natural stop, write your handoff to %s, %s."
             % (marker, n, h, path, tail)) + SUBAGENT_BACKSTOP

@@ -11,6 +11,7 @@ own install path) are pinned too, with private guidance instead of install paths
 """
 import json
 import re
+import shlex
 import sys
 import unittest
 from pathlib import Path
@@ -84,10 +85,12 @@ PAYLOADS = [
 
 
 def emit_out(level, ctx_k, threshold_k):
-    """The context_guard line, without interpreter or checkout paths."""
+    """The context_guard line; the ready command names the guard script this tree runs."""
     head = ("%s ctx=%dk >= %dk: at the next natural stop, write your handoff to your private handoff path, "
             % ("HANDOFF-NOW" if level == "handoff" else "HARD-CAP", ctx_k, threshold_k))
-    tail = ("then run ready (and SendMessage RECYCLE-READY <path> to your parent if your brief says so)."
+    guard = shlex.quote(str((HOOKS / "context_guard.py").resolve()))
+    tail = ("then run `python3 %s ready <handoff-path>` "
+            "(and SendMessage RECYCLE-READY <path> to your parent if your brief says so)." % guard
             + SUBAGENT_BACKSTOP)
     return '{"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "%s%s"}}\n' % (head, tail)
 
