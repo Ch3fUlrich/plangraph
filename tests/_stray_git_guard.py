@@ -5,6 +5,7 @@ later test finds its repository root, so a leak fails the test that made it.
 """
 import os
 import tempfile
+import warnings
 from contextlib import contextmanager
 
 import pytest
@@ -45,18 +46,28 @@ def leaked_gits(before, tempdir=None):
     return leaked
 
 
+def strict_mode():
+    """CI fails the leaking test. A shared workstation only warns: another session's run can create
+    the same `.git` while this test runs, and one run's stray must not fail an unrelated run."""
+    return bool(os.environ.get('CI')) or os.environ.get('PLANGRAPH_STRAY_GIT_GUARD') == '1'
+
+
 @contextmanager
-def watch_stray_git(nodeid, tempdir=None):
-    """Fail with the test's id when it leaves a `.git` at or above the temp dirs."""
+def watch_stray_git(nodeid, tempdir=None, strict=True):
+    """Fail (strict) or warn with the test's id when it leaves a `.git` at or above the temp dirs."""
     before = temp_ancestor_gits(tempdir)
     yield
     leaked = leaked_gits(before, tempdir)
-    assert not leaked, f'{nodeid} left a .git outside its tmp_path: {leaked}'
+    message = f'{nodeid} left a .git outside its tmp_path: {leaked}'
+    if leaked and strict:
+        raise AssertionError(message)
+    if leaked:
+        warnings.warn(message, stacklevel=2)
 
 
 @pytest.fixture(autouse=True)
 def no_git_outside_tmp_path(request):
-    with watch_stray_git(request.node.nodeid):
+    with watch_stray_git(request.node.nodeid, strict=strict_mode()):
         yield
 
 
