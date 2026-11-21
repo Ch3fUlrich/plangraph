@@ -49,19 +49,19 @@ def spawn(cfg_path):
 DAEMON_WAIT_S = 90.0
 
 
-def daemon_failure(proc, what, partial=None, grace=10):
+def daemon_failure(proc, what, grace=10):
     """Kill *proc* if still alive and build an error that carries its stderr.
 
     A descendant that keeps the pipe open can stop ``communicate`` from reaching EOF; the
-    stderr read so far (*partial*, then the retry's own) is still reported.
+    stderr read so far (``TimeoutExpired.stderr``, which keeps what earlier calls read) is
+    still reported.
     """
     if proc.poll() is None:
         proc.kill()
-    err = partial or b""
     try:
         _, err = proc.communicate(timeout=grace)
     except subprocess.TimeoutExpired as exc:
-        err = exc.stderr or err
+        err = exc.stderr or b""
     return AssertionError(f"{what}; daemon stderr:\n{err.decode(errors='replace')}")
 
 
@@ -82,14 +82,14 @@ def wait_health(port, timeout=DAEMON_WAIT_S, proc=None):
     raise AssertionError("daemon did not become healthy")
 
 
-def stop_daemon(proc, timeout=DAEMON_WAIT_S):
+def stop_daemon(proc, timeout=DAEMON_WAIT_S, grace=10):
     """SIGTERM *proc*, wait for its exit and return ``(returncode, stderr)``."""
     proc.send_signal(signal.SIGTERM)
     try:
         _, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         raise daemon_failure(
-            proc, f"daemon did not exit within {timeout}s of SIGTERM", exc.stderr) from None
+            proc, f"daemon did not exit within {timeout}s of SIGTERM", grace) from None
     return proc.returncode, err
 
 
@@ -134,11 +134,7 @@ def test_timeout_report_keeps_stderr_when_a_descendant_holds_the_pipe():
     descendant = int(proc.stdout.readline())
     try:
         with pytest.raises(AssertionError, match="held-pipe-marker"):
-            proc.send_signal(signal.SIGTERM)
-            try:
-                proc.communicate(timeout=1.0)
-            except subprocess.TimeoutExpired as exc:
-                raise daemon_failure(proc, "did not exit", exc.stderr, grace=1) from None
+            stop_daemon(proc, timeout=1.0, grace=1)
     finally:
         os.kill(descendant, signal.SIGKILL)
         proc.communicate(timeout=10)
@@ -162,8 +158,8 @@ def test_daemon_refuses_when_lock_is_held(tmp_path):
         proc = spawn(cfg_path)
         try:
             _, err = proc.communicate(timeout=DAEMON_WAIT_S)
-        except subprocess.TimeoutExpired as exc:
-            raise daemon_failure(proc, "daemon did not refuse the held lock", exc.stderr) from None
+        except subprocess.TimeoutExpired:
+            raise daemon_failure(proc, "daemon did not refuse the held lock") from None
         assert proc.returncode != 0
         assert b"locked" in err.lower()
     finally:
