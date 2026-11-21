@@ -34,8 +34,7 @@ impl Watch {
         crate::reconcile_attach::attach(record, attempt)
     }
 
-    /// Caller serializes recovery under the state and record locks. A failed
-    /// durable warning prevents an activity-driven signal on this invocation.
+    /// Caller serializes recovery under the state and record locks.
     pub(crate) fn advance(
         &mut self,
         child: &mut dyn Child,
@@ -49,11 +48,7 @@ impl Watch {
                 eprintln!("reconciliation attachment failed: {error}");
             }
         }
-        let step = if self.warning_pending {
-            Step::Warn
-        } else {
-            self.tick(child, now)
-        };
+        let step = self.tick(child, now);
         match step {
             Step::Ended(how) => {
                 crate::reconcile_store::settle(state, record, attempt, how, now)?;
@@ -127,6 +122,9 @@ impl Watch {
             if self.deadline.is_some_and(|deadline| now >= deadline) {
                 self.how = "killed_max_s";
                 self.stop = Some(Stop::default());
+            } else if self.warning_pending {
+                // A failed warning save delays activity-driven signals only.
+                return Step::Warn;
             } else if let Some(d) = self.monitor.tick(now, Ctx::default()) {
                 if d.act == Act::Warn {
                     return Step::Warn;

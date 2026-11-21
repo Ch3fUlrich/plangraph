@@ -27,7 +27,7 @@ Zombie-only groups remain P until reaped/removed and the authoritative probe is 
 
 | Row | Record | Identity | Leader | Group | States | Action | Required before settled |
 | --- | --- | --- | --- | --- | ---: | --- | --- |
-| S1 | * | V | A | P | 3 | Hold; durably transfer to reattach/watch owner with the persisted deadline and terminal-unresolved + alert obligation intact, or cleanup on policy deadline | Owner observes exit, empties group, then S5–S7; unresolved at the unchanged deadline otherwise |
+| S1 | * | V | A | P | 3 | Retain capacity and durably attach a watch owner with the existing runtime and reattach policy deadlines | Owner observes exit or initiates cleanup at the policy deadline, then proves S5–S7 before reclaim |
 | S2 | * | V | Z/D | P | 6 | Cleanup owner kills remaining owned members; hold; reclaim only after S5–S7 | Fresh `gone() == Ok(true)`, not leader death or grace expiry |
 | S3 | * | S/U | * | P | 18 | Hold + alert; cleanup only with independent confinement authority | Owned group emptied and original leader non-live; otherwise unresolved |
 | S4 | * | * | A | E/A | 18 | Hold + alert: inconsistent evidence or unrelated reused PID; resolve ownership | Prove recorded leader non-live and group empty/absent; do not kill reused PID |
@@ -39,16 +39,19 @@ Zombie-only groups remain P until reaped/removed and the authoritative probe is 
 Actions are transitions, not synonymous results: **settle** commits a proven-gone
 outcome; **hold** retains ownership/capacity; **reclaim** releases capacity only
 after proof and durable disposition; **alert** records an operator-visible event.
-S1–S4/S8 always enter the bounded-hold protocol below, including missing/terminal
-records. A changed identity/attempt under the record lock restarts classification,
-not the hold clock. Terminal unresolved is not S7's proven-gone disposition.
+Enter the bounded-hold protocol when the observation leaves liveness or
+confinement uncertain, including for missing or terminal records. Positive
+liveness keeps capacity reserved under the watch and its existing policy
+deadlines. A changed identity/attempt under the record lock restarts
+classification without resetting an existing uncertainty clock. Terminal
+unresolved is distinct from S7's proven-gone disposition.
 
 ## 2. Who empties the group and who proves it
 
 | Component | Responsibility | Proof / restriction |
 | --- | --- | --- |
 | Reconcile coordinator (`reconcile_serve` / store) | Classify under state lock; re-read under record lock; assign cleanup/watch owner | `orphan_gone` is a proof/commit boundary, not a timer-based success shortcut |
-| Reattach/watch owner | Monitor verified live run; enforce existing runtime/reattach deadlines; request cleanup | Handoff is durable and explicit; it cannot silently discard a hold |
+| Reattach/watch owner | Monitor verified live run; enforce existing runtime/reattach deadlines; request cleanup | Attachment is recorded durably before the startup scan enrolls the watch |
 | Backend cleanup owner | Kill all owned cgroup members (Linux), terminate owned job (Windows), or signal authenticated process group (PGID fallback) | Never signal a stale PID/PGID solely because its number matches; no authority means unresolved |
 | Backend probe via `gone()` | Re-probe after termination; wait for exit/reaping and drain | Linux authoritative `cgroup.events populated 0` or authenticated absence; Windows empty job or proven absence; PGID requires authenticated ownership and whole-group absence, not leader mismatch |
 | `orphan_gone` / settlement caller | Commit only after fresh whole-group and original-leader proof; then release slot | `Ok(true)` implies no living original leader or member; errors/permission denial are not emptiness |
@@ -62,16 +65,15 @@ No settlement or capacity release while any owned member lives, regardless of ag
 
 ## 3. Bounded holds and terminal unresolved
 
-These are proposed persistence/API additions, not claims about origin/main.
-Use `UNKNOWN_IDENTITY_GRACE_MS = 10_000` in `reconcile_store`'s hold helper for
-**every reconcile hold**, not just U identities; the reference branch has this
-constant but its expiry-to-settlement behavior is not the contract.
+`reconcile_store` uses `UNKNOWN_IDENTITY_GRACE_MS = 10_000` when the probe
+returns `Unknown`. A positive liveness result retains capacity under the
+existing supervision policy and starts no uncertainty clock.
 
 | Item | Durable location / transition | Bound and crash behavior |
 | --- | --- | --- |
 | Hold anchor | `runs/<run_id>/reconcile.json`, keyed by stable run/slot ID, not attempt or identity fingerprint: `hold_started_ms`, `hold_deadline_ms`, `reason`, `disposition`; attempt/fingerprint are evidence only | Atomically save before returning the first hold; set deadline once = first hold + constant; retries/restarts/record rewrites and identity/attempt re-keys reuse this anchor and never reset the deadline or create a second hold |
 | Missing record/attempt | Same sidecar/tombstone; discover holds independently of `inventory()` running records | Retain identity and group provenance; missing `record.json` cannot erase the clock |
-| All S1–S4/S8 holds | At deadline, re-probe once; proven gone follows S5–S7; otherwise persist `disposition=unresolved` | Terminal recovery state, not `settled`, not repeated `Err(Unknown)`; S1 may transfer responsibility through an explicit durable watch handoff before deadline only if the same persisted anchor/deadline and terminal-unresolved + durable alert obligation transfer with it; handoff neither renews the budget nor exempts the new owner from that ending |
+| Uncertainty holds | At deadline, proven gone follows S5–S7; continued uncertainty persists `disposition=unresolved` | The hold anchor and deadline survive reclassification. A positively live run follows the watch policy; later uncertainty reuses any existing anchor |
 | Unresolved alert | Sidecar outbox event `RECONCILE_UNRESOLVED`, key `(run_id, slot_id, hold_started_ms)` (stable ids only, no attempt: a re-key must not mint a second alert; two slots never collide); mirror in record when available | Atomically persist disposition + event, replay delivery idempotently after crash; include evidence and cleanup failure |
 | Capacity/late repair | Keep slot or durable quarantine reservation while unresolved; operator/cleanup repair may later prove gone | End automatic hold retries at deadline; no unproved reclaim; subsequent repair records a separate resolution |
 | Storage/lock failure | Do not acknowledge disposition; retain reservation, surface service-health alert | Deadline remains due; retry durable write on recovery, never reset clock or claim settlement |
@@ -98,7 +100,7 @@ Tests below are required acceptance changes, not tests added by this docs commit
 2. `settled` and `orphan_gone == Ok(true)` require no live owned leader/member and fresh fenced whole-group proof.
 3. Leader death, PID reuse, zombie status, grace expiry and successful kill submission never substitute for `gone()`.
 4. Only an authenticated cleanup owner kills members; stale numeric identities never authorize signals.
-5. Each stable run/slot ID has one hold anchor and one persisted deadline, set once at first hold, including missing/terminal records and unreadable groups. Identity/attempt re-keys cannot reset that deadline or create a second hold; they only update evidence and restart classification (step-2 test: `identity_rekey_preserves_run_slot_hold_deadline`).
+5. Each stable run/slot ID has one uncertainty anchor and one persisted deadline, set at the first uncertain probe, including missing/terminal records and unreadable groups. Identity/attempt re-keys only update evidence and restart classification (step-2 test: `identity_rekey_preserves_run_slot_hold_deadline`).
 6. Expired uncertainty becomes terminal unresolved + durable idempotent alert, never fictional settlement or endless `Unknown`.
 7. Unresolved capacity stays reserved/quarantined; proven disposition precedes reclaim, including crash replay.
 8. State/record locking, identity re-read and ownership fencing protect probe-to-commit; changed evidence is reclassified.
