@@ -20,6 +20,10 @@ from ..review.family import model_family
 __all__ = ["RunsMixin", "normalise_run"]
 
 _REVIEW_RUN = re.compile(r"Review-Run:[ \t]+(\S+)[ \t]+(run-\S+)[ \t]+([0-9a-f]{40})[ \t]*")
+_GO_HEAD_TOKEN = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
+# "head <sha>", "heads <sha>, <sha>", "heads <sha> and fix <sha>" of a GO row's part table.
+_PART_HEADS = re.compile(r"(?<![\w-])heads?\s+((?:`?[0-9a-f]{7,40}(?![\w`])`?)"
+                         r"(?:(?:,\s*|\s+and\s+(?:fix\s+)?)`?[0-9a-f]{7,40}(?![\w`])`?)*)")
 _WARM_S = 60  # how long a warm scan may be read under the request lock
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
@@ -308,21 +312,66 @@ class RunsMixin:
 
     def _merged_go_scope_matches(self, decision_id, item, now, *, require_key=True, decisions=None):
         """Additional PR GOs must name this project and this item explicitly."""
+        return self._merged_go_scope(decision_id, item, now, require_key=require_key,
+                                     decisions=decisions)[0]
+
+    def _merged_go_scope(self, decision_id, item, now, *, require_key=True, decisions=None):
+        """``(matches, part)``: whether the GO row covers the item, and the part head that vouches for it.
+
+        The row covers the item when its key list names it. A merged row is frozen evidence, so a key
+        its list omits is also covered by a part head the row names (``part``, else ``None``).
+        """
         decisions = decisions or self._ctx(item, now).decisions
         rows = decisions._rows_strict().get(decision_id, ())
         if len(rows) != 1:
-            return False
+            return False, None
         cells = [c.strip() for c in rows[0].split("|")[1:]]
         if len(cells) < 3 or cells[1] != item["project"]:
-            return False
+            return False, None
         text = cells[2]
         keys = re.findall(r"(?<![\w:-])[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_.-]+", text)
-        if keys:
-            return item["key"] in keys
-        if not require_key:
-            return True  # legacy head-only GO; the caller selected this row
+        if keys and item["key"] in keys:
+            return True, None
+        if not keys and not require_key:
+            return True, None  # legacy head-only GO; the caller selected this row
         bare = item["key"].split(":", 1)[1]
-        return re.search(r"(?<![\w:-])" + re.escape(bare) + r"(?![\w:-])", text) is not None
+        if not keys and re.search(r"(?<![\w:-])" + re.escape(bare) + r"(?![\w:-])", text):
+            return True, None
+        part = self._merged_go_part(item, text)
+        return part is not None, part
+
+    def _merged_go_part(self, item, text):
+        """Full head of the part a GO row names that lies in its GO-HEAD and carries the item's Plan-Item commit.
+
+        Only the heads the row names after ``head``/``heads`` count, never the GO-HEAD itself (it would
+        vouch for every key of the train); a commit with the exact trailer must be an ancestor of that part.
+        """
+        go_heads = {h.lower() for h in _GO_HEAD_TOKEN.findall(text)}
+        tokens = list(dict.fromkeys(t for run in _PART_HEADS.findall(text)
+                                    for t in re.findall(r"[0-9a-f]{7,40}", run)))
+        if len(go_heads) != 1 or not tokens:
+            return None
+        go_head = go_heads.pop()
+        git, project = self._adapter("git"), self._merge_project(item)
+        repo = git.repo_path(project)
+        try:
+            commits = context_sources.plan_item_commits(git, project, item["key"], fetch=False, limit=None)
+        except Exception:  # noqa: BLE001 - an unreadable git proof never authorizes
+            return None
+        shas = [c["sha"] for c in commits or () if valid_commit_ref(c.get("sha"))]
+        if not shas:
+            return None
+
+        def within(inner, outer):
+            return git._run(repo, ["merge-base", "--is-ancestor", "--end-of-options", inner, outer]).returncode == 0
+
+        for token in tokens:
+            found = git._run(repo, ["rev-parse", "--verify", "--quiet", "--end-of-options", f"{token}^{{commit}}"])
+            part = found.stdout.strip() if found.returncode == 0 else ""
+            if (valid_commit_ref(part) and part != go_head and within(part, go_head)
+                    and any(within(sha, part) for sha in shas)):
+                return part
+        return None
 
     def _merged_open_prs_checked(self, item, decision_id, head, now):
         from . import context_sources
