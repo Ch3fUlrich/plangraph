@@ -23,7 +23,7 @@ import pytest
 from pathlib import Path
 from _split_ci_environment import (git_config_guard, _test_environment, _clear_inherited_git_environment,
     pytest_sessionstart, detached_git_environment, isolated_git_session, config_guard)
-from _stray_git_guard import no_git_outside_tmp_path, settings_root_ceiling  # noqa: F401  (autouse fixtures)
+from _stray_git_guard import no_git_outside_tmp_path, settings_root_ceiling, SharedTempCheck  # noqa: F401
 
 # Initial nested conftests load before sessionstart and may invoke Git at import.
 _clear_inherited_git_environment()
@@ -244,6 +244,7 @@ def _remove_windows_basetemp(root):
             time.sleep(1)
 
 def pytest_configure(config):
+    config.pluginmanager.register(SharedTempCheck(), 'stray-git-shared-check')
     if sys.platform == "win32" and config.option.basetemp is None:
         # Avoid numbered-root/pytest-current symlink cleanup on Windows mounts
         # affected by the reported WinError 448 (not reproduced on this run).

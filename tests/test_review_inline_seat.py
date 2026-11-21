@@ -106,3 +106,21 @@ def test_native_review_brief_keeps_its_tool_instructions_without_markers_on_a_to
     # The marker block is only interpreted for a review prompt.
     implement = prompt_input.compose(NATIVE_BRIEF, 'implement', 'claude', None, tool_mode='inline-only')
     assert implement.count('[tools-only]') == 3
+
+
+def test_a_skill_version_the_loader_does_not_know_is_still_recognised_by_its_front_matter():
+    # The writer embedded another version of the review skill than origin/main or this tree serve.
+    other = SKILL.replace('Run only the tests', 'Run just the tests of the touched crates').replace(
+        'Independence', 'Independence of the reviewer')
+    assert other != SKILL
+    brief = other + '\n' + NATIVE_BRIEF
+    inline = prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only')
+    for text in ('Open callers', 'run read-only commands', 'Run just the tests', 'Independence of the reviewer'):
+        assert text not in inline, text
+    assert 'The diff is base..head.' in inline and 'tool mode inline' in inline
+
+
+def test_a_quoted_marker_without_a_block_after_the_skill_is_left_alone():
+    brief = SKILL + '\nWriter brief (item keys and Done-when lines):\nitem: "[tools-only]x[/tools-only]"\n'
+    inline = prompt_input.compose(brief, 'review', 'opencode', None, 'mimo-v2.6-pro', tool_mode='inline-only')
+    assert '"[tools-only]x[/tools-only]"' in inline and 'Writer brief' in inline

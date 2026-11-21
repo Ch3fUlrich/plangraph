@@ -142,24 +142,24 @@ def read_skill(name: str, cwd: str | None) -> str | None:
     return None
 
 
-_TOOLS_ONLY = re.compile(r'(\s*)\[tools-only\](.*?)\[/tools-only\]\s*', re.DOTALL)
+_SKILL_FRONT = '---\nname: review\n'
+_BRIEF_START = 'Writer brief (item keys and Done-when lines):'
+_TOOLS_ONLY = re.compile(r'(?P<pre>(?:' + re.escape(_SKILL_FRONT) + r'.*?)?)(?P<ws>\s*)'
+                         r'\[tools-only\](?P<block>.*?)\[/tools-only\]\s*', re.DOTALL)
 
 
 def apply_tool_mode(body: str, inline: bool, cwd: str | None = None) -> str:
     """Apply the leg's tool mode to the whole caller brief. A ``[tools-only]`` block (file-read and test-run
-    instructions) counts only when it is the first thing after the leading review skill, where the native
-    writer puts it; it goes for a toolless inline seat and only its markers go for the rest. Marker text
-    anywhere later (item criteria, a quoted earlier finding) is the brief's own and stays."""
-    start = 0
-    for text in (read_skill('review', cwd), _tree_skill()):
-        if text and body.startswith(text):
-            start = len(text)
-            break
-    found = _TOOLS_ONLY.match(body, start)
-    if found is None:
+    instructions) counts only when it is the first thing after the leading review skill, in whichever version
+    the caller embedded (recognised by its front matter, not by comparing text), and before the writer brief,
+    where the native writer puts it. For a toolless inline seat the skill and the block go; for the rest only
+    the markers go. Marker text anywhere later (item criteria, a quoted earlier finding) is the brief's own."""
+    found = _TOOLS_ONLY.match(body)
+    if found is None or _BRIEF_START in found.group('pre'):
         return body
-    kept = '' if inline else found.group(1) + found.group(2) + '\n'
-    return body[:start] + (found.group(1) if inline else '') + kept + body[found.end():]
+    if inline:
+        return body[found.end():]
+    return found.group('pre') + found.group('ws') + found.group('block') + '\n' + body[found.end():]
 
 
 def _tree_skill() -> str | None:

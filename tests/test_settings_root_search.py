@@ -79,6 +79,7 @@ def _runs_dirs(tmp_path, monkeypatch):
     basetemp.mkdir(parents=True)
     monkeypatch.setattr(guard.tempfile, 'gettempdir', lambda: str(private))
     monkeypatch.setenv('PLANGRAPH_ROOT_CEILING', str(basetemp))
+    monkeypatch.delenv('PYTEST_XDIST_WORKER', raising=False)  # a plain process, whatever runs this test
     return system_tmp, private, basetemp
 
 
@@ -133,8 +134,9 @@ def test_session_ceiling_is_the_pytest_basetemp(tmp_path_factory):
 def test_an_xdist_workers_basetemp_parent_is_shared_with_its_siblings(tmp_path, monkeypatch):
     import _stray_git_guard as guard
     private = tmp_path / 'shared' / 'private'
-    basetemp = private / 'pytest-of-user' / 'pytest-0' / 'popen-gw1'
+    basetemp = private / 'pytest-of-user' / 'pytest-0' / 'alpha'  # custom worker ids exist (--tx popen//id=alpha)
     basetemp.mkdir(parents=True)
+    monkeypatch.setenv('PYTEST_XDIST_WORKER', 'alpha')
     monkeypatch.setattr(guard.tempfile, 'gettempdir', lambda: str(private))
     monkeypatch.setenv('PLANGRAPH_ROOT_CEILING', str(basetemp))
     # A sibling worker's leak in the common parent is not this worker's test's to fail or clean.
@@ -146,3 +148,25 @@ def test_an_xdist_workers_basetemp_parent_is_shared_with_its_siblings(tmp_path, 
     with pytest.raises(AssertionError, match='demo::own'):
         with guard.watch_stray_git('demo::own'):
             (basetemp / '.git').mkdir()
+
+
+def test_the_controller_checks_the_shared_root_once_after_the_workers_finish(tmp_path, monkeypatch):
+    import _stray_git_guard as guard
+    from types import SimpleNamespace
+    system_tmp, _, _ = _runs_dirs(tmp_path, monkeypatch)
+    lines = []
+    reporter = SimpleNamespace(write_line=lambda text, **kw: lines.append(text))
+    config = SimpleNamespace(pluginmanager=SimpleNamespace(get_plugin=lambda name: reporter))
+    session = SimpleNamespace(config=config, exitstatus=0)
+    plugin = guard.SharedTempCheck(strict=True)
+    (system_tmp / '.git').mkdir()                  # a worker leaks after another worker already finished
+    plugin.pytest_sessionfinish(session, 0)
+    assert session.exitstatus == 1 and 'shared with other runs' in lines[0]
+    assert (system_tmp / '.git').exists()          # reported, never removed
+    quiet = guard.SharedTempCheck(strict=True)     # nothing new since this snapshot
+    session.exitstatus = 0
+    quiet.pytest_sessionfinish(session, 0)
+    assert session.exitstatus == 0
+    worker = SimpleNamespace(config=SimpleNamespace(workerinput={}), exitstatus=0)
+    plugin.pytest_sessionfinish(worker, 0)         # a worker never runs the check
+    assert worker.exitstatus == 0

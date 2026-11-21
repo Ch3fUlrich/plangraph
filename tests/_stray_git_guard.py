@@ -52,8 +52,8 @@ def _is_below(path, parent):
 
 
 def owned_gits(found, tempdir=None):
-    """Entries in directories this worker owns: the pytest basetemp (and its parent, unless it is an xdist
-    worker's, which its siblings share), and the process temp dir with the directories between it and the
+    """Entries in directories this worker owns: the pytest basetemp (and its parent, unless this is an xdist
+    worker, whose siblings share it), and the process temp dir with the directories between it and the
     basetemp."""
     temp = os.path.realpath(tempdir or tempfile.gettempdir())
     base = os.environ.get('PLANGRAPH_ROOT_CEILING') if not tempdir else None
@@ -61,13 +61,13 @@ def owned_gits(found, tempdir=None):
     if base:
         base = os.path.realpath(base)
         owned.add(base)
-        if not os.path.basename(base).startswith('popen-gw'):
+        if not os.environ.get('PYTEST_XDIST_WORKER'):  # xdist's own worker metadata, whatever the worker id
             owned.add(os.path.dirname(base))
             here = base
             while _is_below(here, temp):
                 owned.add(here)
                 here = os.path.dirname(here)
-        # An xdist worker's basetemp sits in a tree its sibling workers share: only the basetemp is its own.
+        # Under xdist the basetemp sits in a tree its sibling workers share: only the basetemp is its own.
     return {entry for entry in found if os.path.dirname(entry) in owned}
 
 
@@ -108,17 +108,39 @@ def no_git_outside_tmp_path(request):
         yield
 
 
+class SharedTempCheck:
+    """Session plugin of the pytest controller (or the plain process, never a worker): the shared temp
+    root is checked once, after every worker has finished, so no worker's early exit can miss a leak."""
+
+    def __init__(self, strict=None):
+        self.strict = strict_mode() if strict is None else strict
+        self.before = shared_gits()
+
+    def pytest_sessionfinish(self, session, exitstatus):
+        if hasattr(session.config, 'workerinput'):
+            return
+        try:
+            leaked = check_shared(self.before, self.strict)
+        except AssertionError as error:
+            session.exitstatus = 1
+            self._report(session, str(error))
+            return
+        if leaked:
+            self._report(session, f'warning: {leaked} appeared in a directory shared with other runs')
+
+    @staticmethod
+    def _report(session, text):
+        reporter = session.config.pluginmanager.get_plugin('terminalreporter')
+        if reporter is not None:
+            reporter.write_line(f'stray .git guard: {text}', red=text.startswith('a .git'))
+
+
 @pytest.fixture(scope='session', autouse=True)
 def settings_root_ceiling(tmp_path_factory):
     """Settings root discovery stops at this session's basetemp, never walking into /tmp."""
     previous = os.environ.get('PLANGRAPH_ROOT_CEILING')
     os.environ['PLANGRAPH_ROOT_CEILING'] = str(tmp_path_factory.getbasetemp().resolve())
-    # One checker per session: the only worker of an xdist run named gw0, or the plain process.
-    checks = os.environ.get('PYTEST_XDIST_WORKER', 'gw0') == 'gw0'
-    shared = shared_gits()
     yield
-    if checks:
-        check_shared(shared, strict_mode())
     if previous is None:
         os.environ.pop('PLANGRAPH_ROOT_CEILING', None)
     else:
