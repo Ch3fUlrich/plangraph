@@ -29,6 +29,7 @@ def _wait_runs(service, result, wait):
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
     from .env_redact import redact_env_values
+    from .redact_tokens import open_wrapped_line_start
     from plangraph.routing_support.host_keys import redaction_env
     import codecs
     decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
@@ -39,14 +40,26 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
         if isinstance(data, bytes):
             data = data.decode('utf-8')
         return redact_output(redact_env_values(data, redact_base)).encode()
-    pending = b''
+    pending, held = b'', b''
     for chunk in chunks:
         pending += decoder.decode(chunk).encode('utf-8')
         observe(len(pending))
         while b'\n' in pending:
             line, pending = pending.split(b'\n', 1)
-            write(clean(line + b'\n'))
+            held += line + b'\n'
+            # Keep lines back while a wrapped credential may still continue.
+            keep = open_wrapped_line_start(held.decode('utf-8'))
+            if keep is not None and len(held) < 65536:
+                keep = len(held.decode('utf-8')[:keep].encode('utf-8'))
+                emit, held = held[:keep], held[keep:]
+            else:
+                emit, held = held, b''
+            if emit:
+                write(clean(emit))
         if len(pending) >= 65536:
+            if held:
+                write(clean(held))
+                held = b''
             # Redact before choosing the boundary, so a known secret spanning
             # that boundary cannot leave either half in the output.
             safe = clean(pending)
@@ -55,7 +68,7 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
                 boundary -= 1
             write(safe[:boundary] + b' [truncated chunk]\n')
             pending = safe[boundary:]
-    pending += decoder.decode(b'', final=True).encode('utf-8')
+    pending = held + pending + decoder.decode(b'', final=True).encode('utf-8')
     if pending:
         write(clean(pending.decode('utf-8')))
 
