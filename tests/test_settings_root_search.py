@@ -48,76 +48,83 @@ def test_root_ceiling_stops_the_search_below_a_real_git_directory(tmp_path, monk
     assert review_method(root=inner).max_rounds == 9
 
 
-def test_guard_reports_a_git_left_above_the_temp_dir(tmp_path):
+def test_guard_reports_a_git_left_in_the_temp_dir_and_cleans_an_empty_one(tmp_path):
     import _stray_git_guard as guard
     inner = tmp_path / 'tmp' / 'worker'
     inner.mkdir(parents=True)
-    before = guard.temp_ancestor_gits(inner)
-    assert guard.leaked_gits(before, inner) == []
-    (tmp_path / 'tmp' / '.git').mkdir()
-    assert guard.leaked_gits(before, inner) == [str((tmp_path / 'tmp' / '.git').resolve())]
-    assert not (tmp_path / 'tmp' / '.git').exists()  # the empty stray directory is cleaned up
+    with guard.watch_stray_git('demo::clean', str(inner)):
+        pass
+    with pytest.raises(AssertionError, match='demo::leak left a .git'):
+        with guard.watch_stray_git('demo::leak', str(inner)):
+            (inner / '.git').mkdir()
+    assert not (inner / '.git').exists()  # the empty stray directory is cleaned up
 
 
 def test_guard_keeps_a_real_repository_it_reports(tmp_path):
     import _stray_git_guard as guard
     inner = tmp_path / 'tmp' / 'worker'
     inner.mkdir(parents=True)
-    before = guard.temp_ancestor_gits(inner)
-    (tmp_path / 'tmp' / '.git').mkdir()
-    (tmp_path / 'tmp' / '.git' / 'HEAD').write_text('ref: refs/heads/main\n')
-    assert guard.leaked_gits(before, inner)
-    assert (tmp_path / 'tmp' / '.git' / 'HEAD').exists()
+    with pytest.raises(AssertionError, match='demo::repo left a .git'):
+        with guard.watch_stray_git('demo::repo', str(inner)):
+            (inner / '.git').mkdir()
+            (inner / '.git' / 'HEAD').write_text('ref: refs/heads/main\n')
+    assert (inner / '.git' / 'HEAD').exists()
 
 
-def test_session_ceiling_is_the_pytest_basetemp(tmp_path_factory):
-    import os
-    from pathlib import Path
-    assert Path(os.environ['PLANGRAPH_ROOT_CEILING']) == tmp_path_factory.getbasetemp().resolve()
-
-
-def test_guard_context_fails_the_test_that_leaks_above_basetemp(tmp_path, monkeypatch):
+def _runs_dirs(tmp_path, monkeypatch):
     import _stray_git_guard as guard
-    basetemp = tmp_path / 'base' / 'worker'
-    basetemp.mkdir(parents=True)
-    other_tmp = tmp_path / 'elsewhere'
-    other_tmp.mkdir()
-    monkeypatch.setattr(guard.tempfile, 'gettempdir', lambda: str(other_tmp))
-    monkeypatch.setenv('PLANGRAPH_ROOT_CEILING', str(basetemp))
-    with pytest.raises(AssertionError, match='demo::leaks left a .git outside its tmp_path'):
-        with guard.watch_stray_git('demo::leaks'):
-            (tmp_path / 'base' / '.git').mkdir()  # directly above the basetemp, away from the temp dir
-    with guard.watch_stray_git('demo::clean'):
-        pass
-
-
-def test_guard_fails_an_owned_leak_and_only_warns_for_a_shared_one_off_ci(tmp_path, monkeypatch):
-    import _stray_git_guard as guard
-    monkeypatch.delenv('CI', raising=False)
-    monkeypatch.delenv('PLANGRAPH_STRAY_GIT_GUARD', raising=False)
-    assert not guard.strict_mode()
     system_tmp = tmp_path / 'shared'
     private = system_tmp / 'private'          # TMPDIR is a private subdirectory of the shared temp root
     basetemp = private / 'pytest-of-user' / 'pytest-0'
     basetemp.mkdir(parents=True)
     monkeypatch.setattr(guard.tempfile, 'gettempdir', lambda: str(private))
     monkeypatch.setenv('PLANGRAPH_ROOT_CEILING', str(basetemp))
-    # Directly above the basetemp is this run's own tree: it fails by default.
+    return system_tmp, private, basetemp
+
+
+def test_guard_fails_a_leak_in_a_directory_the_run_owns(tmp_path, monkeypatch):
+    import _stray_git_guard as guard
+    _, private, basetemp = _runs_dirs(tmp_path, monkeypatch)
     with pytest.raises(AssertionError, match='demo::owned left a .git outside its tmp_path'):
         with guard.watch_stray_git('demo::owned'):
-            (basetemp.parent / '.git').mkdir()
+            (basetemp.parent / '.git').mkdir()    # directly above the basetemp
+    assert not (basetemp.parent / '.git').exists()  # the empty stray is removed
     with pytest.raises(AssertionError, match='demo::private'):
         with guard.watch_stray_git('demo::private'):
             (private / '.git').mkdir()
-    # Above the process temp dir the directory is shared with other runs: warn, and fail in strict mode.
-    with pytest.warns(UserWarning, match='demo::shared left a .git outside'):
-        with guard.watch_stray_git('demo::shared'):
-            (system_tmp / '.git').mkdir()
-    with pytest.raises(AssertionError, match='demo::strict'):
-        with guard.watch_stray_git('demo::strict', strict=True):
-            (system_tmp / '.git').mkdir()
+
+
+def test_a_shared_directory_leak_is_never_attributed_to_a_test_or_removed(tmp_path, monkeypatch):
+    import _stray_git_guard as guard
+    system_tmp, _, _ = _runs_dirs(tmp_path, monkeypatch)
+    monkeypatch.delenv('CI', raising=False)
+    monkeypatch.delenv('PLANGRAPH_STRAY_GIT_GUARD', raising=False)
+    session_before = guard.shared_gits()
+    # Another worker's test leaks while this watcher is open: this test neither fails nor cleans it.
+    with guard.watch_stray_git('demo::bystander'):
+        (system_tmp / '.git').mkdir()
+    assert (system_tmp / '.git').exists()
+    with pytest.warns(UserWarning, match='shared with other runs'):
+        assert guard.check_shared(session_before, strict=False) == [str((system_tmp / '.git').resolve())]
+    assert (system_tmp / '.git').exists()          # still there for the operator to see
+    with pytest.raises(AssertionError, match='shared with other runs'):
+        guard.check_shared(session_before, strict=True)
+    assert guard.check_shared(guard.shared_gits(), strict=True) == []   # a pre-existing one is not new
+
+
+def test_guard_strict_mode_follows_ci_and_the_switch(monkeypatch):
+    import _stray_git_guard as guard
+    monkeypatch.delenv('CI', raising=False)
+    monkeypatch.delenv('PLANGRAPH_STRAY_GIT_GUARD', raising=False)
+    assert not guard.strict_mode()
     monkeypatch.setenv('CI', 'true')
     assert guard.strict_mode()
     monkeypatch.delenv('CI')
     monkeypatch.setenv('PLANGRAPH_STRAY_GIT_GUARD', '1')
     assert guard.strict_mode()
+
+
+def test_session_ceiling_is_the_pytest_basetemp(tmp_path_factory):
+    import os
+    from pathlib import Path
+    assert Path(os.environ['PLANGRAPH_ROOT_CEILING']) == tmp_path_factory.getbasetemp().resolve()
