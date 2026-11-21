@@ -78,7 +78,7 @@ def scaled_test_timeout(count):
 
 
 def check_timeout(command, cwd=None, env=None):
-    if command[:2] in (["cargo", "clippy"], ["cargo", "test"]):
+    if command[:2] in (["cargo", "clippy"], ["cargo", "test"], ["cargo", "build"]):
         return RUST_TIMEOUT
     if is_affected_step(command):
         return scaled_test_timeout(planned_paths(command, cwd, env))
@@ -392,6 +392,25 @@ def rust_target_env(env, cleanup):
     return out
 
 
+def policy_build_command(root):
+    """The one build of pg-policy: the policy step runs this binary, never a cold cargo run."""
+    manifest = Path(root) / 'rust/Cargo.toml'
+    if not manifest.is_file():
+        return None
+    return ['cargo', 'build', '--quiet', '--locked', '--manifest-path', str(manifest), '-p', 'pg-policy']
+
+
+def stage_policy_binary(target, cleanup):
+    """Private copy of the built pg-policy: a concurrent checkout may rebuild the shared one."""
+    name = 'pg-policy.exe' if os.name == 'nt' else 'pg-policy'
+    built = Path(target) / 'debug' / name
+    if not built.is_file():
+        return None
+    private = tempfile.mkdtemp(prefix='preflight-policy-')
+    cleanup.append(private)
+    return shutil.copy2(built, Path(private) / name)
+
+
 def main(argv=None, root=None):
     cleanup = []
     try:
@@ -483,6 +502,16 @@ def _main(argv, root, cleanup):
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)
                 failed = []  # policy runs every check and reports all failures
+                if family == "policy" and policy_build_command(root):
+                    # Outside the per-check bound; a cold compile must not fail a green diff.
+                    code, output = invoke(policy_build_command(root), root, env)
+                    print(output, end="", flush=True)
+                    binary = None if code else stage_policy_binary(env["CARGO_TARGET_DIR"], cleanup)
+                    if binary:
+                        family_env = dict(family_env, PG_POLICY_BIN=binary)
+                    elif code:
+                        failed.append(("FAIL", "pg-policy build", first_error(output)))
+                        commands = [c for c in commands if Path(c[1]).name != "check_new_code_lang.py"]
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
                     command_env = family_env
