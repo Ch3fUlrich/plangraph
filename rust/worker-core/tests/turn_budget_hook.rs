@@ -5,6 +5,8 @@ use std::{
     io::Write,
     process::{Command, Stdio},
 };
+#[path = "turn_budget_hook/settings_cases.rs"]
+mod settings_cases;
 #[path = "turn_budget_hook/storage_cases.rs"]
 mod storage_cases;
 
@@ -391,39 +393,4 @@ fn legacy_near_cap_histories_are_compacted_before_the_next_update() {
     assert_eq!(f.status()["wake_calls"], 1);
     assert_eq!(f.status()["seen"].as_array().unwrap().len(), 2048);
     assert!(fs::metadata(&path).unwrap().len() < 200_000);
-}
-
-#[test]
-fn measurement_only_allows_polls_and_produces_no_live_alert() {
-    let f = Fixture::new();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    for index in 0..7 {
-        f.append(json!({"type":"assistant", "timestamp":chrono::DateTime::from_timestamp(now as i64, 0).unwrap().to_rfc3339(),
-            "message":{"id":format!("measure-{index}"),"role":"assistant","content":[]}}));
-    }
-    let mut child = Command::new(env!("CARGO_BIN_EXE_turn-budget-hook"))
-        .arg("--measure-only")
-        .env("FLEET_STATE_DIR", &f.config.state_dir)
-        .env("FLEET_SESSION_NAME", "build-L1-0429")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    writeln!(child.stdin.take().unwrap(), "{}", json!({
-        "hook_event_name":"PreToolUse","session_id":"test-session","tool_name":"Bash",
-        "tool_input":{"command":"sleep 5; git status"}, "transcript_path":f.dir.path().join("transcript.jsonl")
-    })).unwrap();
-    let out = child.wait_with_output().unwrap();
-    assert!(out.status.success());
-    assert!(out.stdout.is_empty() && out.stderr.is_empty());
-    assert!(pg_worker_core::turn_budget::read_alerts(&f.config.state_dir, now).is_empty());
-    let shadow = f.config.state_dir.join("shadow-turn-budget");
-    assert_eq!(
-        pg_worker_core::turn_budget::read_alerts(&shadow, now).len(),
-        1
-    );
 }

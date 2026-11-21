@@ -25,7 +25,9 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
 For A2 shadow measurement, append `--measure-only` to the command. Both
 polling checks run for accounting while the hook returns success and emits no
 tool decision. The measurements go under `<state>/shadow-turn-budget/status`.
-The live watchdog reads only `<state>/status`.
+The live watchdog reads only `<state>/status`. The versioned settings fixtures
+verify measurement-only registration at each event and isolate an over-budget
+canary from the live watchdog. [Fleet hook settings](guard-hooks.md)
 
 ## State and accounting contract
 
