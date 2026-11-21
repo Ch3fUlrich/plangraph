@@ -3,7 +3,7 @@
 //!
 //! | Review scenario | Production-path test |
 //! | --- | --- |
-//! | R1 revoked credential reads only its own receipt | `tests/test_keeper_outbox.py::test_http_receipt_readback_after_token_revocation`, `tests/test_keeper_run_tokens_doors.py::test_reviewer_run_token_cannot_cross_seats_and_replays_exact_receipt` |
+//! | R1 revoked token reads only its own receipt | `tests/test_keeper_outbox.py -k readback_after` and `tests/test_keeper_run_tokens_doors.py -k reviewer_run` |
 //! | R1 crash before send and append during acknowledgement | `keeper_outbox::tests::append_during_acknowledgement_survives_reopening` |
 //! | R1 legacy outcome authorizes readback only | `tests/test_keeper_schema_upgrade.py::test_mixed_version_legacy_and_fresh_receipt_replay`, `tests/test_keeper_outbox.py::test_unproven_legacy_entries_remain_unacknowledged` |
 //! | R1 delayed seat cannot follow a same-head resubmission | `tests/test_keeper_run_tokens_doors.py::test_seat_binding_refuses_late_same_head_on_direct_and_replay` |
