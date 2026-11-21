@@ -26,11 +26,7 @@ pub(super) fn mask_words(data: &mut Value, path: &Path) {
             .collect::<Result<Vec<_>, _>>()
             .ok()
     });
-    let mask = |text: &str| {
-        // The secret redactor runs first, on the original text: private words must not
-        // remove the context (a keyword, a name) it matches on.
-        let redacted = pg_worker_core::redact::redact(text);
-        let text = redacted.as_str();
+    let word_spans = |text: &str| {
         let mut spans = Vec::new();
         for (regex, token) in patterns.as_ref().into_iter().flatten() {
             for hit in regex.find_iter(text) {
@@ -58,11 +54,29 @@ pub(super) fn mask_words(data: &mut Value, path: &Path) {
                 merged.push((start, end));
             }
         }
+        merged
+    };
+    let apply = |text: &str, spans: Vec<(usize, usize)>| {
         let mut result = text.to_owned();
-        for (start, end) in merged.into_iter().rev() {
+        for (start, end) in spans.into_iter().rev() {
             result.replace_range(start..end, "[redacted]");
         }
         result
+    };
+    // Both policies read the original text. When a secret and a private word are both
+    // present their spans cannot be combined from the redactor's output, so the whole
+    // string is withheld rather than letting one replacement break the other's match.
+    let mask = |text: &str| {
+        let redacted = pg_worker_core::redact::redact(text);
+        let own = word_spans(text);
+        if own.is_empty() {
+            let spans = word_spans(&redacted);
+            apply(&redacted, spans)
+        } else if redacted == text {
+            apply(text, own)
+        } else {
+            "[redacted]".to_owned()
+        }
     };
     for host in data["hosts"].as_array_mut().into_iter().flatten() {
         if patterns.is_none() {

@@ -272,6 +272,9 @@ fn scrub_words(home: &Path) -> PathBuf {
 fn publish(home: &Path, words: &Path, out: &mut dyn Write) -> Result<(), String> {
     let stored =
         read(&home.join(".local/state/plangraph/agents-view.json")).map_err(|e| e.to_string())?;
+    if !stored["hosts"].is_array() {
+        return Err("stored inventory has no hosts array".into());
+    }
     let mut view = project_view(&stored);
     super::agent_view_projection::mask_words(&mut view, words);
     writeln!(out, "{view}").map_err(|e| e.to_string())

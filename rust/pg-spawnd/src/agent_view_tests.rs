@@ -458,3 +458,18 @@ fn local_run_hosts_survive_the_stored_projection() {
     assert_eq!(stored["hosts"][0]["reason"], "not_collected");
     cleanup(&home);
 }
+#[test]
+fn publish_refuses_a_stored_inventory_without_a_hosts_array() {
+    let home = fixture();
+    put(
+        &home,
+        ".local/state/plangraph/agents-view.json",
+        json!({"generated_at":"2026-11-21T06:30:00Z","hosts":null}),
+    );
+    let words = home.join("words.txt");
+    fs::write(&words, "# none\n").unwrap();
+    let mut out = Vec::new();
+    assert!(publish(&home, &words, &mut out).is_err());
+    assert!(out.is_empty());
+    cleanup(&home);
+}

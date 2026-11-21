@@ -113,3 +113,19 @@ fn unavailable_reasons_and_timestamps_are_allowlisted() {
     let kept = project_view(&json!({"generated_at":"2026-11-21T06:30:00Z","hosts":[]}));
     assert_eq!(kept["generated_at"], "2026-11-21T06:30:00Z");
 }
+#[test]
+fn a_private_phrase_spanning_a_secret_is_withheld_whole() {
+    let path = std::env::temp_dir().join(format!("pg-span-words-{}", std::process::id()));
+    std::fs::write(&path, "re:private-prefix Bearer [^ ]+\n").unwrap();
+    let secret = ["synthetic", "Credential", "0123456789"].concat();
+    let mut view = json!({"hosts":[{"host":"local","readable":true,"agents":[{
+        "name":format!("x private-prefix Bearer {secret} y"),"model":"fine"}]}]});
+    mask_words(&mut view, &path);
+    std::fs::remove_file(&path).unwrap();
+    let text = view.to_string();
+    assert!(
+        !text.contains(&secret) && !text.contains("private-prefix"),
+        "{text}"
+    );
+    assert_eq!(view["hosts"][0]["agents"][0]["model"], "fine");
+}

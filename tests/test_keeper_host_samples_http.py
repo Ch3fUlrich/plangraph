@@ -4,12 +4,12 @@ import threading
 
 import pytest
 
-from test_keeper_host_samples import DSN, world, sample, host_principal
+from test_keeper_host_samples import DSN, world, sample, host_principal, SKIP_WITHOUT_PG
 from test_keeper_api import call, make_cfg
 from keeper_util import seed
 from plangraph.keeper import api
 
-pytestmark = pytest.mark.skipif(not DSN, reason="PLANGRAPH_TEST_PG_DSN (or PG_DSN) unset: needs Postgres 16")
+pytestmark = SKIP_WITHOUT_PG
 
 
 @pytest.fixture

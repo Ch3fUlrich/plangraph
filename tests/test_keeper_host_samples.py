@@ -8,11 +8,17 @@ from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 
 DSN = os.environ.get("PLANGRAPH_TEST_PG_DSN") or os.environ.get("PG_DSN")
-pytestmark = pytest.mark.skipif(not DSN, reason="PLANGRAPH_TEST_PG_DSN (or PG_DSN) unset: needs Postgres 16")
+#: A job that selects the Postgres backend (``PG_KEEPER_BACKEND=postgres``, the CI job) must run
+#: these cases: a missing DSN there fails them instead of skipping.
+SKIP_WITHOUT_PG = pytest.mark.skipif(
+    not DSN and os.environ.get("PG_KEEPER_BACKEND") != "postgres",
+    reason="PLANGRAPH_TEST_PG_DSN (or PG_DSN) unset: needs Postgres 16")
+pytestmark = SKIP_WITHOUT_PG
 
 
 @pytest.fixture
 def world(tmp_path):
+    assert DSN, "PG_KEEPER_BACKEND=postgres needs PG_DSN (or PLANGRAPH_TEST_PG_DSN)"
     w = World(tmp_path, backend="postgres", dsn=DSN)
     try:
         yield w

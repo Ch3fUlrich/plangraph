@@ -63,3 +63,24 @@ def test_principal_token_starting_with_the_host_prefix_resolves_and_is_never_min
         assert auth.add_principal(w.conn, "misfire2", "reader", []) == "zzzz" + "p" * 40
     finally:
         w.close()
+
+
+@pytest.mark.parametrize("backend,dsn,skips", [("postgres", None, False), (None, None, True),
+                                              ("postgres", "postgresql://x/k", False)])
+def test_postgres_cases_skip_only_when_no_postgres_job_is_selected(backend, dsn, skips):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PG_DSN", "PLANGRAPH_TEST_PG_DSN", "PG_KEEPER_BACKEND")}
+    if backend:
+        env["PG_KEEPER_BACKEND"] = backend
+    if dsn:
+        env["PG_DSN"] = dsn
+    env["PYTHONPATH"] = os.pathsep.join([str(Path(__file__).resolve().parent), *sys.path])
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import test_keeper_host_samples as m; print(m.SKIP_WITHOUT_PG.args[0])"],
+        env=env, capture_output=True, text=True, check=True).stdout.strip()
+    assert out == str(skips)

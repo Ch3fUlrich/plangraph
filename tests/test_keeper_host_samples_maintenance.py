@@ -3,10 +3,10 @@ import inspect
 
 import pytest
 
-from test_keeper_host_samples import world, sample, host_principal, DSN
+from test_keeper_host_samples import world, sample, host_principal, DSN, SKIP_WITHOUT_PG
 from plangraph.keeper import daemon, schema_pg
 
-pytestmark = pytest.mark.skipif(not DSN, reason="PLANGRAPH_TEST_PG_DSN (or PG_DSN) unset: needs Postgres 16")
+pytestmark = SKIP_WITHOUT_PG
 
 
 def test_pg_partitioned_raw_and_migration(world):
