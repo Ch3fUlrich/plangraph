@@ -74,6 +74,11 @@ Each host entry supplies `PG_LANDING_BUILD_STAMP` and, for repair,
 repository root and merged SHA. The stamp names the build head and installed
 binary paths with SHA-256 digests. Settlement persists all three receipts
 before advancing past host verification.
+To stop landed native writers during host verification, set
+`PG_LANDING_WRITER_RECORDS` in each host entry to an owner-local JSON array of
+candidate record paths. `pg-spawnd writer-stop MERGED_SHA RECORD...` reports
+which candidates it stopped or kept. `pg-spawnd writer-resume RECORD` resumes
+the preserved session from its original request and worktree.
 
 Migration 16 stores individual GitHub Actions job timings. The lander imports the
 exact run and attempt with `plangraph landing ci-import OWNER/REPO BATCH HEAD RUN ATTEMPT`.

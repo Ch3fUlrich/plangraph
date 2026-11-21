@@ -71,7 +71,15 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
         record["final_head"] = json!(head);
     }
     record["exit_code"] = json!(exit);
-    record["status"] = json!(if exit == 0 { "completed" } else { "failed" });
+    record["status"] = json!(
+        if reason.as_deref() == Some(crate::writer_control::STOPPED) {
+            "stopped"
+        } else if exit == 0 {
+            "completed"
+        } else {
+            "failed"
+        }
+    );
     record["reason"] = json!(reason);
     if exit == 9 {
         record["result"] = json!("BLOCKED");
@@ -97,7 +105,17 @@ fn lifecycle(
     brief: &str,
 ) -> Result<i32, (i32, String)> {
     admit_disk(driver)?;
-    record["base_sha"] = json!(driver.prepare().map_err(|e| (5, e))?);
+    let mut saved_session = if record["landing_resume"] == true {
+        Some(
+            record["session_id"]
+                .as_str()
+                .ok_or((5, "saved writer session unavailable".to_owned()))?
+                .to_owned(),
+        )
+    } else {
+        record["base_sha"] = json!(driver.prepare().map_err(|e| (5, e))?);
+        None
+    };
     // Worktree creation can consume disk after placement admitted this host.
     admit_disk(driver)?;
     record["base_admitted"] = json!(true);
@@ -118,7 +136,8 @@ fn lifecycle(
             ),
             None => prompt.clone(),
         };
-        match writer_attempt(driver, record, &launch) {
+        match writer_attempt(driver, record, &launch, saved_session.take().as_deref()) {
+            Err((_, error)) if error == crate::writer_control::STOPPED => return Err((10, error)),
             Err((6, error)) => {
                 record["last_writer_failure"] = json!(error);
                 driver.save(record).map_err(|e| (9, e))?;
@@ -196,15 +215,19 @@ fn writer_attempt(
     driver: &mut impl Driver,
     record: &mut Value,
     prompt: &str,
+    saved_session: Option<&str>,
 ) -> Result<i32, (i32, String)> {
     // HEAD before the turn: a relaunch keeps the commits of the earlier attempts.
     let mut turn_start = driver.head().map_err(|e| (6, e))?;
     let started = stage::now();
-    let executed = driver.execute(None, prompt);
+    let executed = driver.execute(saved_session, prompt);
     if let Ok(head) = driver.head() {
         stage::record(record, "writing", &head, started);
     }
     let session = executed.map_err(|e| (6, e))?;
+    if saved_session.is_some() {
+        record.as_object_mut().unwrap().remove("landing_resume");
+    }
     record["session_id"] = json!(session);
     record["resumes"] = json!(0);
     let mut fixes = 0;

@@ -384,6 +384,7 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     )
     .unwrap();
     let state = dir.path().join("state");
+    fs::create_dir_all(state.join("runs/run-host")).unwrap();
     let cli = dir.path().join("review-cli.py");
     fs::write(
         &cli,
@@ -458,7 +459,6 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert!(host.gates().unwrap_err().starts_with("ci_commit_gate.py"));
     fs::remove_file(dir.path().join("gate-red")).unwrap();
     // The writer session log of the turns that produced this head (cargo runs included).
-    fs::create_dir_all(state.join("runs/run-host")).unwrap();
     fs::write(
         state.join("runs/run-host/native.log"),
         "cargo test: 3 passed\n",

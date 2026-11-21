@@ -16,6 +16,8 @@ struct Request {
     stamp: PathBuf,
     head: String,
     sync: Option<PathBuf>,
+    #[serde(default)]
+    writer_records: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -138,10 +140,42 @@ pub(super) fn agent() -> Result<Value, String> {
         }
     }
     match verify(&request) {
-        Ok(()) => Ok(json!({"verified": true, "head": request.head,
-                           "checkout": request.head, "hooks": request.head, "build": request.head})),
+        Ok(()) => {
+            let writers = stop_writers(&request)?;
+            Ok(json!({"verified": true, "head": request.head,
+                      "checkout": request.head, "hooks": request.head, "build": request.head,
+                      "writers": writers}))
+        }
         Err(reason) => Ok(json!({"verified": false, "reason": reason})),
     }
+}
+
+fn stop_writers(request: &Request) -> Result<Value, String> {
+    let Some(list) = &request.writer_records else {
+        return Ok(json!([]));
+    };
+    if !list.is_absolute() {
+        return Err("landing writer inventory must be an absolute path".into());
+    }
+    let records: Vec<PathBuf> = serde_json::from_slice(
+        &fs::read(list).map_err(|_| "landing writer inventory is unavailable")?,
+    )
+    .map_err(|_| "invalid landing writer inventory")?;
+    if records.len() > 100 || records.iter().any(|path| !path.is_absolute()) {
+        return Err("landing writer inventory needs at most 100 absolute record paths".into());
+    }
+    if records.is_empty() {
+        return Ok(json!([]));
+    }
+    let result = Command::new("pg-spawnd")
+        .args(["writer-stop", &request.head])
+        .args(records)
+        .output()
+        .map_err(|_| "cannot run guarded writer stop")?;
+    if !result.status.success() {
+        return Err("guarded writer stop failed".into());
+    }
+    serde_json::from_slice(&result.stdout).map_err(|_| "invalid writer stop report".into())
 }
 
 fn request(host: &HostEntry, local: bool, body: &Request) -> Result<Value, String> {
@@ -214,6 +248,7 @@ fn converge(
                 stamp: stamp.into(),
                 head: head.into(),
                 sync: None,
+                writer_records: host.env.get("PG_LANDING_WRITER_RECORDS").map(PathBuf::from),
             };
             let local = registry.self_host == host.id;
             let first = invoke(host, local, &body)?;
@@ -224,6 +259,7 @@ fn converge(
                         .all(|field| receipt[*field] == head)
             };
             if ok(&first) {
+                log_writers(&host.id, &first);
                 return Ok(false);
             }
             let reason = first["reason"]
@@ -237,6 +273,7 @@ fn converge(
                     .into(),
             );
             let next = invoke(host, local, &body)?;
+            log_writers(&host.id, &next);
             ok(&next).then_some(true).ok_or_else(|| {
                 next["reason"]
                     .as_str()
@@ -260,6 +297,19 @@ fn converge(
         ));
     }
     Ok(json!({"verified": verified, "count": verified.len()}))
+}
+
+fn log_writers(host: &str, result: &Value) {
+    if let Some(writers) = result["writers"].as_array().filter(|rows| !rows.is_empty()) {
+        let stopped = writers
+            .iter()
+            .filter(|row| row["status"] == "stopped")
+            .count();
+        eprintln!(
+            "landing host {host}: {stopped} writers stopped, {} kept",
+            writers.len() - stopped
+        );
+    }
 }
 
 pub(super) fn run(env: &Env, args: &[String]) -> Result<Value, String> {
