@@ -398,7 +398,7 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setenv('GIT_DIR', 'caller-binding')
-    monkeypatch.setattr(sel.subprocess, 'check_output', lambda *a, **k: 'GIT_DIR\n')
+    monkeypatch.setattr(sel.subprocess, 'check_output', lambda *a, **k: 'GIT_DIR\n' if 'rev-parse' in a[0] else b'')
     monkeypatch.setattr(sel.subprocess, 'run', fake_run)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
