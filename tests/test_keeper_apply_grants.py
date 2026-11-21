@@ -199,3 +199,47 @@ def test_grant_is_audited_and_removed_by_revoke(w):
     acts = [r["action"] for r in w.conn.execute(
         "SELECT action FROM audit_log WHERE ok=1").fetchall()]
     assert "grant_apply" in acts and "revoke_apply" in acts
+
+
+def test_a_cancel_may_not_rewrite_a_dependent_in_a_foreign_project(w):
+    """cancel authorizes its named key; its edge repair must stay inside the grant."""
+    w.store.create_items(w.p("router"), [
+        defn("X", project="demo", under="GOAL"),
+        defn("XG", ["demo:X"], project="other", kind="gate", under="GOAL")])
+    before = counts(w)
+    for reason in ("dup", "dup of D-9"):
+        err = refused(w, [{"op": "cancel", "key": "demo:X", "reason": reason}])
+        assert "other:XG" in err.msg
+    with pytest.raises(Refused) as exc:                  # the direct l1 verb too
+        w.store.cancel(w.p(L1), "demo:X", "superseded by D-9")
+    assert exc.value.code == "forbidden" and "other:XG" in exc.value.msg
+    assert counts(w) == before
+    assert w.store._item("other:XG")["depends_on"] == ["demo:X"]
+    assert w.store._item("demo:X")["state"] == "open"
+
+
+def test_the_target_checked_in_the_lock_is_the_target_mutated(w, monkeypatch):
+    """A rehome landing between the pre-lock resolution and the lock must not
+    redirect a checked key to a foreign one."""
+    real, calls = w.store.resolve_key, []
+
+    def resolve(key):
+        calls.append(key)
+        if key == "demo:A" and len(calls) >= 3:      # past the pre-lock phase
+            return "other:F"
+        return real(key)
+
+    monkeypatch.setattr(w.store, "resolve_key", resolve)
+    before = counts(w)
+    refused(w, [{"op": "cancel", "key": "demo:A", "reason": "r"}])
+    assert counts(w) == before
+    assert w.store._item("other:F")["state"] == "open"
+
+
+def test_events_of_a_granted_batch_keep_the_l1_name_and_role(w):
+    apply(w, [create("X"), link_goal("A", "X")])
+    rows = w.conn.execute(
+        "SELECT actor, role FROM events WHERE key IN ('demo:X', 'demo:GOAL')"
+        " ORDER BY seq DESC LIMIT 2").fetchall()
+    assert [(r["actor"], r["role"]) for r in rows] == [(L1, "l1"), (L1, "l1")]
+    assert w.store.verify_integrity() == []

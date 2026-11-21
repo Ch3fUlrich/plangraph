@@ -38,12 +38,12 @@ also hashed pre-lock as a fail-fast.
 """
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import logging
 
 from .. import views
+from . import auth
 from . import events
 from . import db_errors
 from . import oversight_policy
@@ -523,8 +523,12 @@ class OpsMixin:
             if principal.role == "l1":
                 # The gate admitted this op for the granted projects alone, so it
                 # runs under the router's checks (the single verbs' own state and
-                # graph rules still apply); the audit rows keep the l1 name.
-                principal = dataclasses.replace(principal, role="router")
+                # graph rules still apply); events keep the l1 name and role and
+                # the grant bounds what a verb writes beyond its named key.
+                principal = auth.ScopedPrincipal(
+                    principal.name, "router", principal.projects, principal.family,
+                    audit_role="l1",
+                    granted=frozenset(self._grant_projects(principal.name)))
             return self._run_op(principal, op, batch_ref, now)
         except Refused as exc:
             if principal.role == "oversight":
@@ -640,7 +644,9 @@ class OpsMixin:
         """Every key an op creates, edits, or points at, alias-resolved."""
         name = op["op"]
         if name != "create":
-            keys = [op["key"]]
+            # Resolved here, in the lock, exactly as ``_run_op`` resolves it: the
+            # key checked is the key mutated even if a rehome landed meanwhile.
+            keys = [self.resolve_key(op["key"])]
             fields = op.get("fields") if name == "edit" else None
             if isinstance(fields, dict):
                 project = self._key_project(op["key"])

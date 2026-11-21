@@ -5,3 +5,4 @@ ready read builds its groups once (it built them twice). `pg ready`/`blocked`/`w
 120 s client timeout. With no client config the READ-ONLY fallback reads the daemon's default
 snapshot (`~/.local/share/plangraph/plan.snapshot.json`), never the cwd, and a missing snapshot
 is a named refusal instead of a traceback.
+An index served while its refresh runs is reported in the ready warnings with its age.

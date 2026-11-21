@@ -432,6 +432,11 @@ def main(argv=None, out=None, err=None):
                  f"{who_name!r} ({who_role}) (refusing before any call)",
                  refusal=True)
             return _done(1)
+        if who_role == "l1" and opts.per_op:
+            # --per-op sends single verbs outside the grant gate and the report line.
+            line("error: a granted l1 token needs the atomic mode (drop --per-op; "
+                 "refusing before any call)", refusal=True)
+            return _done(2)
     except ApiError as exc:
         if opts.allow_no_whoami:
             msg = f" ({exc.msg})" if exc.msg else ""

@@ -99,3 +99,11 @@ def test_cli_grant_apply_round_trip(world, srv, tmp_path, capsys, monkeypatch):
         else:
             assert rc != 0
     assert world.store._grant_projects("l1main") == set()
+
+
+def test_granted_l1_token_cannot_use_per_op(world, srv, tmp_path):
+    world.store.grant_apply(world.p("router"), "l1main", "demo")
+    rc, out, _ = run(l1_batch(tmp_path), srv.base_url, token(world, tmp_path, "l1main"),
+                     extra=("--per-op",))
+    assert rc == 2 and "atomic" in out
+    assert item_count(world) == 0

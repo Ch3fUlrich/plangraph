@@ -179,3 +179,39 @@ def test_fallback_with_no_snapshot_anywhere_is_a_refusal_not_a_crash(tmp_path, m
     from plangraph.keeper import cli
     assert cli.main(["ready"]) == cli_verbs.EXIT_UNREACHABLE
     assert "no usable local snapshot" in capsys.readouterr().err
+
+
+def test_an_expired_index_is_served_with_its_age_while_the_refresh_runs(big, served, monkeypatch):
+    """Through the 4000-item endpoint: the index expired, the refresh is slow; the
+    read answers inside the client timeout and says the index is old."""
+    gate = threading.Event()
+    git = FakeGit()
+    result = {"stale": False, "origin_stale": False, "commits": {}, "prs": {},
+              "branches": [], "order": {}, "verified_at": time.time() - 3600}
+    git._context_work_index = {("repo", "ref"): (time.monotonic() - 3600, result)}
+    built = []
+
+    def slow_index(g, project, *, fresh=False):
+        built.append(project)
+        gate.wait(30)
+        return result
+
+    monkeypatch.setattr(src, "work_index", slow_index)
+    monkeypatch.setattr(src, "_repo_ref", lambda g, project: ("repo", "ref"))
+    monkeypatch.setattr(src, "_REFRESHING", set())
+    monkeypatch.setattr(big.store, "_adapter", lambda name: git if name == "git" else None)
+    try:
+        elapsed, body = get(served, big.tokens["router"], "fmt=json&n=3")
+        assert elapsed < cli_verbs.TIMEOUT
+        data = json.loads(body)
+        assert len(data["items"]) == 3                       # still answers, rows ready
+        note, = [w for w in data["warnings"] if w["status"] == "refreshing"]
+        assert note["project"] == "demo" and note["age_seconds"] >= 3600
+        text = get(served, big.tokens["router"], "fmt=text&n=3")[1].decode()
+        assert "work index stale" in text and "refresh running" in text
+    finally:
+        gate.set()
+    deadline = time.monotonic() + 10
+    while src._REFRESHING and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert built == ["demo"]                                  # one refresh only

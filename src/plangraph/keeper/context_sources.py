@@ -259,10 +259,13 @@ def work_index_cached(git, project):
     hit = getattr(git, "_context_work_index", {}).get(key)
     if hit is None:
         return work_index(git, project)
-    if time.monotonic() - hit[0] >= _REFS_TTL:
+    age = time.monotonic() - hit[0]
+    if age >= _REFS_TTL:
+        # The served index says it is expired, so the reader can warn.
+        served = dict(hit[1], refreshing=True, built_age_s=int(age))
         with _REFRESH_LOCK:
             if key in _REFRESHING:
-                return hit[1]
+                return served
             _REFRESHING.add(key)
 
         def refresh():
@@ -275,6 +278,7 @@ def work_index_cached(git, project):
                     _REFRESHING.discard(key)
         threading.Thread(target=refresh, name="work-index-refresh",
                          daemon=True).start()
+        return served
     return hit[1]
 
 

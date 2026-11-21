@@ -381,6 +381,14 @@ class VerbsMixin:
             # (planned on the graph with the item already cancelled: dropping its
             # edges must not read as stranding the item itself)
             drops, kept = self._cancel_repairs(fresh, decided)
+            scope = getattr(principal, "granted", None)
+            if scope is None and principal.role != "router":
+                scope = set(principal.projects or [])
+            for drop in drops if scope is not None else ():
+                if drop["key"].split(":", 1)[0] not in scope:
+                    raise Refused("forbidden",
+                                  f"cancelling {key} would rewrite {drop['key']}, "
+                                  "outside the projects this principal may manage")
             if principal.role != "router":
                 owner_repair = decided and fresh["state"] == "open"
                 dependent = self.conn.execute(

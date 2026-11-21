@@ -5,3 +5,6 @@ refuses the whole batch and names it; rehome, set_kind, dependency ops and any g
 role or token change stay router-only. Each applied batch posts one report line to
 `routing`. New verbs `grant_apply`, `revoke_apply`, `apply_grants` (`pg grant-apply`);
 PostgreSQL migration 13.
+A granted batch keeps the l1 name and role in its events, a cancel inside it may not rewrite a
+dependent in a foreign project, the grant check resolves aliases in the lock, and a granted
+token refuses `--per-op`.
