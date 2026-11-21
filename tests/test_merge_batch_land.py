@@ -414,3 +414,26 @@ def test_land_cleanup_metadata_failure_is_nonfatal(env):
     result = land(env, approval)
     assert result.returncode == 0 and "cleanup failed:" in result.stderr
     assert result.stdout.count("MERGED") == 2
+
+
+def test_land_names_the_pending_check_and_does_not_retry(env):
+    approval = pushed(env, prs=(1, 2))
+    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": "pending"}]
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and "pending: ci-gate" in res.stderr and "does not wait or retry" in res.stderr
+    assert not env.calls("pr", "merge")
+
+
+def test_land_refuses_a_head_green_on_an_older_main(env):
+    """LE-MAIN-RED-AFTER-GREEN-MERGES: a green run of a head that lacks main's tip does not merge."""
+    approval = pushed(env, prs=(1, 2))
+    env.state["behind_by"] = 2
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and res.stdout == "", res.stderr
+    assert "stale_base" in res.stderr and "2 commit(s) behind" in res.stderr
+    assert not env.calls("pr", "merge") and env.state_file("l1").exists()
+    env.state["behind_by"] = 0
+    env.save()
+    assert land(env, approval).returncode == 0

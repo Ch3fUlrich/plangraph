@@ -143,6 +143,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("health") {
         return crate::health_cli::execute(rest, out);
     }
+    if verb.as_deref() == Some("land-go") {
+        return crate::land_go_shell::execute(rest, out);
+    }
     if verb.as_deref() == Some("check-manage-key") {
         return crate::manage_key_alert::execute(rest, out);
     }

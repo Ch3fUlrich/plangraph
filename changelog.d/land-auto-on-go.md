@@ -1,0 +1,1 @@
+- pg-spawnd land-go lands a batch on a router GO row for an exact green, unmoved, current head: merge, MERGED line to routing, close-merged dry run; a moved head or red check posts BLOCKED and lands nothing.
