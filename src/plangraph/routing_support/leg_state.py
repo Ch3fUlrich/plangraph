@@ -412,9 +412,11 @@ class LegAdapter:
     @staticmethod
     def standalone_models():
         import subprocess
+        from .opencode_render import drop_parent_only_env
         try:
             result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
-                                    text=True, timeout=8, shell=False, check=True)
+                                    text=True, timeout=8, shell=False, check=True,
+                                    env=drop_parent_only_env(dict(os.environ)))
         except (OSError, subprocess.SubprocessError):
             return []
         return result.stdout.splitlines()
