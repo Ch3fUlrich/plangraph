@@ -9,6 +9,7 @@ transaction/authorisation core.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import datetime, timezone
 
 from .. import views
@@ -328,12 +329,15 @@ class SupportMixin:
                 have = self._alert_row("refusal", key, "refused")
                 live_open = have is not None and have["state"] == "open"
                 # A live row keeps its precise times; the audit log (whole seconds) only adds
-                # the refusals the row does not already hold.
+                # the refusals the row does not already hold, counted per second.
                 live = ([t for t in self._refusal_times(have) if t >= cutoff]
                         if live_open else [])
-                held = {int(t) for t in live}
-                times = sorted(live + [t for t in audited if int(t) not in held]
-                               )[-REFUSAL_TIMES_CAP:]
+                # Per whole second: the audit rows beyond the live times of that second.
+                held = Counter(int(t) for t in live)
+                extra = []
+                for second, count in Counter(int(t) for t in audited).items():
+                    extra += [float(second)] * max(0, count - held[second])
+                times = sorted(live + extra)[-REFUSAL_TIMES_CAP:]
                 current = state[key] in open_states and len(times) >= 2
                 if have is None:
                     self.conn.execute(

@@ -328,6 +328,25 @@ def test_backfill_keeps_the_precise_times_of_a_live_row(w):
     assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 2)]
 
 
+def test_backfill_adds_the_audit_refusals_beyond_the_live_ones_of_the_same_second(w):
+    from plangraph.keeper.store_support import iso
+    now = float(int(w.store.now()))
+    # One live refusal in this second (a row), plus a legacy refusal of the same second that
+    # only the audit log holds: two refusals, an active alert.
+    w.conn.execute(
+        "INSERT INTO alerts(kind,key,code,msg,first_seen,last_seen,n,state)"
+        " VALUES('refusal','demo:A','refused',?,?,?,1,'open')",
+        (json.dumps([now + 0.4]), iso(now), iso(now)))
+    for _ in range(2):  # the audit log holds both refusals of that second
+        w.conn.execute(
+            "INSERT INTO audit_log(ts,actor,role,action,key,ok) VALUES(?,?,?,?,?,0)",
+            (iso(now), "reader", "reader", "claim", "demo:A"))
+    w.store.backfill_alerts()
+    row = w.conn.execute("SELECT msg, n, state FROM alerts WHERE kind='refusal'").fetchone()
+    assert (row["n"], row["state"], len(json.loads(row["msg"]))) == (2, "open", 2)
+    assert [r["count"] for r in w.store.alerts(w.p("reader"))["refusals"]] == [2]
+
+
 def test_backfill_sorts_out_of_order_refusals_before_the_cap_and_the_bounds(w):
     from plangraph.keeper.store_support import REFUSAL_TIMES_CAP, iso
     now = w.store.now()
