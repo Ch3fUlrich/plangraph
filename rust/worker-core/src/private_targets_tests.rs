@@ -38,38 +38,23 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
     fixture(&target, false);
     let mut report = report();
     let guards = Guards::default();
-    reclaim(
-        &target,
-        &guards,
-        SystemTime::now(),
-        true,
-        &mut report,
-        || panic!("recent target"),
-    )
+    reclaim(&target, &guards, None, true, &mut report, || {
+        panic!("recent target")
+    })
     .unwrap();
     fixture(&target, true);
     let lease = crate::cargo_cache::try_exclusive_lease(&target)
         .unwrap()
         .unwrap();
-    reclaim(
-        &target,
-        &guards,
-        SystemTime::now(),
-        true,
-        &mut report,
-        || panic!("leased target"),
-    )
+    reclaim(&target, &guards, None, true, &mut report, || {
+        panic!("leased target")
+    })
     .unwrap();
     drop(lease);
     for facts in [(vec![], true), (vec![target.join("debug")], false)] {
-        reclaim(
-            &target,
-            &guards,
-            SystemTime::now(),
-            true,
-            &mut report,
-            || Ok(facts.clone()),
-        )
+        reclaim(&target, &guards, None, true, &mut report, || {
+            Ok(facts.clone())
+        })
         .unwrap();
         assert!(target.exists());
     }
@@ -79,41 +64,26 @@ fn idle_private_target_requires_age_lease_and_process_clearance() {
             pinned: vec![tmp.path().into()],
             live: vec![],
         },
-        SystemTime::now(),
+        None,
         true,
         &mut report,
         || panic!("pinned target"),
     )
     .unwrap();
-    reclaim(
-        &target,
-        &guards,
-        SystemTime::now(),
-        true,
-        &mut report,
-        || Err(io::Error::other("unavailable")),
-    )
+    reclaim(&target, &guards, None, true, &mut report, || {
+        Err(io::Error::other("unavailable"))
+    })
     .unwrap_err();
     assert!(target.exists());
-    reclaim(
-        &target,
-        &guards,
-        SystemTime::now(),
-        false,
-        &mut report,
-        || Ok((vec![], false)),
-    )
+    reclaim(&target, &guards, None, false, &mut report, || {
+        Ok((vec![], false))
+    })
     .unwrap();
     assert!(target.exists());
     assert_eq!(report.freed_bytes, 0);
-    reclaim(
-        &target,
-        &guards,
-        SystemTime::now(),
-        true,
-        &mut report,
-        || Ok((vec![], false)),
-    )
+    reclaim(&target, &guards, None, true, &mut report, || {
+        Ok((vec![], false))
+    })
     .unwrap();
     assert!(!target.exists());
     assert_eq!(report.freed_bytes, 7);
@@ -146,7 +116,7 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
     reclaim(
         &link.join("rust/target"),
         &Guards::default(),
-        SystemTime::now(),
+        None,
         true,
         &mut report,
         || panic!("symlinked parent"),
@@ -197,11 +167,95 @@ fn private_target_discovery_preserves_sources_and_symlinked_worktrees() {
     reclaim(
         &tree.join("rust/target"),
         &Guards::default(),
-        SystemTime::now(),
+        None,
         true,
         &mut report,
         || panic!("source"),
     )
     .unwrap();
     assert!(tree.join("rust/target/Cargo.toml").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn worktree_target_older_than_last_commit_is_reclaimed_immediately() {
+    let tmp = tempfile::tempdir().unwrap();
+    let temporary = tmp.path().join("tmp");
+    fs::create_dir_all(&temporary).unwrap();
+    let tree = tmp.path().join("tree");
+    fs::create_dir_all(&tree).unwrap();
+    let git = |args: &[&str], commit_date: Option<&str>| {
+        let mut cmd = std::process::Command::new("git");
+        cmd.arg("-C")
+            .arg(&tree)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+            .args(args);
+        if let Some(ts) = commit_date {
+            cmd.env("GIT_COMMITTER_DATE", ts).env("GIT_AUTHOR_DATE", ts);
+        }
+        assert!(cmd.status().unwrap().success());
+    };
+    git(&["init", "-q"], None);
+    fs::write(tree.join(".gitignore"), "rust/target/\n").unwrap();
+    git(&["add", ".gitignore"], None);
+    let now_secs = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let commit_ts = (now_secs - 60).to_string();
+    git(&["commit", "-q", "-m", "recent"], Some(&commit_ts));
+
+    let target = tree.join("rust/target");
+    fixture(&target, false);
+    // Set target mtime older than the commit (now - 120s), still well under 30m.
+    fn set_tree_mtime(path: &Path, when: SystemTime) {
+        if path.is_dir() {
+            for child in fs::read_dir(path).unwrap() {
+                set_tree_mtime(&child.unwrap().path(), when);
+            }
+        }
+        fs::File::open(path).unwrap().set_modified(when).unwrap();
+    }
+    set_tree_mtime(&target, SystemTime::now() - Duration::from_secs(120));
+
+    let mut report = report();
+    sweep_using(
+        &temporary,
+        std::slice::from_ref(&tree),
+        &Guards::default(),
+        true,
+        &mut report,
+        || Ok((vec![], false)),
+    )
+    .unwrap();
+    assert!(
+        !target.exists(),
+        "worktree rust/target older than HEAD commit should be swept"
+    );
+
+    // If newer than the commit and < 30m, preserve it.
+    fixture(&target, false);
+    sweep_using(
+        &temporary,
+        std::slice::from_ref(&tree),
+        &Guards::default(),
+        true,
+        &mut report,
+        || Ok((vec![], false)),
+    )
+    .unwrap();
+    assert!(target.exists(), "recent target newer than commit must stay");
+}
+
+#[test]
+fn vanished_entries_are_skipped_and_other_errors_stay_errors() {
+    use super::skip_vanished;
+    let gone = skip_vanished(std::fs::read_dir("/nonexistent/vanished-entry")).unwrap();
+    assert!(gone.is_none());
+    let denied = io::Error::from(io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        skip_vanished::<()>(Err(denied)).unwrap_err().kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(skip_vanished(Ok(3)).unwrap(), Some(3));
 }

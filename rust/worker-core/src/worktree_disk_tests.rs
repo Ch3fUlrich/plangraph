@@ -4,6 +4,9 @@ use super::*;
 #[path = "worktree_disk_reap_tests.rs"]
 mod teardown;
 
+#[path = "worktree_disk_cap_tests.rs"]
+mod cap;
+
 #[test]
 fn legacy_target_is_removed_but_shared_cache_is_kept() {
     let root = tempfile::tempdir().unwrap();
@@ -130,6 +133,7 @@ asyncio.run(main())
         .arg(root.path())
         .arg(std::env::current_exe().unwrap())
         .env("PYTHONPATH", repo.join("src"))
+        .env("HOME", root.path().join("home"))
         .env_remove("PLANGRAPH_SETTINGS")
         .env("PLANGRAPH_CARGO_TARGET_DIR", root.path().join("target"))
         .env("PLANGRAPH_CARGO_TARGET_CAP_GB", "0.0078125") // 8 MiB
@@ -212,12 +216,19 @@ print(json.dumps([low, boundary, error]))
 }
 
 fn disk_bridge(script: &str) -> serde_json::Value {
+    disk_bridge_with("", script)
+}
+
+/// `arg` is passed to the script as `sys.argv[2]`.
+fn disk_bridge_with(arg: &str, script: &str) -> serde_json::Value {
     let root = tempfile::tempdir().unwrap();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = std::process::Command::new("python3")
         .args(["-c", script])
         .arg(root.path())
+        .arg(arg)
         .env("PYTHONPATH", repo.join("src"))
+        .env("HOME", root.path().join("home"))
         .env_remove("PLANGRAPH_SETTINGS")
         .env("PLANGRAPH_CARGO_TARGET_DIR", root.path().join("target"))
         .env("PLANGRAPH_CARGO_TARGET_CAP_GB", "12")

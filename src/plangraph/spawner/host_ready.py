@@ -14,11 +14,22 @@ import sys
 import time
 
 from .doctor import clean
-from .host_ready_source import check_sources
 from .private_io import atomic_write_private
+from .host_ready_source import (
+    checkout_floor,
+    configured_work_drives as _configured_work_drives,
+    select_drive,
+    legacy_cache_roots as _legacy_cache_roots,
+    pool_slot_roots as _pool_slot_roots,
+    record_disk_floor_alarm as _record_disk_floor_alarm,
+    windows_cargo_lease as _windows_cargo_lease,
+    check_sources,
+)
 
 HOST_TIMEOUT = 120
 MAX_AGE = 600
+# Mirrors pg_worker_core::cargo_pool::DEFAULT_CARGO_TARGET_CAP_GB (a test pins both).
+DEFAULT_CARGO_TARGET_CAP_GB = 12
 
 
 def shared_cargo_target():
@@ -57,36 +68,11 @@ def cargo_target_size_gb(path):
     return total / (1024 ** 3)
 
 
-def _windows_cargo_lease(path, exclusive):
-    # Shared handles admit concurrent readers; an exclusive cleanup handle
-    # cannot open while any run holds a read handle. Closing releases the lease.
-    import ctypes
-    from ctypes import wintypes
-    import msvcrt
-    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-    create = kernel.CreateFileW
-    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-    create.restype = wintypes.HANDLE
-    handle = create(str(path), 0xC0000000 if exclusive else 0x80000000,
-                    0 if exclusive else 1, None, 4, 0x80, None)
-    if handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY)
-    except BaseException:
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.CloseHandle(handle)
-        raise
-    return os.fdopen(fd, 'rb')
-
-
 CLEANUP_WAIT_ENV = 'PLANGRAPH_CARGO_CLEANUP_WAIT_S'
 
 
-def cargo_lease(exclusive=False, wait=0.0):
-    """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
-    target = shared_cargo_target()
+def _cargo_lease_for(target, exclusive=False, wait=0.0):
+    target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     path = target.with_name(target.name + '.plangraph-lock')
     deadline = time.monotonic() + wait
@@ -106,6 +92,11 @@ def cargo_lease(exclusive=False, wait=0.0):
             if not exclusive or time.monotonic() >= deadline:
                 raise
             time.sleep(min(0.5, max(deadline - time.monotonic(), 0)))
+
+
+def cargo_lease(exclusive=False, wait=0.0):
+    """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
+    return _cargo_lease_for(shared_cargo_target(), exclusive=exclusive, wait=wait)
 
 
 CLI_TESTS_KEEP_ENV = 'PLANGRAPH_CLI_TESTS_KEEP'
@@ -234,7 +225,7 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
 
 
 def cargo_target_cap_gb():
-    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', str(DEFAULT_CARGO_TARGET_CAP_GB)))
     if not math.isfinite(cap) or cap < 0:
         raise ValueError('invalid cache cap')
     return cap
@@ -255,14 +246,95 @@ def cargo_run_busy(record):
     return not run_pids_dead(record)
 
 
+def _safe_cache_dir(target, worktree):
+    try:
+        unsafe_cache_dir(target, worktree)
+    except ValueError:
+        return False
+    return True
+
+
+def _shared_cache_roots():
+    primary = shared_cargo_target()
+    roots = [primary]
+    for extra in _legacy_cache_roots() + _pool_slot_roots(primary):
+        if extra not in roots:
+            roots.append(extra)
+    return roots
+
+
+def _clean_single_cache(target, service, cap=None):
+    """Remove an idle, unleased shared cache dir. Returns True if cleaned."""
+    if not target.exists() or target.is_symlink():
+        return False
+    if cap is not None and cargo_target_size_gb(target) < cap:
+        return False
+    try:
+        wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
+        with _cargo_lease_for(target, exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
+            if any(cargo_run_busy(r) for r in service.ps()['runs']):
+                return False
+            if target.exists():
+                if cap is not None and cargo_target_size_gb(target) < cap:
+                    return True  # A competing cleanup already made room.
+                shutil.rmtree(target)
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _cleanup_before_disk_refusal(worktree, service):
+    """Reclaim idle rebuildable build caches before refusing disk_low."""
+    cleaned = False
+    for root in _shared_cache_roots():
+        if _safe_cache_dir(root, worktree) and _clean_single_cache(root, service):
+            cleaned = True
+    try:
+        wt_path = Path(worktree)
+        if wt_path.is_dir() and not any(cargo_run_busy(r) for r in service.ps()['runs']):
+            proc = subprocess.run(
+                ['git', '-C', str(wt_path), 'worktree', 'list', '--porcelain'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15)
+            if proc.returncode == 0:
+                live_cwds = {Path(r['cwd']).resolve() for r in service.ps()['runs']
+                             if cargo_run_busy(r) and r.get('cwd')}
+                for line in proc.stdout.splitlines():
+                    if not line.startswith('worktree '):
+                        continue
+                    tree = Path(line[len('worktree '):])
+                    if not tree.is_dir() or tree.is_symlink():
+                        continue
+                    if any(tree.resolve() == c or tree.resolve().is_relative_to(c) for c in live_cwds):
+                        continue
+                    rust_target = tree / 'rust/target'
+                    if rust_target.is_dir() and not rust_target.is_symlink():
+                        try:
+                            with _cargo_lease_for(rust_target, exclusive=True, wait=0.0):
+                                shutil.rmtree(rust_target)
+                                cleaned = True
+                        except OSError:
+                            pass
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return cleaned
+
+
+def select_work_drive(drives, cleanup):
+    """The one drive decision (see host_ready_source.select_drive), measured with ``disk_free_gb``."""
+    return select_drive(drives, cleanup, disk_free_gb)
+
+
 #: Roles that build nothing, so the shared build cache's size cap does not bind them.
 NO_BUILD_ROLES = ('review',)
 
 
-def local_disk_refusal(worktree, service, role='implement'):
+def local_disk_refusal(worktree, service, role='implement', movable=False):
     """Check the worktree filesystem and bound the host's shared build cache.
 
-    A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap.
+    A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap. A pinned run is
+    measured on its checkout's filesystem against that work drive's floor; ``movable`` (no
+    checkout named) lets any configured drive satisfy the floor.
     """
     # SettingsError derives from ValueError: validate before measurement's catch.
     from plangraph.settings import _policy_data, SettingsError, as_spawn_refused
@@ -272,7 +344,7 @@ def local_disk_refusal(worktree, service, role='implement'):
         raise as_spawn_refused(exc) from None
     try:
         floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
-        cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+        cap = cargo_target_cap_gb()
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
         target = shared_cargo_target()
@@ -286,15 +358,42 @@ def local_disk_refusal(worktree, service, role='implement'):
                 reclaim_cargo_target(target, cap, worktree)
             except OSError:
                 return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
+        if building:
+            # The legacy caches and the pool slots stay under the same cap.
+            for extra in _legacy_cache_roots() + _pool_slot_roots(target):
+                if extra != target and _safe_cache_dir(extra, worktree) and cargo_target_size_gb(extra) >= cap:
+                    _clean_single_cache(extra, service, cap=cap)
         if cap == 0 and building:
             return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
-        paths = [worktree, target]
+        configured = _configured_work_drives(policy)
+        drives = configured if movable else None
+        if drives:
+            selected, low = select_work_drive(
+                drives, lambda: _cleanup_before_disk_refusal(worktree, service))
+            if selected is not None:
+                return None
+            free, low_floor = low
+            reason = f'disk_low: free {free:.2f} GB, floor {low_floor:g} GB'
+            _record_disk_floor_alarm(service, free, low_floor, reason)
+            return reason
+        paths = [target]
         if getattr(service, 'state', None) is not None:
             paths.append(policy.get('worktree_root') or service.state / 'worktrees')
             paths.append(service.state / 'trees')
-        free = min(disk_free_gb(p) for p in paths)
-        if free < floor:
-            return f'disk_low: free {free:.2f} GB, floor {floor:g} GB'
+        # The checkout is held to the floor configured for the work drive it sits on.
+        checks = [(worktree, checkout_floor(worktree, configured, floor))] + [(p, floor) for p in paths]
+
+        def shortfall():
+            return next(((free, need) for path, need in checks
+                         for free in [disk_free_gb(path)] if free < need), None)
+        low = shortfall()
+        if low:
+            _cleanup_before_disk_refusal(worktree, service)
+            low = shortfall()
+            if low:
+                reason = f'disk_low: free {low[0]:.2f} GB, floor {low[1]:g} GB'
+                _record_disk_floor_alarm(service, low[0], low[1], reason)
+                return reason
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: measurement or configuration unavailable'
     return None
@@ -549,6 +648,13 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
             record['disk_free_gb'] = measure_argv('disk', ['df', '-Pk', '--', config['repo']],
                 lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
+            if config.get('work_drives'):
+                def free_gb(s):
+                    return int(s.splitlines()[-1].split()[3]) // (1024 * 1024)
+                record['work_drives'] = [
+                    dict(path=d['path'], disk_floor_gb=d.get('disk_floor_gb', config.get('disk_floor_gb', 5)),
+                         disk_free_gb=measure_argv('disk', ['df', '-Pk', '--', d['path']], free_gb))
+                    for d in config['work_drives']]
             def sha(s):
                 value = s.strip()
                 if not re.fullmatch(r'[0-9a-f]{40,64}', value):
@@ -609,7 +715,12 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                                           **spawner(run_probe))
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
                 fail('memory', 'below_floor')
-            if record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):
+            drives = record.get('work_drives')
+            if drives:
+                # A host with work drives is ready while one drive meets its own floor.
+                if not any(d['disk_free_gb'] is not None and d['disk_free_gb'] >= d['disk_floor_gb'] for d in drives):
+                    fail('disk', f"disk_low: free {drives[0]['disk_free_gb']} GB")
+            elif record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):
                 fail('disk', f"disk_low: free {record['disk_free_gb']} GB")
         else:
             reachability_failed = True
