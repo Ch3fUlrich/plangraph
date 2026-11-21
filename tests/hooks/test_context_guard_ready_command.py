@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -73,17 +74,25 @@ class SkillNamesTheCommandLikeTheLine(HookCase):
         self.assertIn("copy it from the message", step)
         self.assertIn("Never run the hook wrapper (`ctx_guard_session.py`)", step)  # named only as the wrong script
         self.assertEqual(step.count("ctx_guard_session.py"), 1)
-        # the template the skill gives is the shape the guard emits, with only the two placeholders filled in
-        # the line a session really sees comes through the wrapper, which appends the card rule
+        # the template the skill gives, filled in for an INSTALLED hooks directory, is exactly what that install's
+        # wrapper delivers: all four arguments, the guard path being the installed copy
+        installed = self.tmp / "installed" / "hooks"
+        installed.mkdir(parents=True)
+        for source in HOOKS.glob("*.py"):
+            shutil.copyfile(source, installed / source.name)
         self.write(usage_line(read=280000))
-        proc = self.run_hook(WRAPPER, {"transcript_path": str(self.transcript), "session_id": SID, "cwd": "/w/x",
-                                       "hook_event_name": "PostToolUse"})
-        text = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
-        emitted = shlex.split(ready_command(text))
+        proc = self.run_hook(installed / "ctx_guard_session.py",
+                             {"transcript_path": str(self.transcript), "session_id": SID, "cwd": "/w/x",
+                              "hook_event_name": "PostToolUse"})
+        self.assertEqual((proc.returncode, proc.stderr), (0, ""))
+        delivered = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]  # carries the card rule too
+        emitted = shlex.split(ready_command(delivered))
         template = re.search(r"`(python3 <absolute-guard-path> ready <handoff-path>)`", step).group(1).split()
-        self.assertEqual([emitted[0], "<absolute-guard-path>", *emitted[2:]], template)
+        expected = [installed_guard if part == "<absolute-guard-path>" else part
+                    for part in template for installed_guard in [os.path.realpath(installed / "context_guard.py")]]
+        self.assertEqual(emitted, expected)
         self.assertEqual(len(emitted), 4)  # python3, guard, ready, handoff: no extra argument
-        self.assertTrue(os.path.isabs(emitted[1]) and emitted[1].endswith("context_guard.py"))
+        self.assertNotEqual(emitted[1], str(GUARD.resolve()))  # the installed copy, not the checkout
         for hardcoded in ("tools/hooks/", ".local/share/plangraph/hooks"):
             self.assertNotIn(hardcoded, step)
 
@@ -103,7 +112,6 @@ class WrapperHasNoReadyCommand(HookCase):
         self.assertIn("python3 %s status" % shlex.quote(str(GUARD.resolve())), proc.stderr)
 
     def test_a_checkout_path_with_spaces_stays_one_quoted_argument(self):
-        import shutil
         spaced = self.tmp / "dir with space" / "hooks"
         spaced.mkdir(parents=True)
         for name in ("context_guard.py", "hook_common.py"):
