@@ -399,3 +399,25 @@ def test_the_hosted_lane_lookup_is_done_while_warming_and_not_again_under_the_lo
     assert during_warm, "the warm step looks the hosted lanes up"
     result = auto(env, require_seats=False)
     assert asked == during_warm and [c["key"] for c in result["closed"]] == ["demo:C"]
+
+
+def test_the_lane_cache_is_per_repository_and_a_frozen_cache_never_asks_the_forge(env, tmp_path, monkeypatch):
+    from plangraph.keeper import context_sources
+
+    first = env.repo
+    first.land("c-lane", "side work", 0, merge=False)
+    clone = tmp_path / "clone"
+    git(tmp_path, "clone", "-q", str(first.root), str(clone))          # same branch name, same tip
+    git(clone, "branch", "-f", "c-lane", git(first.root, "rev-parse", "c-lane"))
+    adapter = GitAdapter({"x": str(first.root), "y": str(clone)})
+    answers = {str(first.root): 77, str(clone): 0}                     # closed there, open here
+    asked = []
+    monkeypatch.setattr(context_sources, "_github_repo", lambda origin: "o/r")
+    monkeypatch.setattr(context_sources, "_closed_lane_pr", lambda g, repo, hosted, branch, tip:
+                        asked.append(repo) or answers[repo])
+    cache = {}
+    assert context_sources.open_lanes(adapter, "x", "demo:C", cache=cache) == []
+    assert context_sources.open_lanes(adapter, "y", "demo:C", cache=cache) == ["c-lane"]
+    assert len(asked) == 2
+    assert context_sources.open_lanes(adapter, "x", "demo:C", cache={}, frozen=True) is None
+    assert len(asked) == 2 and context_sources.open_lanes(adapter, "x", "demo:C", cache=cache, frozen=True) == []

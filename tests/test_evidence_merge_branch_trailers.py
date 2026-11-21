@@ -147,11 +147,13 @@ def test_git_trailer_shapes_are_read_as_git_reads_them():
 @pytest.mark.parametrize("message", ["work\n\nWriter: x y\n  Plan-Item: demo:A\n",
                                      "work\n\nPlan-Item: demo:A\n  and more words\n"])
 def test_a_continued_or_indented_plan_item_never_binds_as_commit_ci_evidence(tmp_path, message):
-    """A merge of green CI whose branch commit and merge both carry only the folded shape: refused for the trailer."""
+    """A merge with green CI whose branch commit and merge carry only the folded shape: refused for the trailer."""
     merge = merged(tmp_path, message, "Merge pull request #5\n\n" + message.split("\n\n", 1)[1])
-    result = verify(tmp_path, merge, "demo:A")
+    green = [{"name": "build", "head_sha": merge, "conclusion": "success"}]
+    result, _ = verify_ci(tmp_path, merge, "demo:A", green)
     assert not result.ok and "does not carry trailer 'Plan-Item: demo:A'" in result.detail
-    assert verify(tmp_path, merged_again(tmp_path), "demo:A").ok  # the same fixture shape with a real trailer passes
+    plain = merged_again(tmp_path)  # the same fixture with a real trailer passes on its own green CI
+    assert verify_ci(tmp_path, plain, "demo:A", [{"name": "build", "head_sha": plain, "conclusion": "success"}])[0].ok
 
 
 def merged_again(root):

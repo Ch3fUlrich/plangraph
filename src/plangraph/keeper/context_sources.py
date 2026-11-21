@@ -490,7 +490,7 @@ def _closed_lane_pr(git, repo, hosted, branch, head):
     return 0
 
 
-def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None):
+def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, frozen=False):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -532,9 +532,11 @@ def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None):
                 tip = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", full])
                 if tip is None or not valid_commit_ref(tip.strip()):
                     return None
-                identity = (short, tip.strip())
+                identity = (repo, short, tip.strip())  # a cache is shared between repositories
                 if identity not in verified:
-                    verified[identity] = _closed_lane_pr(git, repo, hosted, *identity)
+                    if frozen:        # a warm answer that no longer matches is unknown, never a forge call
+                        return None
+                    verified[identity] = _closed_lane_pr(git, repo, hosted, short, tip.strip())
                 pr = verified[identity]
                 if pr is None:
                     return None

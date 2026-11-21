@@ -319,7 +319,7 @@ class WaiverMixin:
         git, project = self._adapter("git"), self._merge_project(item)
         if not self._warm(project) and not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
-        kw = {"cache": self.__dict__.setdefault("_lanes", {})} if self._warm(project) else {}
+        kw = {"cache": self.__dict__.setdefault("_lanes", {}), "frozen": True} if self._warm(project) else {}
         if context_sources.open_lanes(git, project, item["key"], **kw) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
