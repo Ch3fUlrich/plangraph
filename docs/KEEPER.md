@@ -487,7 +487,7 @@ md-sync reads it from the end of a QUESTIONS.md "Exact step" cell:
 (`*` = default, `;` separates; an option whose id is not the slug of its label is written `label {id}`
 with `id = [a-z0-9][a-z0-9-]{0,39}`, e.g. `Keep the Shelfmark lane {keep} = stays`; a malformed block,
 including a malformed `{...}`, stays plain text). Rows whose ID cell is not exactly one id are
-listed in the md-sync status file under `unmatched`.
+listed in the md-sync status file under `unmatched`. In the decisions log, `Closes:` and `Waives:` match whole keys after stripping surrounding prose punctuation. Quoted keyword examples and prose after a list supply no keys. For a router row with a `Closes:` keyword and no valid key, md-sync reports the invalid row once per decisions log using `plangraph/md-sync-seen.sqlite` under `$XDG_STATE_HOME` (default `~/.local/state`).
 QUESTIONS.md row format `| Prio | ID | Kind | Parent | why | step | where |` (Kind/Parent header-declared, either
 order, either absent; Kind is `TASK` / `ANSWER` / `DECISION`, where `DECISION` parses to kind `decision`,
 wait `answer`); the step cell may end `[Parent: <key>] Options: a = consequence; *b {custom}; c. Deadline: YYYY-MM-DD`
