@@ -31,14 +31,12 @@ The Rust step resolves `protoc` (`PROTOC`, then `~/.local/bin/protoc`, then `PAT
 timeout or interruption, including nested worker sessions on Linux, then reaps
 git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
-to skip affected tests. The existing pre-push hook runs preflight too; set
-`PREFLIGHT_FAST=1` for its fast mode or, on `refs/heads/phase/*` pushes only
-(D-5843), `PREFLIGHT_SKIP=1` to bypass only that hook invocation (not the existing
-scrub/ref/file-size/commit gates or direct CLI runs; `PREFLIGHT_SKIP=1` on any
-other ref is refused). Private
+to skip affected tests in a direct run. The pre-push hook runs preflight with
+file-only affected tests for the pushed revision, using the pushing checkout's
+virtual environment when present. Private
 scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
 when neither is present, public rules still run but scrub reports SKIP with a reason.
-`PREFLIGHT_TOOLS_DIR` overrides tool paths for tests.
+`PREFLIGHT_TOOLS_DIR` overrides tool paths in direct preflight runs.
 The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
 are scoped to policy checks. Other families receive none of these controls,
 including inherited values, so nested Git test fixtures own their revision bases.
@@ -535,8 +533,7 @@ Both pytest CI jobs validate collection once without `PYTEST_SHARD` on shard 0, 
 affected selection or the full push/nightly suite. Empty individual shards remain
 valid; a nonempty file selection that collects no tests fails the job. Local
 preflight timeouts terminate the selector and its pytest descendants. Missing
-`tools/preflight.py` refuses pushes to main; `PREFLIGHT_SKIP=1` is allowed only when
-every pushed ref is `refs/heads/phase/*` (D-5843) and is refused on all other refs.
+`tools/preflight.py` refuses pushes to main.
 Topic and tag pushes without preflight still run the scrub, ref and file-size gates.
 
 The K1-R1 HEAD audit runtime is explicitly stdlib Python so the installer can copy
@@ -578,7 +575,7 @@ base-revision OPERATOR authority; D-5840 and D-5830 do not count. See
 [the migration plan](docs/PY-TO-RUST-MIGRATION-PLAN.md) for the index and first ports.
 
 The pre-push hook checks commit trailers on `origin/main..head` before scrub and
-preflight, including when `PREFLIGHT_SKIP=1`. It queries open PR heads and checks
+preflight. It queries open PR heads and checks
 foreign merges when gh/network access is available; offline pushes still run the
 local trailer gate and explicitly report the skipped open-PR check.
 

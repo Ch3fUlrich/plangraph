@@ -398,15 +398,6 @@ def push_main():
         print(f"pre-push: {len(hits)} scrub hit(s): push refused "
               "(rule ids above; matched values are never shown)", file=sys.stderr)
         return 1
-    if os.environ.get("PREFLIGHT_SKIP") == "1":
-        if all(rec[2].startswith("refs/heads/phase/")
-               and len(rec[2]) > len("refs/heads/phase/") for rec in refs):
-            print("pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)",
-                  file=sys.stderr)
-            return 0
-        print("pre-push: PREFLIGHT_SKIP=1 is allowed only for refs/heads/phase/* "
-              "(D-5843): push refused", file=sys.stderr)
-        return 1
     # Prune deleted heads too: stale tracking refs cannot vouch for parts.
     fetched = refresh_origin()
     for _, local_sha, remote_ref, remote_sha in refs:
@@ -422,11 +413,10 @@ def push_main():
             command = [PYTHON, str(preflight),
                        "--base", affected_base_commit(remote_sha, local_sha),
                        "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
-            if os.environ.get("PREFLIGHT_FAST") == "1":
-                command.append("--fast")
             # Git's hook-local repository variables must not redirect the worktree.
             local_env = set(git_out("rev-parse", "--local-env-vars").splitlines())
             env = {key: value for key, value in os.environ.items() if key not in local_env}
+            env.pop("PREFLIGHT_TOOLS_DIR", None)
             env["PREFLIGHT_PYTHON"] = PYTHON
             env["PLANGRAPH_PUSH_RANGE"] = f"{batch_base}:{local_sha}" if fetched else ""
             # Per-check deadlines govern, including the possible INFRA retry.

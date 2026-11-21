@@ -1,0 +1,1 @@
+- The pre-push hook runs file-only affected preflight for phase pushes as well as other refs. Legacy environment flags can no longer skip those tests.
