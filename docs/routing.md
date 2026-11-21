@@ -180,6 +180,8 @@ remain readable. The catalog query exposes source, imputation and staleness for
 each observation. See [benchmark observations](spawner-benchmarks.md#benchmark-observations-by-effort-and-harness).
 The existing Sonnet and Opus effort-qualified aliases carry their effort in the
 route record and select the corresponding benchmark cell.
+When a leg leaves effort unspecified, a legacy catalog row can supply the
+catalog's default effort for the same model and a compatible harness.
 
 D-6310 retires `gpt-6.1-sol` (and `gemini-4-argon` for implement; D-6366 serves it as the first review leg), lists `opencode` as a provider,
 removes the `deepseek` and `glm` family bans, and leaves no `opencode-go` leg disabled.

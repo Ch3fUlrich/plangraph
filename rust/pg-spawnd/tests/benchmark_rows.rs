@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from plangraph.planner.benchmarks import benchmark_for_leg
-from plangraph.planner.legs import DEFAULT_LEGS, spawnable_legs
+from plangraph.planner.legs import DEFAULT_LEGS, leg_active, spawnable_legs
 from plangraph.planner.routing import plan_spawn
 from plangraph.routing_support.catalog_db import CatalogDB
 from plangraph.spawner.bench_entry import benchmark_options
@@ -83,6 +83,17 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     assert rows['low', 'opencode']['score'] == 20
     data = benchmark_options()['benchmark']
     assert {(r['effort'], r['harness']): r for r in data[model]['benchmark_rows']} == rows
+    for leg in spawnable_legs():
+        key = leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}'
+        cells = data.get(key, {}).get('benchmark_rows', ())
+        if leg_active(leg, now=float('inf')) and any(
+                cell['score'] is not None and cell['harness'] in ('', leg.harness)
+                and (cell['effort'] == (leg.effort or '') or (cell['legacy'] and leg.effort is None))
+                for cell in cells):
+            assert benchmark_for_leg(data, leg) is not None, leg.id
+    muse = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-muse-spark')
+    assert benchmark_for_leg(data, muse)['effort'] == 'xhigh'
+    assert benchmark_for_leg(data, replace(muse, effort='low')) is None
     codex = next(leg for leg in spawnable_legs() if leg.id == 'gpt-6.2-sol-medium')
     assert benchmark_for_leg(data, codex)['score'] == 53
     luna_legs = [leg for leg in spawnable_legs() if leg.id.startswith('cx-gpt-6-luna-')]

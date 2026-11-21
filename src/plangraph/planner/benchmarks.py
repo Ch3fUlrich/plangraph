@@ -64,7 +64,8 @@ def benchmark_for_leg(rows, leg):
     exact = next((cell for cell in cells if cell['effort'] == effort and cell['harness'] == leg.harness), None)
     if exact is None:
         exact = next((cell for cell in cells if cell['legacy'] and
-                      cell['effort'] == effort and cell['harness'] == ''), None)
+                      (leg.effort is None or cell['effort'] == effort) and
+                      cell['harness'] in ('', leg.harness)), None)
     return _utility_row(exact) if exact is not None and exact['score'] is not None else None
 
 
