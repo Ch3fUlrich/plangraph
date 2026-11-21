@@ -131,13 +131,8 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
-    if verb.as_deref() == Some("host") && rest == ["work-disk"] {
-        let (root, _) = pg_worker_core::work_disks::worktree_disk()
-            .map_err(|error| error.to_string())?
-            .ok_or("disk_low: no worktree mounts configured")?;
-        let path = root.to_str().ok_or("worktree root is not UTF-8")?;
-        return writeln!(out, "{}", serde_json::to_string(path).unwrap())
-            .map_err(|error| error.to_string());
+    if verb.as_deref() == Some("host") {
+        return crate::host_tools::execute(&rest, out);
     }
     if verb.as_deref() == Some("steps") {
         // The plan arrives on stdin; the exit code is the plan's, not a usage error's.

@@ -65,3 +65,17 @@ effective wrapper, cache directory and cap with a small spawned Cargo build.
 NOTE Watchdog host session. Include the usage of configured work mounts in each
 host's `work_used_percent` array. On the single-disk worker, inspect the
 worktree and cache reports, reclaim eligible data and measure usage below 85%.
+
+## WSL cache guard
+
+NOTE Host-sync session. For placement entries with `memory_source = "windows"`,
+install a root-owned `pg-spawnd` in `/usr/local/bin` and copy the
+`pg-wsl-cache-guard` service and timer into the system unit directory. Write
+`PG_WSL_CACHE_GUARD_MIN_FREE_MB` in `/etc/plangraph/wsl-cache-guard.env` from the
+placement entry's `cache_guard_min_free_mb`, defaulting to 20480.
+
+NOTE Workstation host session. Check Windows interop from the system service.
+Enable the timer and run the 30-minute Cargo and pytest probe. Confirm Windows
+free physical memory stays above 12 GiB and the launcher admits the workstation
+on every probe. Inspect the guard's before and after samples, then retire the
+temporary timer on the orchestration host once the replacement is verified.
