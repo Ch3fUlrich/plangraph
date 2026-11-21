@@ -21,7 +21,7 @@ their owning `Cargo.toml` with `--manifest-path`, including excluded packages
 without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
 
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
-affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s), scaled up to 2 seconds per selected test path and capped at 1200 seconds for a large selection; when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s), scaled up to 2 seconds per selected test path and capped at 1200 seconds for a large selection; it runs with pytest-xdist workers sized from the host (half the cores, at most one per 2 GiB of available memory, cores only when memory cannot be read, 2 to 16; `PREFLIGHT_TEST_WORKERS` overrides); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 
 With sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned before a private target is created. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). See docs/TESTING.md.
 `tools/merge_batch.py push` also waits without an overall deadline and forwards
@@ -148,6 +148,8 @@ literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs must be added to `RUST_INPUTS`, not inline to the workflow. `rust/pg-spawnd/`
 and `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
 Python files executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
+`ci_select.RUST_WORKER_INPUTS` lists inputs that also select the standalone
+Temporal worker job, including `tools/probe_admission_policy_guard.py`.
 Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
 `docs/rust-hooks.md`, `tools/new_code_allowlist.txt` and its parity corpus at
 `tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
