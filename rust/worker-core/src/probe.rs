@@ -1,6 +1,6 @@
 //! Outcome probe: run before retrying an attempt to see what it left behind.
 
-use crate::check::run_check;
+use crate::check::run_check_scoped;
 use crate::git::{check_rev, git, GitError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -41,10 +41,24 @@ pub fn probe(
     timeout: Duration,
     tail_n: usize,
 ) -> Result<ProbeOutcome, ProbeError> {
+    probe_scoped(dir, base, check_cmd, timeout, tail_n, None)
+}
+
+/// [`probe`] with the attempt's jail (helper, limits, private tmp) around the
+/// check. A configured jail whose helper is missing is an error: the check never
+/// runs unjailed.
+pub fn probe_scoped(
+    dir: &Path,
+    base: &str,
+    check_cmd: &str,
+    timeout: Duration,
+    tail_n: usize,
+    jail: Option<(&Path, &crate::scope::ScopeLimits, &Path)>,
+) -> Result<ProbeOutcome, ProbeError> {
     if commits_beyond(dir, base)? == 0 {
         return Ok(ProbeOutcome::Nothing);
     }
-    let r = run_check(check_cmd, dir, timeout, tail_n)?;
+    let r = run_check_scoped(check_cmd, dir, timeout, tail_n, jail, &|| false)?;
     Ok(if r.passed() {
         ProbeOutcome::AlreadyDone
     } else {

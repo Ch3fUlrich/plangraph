@@ -60,6 +60,45 @@ fn judged_report(
     }
 }
 
+/// The report the workflow sends for a finished attempt.
+pub(crate) fn attempt_report(
+    card: &str,
+    n: u32,
+    leg_id: &str,
+    result: &AttemptResult,
+) -> AttemptReport {
+    judged_report(
+        card,
+        n,
+        leg_id,
+        result.exit_class,
+        &result.diff_hash,
+        &result.check_tail,
+    )
+}
+
+/// The tail the workflow keeps for an attempt's synthetic follow-ups and parks:
+/// the attempt's redacted CHECK tail (not its harness output tail).
+pub(crate) fn initial_check_tail(result: &AttemptResult) -> String {
+    result.check_tail.clone()
+}
+
+/// The keeper report and the park packet the workflow emits for a finished
+/// attempt, built by the same helpers the workflow calls.
+#[cfg(test)]
+pub(crate) fn attempt_payloads(
+    card: &str,
+    n: u32,
+    leg: &LegSpec,
+    result: &AttemptResult,
+) -> (AttemptReport, ParkPacket) {
+    let history = [to_budget_attempt(result, leg)];
+    (
+        attempt_report(card, n, &leg.id, result),
+        packet_from_last(card, &history, &initial_check_tail(result)),
+    )
+}
+
 /// Sweep dead attempts; every terminal path except `merged` runs this first.
 async fn run_janitor(
     ctx: &WorkflowContext<Card>,
@@ -149,6 +188,23 @@ fn stale_state_refusal(failure: Option<&Failure>) -> Option<&Failure> {
 /// `exec_stale_state`) -- the one failure a fresh observation can repair?
 fn is_stale_state_refusal(failure: Option<&Failure>) -> bool {
     stale_state_refusal(failure).is_some()
+}
+
+/// The typed admission refusal in a failure's cause chain (`card_not_allowlisted`,
+/// `card_not_claimable`, `card_attempt_overlap`), if any. A refusal is policy,
+/// not a crashed worker: nothing ran, so the workflow must end the card, never
+/// report an attempt or probe a worktree for it.
+fn admission_refusal(failure: Option<&Failure>) -> Option<&str> {
+    let mut f = failure;
+    while let Some(node) = f {
+        if let Some(FailureInfo::ApplicationFailureInfo(info)) = &node.failure_info
+            && crate::card_admit::REFUSAL_KINDS.contains(&info.r#type.as_str())
+        {
+            return Some(info.r#type.as_str());
+        }
+        f = node.cause.as_deref();
+    }
+    None
 }
 
 /// Record a park packet and raise the alarm that goes with it.

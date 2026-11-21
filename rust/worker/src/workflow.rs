@@ -62,6 +62,10 @@ const OBSERVE_PATCH: &str = "park-observe-v1";
 /// renaming it would strand every card whose history already carries the old
 /// marker.
 const PARK_REOBSERVE_PATCH: &str = "park-reobserve-v1";
+/// `ctx.patched` marker for ending the card on a typed admission refusal of the
+/// attempt activity. Before it, the refusal counted as a worker crash and the
+/// card went on to probe a worktree; a history recorded then replays that path.
+const ADMISSION_REFUSAL_PATCH: &str = "admission-refusal-terminal-v1";
 /// How many times a park refused as stale is re-observed and retried before the
 /// workflow fails with the last cause (D3).
 const PARK_REOBSERVES: u32 = 2;
@@ -219,6 +223,19 @@ impl Card {
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
                     return Ok(cancelled(n));
                 }
+                Err(e)
+                    if admission_refusal(e.failure()).is_some()
+                        && ctx.patched(ADMISSION_REFUSAL_PATCH) =>
+                {
+                    let kind = admission_refusal(e.failure()).unwrap_or("admission");
+                    return Err(ApplicationFailure::builder(anyhow::anyhow!(
+                        "card admission refused: {kind}"
+                    ))
+                    .type_name(kind.to_owned())
+                    .non_retryable(true)
+                    .build()
+                    .into());
+                }
                 Err(e) => {
                     // The worker never returned a result. A heartbeat timeout means
                     // it is hung (a stall); a start-to-close or schedule-to-close
@@ -276,16 +293,9 @@ impl Card {
             // (worker crash, rebase conflict, probe failure) that have none of their own.
             let diff_hash = result.diff_hash.clone();
             let check_hash = result.check_hash.clone();
-            let mut check_tail = result.check_tail.clone();
+            let mut check_tail = initial_check_tail(&result);
 
-            let report = AttemptReport {
-                card: input.claim.card.clone(),
-                n,
-                leg: leg.id.clone(),
-                exit_class: result.exit_class,
-                diff_hash: result.diff_hash.clone(),
-                check_tail: result.check_tail.clone(),
-            };
+            let report = attempt_report(&input.claim.card, n, &leg.id, &result);
             ctx.execute_activity(CardActivities::report, report, activity_options(&cfg))
                 .await?;
 

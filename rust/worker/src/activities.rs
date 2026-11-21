@@ -128,9 +128,9 @@ impl CardActivities {
         input: ProbeInput,
     ) -> Result<ProbeResult, ActivityError> {
         let cfg = self.deps.cfg.clone();
-        tokio::task::spawn_blocking(move || do_probe(&cfg, &input))
+        tokio::task::spawn_blocking(move || admitted_probe(&cfg, &input))
             .await
-            .map_err(activity_error)
+            .map_err(activity_error)?
     }
 
     /// Run a card's named gate checks in a worktree and report the outcome.

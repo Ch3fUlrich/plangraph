@@ -63,7 +63,7 @@ fn settle_refusal<T>(
     }
 }
 fn activity_error(e: impl std::fmt::Display) -> ActivityError {
-    anyhow::anyhow!(e.to_string()).into()
+    anyhow::anyhow!(crate::output_redact::failure_text(&e.to_string())).into()
 }
 /// Invalid gate input (empty command, timeout 0, a workdir outside the workroot
 /// or not a directory) can never succeed on a retry, so it is reported as a
@@ -310,18 +310,43 @@ pub(crate) fn map_merge(o: MergeOutcome, main_head: String) -> MergeResult {
         },
     }
 }
+/// The probe activity's entry: the same admission policy as the attempt, then
+/// the probe. A card the worker refuses must never have its check run here.
+pub(crate) fn admitted_probe(cfg: &Config, input: &ProbeInput) -> Result<ProbeResult, ActivityError> {
+    crate::card_admit::allow(cfg, &input.card)?;
+    Ok(do_probe(cfg, input))
+}
 /// Probe the worktree of `card#n` in `workroot`. A missing worktree or a bad
 /// base is reported as `error`, never as `nothing`.
 pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
+    do_probe_with_jail(cfg, input, crate::harness::JailConfig::from_env())
+}
+/// [`do_probe`] with the attempt's jail policy given: the card's check is
+/// untrusted code, so it runs jailed with a private tmp exactly as in the
+/// attempt, and a jail that is required but unavailable is an `error`, never
+/// an unjailed run.
+pub(crate) fn do_probe_with_jail(
+    cfg: &Config,
+    input: &ProbeInput,
+    jail: Result<Option<crate::harness::JailConfig>, String>,
+) -> ProbeResult {
     let id = AttemptId::new(input.card.clone(), input.n);
     let dir = Path::new(&input.workroot).join(id.dir_name());
-    let outcome = probe::probe(
-        &dir,
-        &input.base_sha,
-        &input.check_cmd,
-        cfg.start_to_close,
-        cfg.check_tail_lines,
-    );
+    let outcome = jail
+        .map_err(std::io::Error::other)
+        .and_then(|jail| Ok((jail, crate::attempt::attempt_tmp()?)))
+        .map_err(probe::ProbeError::Check)
+        .and_then(|(jail, tmp)| {
+            probe::probe_scoped(
+                &dir,
+                &input.base_sha,
+                &input.check_cmd,
+                cfg.start_to_close,
+                cfg.check_tail_lines,
+                jail.as_ref()
+                    .map(|j| (j.bin.as_path(), &j.limits, tmp.path())),
+            )
+        });
     map_probe(outcome, id.branch())
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

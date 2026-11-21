@@ -39,6 +39,10 @@ pub struct Opts {
     pub grace: Duration,
     /// Keep at most this many trailing bytes of combined output.
     pub max_output: usize,
+    /// Scrub secret-shaped text from the captured output before any of it is
+    /// dropped from the front, so a secret that straddles the cut leaves no
+    /// fragment behind. Retained bytes are then redacted, not raw.
+    pub redact_discarded: bool,
 }
 
 impl Default for Opts {
@@ -48,6 +52,7 @@ impl Default for Opts {
             timeout: None,
             grace: Duration::from_secs(10),
             max_output: 1 << 20,
+            redact_discarded: false,
         }
     }
 }
@@ -66,7 +71,25 @@ pub struct Supervised {
     pub output: Vec<u8>,
 }
 
-fn read_tail(mut r: impl Read, start: Instant, last: &AtomicU64, max: usize) -> Vec<u8> {
+/// Redact the captured bytes in place. An incomplete UTF-8 character at the end
+/// (the next read completes it) stays as raw bytes.
+fn redact_captured(buf: &mut Vec<u8>) {
+    let body = match std::str::from_utf8(buf) {
+        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+        _ => buf.len(),
+    };
+    let mut out = crate::redact::redact(&String::from_utf8_lossy(&buf[..body])).into_bytes();
+    out.extend_from_slice(&buf[body..]);
+    *buf = out;
+}
+
+fn read_tail(
+    mut r: impl Read,
+    start: Instant,
+    last: &AtomicU64,
+    max: usize,
+    redact: bool,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
     while let Ok(n) = r.read(&mut chunk) {
@@ -76,11 +99,17 @@ fn read_tail(mut r: impl Read, start: Instant, last: &AtomicU64, max: usize) -> 
         last.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
         buf.extend_from_slice(&chunk[..n]);
         if buf.len() > max.saturating_mul(2) {
-            buf.drain(..buf.len() - max);
+            if redact {
+                redact_captured(&mut buf);
+            }
+            buf.drain(..buf.len().saturating_sub(max));
         }
     }
     if buf.len() > max {
-        buf.drain(..buf.len() - max);
+        if redact {
+            redact_captured(&mut buf);
+        }
+        buf.drain(..buf.len().saturating_sub(max));
     }
     buf
 }
@@ -115,8 +144,8 @@ pub fn supervise_with_cancel(
     drop(cmd); // closes our copies of the write end so the reader sees EOF
     let start = Instant::now();
     let last = Arc::new(AtomicU64::new(0));
-    let (last2, max) = (last.clone(), opts.max_output);
-    let reader = thread::spawn(move || read_tail(reader, start, &last2, max));
+    let (last2, max, redact) = (last.clone(), opts.max_output, opts.redact_discarded);
+    let reader = thread::spawn(move || read_tail(reader, start, &last2, max, redact));
 
     let (mut stalled, mut timed_out, mut cancelled_flag) = (false, false, false);
     let mut term_at: Option<Instant> = None;
@@ -214,6 +243,11 @@ pub fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg(unix)]
+#[path = "stall_redact_tests.rs"]
+mod redact_tests;
 
 #[cfg(test)]
 #[cfg(unix)]

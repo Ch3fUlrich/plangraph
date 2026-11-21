@@ -106,3 +106,38 @@ fn admission_and_no_claim_are_refusals() {
     assert!(allow(&cfg, "unlisted").is_err());
     assert!(claimed(None, "listed").is_err());
 }
+
+/// A token-shaped fake secret assembled from fragments.
+fn fake_token() -> String {
+    ["gh", "p_", &"Qr7x".repeat(10)].concat()
+}
+
+#[test]
+fn attempt_failure_message_carries_no_git_stderr_secret() {
+    let token = fake_token();
+    let git = pg_worker_core::git::GitError::Failed {
+        args: "fetch origin".into(),
+        code: Some(128),
+        stderr: format!("fatal: Authentication failed for 'https://user:{token}@host/repo.git'"),
+    };
+    let ActivityError::Application(failure) =
+        attempt_error(crate::attempt::AttemptError::Git(git).into())
+    else {
+        panic!("expected application failure")
+    };
+    let message = failure.source_error().to_string();
+    assert!(!message.contains(&token), "{message}");
+    assert!(message.contains("exit Some(128)"), "{message}");
+    assert!(!failure.is_non_retryable());
+}
+
+#[test]
+fn attempt_failure_message_is_capped() {
+    let io = std::io::Error::other("word ".repeat(5000));
+    let ActivityError::Application(failure) =
+        attempt_error(crate::attempt::AttemptError::Io(io).into())
+    else {
+        panic!("expected application failure")
+    };
+    assert!(failure.source_error().to_string().len() <= crate::output_redact::MAX_FAILURE_BYTES);
+}
