@@ -64,13 +64,20 @@ struct Host {
     reviews_started: usize,
     /// Spawner CLI argv prefix that starts review runs (`review_cli`).
     review_cli: Vec<String>,
+    /// Checkout of trusted plangraph sources for the family table; None uses the installed
+    /// package. Never the writer's worktree: the change under review must not pick the
+    /// families it is reviewed against.
+    python_src: Option<PathBuf>,
 }
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
     if !result.status.success() {
+        // A tool may report on stdout only; the failure carries both streams in full.
         return Err(format!(
-            "command failed: {}",
-            String::from_utf8_lossy(&result.stderr)
+            "command failed ({}):\nstdout: {}\nstderr: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stdout).trim(),
+            String::from_utf8_lossy(&result.stderr).trim()
         ));
     }
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())
@@ -340,10 +347,15 @@ impl Driver for Host {
         if self.git(&["rev-parse", "HEAD"])? != head {
             return Err(format!("worktree is not at {head}"));
         }
-        self.checks()?;
         let stamp = self.stamp(head)?;
         fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
             .map_err(|e| e.to_string())?;
+        // The turns up to this head are bound to it before the gates run, so a head whose gate
+        // fails keeps its own output and the next head starts after it.
+        self.session_excerpt(&stamp)?;
+        let log = self.checks()?;
+        // The exact-head gate output, named in the review brief next to the stamp.
+        fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
         fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
             .map_err(|e| e.to_string())
     }
@@ -355,7 +367,7 @@ impl Driver for Host {
     }
     fn gates(&mut self) -> Result<(), String> {
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
-        self.checks()
+        self.checks().map(|_| ())
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         let Some(target) = self.push_ref.clone() else {
@@ -457,6 +469,7 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
         reviews_started: 0,
         review_cli: review_cli()?,
+        python_src: None,
     };
     if let Some(target) = &host.push_ref {
         if !target.starts_with("refs/heads/") {
@@ -486,6 +499,8 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     );
     Ok(())
 }
+#[path = "native_writer_context.rs"]
+mod context;
 #[path = "native_writer_review.rs"]
 mod review;
 use review::review_cli;

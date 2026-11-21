@@ -327,7 +327,37 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
 
 _INFLIGHT = {}
 
-async def before_launch(runner, leg, role, dry_run):
+class ProbeBudget:
+    """Time the live probes of one spawn may use together, below the base admission window.
+
+    The pre-launch probe runs inside the spawn's base admission wait (ADMISSION_TIMEOUT). One
+    probe gets at most a third of the window and all probes of a spawn at most half, so serial
+    hung probes fail over leg by leg and still leave time to prepare the worktree and launch.
+    A probe that exceeds its share is killed and booked as a probe failure.
+    """
+    def __init__(self, window=None, started=None):
+        from .base_fresh import ADMISSION_TIMEOUT
+        from .base_fresh import ADMISSION_STARTED
+        window = ADMISSION_TIMEOUT if window is None else window
+        # Admission time already spent: since the wait began (monotonic; routing and record
+        # creation included) and since the run record was created, whichever is longer.
+        waited = time.monotonic() - ADMISSION_STARTED.get() if ADMISSION_STARTED.get() else 0
+        recorded = time.time() - started if started else 0
+        elapsed = max(waited, recorded, 0)
+        self.each = window / 3
+        # Half the window in all, and always leaving a sixth for the worktree and the launch.
+        self.left = min(window / 2, window - window / 6 - elapsed)
+        self.grace = min(5, self.each / 6)  # probe setup and cleanup around its own deadline
+
+    def timeout(self):
+        """Seconds the next probe may run, or 0 when the spawn's probe budget is spent."""
+        return max(min(seconds('PLANGRAPH_LEG_PROBE_TIMEOUT_S', 180, positive=True), self.each, self.left), 0)
+
+    def spend(self, started):
+        self.left -= time.monotonic() - started
+
+
+async def before_launch(runner, leg, role, dry_run, budget=None):
     from .target import quota_paused
     from .env_redact import redact_output, redact_env_values
     root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
@@ -374,11 +404,26 @@ async def before_launch(runner, leg, role, dry_run):
     ts = None if snapshot_error else state.last_probe_ts(key(leg))
     if ts is not None and time.time() - ts < ttl:
         return skip  # Only ordinary admission may reuse pre-failure probe evidence.
+    budget = budget or ProbeBudget()
+    timeout = budget.timeout()
+    if timeout <= 0:
+        return 'probe_budget_exhausted'
+    started = time.monotonic()
     pending = _INFLIGHT.get(key(leg))  # Share concurrent probes, failures included.
+    joined = pending is not None
     if pending is None:
-        pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state))
+        pending = _INFLIGHT[key(leg)] = asyncio.ensure_future(probe(runner, leg, store=state, timeout_s=timeout))
         pending.add_done_callback(lambda _: _INFLIGHT.pop(key(leg), None))
-    result = await asyncio.shield(pending)
+    try:
+        # The probe bounds itself to `timeout`; every spawn, the one that started the probe and
+        # any that join it, waits only as long as its own budget allows (the owner a short grace
+        # more for the probe's setup and cleanup) and is charged for the time it waited. A probe
+        # that outlives the wait keeps running for its other waiters.
+        result = await asyncio.wait_for(asyncio.shield(pending), timeout if joined else timeout + budget.grace)
+    except asyncio.TimeoutError:
+        return 'probe_budget_exhausted'
+    finally:
+        budget.spend(started)
     reason = result.get('reason')
     if not reason or reason.strip().lower() == 'unknown':
         reason = 'host_not_ready' if result.get('state') == 'host-not-ready' else 'leg_probe_failed'

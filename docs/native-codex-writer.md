@@ -31,11 +31,16 @@ repository's fast gates present in the checkout (file size, new-code language,
 changelog/docs, `ci_commit_gate.py check` against the pinned base, and the private
 scrub when `~/.config/plangraph/scrub-words.txt` exists) and writes the stamp
 `<git-dir>/fast-checks/<head>`. A failure resumes the same Codex session with the
-output, at most twice per head. A review is refused without the stamp of exactly
+output (stdout and stderr in full), at most twice per head. A turn that leaves HEAD at
+the base is resumed with the items of its brief and runs no gate; after two such
+resumes the run ends exit 7 `no_commit`. `codex-host-readiness` reports a placeholder
+git identity (`example.invalid`, `localhost`, unset) as not ready. A review is refused without the stamp of exactly
 that head. The worker then starts one review run through the spawner CLI (role
-`review`, writer family `openai`, a diff_ref card in a disposable no-push clone
+`review`, one `--writer-family` per family in the Writer trailers of base..head plus the
+served writer model's family, read by `pg_worker_core::writer_families`, the reader
+`plangraph review` shares; a diff_ref card in a disposable no-push clone
 at the head; `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
-`python3 -m plangraph.spawner.cli`). The verdict is read from that run's record
+`python3 -m plangraph.spawner.cli`). The review prompt starts with the versioned review brief (`render_brief`, review skill as its rules) whose item context carries the whole done criteria and invariants of the writer brief (feeder or batch layout), both SHAs, the public symbols the diff adds with their first callers, and the exact-head fast-check log (`<git-dir>/fast-checks/<head>.log`) and writer session log. The verdict is read from that run's record
 (`review_artifacts::review_text`), never from a file name: the last `VERDICT:`
 line must be canonical, a `HEAD:` line naming another head or an ACCEPT that names
 no changed file is `no_verdict`, retried twice, then the run ends BLOCKED with

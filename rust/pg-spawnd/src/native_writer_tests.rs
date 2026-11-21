@@ -20,6 +20,10 @@ struct Fake {
     review_head: Option<&'static str>,
     /// Fast-check runs that fail before the first green one.
     fast_failures: usize,
+    /// HEAD seen at each call count (indexed by calls so far, the last entry repeats); overrides the default.
+    head_script: Vec<&'static str>,
+    /// Turns after which HEAD is still the base (no commit yet).
+    uncommitted_turns: usize,
     /// When false, green fast checks leave no stamp.
     stamps: bool,
     stamped: Vec<String>,
@@ -57,7 +61,23 @@ impl Driver for Fake {
     }
     fn head(&mut self) -> Result<String, String> {
         self.heads += 1;
-        Ok("final-head".into())
+        if let Some(head) = self
+            .head_script
+            .get(self.calls.len())
+            .or(self.head_script.last())
+        {
+            return Ok((*head).into());
+        }
+        // Every writer turn after the uncommitted ones commits: the head changes per turn.
+        Ok(
+            if self.calls.is_empty() || self.calls.len() <= self.uncommitted_turns {
+                "base".into()
+            } else if self.calls.len() <= self.uncommitted_turns + 1 {
+                "final-head".into()
+            } else {
+                format!("final-head-{}", self.calls.len())
+            },
+        )
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
         if self.fast_failures > 0 {
@@ -131,7 +151,7 @@ fn native_missing_final_review_resumes_same_session_and_records_host_head() {
     assert_eq!(driver.reviews[1].as_ref().unwrap()["run_id"], "run-review1");
     assert_eq!(record["host"], "other-host");
     assert_eq!(record["base_sha"], "base");
-    assert_eq!(record["final_head"], "final-head");
+    assert_eq!(record["final_head"], "final-head-2");
     assert_eq!(record["review_rounds"], 2);
     assert_eq!(record["round_counts"], json!([1]));
     assert_eq!(record["reviews"][0]["verdict"], "REQUEST_CHANGES");
@@ -689,3 +709,5 @@ fn round_stop_is_the_round_progress_rule_capped_at_max_rounds() {
         2
     );
 }
+#[path = "native_writer_idle_tests.rs"]
+mod idle;

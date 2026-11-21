@@ -543,3 +543,130 @@ def test_named_writer_leg_with_all_reviewers_keeps_writer_probe(tmp_path, monkey
     assert roles[writer.id] is None
     assert all(roles[leg_id] == 'review' for leg_id in roles if leg_id != writer.id) and len(roles) > 1
     assert store.leg_status(leg_probe.key(writer))['state'] != 'down'
+
+
+def test_probe_budget_inside_a_spawn_is_below_the_admission_window(monkeypatch):
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.delenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', raising=False)
+    budget = leg_probe.ProbeBudget()
+    assert budget.timeout() == base_fresh.ADMISSION_TIMEOUT / 3
+    budget.spend(time.monotonic() - 70)  # one probe used 70 s of the spawn's 90 s
+    assert budget.timeout() == pytest.approx(base_fresh.ADMISSION_TIMEOUT / 2 - 70, abs=0.5)
+    budget.spend(time.monotonic() - 30)
+    assert budget.timeout() == 0
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '5')
+    assert leg_probe.ProbeBudget().timeout() == 5
+
+
+def test_hung_probes_fail_over_leg_by_leg_inside_the_admission_window(monkeypatch):
+    """Serial hung probes share one budget: failover, then a refusal, never base_admission_timeout."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', '180')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 1.5)  # 0.5 s per probe, 0.75 s in all
+    monkeypatch.setattr(leg_probe.shutil, 'which', lambda name: '/bin/true')
+
+    class Runner:
+        def __init__(self):
+            self._tasks, self.jobs, self.cancelled = {}, {}, []
+
+        async def spawn(self, **kwargs):
+            job = SimpleNamespace(job_id='hung%d' % len(self.jobs), status='running', exit_code=None)
+            self.jobs[job.job_id] = job
+            self._tasks[job.job_id] = asyncio.ensure_future(asyncio.sleep(3600))  # the harness hangs
+            return job
+
+        async def cancel(self, job_id):
+            self.cancelled.append(job_id)
+            self.jobs[job_id].status = 'cancelled'
+            self._tasks[job_id].cancel()
+
+    runner = Runner()
+    legs = [SimpleNamespace(model='agy/model%d' % n, harness='agy') for n in range(3)]
+
+    async def run():
+        started, budget, skips = time.monotonic(), leg_probe.ProbeBudget(), []
+        for leg in legs:  # what the runner does for each leg it tries
+            skips.append(await asyncio.wait_for(
+                leg_probe.before_launch(runner, leg, 'implement', False, budget),
+                base_fresh.ADMISSION_TIMEOUT))
+        return skips, time.monotonic() - started
+
+    skips, elapsed = asyncio.run(run())
+    assert skips == ['down: timeout', 'down: timeout', 'probe_budget_exhausted']
+    assert elapsed < base_fresh.ADMISSION_TIMEOUT
+    assert runner.cancelled == ['hung0', 'hung1']  # hung harnesses are killed, not orphaned
+
+
+def test_a_spawn_joining_an_inflight_probe_is_bounded_and_charged(monkeypatch):
+    """The joining spawn waits at most its own remaining budget, and that wait is charged."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 0.9)  # 0.3 s per probe, 0.45 s in all
+
+    async def slow(runner, leg, **kwargs):
+        await asyncio.sleep(5)  # another spawn's probe, still running
+        return dict(ok=True, reason='', seconds=0)
+
+    monkeypatch.setattr(leg_probe, 'probe', slow)
+
+    async def run():
+        owner = asyncio.ensure_future(leg_probe.before_launch(None, _leg(), 'implement', False))
+        await asyncio.sleep(0.05)  # the owner's probe is in flight
+        budget, started, skips = leg_probe.ProbeBudget(), time.monotonic(), []
+        for _ in range(3):  # three legs joining the same in-flight probe
+            skips.append(await leg_probe.before_launch(None, _leg(), 'implement', False, budget))
+        waited = time.monotonic() - started
+        owner.cancel()
+        return skips, waited
+
+    skips, waited = asyncio.run(run())
+    assert skips == ['probe_budget_exhausted'] * 3
+    assert waited < 0.6  # 0.3 + 0.15 of budget, then nothing: not 3 x 0.3
+
+
+def test_the_spawn_that_starts_a_probe_is_bounded_too(monkeypatch):
+    """A probe stuck in setup or cleanup cannot hold its own spawn past the probe budget."""
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(base_fresh, 'ADMISSION_TIMEOUT', 0.9)  # 0.3 s per probe
+
+    async def stuck(runner, leg, **kwargs):
+        await asyncio.sleep(5)  # e.g. delayed log scanning before its own deadline starts
+        return dict(ok=True, reason='', seconds=0)
+
+    monkeypatch.setattr(leg_probe, 'probe', stuck)
+
+    async def run():
+        budget, started = leg_probe.ProbeBudget(), time.monotonic()
+        skip = await leg_probe.before_launch(None, _leg(), 'implement', False, budget)
+        return skip, time.monotonic() - started, budget.left
+
+    skip, waited, left = asyncio.run(run())
+    assert skip == 'probe_budget_exhausted'
+    assert waited < 0.5 and left < 0.45  # 0.3 s probe + a short grace, charged to the budget
+
+
+def test_probe_budget_is_net_of_the_admission_time_already_spent(monkeypatch):
+    from plangraph.spawner import base_fresh, leg_probe
+    monkeypatch.delenv('PLANGRAPH_LEG_PROBE_TIMEOUT_S', raising=False)
+    window = base_fresh.ADMISSION_TIMEOUT
+    assert leg_probe.ProbeBudget().left == window / 2
+    late = leg_probe.ProbeBudget(started=time.time() - (window - window / 6 - 10))  # 10 s left before the reserve
+    assert late.timeout() == pytest.approx(10, abs=0.5)
+    spent = leg_probe.ProbeBudget(started=time.time() - window)
+    assert spent.timeout() == 0
+
+
+def test_a_backward_wall_clock_step_does_not_restore_probe_budget(monkeypatch):
+    from plangraph.spawner import base_fresh, leg_probe
+    window = base_fresh.ADMISSION_TIMEOUT
+    token = base_fresh.ADMISSION_STARTED.set(time.monotonic() - (window - window / 6 - 10))
+    try:
+        # The wall clock jumped back an hour: only the monotonic admission clock is trusted.
+        monkeypatch.setattr(leg_probe.time, 'time', lambda: 1_000_000.0)
+        budget = leg_probe.ProbeBudget(started=1_000_000.0 + 3600)
+        assert budget.timeout() == pytest.approx(10, abs=0.5)
+    finally:
+        base_fresh.ADMISSION_STARTED.reset(token)
+

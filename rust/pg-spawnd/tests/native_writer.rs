@@ -189,6 +189,10 @@ if 'resume' in sys.argv:
     # Fix turns only follow a driver-run review that requested changes.
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
     assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
+    # The fix turn commits its fix: a turn that leaves HEAD unchanged is resumed on its items.
+    with open('fix.txt', 'a') as fix: fix.write('fixed after review\n')
+    subprocess.run(['git','add','fix.txt'], check=True)
+    subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fix'], check=True, stdout=subprocess.DEVNULL)
 else:
     import os
     pathlib.Path('writer-path').write_text(os.environ['PATH'])

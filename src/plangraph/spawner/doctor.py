@@ -146,6 +146,33 @@ async def harness(name):
         await child.wait()
 
 
+def claude_shell(environ=None, settings_path=None, platform=None):
+    """Whether Claude sessions on this host run their Bash tool with bash semantics.
+
+    zsh breaks agent commands (unquoted $var is not word-split, an unmatched glob aborts the
+    command, `=word` expands). The override is CLAUDE_CODE_SHELL, from the environment or the
+    env block of the Claude settings file; without it sessions use the login shell.
+    """
+    environ = os.environ if environ is None else environ
+    if (platform or sys.platform) == 'win32':
+        return 'skip', 'shell override applies to POSIX hosts'
+    value = environ.get('CLAUDE_CODE_SHELL')
+    if not value:
+        path = settings_path or Path(environ.get('CLAUDE_CONFIG_DIR')
+                                     or Path.home() / '.claude') / 'settings.json'
+        try:
+            env_block = json.loads(Path(path).read_text()).get('env', {})
+            value = env_block.get('CLAUDE_CODE_SHELL') if isinstance(env_block, dict) else None
+        except (OSError, ValueError, AttributeError):
+            value = None
+    shell = value or environ.get('SHELL') or ''
+    if Path(shell).name == 'bash':
+        return 'pass', 'sessions run ' + shell
+    return 'fail', ('sessions run ' + (shell or 'the login shell') +
+                    ' (zsh word-splitting, nomatch and = expansion break agent commands);'
+                    ' set CLAUDE_CODE_SHELL=/bin/bash in the Claude settings env block')
+
+
 def host_path(checks):
     from plangraph.fleet_sync.genconfig import config_dir
     try:
@@ -245,6 +272,7 @@ async def _diagnose(probe, checks):
         await check('mcp_' + component, lambda: mcp('plangraph.' + component + '.mcp'))
     await check('keeper_whoami', whoami)
     await check('completion_delivery', completion)
+    await check('claude_shell', claude_shell)
     for name in HARNESSES:
         await check('harness_' + name, lambda: harness(name))
     if not any(shutil.which(name) for name in HARNESSES):
