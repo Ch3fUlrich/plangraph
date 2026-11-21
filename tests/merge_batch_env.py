@@ -90,6 +90,26 @@ class Env:
         self.git("push", "-q", "origin", "main")
         self.save()
 
+    def attach_seat(self, batch, rec):
+        config = self.home / ".config" / "plangraph" / "keeper.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        mirror = self.tmp / "mirror"
+        config.write_text(json.dumps({"spawner_records_dir": str(mirror)}))
+        config.chmod(0o600)
+        for index, key in enumerate(rec["items"]):
+            run_id = f"run-part-{rec['pr']}-{index}"
+            path = mirror / "fixture" / run_id / "record.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({
+                "run_id": run_id, "host": "fixture", "item_key": key,
+                "role": "review", "status": "completed", "exit_code": 0,
+                "served_model": "gemini-test", "finish_reason": "stop", "attempts": [{}],
+                "head_sha": rec["head"], "completion": {"head_sha": rec["head"]},
+                "stdout_tail": "TEST_GAMING: no\nVERDICT: PASS\n",
+            }))
+            result = self.run("review", "--name", batch, "--pr", str(rec["pr"]), "--run-id", run_id)
+            assert result.returncode == 0, result.stderr
+
     @contextmanager
     def hook_readiness(self, monkeypatch):
         """Start the push deadline only after both fake hook workers report ready."""
@@ -250,9 +270,11 @@ def pushed(env, name="l1", prs=(1, 2, 3), checks="pass"):
     """A pushed batch of PRs 1..3 whose batch PR is #100 with green checks and a passing approval."""
     env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
     env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
-    env.branch_pr(3, {"c.txt": "c\n"})
+    env.branch_pr(3, {"c.txt": "c\n"}, item="ITEM-C")
     assert env.run("build", "--name", name, "--prs", ",".join(map(str, prs))).returncode == 0
     assert env.run("push", "--name", name).stdout == "100\n"
+    for rec in json.loads(env.state_file(name).read_text())["merged"]:
+        env.attach_seat(name, rec)
     env.load()  # the stub created PR 100
     env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": checks}]
     env.save()

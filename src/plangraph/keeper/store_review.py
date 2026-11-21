@@ -296,19 +296,22 @@ class ReviewMixin:
                 "family": auth.norm_family(principal.family),
                 "ok": True, "epoch": item["epoch"], "round": item["round"]}
 
-    def _pass(self, principal, key, reason, item, now, reviews_passed):
+    def _pass(self, principal, key, reason, item, now, reviews_passed, release=False):
         """Write ``done`` (and lock it) plus ``review_passed``, under the lock.
 
         Reached from either tier: one standard verdict, or one waived/two high
         verdicts.  The UPDATE is guarded on ``in_review`` and the epoch, so a
         peer verdict that slipped in between the pre-read and here loses.
+        ``release`` ends the claim with the item (the automatic merge close).
         """
         cursor = self.conn.execute(
             "UPDATE items SET state='done', reviewer=?, updated_at=?"
-            " WHERE key=? AND state='in_review' AND epoch=?",
+            + (", claimed_by=NULL, delegate=NULL, lease_until=NULL" if release else "")
+            + " WHERE key=? AND state='in_review' AND epoch=?",
             (principal.name, self._iso(now), key, item["epoch"]))
         self._race_guard(cursor, key, "in_review", item["epoch"])
-        self._append(principal, key, "review_passed", {"reason": reason}, now)
+        self._append(principal, key, "review_passed",
+                     {"reason": reason, **({"released": True} if release else {})}, now)
         return {"key": key, "state": "done", "reviews_passed": reviews_passed}
 
     def _verdict_changes(self, principal, key, reason, item, now):

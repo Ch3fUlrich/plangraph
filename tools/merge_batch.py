@@ -21,7 +21,7 @@
             worktree and before each merge, so a merge that was made is recorded, not lost.
   push      push batch/NAME, open the batch PR (table of PRs, Plan-Item values, skipped PRs,
             resolution commits), print its number. Run again after a fix to update it.
-  review    record a part review ending in HEAD: <full part sha> and VERDICT: ACCEPT.
+  review    record a keeper-bound review by run id, or a supplementary review file.
   go-req    print the batch GO request from saved reviews, CI and PLAN evidence.
   land      merge the batch PR only if its head is the pushed head, every required check is
             green and --approval ends in `HEAD: <sha>` (the batch head in full, all 40 hex
@@ -42,6 +42,9 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import merge_batch_build as build
 import merge_batch_land as land
@@ -125,7 +128,9 @@ def parser():
     cmd = add("review", land.cmd_review, "record a review on a part's full head")
     cmd.add_argument("--name", required=True)
     cmd.add_argument("--pr", required=True, type=positive)
-    cmd.add_argument("--file", required=True)
+    evidence = cmd.add_mutually_exclusive_group(required=True)
+    evidence.add_argument("--run-id", help="keeper-bound spawner review run")
+    evidence.add_argument("--file", help="supplementary review file")
     add("go-req", land.cmd_go_req, "print the batch GO request").add_argument("--name", required=True)
     cmd = add("land", land.cmd_land, "merge the batch PR and report the included PRs")
     cmd.add_argument("--name", required=True)

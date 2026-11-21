@@ -8,11 +8,18 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import time
 
+from . import context_sources
 from .errors import Refused
+from .evidence_git import plan_items
+from .evidence_runs import RunRecordAdapter
+from .evidence_types import valid_commit_ref
 
 __all__ = ["RunsMixin", "normalise_run"]
 
+_REVIEW_RUN = re.compile(r"Review-Run:[ \t]+(\S+)[ \t]+(run-\S+)[ \t]+([0-9a-f]{40})[ \t]*")
+_WARM_S = 60  # how long a warm scan may be read under the request lock
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
 _VERDICTS = ("pass", "fail", "invalid", None)
@@ -122,6 +129,83 @@ class RunsMixin:
         decisions = self._ctx(item, now).decisions
         snapshot = getattr(decisions, "snapshot", None)
         return snapshot() if callable(snapshot) else contextlib.nullcontext()
+
+    def _merged_cited_parts(self, item, heads):
+        """``{merged head: {part head: [run ids]}}`` a landed batch cites for the item.
+
+        The merge commit that landed a head lists ``Review-Run: <key> <run-id> <part head>``
+        per keeper-bound part review. A part head counts when it is reachable from that
+        merge's second parent, outside its first-parent history, and a commit of its own range
+        carries the item's parsed ``Plan-Item`` trailer; the record itself is still verified
+        by the witness adapter, so a citation only points at it.
+        """
+        git, project = self._adapter("git"), self._merge_project(item)
+        repo, ref, key = git.repo_path(project), git.repo_ref(project), item["key"]
+        names = {key, key.split(":", 1)[-1]}
+        valid_run = RunRecordAdapter(None).valid_run_id
+        cited = {}
+        for head in heads:
+            merge = git.merge_commit_of(repo, head, ref)
+            if not merge or not valid_commit_ref(merge[0]):
+                continue
+            body = git._run(repo, ["show", "-s", "--format=%B", "--end-of-options", merge[0]]).stdout
+            for line in body.splitlines():
+                found = _REVIEW_RUN.fullmatch(line)
+                if not found or found[1] != key or not valid_run(found[2]):
+                    continue
+                part = found[3]
+                inside = git._run(repo, ["merge-base", "--is-ancestor", "--end-of-options", part, f"{merge[0]}^2"])
+                listed = git._run(repo, ["log", "--format=%B%x1d", "--end-of-options", part, f"^{merge[0]}^1"])
+                if inside.returncode != 0 or listed.returncode != 0:
+                    continue
+                values = {v for record in listed.stdout.split("\x1d") for v in plan_items(record)}
+                if names & values:
+                    cited.setdefault(head, {}).setdefault(part, []).append(found[2])
+            if head in cited and not self._parts_cover_merge((git, repo), merge[0], names, list(cited[head])):
+                del cited[head]  # the batch brought more of the item than the cited parts: the head needs its own seat
+        return cited
+
+    @staticmethod
+    def _parts_cover_merge(git_repo_args, merge, names, parts):
+        """True when every commit (nested merges too) the merge introduced for the item lies at or under a cited part head."""
+        git, repo = git_repo_args
+        listed = git._run(repo, ["log", "--format=%H%x1f%B%x1d", "--end-of-options",
+                                 f"{merge}^2", f"^{merge}^1"])
+        if listed.returncode != 0:
+            return False
+        for record in listed.stdout.split("\x1d"):
+            sha, _, body = record.strip("\n").partition("\x1f")
+            if sha and names & set(plan_items(body)) and not any(
+                    git._run(repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, part]).returncode == 0
+                    for part in parts):
+                return False
+        return True
+
+    def merge_candidates(self):
+        """``(key, project)`` of every item the automatic close may take: the input of :meth:`warm_merge_scan`."""
+        return [(item["key"], item["project"]) for item in self._all_items()
+                if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+
+    def warm_merge_scan(self, candidates=()):
+        """Fetch, index and look up the hosted lanes of the scanned repositories; the API calls it outside its lock.
+
+        The run that follows reads the warm answers (see :meth:`_warm`) instead of asking git or the
+        forge under the lock.
+        """
+        git = self._adapter("git")
+        scan = getattr(git, "scan_projects", None)
+        self.__dict__["_warmed"], self.__dict__["_lanes"] = {}, {}   # a failed refresh must not keep an old snapshot
+        for project in list(scan()) if callable(scan) else []:
+            if self._refresh_merged_default_ref(git, project):
+                index = context_sources.work_index(git, project, fresh=True)
+                if index is not None and not index.get("origin_stale"):
+                    for key, item_project in candidates:
+                        if context_sources.indexed_work(index, key)["commits"]:
+                            context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
+                    self.__dict__["_warmed"][project] = time.monotonic()
+
+    def _warm(self, project):
+        return time.monotonic() - self.__dict__.get("_warmed", {}).get(project, -1e9) < _WARM_S
 
     def _merged_open_prs(self, item, decision_id, head, now):
         try:
@@ -246,7 +330,8 @@ class RunsMixin:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
             git, project, item["key"], fetch=False, limit=None)
-        proofs = {}
+        named = self._named_merge_proof(item)
+        proofs = ({named["head"]: named} if named and named["pr"] else {})
         for commit in commits or ():
             merge = commit.get("merge") or {}
             if type(merge.get("pr")) is not int or merge["pr"] <= 0:

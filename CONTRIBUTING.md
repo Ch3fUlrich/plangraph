@@ -24,6 +24,7 @@ Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each a
 affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s), scaled up to 2 seconds per selected test path and capped at 1200 seconds for a large selection; it runs with pytest-xdist workers sized from the host (half the cores, at most one per 2 GiB of available memory, cores only when memory cannot be read, 2 to 16; `PREFLIGHT_TEST_WORKERS` overrides); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 
 With sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned before a private target is created. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). See docs/TESTING.md.
+`tools/merge_batch.py land` merges the batch PR with one `Plan-Item` trailer per item of every included part and for the batch `--plan` key, plus one `Review-Run: KEY RUN_ID PART_HEAD` line per recorded part review, in the merge commit body, and runs `plangraph merge-close` once after the batch landed, so the keeper closes the items its merge names; the job's report goes to stderr and a failure or a missing binary never fails the land.
 `tools/merge_batch.py push` also waits without an overall deadline and forwards
 git and hook output to stderr while the hook enforces its per-step bounds.
 The shared subprocess runner kills the process group on a caller-supplied
@@ -68,11 +69,12 @@ batch helper reports a label as added only when the returned label list contains
 its name; missing labels or malformed responses leave `labeled` false and warn.
 
 `tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
-batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions
-also appear as deviations). Record every included part with `review --name NAME
---pr N --file PATH`: evidence must end in `HEAD: <full part sha>` then
-`VERDICT: ACCEPT` (or `REQUEST_CHANGES` / `REJECT`, which replace an earlier
-ACCEPT and block the request). `push --name NAME --ci-run ID` records the full batch CI run's
+batch PLAN key. `--deviations TEXT` records nonconformance, including forced
+build exceptions. Record a keeper-bound spawner review for each included
+Plan-Item with `review --name NAME --pr N --run-id RUN_ID`. Both `go-req` and
+`land` recheck the recorded item key, head, and verdict. Use `--file PATH` to
+record a supplementary review with a full `HEAD` and final `VERDICT`.
+`push --name NAME --ci-run ID` records the full batch CI run's
 head, status and conclusion; repeat push after CI completes. A push without an ID
 refreshes an existing run only on the same head; a new head clears it.
 `go-req --name NAME` prints one batch GO-REQ with PR, full head, diff stat, part

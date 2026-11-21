@@ -362,6 +362,7 @@ def cmd_land(args):
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
     check_approval(args.approval, st["head"])
+    require_part_seats(st)
     fields = "state,headRefOid,isDraft,mergeCommit,baseRefName"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
     if pr["headRefOid"] != st["head"]:
@@ -377,7 +378,8 @@ def cmd_land(args):
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
-        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"])
+        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
+           "--body", merge_trailers(st))
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
     for _ in range(10):  # the merge commit can lag the merge by a moment
@@ -411,7 +413,30 @@ def cmd_land(args):
         cleanup_landed(st, landed)
     except Exception as exc:  # Cleanup is strictly best effort after GitHub has landed.
         print(f"cleanup failed: {exc}", file=sys.stderr)
+    close_merged_items()
     return 0
+
+
+def merge_trailers(st):
+    """The body of the batch merge commit: one Plan-Item trailer per item of every included part and
+    the batch item, then one Review-Run line per keeper-bound part review (key, run id, part head)."""
+    keys = {key for rec in st["merged"] for key in part_items(st, rec)}
+    batch = st.get("plan")
+    if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
+        keys.add(batch)
+    runs = [f"Review-Run: {key} {run} {rec['head']}" for rec in st["merged"]
+            for key, run in sorted((rec.get("review_runs") or {}).items())]
+    return "\n".join([f"Plan-Item: {key}" for key in sorted(keys)] + runs)
+
+
+def close_merged_items():
+    """Run the keeper merge-close job once for the landed batch; its report goes to stderr, never fails the land."""
+    try:
+        proc = run(["plangraph", "merge-close"], ok=None, timeout=330)
+    except MergeBatchError as exc:
+        print(f"merge-close not run: {exc}", file=sys.stderr)
+        return
+    sys.stderr.write(proc.stdout + proc.stderr)
 
 
 def cleanup_landed(st, landed):
@@ -465,12 +490,80 @@ def cmd_status(args):
     return 0
 
 
+def part_items(st, rec):
+    wt, merge, head = st["worktree"], rec["merge"], rec["head"]
+    if git("rev-parse", f"{merge}^2", cwd=wt).stdout.strip() != head:
+        raise MergeBatchError(f"part #{rec['pr']} merge does not bind its head")
+    from plangraph.keeper.evidence_git import plan_items  # the keeper's reading of a commit's trailers
+
+    messages = git("log", "--format=%B%x1d", f"{merge}^1..{head}", cwd=wt).stdout.split("\x1d")
+    keys = {key for message in messages for key in plan_items(message)}
+    if not keys or any(not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", key) for key in keys):
+        raise MergeBatchError(f"part #{rec['pr']} needs a Plan-Item for its keeper-bound review")
+    return keys
+
+
+def part_seat(run_id, key, head):
+    from plangraph.keeper.config import ConfigError, load_config
+    from plangraph.keeper.evidence_runs import RunRecordAdapter
+    from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
+
+    if not isinstance(run_id, str) or not run_id.startswith("run-") or not RunRecordAdapter(None).valid_run_id(run_id):
+        raise MergeBatchError("a keeper-bound review requires a spawner run id")
+    config_dir = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph"
+    try:
+        config = load_config(config_dir / "keeper.json")
+        adapter = SpawnerRecordAdapter(config.spawner_records_dir)
+        seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
+                                     allow_cli_reported=True, require_diff_head=True,
+                                     require_explicit_accept=True)
+        if len(seats) != 1 or seats[0]["verdict"] != "pass":
+            raise ValueError(f"{run_id}: expected one passing review seat")
+    except (ConfigError, OSError, ValueError) as exc:
+        raise MergeBatchError(f"keeper-bound review for {key}: {exc}") from None
+
+
+def require_part_seats(st):
+    if not st["merged"]:
+        raise MergeBatchError("batch has no included parts")
+    seats = {}
+    for rec in st["merged"]:
+        if git("merge-base", "--is-ancestor", rec["head"], st["head"],
+               cwd=st["worktree"], ok=(0, 1)).returncode:
+            raise MergeBatchError(f"part #{rec['pr']} is not in batch head")
+        keys = part_items(st, rec)
+        recorded = rec.get("review_runs") or {}
+        if not isinstance(recorded, dict) or set(recorded) != keys:
+            raise MergeBatchError(f"part #{rec['pr']} lacks a keeper-bound review on {rec['head']}")
+        for key in sorted(keys):
+            part_seat(recorded[key], key, rec["head"])
+        review = rec.get("review")
+        if review and (review.get("verdict") != "ACCEPT" or review.get("head") != rec["head"]
+                       or part_review(review.get("file", ""), rec["head"])["verdict"] != "ACCEPT"):
+            raise MergeBatchError(f"part #{rec['pr']} supplementary review does not accept its head")
+        seats[rec["pr"]] = [recorded[key] for key in sorted(keys)]
+    return seats
+
+
 def cmd_review(args):
     st = load_state(args.name)
     rec = next((r for r in st["merged"] if r["pr"] == args.pr), None)
     if rec is None:
         raise MergeBatchError(f"PR #{args.pr} is not an included part")
-    rec["review"] = part_review(args.file, rec["head"])
+    if args.file:
+        rec["review"] = part_review(args.file, rec["head"])
+    else:
+        reason = None
+        for key in sorted(part_items(st, rec)):
+            try:
+                part_seat(args.run_id, key, rec["head"])
+            except MergeBatchError as exc:
+                reason = exc
+                continue
+            rec.setdefault("review_runs", {})[key] = args.run_id
+            break
+        else:
+            raise reason
     save_state(st)
     return 0
 
@@ -489,17 +582,10 @@ def cmd_go_req(args):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", plan):
         raise MergeBatchError("build needs --plan <keeper key> for the batch PLAN block")
     parts = []
-    if not st["merged"]:
-        raise MergeBatchError("batch has no included parts")
+    seats = require_part_seats(st)
     for rec in st["merged"]:
-        review = rec.get("review") or {}
-        if review.get("verdict") != "ACCEPT" or review.get("head") != rec["head"]:
-            raise MergeBatchError(f"part #{rec['pr']} lacks ACCEPT on its own head {rec['head']}")
-        if part_review(review.get("file", ""), rec["head"])["verdict"] != "ACCEPT":
-            raise MergeBatchError(f"part #{rec['pr']} review file no longer says ACCEPT")
-        if git("merge-base", "--is-ancestor", rec["head"], head, cwd=wt, ok=(0, 1)).returncode:
-            raise MergeBatchError(f"part #{rec['pr']} is not in batch head")
-        parts.append(f"#{rec['pr']} sha={rec['head']} review={review['file']} verdict=ACCEPT")
+        runs = ",".join(seats[rec["pr"]])
+        parts.append(f"#{rec['pr']} sha={rec['head']} review={runs} verdict=ACCEPT")
     ci = st.get("ci") or {}
     if (ci.get("head") != head or not ci.get("id") or ci.get("state") != "completed" or
             ci.get("conclusion") != "success"):
