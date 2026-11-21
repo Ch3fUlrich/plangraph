@@ -68,9 +68,13 @@ define, each with every open finding verbatim; the PR is closed unmerged; one ro
 `REPLAN <item> <reason> | PR <pr> closed unmerged | slices <keys>` is sent. Each step is
 saved before the next and skipped when saved, so a retry never repeats a definition, a close
 or the report; the report is marked before the send and un-marked only when the send failed,
-so it is sent at most once. The engine takes its legs, PR, keeper and routing through the
-`Ports` trait; the command bindings for gh, keeper define and routing are still to be wired,
-and until they are the orchestrator runs the stop procedure from R-batch-04 by hand.
+so a crash between the mark and the delivery sends the line again, under one idempotency key
+(32 hex, stable per item and PR; `fleet-msg send --msg-id`) the receiver dedupes, and the job
+is `sent` only after the delivery was acknowledged. The engine takes its legs, PR, keeper and
+routing through the `Ports` trait; `round_replan_ports.rs` binds them to the spawner route,
+`gh pr view|close`, the keeper CLI (`show`, `define`) and the fleet bus client, and
+`pg-spawnd serve` runs a pass over the queued jobs every 30 s. The production planner adopts
+the deterministic grouping; the strongest planning leg is named in the job file.
 
 A spawner-owned `round_void: true` excludes failed rounds that never launched
 (no PID), or whose bounded Git fingerprint proves HEAD, tracked diff and

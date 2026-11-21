@@ -86,7 +86,7 @@ fn summarize(value: &Value, run: &str, item: &str, pr: &Value) -> Result<Value, 
         "narrow_fix_eligible":high == 0 && (1..=2).contains(&med) && clear,
         "verdict":value}))
 }
-fn read_json(path: &Path) -> Result<Value, ToolError> {
+pub(crate) fn read_json(path: &Path) -> Result<Value, ToolError> {
     let read = || -> std::io::Result<Value> {
         // Reuse the record reader's no-follow, regular-file checks, including FIFOs.
         let file = crate::records::open_record(path)?;

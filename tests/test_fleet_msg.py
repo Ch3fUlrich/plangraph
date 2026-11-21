@@ -334,6 +334,17 @@ def test_retry_with_same_msg_id_is_idempotent(bus):
     assert res2["seq"] == res1["seq"]
 
 
+def test_caller_msg_id_is_a_stable_idempotency_key(bus):
+    key = "ab" * 16
+    first = run_cli(bus, ["send", "--msg-id", key, "worker", "the same line"])
+    second = run_cli(bus, ["send", "--msg-id", key, "worker", "the same line"])
+    assert first.returncode == 0 and second.returncode == 0, second.stderr
+    rows = [r for r in bus.fetch_rows("router") if r["msg_id"] == key]
+    assert len(rows) == 1, "the receiver dropped the repeat of the key"
+    bad = run_cli(bus, ["send", "--msg-id", "NOT-HEX", "worker", "x"])
+    assert bad.returncode == 2 and "msg_id" in bad.stderr
+
+
 def test_replay_with_same_nonce_is_refused(bus):
     """G2-1: replaying an envelope with the same nonce is rejected by the real keeper."""
     client = build_client(bus.env())

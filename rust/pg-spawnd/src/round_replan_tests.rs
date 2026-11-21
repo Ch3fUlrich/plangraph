@@ -21,6 +21,8 @@ struct Fixture {
     calls: RefCell<Vec<String>>,
     fail_define_at: RefCell<Option<String>>,
     fail_send: RefCell<bool>,
+    keys: RefCell<Vec<String>>,
+    sent_keys: RefCell<Vec<String>>,
 }
 impl Fixture {
     fn count(&self, prefix: &str) -> usize {
@@ -83,17 +85,23 @@ impl Ports for Fixture {
         self.calls.borrow_mut().push(format!("close {pr}"));
         Ok(())
     }
-    fn send_routing(&self, line: &str) -> Result<(), ToolError> {
+    fn send_routing(&self, key: &str, line: &str) -> Result<(), ToolError> {
+        self.sent_keys.borrow_mut().push(key.to_string());
         if *self.fail_send.borrow() {
             return Err(parameter("routing_down: send refused"));
         }
+        // A receiver drops a repeat of a key it has already taken.
+        if self.keys.borrow().iter().any(|k| k == key) {
+            return Ok(());
+        }
+        self.keys.borrow_mut().push(key.to_string());
         self.calls.borrow_mut().push(format!("route {line}"));
         Ok(())
     }
 }
 
 /// A refusal of the real round admission after three rounds without a new best count.
-fn refused_run(state: &Path) -> Value {
+pub(crate) fn refused_run(state: &Path) -> Value {
     let args = history(state, &[5, 5, 5]);
     let error = match crate::round_progress::admit(state, &args) {
         Ok(_) => panic!("expected the round rule to refuse"),
@@ -299,8 +307,8 @@ fn a_plan_that_drops_a_file_is_refused_and_nothing_is_closed() {
         fn close_pr_unmerged(&self, p: &str) -> Result<(), ToolError> {
             self.0.close_pr_unmerged(p)
         }
-        fn send_routing(&self, l: &str) -> Result<(), ToolError> {
-            self.0.send_routing(l)
+        fn send_routing(&self, k: &str, l: &str) -> Result<(), ToolError> {
+            self.0.send_routing(k, l)
         }
     }
     let dir = tempfile::tempdir().unwrap();
@@ -310,4 +318,57 @@ fn a_plan_that_drops_a_file_is_refused_and_nothing_is_closed() {
         .1
         .contains("replan_plan_invalid"));
     assert!(ports.0.calls.borrow().is_empty());
+}
+
+fn job_file(state: &Path) -> PathBuf {
+    std::fs::read_dir(job_dir(state))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|x| x == "json"))
+        .unwrap()
+}
+
+#[test]
+fn a_crash_after_the_send_mark_retries_the_delivery_and_reports_done_only_after_it() {
+    let dir = tempfile::tempdir().unwrap();
+    refused_run(dir.path());
+    let ports = Fixture::default();
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    // The process died after the receiver took the line but before `sent` was saved.
+    let path = job_file(dir.path());
+    let mut job = load(&path).ok().unwrap();
+    job["report"] = json!("sending");
+    save(&path, &job).ok().unwrap();
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    let keys = ports.sent_keys.borrow();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], keys[1], "a retry carries the same idempotency key");
+    assert_eq!(keys[0].len(), 32);
+    assert!(keys[0]
+        .bytes()
+        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+    assert_eq!(ports.count("route"), 1, "the receiver dropped the repeat");
+    assert_eq!(ports.count("close"), 1);
+    assert_eq!(load(&path).ok().unwrap()["report"], "sent");
+}
+
+#[test]
+fn a_crash_between_the_send_mark_and_the_delivery_still_sends_the_line() {
+    let dir = tempfile::tempdir().unwrap();
+    refused_run(dir.path());
+    let ports = Fixture::default();
+    *ports.fail_send.borrow_mut() = true;
+    assert!(run_pending(dir.path(), &ports)[0]
+        .1
+        .contains("routing_down"));
+    // The job stays in `sending`: a failed or interrupted delivery is never reported done.
+    assert_eq!(
+        load(&job_file(dir.path())).ok().unwrap()["report"],
+        "sending"
+    );
+    *ports.fail_send.borrow_mut() = false;
+    assert_eq!(run_pending(dir.path(), &ports)[0].1, "done");
+    assert_eq!(ports.count("route"), 1);
+    assert_eq!(load(&job_file(dir.path())).ok().unwrap()["report"], "sent");
 }

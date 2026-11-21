@@ -46,10 +46,8 @@ mod review_retry;
 mod review_split;
 mod role_header;
 mod round_progress;
-// The engine is complete and tested; the spawner's command ports (gh, keeper define, routing) are
-// bound to `Ports` outside this module, so the runner is not called from `main` yet.
-#[cfg_attr(not(test), allow(dead_code))]
 mod round_replan;
+mod round_replan_ports;
 mod runs;
 mod serve;
 mod serve_options;

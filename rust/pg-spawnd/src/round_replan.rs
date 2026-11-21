@@ -5,8 +5,9 @@
 //! strongest planning leg of the route groups the PR's changed files, `SLICE_TARGET_LINES`
 //! changed lines per slice, `Cargo.lock` and generated files excluded, every open finding
 //! verbatim on every slice), define the slice items, close the PR unmerged, send one routing
-//! line. Every step is saved before the next one starts and skipped when saved, so a replayed
-//! trigger or a retry after a crash never repeats a close, a definition or the report.
+//! line (under a key that stays the same on every retry). Every step is saved before the next
+//! one starts and skipped when saved, so a replayed trigger or a retry after a crash never
+//! repeats a close or a definition, and the report is retried until its delivery is acknowledged.
 use crate::{errors::ToolError, placement::parameter};
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 #[path = "round_replan_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 /// Rule 3.35: the target size of one slice in changed lines; a target, not a gate.
 pub(crate) const SLICE_TARGET_LINES: u64 = 1500;
@@ -38,7 +39,9 @@ pub(crate) struct FileChange {
     pub lines: u64,
 }
 
-/// What the planning leg is given.
+/// What the planning leg is given. The production planner adopts `proposal`; a leg-backed one
+/// reads the rest.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct PlanInput<'a> {
     pub item: &'a str,
     pub item_text: &'a str,
@@ -69,7 +72,9 @@ pub(crate) trait Ports {
     fn plan(&self, leg: &Leg, input: &PlanInput) -> Result<Vec<Vec<String>>, ToolError>;
     fn define_slice(&self, slice: &Slice) -> Result<(), ToolError>;
     fn close_pr_unmerged(&self, pr: &str) -> Result<(), ToolError>;
-    fn send_routing(&self, line: &str) -> Result<(), ToolError>;
+    /// Deliver `line`; `key` is the same on every retry of this job's report, so a receiver can
+    /// drop a repeat. Return Ok only after the receiver or its durable spool took the line.
+    fn send_routing(&self, key: &str, line: &str) -> Result<(), ToolError>;
 }
 
 /// The strongest available planning leg; the name decides a tie so the choice is stable.
@@ -207,6 +212,17 @@ fn plan_step(job: &mut Value, ports: &dyn Ports) -> Result<(), ToolError> {
     Ok(())
 }
 
+/// The idempotency key of the job's routing line: 32 lowercase hex characters, stable per item
+/// and PR, so every retry of the same report carries the same key.
+fn report_key(job: &Value) -> String {
+    let id = Sha256::digest(format!(
+        "replan-report\n{}\n{}",
+        job["item"].as_str().unwrap_or(""),
+        job["pr"].as_str().unwrap_or("")
+    ));
+    format!("{id:x}")[..32].to_string()
+}
+
 fn slice_of(value: &Value) -> Slice {
     let strings = |v: &Value| {
         v.as_array()
@@ -258,14 +274,16 @@ fn drive(path: &Path, job: &mut Value, ports: &dyn Ports) -> Result<(), ToolErro
             job["pr"].as_str().unwrap_or(""),
             keys.join(" ")
         );
-        // At most once: the mark is saved before the send and reset only when the send failed.
+        // Saved before the send and kept when the process dies in between: the next run sends
+        // the same line under the same key and the receiver drops the repeat.
+        job["report_line"] = json!(line);
         job["report"] = json!("sending");
         save(path, job)?;
-        if let Err(error) = ports.send_routing(&line) {
-            job["report"] = json!("pending");
-            save(path, job)?;
-            return Err(error);
-        }
+    }
+    if job["report"] == "sending" {
+        let line = job["report_line"].as_str().unwrap_or("").to_string();
+        ports.send_routing(&report_key(job), &line)?;
+        // `sent` only after the delivery was acknowledged.
         job["report"] = json!("sent");
         save(path, job)?;
     }
@@ -284,7 +302,7 @@ fn run_job(path: &Path, ports: &dyn Ports) -> String {
         Ok(job) => job,
         Err(e) => return message(e),
     };
-    if job["report"] == "sent" || job["report"] == "sending" {
+    if job["report"] == "sent" {
         return "done".into();
     }
     let outcome = drive(path, &mut job, ports);
