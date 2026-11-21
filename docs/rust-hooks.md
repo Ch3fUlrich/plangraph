@@ -127,3 +127,7 @@ temporary worktree. Cleanup runs after successful checks and failures. The
 pushing checkout's Python interpreter remains available to launch preflight.
 Rust regressions in `pg-hook`'s `pushed_tree` integration target exercise these
 paths by feeding the real hook Git's ref records from isolated repositories.
+
+The `guard-hook` binary wraps effective Claude Code PreToolUse guards with
+a deadline and one incident record per outage. Build and wire it after a
+scoped deployment GO. [Fail-closed registration](guard-hooks.md)

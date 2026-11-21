@@ -584,8 +584,8 @@ not a five-minute completion or delivery SLA; see the operations guide for detai
 Cross-host ps: see [site configuration and transport](spawner-ps.md); [host readiness](placement-rules.md#host-readiness-consumer-contract) requires a matching ps entry and string source paths. Its ps `target` and overflow `ssh` must be the same string, even for aliases of one machine; mismatch lines name both values. A malformed run inventory reports `runs: invalid_response` and leaves the live-run count unknown. Ordinary malformed host/probe and state-write errors emit per-host failure lines rather than aborting the fan-out; resource exhaustion (`MemoryError`, `RecursionError`) and process-control exceptions propagate instead.
 # Remote ps protocol
 
-The SSH ps endpoint serializes only running and queued records. Terminal history
-does not consume the 1 MiB transport budget.
+The SSH ps endpoint serializes running and queued records within its 1 MiB transport budget.
+For durable transitions including terminal results, use `plangraph-spawn runs --changed-since CURSOR_JSON` with a separate cursor per host.
 Malformed terminal fields do not hide live runs; malformed live or oversized replies name the queried host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits

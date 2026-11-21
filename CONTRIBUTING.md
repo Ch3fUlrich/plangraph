@@ -665,3 +665,6 @@ config keys they name, never from absolute paths.
 `tools/apply_batch.py` also accepts a role-l1 token that holds a router-written apply grant
 (`pg grant-apply NAME PROJECT`); the keeper refuses any key outside the granted projects and posts
 one `granted_apply` report line per applied batch to `routing`.
+
+The Bash and context guards have a fail-closed fleet registration and an
+isolated missing-file, crash, and timeout fixture. [Guard hooks](docs/guard-hooks.md)
