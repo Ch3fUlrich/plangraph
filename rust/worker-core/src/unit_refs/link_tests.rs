@@ -257,3 +257,52 @@ fn an_intermediate_link_to_a_missing_directory_keeps_its_existing_prefix_and_suf
         "{refs:?}"
     );
 }
+
+#[test]
+fn a_dangling_link_met_while_resolving_does_not_discard_the_worktree_that_holds_it() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let live = tmp.path().join("trees/app-worktrees/live");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&live).unwrap();
+    fs::create_dir_all(tmp.path().join("links")).unwrap();
+    // example.service -> links/alias/redirect/unit.service; alias -> live; live/redirect -> missing.
+    symlink(&live, tmp.path().join("links/alias")).unwrap();
+    symlink(tmp.path().join("outside/missing"), live.join("redirect")).unwrap();
+    symlink(
+        tmp.path().join("links/alias/redirect/unit.service"),
+        dir.join("example.service"),
+    )
+    .unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    let canonical = live.canonicalize().unwrap();
+    assert!(
+        unit_names(&refs, &live, &canonical).contains(&"example.service".to_string()),
+        "{refs:?}"
+    );
+}
+
+#[test]
+fn a_resolved_link_is_exact_only_if_the_written_and_the_resolved_path_are_whole_words() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let gone = tmp.path().join("trees/app-worktrees/gone");
+    fs::create_dir_all(&dir).unwrap();
+    // `spaced alias` is a dangling link; written with whitespace, resolved without.
+    symlink(&gone, dir.join("spaced alias")).unwrap();
+    symlink("spaced alias/unit.service", dir.join("x.service")).unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    let named = gone.join("unit.service");
+    assert!(refs.iter().any(|r| r.path == named), "{refs:?}");
+    assert!(
+        !refs
+            .iter()
+            .any(|r| r.unit == "x.service" && r.exact && r.path == named),
+        "{refs:?}"
+    );
+    assert!(missing_worktree_refs(&refs)
+        .iter()
+        .all(|r| r.unit != "x.service"));
+}

@@ -80,10 +80,14 @@ fn collect(
                 // target's parent); the final name stays as named. Where a directory is missing
                 // the rest is read lexically.
                 let lexical_path = lexical(&joined);
-                let named = resolve_directories(&joined);
-                let exact = words::is_whole_word_path(&named.to_string_lossy());
+                let (named, visited) = resolve_directories(&joined);
+                // Exact only if the target as written and as resolved are both whole words: a
+                // resolution through whitespace or a dangling alias is not a word we can report.
+                let exact = words::is_whole_word_path(&joined.to_string_lossy())
+                    && words::is_whole_word_path(&named.to_string_lossy());
                 // Guesses that protect too: the lexical reading, and where a final link leads.
                 let mut guesses = vec![lexical_path];
+                guesses.extend(visited);
                 guesses.extend(named.canonicalize().ok());
                 for guess in guesses.into_iter().filter(|g| *g != named) {
                     refs.insert(UnitRef {
@@ -136,7 +140,7 @@ fn collect(
 /// followed through `read_link` (so one that points at a missing directory still leads to its
 /// existing prefix and keeps the missing suffix), `..` is the parent of what has been resolved,
 /// and the last component stays as named.
-fn resolve_directories(path: &Path) -> PathBuf {
+fn resolve_directories(path: &Path) -> (PathBuf, Vec<PathBuf>) {
     use std::{collections::VecDeque, ffi::OsString, path::Component};
     enum Part {
         Root,
@@ -153,6 +157,9 @@ fn resolve_directories(path: &Path) -> PathBuf {
     }
     let mut pending: VecDeque<Part> = parts(path).collect();
     let (mut out, mut follows) = (PathBuf::new(), 0);
+    // Every place resolution passed through (each link met, each prefix reached): all of them
+    // protect, so a link that leads away cannot hide the worktree that held it.
+    let mut visited = Vec::new();
     while let Some(part) = pending.pop_front() {
         match part {
             Part::Root => out = PathBuf::from("/"),
@@ -172,6 +179,7 @@ fn resolve_directories(path: &Path) -> PathBuf {
                 match link {
                     Some(target) => {
                         follows += 1;
+                        visited.push(candidate.clone());
                         // The target replaces this component: absolute from the root, relative
                         // from the directory that held the link (`out`).
                         for part in parts(&target).collect::<Vec<_>>().into_iter().rev() {
@@ -180,10 +188,11 @@ fn resolve_directories(path: &Path) -> PathBuf {
                     }
                     None => out = candidate,
                 }
+                visited.push(out.clone());
             }
         }
     }
-    out
+    (out, visited)
 }
 
 /// `.` and `..` resolved without touching the file system (a dangling link has no canonical form).
