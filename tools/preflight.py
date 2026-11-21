@@ -246,6 +246,11 @@ def selected_count(partial):
         return "unknown"
 
 
+def lane_rust_commands(commands):
+    """The lane keeps only the seconds-fast Rust check: formatting. Clippy and cargo test run in CI."""
+    return [command for command in commands if command[:2] == ["cargo", "fmt"]]
+
+
 def with_no_fail_fast(command):
     """cargo test stops at the first failing binary unless told not to: every binary runs in one pass."""
     if command[:2] == ["cargo", "test"] and "--no-fail-fast" not in command:
@@ -539,6 +544,8 @@ def _main(argv, root, cleanup):
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--scrub-base", help="scrub range start when affected tests use a nearer base")
     parser.add_argument("--fast", action="store_true")
+    parser.add_argument("--lane", action="store_true",
+                        help="push-gate mode: seconds-fast checks (scrub, policy, skill lint, cargo fmt) and no test")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--keep-going", action="store_true", help="default behaviour")
     mode.add_argument("--fail-fast", action="store_true")
@@ -595,8 +602,9 @@ def _main(argv, root, cleanup):
                 ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),
                             python("ci_commit_gate.py", "check", "--base", args.base,
-                                   "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt"))]),
-                ("rust", None), ("tests", [] if args.fast else [tests])]
+                                   "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt")),
+                            *([python("skill-rules.py", "all")] if args.lane else [])]),
+                ("rust", None), ("tests", [] if args.fast or args.lane else [tests])]
     summary, exit_code, stopped, scrub_bad = [], 0, False, False
     for family, commands in families:
         start = time.monotonic()
@@ -607,6 +615,8 @@ def _main(argv, root, cleanup):
             try:
                 if commands is None:
                     commands = rust_commands(root, args.base, args.head, env)
+                    if args.lane:
+                        commands = lane_rust_commands(commands)
                 family_env = policy_env if family == "policy" else env
                 if family == 'rust':
                     rust_env = rust_target_env(env, cleanup)
