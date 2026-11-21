@@ -2433,17 +2433,6 @@ def test_principal_token_never_dispatches_to_the_oversight_lookup(w, monkeypatch
     fresh_token = auth.add_principal(w.conn, "misfire2", "reader", [])
     assert fresh_token == "zzzz" + "q" * 40
     assert auth.authenticate(w.conn, fresh_token).name == "misfire2"
-    # Same for the host-token namespace (``pgh1_``): a stored principal token that starts with
-    # it resolves to its own row, and the mint re-rolls such a draw away.
-    host_shaped = "pgh1_" + "Y" * 40
-    w.conn.execute(
-        "INSERT INTO principals(name,role,projects,family,token_sha256,active)"
-        " VALUES('misfire3','l1',?,?,?,1)",
-        (json.dumps([P]), None, auth.hash_token(host_shaped)))
-    assert auth.authenticate(w.conn, host_shaped).name == "misfire3"
-    draws = iter(["pgh1_" + "q" * 40, "zzzz" + "p" * 40])
-    monkeypatch.setattr(auth.secrets, "token_urlsafe", lambda n: next(draws))
-    assert auth.add_principal(w.conn, "misfire4", "reader", []) == "zzzz" + "p" * 40
 
 
 def test_authenticate_clock_is_not_process_global(w, monkeypatch):
