@@ -12,6 +12,23 @@ fn dump_at(seq: u64, day: u64) -> String {
     names::dump_name(seq, NOW + day * 86_400)
 }
 
+/// The name of a dump of `seq` taken at `NOW`, spelled out from fragments instead of
+/// the production formatter, so a formatter bug cannot cancel out in an assertion.
+fn literal_name(seq: u64) -> String {
+    [
+        "keeper-schema-seq",
+        &seq.to_string(),
+        "-",
+        &stamp_of_now(),
+        ".dump",
+    ]
+    .concat()
+}
+
+fn stamp_of_now() -> String {
+    ["2026", "11", "06", "T", "2120", "Z"].concat()
+}
+
 fn path_at(seq: u64, day: u64) -> PathBuf {
     Path::new("/x").join(dump_at(seq, day))
 }
@@ -130,9 +147,9 @@ fn a_dump_run_writes_a_0600_file_and_one_ledger_line() {
     // sha256 of "PGDMP-fake"
     let want = format!(
         "{} seq=19200 size=10 sha256={} verified=skipped file={}",
-        names::stamp(NOW),
+        stamp_of_now(),
         out.entry.sha256,
-        dump_at(19200, 0)
+        literal_name(19200)
     );
     assert_eq!(text.trim(), want);
     assert_eq!(out.entry.sha256.len(), 64);
@@ -360,12 +377,7 @@ fn a_dump_that_fails_its_restore_test_is_quarantined_and_prunes_nothing() {
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .collect();
     assert_eq!(all.iter().filter(|n| names::parse(n).is_some()).count(), 14);
-    assert_eq!(
-        all.iter()
-            .filter(|n| n.ends_with(names::UNVERIFIED))
-            .count(),
-        1
-    );
+    assert_eq!(all.iter().filter(|n| n.ends_with(".unverified")).count(), 1);
     let ledger = std::fs::read_to_string(dir.path().join(ledger::LEDGER_NAME)).unwrap();
     assert!(ledger.lines().last().unwrap().contains("verified=no"));
     assert_eq!(
@@ -380,7 +392,7 @@ fn a_dump_that_fails_its_restore_test_is_quarantined_and_prunes_nothing() {
 #[test]
 fn unverified_dumps_are_capped_and_never_counted_as_backups() {
     let all: Vec<String> = (1..=5u64)
-        .map(|d| format!("{}{}", dump_at(19200, d), names::UNVERIFIED))
+        .map(|d| format!("{}{}", dump_at(19200, d), ".unverified"))
         .collect();
     assert_eq!(retention::plan(&all, 14), all[..2].to_vec());
 }
@@ -428,7 +440,7 @@ fn a_failed_candidate_never_has_a_dump_name_and_an_existing_quarantine_is_not_ov
         .unwrap();
     let kept = dir
         .path()
-        .join(format!("{}{}", dump_at(19200, 0), names::UNVERIFIED));
+        .join(format!("{}{}", dump_at(19200, 0), ".unverified"));
     std::fs::write(&kept, "first").unwrap();
     let err = run_dump(&bad, dir.path(), "keeper", 14, NOW + 10, Some(&VERIFY))
         .err()
@@ -480,10 +492,7 @@ fn failed_restores_keep_only_three_quarantined_dumps_and_every_verified_one() {
         14
     );
     assert_eq!(
-        names
-            .iter()
-            .filter(|n| n.ends_with(names::UNVERIFIED))
-            .count(),
+        names.iter().filter(|n| n.ends_with(".unverified")).count(),
         3
     );
 }
