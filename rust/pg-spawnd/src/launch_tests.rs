@@ -292,6 +292,20 @@ fn an_unreadable_registered_head_refuses_instead_of_assuming_no_writer() {
 }
 
 #[test]
+fn a_non_ascii_registered_head_refuses_without_echoing_the_head() {
+    let (_dir, repos, mut request) = repo_with_writer_trailer(None);
+    let head = format!("{}é{}", "a".repeat(11), "a".repeat(27));
+    assert_eq!(head.len(), 40);
+    assert!(!head.is_char_boundary(12));
+    request["card"]["diff_ref"]["head_sha"] = json!(head);
+    assert!(matches!(
+        with_head_writers(&request, &repos),
+        Err(crate::errors::ToolError::Refused { kind: RefusalKind::Spawn, message, .. })
+            if message == "cannot read the Writer trailer of the registered head"
+    ));
+}
+
+#[test]
 fn unresolved_registered_refs_refuse_without_echoing_or_starting_the_adapter() {
     let (dir, spec) = fixture();
     let marker = dir.join("started");
@@ -299,11 +313,9 @@ fn unresolved_registered_refs_refuse_without_echoing_or_starting_the_adapter() {
         &dir,
         &format!("touch {}; printf '%s' '{}'", marker.display(), spec),
     );
-    // An unknown repository id, a malformed ref and a non-ASCII sha (a byte slice at 12 would panic).
     for diff_ref in [
         json!({"repo_id":"nowhere","base_sha":"a".repeat(40),"head_sha":"b".repeat(40)}),
         json!({"repo_id":"nowhere"}),
-        json!({"repo_id":"nowhere","base_sha":"a".repeat(40),"head_sha":"ééééééééééééééé"}),
     ] {
         let request =
             json!({"role":"review","writer_families":["openai"],"card":{"diff_ref":diff_ref}});
@@ -313,10 +325,7 @@ fn unresolved_registered_refs_refuse_without_echoing_or_starting_the_adapter() {
             .expect("refusal");
         match error {
             crate::errors::ToolError::Refused { message, .. } => {
-                assert!(
-                    !message.contains("ééé") && !message.contains(&"b".repeat(12)),
-                    "{message}"
-                );
+                assert!(!message.contains(&"b".repeat(12)), "{message}");
             }
             _ => panic!("expected a refusal"),
         }
