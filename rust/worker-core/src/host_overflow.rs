@@ -8,6 +8,7 @@ pub enum Launch {
     /// Only an explicit refusal guarantees that no writer was launched.
     Refused(String),
     Uncertain(String),
+    Waiting(String),
 }
 #[derive(Serialize)]
 pub struct Outcome {
@@ -45,6 +46,14 @@ pub fn spawn(
                 host: host.id.clone(),
                 reason,
             }),
+            Launch::Waiting(reason) => {
+                out.refusals.push(Refusal {
+                    host: host.id.clone(),
+                    reason,
+                });
+                out.queued = true;
+                return out;
+            }
             Launch::Uncertain(reason) => {
                 out.error = Some(format!("{}: {reason}", host.id));
                 return out;

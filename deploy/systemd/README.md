@@ -8,6 +8,8 @@ All units are user units (`systemctl --user`), not system units.
 | --- | --- | --- |
 | pg-snapshot-pull.service | reader-host local plan copy refresh every 5 min | reader host |
 | pg-snapshot-pull.timer | timer driving pg-snapshot-pull.service every 5 min | reader host |
+| pg-host-link.service + .timer | Tailscale link to the coordinator | worker host |
+| pg-host-ssh-link@.service + @.timer | SSH link and outage evidence for each configured worker | coordinator |
 | pg-ci-watch.service + .timer | Rust CI failure scan and keeper fix tasks every 5 min; see [CI watch](../../docs/ci-watch.md) | CI watcher host |
 | pg-merge-close.service + .timer | `plangraph merge-close`: close every open, claimed or in-review keeper item a merge into main names by `Plan-Item`, every 10 min (the land step calls it too); needs `PG_URL` and a `PG_TOKEN_FILE` of role `system`; `plangraph merge-close --count` prints the merged-but-not-done count; see [Keeper](../../docs/KEEPER.md) | keeper host |
 | plangraph-keeper.service | persistent keeper daemon | keeper host |
@@ -94,3 +96,37 @@ Notes:
 - Reads the same `projector.env` (`%h/.config/plangraph/projector.env`) as the reconcile service.
 - Does not replace the nightly reconcile timer.
 - Production placement stays with the release/deploy item.
+
+### Worker SSH link
+
+Install `pg-host-link` in `~/.local/bin`. Install both
+`pg-host-ssh-link@.service` and `pg-host-ssh-link@.timer` in
+`~/.config/systemd/user/`. Each instance reads
+`~/.config/plangraph/host-links/<worker-id>.env` with
+`PLANGRAPH_SPAWN_STATE`, `HOST_LINK_OBSERVER`, `HOST_LINK_SSH` (the exact SSH
+destination callers use), and `HOST_LINK_PEER` (the Tailscale hostname, DNS
+name, or address). Run `systemctl --user daemon-reload` and
+`systemctl --user enable --now pg-host-ssh-link@<worker-id>.timer`.
+Use `pg-host-link ssh-status STATE_ROOT DESTINATION` before an SSH step to
+report a confirmed outage. The local journal logs the evidence for host L1.
+The monitoring user needs read access to the `tailscaled.service` journal.
+
+On workers, install `pg-host-link.service` and `pg-host-link.timer` and set
+`PLANGRAPH_SPAWN_STATE`, `HOST_LINK_ID` and `HOST_LINK_PEER` (the coordinator
+peer) in `~/.config/plangraph/host-link.env`. Run
+`systemctl --user enable --now pg-host-link.timer` after daemon reload.
+
+The existing stall-watchdog timer delivers the outbox. In its
+`~/.config/plangraph/watchdog.env`, move the existing bridge argv to
+`PLANGRAPH_WATCHDOG_FALLBACK` and set `PLANGRAPH_WATCHDOG_DELIVERY` to the JSON
+argv for `plangraph host-link-deliver`, using the binary's absolute path.
+Set `PG_URL`, `PG_TOKEN_FILE` (a principal allowed to post keeper messages),
+and `PG_HOST_LINK_SENDER` (that principal's name). The keeper endpoint must be reachable independently of the link under
+test. Successful delivery uses the watchdog event ID as the keeper message ID.
+
+Read-only SSH waiters can use
+`pg-host-link ssh-wait STATE_ROOT DESTINATION -- COMMAND [ARG...]`. It retries
+SSH transport failures up to three checks and reports the confirmed outage
+time when the monitor has one. Use `ssh-status` to guard steps with side effects.
+`pg-package-host --state` uses the same state directory to queue launches when
+the selected SSH route has a confirmed outage.
