@@ -1,8 +1,10 @@
-"""Host readiness: python3 -m plangraph.spawner.doctor [--json] [--probe].
+"""Host readiness: python3 -m plangraph.spawner.doctor [--json] [--probe] [--memory-probe].
 
 Default checks never call a provider or deliver an event. --probe opts into
-the existing liveness probes (up to three routed legs per role). Any failed
-check makes the command exit 1; missing optional harnesses are skipped.
+the existing liveness probes (up to three routed legs per role).
+--memory-probe uses og-memory with OG_MEMORY_BASE_URL set to the plangraph
+graph route and OG_MEMORY_TOKEN_FILE set to a private token file.
+Any failed check makes the command exit 1; missing optional harnesses are skipped.
 """
 from __future__ import annotations
 
@@ -211,14 +213,14 @@ def host_path(checks):
     return None
 
 
-async def diagnose(probe=False):
+async def diagnose(probe=False, memory_probe=False):
     checks = []
     original = os.environ.get('PATH')
     path = host_path(checks)
     try:
         if path is not None:
             os.environ['PATH'] = path
-        return await _diagnose(probe, checks)
+        return await _diagnose(probe, checks, memory_probe)
     finally:
         if path is not None:
             if original is None:
@@ -227,7 +229,30 @@ async def diagnose(probe=False):
                 os.environ['PATH'] = original
 
 
-async def _diagnose(probe, checks):
+def _memory_access():
+    try:
+        result = subprocess.run(['og-memory', 'probe-access'], check=False,
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=2 * TIMEOUT + 2)
+    except FileNotFoundError:
+        return 'fail', 'og-memory unavailable'
+    except subprocess.TimeoutExpired:
+        return 'fail', 'og-memory probe timed out'
+    except OSError:
+        return 'fail', 'og-memory probe unavailable'
+    success = b'HealthOk AuthenticatedReadOk plangraph HTTP 0.13'
+    if result.returncode == 0 and result.stdout.strip() == success:
+        return 'pass', success.decode()
+    reason = result.stderr.strip()
+    if reason in {
+        b'HttpUnconfigured', b'HttpConfigurationUnavailable', b'HealthUnavailable',
+        b'HealthTimeout', b'WrongGraph', b'MissingHub', b'Unauthorized', b'Forbidden',
+        b'UnsupportedApi', b'ReadUnavailable', b'ReadTimeout',
+    }:
+        return 'fail', reason.decode()
+    return 'fail', 'unexpected og-memory probe response'
+
+
+async def _diagnose(probe, checks, memory_probe=False):
     from plangraph.planner.legs import HARNESSES
     from .service import SpawnService
     from .leg_probe import probe_many
@@ -273,6 +298,8 @@ async def _diagnose(probe, checks):
     await check('keeper_whoami', whoami)
     await check('completion_delivery', completion)
     await check('claude_shell', claude_shell)
+    if memory_probe:
+        await check('omnigraph_access', lambda: asyncio.to_thread(_memory_access))
     for name in HARNESSES:
         await check('harness_' + name, lambda: harness(name))
     if not any(shutil.which(name) for name in HARNESSES):
@@ -315,8 +342,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--probe', action='store_true')
+    parser.add_argument('--memory-probe', action='store_true',
+                        help='check Omnigraph health and the authenticated plangraph hub read')
     args = parser.parse_args(argv)
-    result = asyncio.run(diagnose(args.probe))
+    result = asyncio.run(diagnose(args.probe, args.memory_probe))
     if args.json:
         print(json.dumps(result))
     else:

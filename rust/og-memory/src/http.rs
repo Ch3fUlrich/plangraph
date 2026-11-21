@@ -21,6 +21,19 @@ pub struct Http {
     token: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum AccessError {
+    HealthUnavailable,
+    HealthTimeout,
+    WrongGraph,
+    MissingHub,
+    Unauthorized,
+    Forbidden,
+    UnsupportedApi,
+    ReadUnavailable,
+    ReadTimeout,
+}
+
 #[derive(Serialize)]
 pub struct Request<'a, P: Serialize> {
     pub query: &'a str,
@@ -75,6 +88,58 @@ impl Http {
         self.post("query", request, None)
     }
 
+    /// Check server liveness and prove an authenticated read of the plangraph hub.
+    pub fn probe_access(&self) -> Result<(), AccessError> {
+        let uri: ureq::http::Uri = self
+            .base
+            .parse()
+            .map_err(|_| AccessError::HealthUnavailable)?;
+        let health = format!(
+            "{}://{}/healthz",
+            uri.scheme_str().ok_or(AccessError::HealthUnavailable)?,
+            uri.authority().ok_or(AccessError::HealthUnavailable)?
+        );
+        match self.agent.get(health).call() {
+            Ok(response) if response.status() == 200 => {}
+            Err(ureq::Error::Timeout(_)) => return Err(AccessError::HealthTimeout),
+            _ => return Err(AccessError::HealthUnavailable),
+        }
+        if uri.path() != "/graphs/plangraph" {
+            return Err(AccessError::WrongGraph);
+        }
+
+        let request = Request {
+            query: "query plangraphHub($slug: String) { match { $p: Project { slug: $slug } } return { $p.slug } limit 2 }",
+            params: serde_json::json!({"slug": "plangraph"}),
+        };
+        let body = serde_json::to_vec(&request).map_err(|_| AccessError::ReadUnavailable)?;
+        let mut response = self
+            .send("query", &body, None)
+            .map_err(|error| match error {
+                ureq::Error::StatusCode(401) => AccessError::Unauthorized,
+                ureq::Error::StatusCode(403) => AccessError::Forbidden,
+                ureq::Error::StatusCode(400 | 404 | 405 | 406 | 415 | 426 | 501) => {
+                    AccessError::UnsupportedApi
+                }
+                ureq::Error::Timeout(_) => AccessError::ReadTimeout,
+                _ => AccessError::ReadUnavailable,
+            })?;
+        if !response.status().is_success() {
+            return Err(AccessError::ReadUnavailable);
+        }
+        let value = Self::response_json(&mut response).map_err(|error| match error {
+            ureq::Error::Timeout(_) => AccessError::ReadTimeout,
+            _ => AccessError::UnsupportedApi,
+        })?;
+        let (_, rows) = recall::rows(&value).map_err(|_| AccessError::UnsupportedApi)?;
+        if let [row] = rows {
+            if row["slug"] == "plangraph" {
+                return Ok(());
+            }
+        }
+        Err(AccessError::MissingHub)
+    }
+
     /// A lost or malformed write response is ambiguous, never a retry instruction.
     pub fn mutate<P: Serialize>(
         &self,
@@ -102,6 +167,22 @@ impl Http {
         };
         // Serialize before dispatch: serialization failure cannot have committed.
         let body = serde_json::to_vec(body).map_err(|_| Error::Outage)?;
+        let mut response = self.send(route, &body, expected).map_err(|e| match e {
+            ureq::Error::StatusCode(412) => Error::Conflict,
+            _ => failure(),
+        })?;
+        if !response.status().is_success() {
+            return Err(failure());
+        }
+        Self::response_json(&mut response).map_err(|_| failure())
+    }
+
+    fn send(
+        &self,
+        route: &str,
+        body: &[u8],
+        expected: Option<&str>,
+    ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
         let mut request = self
             .agent
             .post(format!("{}/{route}", self.base))
@@ -111,19 +192,17 @@ impl Http {
         if let Some(commit) = expected {
             request = request.header("Omnigraph-If-Graph-Commit", commit);
         }
-        let mut response = request.send(body.as_slice()).map_err(|e| match e {
-            ureq::Error::StatusCode(412) => Error::Conflict,
-            _ => failure(),
-        })?;
-        if !response.status().is_success() {
-            return Err(failure());
-        }
+        request.send(body)
+    }
+
+    fn response_json(
+        response: &mut ureq::http::Response<ureq::Body>,
+    ) -> Result<Value, ureq::Error> {
         response
             .body_mut()
             .with_config()
             .limit(1024 * 1024)
             .read_json()
-            .map_err(|_| failure())
     }
 }
 

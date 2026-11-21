@@ -21,6 +21,16 @@ fn main() {
         eprintln!("{reason}");
         std::process::exit(1);
     });
+    if args == ["probe-access"] {
+        match transport.probe_access() {
+            Ok(()) => println!("HealthOk AuthenticatedReadOk plangraph HTTP 0.13"),
+            Err(reason) => {
+                eprintln!("{reason:?}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     let mut m = Memory::new(transport);
     let c = og_memory::http::capabilities();
     if args == ["mcp"] {
