@@ -6,15 +6,17 @@ Run on Linux from the repository root:
 cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test fleet_launch_parity
 ```
 
-The ordinary Rust CI test step discovers this target. With a data checkout at
-`~/code/plangraph-data`, the target reads the annex revision by object ID
-(`2b5a8c90725e2fdf4d5d5671c3e4589f5e03a5bf`) and stages its launcher and policy
-in a temporary directory. The data worktree is read-only and can be on any revision.
-A checkout missing the pinned object is an error. Runners without the data checkout
-print a skip reason. To run against a replacement, set `PLANGRAPH_FLEET_LAUNCH` to
+The ordinary Rust CI test step discovers this target. The target finds the
+annex revision (`2b5a8c90725e2fdf4d5d5671c3e4589f5e03a5bf`) in a checkout
+under `~/code` and stages its launcher and policy in a temporary directory.
+The data worktree is read-only and can be on any revision. Runners without a
+checkout containing the pin print a skip reason. To run against a replacement,
+set `PLANGRAPH_FLEET_LAUNCH` to
 the executable path. It must accept the same CLI and state environment. The test for
 editing the Python launcher’s bundled admission policy runs only against the staged
-pin, where private test settings can be installed without changing the caller’s files.
+pin, where test settings can be installed inside the disposable directory.
+Destination replay uses the reference checkout’s directory name to match the
+Python sender’s installation layout.
 
 The harness isolates HOME, state, cwd, and PATH. Rust peers stand in for Claude, SSH,
 and Windows memory probes. A destination test delivers the captured envelope to a

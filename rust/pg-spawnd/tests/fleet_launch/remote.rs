@@ -1,4 +1,4 @@
-use super::sandbox::{Launcher, Sandbox, LOCAL, PROMPT, REMOTE, SID};
+use super::sandbox::{reference_checkout, Launcher, Sandbox, LOCAL, PROMPT, REMOTE, SID};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
@@ -187,7 +187,20 @@ fn check_destination(launcher: &Launcher) {
         .rsplit_once(' ')
         .unwrap()
         .1;
-    let target = s.path("target/code/plangraph-data/router/bin/fleet-launch");
+    let checkout = match launcher {
+        Launcher::Pinned(checkout) => checkout.clone(),
+        Launcher::Explicit(_) => match reference_checkout() {
+            Some(checkout) => checkout,
+            None => {
+                eprintln!("destination replay skipped: the pinned checkout supplies the remote installation directory");
+                return;
+            }
+        },
+    };
+    let target = s
+        .path("target/code")
+        .join(checkout.file_name().unwrap())
+        .join("router/bin/fleet-launch");
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     symlink(&s.launcher, target).unwrap();
 

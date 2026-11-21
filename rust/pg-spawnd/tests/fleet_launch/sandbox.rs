@@ -24,11 +24,7 @@ impl Launcher {
             assert!(path.is_file(), "PLANGRAPH_FLEET_LAUNCH must name a file");
             return Some(Self::Explicit(path));
         }
-        let checkout = PathBuf::from(env::var_os("HOME")?).join("code/plangraph-data");
-        checkout
-            .join("router/bin/fleet-launch")
-            .is_file()
-            .then_some(Self::Pinned(checkout))
+        reference_checkout().map(Self::Pinned)
     }
 
     fn install(&self, root: &Path) -> PathBuf {
@@ -67,6 +63,25 @@ impl Launcher {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
     }
+}
+
+pub fn reference_checkout() -> Option<PathBuf> {
+    let code = PathBuf::from(env::var_os("HOME")?).join("code");
+    let mut candidates: Vec<_> = fs::read_dir(code)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.join("router/bin/fleet-launch").is_file())
+        .collect();
+    candidates.sort();
+    candidates.into_iter().find(|path| {
+        Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["cat-file", "-e", &format!("{PIN}:router/bin/fleet-launch")])
+            .output()
+            .is_ok_and(|out| out.status.success())
+    })
 }
 
 pub struct Sandbox {

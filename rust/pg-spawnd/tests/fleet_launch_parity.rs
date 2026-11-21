@@ -35,7 +35,7 @@ fn main() {
     }
     let Some(launcher) = sandbox::Launcher::find() else {
         eprintln!(
-            "fleet-launch parity skipped: no launcher at ~/code/plangraph-data/router/bin/fleet-launch and PLANGRAPH_FLEET_LAUNCH is unset"
+            "fleet-launch parity skipped: no checkout of the pinned fleet launcher under ~/code and PLANGRAPH_FLEET_LAUNCH is unset"
         );
         return;
     };
