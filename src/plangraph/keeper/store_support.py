@@ -169,8 +169,24 @@ class SupportMixin:
         if row is None:
             return None
         item = self._hydrate(dict(row))
-        item["depends_on"] = self._dep_map().get(key, [])
+        item["depends_on"] = sorted(row["dst"] for row in self.conn.execute(
+            "SELECT dst FROM edges WHERE src=?", (key,)))
         return item
+
+    def _item_neighborhood(self, item):
+        """The state and links needed for a single item's context."""
+        key = item["key"]
+        index = {key: item}
+        for row in self.conn.execute(
+                "WITH adjacent AS (SELECT dst AS key FROM edges WHERE src=?"
+                " UNION SELECT src FROM edges WHERE dst=?)"
+                " SELECT key,state,corrects,fixes,EXISTS(SELECT 1 FROM edges"
+                " WHERE src=items.key AND dst=?) AS dependent FROM items"
+                " WHERE key IN (SELECT key FROM adjacent) OR corrects=? OR fixes=?"
+                " OR corrects IN (SELECT key FROM adjacent)", (key,) * 5):
+            if row["key"] != key:
+                index[row["key"]] = {**dict(row), "depends_on": [key] if row["dependent"] else []}
+        return index
 
     @staticmethod
     def _hydrate(item):

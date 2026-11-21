@@ -11,10 +11,12 @@ lives in ``store_support``.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 from .. import views
@@ -63,6 +65,18 @@ LEASE_WARN_S = 15 * 60
 ALERT_WINDOW_S = 7 * 86400
 
 _LEASE_MIN, _LEASE_MAX = 60, 86400
+
+_HTTP_RECEIPT = "http_write_receipt"
+_http_write = ContextVar("keeper_http_write", default=None)
+
+
+class _ReplayedWrite(Exception):
+    """Return a committed reply found after taking the database write lock."""
+
+
+def _request_hash(value):
+    data = json.dumps(value, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(data.encode()).hexdigest()
 
 # Exceptions raised by a verb that mean the request was malformed, not that the
 # server crashed.  ``_run`` turns them into an audited ``Refused``.
@@ -128,6 +142,11 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             return
         self.conn.execute("BEGIN IMMEDIATE")
         try:
+            receipt = _http_write.get()
+            if receipt is not None:
+                result = self._http_write_result(receipt)
+                if result is not None:
+                    raise _ReplayedWrite(result)
             yield
         except BaseException:
             self.conn.execute("ROLLBACK")
@@ -138,6 +157,44 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             except BaseException:
                 self.conn.execute("ROLLBACK")
                 raise
+
+    def retry_http_write(self, principal, credential, request_key, action, route, body, call):
+        """Replay a committed response for this credential and request key."""
+        if isinstance(principal, auth.RunPrincipal):
+            credential = f"run:{principal.token_id}"
+        key = "!http/" + _request_hash([credential, request_key])
+        fingerprint = _request_hash([principal.name, principal.role, principal.projects,
+                                     action, route, body])
+        receipt = (key, fingerprint)
+        result = self._http_write_result(receipt)
+        if result is not None:
+            return result, True
+        token = _http_write.set(receipt)
+        try:
+            return call(), False
+        except _ReplayedWrite as replay:
+            return replay.args[0], True
+        finally:
+            _http_write.reset(token)
+
+    def _http_write_result(self, receipt):
+        key, fingerprint = receipt
+        row = self.conn.execute(
+            "SELECT code,msg FROM audit_log WHERE key=? AND action=?",
+            (key, _HTTP_RECEIPT)).fetchone()
+        if row is None:
+            return None
+        if row["code"] != fingerprint:
+            raise Refused("conflict", "idempotency key already used for a different request")
+        return json.loads(row["msg"])
+
+    def _finish_retryable_write(self, principal, result):
+        """Append the receipt before the transaction that changed state commits."""
+        receipt = _http_write.get()
+        if receipt is not None:
+            key, fingerprint = receipt
+            self._audit(principal, _HTTP_RECEIPT, key, True, fingerprint, json.dumps(result))
+        return result
 
     # -------------------------------------------------------------- audit
     def _audit(self, principal, action, key, ok, code="", msg="", now=None):

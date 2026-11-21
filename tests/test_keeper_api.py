@@ -8,7 +8,8 @@ import urllib.request
 import pytest
 
 from keeper_util import World, seed
-from plangraph.keeper import api, config
+from plangraph.keeper import api, config, snapshot_io
+from plangraph.keeper.cli_verbs import RefusedCli, Session, Unreachable
 
 
 @pytest.fixture
@@ -110,6 +111,76 @@ def test_the_token_principal_is_used_not_the_body(srv, w):
                           token=w.tok("workerA"))
     assert status == 403
     assert jbody(raw)["error"] == "forbidden"
+
+
+def test_retry_after_timeout_replays_committed_priority(srv, w, monkeypatch):
+    session = Session(url=srv.base_url)
+    monkeypatch.setattr(session, "token", lambda: w.tok("router"))
+    entered, release = threading.Event(), threading.Event()
+    send = api.KeeperHandler._json
+
+    def delayed_response(handler, status, payload):
+        if status == 200 and payload.get("priority") == 7 and not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        return send(handler, status, payload)
+
+    monkeypatch.setattr(api.KeeperHandler, "_json", delayed_response)
+    body = {"key": "demo:A", "n": 7}
+    try:
+        with pytest.raises(Unreachable, match="timed out"):
+            session.call("POST", "set_priority", body=body, timeout=.25,
+                         idempotency_key="retry-priority")
+        assert entered.is_set()
+    finally:
+        release.set()
+    assert session.call("POST", "set_priority", body=body,
+                        idempotency_key="retry-priority") == {"key": "demo:A", "priority": 7}
+    with pytest.raises(RefusedCli, match="conflict: idempotency key already used"):
+        session.call("POST", "set_priority", body={**body, "n": 8},
+                     idempotency_key="retry-priority")
+    rows = w.conn.execute("SELECT COUNT(*) FROM events WHERE type='priority_set'").fetchone()
+    assert rows[0] == 1
+
+
+def test_slow_snapshot_publication_does_not_block_reads(srv, w, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    atomic_write = snapshot_io._atomic_write
+
+    def slow_write(path, body):
+        started.set()
+        assert release.wait(5)
+        atomic_write(path, body)
+
+    monkeypatch.setattr(snapshot_io, "_atomic_write", slow_write)
+    replies = []
+    writer = threading.Thread(target=lambda: replies.append(call(
+        srv, "/v1/set_priority", method="POST", body={"key": "demo:A", "n": 7},
+        token=w.tok("router"))))
+    writer.start()
+    reader = Session(url=srv.base_url)
+    monkeypatch.setattr(reader, "token", lambda: w.tok("reader"))
+    try:
+        assert started.wait(3)
+        assert reader.call("GET", "show", {"key": "demo:A"}, timeout=.25)["priority"] == 7
+    finally:
+        release.set()
+        writer.join(5)
+    assert replies[0][0] == 200
+
+
+@pytest.mark.parametrize("brief", [None, 1])
+def test_show_loads_only_the_item_neighborhood(srv, w, monkeypatch, brief):
+    expected = Session(url=srv.base_url)
+    monkeypatch.setattr(expected, "token", lambda: w.tok("reader"))
+    params = {"key": "demo:A", "brief": brief}
+    before = expected.call("GET", "show", params)
+
+    def full_plan():
+        raise AssertionError("show loaded the full plan")
+
+    monkeypatch.setattr(w.store, "_all_items", full_plan)
+    assert expected.call("GET", "show", params) == before
 
 
 def test_oversize_body_is_413(srv, w):

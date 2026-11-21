@@ -142,7 +142,7 @@ class ReadMixin:
 
     def _show(self, key):
         item = self._get_or_refuse(key)
-        index = {it["key"]: it for it in self._all_items()}
+        index = self._item_neighborhood(item)
         deps = [{"key": dep, "state": index.get(dep, {}).get("state")}
                 for dep in item["depends_on"]]
         unblocks = sorted(
@@ -196,7 +196,7 @@ class ReadMixin:
     def _brief(self, key):
         """The short task brief: identity, state, requirements, latest note."""
         item = self._get_or_refuse(key)
-        index = {it["key"]: it for it in self._all_items()}
+        index = self._item_neighborhood(item)
         deps = [{"key": dep, "state": index.get(dep, {}).get("state")}
                 for dep in item.get("depends_on") or []]
         return self._brief_context(_build_brief(item, deps), item, index)

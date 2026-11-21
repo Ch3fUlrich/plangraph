@@ -65,7 +65,14 @@ class OutboxMixin:
         if not isinstance(body, dict):
             return self._seen(principal, eid, verb, None, "validation")
         try:
-            self._replay_call(principal, verb, body)
+            request_key = entry.get("idempotency_key")
+            if verb == "heartbeat" and request_key is not None:
+                from .api_routes import check_write_key
+                check_write_key(request_key)
+                self.retry_http_write(principal, None, request_key, verb, "", body,
+                                      lambda: self._replay_call(principal, verb, body))
+            else:
+                self._replay_call(principal, verb, body)
             result = "ok"
         except Refused as exc:
             result = exc.code
@@ -74,6 +81,8 @@ class OutboxMixin:
     def _replay_call(self, principal, verb, body):
         key = body.get("key")
         if verb == "heartbeat":
+            if isinstance(key, str):
+                key = self.resolve_key(key)
             return self.heartbeat(principal, key, body.get("epoch"))
         if verb == "add_evidence":
             return self.add_evidence(principal, key, body.get("epoch"), body.get("kind"),

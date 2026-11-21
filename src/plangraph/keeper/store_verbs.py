@@ -185,7 +185,8 @@ class VerbsMixin:
                 " claimed_by=?, delegate=NULL, reviewer=NULL, lease_until=?,"
                 " review_waiver=NULL, updated_at=? WHERE key=?",
                 (epoch, principal.name, lease, self._iso(now), key))
-        return {"key": key, "epoch": epoch, "lease_until": lease}
+            return self._finish_retryable_write(principal, {
+                "key": key, "epoch": epoch, "lease_until": lease})
 
     def delegate(self, principal, key, worker_principal):
         return self._run(principal, "delegate", key,
@@ -253,7 +254,8 @@ class VerbsMixin:
             self._race_guard(cursor, key, "claimed", epoch)
             if isinstance(principal, auth.RunPrincipal):
                 self._extend_run_token(principal, dict(fresh, lease_until=lease), now)
-        return {"key": key, "epoch": epoch, "lease_until": lease}
+            return self._finish_retryable_write(principal, {
+                "key": key, "epoch": epoch, "lease_until": lease})
 
     def release(self, principal, key, epoch):
         return self._run(principal, "release", key,

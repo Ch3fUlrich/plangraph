@@ -28,7 +28,7 @@ def _path():
     return os.environ.get("PG_OUTBOX") or ""
 
 
-def on_unreachable(verb, body, exc, *, exit_unreachable=3) -> int:
+def on_unreachable(verb, body, exc, *, exit_unreachable=3, idempotency_key=None) -> int:
     """Queue *verb* when an outbox is configured; else the plain unreachable exit."""
     path = _path()
     if not path or verb not in QUEUE_VERBS:
@@ -36,6 +36,8 @@ def on_unreachable(verb, body, exc, *, exit_unreachable=3) -> int:
         return exit_unreachable
     entry = {"id": secrets.token_hex(16), "verb": verb, "body": body,
              "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    if idempotency_key is not None:
+        entry["idempotency_key"] = idempotency_key
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(entry, sort_keys=True) + "\n")

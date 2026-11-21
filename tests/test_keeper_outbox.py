@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.keeper import outage, outbox
+from plangraph.keeper.cli_verbs import Session, Unreachable, write
 from plangraph.keeper.auth import Principal
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.events import verify_integrity
@@ -53,6 +54,27 @@ def test_replay_runs_in_order_and_dedupes(w):
     assert results(again) == ["duplicate"] * 3 and again["results"][2]["first"] == "ok"
     assert events(w, "submitted") == before                        # never re-run
     assert verify_integrity(w.conn) == []
+
+
+def test_heartbeat_outbox_keeps_the_original_write_key(w, tmp_path, monkeypatch):
+    epoch, _, principal = claimed_with_token(w)
+    path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("PG_OUTBOX", str(path))
+    session = Session()
+
+    def call(method, verb, *, body, idempotency_key):
+        assert (method, verb) == ("POST", "heartbeat")
+        w.store.retry_http_write(principal, None, idempotency_key, verb, "", body,
+                                 lambda: w.store.heartbeat(principal, body["key"], body["epoch"]))
+        raise Unreachable("timed out")
+
+    monkeypatch.setattr(session, "call", call)
+    body = {"key": "demo:A", "epoch": epoch}
+    assert write(session, "heartbeat", body) == outbox.EXIT_QUEUED
+    lease = w.store._item("demo:A")["lease_until"]
+    w.clock.advance(60)
+    assert results(w.store.replay(principal, [json.loads(path.read_text())])) == ["ok"]
+    assert w.store._item("demo:A")["lease_until"] == lease
 
 
 def test_reordered_stale_and_revoked_entries_are_refused(w):

@@ -38,7 +38,7 @@ from pathlib import Path
 
 from .. import inbox, views
 from . import outage, timing
-from .snapshot_io import write_snapshot  # noqa: F401  (re-exported; M2B signing)
+from .snapshot_io import SnapshotPublication, write_snapshot  # noqa: F401  (re-exported; M2B signing)
 from .snapshot_writer import SnapshotWriter
 from . import api_routes, audit_meta, auth, brief, changelog, fmt
 from .auth import Principal, RunPrincipal
@@ -158,7 +158,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         server = self.server
         if name == "close_merged_auto":
             self._warm_merge_scan(server)
-        with timing.RequestTimer(server.lock, "read" if method == "GET" else "write"):
+        with timing.RequestTimer(server.lock, "read" if method == "GET" else "write", verb=name):
             try:
                 try:
                     principal = auth.authenticate(server.store.conn, self._token())
@@ -172,9 +172,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 if method == "GET":
                     payload, as_text = self._read(name, extra, query, principal)
                 else:
-                    payload = self._write(name, body or {}, principal, extra)
+                    payload, replayed = self._request_write(name, body or {}, principal, extra)
                     as_text = query.get("fmt", ["json"])[0] == "text"
-                    self._snapshot(principal)
+                    if not replayed:
+                        self._snapshot(principal)
                     if payload is None:   # worker verbs: 204, no body
                         self._empty(204)
                         return
@@ -292,6 +293,7 @@ class KeeperHandler(BaseHTTPRequestHandler):
         values = query.get(name)
         return values[0] if values else default
 
+    @timing.measured(part="query_ms")
     def _read(self, name, extra, query, principal):
         if name in ("host_samples", "host_samples_range"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_read"]).http_read(self.server.store, principal, name, query), False
         if name == "hosts":
@@ -379,6 +381,18 @@ class KeeperHandler(BaseHTTPRequestHandler):
             text = getattr(fmt, name + "_text")
             return (text(data), True) if as_text else (data, False)
         raise Refused("not_found", f"no read verb {name!r}")
+    @timing.measured(part="query_ms")
+    def _request_write(self, name, body, principal, extra):
+        request_key = self.headers.get("Idempotency-Key") if hasattr(self, "headers") else None
+        if request_key is None:
+            return self._write(name, body, principal, extra), False
+        if name not in api_routes.RETRYABLE_WRITES:
+            raise Refused("validation", "idempotency key is unsupported for this write verb")
+        api_routes.check_write_key(request_key)
+        return self.server.store.retry_http_write(
+            principal, auth.hash_token(self._token()), request_key, name, extra, body,
+            lambda: self._write(name, body, principal, extra))
+
     def _write(self, name, body, principal, extra=""):
         if name in ("ingest_host_sample", "mint_host_token", "revoke_host_token"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_write"]).http_write(self.server.store, principal, name, body)
         if name == "post_message":
@@ -485,7 +499,7 @@ class Reaper(threading.Thread):
     def run(self):
         while not self._halt.wait(self.interval):
             try:
-                with self.server.lock:
+                with timing.RequestTimer(self.server.lock, event="reaper_timing"):
                     self.server.store.reap(self.server.system)
                     write_snapshot(self.server, self.server.system)
                     outage.stamp(self.server.config)      # M2B-OUTBOX: liveness for the outage grace
@@ -513,6 +527,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
         self.store = store
         self.config = config
         self.lock = threading.RLock()
+        self.snapshot_publication = SnapshotPublication()
         self.system = system or Principal("system", "system", [], None)
         self.reaper = None
         self.anchorer = None     # M2B-ANCHOR: set by the daemon when anchors are configured

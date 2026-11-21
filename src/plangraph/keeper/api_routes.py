@@ -8,6 +8,7 @@ within its size budget as new doors (``close_on_decision``,
 from __future__ import annotations
 
 import os
+import re
 import urllib.parse
 
 from ..inbox import routes as _inbox
@@ -62,6 +63,14 @@ READ_CALLS = {
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
 RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay"})
+
+# These verbs persist their response inside the same transaction as the mutation.
+RETRYABLE_WRITES = frozenset({"claim", "heartbeat", "set_priority"})
+
+
+def check_write_key(key):
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", key):
+        raise Refused("validation", "invalid idempotency key")
 
 #: Read-only verbs reachable by the ``sweep`` role (claims, runs, PR links).
 SWEEP_READ_VERBS = frozenset({"whoami", "snapshot", "show"})

@@ -16,6 +16,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 from .. import views
@@ -112,7 +113,7 @@ class Session:
         return self._token
 
     # ---------------------------------------------------------------- HTTP
-    def call(self, method, verb, params=None, body=None, timeout=None):
+    def call(self, method, verb, params=None, body=None, timeout=None, *, idempotency_key=None):
         query = dict(params or {})
         query.setdefault("fmt", "json")
         query = {k: v for k, v in query.items() if v is not None}
@@ -120,6 +121,8 @@ class Session:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = urllib.request.Request(url, data=data, method=method)
         request.add_header("Authorization", f"Bearer {self.token()}")
+        if idempotency_key is not None:
+            request.add_header("Idempotency-Key", idempotency_key)
         if data is not None:
             request.add_header("Content-Type", "application/json")
         try:
@@ -209,14 +212,28 @@ def read(session, verb, params, renderer, local=None) -> int:
 
 
 def write(session, verb, body, renderer=None) -> int:
+    from .api_routes import RETRYABLE_WRITES, check_write_key
+    from .errors import Refused
+    options = {}
+    request_key = None
+    if verb in RETRYABLE_WRITES:
+        request_key = os.environ.get("PG_IDEMPOTENCY_KEY") or uuid.uuid4().hex
+        try:
+            check_write_key(request_key)
+        except Refused as exc:
+            return _refuse(RefusedCli(exc.code, exc.msg))
+        options["idempotency_key"] = request_key
     try:
-        result = session.call("POST", verb, body=body)
+        result = session.call("POST", verb, body=body, **options)
         status = _emit(session, result, renderer or (lambda r: fmt.result_text(verb, r)))
         return EXIT_REFUSED if isinstance(result, dict) and result.get("refused") else status
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:   # M2B-OUTBOX: a run token with PG_OUTBOX queues instead
-        return outbox.on_unreachable(verb, body, exc, exit_unreachable=EXIT_UNREACHABLE)
+        if request_key:
+            exc = Unreachable(f"{exc}; outcome unknown, repeat with PG_IDEMPOTENCY_KEY={request_key}")
+        return outbox.on_unreachable(verb, body, exc, exit_unreachable=EXIT_UNREACHABLE,
+                                     idempotency_key=request_key)
 
 
 def _epoch(session, key) -> int:
