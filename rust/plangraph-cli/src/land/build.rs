@@ -1,5 +1,6 @@
 //! The git-backed train builder and the verifier that repeats it (P3, P4, P5, P7, P9).
 use super::git::{self, Checkout, Merged, POLICY_VERSION};
+use super::resolve::Adopted;
 use super::train::*;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -14,6 +15,10 @@ pub struct BuildInput<'a> {
     pub attributes: String,
     /// Most parts one train holds; `None` while unbounded trains are the rule.
     pub cap: Option<usize>,
+    /// Adopted resolutions of this build (from the keeper's log); a conflicting part with one is merged by it.
+    pub resolutions: Vec<Adopted>,
+    /// Path prefixes a resolution may not touch (gate paths, auth-door paths); `.gitattributes` is always one.
+    pub protected: Vec<String>,
 }
 
 /// `land_build_result`: bound to the snapshot it was built from; merged and left out are exactly the snapshot.
@@ -79,6 +84,7 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
     let mut parts: Vec<Part> = Vec::new();
     let mut merges: Vec<String> = Vec::new();
     let mut left_out: Vec<LeftOut> = Vec::new();
+    let mut resolution: Vec<Resolution> = Vec::new();
     let mut prefix = input.base.clone();
     let base_has = |sha: &str| in_base(repo, &input.base, sha);
     for part in &ordered {
@@ -133,6 +139,30 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
                 });
             }
             Merged::Conflict => {
+                let adopted = input
+                    .resolutions
+                    .iter()
+                    .find(|a| a.part == part.pr && a.head == part.head && a.onto == prefix);
+                if let Some(a) =
+                    adopted.filter(|a| check_resolution(repo, a, &input.protected).is_ok())
+                {
+                    git::out(checkout.path(), &["checkout", "-q", "--detach", &a.commit])?;
+                    merged_heads.insert(part.pr, part.head.clone());
+                    merges.push(a.commit.clone());
+                    resolution.push(Resolution {
+                        part: part.pr,
+                        submission: a.submission.clone(),
+                        commit: a.commit.clone(),
+                    });
+                    prefix = a.commit.clone();
+                    parts.push(Part {
+                        pr: part.pr,
+                        head: part.head.clone(),
+                        parent: part.parent.clone(),
+                        own: Own::of(&own),
+                    });
+                    continue;
+                }
                 left_out.push(LeftOut {
                     pr: part.pr,
                     head: part.head.clone(),
@@ -179,6 +209,7 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
         graph,
         left_out,
         merges,
+        resolution,
         train_sha: prefix,
     };
     Ok(Outcome {
@@ -204,6 +235,18 @@ pub fn publish(repo: &Path, branch: &str, manifest: &Manifest) -> Result<(), Str
 /// registered heads and dependencies, the first-parent chain with two expected parents per merge, a clean replay of every merge with the recorded
 /// inputs, and the exact set of introduced commits.
 pub fn verify_manifest(repo: &Path, m: &Manifest, selection: &[PartIn]) -> Result<(), String> {
+    verify_manifest_with(repo, m, selection, &[], &[])
+}
+
+/// As `verify_manifest`, with the adopted resolutions of the freeze's build: a part merged by a resolution
+/// must match an adopted result, pass both steps of P8, and would otherwise have conflicted on replay.
+pub fn verify_manifest_with(
+    repo: &Path,
+    m: &Manifest,
+    selection: &[PartIn],
+    adopted: &[Adopted],
+    protected: &[String],
+) -> Result<(), String> {
     if m.policy.version != POLICY_VERSION {
         return Err(format!(
             "policy version {} is not {POLICY_VERSION}",
@@ -212,6 +255,12 @@ pub fn verify_manifest(repo: &Path, m: &Manifest, selection: &[PartIn]) -> Resul
     }
     if m.policy.git != git::git_version()? {
         return Err("git_version_mismatch: the replay must use the recorded Git version".into());
+    }
+    if m.resolution
+        .iter()
+        .any(|r| !m.parts.iter().any(|p| p.pr == r.part))
+    {
+        return Err("manifest: a resolution names a part that is not in the train".into());
     }
     if m.merges.len() != m.parts.len() {
         return Err("manifest: one merge per part".into());
@@ -286,7 +335,39 @@ pub fn verify_manifest(repo: &Path, m: &Manifest, selection: &[PartIn]) -> Resul
             ));
         }
         let check = Checkout::new(repo, &prev)?;
-        match git::merge(check.path(), Some(&attrs.path), &part.head, "replay", &date)? {
+        let resolved = m.resolution.iter().find(|r| r.part == part.pr);
+        let merge = git::merge(check.path(), Some(&attrs.path), &part.head, "replay", &date)?;
+        if let Some(r) = resolved {
+            let ok = adopted.iter().find(|a| {
+                a.part == part.pr
+                    && a.submission == r.submission
+                    && a.commit == r.commit
+                    && a.commit == m.merges[i]
+            });
+            let a = ok.ok_or_else(|| {
+                format!(
+                    "resolution: #{} has no adopted result of this build",
+                    part.pr
+                )
+            })?;
+            if a.onto != prev || a.head != part.head {
+                return Err(format!(
+                    "resolution: #{} was adopted for another prefix or head",
+                    part.pr
+                ));
+            }
+            check_resolution(repo, a, protected)
+                .map_err(|e| format!("resolution: #{}: {e}", part.pr))?;
+            if matches!(merge, Merged::Clean { .. }) {
+                return Err(format!(
+                    "resolution: #{} merges cleanly, no resolution is needed",
+                    part.pr
+                ));
+            }
+            prev = row[0].to_owned();
+            continue;
+        }
+        match merge {
             Merged::Clean { tree, .. } => {
                 let actual = git::out(repo, &["rev-parse", &format!("{}^{{tree}}", row[0])])?;
                 if tree != actual {
@@ -407,6 +488,26 @@ pub fn verify_result(
                     ));
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+/// The two deterministic steps of P8 on the pinned object: its two parents are exactly the requested prefix
+/// commit and the part head, and its change against the prefix touches no protected path.
+pub fn check_resolution(repo: &Path, a: &Adopted, protected: &[String]) -> Result<(), String> {
+    let parents = git::out(repo, &["rev-list", "--parents", "-n", "1", &a.commit])?;
+    let row: Vec<&str> = parents.split(' ').collect();
+    if row.len() != 3 || row[1] != a.onto || row[2] != a.head {
+        return Err(
+            "wrong parents: a resolution merges exactly the prefix and the part head".into(),
+        );
+    }
+    let changed = git::out(repo, &["diff", "--name-only", &a.onto, &a.commit])?;
+    for path in changed.lines() {
+        let gitattributes = path == ".gitattributes" || path.ends_with("/.gitattributes");
+        if gitattributes || protected.iter().any(|p| path.starts_with(p.as_str())) {
+            return Err(format!("protected path {path} in a resolution"));
         }
     }
     Ok(())

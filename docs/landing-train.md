@@ -24,6 +24,16 @@
 - **No train on a red main**: `build` asks `plangraph main-state` first and refuses with `main_red`, `main_pending`,
   `state_unknown` or `ref_not_forward_only`.
 
+- **Resolution by request** (`resolve.rs`, conflict note V12 to V15): the append rules of the keeper's resolve events as
+  a state machine. A request (unique per build position, deadline 30 minutes) has at most one open submission; a
+  correction from the batch's recorded writer before the deadline names the open one and supersedes it, and a superseded
+  submission can no longer be secured, rejected or adopted; a carry never supersedes and is refused while one is open.
+  Every append has an idempotency key stored per (principal, repository, verb) with its canonical payload: a repeat returns
+  the first result, the same key with another payload is `key_reuse`. `replay` applies a recorded log by the same rules.
+  A conflicting part whose request has an adopted result (parents exactly the prefix and the part head, no protected path
+  touched) is merged by that commit and listed in the manifest as `resolution {part, submission, commit}` instead of
+  being left out; `verify_manifest_with` requires the adopted result of the freeze's build and a replay that conflicts.
+
 `plangraph land-train verify --repo DIR --manifest FILE --parts FILE` repeats the proof on a published train branch.
 
 ## A red train

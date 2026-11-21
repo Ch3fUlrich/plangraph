@@ -81,6 +81,15 @@ pub struct Policy {
     pub attributes: String,
 }
 
+/// A conflicting part merged by an adopted resolution instead of being left out: the part, the adopted
+/// submission and the merge commit. It must match an adopted result of the freeze's build.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Resolution {
+    pub part: u64,
+    pub submission: String,
+    pub commit: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Manifest {
     pub build: String,
@@ -94,6 +103,9 @@ pub struct Manifest {
     pub left_out: Vec<LeftOut>,
     /// The merge commit of each part, in order.
     pub merges: Vec<String>,
+    /// Parts whose merge commit is an adopted resolution.
+    #[serde(default)]
+    pub resolution: Vec<Resolution>,
     pub train_sha: String,
 }
 

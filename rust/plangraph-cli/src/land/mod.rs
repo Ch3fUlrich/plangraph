@@ -13,6 +13,9 @@ mod main_state_tests;
 pub mod registrar;
 #[cfg(test)]
 mod registrar_tests;
+pub mod resolve;
+#[cfg(test)]
+mod resolve_tests;
 pub mod split;
 #[cfg(test)]
 mod split_tests;

@@ -71,6 +71,8 @@ impl Fx {
             parts,
             attributes: attributes.into(),
             cap,
+            resolutions: vec![],
+            protected: vec![],
         }
     }
 }
@@ -418,6 +420,8 @@ fn the_command_builds_nothing_while_main_is_red_or_pending_and_otherwise_writes_
         cap: None,
         out: out.path().to_owned(),
         branch: "land/build/b1".into(),
+        resolutions: vec![],
+        protected: vec![],
     };
     for (state, word) in [
         (State::Red { blocking: vec![] }, "main_red"),
@@ -436,4 +440,181 @@ fn the_command_builds_nothing_while_main_is_red_or_pending_and_otherwise_writes_
         serde_json::from_slice(&std::fs::read(out.path().join("b1.manifest.json")).unwrap())
             .unwrap();
     assert_eq!(g(fx.path(), &["rev-parse", "land/build/b1"]), m.train_sha);
+}
+
+/// A conflicting pair: x and p edit the same line. Returns (x, p, prefix commit M1 of the first build).
+fn conflicting(fx: &Fx) -> (String, String, String) {
+    let x = fx.commit(
+        &fx.base(),
+        "shared.txt",
+        &lines(&["line 1", "X", "line 3", "line 4", "line 5", "line 6"]),
+    );
+    let p = fx.commit(
+        &fx.base(),
+        "shared.txt",
+        &lines(&["line 1", "P", "line 3", "line 4", "line 5", "line 6"]),
+    );
+    let first = build(&fx.input(vec![part(1, &x, None), part(2, &p, None)], "", None)).unwrap();
+    let m1 = first.manifest.unwrap().merges[0].clone();
+    assert_eq!(
+        first.result.left_out[0].prefix, m1,
+        "the request names the prefix the part conflicted on"
+    );
+    (x, p, m1)
+}
+
+/// The writer's candidate: the merge of p onto m1 with the conflict resolved by `text` in `file`.
+fn resolve(fx: &Fx, m1: &str, p: &str, file: &str, text: &str) -> String {
+    let d = fx.path();
+    g(d, &["checkout", "-q", "--detach", m1]);
+    let _ = Command::new("git")
+        .current_dir(d)
+        .args(["merge", "--no-ff", "-m", "resolved", p])
+        .env("GIT_AUTHOR_NAME", "w")
+        .env("GIT_AUTHOR_EMAIL", "w@example.invalid")
+        .env("GIT_COMMITTER_NAME", "w")
+        .env("GIT_COMMITTER_EMAIL", "w@example.invalid")
+        .output()
+        .unwrap();
+    std::fs::write(d.join(file), text).unwrap();
+    g(d, &["add", "-A"]);
+    g(d, &["commit", "-q", "-m", "resolved"]);
+    let r = g(d, &["rev-parse", "HEAD"]);
+    g(d, &["checkout", "-q", "main"]);
+    r
+}
+
+fn adopted(m1: &str, p: &str, commit: &str) -> super::resolve::Adopted {
+    super::resolve::Adopted {
+        request: "r1".into(),
+        build: "b1".into(),
+        position: 2,
+        part: 2,
+        head: p.into(),
+        onto: m1.into(),
+        submission: "s2".into(),
+        commit: commit.into(),
+    }
+}
+
+#[test]
+fn a_conflicting_part_with_an_adopted_resolution_is_merged_and_listed_as_a_resolution() {
+    let fx = Fx::new();
+    let (x, p, m1) = conflicting(&fx);
+    let r = resolve(
+        &fx,
+        &m1,
+        &p,
+        "shared.txt",
+        &lines(&["line 1", "X and P", "line 3", "line 4", "line 5", "line 6"]),
+    );
+    let a = adopted(&m1, &p, &r);
+    let parts = vec![part(1, &x, None), part(2, &p, None)];
+    let mut input = fx.input(parts.clone(), "", None);
+    input.resolutions = vec![a.clone()];
+    let out = build(&input).unwrap();
+    let m = out.manifest.clone().unwrap();
+    assert_eq!(m.parts.len(), 2);
+    assert!(
+        m.left_out.is_empty(),
+        "resolved instead of left out as conflict"
+    );
+    assert_eq!(
+        m.resolution,
+        vec![Resolution {
+            part: 2,
+            submission: "s2".into(),
+            commit: r.clone()
+        }]
+    );
+    assert_eq!(m.train_sha, r);
+    publish(fx.path(), "land/build/b1", &m).unwrap();
+    verify_manifest_with(fx.path(), &m, &parts, std::slice::from_ref(&a), &[]).unwrap();
+    verify_result(fx.path(), &m.base, &out.result, Some(&m)).unwrap();
+    // The gate refuses the same manifest without an adopted result of this build, or for another prefix.
+    assert!(verify_manifest_with(fx.path(), &m, &parts, &[], &[])
+        .unwrap_err()
+        .starts_with("resolution"));
+    let mut elsewhere = a.clone();
+    elsewhere.onto = fx.base();
+    assert!(
+        verify_manifest_with(fx.path(), &m, &parts, &[elsewhere], &[])
+            .unwrap_err()
+            .starts_with("resolution")
+    );
+    // A plain verify has no adopted results: the resolved manifest is refused there too.
+    assert!(verify_manifest(fx.path(), &m, &parts).is_err());
+}
+
+#[test]
+fn a_resolution_with_wrong_parents_or_a_protected_path_is_not_adopted_by_the_builder() {
+    let fx = Fx::new();
+    let (x, p, m1) = conflicting(&fx);
+    let parts = vec![part(1, &x, None), part(2, &p, None)];
+    // Wrong parents: a commit on top of m1 that does not merge p.
+    let wrong = fx.commit(&m1, "shared.txt", "resolved by hand\n");
+    let mut input = fx.input(parts.clone(), "", None);
+    input.resolutions = vec![adopted(&m1, &p, &wrong)];
+    let out = build(&input).unwrap();
+    assert_eq!(out.result.left_out.len(), 1, "left out as conflict");
+    assert!(out.manifest.unwrap().resolution.is_empty());
+    assert!(check_resolution(fx.path(), &adopted(&m1, &p, &wrong), &[])
+        .unwrap_err()
+        .starts_with("wrong parents"));
+    // A resolution that edits a protected path is refused, `.gitattributes` always.
+    let r = resolve(&fx, &m1, &p, ".gitattributes", "* merge=union\n");
+    let r_fixed = {
+        // The resolution also resolves the conflict itself.
+        let d = fx.path();
+        g(d, &["checkout", "-q", "--detach", &r]);
+        std::fs::write(d.join("shared.txt"), "ok\n").unwrap();
+        g(d, &["add", "-A"]);
+        g(d, &["commit", "-q", "--amend", "-m", "resolved"]);
+        let c = g(d, &["rev-parse", "HEAD"]);
+        g(d, &["checkout", "-q", "main"]);
+        c
+    };
+    assert!(
+        check_resolution(fx.path(), &adopted(&m1, &p, &r_fixed), &[])
+            .unwrap_err()
+            .contains(".gitattributes")
+    );
+    let ok = resolve(&fx, &m1, &p, "shared.txt", "fine\n");
+    assert!(check_resolution(fx.path(), &adopted(&m1, &p, &ok), &[]).is_ok());
+    assert!(
+        check_resolution(fx.path(), &adopted(&m1, &p, &ok), &["shared".to_owned()])
+            .unwrap_err()
+            .contains("protected path")
+    );
+}
+
+#[test]
+fn a_resolution_entry_for_a_part_that_merges_cleanly_is_refused() {
+    let fx = Fx::new();
+    let a = fx.commit(&fx.base(), "a.txt", "a\n");
+    let b = fx.commit(&fx.base(), "b.txt", "b\n");
+    let parts = vec![part(1, &a, None), part(2, &b, None)];
+    let m = build(&fx.input(parts.clone(), "", None))
+        .unwrap()
+        .manifest
+        .unwrap();
+    publish(fx.path(), "land/build/b1", &m).unwrap();
+    let mut forged = m.clone();
+    forged.resolution = vec![Resolution {
+        part: 2,
+        submission: "s2".into(),
+        commit: m.merges[1].clone(),
+    }];
+    let ad = super::resolve::Adopted {
+        request: "r1".into(),
+        build: "b1".into(),
+        position: 2,
+        part: 2,
+        head: b.clone(),
+        onto: m.merges[0].clone(),
+        submission: "s2".into(),
+        commit: m.merges[1].clone(),
+    };
+    let err = verify_manifest_with(fx.path(), &forged, &parts, &[ad], &[]).unwrap_err();
+    assert!(err.contains("merges cleanly"), "{err}");
 }

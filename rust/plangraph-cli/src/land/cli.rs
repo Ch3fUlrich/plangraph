@@ -2,10 +2,11 @@
 use super::build::{self, BuildInput};
 use super::main_gh;
 use super::main_state::State;
+use super::resolve::Adopted;
 use super::train::{require_open_main, Manifest, PartIn};
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE [--attributes FILE] [--cap N] [--out DIR] [--branch NAME]\n  plangraph land-train verify --repo DIR --manifest FILE --parts FILE\n\
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE [--attributes FILE] [--cap N] [--resolutions FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train verify --repo DIR --manifest FILE --parts FILE\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null} in selection order (the registrar's READY entries)";
 
 pub struct Build {
@@ -17,6 +18,8 @@ pub struct Build {
     pub cap: Option<usize>,
     pub out: PathBuf,
     pub branch: String,
+    pub resolutions: Vec<Adopted>,
+    pub protected: Vec<String>,
 }
 
 /// Builds, publishes and verifies one train. Nothing is built while main is red or pending.
@@ -30,11 +33,13 @@ pub fn build_train(b: &Build, main: &State) -> Result<Vec<String>, String> {
         parts: b.parts.clone(),
         attributes: b.attributes.clone(),
         cap: b.cap,
+        resolutions: b.resolutions.clone(),
+        protected: b.protected.clone(),
     })?;
     std::fs::create_dir_all(&b.out).map_err(|e| e.to_string())?;
     if let Some(m) = &outcome.manifest {
         build::publish(&b.repo, &b.branch, m)?;
-        build::verify_manifest(&b.repo, m, &b.parts)?;
+        build::verify_manifest_with(&b.repo, m, &b.parts, &b.resolutions, &b.protected)?;
         write(&b.out.join(format!("{}.manifest.json", b.name)), m)?;
     }
     build::verify_result(&b.repo, &b.base, &outcome.result, outcome.manifest.as_ref())?;
@@ -122,6 +127,15 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
                         .get("cap")
                         .map(|c| c.parse().map_err(|_| "cap must be a number".to_owned()))
                         .transpose()?,
+                    resolutions: flags
+                        .get("resolutions")
+                        .map(|p| read(p))
+                        .transpose()?
+                        .unwrap_or_default(),
+                    protected: flags
+                        .get("protected")
+                        .map(|p| p.split(',').map(str::to_owned).collect())
+                        .unwrap_or_default(),
                     out: PathBuf::from(flags.get("out").cloned().unwrap_or_else(|| ".".into())),
                     branch: flags
                         .get("branch")
@@ -135,7 +149,16 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
         "verify" => {
             let manifest: Manifest = read(&need("manifest")?)?;
             let repo = PathBuf::from(need("repo")?);
-            build::verify_manifest(&repo, &manifest, &parts)?;
+            let adopted: Vec<Adopted> = flags
+                .get("resolutions")
+                .map(|p| read(p))
+                .transpose()?
+                .unwrap_or_default();
+            let protected: Vec<String> = flags
+                .get("protected")
+                .map(|p| p.split(',').map(str::to_owned).collect())
+                .unwrap_or_default();
+            build::verify_manifest_with(&repo, &manifest, &parts, &adopted, &protected)?;
             Ok(vec![format!(
                 "train {} matches its manifest",
                 manifest.build
