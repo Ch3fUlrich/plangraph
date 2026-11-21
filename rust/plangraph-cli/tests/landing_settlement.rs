@@ -7,6 +7,7 @@ fn keeper_reopens_the_exact_landed_train_and_advances_each_step_once() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let fixture = r#"
 from pathlib import Path
+import json
 from tempfile import TemporaryDirectory
 from plangraph.keeper.auth import Principal, add_principal
 from plangraph.keeper.db import open_db
@@ -36,20 +37,23 @@ with TemporaryDirectory() as tmp:
     first = Store(db).land(principal, dict(identity, action='landed', merge='d'*40))
     assert first['open_steps'] == ['evidence', 'close_parts', 'host_sync', 'cleanup']
     calls = []
+    proof = [dict(host=str(i), head='d'*40, checkout='d'*40, hooks='d'*40, build='d'*40, synced=i==1)
+             for i in range(3)]
     def effect(args, **kwargs):
         calls.append(args)
-        return Mock(stdout='', stderr='')
+        return Mock(stdout=json.dumps({'verified': proof}) if 'verify-hosts' in args else '', stderr='')
     st = {'merged': []}
     with (patch.object(landing, 'landing_journal', journal),
           patch.object(landing, 'read_verified_merge', return_value=('d'*40, 'merged')),
           patch.object(landing, 'run', effect),
           patch.object(landing, 'cleanup_landed', side_effect=lambda *args, **kw: calls.append('cleanup')),
-          patch.object(landing, 'drop_state', side_effect=lambda st: calls.append('drop_state')),
-          patch.dict('os.environ', {'PG_LANDING_HOST_VERIFY': 'verify'})):
+          patch.object(landing, 'drop_state', side_effect=lambda st: calls.append('drop_state'))):
         landing.settle_train(pending[0], lease, st)
         landing.settle_train(pending[0], lease, st)
-    assert calls == [['plangraph', 'merge-close'], ['verify', 'example/repo', 'd'*40],
+    assert calls == [['plangraph', 'merge-close'], ['plangraph', 'landing', 'verify-hosts', 'example/repo', 'd'*40],
                      'cleanup', 'drop_state'], calls
+    recorded = store.land(principal, dict(identity, action='show'))['train']
+    assert recorded['host_verification'] == proof
     assert store.land(principal, dict(repo=identity['repo'], action='pending')) == {'trains': []}
     assert store.land(principal, dict(identity, action='landed', merge='d'*40))['open_steps'] == []
     try:

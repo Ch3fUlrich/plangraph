@@ -468,6 +468,7 @@ def settle_train(train, lease, st=None):
         raise MergeBatchError(f"train #{number} is {state}; settlement remains pending")
     train = landing_journal(repo, "landed", pr=number, merge=merge, **lease)
     for step in train["open_steps"]:
+        receipt = {}
         if step == "evidence":
             for part in train["parts"]:
                 print(f"MERGED {part['pr']} {merge} {','.join(part['items']) or '-'}")
@@ -475,11 +476,10 @@ def settle_train(train, lease, st=None):
             result = run(["plangraph", "merge-close"], timeout=330)
             sys.stderr.write(result.stdout + result.stderr)
         elif step == "host_sync":
-            sync = os.environ.get("PG_LANDING_HOST_VERIFY")
-            if not sync:
-                raise MergeBatchError("host sync pending: set PG_LANDING_HOST_VERIFY to the landing verifier")
             started = landing_now()
-            sys.stderr.write(run([sync, repo, merge], timeout=600).stdout)
+            result = run(["plangraph", "landing", "verify-hosts", repo, merge], timeout=600)
+            receipt["verification"] = json.loads(result.stdout)["verified"]
+            sys.stderr.write(result.stdout)
             record_stage(repo, train["batch_key"], "host_sync", merge, started)
         elif step == "cleanup":
             if st is not None:
@@ -492,7 +492,7 @@ def settle_train(train, lease, st=None):
                 cleanup_landed(state, [part for part in parts if part["ref"]], strict=True)
         else:
             raise MergeBatchError(f"unknown keeper landing step {step}")
-        landing_journal(repo, "advance", pr=number, merge=merge, step=step, **lease)
+        landing_journal(repo, "advance", pr=number, merge=merge, step=step, **receipt, **lease)
 
 
 def cmd_settle(args):

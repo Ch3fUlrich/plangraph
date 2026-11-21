@@ -67,6 +67,21 @@ def _timing(row):
     return start, end
 
 
+def _host_receipts(value, merge):
+    if not isinstance(value, list) or len(value) != 3:
+        raise Refused("validation", "host sync requires three verification receipts")
+    verified = {}
+    for row in value:
+        if not isinstance(row, dict) or any(row.get(field) != merge for field in ("head", "checkout", "hooks", "build")):
+            raise Refused("validation", "host receipt does not cover the verified merged head")
+        host = _text("host", row.get("host"), required=True, cap=64)
+        if host in verified or type(row.get("synced")) is not bool:
+            raise Refused("validation", "duplicate or incomplete host verification")
+        verified[host] = {"host": host, "head": merge, "checkout": merge,
+                          "hooks": merge, "build": merge, "synced": row["synced"]}
+    return list(verified.values())
+
+
 class MergeLocksMixin:
     def land(self, principal, body):
         """Journal the lander's immutable manifest and issue fenced cursor updates."""
@@ -142,7 +157,14 @@ class MergeLocksMixin:
                 if step not in _LAND_STEPS or _LAND_STEPS.index(step) > row["cursor"]:
                     raise Refused("conflict", "landing cursor is out of order")
                 if _LAND_STEPS.index(step) == row["cursor"]:
-                    self.conn.execute("UPDATE landing_trains SET cursor=cursor+1 WHERE repo=? AND pr=?", identity)
+                    if step == "host_sync":
+                        data = _landing_data(row)
+                        manifest = {"parts": data["parts"], "batch_key": data["batch_key"],
+                                    "host_verification": _host_receipts(body.get("verification"), merge)}
+                        self.conn.execute("UPDATE landing_trains SET cursor=cursor+1,manifest=? WHERE repo=? AND pr=?",
+                                          (json.dumps(manifest, separators=(",", ":")), *identity))
+                    else:
+                        self.conn.execute("UPDATE landing_trains SET cursor=cursor+1 WHERE repo=? AND pr=?", identity)
             elif action != "landed":
                 raise Refused("conflict", "invalid landing journal transition")
             return _landing_data(self.conn.execute(select, identity).fetchone())

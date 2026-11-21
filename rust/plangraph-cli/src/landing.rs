@@ -37,6 +37,8 @@ fn execute(env: &Env, args: &[String]) -> Result<Value, String> {
             keeper.call("land", Some(body))
         }
         [command, rest @ ..] if command == "ci-import" => crate::landing_ci::import(&keeper, rest),
+        [command, rest @ ..] if command == "verify-hosts" => crate::landing_hosts::run(env, rest),
+        [command] if command == "host-agent" => crate::landing_hosts::agent(),
         _ => Err("usage: plangraph landing journal|ci-import".into()),
     }
 }
