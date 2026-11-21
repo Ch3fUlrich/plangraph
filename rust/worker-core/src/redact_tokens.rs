@@ -110,21 +110,30 @@ pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
         .into_owned()
 }
 
+/// True when `value` holds a credential-name assignment. Headers are found apart
+/// from their values, so one after an `==` is seen too; `==` itself compares and
+/// assigns nothing, while `:=` assigns.
+fn has_nested_assignment(value: &str) -> bool {
+    use std::sync::OnceLock;
+    static HEADER: OnceLock<regex::Regex> = OnceLock::new();
+    let header = HEADER.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)\b[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*["']?[^\S\r\n]*([=:])"#,
+        )
+        .unwrap()
+    });
+    header
+        .captures_iter(value)
+        .any(|m| !(&m[1] == "=" && value[m.get(0).unwrap().end()..].starts_with('=')))
+}
+
 /// True for None/True/False/null or an already masked value, or for one call,
 /// subscript or bracketed expression (with attribute/call chains) holding no
 /// string literal. Spawner-read source keeps these readable; anything else after a
 /// credential name is masked (src/plangraph/spawner/redact_tokens.py is_computed).
 /// `value` must be the whole right-hand side, to the end of the line.
-pub(crate) fn is_computed(value: &str, nested: &[regex::Regex]) -> bool {
+pub(crate) fn is_computed(value: &str) -> bool {
     let value = value.trim();
-    // A credential-name assignment nested in the expression is judged by itself.
-    // (`==` compares and assigns nothing.)
-    if nested
-        .iter()
-        .any(|rule| rule.captures_iter(value).any(|m| !m[4].starts_with('=')))
-    {
-        return false;
-    }
     if matches!(
         value,
         "None" | "True" | "False" | "null" | "[REDACTED]" | "\"[REDACTED]\"" | "'[REDACTED]'"
@@ -132,6 +141,10 @@ pub(crate) fn is_computed(value: &str, nested: &[regex::Regex]) -> bool {
         return true;
     }
     if value.is_empty() || value.contains(['"', '\'']) {
+        return false;
+    }
+    // A credential-name assignment nested in the expression is judged by itself.
+    if has_nested_assignment(value) {
         return false;
     }
     let chars: Vec<char> = value.chars().collect();
@@ -202,12 +215,7 @@ pub(crate) fn is_computed(value: &str, nested: &[regex::Regex]) -> bool {
 /// computed expression, judged on the whole rest of its line, stays readable; any
 /// other unquoted value is masked through the end of the line, so nothing after the
 /// first closing delimiter can survive.
-pub(crate) fn replace_assignments(
-    rule: &regex::Regex,
-    nested: &[regex::Regex],
-    text: &str,
-    source: bool,
-) -> String {
+pub(crate) fn replace_assignments(rule: &regex::Regex, text: &str, source: bool) -> String {
     if !source {
         return rule.replace_all(text, "$1$2$3[REDACTED]").into_owned();
     }
@@ -229,7 +237,7 @@ pub(crate) fn replace_assignments(
                 .map_or(text.len(), |i| value.start() + i);
         }
         let judged = &text[value.start()..line_end];
-        if is_computed(judged, nested) {
+        if is_computed(judged) {
             kept_until = line_end;
             continue;
         }
@@ -360,7 +368,7 @@ mod tests {
             "None",
             "\"[REDACTED]\"",
         ] {
-            assert!(is_computed(yes, &[]), "{yes}");
+            assert!(is_computed(yes), "{yes}");
         }
         for no in [
             "load(x) + literal",
@@ -376,7 +384,7 @@ mod tests {
             "os.environ[\"X\"]",
             "",
         ] {
-            assert!(!is_computed(no, &[]), "{no}");
+            assert!(!is_computed(no), "{no}");
         }
     }
 

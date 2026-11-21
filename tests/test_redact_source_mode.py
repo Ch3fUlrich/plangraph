@@ -374,3 +374,12 @@ def test_equality_inside_a_computed_value_is_not_a_nested_assignment(value):
     text = 'API_' + 'KEY = ' + value
     assert env_redact.redact_source(text) == text
     assert env_redact.redact(text) == 'API_KEY = [REDACTED]'
+
+
+@pytest.mark.parametrize('value', [
+    'f(a, PASSWORD := hunter2value)', 'f(PASSWORD := hunter2value)', 'f(MY_' + 'SECRET := hunter2value)',
+    'f(PASSWORD == other, SECRET=hunter2value)', 'f(a == b, TOKEN: hunter2value)',
+    'f(MY_' + 'SECRET == other, TOKEN=hunter2value)'])
+def test_walrus_and_a_later_assignment_after_an_equality_are_nested_assignments(value):
+    text = 'API_' + 'KEY = ' + value
+    assert 'hunter2value' not in env_redact.redact_source(text)

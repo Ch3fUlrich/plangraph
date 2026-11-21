@@ -72,8 +72,12 @@ _ASSIGNMENT = re.compile(
     r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
 
 
+# The name and separator of an assignment, without its value (group 1 is the separator).
+_ASSIGN_HEADER = re.compile(r'(?im)(?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)(?:["\x27])?\s*([=:])')
+
+
 def _computed(value):
-    return is_computed(value, _ASSIGNMENT)
+    return is_computed(value, _ASSIGN_HEADER)
 
 
 def _redact_assignments(text, source=False):

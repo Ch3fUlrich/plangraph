@@ -221,14 +221,21 @@ _CALL_HEAD = re.compile(r'[A-Za-z_][\w.]*[^\S\r\n]*')
 _CLOSER = {'(': ')', '[': ']', '{': '}'}
 
 
-def _nested_assignment(value, assignment):
-    """True when ``value`` holds a credential-name assignment; ``==`` compares and assigns nothing."""
-    if any(not m[0][len(m[1]):].startswith('=') for m in assignment.finditer(value)):
-        return True
-    return any(not value[end:end + 1] == '=' for _, end in _name_headers(value))
+def _nested_assignment(value, header):
+    """True when ``value`` holds a credential-name assignment.
+
+    Headers are found apart from their values, so one after an ``==`` is seen too; ``==`` itself
+    compares and assigns nothing, while ``:=`` assigns."""
+    for m in header.finditer(value):
+        if not (m[1] == '=' and value[m.end():m.end() + 1] == '='):
+            return True
+    for start, end in _name_headers(value):
+        if not (value[start:end].rstrip()[-1:] == '=' and value[end:end + 1] == '='):
+            return True
+    return False
 
 
-def is_computed(value, assignment=None):
+def is_computed(value, header=None):
     """True for None/True/False/null or an already masked value, or for one call, subscript or
     bracketed expression (with attribute/call chains) holding no string literal.
 
@@ -239,7 +246,7 @@ def is_computed(value, assignment=None):
     """
     value = value.strip()
     # A credential-name assignment nested in the expression is judged by itself, so it is no computed value.
-    if assignment is not None and _nested_assignment(value, assignment):
+    if header is not None and _nested_assignment(value, header):
         return False
     if re.fullmatch(r'None|True|False|null|["\']?\[REDACTED\][\"\']?', value):
         return True
