@@ -29,7 +29,8 @@ with sqlite3.connect(sys.argv[1]) as db:
           (1, 'codex', 'a', 'weekly', 90, 0, NULL, '2026-11-21T10:00:00Z'),
           (2, 'codex', 'a', 'weekly', 26.5, 0, NULL, '2026-11-21T11:00:00Z'),
           (3, 'agy', 'b', 'daily', 50, 1, NULL, '2026-11-21T11:00:00Z'),
-          (4, 'codex', 'a', 'daily', NULL, 0, NULL, '2026-11-21T11:00:00Z');
+          (4, 'codex', 'a', 'daily', NULL, 0, NULL, '2026-11-21T11:00:00Z'),
+          (5, 'codex', 'b', 'daily', 99.9, 0, NULL, '2026-11-21T11:00:00Z');
     ''')
 "#,
         ])
@@ -43,6 +44,7 @@ with sqlite3.connect(sys.argv[1]) as db:
     assert!(text.contains("agy\tb\tdaily\t100% / 100%"), "{text}");
     assert!(text.contains("codex\ta\tweekly\t73.5% / 100%"), "{text}");
     assert!(text.contains("codex\ta\tdaily\tunknown"), "{text}");
+    assert!(text.contains("codex\tb\tdaily\t0.1% / 100%"), "{text}");
     assert!(!text.contains("10% / 100%"), "{text}");
 }
 

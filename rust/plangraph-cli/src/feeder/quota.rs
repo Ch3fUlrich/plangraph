@@ -150,7 +150,10 @@ pub fn run_status(env: &Env, args: &[String]) -> i32 {
         for ((provider, account, window), (_, row, observed)) in latest {
             let usage = remaining_percent(row).map_or_else(
                 || "unknown".into(),
-                |left| format!("{}% / 100%", 100.0 - left),
+                |left| {
+                    let used = format!("{:.1}", 100.0 - left);
+                    format!("{}% / 100%", used.trim_end_matches(".0"))
+                },
             );
             println!("{provider}\t{account}\t{window}\t{usage}\t{observed}");
         }
