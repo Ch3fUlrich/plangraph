@@ -245,7 +245,7 @@ def test_deploy_targets_count_a_binary_only_when_its_entry_point_is_added():
     assert deploy_targets(["rust/pg-disk/src/main.rs"]) == ["bin:pg-disk"]
 
 
-def _pr_repo(tmp_path, follow_up_files, tagged_files=None):
+def _pr_repo(tmp_path, follow_up_files, tagged_files=None, *, main_after=None, tag_merge=False):
     """A repo whose PR has a tagged commit and an untagged follow-up that adds `follow_up_files`."""
     import os
     import subprocess
@@ -273,17 +273,26 @@ def _pr_repo(tmp_path, follow_up_files, tagged_files=None):
     git("commit", "-m", "work\n\nPlan-Item: demo:A")
     for path, text in follow_up_files.items():
         (repo / path).parent.mkdir(parents=True, exist_ok=True)
-        (repo / path).write_text(text)
+        if text is None:
+            (repo / path).unlink()
+        else:
+            (repo / path).write_text(text)
     git("add", "-A")
     git("commit", "-m", "follow-up without a trailer")
     tip = git("rev-parse", "HEAD")
     git("checkout", "-q", "main")
-    git("merge", "-q", "--no-ff", "-m", "batch (#1078)", "batch")
+    for path, text in (main_after or {}).items():  # the default branch moves on after the branch point
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+        git("add", "-A")
+        git("commit", "-m", f"main gains {path}")
+    subject = "batch (#1078)" + ("\n\nPlan-Item: demo:A" if tag_merge else "")
+    git("merge", "-q", "--no-ff", "-m", subject, "batch")
     return repo, tip
 
 
-def _close_pr_repo(w, tmp_path, monkeypatch, follow_up_files, tagged_files=None):
-    repo, tip = _pr_repo(tmp_path, follow_up_files, tagged_files)
+def _close_pr_repo(w, tmp_path, monkeypatch, follow_up_files, tagged_files=None, **repo_args):
+    repo, tip = _pr_repo(tmp_path, follow_up_files, tagged_files, **repo_args)
     from plangraph.keeper.evidence_git import GitAdapter
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
     monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
@@ -314,6 +323,19 @@ def test_editing_an_existing_binary_entry_point_ships_no_new_host_binary(w, tmp_
 def test_a_tagged_edit_or_deletion_of_an_existing_entry_point_ships_no_new_host_binary(
         w, tmp_path, monkeypatch, tagged):
     out = _close_pr_repo(w, tmp_path, monkeypatch, {"docs/x.md": "x\n"}, tagged)
+    assert out["state"] == "done"
+
+
+def test_an_untagged_deletion_of_an_existing_entry_point_ships_no_new_host_binary(w, tmp_path, monkeypatch):
+    out = _close_pr_repo(w, tmp_path, monkeypatch, {"rust/pg-old/src/main.rs": None})
+    assert out["state"] == "done"
+
+
+def test_a_tagged_merge_is_read_against_its_first_parent_only(w, tmp_path, monkeypatch):
+    # The default branch gains a binary after the PR branched; the PR itself is docs only.
+    out = _close_pr_repo(w, tmp_path, monkeypatch, {"docs/x.md": "x\n"},
+                         main_after={"rust/pg-main/src/main.rs": "fn main() {}\n"},
+                         tag_merge=True)
     assert out["state"] == "done"
 
 

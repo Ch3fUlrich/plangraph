@@ -459,7 +459,16 @@ class GitAdapter:
         """
         if not valid_commit_ref(sha):
             raise ValueError("invalid commit")
-        changes = self._name_status(repo, ["--root", "-m", "--end-of-options", sha])
+        # A merge commit is read against its first parent only: against the second one every
+        # file the default branch gained since the PR branched would look added.
+        parents = self._run(repo, ["rev-list", "--parents", "-n", "1",
+                                   "--end-of-options", sha])
+        tokens = parents.stdout.split() if parents.returncode == 0 else []
+        if not tokens or not all(valid_commit_ref(t) for t in tokens):
+            raise RuntimeError("cannot read commit parents")
+        changes = self._name_status(
+            repo, ["--end-of-options", tokens[1], sha] if len(tokens) > 1
+            else ["--root", "--end-of-options", sha])
         merge = self.merge_commit_of(repo, sha, ref)
         if merge and valid_commit_ref(merge[0]):
             proc = self._run(repo, ["rev-list", "--parents", "-n", "1",
