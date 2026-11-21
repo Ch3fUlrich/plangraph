@@ -368,6 +368,9 @@ def test_keeper_migration_needs_a_head_bound_go_marker(env):
     approval.write_text(f"HEAD: {head}\nVERDICT: PASS\n")
     env.load()["checks"]["100"] = [{"name": "ci-gate", "bucket": "pass"}]
     env.save()
+    refused = land(env, approval, name="g1")
+    assert refused.returncode == 1 and "must include MIGRATION 2" in refused.stderr
+    assert not env.calls("pr", "merge")
     row = env.tmp / "go-row.txt"
     for text in (
         f"GO owner/proj PR #100 GO-HEAD {head}; MIGRATION 1",
