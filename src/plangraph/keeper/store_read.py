@@ -58,6 +58,17 @@ class ReadMixin:
                          lambda now: self._ready_text(project=project, n=n,
                                                    owner=owner, agent=bool(agent)))
 
+    def ready_data(self, principal, project=None, n=10, owner=None, agent=False):
+        """The JSON ready read: the groups plus ``unblocks``, built ONCE.
+
+        The HTTP door used to call ``ready`` (a text build nobody read) and then
+        ``_ready_groups`` again: the whole per-row context twice per request.
+        """
+        def build(now):
+            groups = self._ready_groups(project=project, n=n, owner=owner, agent=bool(agent))
+            return {**groups, "unblocks": views.unblocks(self._all_items())}
+        return self._run(principal, "ready", None, build)
+
     def show(self, principal, key, brief=False):
         if brief:
             return self._run(principal, "show", key, lambda now: self._brief(key))

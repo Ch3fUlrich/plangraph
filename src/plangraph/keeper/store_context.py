@@ -252,7 +252,7 @@ class ContextMixin:
         rows = [dict(row) for row in
                 views.ready(items, project=project, owner=owner, agent=agent)]
         inputs, activity = self._inputs(index), self._last_activity_map()
-        indexes = {p: src.work_index(self._adapter("git"), p)
+        indexes = {p: src.work_index_cached(self._adapter("git"), p)
                    for p in {r["project"] for r in rows}}
         for row in rows:
             ctx = self._task_context(row, index, inputs=inputs,
