@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from plangraph.keeper.credential_guard import mask_all
-from plangraph.spawner.env_redact import redact as redact_secrets
+from plangraph.routing_support.leg_state import _redact as redact_secrets
 
 __all__ = ["render", "main", "default_vendor_dir", "cdn_script_tags", "build_sha"]
 
@@ -311,7 +311,7 @@ def _private_word_patterns() -> list | None:
 
 
 def _mask_view_text(text: str, patterns: list) -> str:
-    text = redact_secrets(text)
+    text = redact_secrets(text, limit=None)
     for pattern in patterns:
         text = pattern.sub("[redacted]", text)
     return text
