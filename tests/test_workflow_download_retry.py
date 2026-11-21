@@ -173,6 +173,14 @@ def test_temporal_export_uses_the_restored_binary(tmp_path):
     assert env_file == f"TEMPORAL_CLI={binary}\n"
 
 
+def test_temporal_export_refuses_a_directory_named_like_the_binary(tmp_path):
+    binary = tmp_path / "temporal"
+    binary.mkdir()
+    proc, env_file, _ = _run_step(_temporal_steps()["Export"], tmp_path, binary)
+    assert proc.returncode == 1 and env_file == ""
+    assert "missing or not executable" in proc.stdout
+
+
 @pytest.mark.parametrize("mode", [None, 0o644])
 def test_temporal_export_fails_clearly_when_binary_is_missing(tmp_path, mode):
     binary = tmp_path / "missing" / "temporal"

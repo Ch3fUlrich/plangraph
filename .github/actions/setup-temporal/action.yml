@@ -42,7 +42,7 @@ runs:
         TEMPORAL_BIN: ${{ steps.temporal-path.outputs.bin }}
       run: |
         set -euo pipefail
-        if [ ! -x "$TEMPORAL_BIN" ]; then
+        if [ ! -f "$TEMPORAL_BIN" ] || [ ! -x "$TEMPORAL_BIN" ]; then
           echo "::error::setup-temporal: Temporal CLI missing or not executable at $TEMPORAL_BIN after cache restore and download"
           exit 1
         fi
