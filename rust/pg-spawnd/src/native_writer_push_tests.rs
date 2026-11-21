@@ -1,6 +1,25 @@
 use super::*;
 
 #[test]
+fn push_gate_fix_turn_without_new_commit_keeps_the_refusal() {
+    let mut driver = Fake {
+        push_failures: 1,
+        head_script: vec!["base", "final-head"],
+        ..fake()
+    };
+
+    let record = run(&mut driver, json!({}), "brief");
+
+    assert_eq!(record["status"], "failed", "{record}");
+    assert_eq!(driver.pushed, ["final-head"]);
+    assert_eq!(driver.reviews.len(), 1);
+    assert_eq!(record["resumes"], 1);
+    let reason = record["reason"].as_str().unwrap();
+    assert!(reason.contains("no_commit"));
+    assert!(reason.contains("pre-push: fixture scrub hit"));
+}
+
+#[test]
 fn push_gate_fix_turn_reviews_and_pushes_the_new_commit() {
     let mut driver = Fake {
         push_failures: 1,

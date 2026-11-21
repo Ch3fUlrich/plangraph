@@ -343,6 +343,12 @@ fn writer_attempt(
                     resume(driver, record, &session, &format!(
                         "The push of your accepted head {head} was refused:\n{failure}\nFix the cause, commit and end your turn; keep this session."
                     ))?;
+                    if driver.head().map_err(|e| (7, e))? == head {
+                        return Err((
+                            7,
+                            format!("no_commit: push fix left HEAD at {head}: {failure}"),
+                        ));
+                    }
                     continue;
                 }
             }
