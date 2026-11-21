@@ -68,6 +68,7 @@ if sys.platform.startswith('linux'):
     from plangraph.spawner.proc_kill import _stat
     tree['supervisor_pid_start'] = (_stat(os.getpid()) or (None,) * 5)[4]
 tree['supervisor_stderr_path'] = path
+tree['supervisor_pid'] = os.getpid()
 read_fd, write_fd = os.pipe()
 os.dup2(write_fd, 2)
 os.close(write_fd)
@@ -113,7 +114,7 @@ raise SystemExit(code)
         payload.update(state=str(state), _tree=tree, _admitted=True,
                        _cwd=getattr(service.runner, 'default_cwd', None) or os.getcwd())
         with os.fdopen(os.open(log, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
-            child = cli._start_supervisor([sys.executable, '-c', bootstrap, str(log)],
+            child = cli._start_supervisor(cli.scope_argv([sys.executable, '-c', bootstrap, str(log)]),
                 cwd=tree['tree_path'], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=errors, **background_process_options(new_session=True, platform=os.name))
         def handshake():

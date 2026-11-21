@@ -171,7 +171,10 @@ class SpawnService(SeatSpawnMixin):
                                benchmark=benchmark, require_bench=require_bench)
             from plangraph.planner.routing import SpawnRefused, explicit_only_skips
             if plan.error:
-                raise SpawnRefused("\n".join([plan.error, *(f"skip {row['leg']}: {row['reason']}" for row in plan.skipped)]))
+                refused = SpawnRefused("\n".join([plan.error, *(f"skip {row['leg']}: {row['reason']}" for row in plan.skipped)]))
+                # The record's error is the reason alone; the skip list is its own field.
+                refused.reason, refused.skipped = plan.error, [dict(row) for row in plan.skipped]
+                raise refused
             return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))), reasons=self._seat_reasons([s.family for s in plan.review_seats], plan.reasons))
         except Exception as exc:
             self.save_refusal(exc, role)
@@ -241,7 +244,8 @@ class SpawnService(SeatSpawnMixin):
                       started=time.time(), ended=time.time(),
                       status='refused' if isinstance(exc, SpawnRefused) else 'failed',
                       exit_code=3 if isinstance(exc, BenchmarkError) else 2 if isinstance(exc, SpawnRefused) else 1,
-                      refusal=type(exc).__name__, error=str(exc),
+                      refusal=type(exc).__name__, error=getattr(exc, 'reason', None) or str(exc),
+                      **({'skipped': exc.skipped} if getattr(exc, 'skipped', None) else {}),
                       legs=list(exc.legs) if isinstance(exc, BenchRequired) else [],
                       evidence=list(exc.gaps) if isinstance(exc, BenchRequired) else [], **extra)
         if placement is not None: record.update(placement=placement, host=placement['host'])

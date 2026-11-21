@@ -1,0 +1,1 @@
+Spawner supervisors start in their own systemd user scope and record `supervisor_pid`, so a run outlives the session that started it; a run whose child exit was recorded keeps its real exit instead of `orphaned`, and a route refusal keeps its skip list in a separate `skipped` field instead of `error`.

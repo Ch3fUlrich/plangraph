@@ -58,6 +58,29 @@ def _drain_chunks(chunks, write, observe=lambda size: None):
     if pending:
         write(clean(pending.decode('utf-8')))
 
+_SCOPE_PROBE = []
+
+
+def scope_argv(argv):
+    """``argv`` run inside its own transient systemd user scope when one is available.
+
+    A supervisor started from a session is detached (own session) but still inside the session's
+    cgroup, so stopping that session (a handoff) killed it and left its run unfinished. A scope of
+    its own outlives the caller. The command is exec'd in place (same pid); without systemd,
+    off Linux or with ``PLANGRAPH_SUPERVISOR_SCOPE=0`` the argv is returned unchanged.
+    """
+    if not sys.platform.startswith('linux') or os.environ.get('PLANGRAPH_SUPERVISOR_SCOPE') == '0':
+        return list(argv)
+    if not _SCOPE_PROBE:
+        try:
+            probe = subprocess.run(['systemd-run', '--user', '--scope', '--quiet', '--collect', 'true'],
+                                   stdin=subprocess.DEVNULL, capture_output=True, timeout=10, check=False)
+            _SCOPE_PROBE.append(probe.returncode == 0)
+        except (OSError, subprocess.TimeoutExpired):
+            _SCOPE_PROBE.append(False)
+    return ['systemd-run', '--user', '--scope', '--quiet', '--collect', *argv] if _SCOPE_PROBE[0] else list(argv)
+
+
 def _prune_supervisor_logs(state):
     logs = []
     for path in state.glob('supervisor-*.stderr.log'):
@@ -379,6 +402,7 @@ def service_with_log(*args, **kwargs):
     save = service._save
     def save_with_log(record):
         record["supervisor_stderr_path"] = path
+        record["supervisor_pid"] = os.getpid()
         record["supervisor_pid_start"] = (_stat(os.getpid()) or (None,) * 5)[4] if sys.platform.startswith("linux") else None
         return save(record)
     service._save = save_with_log
@@ -397,7 +421,7 @@ finally:
 raise SystemExit(code)
 '''
                 with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as errors:
-                    child = _start_supervisor([sys.executable, '-c', bootstrap, str(log_path)],
+                    child = _start_supervisor(scope_argv([sys.executable, '-c', bootstrap, str(log_path)]),
                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
                         env=env, text=True, encoding="utf-8", errors="replace", **background_process_options(new_session=True, platform=os.name))
                     try:
