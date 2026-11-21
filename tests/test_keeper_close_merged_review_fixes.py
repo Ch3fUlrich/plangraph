@@ -1,5 +1,6 @@
 """PR 878 review regressions: authority, freshness and witnessed seats."""
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,9 +8,47 @@ import pytest
 
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.evidence_git import GitAdapter
-from test_keeper_close_merged import HEAD, MERGE, unseated_w
+from test_keeper_close_merged import HEAD, MERGE, unseated_w, w  # noqa: F401
 from test_keeper_close_merged_router_path import mirrored_reviews
 from test_keeper_waiver_validation import historical_waiver_fixture
+
+
+def test_tip_merge_with_plan_item_trailers_closes_both_keys(w, tmp_path, monkeypatch):
+    from plangraph.keeper import context_sources
+
+    repo = tmp_path / "tip-merge"
+    repo.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-C", str(repo), "-c", "user.name=Fixture",
+             "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false",
+             *args], text=True).strip()
+
+    git("init", "-q", "-b", "main")
+    git("commit", "--allow-empty", "-qm", "base")
+    git("checkout", "-qb", "fixture-pr")
+    git("commit", "--allow-empty", "-qm", "work")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    subject = "Merge work mentioning #42 (#1087)"
+    git("merge", "--no-ff", "-q", "-m", subject,
+        "-m", "Plan-Item: demo:A\nPlan-Item: demo:H", "fixture-pr")
+    tip = git("rev-parse", "main")
+    adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    assert context_sources.named_merge(adapter, "demo", tip) == {"head": head, "pr": 1087}
+    w.store.ctx["git"] = adapter
+    monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
+    w.decision_path.write_text(f"| D-5504 | demo | GO {head} demo:A demo:H |\n")
+    w.conn.execute("UPDATE items SET state='open' WHERE key IN ('demo:A', 'demo:H')")
+
+    for key in ("demo:A", "demo:H"):
+        result = w.store.close_merged(w.p("router"), key, "D-5504",
+                                      ["google", "deepseek"], from_open=True, apply=True)
+        assert result["state"] == "done"
+        assert w.store._evidence(key)[-1]["ref"]["prs"][0]["pr"] == 1087
+        indexed = context_sources.indexed_work(context_sources.work_index(adapter, "demo"), key)
+        assert indexed["commits"][0]["merge"] == {"sha": tip, "subject": subject, "pr": 1087}
 
 
 @pytest.mark.parametrize("name", [

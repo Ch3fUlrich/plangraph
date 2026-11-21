@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell
-from .evidence_git import plan_items, valid_ref
+from .evidence_git import is_first_parent_merge, plan_items, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
@@ -37,6 +37,7 @@ _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 _PR_RE = re.compile(r"#(\d+)")
+_PR_SUFFIX_RE = re.compile(r"\(#([1-9][0-9]*)\)\Z")
 MERGE_REPO_LINE = re.compile(
     r"[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)"
     r"(?:[ \t]+([a-fA-F0-9]{40}|#[1-9][0-9]*))?[ \t]*")
@@ -64,6 +65,12 @@ def _did_num(did):
         return int(str(did).split("-", 1)[1])
     except (IndexError, ValueError):
         return -1
+
+
+def _merge_pr(subject):
+    text = subject.strip()
+    match = _PR_SUFFIX_RE.search(text) or _PR_RE.search(text)
+    return int(match[1]) if match else None
 
 
 # ------------------------------------------------------------------ git
@@ -214,11 +221,11 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             introduced.append(sha)
             todo.extend(records.get(sha, ([],))[0])
         if len(parents) > 1:
-            match = _PR_RE.search(commit["subject"])
-            merge = {"sha": landing, "subject": commit["subject"],
-                     "pr": int(match.group(1)) if match else None}
+            pr = _merge_pr(commit["subject"])
+            merge = {"sha": landing, "subject": commit["subject"], "pr": pr}
+            own_pr = len(parents) == 2 and pr
             for sha in introduced:
-                if sha != landing and sha in records:
+                if sha in records and (sha != landing or own_pr):
                     records[sha][1]["merge"] = merge
     commits, pulls = {}, {}
     for sha, (_, commit, names) in records.items():
@@ -358,16 +365,13 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
 
 def _merge_of(git, repo, ref, sha):
     """The first-parent merge on *ref* that introduced *sha*, or ``None``."""
-    # A merge commit on the ref's first-parent chain (a batch merge that carries
-    # the trailers itself) introduced itself, however many merges came after it.
-    parents = (_ok(git, repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]) or "").split()
-    if len(parents) > 2:
-        chain = _ok(git, repo, ["rev-list", "--first-parent", "--merges", "--end-of-options", f"{sha}^..{ref}"])
-        if chain is not None and sha in chain.split():
-            subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
-                                       "--end-of-options", sha]) or "").strip()
-            match = _PR_RE.search(subject)
-            return {"sha": sha, "subject": subject, "pr": int(match.group(1)) if match else None}
+    own_merge = is_first_parent_merge(git, repo, sha, ref)
+    if own_merge is None:
+        return None
+    if own_merge:
+        subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
+                                   "--end-of-options", sha]) or "").strip()
+        return {"sha": sha, "subject": subject, "pr": _merge_pr(subject)}
     # Combining --ancestry-path with --first-parent prunes paths through
     # second parents (nested batches and PR branches refreshed from main).
     # Walk ancestry separately, then intersect with the ref's landing merges.
@@ -388,9 +392,7 @@ def _merge_of(git, repo, ref, sha):
         return None
     subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                "--end-of-options", found[-1]]) or "").strip()
-    match = _PR_RE.search(subject)
-    return {"sha": found[-1], "subject": subject,
-            "pr": int(match.group(1)) if match else None}
+    return {"sha": found[-1], "subject": subject, "pr": _merge_pr(subject)}
 
 
 def pr_merge_of(git, project, head):
@@ -458,9 +460,8 @@ def named_merge(git, project, revision):
         return None
     parent_text, _, subject = shown.partition("\x1f")
     parents = parent_text.split()
-    match = _PR_RE.search(subject)
     return {"head": parents[1] if len(parents) == 2 else sha,
-            "pr": int(match[1]) if match else None}
+            "pr": _merge_pr(subject)}
 
 
 _REFS_LOCK = threading.Lock()

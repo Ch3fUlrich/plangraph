@@ -14,7 +14,7 @@ Preflight pins Cargo to `PLANGRAPH_CARGO_TARGET_DIR` (default
 `~/.cache/plangraph/cargo-target`), disables incremental builds and holds the
 shared cleanup lease. It checks the host cache cap before and after each Cargo
 command; never override this with a private target. See [disk limits and
-cleanup](docs/operations/spawner-disk-admission.md).
+cleanup](docs/operations/spawner-disk-admission.md). For md-sync changes, use a temporary `XDG_STATE_HOME` when testing repeated syncs so the invalid-row diagnostics ledger starts empty.
 
 Rust packages outside the `rust/` workspace (including `rust/worker`) run through
 their owning `Cargo.toml` with `--manifest-path`, including excluded packages
