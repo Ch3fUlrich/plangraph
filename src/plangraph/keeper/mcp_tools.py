@@ -12,10 +12,10 @@ def _tool(name, description, props=None, required=()):
 TOOLS = (
     _tool("requeue", "Router: revive a parked card and retire its exec run.",
           {"key": {"type": "string"}, "reason": {"type": "string"}}, ("key",)),
-    _tool("ready", "Open items with deps done, D-ids and STALE (last). mine=own, agent=no operator steps. Read show first.",
+    _tool("ready", "Open items with deps done, D-ids and STALE (last). mine=own, agent=no operator steps. Run show before work.",
           {"project": {"type": "string"}, "n": {"type": "integer"}, "owner": {"type": "string"},
            "mine": {"type": "boolean"}, "agent": {"type": "boolean"}}),
-    _tool("show", "Read before work: desc, done, deps/dependents + why, evidence, D-ids, activity, merges, open lanes, STALE. brief=true for less.",
+    _tool("show", "ALWAYS read before work, never start from a title: desc, done, deps/dependents + why, evidence, D-ids, activity, merges, open lanes, STALE. brief=true for less.",
           {"key": {"type": "string"}, "brief": {"type": "boolean"}}, ("key",)),
     _tool("claim", "Claim after show. Merged/superseded/outdated premises require force_stale=<reason> (audited).",
           {"key": {"type": "string"}, "lease_s": {"type": "integer"}, "force_stale": {"type": "string"}}, ("key",)),
