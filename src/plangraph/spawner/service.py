@@ -200,6 +200,14 @@ class SpawnService(SeatSpawnMixin):
         from plangraph.planner.legs import leg_active
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
         return replace(plan, legs=witness_order(card, role, live(plan.legs), measured_down(self.state)), review_seats=live(plan.review_seats))
+    def _given_writers(self, card, role, writer_families, review_of):
+        """The writer families a run record names: the caller's, the reviewed run's and, for a review, the head's."""
+        families = list(writer_families)
+        if review_of:
+            source = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
+            families += [f for f in (source.get('given_writer_families') or [source.get('writer_family')])
+                         if f and f not in families]
+        return with_head_writers(card, role, families)
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)
@@ -358,7 +366,7 @@ class SpawnService(SeatSpawnMixin):
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
-            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=with_head_writers(card, role, list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else [])),
+            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=self._given_writers(card, role, writer_families, review_of),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
         if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(record['run_id'])

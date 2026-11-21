@@ -109,7 +109,7 @@ def head_writer_families(card):
     import subprocess
     try:
         proc = subprocess.run(
-            ["git", "-C", ref["repo"], "log", "-1", "--no-color", "--format=%(trailers:key=Writer,valueonly,unfold)", ref["head"]],
+            ["git", "-C", ref["repo"], "log", "-1", "--no-color", "--format=%(trailers:key=Writer,valueonly,unfold)", ref["head"], "--"],  # "--": head is a revision, never a path
             stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=30, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:

@@ -370,3 +370,23 @@ def test_seat_refusal_keeps_the_skip_list_in_its_own_field(tmp_path, monkeypatch
         asyncio.run(service.spawn(card=ROUTE_CARD, role="review", writer_families=["claude"], seats=True, dry_run=True))
     record = service.ps()["runs"][0]
     assert record["error"] == "no eligible leg" and record["skipped"] == list(skipped)
+
+
+def test_head_that_is_a_tracked_filename_is_not_read_as_a_commit(tmp_path, monkeypatch):
+    from plangraph.planner.seats import head_writer_families
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    card["diff_ref"]["head"] = "f.txt"   # a tracked path whose last commit carries a Writer trailer
+    with pytest.raises(SpawnRefused, match="cannot read the Writer trailer"):
+        head_writer_families(card)
+
+
+def test_flag_and_review_of_families_are_both_recorded(tmp_path, monkeypatch):
+    from plangraph.spawner.service import SpawnService
+    service = SpawnService(state=tmp_path / "state")
+    source = service.save_refusal(SpawnRefused("x"))   # any saved run
+    run_id = "run-" + "c" * 12
+    service._save(dict(run_id=run_id, role="implement", status="completed", started=1.0, ended=2.0,
+                       attempts=[], stdout_tail="", exit_code=0, cwd=str(tmp_path),
+                       given_writer_families=["openai"], writer_family="openai"))
+    assert service._given_writers(CARD, "review", ["mimo"], run_id) == ["mimo", "openai"]
+    assert service._given_writers(CARD, "review", ["mimo"], None) == ["mimo"]
