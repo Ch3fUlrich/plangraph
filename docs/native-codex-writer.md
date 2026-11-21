@@ -57,7 +57,11 @@ gates on the clean final head, then pushes it once to the card's optional
 `push_ref` (`refs/heads/...`, no force) and records `status_line: DONE`.
 The review seat follows the current spawner route. A card can pin a seat with
 `review_leg` and an audited `review_override_reason` of at least ten characters.
-The review record includes the selected leg and its harness.
+The review record includes the selected leg and its harness. Before automatic
+review, the worker checks the target host's route for repository-capable seats.
+An empty route records `review_status: deferred_to_batch_seat` and the per-leg
+`review_causes`, exits successfully after final gates, and leaves the head for
+the batch review. Once a seat is admitted, normal verdict retries apply.
 The card's `review_dir` selects a target-host directory; the default is
 `<worktree>/reviews`.
 

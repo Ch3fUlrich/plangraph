@@ -405,7 +405,17 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
 argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
-assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
+assert value('--role') == 'review' and card['repository_review_required']
+verb = argv[argv.index('--state') + 2]
+if verb == 'route':
+    if (state / 'no-review-seat').exists():
+        print(json.dumps({'legs': [], 'skipped': [
+            {'leg': 'agy-gemini-4-hydrogen-high', 'reason': 'limited'},
+            {'leg': 'mimo-v2.6-pro', 'reason': 'repository_review_tools_unavailable'}]}))
+    else:
+        print(json.dumps({'legs': [{'id':'agy-gemini-4-hydrogen-high'}], 'skipped': []}))
+    sys.exit(0)
+assert verb == 'spawn' and pathlib.Path(value('--cwd')) == pathlib.Path.cwd()
 families = [argv[i + 1] for i, a in enumerate(argv) if a == '--writer-family']
 # The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
 assert sorted(families) == ['anthropic', 'google', 'openai'], families
@@ -505,6 +515,12 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         review_verdict(&text, &head, &[])["verdict"],
         "REQUEST_CHANGES"
     );
+    host.reviews_started = 0;
+    fs::write(state.join("no-review-seat"), "").unwrap();
+    let deferred = host.review(&head, None).unwrap();
+    assert_eq!(deferred["status"], "deferred_to_batch_seat");
+    assert_eq!(deferred["causes"][0]["reason"], "limited");
+    assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
     // A spawner that prints no run record is an error, never a verdict.
     host.review_cli = vec!["true".into()];
     assert!(host

@@ -517,9 +517,12 @@ mod base;
 mod context;
 #[path = "native_writer_review.rs"]
 mod review;
-use review::{review_cli, review_override};
+use review::review_cli;
+#[path = "native_writer_review_route.rs"]
+mod review_route;
 #[cfg(test)]
 use review::{review_run_text, review_verdict};
+use review_route::review_override;
 #[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;

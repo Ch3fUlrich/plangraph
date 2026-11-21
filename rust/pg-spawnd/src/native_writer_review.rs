@@ -230,6 +230,14 @@ impl Host {
             &[super::WRITER_MODEL],
             &trusted_python,
         )?;
+        let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
+            "repository_review_required":true,
+            "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
+        if self.reviews_started == 1 && self.review_override.is_none() {
+            if let Some(deferred) = self.review_preflight(clone, &card, &families, head)? {
+                return Ok(deferred);
+            }
+        }
         // Fixed prefix, the review skill as rules and the item context of the versioned
         // review brief, from the one renderer; the context carries the actual evidence.
         let context = self.brief_context(base, head);
@@ -241,9 +249,6 @@ impl Host {
         let prompt = self.review_prompt(base, head, prev, &families, &versioned);
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
-        let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
-            "repository_review_required":true,
-            "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
         let serialized_card = card.to_string();
         let mut command = self.command(&self.review_cli[0]);
         command
@@ -262,6 +267,8 @@ impl Host {
             ]);
         }
         let printed = command
+            .arg("--cwd")
+            .arg(clone)
             .arg("--prompt-file")
             .arg(&prompt_path)
             .args(["--wait", "3300", "--json"])
@@ -327,29 +334,6 @@ pub(crate) fn review_verdict(text: &str, head: &str, paths: &[String]) -> Value 
     }
     json!({"verdict":verdict,"head":head,"text":text})
 }
-/// Optional card pin with the same audited reason bar as other explicit legs.
-pub(super) fn review_override(card: &Value) -> Result<Option<(String, String)>, String> {
-    let (leg, reason) = (&card["review_leg"], &card["review_override_reason"]);
-    if leg.is_null() && reason.is_null() {
-        return Ok(None);
-    }
-    let leg = leg
-        .as_str()
-        .filter(|leg| {
-            leg.starts_with(|c: char| c.is_ascii_alphanumeric())
-                && leg
-                    .bytes()
-                    .all(|c| c.is_ascii_alphanumeric() || b"-._".contains(&c))
-        })
-        .ok_or("review_leg_invalid: expected a registered leg ID")?;
-    let reason = reason
-        .as_str()
-        .map(str::trim)
-        .filter(|reason| reason.chars().count() >= 10)
-        .ok_or("review_leg_needs_reason: card.review_override_reason must contain at least 10 characters")?;
-    Ok(Some((leg.into(), reason.into())))
-}
-
 /// Spawner CLI argv prefix for review runs; PLANGRAPH_NATIVE_REVIEW_CLI (a JSON string
 /// array) replaces the default `python3 -m plangraph.spawner.cli`.
 pub(super) fn review_cli() -> Result<Vec<String>, String> {

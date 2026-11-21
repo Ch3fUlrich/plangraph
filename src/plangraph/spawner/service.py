@@ -167,12 +167,13 @@ class SpawnService(SeatSpawnMixin):
         runs = [with_stale(record) for record in read_runs(self.state)]
         return {'runs': sorted(runs, key=lambda r: r.get('started', 0), reverse=True)}
 
-    def route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
+    def route(self, card, role='implement', writer_families=(), review_of=None, *,
+              benchmark=None, require_bench=False, repository_preview=False):
         try:
             plan = self._route(card, role, writer_families, review_of,
                                benchmark=benchmark, require_bench=require_bench)
             from plangraph.planner.routing import SpawnRefused, explicit_only_skips
-            if plan.error:
+            if plan.error and not (repository_preview and not plan.legs):
                 raise SpawnRefused("\n".join([plan.error, *(f"skip {row['leg']}: {row['reason']}" for row in plan.skipped)]))
             return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))), reasons=self._seat_reasons([s.family for s in plan.review_seats], plan.reasons))
         except Exception as exc:

@@ -264,6 +264,8 @@ def main(argv=None):
                 service.save_refusal(exc, args.role)
             raise
         if args.verb == 'route':
+            if args.role == 'review' and args.json and (args.card or {}).get('repository_review_required') is True:
+                options['repository_preview'] = True
             result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
             if args.writer_snapshot:
                 from plangraph.planner.legs import DEFAULT_LEGS
@@ -498,6 +500,8 @@ raise SystemExit(code)
                 # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
                 return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in result['seats']) else 1
             if 'status' not in result:
+                if args.verb == 'route' and options.get('repository_preview') and not result.get('legs'):
+                    return 0
                 return 2 if result.get('error') else 0
             code = result.get('exit_code')
             return code if code is not None else (0 if result.get('status') == 'running' else 1)

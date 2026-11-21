@@ -122,3 +122,21 @@ def test_native_review_route_requires_repository_tools():
     assert all(leg.harness != "opencode" and leg.tool_mode == "tools" for leg in plan.legs)
     reasons = {row["leg"]: row["reason"] for row in plan.skipped}
     assert reasons["opencode-go-deepseek-v4-flash"] == "repository_review_tools_unavailable"
+
+
+def test_native_review_cli_preview_reports_empty_route_with_causes(tmp_path, monkeypatch, capsys):
+    import json
+
+    from plangraph.planner import legs
+    from plangraph.spawner.cli import main
+
+    monkeypatch.delenv("PLANGRAPH_OWN_HARNESS", raising=False)
+    monkeypatch.setattr(legs, "client_installed", lambda name: name == "opencode")
+    card = {"estimate_tokens": 1000, "repository_review_required": True}
+    assert main(["--state", str(tmp_path), "route", "--role", "review", "--writer-family", "gpt",
+                 "--json", "--card", json.dumps(card)]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["legs"] == []
+    reasons = {row["leg"]: row["reason"] for row in plan["skipped"]}
+    assert reasons["agy-gemini-4-hydrogen-high"] == "client_missing"
+    assert reasons["opencode-go-deepseek-v4-flash"] == "repository_review_tools_unavailable"
