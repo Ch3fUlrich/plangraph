@@ -52,8 +52,12 @@ the delta from the previous head. The HIGH+MED count of each round goes to
 `MAX_ROUNDS` (exit 3 with `round_stop` `round_cap`, `no_progress` or
 `slow_progress`; `no_session` when Codex
 reported no session ID to resume). ACCEPT runs the same
-gates on the clean final head, then pushes it once to the card's optional
-`push_ref` (`refs/heads/...`, no force) and records `status_line: DONE`.
+gates on the clean final head, then pushes to the card's optional
+`push_ref` (`refs/heads/...`, no force). A refused push records the head and
+gate output in `push_failures` and gives the same session up to two fix turns
+within the overall review cap. A fix must commit a new head and pass fast
+checks and review before the next push. A successful push records
+`status_line: DONE`. Exhaustion keeps the gate output in the failed run record.
 The card's `review_dir` selects a target-host directory; the default is
 `<worktree>/reviews`.
 

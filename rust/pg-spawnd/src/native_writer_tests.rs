@@ -29,6 +29,7 @@ struct Fake {
     stamped: Vec<String>,
     reviews: Vec<Option<serde_json::Value>>,
     pushed: Vec<String>,
+    push_failures: usize,
 }
 impl Driver for Fake {
     fn prepare(&mut self) -> Result<String, String> {
@@ -121,6 +122,9 @@ impl Driver for Fake {
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         self.pushed.push(head.into());
+        if self.pushed.len() <= self.push_failures {
+            return Err("pre-push: fixture scrub hit".into());
+        }
         Ok(Some("refs/heads/lane/fixture".into()))
     }
     fn save(&mut self, _: &serde_json::Value) -> Result<(), String> {
@@ -713,3 +717,5 @@ fn round_stop_is_the_round_progress_rule_capped_at_max_rounds() {
 mod idle;
 #[path = "native_writer_placement_tests.rs"]
 mod placement;
+#[path = "native_writer_push_tests.rs"]
+mod push;

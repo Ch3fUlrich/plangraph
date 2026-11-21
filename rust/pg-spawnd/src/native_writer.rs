@@ -18,7 +18,7 @@ pub(crate) trait Driver {
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String>;
     /// Final gates on the accepted head, the commit-trailer gate included.
     fn gates(&mut self) -> Result<(), String>;
-    /// Push the accepted head once; returns the pushed ref, or None when no push is configured.
+    /// Push the accepted head; returns the pushed ref, or None when no push is configured.
     fn push(&mut self, _head: &str) -> Result<Option<String>, String> {
         Ok(None)
     }
@@ -32,6 +32,8 @@ pub(crate) trait Driver {
 const REVIEW_TRIES: usize = 3;
 /// Fast-check fix turns per head before the run fails.
 const FAST_CHECK_FIXES: usize = 2;
+/// A refused push can trigger two fix turns, subject to the overall review cap.
+const PUSH_FIXES: usize = 2;
 /// Resumes after turns that left no commit beyond the base before the run fails.
 const NO_COMMIT_RESUMES: usize = 2;
 /// Stop rule after a REQUEST_CHANGES round, given the confirmed HIGH+MED count of every
@@ -114,7 +116,12 @@ fn lifecycle(
             Some(text) => format!(
                 "{prompt}\nOpen findings of the last review on this worktree; fix them:\n{text}\n"
             ),
-            None => prompt.clone(),
+            None => match latest_push_failure(record) {
+                Some(failure) => {
+                    format!("{prompt}\nUnresolved push failure on this worktree:\n{failure}\n")
+                }
+                None => prompt.clone(),
+            },
         };
         match writer_attempt(driver, record, &launch) {
             Err((6, error)) => {
@@ -137,6 +144,31 @@ fn lifecycle(
     }
     unreachable!()
 }
+fn latest_push_failure(record: &Value) -> Option<&str> {
+    let failure = record["push_failures"].as_array()?.last()?;
+    (record["review"]["head"] == failure["head"])
+        .then(|| failure["output"].as_str())
+        .flatten()
+}
+
+fn round_cap(record: &Value) -> bool {
+    record["review_rounds"].as_u64().unwrap_or(0) >= crate::round_progress::MAX_ROUNDS
+}
+
+fn push_failure(record: &mut Value, head: &str, failure: &str) -> usize {
+    let history = record
+        .as_object_mut()
+        .unwrap()
+        .entry("push_failures")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .unwrap();
+    history.push(json!({
+        "head":head, "output":failure, "at":chrono::Utc::now().to_rfc3339()
+    }));
+    history.len()
+}
+
 fn resume(
     driver: &mut impl Driver,
     record: &mut Value,
@@ -245,10 +277,23 @@ fn writer_attempt(
             if driver.head().map_err(|e| (7, e))? != head {
                 return Err((7, "HEAD changed during final gates".into()));
             }
-            // One push per package: only the accepted, gated head leaves the host.
-            record["pushed"] = json!(driver.push(&head).map_err(|e| (7, e))?);
-            record["status_line"] = json!("DONE");
-            return Ok(0);
+            match driver.push(&head) {
+                Ok(target) => {
+                    record["pushed"] = json!(target);
+                    record["status_line"] = json!("DONE");
+                    return Ok(0);
+                }
+                Err(failure) => {
+                    let failures = push_failure(record, &head, &failure);
+                    if failures > PUSH_FIXES || round_cap(record) || session.is_empty() {
+                        return Err((7, format!("push failed on {head}: {failure}")));
+                    }
+                    resume(driver, record, &session, &format!(
+                        "The push of your accepted head {head} was refused:\n{failure}\nFix the cause, commit and end your turn; keep this session."
+                    ))?;
+                    continue;
+                }
+            }
         }
         let text = record["review"]["text"].as_str().unwrap_or("").to_owned();
         if record["round_counts"].as_array().is_none() {
@@ -264,7 +309,9 @@ fn writer_attempt(
             .iter()
             .filter_map(Value::as_u64)
             .collect();
-        if let Some(reason) = round_stop(&counts) {
+        if let Some(reason) =
+            round_stop(&counts).or_else(|| round_cap(record).then_some("round_cap"))
+        {
             record["round_stop"] = json!(reason);
             return Ok(3);
         }
