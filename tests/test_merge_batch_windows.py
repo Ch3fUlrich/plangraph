@@ -41,8 +41,8 @@ def no_state_file(monkeypatch):
     monkeypatch.setattr(land, "save_state", lambda st: None)
 
 
-def state(root, base, head):
-    return {"worktree": str(root), "branch": "batch/t", "base_head": base, "head": head, "name": "t"}
+def state(root, base, head, branch="batch/t"):
+    return {"worktree": str(root), "branch": branch, "base": "main", "base_head": base, "head": head, "name": "t"}
 
 
 def test_the_windows_selection_is_the_one_the_ci_windows_job_runs():
@@ -101,7 +101,7 @@ def test_a_green_windows_run_is_recorded_with_its_duration(train, monkeypatch):
     assert land.windows_report(st, head) == line
 
 
-def test_a_train_that_does_not_touch_rust_runs_no_windows_job(tmp_path, monkeypatch):
+def docs_only(tmp_path, branch):
     root = tmp_path / "wt"
     root.mkdir()
     git(root, "init", "-q", "-b", "main")
@@ -109,12 +109,54 @@ def test_a_train_that_does_not_touch_rust_runs_no_windows_job(tmp_path, monkeypa
     git(root, "add", "-A")
     git(root, "commit", "-qm", "base")
     base = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "-b", branch)
     (root / "a.md").write_text("b")
     git(root, "commit", "-qam", "docs")
+    return root, base, git(root, "rev-parse", "HEAD")
+
+
+def test_a_non_candidate_that_selects_no_rust_runs_no_windows_job(tmp_path, monkeypatch):
+    root, base, head = docs_only(tmp_path, "lane/docs")
     monkeypatch.setenv("PLANGRAPH_WINDOWS_HOST", "ws-build")
     transport = Transport()
-    assert land.windows_gate(state(root, base, git(root, "rev-parse", "HEAD")), WORKFLOW, transport=transport) is None
+    assert land.windows_gate(state(root, base, head, "lane/docs"), WORKFLOW, transport=transport) is None
     assert transport.calls == []
+
+
+def test_a_docs_only_batch_candidate_still_runs_windows_because_ci_runs_the_full_suite(tmp_path, monkeypatch):
+    root, base, head = docs_only(tmp_path, "batch/docs")
+    monkeypatch.setenv("PLANGRAPH_WINDOWS_HOST", "ws-build")
+    transport = Transport(0, "test result: ok\n")
+    line = land.windows_gate(state(root, base, head, "batch/docs"), WORKFLOW, transport=transport)
+    assert line and line.startswith("windows ok")
+    assert transport.calls
+
+
+def test_a_block_scalar_run_step_is_read_and_an_empty_selection_is_refused():
+    workflow = ("jobs:\n  rust-windows:\n    steps:\n      - name: t\n        run: |\n"
+                "          cargo test -p pg-spawnd\n          cargo test -p pg-worker-core --lib\n"
+                "  next:\n    steps: []\n")
+    assert land.windows_commands(workflow) == [["cargo", "test", "-p", "pg-spawnd"],
+                                               ["cargo", "test", "-p", "pg-worker-core", "--lib"]]
+    with pytest.raises(MergeBatchError, match="zero tests"):
+        land.windows_commands("jobs:\n  rust-windows:\n    steps:\n      - run: echo hi\n  other:\n    steps: []\n")
+
+
+def test_the_part_cost_of_a_pushed_head_is_appended_to_telemetry(tmp_path, monkeypatch):
+    jobs = {"jobs": [{"name": "pytest", "created_at": "2026-11-21T10:00:00Z", "started_at": "2026-11-21T10:01:00Z",
+                      "completed_at": "2026-11-21T10:11:00Z", "labels": ["self-hosted"]}]}
+    monkeypatch.setattr(land, "gh_json", lambda *a, **k: jobs)
+    record = land.record_part_cost({"repo": "o/p", "pr": 7}, 42, HEAD, telemetry_dir=tmp_path)
+    assert record["pr"] == 7 and record["jobs"][0]["runner"] == "warm"
+    assert (tmp_path / "part-cost.jsonl").read_text().count("\n") == 1
+
+
+def test_a_failing_cost_lookup_never_fails_the_push(tmp_path, monkeypatch, capsys):
+    def broken(*a, **k):
+        raise MergeBatchError("gh api failed")
+    monkeypatch.setattr(land, "gh_json", broken)
+    assert land.record_part_cost({"repo": "o/p"}, 1, HEAD, telemetry_dir=tmp_path) is None
+    assert "part cost not recorded" in capsys.readouterr().err
 
 
 def test_without_a_configured_host_the_gate_says_so_and_the_go_req_has_no_windows_part(train, monkeypatch, capsys):

@@ -167,6 +167,11 @@ def is_train_ref(remote_ref):
     return remote_ref.startswith(TRAIN_REF_PREFIX) and len(remote_ref) > len(TRAIN_REF_PREFIX)
 
 
+def lane_or_train_ref(remote_ref):
+    """Lane and train pushes run no test; a direct push to main or a tag keeps the full preflight."""
+    return remote_ref.startswith("refs/heads/") and remote_ref != "refs/heads/main"
+
+
 def read_train_manifest(path):
     """The parts of a train, in merge order: one full head sha per line, # comments allowed."""
     heads = []
@@ -488,7 +493,9 @@ def push_main():
             # Lane and train pushes run the seconds-fast checks only; the affected tests run once, in CI.
             command = [PYTHON, str(preflight),
                        "--base", affected_base_commit(remote_sha, local_sha),
-                       "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha, "--lane"]
+                       "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
+            if lane_or_train_ref(remote_ref):
+                command.append("--lane")
             if os.environ.get("PREFLIGHT_FAST") == "1":
                 command.append("--fast")
             # Git's hook-local repository variables must not redirect the worktree.

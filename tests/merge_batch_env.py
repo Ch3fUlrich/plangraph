@@ -74,7 +74,11 @@ class Env:
         for tool in ("git", "sh", "env"):
             (self.bin / tool).symlink_to(shutil.which(tool))
         (self.bin / "python3").symlink_to(sys.executable)
+        # pg-policy: a stub that lets every part in; tests point PG_POLICY_BIN at a refusing one.
+        (self.stubs / "pg-policy").write_text("#!/bin/sh\nexit 0\n")
+        (self.stubs / "pg-policy").chmod(0o755)
         self.env = {"PATH": f"{self.stubs}:{self.bin}", "HOME": str(self.home), "GH_STUB_DIR": str(self.stubs),
+                    "PG_POLICY_BIN": str(self.stubs / "pg-policy"),
                     "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
                     "GIT_AUTHOR_NAME": "tester", "GIT_AUTHOR_EMAIL": "tester",
                     "GIT_COMMITTER_NAME": "tester", "GIT_COMMITTER_EMAIL": "tester", "LC_ALL": "C"}

@@ -493,8 +493,11 @@ def test_a_train_runs_everything_whatever_its_labels():
     assert not full_run_required("pull_request", "lane/base", "land/train-x", [])
 
 
-def test_the_full_label_still_makes_a_part_a_candidate():
-    assert full_run_required("pull_request", "main", "batch/part-x", [ci_select.PART_LABEL, ci_select.FULL_LABEL])
+def test_a_part_stays_affected_only_even_with_a_stray_full_label_but_never_a_train():
+    labels = [ci_select.PART_LABEL, ci_select.FULL_LABEL]
+    assert not full_run_required("pull_request", "main", "batch/part-x", labels)
+    assert not full_run_required("pull_request", "main", "lane/x", labels)
+    assert full_run_required("pull_request", "main", "land/train-1", labels)
 
 
 def test_a_part_run_is_selection_in_the_gate_and_a_train_run_must_be_full(capsys):

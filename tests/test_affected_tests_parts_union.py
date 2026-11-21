@@ -46,8 +46,10 @@ def train(tmp_path):
     return root, base, git(root, "rev-parse", "HEAD")
 
 
-def select(root, base, head, *extra):
-    env = dict(os.environ, PLANGRAPH_PUSH_RANGE=f"{base}:{head}")
+def select(root, base, head, *extra, hook_range=True):
+    env = {k: v for k, v in os.environ.items() if k != "PLANGRAPH_PUSH_RANGE"}
+    if hook_range:
+        env["PLANGRAPH_PUSH_RANGE"] = f"{base}:{head}"
     out = subprocess.run([sys.executable, str(TOOL), "--root", str(root), "--base", base, "--head", head,
                           "--files-only", "--local", *extra], env=env, capture_output=True, text=True, check=True)
     return json.loads(out.stdout.splitlines()[0])["tests"], out.stderr
@@ -64,3 +66,18 @@ def test_without_the_flag_the_interaction_selection_stays_as_it_was(tmp_path):
     root, base, head = train(tmp_path)
     tests, _ = select(root, base, head)
     assert "tests/test_users.py" not in tests
+
+
+def test_standalone_preflight_selection_takes_the_union_without_a_hook_range(tmp_path):
+    """preflight runs the selector with --parts-union and no PLANGRAPH_PUSH_RANGE: the batch is base..head."""
+    root, base, head = train(tmp_path)
+    tests, err = select(root, base, head, "--parts-union", hook_range=False)
+    assert "tests/test_users.py" in tests and "mode=pushed-parts parts=2" in err
+
+
+def test_an_explicitly_empty_hook_range_still_refuses_pushed_parts(tmp_path):
+    root, base, head = train(tmp_path)
+    env = dict(os.environ, PLANGRAPH_PUSH_RANGE="")
+    out = subprocess.run([sys.executable, str(TOOL), "--root", str(root), "--base", base, "--head", head,
+                          "--files-only", "--local", "--parts-union"], env=env, capture_output=True, text=True, check=True)
+    assert "mode=normal" in out.stderr

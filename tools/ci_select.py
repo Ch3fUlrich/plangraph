@@ -230,18 +230,20 @@ PART_LABEL = "land-part"
 def full_run_required(event: str, base_ref: str = "", head_ref: str = "", labels=()) -> bool:
     """The full suite runs once per merge candidate; every part and lane pull request gets the affected selection.
 
-    A pull_request event gets the full suite only for a train head (TRAIN_PREFIX), a batch/* head that is not
-    labelled PART_LABEL (the hand-built batch candidate) or a head carrying FULL_LABEL, and only when it
-    targets main. A part (PART_LABEL) runs the affected-only mode, whatever its branch name or draft state.
+    A pull_request event gets the full suite only for a train head (TRAIN_PREFIX), a batch/* head or a head
+    carrying FULL_LABEL, and only when it targets main. A part (PART_LABEL) that is not a train head runs the
+    affected-only mode, whatever its branch name, draft state or other labels.
     Push, schedule, workflow_dispatch and merge_group events are the record or the candidate itself: full."""
     if event != "pull_request":
         return True
     if base_ref != "main":
         return False
     names = set(labels or ())
-    if FULL_LABEL in names or head_ref.startswith(TRAIN_PREFIX):
+    if head_ref.startswith(TRAIN_PREFIX):
         return True
-    return head_ref.startswith(BATCH_PREFIX) and PART_LABEL not in names
+    if PART_LABEL in names:   # a part is never a candidate, not even with a stray ci-full label
+        return False
+    return FULL_LABEL in names or head_ref.startswith(BATCH_PREFIX)
 
 
 def gate(needs: dict, require_full: bool = False) -> list[str]:
@@ -308,6 +310,7 @@ def entry_set(root, base: str, head: str) -> dict:
     python_tests = _load_tool("affected_tests").select_tests(root, paths, local=True, base=base, head=head)["tests"]
     fallback = "tests" in python_tests or suites["full"]
     packages: list[str] = []
+    rust_tests: list[list[str]] = []
     if any(p.startswith("rust/") or p == "rust-toolchain.toml" for p in paths):
         preflight = _load_tool("preflight")
         try:
@@ -316,9 +319,10 @@ def entry_set(root, base: str, head: str) -> dict:
             commands = []
         for command in commands:
             if command[:2] == ["cargo", "test"]:
+                rust_tests.append(command[2:])   # every selected test command, standalone manifests included
                 packages += [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
     return {"paths": paths, "suites": {k: v for k, v in suites.items()}, "python_tests": python_tests,
-            "rust_packages": sorted(set(packages)), "fallback": fallback, "windows": bool(suites["rust"])}
+            "rust_packages": sorted(set(packages)), "rust_tests": rust_tests, "fallback": fallback, "windows": bool(suites["rust"])}
 
 
 def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", root=None) -> list[list[str]]:
@@ -329,9 +333,10 @@ def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", ro
     elif plan.get("python_tests"):
         commands.append([sys.executable, str(TOOLS_DIR / "affected_tests.py"), "--base", base, "--head", head,
                          *(["--root", str(root)] if root else []), "--local", "--run"])
-    if plan.get("rust_packages"):
-        commands.append(["cargo", "test", "--no-fail-fast",
-                         *[arg for package in plan["rust_packages"] for arg in ("-p", package)]])
+    tests = plan.get("rust_tests")
+    if tests is None and plan.get("rust_packages"):
+        tests = [[arg for package in plan["rust_packages"] for arg in ("-p", package)]]
+    commands += [["cargo", "test", "--no-fail-fast", *arguments] for arguments in tests or []]
     return commands
 
 

@@ -134,3 +134,14 @@ def test_a_part_whose_head_breaks_a_quota_test_fails_the_entry_run(tmp_path, cap
 def test_a_part_whose_head_is_green_passes_the_entry_run(tmp_path):
     root, base, head = tree(tmp_path, {"src/plangraph/planner/provider_stop.py": "X = 5\n"}, BASE)
     assert ci_select.main(["entry-set", "--root", str(root), "--base", base, "--head", head, "--run"]) == 0
+
+
+def test_a_standalone_manifest_test_command_survives_into_the_entry_commands(tmp_path):
+    """rust/worker is addressed by --manifest-path with --lib --bins: no crate name, still a command."""
+    base = {**BASE, "rust/worker/Cargo.toml": '[package]\nname = "pg-worker"\n[workspace]\n',
+            "rust/worker/src/lib.rs": "", "rust/Cargo.toml": '[workspace]\nmembers = ["pg-spawnd"]\nexclude = ["worker"]\n'}
+    root, b, head = tree(tmp_path, {"rust/worker/src/lib.rs": "// x\n"}, base)
+    plan = ci_select.entry_set(root, b, head)
+    commands = ci_select.entry_commands(plan, b, head, root)
+    worker = [c for c in commands if c[:3] == ["cargo", "test", "--no-fail-fast"] and "--manifest-path" in c]
+    assert worker and worker[0][-2:] == ["--lib", "--bins"], commands

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents, stack_sorted
-from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff,
+from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, repo_info, save_state, short, state_dir, state_path,
                               workflow_gate, worktrees)
@@ -248,6 +248,42 @@ def rule_problems(args, base, prs, heads):
     return problems
 
 
+def policy_runner(argv):
+    """Run pg-policy: PG_POLICY_BIN when set, else cargo run on this checkout. Returns (returncode, stdout, stderr)."""
+    root = git("rev-parse", "--show-toplevel").stdout.strip()
+    binary = os.environ.get("PG_POLICY_BIN")
+    command = ([binary] if binary else ["cargo", "run", "--quiet", "--locked", "--manifest-path",
+                                        str(Path(root) / "rust/Cargo.toml"), "-p", "pg-policy", "--"]) + argv
+    proc = run(command, cwd=root, ok=None)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def part_entry_problems(base, order, heads, parent, runner=policy_runner):
+    """Apply the part-entry predicate (imported_history, undeclared_dependency, shared_history) to every part.
+
+    A part's parent is the part it is stacked on; the other heads are the batch's parts outside its chain."""
+    problems = []
+    for num in order:
+        chain, up = {num}, num
+        while up in parent:
+            up = parent[up]
+            chain.add(up)
+        grew = True
+        while grew:  # descendants: parts whose chain reaches num
+            grew = False
+            for child, mother in parent.items():
+                if mother in chain and child not in chain:
+                    chain.add(child)
+                    grew = True
+        others = [heads[o] for o in order if o not in chain]
+        code, out, err = runner(["--part-entry", f"{REMOTE}/{base}", heads[num],
+                                 heads[parent[num]] if num in parent else "-", *others])
+        if code:
+            detail = "; ".join(line.strip() for line in (out or err).splitlines() if line.strip())
+            problems.append(f"PR #{num}: {detail or 'part entry check failed'}")
+    return problems
+
+
 def cmd_build(args):
     name = check_name(args.name)
     if state_path(name).exists():
@@ -274,6 +310,12 @@ def cmd_build(args):
     heads = fetch_heads(name, base, order, infos, repo)
     try:
         forced = rule_problems(args, base, [infos[num] for num in order], heads)
+        entry = part_entry_problems(base, order, heads, parent)
+        if entry and not args.force_set:
+            raise MergeBatchError("part entry refused: " + "; ".join(entry) + " (--force-set builds it anyway and logs it)")
+        if entry:
+            print("FORCE-SET: building despite part entry: " + "; ".join(entry), file=sys.stderr)
+        forced = [*forced, *entry]
         for num in order:  # a frozen batch push cannot be fixed by a history rewrite: refuse before the build
             workflow_gate(None, f"{REMOTE}/{base}", f"refs/merge-batch/{name}/{num}")
     except MergeBatchError:

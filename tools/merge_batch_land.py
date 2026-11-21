@@ -107,17 +107,36 @@ WINDOWS_TIMEOUT = 3600
 
 
 def windows_commands(workflow_text):
-    """The cargo test commands of the CI Windows job, read from the workflow: one selection, not a copy."""
+    """The cargo test commands of the CI Windows job, read from the workflow: one selection, not a copy.
+
+    Inline `run: cargo test ...` and block-scalar (`run: |`) steps are read; an empty selection is an error,
+    never a green run of zero tests."""
     block = re.search(r"^  rust-windows:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", workflow_text, re.S | re.M)
     if not block:
         raise MergeBatchError("tests.yml has no Windows job (rust-windows): cannot select the Windows tests")
-    return [shlex.split(c) for c in re.findall(r"^\s+run: (cargo test .+)$", block.group(1), re.M)]
+    commands, lines, index = [], block.group(1).splitlines(), 0
+    while index < len(lines):
+        step = re.match(r"^(\s+)(?:- )?run:\s*(.*?)\s*$", lines[index])
+        index += 1
+        if not step:
+            continue
+        indent, value = len(step.group(1)), step.group(2)
+        if re.fullmatch(r"[|>][-+]?", value):
+            value = ""
+            while index < len(lines) and (not lines[index].strip() or len(lines[index]) - len(lines[index].lstrip()) > indent):
+                value += lines[index].strip() + "\n"
+                index += 1
+        commands += [shlex.split(line) for line in value.splitlines() if line.strip().startswith("cargo test ")]
+    if not commands:
+        raise MergeBatchError("the Windows job of tests.yml selects no cargo test command: refusing to run zero tests")
+    return commands
 
 
-def windows_needed(paths):
-    """The Windows job runs whenever CI selects Rust, also for a Python-only change (tools/ci_select.py)."""
+def windows_needed(paths, full=False):
+    """The Windows job runs whenever CI selects Rust, also for a Python-only change (tools/ci_select.py), and
+    always when CI runs the full suite: a train or batch candidate (ci_select.full_run_required)."""
     import ci_select
-    return bool(ci_select.select(list(paths))["rust"])
+    return bool(full or ci_select.select(list(paths))["rust"])
 
 
 def windows_script(bundle, head, commands, cap_gb):
@@ -151,7 +170,9 @@ def windows_gate(st, workflow_text, transport=_transport):
     ids, when the run is red. The line and its duration are kept in the state for the GO-REQ."""
     wt, head = st["worktree"], git("rev-parse", "HEAD", cwd=st["worktree"]).stdout.strip()
     paths = git("diff", "--name-only", f"{st['base_head']}...{head}", cwd=wt).stdout.split()
-    if not windows_needed(paths):
+    import ci_select
+    full = ci_select.full_run_required("pull_request", st.get("base", "main"), st["branch"], [])
+    if not windows_needed(paths, full):
         return None
     host = os.environ.get(WINDOWS_HOST_ENV, "").strip()
     if not host:
@@ -178,6 +199,24 @@ def windows_gate(st, workflow_text, transport=_transport):
     st["windows"] = {"head": head, "line": line}
     save_state(st)
     return line
+
+
+def record_part_cost(st, run_id, head, telemetry_dir=None):
+    """Append the CI queue and run cost of this head to the part-cost telemetry; never fails the push."""
+    import ci_select
+    try:
+        jobs = gh_json("api", f"repos/{st['repo']}/actions/runs/{run_id}/jobs?per_page=100")["jobs"]
+        jobs = [j for j in jobs if j.get("started_at") and j.get("completed_at") and j.get("created_at")]
+        if not jobs:
+            return None
+        record = ci_select.part_cost(jobs, st.get("pr") or 0, head)
+        folder = Path(telemetry_dir or os.environ.get("PLANGRAPH_TELEMETRY_DIR")
+                      or Path.home() / ".local/share/plangraph/telemetry")
+        ci_select.write_part_cost(folder / "part-cost.jsonl", record)
+        return record
+    except (MergeBatchError, KeyError, ValueError, TypeError, OSError) as exc:
+        print(f"merge_batch: part cost not recorded: {exc}", file=sys.stderr)
+        return None
 
 
 def windows_report(st, head):
@@ -229,6 +268,7 @@ def cmd_push(args):
             raise MergeBatchError(f"CI run {run_id} does not name pushed head {head}")
         st["ci"] = {"id": run_id, "head": head, "state": ci.get("status"), "conclusion": ci.get("conclusion")}
         save_state(st)
+        record_part_cost(st, run_id, head)
     print(f"pushed {st['branch']} {head}; {st['url']}; land needs an approval ending in 'HEAD: {head}' and "
           "'VERDICT: PASS'", file=sys.stderr)
     print(st["pr"])

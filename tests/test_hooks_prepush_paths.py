@@ -144,18 +144,34 @@ def _one(tmp_path, head):
 
 @pytest.mark.parametrize("ref", ["lane/x", "land/train-20261121-3"])
 def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
+    """A valid one-merge train whose part commit lacks the trailers: the manifest passes, commit policy refuses."""
     r, base = repo
     install_preflight(r, tmp_path / "unused")
     base = git(r, "rev-parse", "HEAD").strip()
     git(r, "update-ref", "refs/remotes/origin/main", base)
     git(r, "checkout", "-q", "-b", "part", base)
-    part = commit_file(r, "app/p.py", "p = 1\n")
+    (r / "app/p.py").write_text("p = 1\n")
+    git(r, "add", "-A")
+    git(r, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "part without trailers")
+    part = git(r, "rev-parse", "HEAD").strip()
     git(r, "checkout", "-q", "-b", "train", base)
     git(r, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "merge", "--no-ff", "-q", "part", "-m",
-        "a merge with no trailers at all")
-    git(r, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "no trailers")
+        "merge the part")
     head = git(r, "rev-parse", "HEAD").strip()
     res = run_hook(r, [push_line(ref, head, "0" * 40)],
                    {"TEST_PREFLIGHT_MARKER": str(tmp_path / "argv"), "PLANGRAPH_TRAIN_MANIFEST": str(_one(tmp_path, part))})
     assert res.returncode == 1, res.stdout + res.stderr
+    assert "missing Writer trailer" in res.stdout + res.stderr
+    assert "outside its manifest" not in res.stderr and "out of manifest order" not in res.stderr
     assert not (tmp_path / "argv").exists()
+
+
+@pytest.mark.parametrize("ref,lane", [("refs/heads/lane/x", True), ("refs/heads/main", False), ("refs/tags/v9", False)])
+def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, lane):
+    r, base = repo
+    env = install_preflight(r, tmp_path / "argv")
+    head = commit_file(r, "app/other.py", "y = 2\n")
+    line = f"{ref} {head} {ref} {base}" if ref != "refs/tags/v9" else f"{ref} {head} {ref} {'0' * 40}"
+    res = run_hook(r, [line], env)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert ("--lane" in json.loads((tmp_path / "argv").read_text())) is lane
