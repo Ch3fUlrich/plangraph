@@ -1,2 +1,3 @@
 - The pre-push hook runs file-only affected preflight for phase pushes as well as other refs. Legacy environment flags can no longer skip those tests.
 - File-only preflight shares a 240-second deadline across selection and pytest. A worker replay of a phase ref update ran the real hook, preflight, and selector in 2.267 seconds with unrelated policy subprocesses stubbed. The fixture includes an unaffected test that fails on collection and asserts the selector flags and deadline. The replay updates no remote ref.
+- An explicit fast preflight request is forwarded on landing train refs. Phase and other pushes retain affected-test preflight.

@@ -487,19 +487,23 @@ def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
 
 
 def test_phase_hook_runs_only_affected_tests_with_a_fixed_deadline(repo):
+    import site
     import sys
     import time
 
     r, _ = repo
     preflight = HOOK.parents[1] / "preflight.py"
+    user_base = site.getuserbase()
     # Keep the hook, preflight argument construction, timeout and selector real.
     # The unrelated scrub, policy and Rust subprocesses are covered separately.
     launcher = f"""
 from pathlib import Path
 import os
 import runpy
+import site
 
 assert "PREFLIGHT_TOOLS_DIR" not in os.environ
+assert site.getuserbase() == {user_base!r}
 main = runpy.run_path({str(preflight)!r})["main"]
 settings = main.__globals__
 run = settings["run"]
@@ -527,11 +531,13 @@ raise SystemExit(main(root=Path.cwd()))
                        'raise AssertionError("the full suite was collected")\n')
     git(r, "update-ref", "refs/remotes/origin/main", base)
     head = commit_file(r, "tests/test_selected.py", "def test_selected():\n    assert True\n")
+    env = {"PREFLIGHT_PYTHON": sys.executable, "PREFLIGHT_TEST_WORKERS": "1",
+           "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1",
+           "PREFLIGHT_TOOLS_DIR": str(r / "ambient-tools")}
+    if user_base is not None:
+        env["PYTHONUSERBASE"] = user_base
     started = time.monotonic()
-    result = run_hook(r, [push_line("phase/affected", head, base)],
-                      {"PREFLIGHT_PYTHON": sys.executable, "PREFLIGHT_TEST_WORKERS": "1",
-                       "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1",
-                       "PREFLIGHT_TOOLS_DIR": str(r / "ambient-tools")})
+    result = run_hook(r, [push_line("phase/affected", head, base)], env)
     elapsed = time.monotonic() - started
     print(f"phase pre-push replay wall seconds: {elapsed:.3f}")
     output = result.stdout + result.stderr

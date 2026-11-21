@@ -413,6 +413,9 @@ def push_main():
             command = [PYTHON, str(preflight),
                        "--base", affected_base_commit(remote_sha, local_sha),
                        "--scrub-base", base_commit(remote_sha, local_sha), "--head", local_sha]
+            if (os.environ.get("PREFLIGHT_FAST") == "1"
+                    and remote_ref.startswith(("refs/heads/train/", "refs/heads/land/train-"))):
+                command.append("--fast")
             # Git's hook-local repository variables must not redirect the worktree.
             local_env = set(git_out("rev-parse", "--local-env-vars").splitlines())
             env = {key: value for key, value in os.environ.items() if key not in local_env}

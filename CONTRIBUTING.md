@@ -33,8 +33,9 @@ git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests in a direct run. The pre-push hook runs preflight with
 file-only affected tests for the pushed revision, using the pushing checkout's
-virtual environment when present. Private
-scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
+virtual environment when present.
+On landing train refs (`train/*` and `land/train-*`), `PREFLIGHT_FAST=1` forwards `--fast`.
+Private scrub words come from `PLANGRAPH_SCRUB_WORDS` or `~/.config/plangraph/scrub-words.txt`;
 when neither is present, public rules still run but scrub reports SKIP with a reason.
 `PREFLIGHT_TOOLS_DIR` overrides tool paths in direct preflight runs.
 The revision controls `FILESIZE_REQUIRE_BASE`, `NEWCODE_BASE` and `CHANGELOG_BASE`
