@@ -35,7 +35,7 @@ def test_invalid_card_idle_limit_is_refused(value):
         thresholds({'stuck_min': value})
 
 
-def test_active_child_keeps_hard_deadline():
+def test_live_child_counts_as_activity_but_keeps_hard_deadline():
     gate = Watchdog(thresholds({'stuck_min': 1, 'stall_min': 1, 'max_min': 10}, role='review'),
                     0, 'same', writer=False)
     assert gate.decide(0, 'same', 0, 0) is None
