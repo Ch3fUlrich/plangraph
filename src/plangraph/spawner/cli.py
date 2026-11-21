@@ -71,6 +71,22 @@ def _rotate_log(path):
         pass
     os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode))
 
+def _private_rotating_log(path, max_bytes=1024 * 1024):
+    """Private (0600) size-rotating stderr handler; rotation goes through `_rotate_log`."""
+    import logging
+    from logging.handlers import RotatingFileHandler
+    class PrivateLog(RotatingFileHandler):
+        def _open(self): return os.fdopen(os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'a', encoding='utf-8', newline='')
+        def shouldRollover(self, record): return self.stream.tell() + len(self.format(record).encode('utf-8')) + 1 > self.maxBytes
+        def doRollover(self):
+            self.stream.close()
+            _rotate_log(self.baseFilename)
+            self.stream = self._open()
+    logging.raiseExceptions = False
+    handler = PrivateLog(path, maxBytes=max_bytes, backupCount=1)
+    handler.terminator = ''
+    return handler
+
 def _prune_supervisor_logs(state):
     logs = []
     for path in state.glob('supervisor-*.stderr.log'):

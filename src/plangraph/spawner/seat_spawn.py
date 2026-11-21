@@ -57,7 +57,6 @@ async def fresh_spawn(service, options, *, admission_passed=False):
         _prune_supervisor_logs(state)
         log = state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
         bootstrap = '''import io, json, logging, os, pathlib, sys, threading, traceback
-from logging.handlers import RotatingFileHandler
 from plangraph.spawner import cli as supervisor
 payload = json.loads(sys.stdin.readline())
 tree, admitted, cwd = payload.pop('_tree'), payload.pop('_admitted', False), payload.pop('_cwd')
@@ -71,12 +70,7 @@ tree['supervisor_stderr_path'] = path
 read_fd, write_fd = os.pipe()
 os.dup2(write_fd, 2)
 os.close(write_fd)
-class PrivateLog(RotatingFileHandler):
-    def _open(self): return os.fdopen(os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'a', encoding='utf-8', newline='')
-    def shouldRollover(self, record): return self.stream.tell() + len(self.format(record).encode('utf-8')) + 1 > self.maxBytes
-logging.raiseExceptions = False
-handler = PrivateLog(path, maxBytes=1024 * 1024, backupCount=1)
-handler.terminator = ''
+handler = supervisor._private_rotating_log(path)
 def drain():
     try:
         supervisor._drain_chunks(iter(lambda: os.read(read_fd, 8192), b''), lambda data:
