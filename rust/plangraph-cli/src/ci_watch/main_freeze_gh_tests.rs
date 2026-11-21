@@ -82,6 +82,7 @@ fn the_effects_read_the_recorded_attempt_and_request_one_failed_job_rerun() {
         repo: "o/r".into(),
         dir: dir.path(),
         define: |_: &mut Task| Ok(false),
+        close: |_: &str| Ok(()),
     };
     assert_eq!(fx.attempts(5).unwrap(), (1, true));
     let d: Diagnosis = fx.diagnose(5, 1);
@@ -104,6 +105,7 @@ fn a_pass_reruns_the_flake_once_records_the_budget_and_survives_a_restart() {
             repo: "o/r".into(),
             dir: dir.path(),
             define: |_: &mut Task| Ok(false),
+            close: |_: &str| Ok(()),
         };
         let out = pass(dir.path(), &red(100), &flakes(), &mut fx, 100).unwrap();
         assert!(out.iter().any(|l| l.starts_with("requested RerunFailed")));
@@ -114,6 +116,7 @@ fn a_pass_reruns_the_flake_once_records_the_budget_and_survives_a_restart() {
         repo: "o/r".into(),
         dir: dir.path(),
         define: |_: &mut Task| Ok(false),
+        close: |_: &str| Ok(()),
     };
     pass(dir.path(), &red(200), &flakes(), &mut fx, 200).unwrap();
     assert_eq!(gh.verbs.len(), 1);
@@ -131,6 +134,7 @@ fn a_spent_budget_is_published_for_routing() {
         repo: "o/r".into(),
         dir: dir.path(),
         define: |_: &mut Task| Ok(true),
+        close: |_: &str| Ok(()),
     };
     let mut a = red(100);
     if let State::Red { blocking } = &mut a.state {
@@ -143,6 +147,7 @@ fn a_spent_budget_is_published_for_routing() {
         repo: "o/r".into(),
         dir: dir.path(),
         define: |_: &mut Task| Ok(true),
+        close: |_: &str| Ok(()),
     };
     let mut b = red(300);
     if let State::Red { blocking } = &mut b.state {

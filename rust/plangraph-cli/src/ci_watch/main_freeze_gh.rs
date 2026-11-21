@@ -10,14 +10,23 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-pub struct GhEffects<'a, G: Github, F: FnMut(&mut Task) -> Result<bool>> {
+pub struct GhEffects<
+    'a,
+    G: Github,
+    F: FnMut(&mut Task) -> Result<bool>,
+    C: FnMut(&str) -> Result<()>,
+> {
     pub gh: &'a mut G,
     pub repo: String,
     pub dir: &'a Path,
     pub define: F,
+    /// Cancels a fix task in the keeper by key.
+    pub close: C,
 }
 
-impl<G: Github, F: FnMut(&mut Task) -> Result<bool>> Effects for GhEffects<'_, G, F> {
+impl<G: Github, F: FnMut(&mut Task) -> Result<bool>, C: FnMut(&str) -> Result<()>> Effects
+    for GhEffects<'_, G, F, C>
+{
     fn attempts(&mut self, run: u64) -> Result<(u32, bool)> {
         let latest = self.gh.value(&format!("actions/runs/{run}"))?["run_attempt"]
             .as_u64()
@@ -73,7 +82,7 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>> Effects for GhEffects<'_, G
         };
         self.gh.run_verb(run, verb)
     }
-    fn fix_task(&mut self, run: u64, diagnosis: &Diagnosis) -> Result<()> {
+    fn fix_task(&mut self, run: u64, diagnosis: &Diagnosis) -> Result<String> {
         let test = diagnosis
             .tests
             .first()
@@ -85,7 +94,7 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>> Effects for GhEffects<'_, G
         let mut tasks = super::load_tasks(&task_path)?;
         let old = tasks.get(&key).cloned();
         let task = Task {
-            key,
+            key: key.clone(),
             head: "main".into(),
             pr: None,
             run_id: run,
@@ -101,7 +110,18 @@ impl<G: Github, F: FnMut(&mut Task) -> Result<bool>> Effects for GhEffects<'_, G
         let mut output = Vec::new();
         super::store_task(&task_path, &mut tasks, task, &mut self.define, &mut output)?;
         output.into_iter().for_each(|l| println!("{l}"));
-        Ok(())
+        Ok(key)
+    }
+    fn close_fix_task(&mut self, key: &str) -> Result<()> {
+        let keeper_key = super::load_tasks(&self.dir.join("tasks.jsonl"))?
+            .get(key)
+            .and_then(|t| t.keeper_key.clone())
+            .unwrap_or_else(|| key.to_owned());
+        (self.close)(&keeper_key)?;
+        let path = self.dir.join("tasks.jsonl");
+        let mut tasks = super::load_tasks(&path)?;
+        tasks.remove(key);
+        super::save_tasks(&path, &tasks)
     }
 }
 

@@ -158,6 +158,13 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
             &flakes.flakes,
             now,
             keeper_define,
+            |key: &str| {
+                if use_keeper {
+                    keeper::cancel(env, key)
+                } else {
+                    Ok(())
+                }
+            },
         )?);
     }
     let pending = rows
@@ -381,6 +388,7 @@ fn run_main_freeze(
     flakes: &BTreeMap<String, String>,
     now: i64,
     define: impl FnMut(&mut Task) -> Result<bool>,
+    close: impl FnMut(&str) -> Result<()>,
 ) -> Result<Vec<String>> {
     use crate::land::main_gh::{matrix_from_toml, FileLedger, GhSource, MATRIX};
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -413,6 +421,7 @@ fn run_main_freeze(
         repo: repo.to_owned(),
         dir,
         define,
+        close,
     };
     main_freeze_gh::pass(dir, &answer, flakes, &mut fx, now)
 }

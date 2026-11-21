@@ -8,6 +8,10 @@ const PARENT: &str = "plangraph:PH-ORCH-SETUP";
 trait Keeper {
     fn show(&mut self, key: &str) -> Result<Option<Value>>;
     fn create(&mut self, item: Value) -> Result<()>;
+    /// Cancels an item (the fix task of a main that is green again).
+    fn cancel(&mut self, _key: &str, _reason: &str) -> Result<()> {
+        Err("cancel is not supported".into())
+    }
 }
 struct Http {
     agent: ureq::Agent,
@@ -15,6 +19,14 @@ struct Http {
     token: String,
 }
 impl Keeper for Http {
+    fn cancel(&mut self, key: &str, reason: &str) -> Result<()> {
+        self.agent
+            .post(format!("{}/v1/cancel?fmt=json", self.base))
+            .header("Authorization", format!("Bearer {}", self.token))
+            .send_json(serde_json::json!({"key": key, "reason": reason}))
+            .map_err(|_| "keeper cancel refused; check token permissions".to_owned())?;
+        Ok(())
+    }
     fn show(&mut self, key: &str) -> Result<Option<Value>> {
         match self
             .agent
@@ -42,6 +54,29 @@ impl Keeper for Http {
         Ok(())
     }
 }
+/// Cancels the fix task `key` in the keeper (main is green again).
+pub fn cancel(env: &BTreeMap<String, String>, key: &str) -> Result<()> {
+    let mut http = http(env)?;
+    http.cancel(key, "main is green again")
+}
+
+fn http(env: &BTreeMap<String, String>) -> Result<Http> {
+    let base = env.get("PG_URL").ok_or("PG_URL required")?;
+    let token_path = env.get("PG_TOKEN_FILE").ok_or("PG_TOKEN_FILE required")?;
+    let token = std::fs::read_to_string(token_path).map_err(|_| "cannot read keeper token file")?;
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .proxy(None)
+        .max_redirects(0)
+        .timeout_global(Some(Duration::from_secs(30)))
+        .build()
+        .into();
+    Ok(Http {
+        agent,
+        base: base.trim_end_matches('/').into(),
+        token: token.trim().into(),
+    })
+}
+
 pub fn define(env: &BTreeMap<String, String>, task: &mut Task) -> Result<bool> {
     let base = env.get("PG_URL").ok_or("PG_URL required")?;
     let token_path = env.get("PG_TOKEN_FILE").ok_or("PG_TOKEN_FILE required")?;

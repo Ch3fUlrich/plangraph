@@ -47,6 +47,8 @@ struct Fake {
     refuse: bool,
     requests: Vec<(u64, Kind)>,
     fixes: Vec<u64>,
+    closed: Vec<String>,
+    close_fails: bool,
 }
 
 impl Effects for Fake {
@@ -69,8 +71,15 @@ impl Effects for Fake {
         self.requests.push((run, kind));
         Ok(())
     }
-    fn fix_task(&mut self, run: u64, _: &Diagnosis) -> Result<(), String> {
+    fn fix_task(&mut self, run: u64, _: &Diagnosis) -> Result<String, String> {
         self.fixes.push(run);
+        Ok(format!("plangraph:CI-FIX-{run}"))
+    }
+    fn close_fix_task(&mut self, key: &str) -> Result<(), String> {
+        if self.close_fails {
+            return Err("keeper down".into());
+        }
+        self.closed.push(key.to_owned());
         Ok(())
     }
 }
@@ -353,6 +362,7 @@ fn attempt(status: &str, started: i64) -> Attempt {
         status: status.into(),
         conclusion: None,
         started,
+        concluded: 0,
         tier: "hosted".into(),
         jobs: vec![],
     }
@@ -392,6 +402,8 @@ fn a_red_main_without_progress_alerts_after_thirty_minutes_and_a_young_attempt_i
         id: 5,
         event: "push".into(),
         attempts: vec![attempt("in_progress", 0)],
+        refname: "main".into(),
+        fast: false,
     }];
     refresh_alerts(&mut state, &moving, false);
     let mut later = red(list, NO_PROGRESS_SECS + 10);
@@ -399,6 +411,8 @@ fn a_red_main_without_progress_alerts_after_thirty_minutes_and_a_young_attempt_i
         id: 5,
         event: "push".into(),
         attempts: vec![attempt("in_progress", NO_PROGRESS_SECS)],
+        refname: "main".into(),
+        fast: false,
     }];
     refresh_alerts(&mut state, &later, false);
     assert!(state.alerts.is_empty());
@@ -450,4 +464,82 @@ fn pending_unknown_and_unprotected_alerts_name_the_party_that_is_due() {
         (alert.kind.as_str(), alert.due.as_str()),
         ("main_ref_not_forward_only", "operator")
     );
+}
+
+#[test]
+fn a_red_rerun_after_the_train_pr_closed_creates_the_fix_task_and_a_green_rerun_closes_it() {
+    let mut fx = Fake::default();
+    fx.diagnosis.insert(
+        7,
+        Diagnosis {
+            tests: vec!["real::bug".into()],
+            incomplete: false,
+        },
+    );
+    let mut state = FreezeState::default();
+    // The train pull request is long closed; the rerun of main's full run (run 7) ended red.
+    run_step(
+        &mut state,
+        &red(
+            vec![blocking(7, 2, vec![suite(&["real::bug"])], false)],
+            100,
+        ),
+        &mut fx,
+    );
+    assert_eq!(fx.fixes, vec![7]);
+    assert_eq!(state.fix_tasks.get("plangraph:CI-FIX-7"), Some(&7));
+    // Still red: no second task. Then a green rerun: the task closes, main's sha did not change.
+    run_step(
+        &mut state,
+        &red(
+            vec![blocking(7, 2, vec![suite(&["real::bug"])], false)],
+            200,
+        ),
+        &mut fx,
+    );
+    assert_eq!(fx.fixes.len(), 1);
+    run_step(&mut state, &answer(State::Green, 300), &mut fx);
+    assert_eq!(fx.closed, vec!["plangraph:CI-FIX-7".to_owned()]);
+    assert!(state.fix_tasks.is_empty());
+    // A later red of the same run creates a fresh task.
+    run_step(
+        &mut state,
+        &red(
+            vec![blocking(7, 3, vec![suite(&["real::bug"])], false)],
+            400,
+        ),
+        &mut fx,
+    );
+    assert_eq!(fx.fixes, vec![7, 7]);
+}
+
+#[test]
+fn a_close_that_fails_stays_open_and_is_retried_on_the_next_pass() {
+    let mut fx = Fake {
+        close_fails: true,
+        ..Fake::default()
+    };
+    fx.diagnosis.insert(
+        7,
+        Diagnosis {
+            tests: vec!["real::bug".into()],
+            incomplete: false,
+        },
+    );
+    let mut state = FreezeState::default();
+    run_step(
+        &mut state,
+        &red(
+            vec![blocking(7, 1, vec![suite(&["real::bug"])], false)],
+            100,
+        ),
+        &mut fx,
+    );
+    let out = run_step(&mut state, &answer(State::Green, 200), &mut fx);
+    assert!(out.iter().any(|l| l.starts_with("close pending")));
+    assert_eq!(state.fix_tasks.len(), 1);
+    fx.close_fails = false;
+    run_step(&mut state, &answer(State::Green, 300), &mut fx);
+    assert!(state.fix_tasks.is_empty());
+    assert_eq!(fx.closed.len(), 1);
 }

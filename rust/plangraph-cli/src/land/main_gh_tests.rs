@@ -122,7 +122,9 @@ fn protected() -> Value {
 fn the_recorded_listing_becomes_runs_with_their_attempts_and_tier() {
     let mut s = source(protected());
     let runs = s.runs(TIP).unwrap();
-    assert_eq!(runs.len(), 1);
+    // Runs of every ref on the commit are read; the evaluation ignores other refs on a full tip.
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[1].refname, "feature");
     assert_eq!(runs[0].attempts.len(), 2);
     assert_eq!(runs[0].attempts[0].tier, "hosted");
     assert_eq!(

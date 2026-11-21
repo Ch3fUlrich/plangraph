@@ -26,6 +26,18 @@ fn matrix() -> Matrix {
         own.insert(job.to_owned(), suite.to_owned());
     }
     tiers.insert("self".to_owned(), own);
+    let fast: BTreeMap<String, String> = [
+        "Select suites for this change",
+        "Public scrub: no private names or secrets",
+        "File size limit (400 lines)",
+        "New code is Rust",
+        "Changelog fragment and docs",
+        "ci-gate",
+    ]
+    .iter()
+    .map(|n| (n.to_string(), n.to_string()))
+    .collect();
+    tiers.insert("fast".to_owned(), fast);
     Matrix { tiers }
 }
 
@@ -58,6 +70,7 @@ fn attempt(
         status: status.into(),
         conclusion: conclusion.map(Into::into),
         started,
+        concluded: started,
         tier: tier.into(),
         jobs,
     }
@@ -68,6 +81,8 @@ fn run(id: u64, event: &str, attempts: Vec<Attempt>) -> Run {
         id,
         event: event.into(),
         attempts,
+        refname: "main".into(),
+        fast: false,
     }
 }
 
@@ -501,4 +516,154 @@ fn an_unprotected_ref_answers_at_once_and_a_stale_ledger_call_is_never_green() {
         observe(&mut source, &mut stale, &matrix()).state,
         State::StateUnknown { .. }
     ));
+}
+
+// --- a tip that reached main by a tested fast-forward: fast jobs on main, the full CI ran before ---
+
+fn fast_jobs() -> Vec<Job> {
+    [
+        "Select suites for this change",
+        "Public scrub: no private names or secrets",
+        "File size limit (400 lines)",
+        "New code is Rust",
+        "Changelog fragment and docs",
+        "ci-gate",
+    ]
+    .iter()
+    .map(|n| job(n, "success"))
+    .collect()
+}
+
+fn fast_run(id: u64, conclusion: &str, at: i64) -> Run {
+    let mut jobs = fast_jobs();
+    if conclusion == "failure" {
+        jobs[0] = job("Select suites for this change", "failure");
+    }
+    Run {
+        id,
+        event: "push".into(),
+        attempts: vec![attempt(1, "completed", Some(conclusion), at, "fast", jobs)],
+        refname: "main".into(),
+        fast: true,
+    }
+}
+
+/// A full run on the train's branch (the evidence), or any later full rerun of the commit, of any ref.
+fn full_attempt(id: u64, n: u32, conclusion: Option<&str>, started: i64) -> Run {
+    let status = if conclusion.is_some() {
+        "completed"
+    } else {
+        "in_progress"
+    };
+    let jobs = if conclusion == Some("failure") {
+        let mut j = green_jobs("hosted");
+        j[0] = job("rust", "failure");
+        j
+    } else if conclusion.is_some() {
+        green_jobs("hosted")
+    } else {
+        vec![]
+    };
+    Run {
+        id,
+        event: "pull_request".into(),
+        attempts: vec![attempt(n, status, conclusion, started, "hosted", jobs)],
+        refname: "land/train".into(),
+        fast: false,
+    }
+}
+
+#[test]
+fn a_fast_only_tip_is_green_when_the_latest_full_attempt_and_the_fast_run_are_green() {
+    let runs = [
+        fast_run(10, "success", 100),
+        full_attempt(5, 1, Some("success"), 50),
+    ];
+    assert_eq!(state(&runs, 200), State::Green);
+}
+
+#[test]
+fn a_fast_only_tip_is_red_when_either_generation_is_red() {
+    let red_full = [
+        fast_run(10, "success", 100),
+        full_attempt(5, 1, Some("failure"), 150),
+    ];
+    assert!(matches!(state(&red_full, 200), State::Red { ref blocking } if blocking[0].run == 5));
+    let red_fast = [
+        fast_run(10, "failure", 100),
+        full_attempt(5, 1, Some("success"), 50),
+    ];
+    assert!(matches!(state(&red_fast, 200), State::Red { ref blocking } if blocking[0].run == 10));
+}
+
+#[test]
+fn a_fast_only_tip_is_pending_while_the_latest_started_attempt_of_either_generation_runs() {
+    let rerunning = [
+        fast_run(10, "success", 100),
+        full_attempt(5, 1, Some("success"), 50),
+        full_attempt(6, 1, None, 150),
+    ];
+    assert_eq!(state(&rerunning, 200), State::Pending);
+    // A hung one stalls at T and blocks.
+    assert!(matches!(state(&rerunning, 150 + T), State::Red { .. }));
+    let fast_running = Run {
+        id: 10,
+        event: "push".into(),
+        attempts: vec![attempt(1, "in_progress", None, 100, "fast", vec![])],
+        refname: "main".into(),
+        fast: true,
+    };
+    assert_eq!(
+        state(
+            &[fast_running, full_attempt(5, 1, Some("success"), 50)],
+            200
+        ),
+        State::Pending
+    );
+}
+
+#[test]
+fn green_red_green_on_the_same_commit_reads_green_again_without_a_new_commit() {
+    let tip_runs = |extra: Vec<Run>| {
+        let mut v = vec![
+            fast_run(10, "success", 100),
+            full_attempt(5, 1, Some("success"), 50),
+        ];
+        v.extend(extra);
+        v
+    };
+    assert_eq!(state(&tip_runs(vec![]), 300), State::Green);
+    // A full rerun of the landed commit ends red: main reads red, whatever ref it ran on.
+    let red_rerun = full_attempt(7, 1, Some("failure"), 400);
+    assert!(matches!(
+        state(&tip_runs(vec![red_rerun.clone()]), 500),
+        State::Red { .. }
+    ));
+    // Another full rerun ends green: main reads green again, the fast run's sha unchanged.
+    let green_rerun = full_attempt(8, 1, Some("success"), 600);
+    assert_eq!(
+        state(&tip_runs(vec![red_rerun, green_rerun]), 700),
+        State::Green
+    );
+}
+
+#[test]
+fn a_fast_only_tip_without_any_full_attempt_is_pending_then_red() {
+    let only_fast = [fast_run(10, "success", 100)];
+    assert_eq!(
+        evaluate(&matrix(), &only_fast, 0, 14 * 60, T),
+        State::Pending
+    );
+    assert!(matches!(
+        evaluate(&matrix(), &only_fast, 0, 15 * 60, T),
+        State::Red { .. }
+    ));
+}
+
+#[test]
+fn a_run_of_another_ref_on_a_full_tip_does_not_change_its_state() {
+    // A merge commit tip (full run on main): a red run of a branch on the same commit is not main's.
+    let mut other = full_attempt(9, 1, Some("failure"), 150);
+    other.refname = "somebranch".into();
+    assert_eq!(state(&[green_run(1, "push"), other], 200), State::Green);
 }

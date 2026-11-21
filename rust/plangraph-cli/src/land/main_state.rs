@@ -33,6 +33,9 @@ pub struct Attempt {
     pub conclusion: Option<String>,
     /// Epoch seconds the attempt started (or was created while queued).
     pub started: i64,
+    /// Epoch seconds the attempt concluded (0 while it runs).
+    #[serde(default)]
+    pub concluded: i64,
     /// Runner tier the attempt ran on; selects the expected job matrix.
     pub tier: String,
     pub jobs: Vec<Job>,
@@ -43,6 +46,12 @@ pub struct Run {
     pub id: u64,
     pub event: String,
     pub attempts: Vec<Attempt>,
+    /// The ref the run belongs to (`main`, a train branch, ...); empty when unknown.
+    #[serde(default)]
+    pub refname: String,
+    /// A fast-only run (a landed tip whose full CI ran before it became the tip): it runs the fast jobs only.
+    #[serde(default)]
+    pub fast: bool,
 }
 
 /// The expected jobs per runner tier, each with the suite it belongs to.
@@ -267,8 +276,95 @@ fn blocking_of(matrix: &Matrix, run: &Run, now: i64, t: i64) -> Option<Blocking>
     })
 }
 
+/// One generation of runs (the full runs, or the fast runs, of the tip): its latest started attempt decides.
+enum Generation {
+    None,
+    Pending,
+    Green,
+    Red(Blocking),
+}
+
+fn generation(matrix: &Matrix, runs: &[&Run], now: i64, t: i64) -> Generation {
+    let all: Vec<(&Run, &Attempt)> = runs
+        .iter()
+        .flat_map(|r| r.attempts.iter().map(move |a| (*r, a)))
+        .collect();
+    let Some(latest) = all.iter().max_by_key(|(_, a)| (a.started, a.number)) else {
+        return Generation::None;
+    };
+    if !done(latest.1, now, t) {
+        return Generation::Pending;
+    }
+    // The latest concluded attempt of the generation, of any ref.
+    let (run, attempt) = all
+        .iter()
+        .filter(|(_, a)| done(a, now, t))
+        .max_by_key(|(_, a)| (a.concluded.max(a.started), a.number))
+        .copied()
+        .unwrap_or(*latest);
+    if attempt.status == "completed" && complete_green(matrix, attempt) {
+        return Generation::Green;
+    }
+    Generation::Red(Blocking {
+        run: run.id,
+        event: run.event.clone(),
+        attempt: attempt.number,
+        stalled: stalled(attempt, now, t),
+        failures: failure_set(matrix, run, now, t),
+    })
+}
+
+/// A tip that reached main on a tested fast-forward: only the fast jobs ran on main, the full CI ran before.
+/// Its state is the latest applicable generation: the latest concluded full attempt on the commit (of any
+/// ref) together with the latest fast run. Green when both are green, red when either is red, pending
+/// while the latest started attempt of either is not concluded; red, green, red, green reads green again.
+fn evaluate_fast(matrix: &Matrix, runs: &[Run], first_seen: i64, now: i64, t: i64) -> State {
+    let full: Vec<&Run> = runs.iter().filter(|r| !r.fast).collect();
+    let fast: Vec<&Run> = runs.iter().filter(|r| r.fast).collect();
+    let (f, q) = (
+        generation(matrix, &full, now, t),
+        generation(matrix, &fast, now, t),
+    );
+    let mut blocking = Vec::new();
+    let mut pending = false;
+    for g in [f, q] {
+        match g {
+            Generation::Red(b) => blocking.push(b),
+            Generation::Pending => pending = true,
+            Generation::None | Generation::Green => {}
+        }
+    }
+    let no_full = full.iter().all(|r| r.attempts.is_empty());
+    if no_full && now - first_seen >= NO_PUSH_RUN_SECS {
+        blocking.push(Blocking {
+            run: 0,
+            event: "full".into(),
+            attempt: 0,
+            stalled: false,
+            failures: vec![],
+        });
+    }
+    if !blocking.is_empty() {
+        State::Red { blocking }
+    } else if pending || no_full {
+        State::Pending
+    } else {
+        State::Green
+    }
+}
+
 /// The state on one consistent observation. `first_seen` is when the tip was first observed (epoch seconds).
 pub fn evaluate(matrix: &Matrix, runs: &[Run], first_seen: i64, now: i64, t: i64) -> State {
+    if runs.iter().any(|r| r.event == "push" && r.fast) {
+        return evaluate_fast(matrix, runs, first_seen, now, t);
+    }
+    // A full tip: the runs of main itself count; a run of another ref on the same commit does not.
+    let own: Vec<Run> = runs
+        .iter()
+        .filter(|r| r.refname.is_empty() || r.refname == "main")
+        .cloned()
+        .collect();
+    let runs = &own[..];
     let mut blocking: Vec<Blocking> = runs
         .iter()
         .filter_map(|r| blocking_of(matrix, r, now, t))

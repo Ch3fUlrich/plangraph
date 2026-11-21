@@ -56,6 +56,10 @@ pub struct FreezeState {
     pub pending: Option<Pending>,
     /// Requests that never showed a new attempt: recorded, never submitted again.
     pub unresolved: Vec<Pending>,
+    /// Open fix tasks of rule 3.46 by keeper key, with the run they were created for: created on red,
+    /// closed when main reads green again.
+    #[serde(default)]
+    pub fix_tasks: BTreeMap<String, u64>,
     pub alerts: BTreeMap<String, Alert>,
     pub red_since: Option<(String, i64)>,
     pub last_progress: i64,
@@ -133,7 +137,10 @@ pub trait Effects {
     fn diagnose(&mut self, run: u64, attempt: u32) -> Diagnosis;
     fn latest_conclusion(&mut self, run: u64) -> Option<String>;
     fn request(&mut self, run: u64, kind: Kind) -> Result<(), String>;
-    fn fix_task(&mut self, run: u64, diagnosis: &Diagnosis) -> Result<(), String>;
+    /// Creates (or finds) the fix task for the run; returns its key.
+    fn fix_task(&mut self, run: u64, diagnosis: &Diagnosis) -> Result<String, String>;
+    /// Closes the fix task of a main that is green again.
+    fn close_fix_task(&mut self, key: &str) -> Result<(), String>;
 }
 
 fn raise(
@@ -329,6 +336,23 @@ pub fn step(
     if !free? {
         return Ok(out);
     }
+    if matches!(answer.state, State::Green) && !state.fix_tasks.is_empty() {
+        // Main reads green again (any run, any ref, by the latest-generation rule): the fix tasks close.
+        for (key, run) in state.fix_tasks.clone() {
+            match fx.close_fix_task(&key) {
+                Ok(()) => {
+                    state.fix_tasks.remove(&key);
+                    // A later red of the same run may create a new task.
+                    if let Some(b) = state.budgets.get_mut(&run) {
+                        b.fix_task = false;
+                    }
+                    out.push(format!("closed fix task {key}"));
+                }
+                Err(e) => out.push(format!("close pending: {key}: {e}")),
+            }
+        }
+        save(state)?;
+    }
     let State::Red { blocking } = &answer.state else {
         return Ok(out);
     };
@@ -378,7 +402,9 @@ pub fn step(
             Decision::FixTask => {
                 state.budgets.entry(b.run).or_default().fix_task = true;
                 save(state)?;
-                fx.fix_task(b.run, &diagnosis)?;
+                let key = fx.fix_task(b.run, &diagnosis)?;
+                state.fix_tasks.insert(key, b.run);
+                save(state)?;
                 out.push(format!("fix task: run {}", b.run));
                 return Ok(out);
             }

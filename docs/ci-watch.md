@@ -75,3 +75,7 @@ A failing head of a pull request that `owners.json` (`prs`, `writers`, `successo
 into an unassigned fix lane: the failure is recorded first, delivered with its log through
 `CI_WATCH_DELIVER_CMD <writer> <record file>` to the batch's current writer (a successor is followed), kept open
 until `plangraph ci-watch --ack=<id>`, and escalated to plan-order after 15 minutes. The watcher never starts a writer.
+
+The handler tracks the full runs of main's current tip by run id, whatever ref they ran on and whether or not the train
+pull request is still open. It creates the fix task of rule 3.46 when main reads red and cancels it in the keeper when main
+reads green again (a failed cancel stays open and is retried on the next pass).

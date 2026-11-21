@@ -40,6 +40,12 @@ until one of its own attempts is complete-green, so a green scheduled run never 
 attempt older than the bound T (twice the median of the last 20 green push runs, at least 30 minutes) counts
 as stalled.
 
+A tip that reached main by a tested fast-forward runs only the fast jobs on main (matrix tier `fast`); its full CI
+ran before it became the tip. Its state is the latest applicable generation: the latest concluded full attempt on the
+commit (any ref, so the evidence run on the train's branch and every later full rerun count) together with the latest fast
+run. Green when both are green, red when either is red, pending while the latest started attempt of either is not
+concluded; green, red, green on the same commit reads green again without a new commit.
+
 `tools/merge_batch_land.py land`, the keeper's phase finish and the router's `merge-part` call it before
 they merge and refuse an ordinary merge with `main_red`, `main_pending`, `state_unknown` or
 `ref_not_forward_only`. The one exception is a GO row for the exact head with `EXCEPTION:main-red-fix`;

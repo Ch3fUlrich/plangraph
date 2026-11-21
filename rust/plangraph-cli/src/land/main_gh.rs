@@ -26,8 +26,17 @@ fn epoch(value: &Value, field: &str) -> i64 {
         .map_or(0, |t| t.timestamp())
 }
 
-/// The tier an attempt ran on: the SQLite job count tells the self-hosted tier (four shards) from the fallback.
+/// The tier an attempt ran on: `fast` when it listed jobs but none of the full suite (a landed tip's own
+/// run), otherwise the SQLite job count tells the self-hosted tier (four shards) from the fallback.
 fn tier_of(jobs: &[Job]) -> String {
+    let full_only = |j: &Job| {
+        j.name.starts_with("Python tests")
+            || j.name.starts_with("Rust workspace")
+            || j.name.starts_with("UI tests")
+    };
+    if !jobs.is_empty() && !jobs.iter().any(full_only) {
+        return "fast".into();
+    }
     let own = jobs
         .iter()
         .any(|j| j.name.starts_with("Python tests, SQLite keeper") && j.name.ends_with("of 4)"));
@@ -63,6 +72,11 @@ impl<G: Github> GhSource<G> {
             status: info["status"].as_str().unwrap_or("queued").to_owned(),
             conclusion: info["conclusion"].as_str().map(str::to_owned),
             started: epoch(&info, "run_started_at").max(epoch(&info, "created_at")),
+            concluded: if info["status"] == "completed" {
+                epoch(&info, "updated_at")
+            } else {
+                0
+            },
             tier: tier_of(&jobs),
             jobs,
         })
@@ -94,7 +108,9 @@ impl<G: Github> Source for GhSource<G> {
         )?;
         let mut out = Vec::new();
         for row in rows {
-            if row["head_branch"] != self.branch.as_str() || row["head_sha"] != tip {
+            // Runs of any ref on this commit are read: a fast-only tip is judged by the latest full attempt
+            // of any ref (the evidence run ran on the train's branch); the evaluation filters by ref.
+            if row["head_sha"] != tip {
                 continue;
             }
             let id = row["id"].as_u64().ok_or("run without id")?;
@@ -103,10 +119,13 @@ impl<G: Github> Source for GhSource<G> {
             for n in 1..=latest {
                 attempts.push(self.attempt(id, n)?);
             }
+            let fast = attempts.last().is_some_and(|a| a.tier == "fast");
             out.push(Run {
                 id,
                 event: row["event"].as_str().unwrap_or_default().to_owned(),
                 attempts,
+                refname: row["head_branch"].as_str().unwrap_or_default().to_owned(),
+                fast,
             });
         }
         Ok(out)
