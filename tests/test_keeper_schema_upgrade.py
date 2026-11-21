@@ -356,17 +356,17 @@ def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
         assert db_pg.migrate(raw, name) == [1, 2, 3, 4, 5, 6]
         assert "jev_shadow" in jev_tables()
         assert not set(EXEC_COLUMNS) & columns()
-        # Merged code needs migration 7: opening the old schema is refused first ...
+        # Opening the old schema is refused before the migration runs.
         path = tmp_path / "pg-jev.db"
-        with pytest.raises(RuntimeError, match="code needs 13"):
+        with pytest.raises(RuntimeError, match="code needs 14"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         # ... then pg admin migrate runs 7 and the exec columns are there.
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
-        assert db_pg.migrate(raw, name) == [7, 8, 9, 10, 11, 12, 13]
+        assert db_pg.migrate(raw, name) == [7, 8, 9, 10, 11, 12, 13, 14]
         assert set(EXEC_COLUMNS) <= columns()
         assert "jev_shadow" in jev_tables()
         assert [row[0] for row in raw.execute(
-            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 14))
+            "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, 15))
         conn = kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         conn.close()
     finally:
@@ -421,8 +421,7 @@ def test_main_v14_sqlite_db_with_oversight_upgrades_to_v16(tmp_path):
 
 @needs_pg
 def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
-    """A fresh Postgres schema migrates 1..9; one at main's Migration 8 (oversight,
-    no bus tables) is refused by the merged code, then migrate runs 9 alone."""
+    """Both a fresh schema and one at migration 8 gain the bus and alerts tables."""
     import uuid
 
     import psycopg
@@ -441,19 +440,20 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
     try:
         full = schema_pg.MIGRATIONS
         assert schema_pg.LATEST == 14
-        assert db_pg.migrate(raw, fresh) == list(range(1, 14))
-        assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
+        expected = BUS_TABLES | OVERSIGHT_TABLES | {"alerts", "alert_log"}
+        assert db_pg.migrate(raw, fresh) == list(range(1, 15))
+        assert expected <= pg_tables(fresh)
 
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full[:8])
         assert db_pg.migrate(raw, name) == list(range(1, 9))
         assert OVERSIGHT_TABLES <= pg_tables(name)
-        assert not BUS_TABLES & pg_tables(name)
+        assert not (expected - OVERSIGHT_TABLES) & pg_tables(name)
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
         path = tmp_path / "pg-main.db"
-        with pytest.raises(RuntimeError, match="code needs 13"):
+        with pytest.raises(RuntimeError, match="code needs 14"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
-        assert db_pg.migrate(raw, name) == [9, 10, 11, 12, 13]
-        assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(name)
+        assert db_pg.migrate(raw, name) == [9, 10, 11, 12, 13, 14]
+        assert expected <= pg_tables(name)
         kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name).close()
     finally:
         raw.execute(f'DROP SCHEMA IF EXISTS "{fresh}" CASCADE')

@@ -90,12 +90,12 @@ def test_the_frozen_automatic_close_resolves_no_named_merge_under_its_lock(env, 
     merge = git(env.repo.root, "rev-parse", "HEAD")
     env.conn.execute("UPDATE items SET description=? WHERE key='demo:A'", (f"Merge-Repo: demo {merge}",))
     env.store.warm_merge_scan(env.store.merge_candidates())  # outside the lock: may fetch and resolve
-    resolved = []
-    real = env.store._named_merge_proof
-    monkeypatch.setattr(env.store, "_named_merge_proof", lambda *a: resolved.append(a) or real(*a))
+    def forbidden(*args, **kwargs):
+        pytest.fail("frozen close must consume the warmed named merge and deploy diffs")
+    monkeypatch.setattr(env.store, "_named_merge_proof", forbidden)
+    monkeypatch.setattr(env.store.ctx["git"], "deploy_changes", forbidden)
     result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
     assert [c["key"] for c in result["closed"]] == ["demo:A"]
-    assert resolved == [], "under the request lock the scan comes from the warm snapshot"
 
 
 def test_a_frozen_close_holds_an_item_whose_separately_named_merge_ships_a_unit(env):  # noqa: F811
