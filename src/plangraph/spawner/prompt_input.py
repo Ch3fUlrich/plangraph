@@ -142,23 +142,36 @@ def read_skill(name: str, cwd: str | None) -> str | None:
     return None
 
 
-_TOOLS_ONLY = re.compile(r'\[tools-only\](.*?)\[/tools-only\]\s*', re.DOTALL)
+_TOOLS_ONLY = re.compile(r'(\s*)\[tools-only\](.*?)\[/tools-only\]\s*', re.DOTALL)
 
 
-def apply_tool_mode(body: str, inline: bool) -> str:
-    """Apply the leg's tool mode to the whole caller brief: sentences between ``[tools-only]`` markers
-    (they ask for file reads or shell and test runs) go for a toolless inline seat, the markers go for the rest."""
-    return _TOOLS_ONLY.sub('' if inline else r'\1\n', body)
+def apply_tool_mode(body: str, inline: bool, cwd: str | None = None) -> str:
+    """Apply the leg's tool mode to the whole caller brief. A ``[tools-only]`` block (file-read and test-run
+    instructions) counts only when it is the first thing after the leading review skill, where the native
+    writer puts it; it goes for a toolless inline seat and only its markers go for the rest. Marker text
+    anywhere later (item criteria, a quoted earlier finding) is the brief's own and stays."""
+    start = 0
+    for text in (read_skill('review', cwd), _tree_skill()):
+        if text and body.startswith(text):
+            start = len(text)
+            break
+    found = _TOOLS_ONLY.match(body, start)
+    if found is None:
+        return body
+    kept = '' if inline else found.group(1) + found.group(2) + '\n'
+    return body[:start] + (found.group(1) if inline else '') + kept + body[found.end():]
+
+
+def _tree_skill() -> str | None:
+    try:
+        return (_REPO_ROOT / 'skills' / 'review' / 'SKILL.md').read_bytes().decode('utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _without_review_skill(body: str, cwd: str | None) -> str:
     """A caller brief that starts with the review skill (origin/main's or this tree's copy) loses it."""
-    texts = [read_skill('review', cwd)]
-    try:
-        texts.append((_REPO_ROOT / 'skills' / 'review' / 'SKILL.md').read_bytes().decode('utf-8'))
-    except (OSError, UnicodeDecodeError):
-        pass
-    for text in texts:
+    for text in (read_skill('review', cwd), _tree_skill()):
         if text and body.startswith(text):
             return body[len(text):].lstrip('\n')
     return body
@@ -175,7 +188,7 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
     # it demands test runs and file reads, and origin/main may serve a skill older than the header.
     inline_review = tool_mode == INLINE_TOOL_MODE and _ROLE_KEY.get(role) == 'review'
     if _ROLE_KEY.get(role) == 'review':
-        body = apply_tool_mode(body, inline_review)
+        body = apply_tool_mode(body, inline_review, cwd)
     if inline_review:
         body = _without_review_skill(body, cwd)
     name = None if inline_review else skill_name(role, body)

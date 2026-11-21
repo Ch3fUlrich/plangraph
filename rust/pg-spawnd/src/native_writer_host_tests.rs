@@ -490,6 +490,10 @@ fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
         "{block}"
     );
     // Nothing outside the block asks for a tool run or a file read.
+    assert!(
+        prompt.find("Writer brief").unwrap() > close,
+        "the block precedes the writer brief"
+    );
     let outside = format!("{}{}", &prompt[..open], &prompt[close..]);
     assert!(
         !outside.contains("run read-only commands") && !outside.contains("Open callers"),

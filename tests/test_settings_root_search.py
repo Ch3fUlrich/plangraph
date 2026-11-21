@@ -128,3 +128,21 @@ def test_session_ceiling_is_the_pytest_basetemp(tmp_path_factory):
     import os
     from pathlib import Path
     assert Path(os.environ['PLANGRAPH_ROOT_CEILING']) == tmp_path_factory.getbasetemp().resolve()
+
+
+def test_an_xdist_workers_basetemp_parent_is_shared_with_its_siblings(tmp_path, monkeypatch):
+    import _stray_git_guard as guard
+    private = tmp_path / 'shared' / 'private'
+    basetemp = private / 'pytest-of-user' / 'pytest-0' / 'popen-gw1'
+    basetemp.mkdir(parents=True)
+    monkeypatch.setattr(guard.tempfile, 'gettempdir', lambda: str(private))
+    monkeypatch.setenv('PLANGRAPH_ROOT_CEILING', str(basetemp))
+    # A sibling worker's leak in the common parent is not this worker's test's to fail or clean.
+    with guard.watch_stray_git('demo::bystander'):
+        (basetemp.parent / '.git').mkdir()
+    assert (basetemp.parent / '.git').exists()
+    assert str((basetemp.parent / '.git').resolve()) in guard.shared_gits()
+    # Its own basetemp stays exact.
+    with pytest.raises(AssertionError, match='demo::own'):
+        with guard.watch_stray_git('demo::own'):
+            (basetemp / '.git').mkdir()

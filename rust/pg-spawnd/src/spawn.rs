@@ -234,4 +234,56 @@ mod tests {
         assert_eq!(rows[0]["error"], "'card'");
         assert_eq!(rows[0]["role"], "review");
     }
+
+    #[test]
+    fn empty_review_diff_refuses_once_before_routing_and_saves_one_record() {
+        use pg_worker_core::run::{
+            group::Confinement, supervise::Config, supervisor::SupervisorCfg,
+        };
+        let work = std::env::temp_dir().join(format!("pg-spawnd-empty-diff-{}", new_run_id()));
+        let repo = work.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "base"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let state = work.join("state");
+        let runs = crate::runs::Runs::new(std::sync::Arc::new(
+            pg_worker_core::run::supervisor::Supervisor::new(SupervisorCfg::new(Config {
+                state_dir: state.clone(),
+                confinement: Confinement::Plain,
+                ..Config::default()
+            }))
+            .unwrap(),
+        ));
+        let args = json!({"role":"review","prompt":"review","writer_families":["openai"],
+            "card":{"estimate_tokens":1000,"diff_ref":{"repo":repo,"base":head,"head":head}}})
+        .as_object()
+        .unwrap()
+        .clone();
+        // No route adapter exists here: reaching routing or a leg would give another error.
+        match spawn(&state, &args, "local", &runs) {
+            Err(ToolError::Refused { message, legs, .. }) => {
+                assert!(message.starts_with("empty_diff:"), "{message}");
+                assert!(legs.is_empty());
+            }
+            other => panic!("expected an empty_diff refusal, got ok={}", other.is_ok()),
+        }
+        let rows = crate::records::list_runs(&state);
+        std::fs::remove_dir_all(&work).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["reason"], "empty_diff");
+        assert_eq!(rows[0]["legs"], json!([]));
+        assert_eq!(rows[0]["role"], "review");
+    }
 }
