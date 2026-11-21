@@ -176,7 +176,8 @@ class KeeperSink:
         target = request.get('review_head') or 'HEAD'
         head = subprocess.check_output(
             ['git', 'rev-parse', '--verify', '--end-of-options', target + '^{commit}'],
-            cwd=cwd, env=checkout_env(), timeout=10, text=True).strip()
+            cwd=cwd, env=checkout_env(), timeout=10, text=True,
+            encoding="utf-8", errors="replace").strip()
         item = self.item(key)
         binding = dict(key=key, epoch=item['epoch'], round=item['round'],
                        head=head, seat_run=record['run_id'])

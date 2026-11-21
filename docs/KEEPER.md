@@ -665,6 +665,7 @@ launch. The reviewer binds its boolean verdict and reason once. Direct delivery 
 both check the admission and the payload inside the verdict transaction. The original
 reviewer run token can read its settled verdict through direct delivery or replay after
 revocation. Every entry in such a replay batch must already be settled for that token.
+Outside run-token replay, only reviewer principals may submit an all-verdict replay batch.
 A new round requires a new seat binding even when the head SHA is unchanged. The keeper stores these records in
 `op_receipts` alongside run-token write receipts.
 

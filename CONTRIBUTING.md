@@ -230,7 +230,7 @@ first, then `completion.finish_reason`, then the last `opencode_step_finish` in
 `events[]`. Only recorded values count: an absent or unusable reason on that last
 finish event stays unset, never falling back to an earlier event. Malformed event
 entries and non-list event collections do not raise. PASS still requires `stop`
-or `end_turn` and `TEST_GAMING: no`; the hermetic posting regressions live in
+or `end_turn` and `TEST_GAMING: no`; the hermetic posting regressions use admitted seat records in
 `tests/test_seat_record_finish.py` (D-5624).
 
 Historical seat discovery uses `python3 tools/seat_verdict.py --snapshot plan.snapshot.json --records-dir RECORDS` (equivalently, `--backfill-dry-run`). It is local and read-only by default; `--format json` emits structured outcomes, and `--pr-cache CACHE` supplies evidenced-commit-to-PR mappings without network access. Keeper writes require `--backfill-apply --url URL --token-dir TOKENS`; only apply may enable network PR lookup with `--pr-lookup-gh`. Backfill retains the existing verdict parser, exact-head binding, independent reviewer family and PASS safety gates. It shares the spawner's locked `verdict.json` / `verdict.delivered` outbox, so completed or ambiguous sends are never blindly replayed, including when the forward path already handled the record. A nonzero verifier result is terminal for automatic backfill replay; reconcile an ambiguous delivery before any operator-authorized retry. See [the historical backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md) for the original observations; Slice A has since supplied the forward completion bridge.

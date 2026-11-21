@@ -38,10 +38,14 @@ class OutboxMixin:
 
     def replay(self, principal, entries):
         """Compatibility for old clients: expose history, without sending an uncertain write."""
-        if not isinstance(entries, list) or not entries or len(entries) > MAX_ENTRIES:
-            raise Refused("validation", f"entries must be a list of 1..{MAX_ENTRIES}")
-        if not all(isinstance(entry, dict) and entry.get("verb") == "verdict" for entry in entries):
+        valid_batch = isinstance(entries, list) and 1 <= len(entries) <= MAX_ENTRIES
+        if not isinstance(principal, auth.RunPrincipal) and not (
+            principal.role == "reviewer" and valid_batch
+            and all(isinstance(entry, dict) and entry.get("verb") == "verdict" for entry in entries)
+        ):
             self._receipt_principal(principal)
+        if not valid_batch:
+            raise Refused("validation", f"entries must be a list of 1..{MAX_ENTRIES}")
         results, recovery = [], []
         for entry in entries:
             try:
