@@ -22,6 +22,7 @@ from plangraph.keeper.errors import Refused
 from plangraph.keeper.events import verify_integrity
 
 from test_keeper_run_tokens import claimed_with_token, code, mint, rp, w  # noqa: F401
+from test_keeper_run_tokens_doors import d, native_client  # noqa: F401
 
 SYSTEM = Principal("system", "system", [], None)
 
@@ -153,6 +154,89 @@ def test_unproven_legacy_entries_remain_unacknowledged(w):
     assert w.conn.execute("SELECT COUNT(*) FROM op_receipts").fetchone()[0] == 0
 
 
+def _outbox_writer(doors, monkeypatch):
+    epoch, token, principal = claimed_with_token(doors.world)
+    doors.world.tokens["runw"] = token
+    monkeypatch.setenv("PG_EPOCH", str(epoch))
+    return epoch, token, principal
+
+
+def test_client_queues_without_the_token_and_replay_keeps_unanswered(native_client, monkeypatch):
+    doors = native_client
+    epoch, token, _ = _outbox_writer(doors, monkeypatch)
+    store = doors.world.store
+    store.add_evidence(doors.world.p("l1main"), "demo:A", epoch, "decision", {"id": "D-1"})
+    write = store.write_receipt
+    allowed = set()
+
+    def intermittent(principal, call):
+        if call["id"] not in allowed:
+            raise Refused("unavailable", "test outage")
+        return write(principal, call)
+
+    monkeypatch.setattr(store, "write_receipt", intermittent)
+    assert doors.pg("runw", "heartbeat", "demo:A")[0] == 4
+    assert doors.pg("runw", "submit", "demo:A")[0] == 4
+    assert doors.pg("runw", "claim", "demo:A")[0] == 2
+    queue = doors.tmp / "outbox.jsonl.d"
+    first, second = sorted(queue.glob("*.json"))
+    first_id = json.loads(first.read_text())["id"]
+    second_id = json.loads(second.read_text())["id"]
+    assert first_id != second_id
+    assert all(token not in path.read_text() for path in (first, second, queue / "credential"))
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in (first, second))
+
+    allowed.add(first_id)
+    assert doors.pg("runw", "replay")[0] == 4
+    assert not first.exists()
+    assert json.loads((queue / "done" / first.name).read_text())["id"] == first_id
+    assert json.loads(second.read_text())["id"] == second_id
+
+    allowed.add(second_id)
+    assert doors.pg("runw", "replay")[0] == 0
+    assert not list(queue.glob("*.json"))
+    assert store.conn.execute("SELECT COUNT(*) FROM op_receipts").fetchone()[0] == 2
+    assert events(doors.world, "submitted") == 1
+
+
+def test_client_drops_non_object_lines(native_client, monkeypatch):
+    doors = native_client
+    epoch, _, _ = _outbox_writer(doors, monkeypatch)
+    legacy = doors.tmp / "outbox.jsonl"
+    original = '"not an entry"\n[1, 2]\n' + json.dumps(entry(7, "heartbeat", epoch)) + "\n"
+    legacy.write_text(original)
+    calls = []
+
+    def record_call(principal, call):
+        calls.append(call)
+        return {"id": call["id"], "result": "recovery_required"}
+
+    monkeypatch.setattr(doors.world.store, "write_receipt", record_call)
+    status, _, error = doors.pg("runw", "replay")
+    assert status == 4 and "requires recovery" in error
+    assert calls == []
+    assert legacy.read_text() == original
+    queue = doors.tmp / "outbox.jsonl.d"
+    *malformed, valid = [json.loads(path.read_text()) for path in sorted(queue.glob("*.json"))]
+    assert len(malformed) == 2
+    assert all(row["verb"] == "unreadable" and row["body"] is None for row in malformed)
+    assert valid["id"] == eid(7) and valid["legacy"] is True
+
+
+def test_client_refuses_symlinked_outbox(native_client, monkeypatch):
+    doors = native_client
+    _outbox_writer(doors, monkeypatch)
+    target = doors.tmp / "target"
+    target.write_text("unchanged")
+    legacy = doors.tmp / "outbox.jsonl"
+    legacy.symlink_to(target)
+    status, _, error = doors.pg("runw", "heartbeat", "demo:A")
+    assert status != 0 and "target must be a regular file" in error
+    assert target.read_text() == "unchanged"
+    assert not (doors.tmp / "outbox.jsonl.d").exists()
+    assert doors.world.conn.execute("SELECT COUNT(*) FROM op_receipts").fetchone()[0] == 0
+
+
 def test_outage_gap_is_capped_and_untrusted_stamps_are_ignored(w, tmp_path):
     cfg = SimpleNamespace(db=str(tmp_path / "keeper.db"), reap_interval=60)
     outage.stamp(cfg)
@@ -189,7 +273,7 @@ def test_outage_is_applied_once_per_start(w):
     assert verify_integrity(w.conn) == []
 
 
-def test_per_token_receipt_limit_allows_readback(w, monkeypatch):
+def test_per_token_replay_limit(w, monkeypatch):
     from plangraph.keeper import store_outbox
     epoch, _, p = claimed_with_token(w)
     monkeypatch.setattr(store_outbox, "MAX_SEEN_PER_TOKEN", 3)
@@ -219,32 +303,20 @@ def test_extension_without_the_outage_event_is_flagged(w):
     assert any(p["field"] == "expires_at" for p in verify_integrity(w.conn))   # no grace without the event
 
 
-def test_concurrent_http_replays_of_one_id_run_once(tmp_path):
+def test_concurrent_http_replays_of_one_id_run_once(d):
     import threading
-    from door_util import Doors
-    from keeper_util import World, seed, to_claimed
-    from test_keeper_run_tokens import FakeRuns
-    world = World(tmp_path)
-    seed(world, [("A", []), ("B", [])])
-    world.store.ctx = {"runs": FakeRuns()}
-    doors = Doors(world, tmp_path)
-    try:
-        epoch = to_claimed(world, "demo:A")
-        world.tokens["runw"] = doors.http("l1main", "POST", "/v1/mint_run_token",
-                                          {"key": "demo:A", "role": "writer", "run_id": "w1"})[1]["token"]
-        payload = entry(7, "heartbeat", epoch)
-        got = []
-        threads = [threading.Thread(target=lambda: got.append(
-            doors.http("runw", "POST", "/v1/write_receipt", payload)[1]["result"]))
-            for _ in range(4)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        assert sorted(got) == ["duplicate", "duplicate", "duplicate", "ok"]
-    finally:
-        doors.close()
-        world.close()
+
+    epoch, d.world.tokens["runw"], _ = claimed_with_token(d.world)
+    payload = entry(7, "heartbeat", epoch)
+    got = []
+    threads = [threading.Thread(target=lambda: got.append(
+        d.http("runw", "POST", "/v1/write_receipt", payload)[1]["result"]))
+        for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert sorted(got) == ["duplicate", "duplicate", "duplicate", "ok"]
 
 
 def test_model_vectors_run_against_keeper(w):
@@ -263,39 +335,20 @@ def test_model_vectors_run_against_keeper(w):
     assert events(w, "submitted") == 1
 
 
-def test_http_receipt_readback_after_token_revocation(tmp_path):
-    from door_util import Doors
-    from keeper_util import World, seed
-    from test_keeper_run_tokens import FakeRuns
-
-    world = World(tmp_path)
-    seed(world, [("A", [])])
-    world.store.ctx = {"runs": FakeRuns()}
-    doors = Doors(world, tmp_path)
-    try:
-        epoch = to_claimed_for_receipt(world)
-        world.tokens["runw"] = doors.http("l1main", "POST", "/v1/mint_run_token",
-                                          {"key": "demo:A", "role": "writer", "run_id": "w1"})[1]["token"]
-        add = entry(1, "add_evidence", epoch, kind="decision", ref={"id": "D-1"})
-        path = "/v1/write_receipt"
-        assert doors.http("runw", "POST", path, add)[1]["result"] == "ok"
-        call = entry(2, "submit", epoch, source_round=0)
-        status, committed = doors.http("runw", "POST", path, call)
-        assert status == 200 and committed["result"] == "ok"
-        status, readback = doors.http("runw", "POST", path, call)
-        assert status == 200 and readback["result"] == "duplicate"
-        assert readback["reply"] == committed["reply"]
-        assert doors.http("reader", "POST", path, call)[0] == 403
-        assert doors.http("runw", "POST", path, {**call, "id": eid(3)})[0] == 401
-        assert events(world, "submitted") == 1
-    finally:
-        doors.close()
-        world.close()
-
-
-def to_claimed_for_receipt(world):
-    from keeper_util import to_claimed
-    return to_claimed(world, "demo:A")
+def test_http_receipt_readback_after_token_revocation(d):
+    epoch, d.world.tokens["runw"], _ = claimed_with_token(d.world)
+    add = entry(1, "add_evidence", epoch, kind="decision", ref={"id": "D-1"})
+    path = "/v1/write_receipt"
+    assert d.http("runw", "POST", path, add)[1]["result"] == "ok"
+    call = entry(2, "submit", epoch, source_round=0)
+    status, committed = d.http("runw", "POST", path, call)
+    assert status == 200 and committed["result"] == "ok"
+    status, readback = d.http("runw", "POST", path, call)
+    assert status == 200 and readback["result"] == "duplicate"
+    assert readback["reply"] == committed["reply"]
+    assert d.http("reader", "POST", path, call)[0] == 403
+    assert d.http("runw", "POST", path, {**call, "id": eid(3)})[0] == 401
+    assert events(d.world, "submitted") == 1
 
 
 def test_crash_recording_receipt_rolls_back_mutation(w, monkeypatch):
