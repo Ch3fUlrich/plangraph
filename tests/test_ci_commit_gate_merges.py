@@ -4,13 +4,16 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from test_ci_commit_gate import _commit, _git, _git_env, _head, check, repo  # noqa: F401
+from test_ci_commit_gate import BASE_MSG, OK_MSG, _commit, _git, _git_env, _head, check, repo  # noqa: F401
+
+BASE_MSG_SEED = BASE_MSG
+OK_LANE_MSG = OK_MSG
 
 
 GATE_MSG = "chore: gate\n\nWriter: mimo-v2.6-flash run-g\n\nGate-Edit: D-2209\n"
 
 
-def _conflicted_workflow_merge(repo: Path, message: str) -> tuple[str, str]:
+def _conflicted_workflow_merge(repo: Path, message: str, keep: str | None = None) -> tuple[str, str]:
     """A main-into-lane merge that resolves a conflict in a workflow file; returns (base, merge sha)."""
     _commit(repo, GATE_MSG, files={".github/workflows/x.yml": "name: x\n"})
     base = _head(repo)
@@ -19,7 +22,10 @@ def _conflicted_workflow_merge(repo: Path, message: str) -> tuple[str, str]:
     _git(repo, "checkout", "-q", "-")
     _commit(repo, GATE_MSG, files={".github/workflows/x.yml": "name: lane\n"})
     subprocess.run(["git", "merge", "--no-ff", "--no-commit", "side"], cwd=repo, env=_git_env(), capture_output=True)
-    (repo / ".github/workflows/x.yml").write_text("name: resolved\n", encoding="utf-8")
+    if keep:  # resolve by keeping one parent's version whole: the combined diff then shows nothing
+        _git(repo, "checkout", f"--{keep}", ".github/workflows/x.yml")
+    else:
+        (repo / ".github/workflows/x.yml").write_text("name: resolved\n", encoding="utf-8")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", message)
     return base, _head(repo)
@@ -40,3 +46,35 @@ def test_merge_resolving_workflow_conflict_can_be_exempt(repo: Path, tmp_path: P
     exempt = tmp_path / "exempt.txt"
     exempt.write_text(merge + "\n", encoding="utf-8")
     assert check(base, merge, cwd=repo, exempt=exempt) == []
+
+
+def test_conflict_resolved_by_keeping_one_side_still_needs_gate_edit(repo: Path):
+    from importlib import util
+
+    for keep in ("ours", "theirs"):
+        sub = repo.parent / keep
+        sub.mkdir()
+        _git(sub, "init", "-q")
+        _commit(sub, BASE_MSG_SEED)
+        base, merge = _conflicted_workflow_merge(sub, "Merge side into lane", keep=keep)
+        # The resolution equals a parent, so the combined diff alone would not list the workflow.
+        assert ".github/workflows/x.yml" not in _git(sub, "diff-tree", "--cc", "--name-only", "-r", merge)
+        assert check(base, merge, cwd=sub) == [f"{merge}: gate edit without Gate-Edit trailer"]
+        # The batch land reads the same detection.
+        path = Path(__file__).resolve().parents[1] / "tools/gate_wiring_check.py"
+        spec = util.spec_from_file_location("gate_wiring_check", path)
+        gate = util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        assert gate.commits_missing_gate_edit(
+            base, merge, ".github/workflows/x.yml", cwd=sub, include_merges=True) == [merge]
+
+
+def test_clean_main_merge_of_a_workflow_edit_needs_no_trailer(repo: Path):
+    _commit(repo, GATE_MSG, files={".github/workflows/x.yml": "name: x\n"})
+    base = _head(repo)
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, GATE_MSG, files={".github/workflows/x.yml": "name: side\n"})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, OK_LANE_MSG, files={"lane.txt": "lane\n"})
+    _git(repo, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
+    assert check(base, _head(repo), cwd=repo) == []

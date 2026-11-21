@@ -1,8 +1,8 @@
 '''CI commit gate: Writer attribution, hand-edit, gate-edit, test-removal, open_pr_merged reasons.
 
 Trailer checks use ``git log --no-merges base..head``. A merge commit is checked only for
-its own gate-file edits (combined diff: a conflict resolution in a workflow needs its own
-Gate-Edit trailer); merge parents are checked separately when open PR heads are supplied. Exempt commits skip only trailer rules;
+its own gate-file edits (combined diff plus the parents' conflict list: a conflict resolution in a
+workflow needs its own Gate-Edit trailer); merge parents are checked separately when open PR heads are supplied. Exempt commits skip only trailer rules;
 an exempt entry does not waive open_pr_merged. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
 cannot exempt the commits it introduces.
@@ -199,17 +199,43 @@ def _iter_merges(base: str, head: str, cwd: str | Path | None = None) -> list[tu
     return merges
 
 
-def _merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
-    '''Paths a merge changes against every parent (conflict resolutions, evil merges).
+def _merge_conflict_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
+    '''Paths the two parents of a merge conflict on, even when the resolution equals one parent.'''
+    parents = _git_text(['rev-list', '--parents', '-n', '1', sha], cwd=cwd).split()[1:]
+    if len(parents) != 2:
+        return []
+    proc = subprocess.run(
+        ['git', 'merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', *parents],
+        cwd=cwd, capture_output=True,
+    )
+    if proc.returncode == 0:
+        return []
+    if proc.returncode == 1:
+        names = proc.stdout.decode('utf-8', errors='replace').split('\0')[1:]
+        return [name for name in names[: names.index('')] if name] if '' in names else names
+    # A git without merge-tree --write-tree: a path both sides changed may be a conflict.
+    base = _git_text(['merge-base', *parents], cwd=cwd).strip()
+    sides = [
+        set(_git_text(['diff', '--name-only', '-z', base, parent], cwd=cwd).split('\0')) - {''}
+        for parent in parents
+    ]
+    return sorted(sides[0] & sides[1])
+
+
+def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
+    '''Paths a merge edits itself: its combined diff plus every path its parents conflict on.
 
     The combined diff omits a clean integration of an authorized parent, so a plain
-    main-into-lane merge stays free of trailers.
+    main-into-lane merge stays free of trailers; it also omits a conflict resolved by
+    keeping one parent's version, which the conflict list restores. The batch land and
+    the pre-push/CI gate both read this one function.
     '''
     out = _git_text(
-        ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--cc', '--no-renames', sha],
+        ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', '--cc', '--no-renames', sha],
         cwd=cwd,
     )
-    return [path for path in out.split('\0') if path]
+    combined = [path for path in out.split('\0') if path]
+    return sorted(set(combined) | set(_merge_conflict_paths(sha, cwd=cwd)))
 
 
 def _trailer_block_lines(message: str) -> list[str]:
@@ -492,7 +518,7 @@ def check(
         # a plain commit (the batch land refuses it otherwise, after the frozen push).
         if (
             any(fnmatch.fnmatchcase(path, pattern)
-                for path in _merge_edited_paths(sha, cwd=cwd) for pattern in GATE_PATHS)
+                for path in merge_edited_paths(sha, cwd=cwd) for pattern in GATE_PATHS)
             and not _has_trailer(_trailer_block_lines(message), GATE_EDIT_RE)
         ):
             violations.append(f'{sha}: {GATE_EDIT_VIOLATION}')
