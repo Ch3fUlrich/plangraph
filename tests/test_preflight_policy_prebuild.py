@@ -15,6 +15,11 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools"
 PY = f"#!{sys.executable}\n"
 
 
+def shared_target(repo):
+    """The shared cargo target, outside the checkout like a real one."""
+    return repo.parent / (repo.name + "-cargo")
+
+
 def script(path, body):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(PY + body)
@@ -50,7 +55,7 @@ elif sys.argv[1] == 'run':
 """)
     monkeypatch.setenv("PREFLIGHT_TOOLS_DIR", str(tools))
     monkeypatch.setenv("PATH", f"{repo / 'bin'}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(repo / "target"))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(shared_target(repo)))
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "100")
     monkeypatch.delenv("RUSTC_WRAPPER", raising=False)
     return repo, log, seen
@@ -76,10 +81,10 @@ def test_cold_build_counts_outside_the_policy_check_bound(rig, monkeypatch, caps
 def test_the_built_binary_is_a_private_copy_removed_afterwards(rig, monkeypatch):
     repo, log, seen = rig
     cleanup = []
-    built = repo / "target/debug/pg-policy"
+    built = shared_target(repo) / "debug/pg-policy"
     built.parent.mkdir(parents=True)
     built.write_text("x")
-    staged = preflight.stage_policy_binary(repo / "target", cleanup)
+    staged = preflight.stage_policy_binary(shared_target(repo), cleanup)
     assert Path(staged).read_text() == "x" and Path(staged) != built
     assert str(Path(staged).parent) in cleanup
     built.write_text("replaced by another checkout")
@@ -118,4 +123,4 @@ def test_no_rust_workspace_means_no_prebuild(repo, monkeypatch):
 def test_the_prebuild_uses_the_shared_target_and_rust_step_target(rig, monkeypatch, capsys):
     repo, log, seen = rig
     preflight.main(["--base", "HEAD", "--fast"], repo)
-    assert (repo / "target/debug/pg-policy").is_file()
+    assert (shared_target(repo) / "debug/pg-policy").is_file()

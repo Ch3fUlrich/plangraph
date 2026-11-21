@@ -416,12 +416,13 @@ def stage_policy_binary(target, cleanup):
 TRIM_WAIT_SECONDS = 5.0
 
 
-def trim_shared_target():
+def trim_shared_target(root):
     """Before any build: cap the shared target and prune its old cli-tests builds (LE-PUSH-WARM-TARGET-UNCAPPED)."""
     target = shared_cargo_target()
     try:
-        if target.exists() and not target.is_symlink():
-            reclaim_cargo_target(target, cargo_target_cap_gb(), wait=TRIM_WAIT_SECONDS)
+        if target.exists():
+            reclaim_cargo_target(target, cargo_target_cap_gb(), root,
+                                 wait=TRIM_WAIT_SECONDS, identified=True)
     except (OSError, ValueError) as exc:
         print(f"cargo target trim skipped: {exc}", flush=True)
 
@@ -499,7 +500,7 @@ def _main(argv, root, cleanup):
                                    "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt"))]),
                 ("rust", None), ("tests", [] if args.fast else [tests])]
     summary, exit_code, stopped, scrub_bad = [], 0, False, False
-    trim_shared_target()
+    trim_shared_target(root)
     for family, commands in families:
         start = time.monotonic()
         status = "SKIP"

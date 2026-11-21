@@ -6,7 +6,7 @@ import pytest
 
 from plangraph.spawner import host_ready as h
 from test_preflight import preflight, repo  # noqa: F401
-from test_preflight_policy_prebuild import rig  # noqa: F401
+from test_preflight_policy_prebuild import rig, shared_target  # noqa: F401
 
 NOW = 1_800_000_000
 
@@ -53,9 +53,9 @@ def test_reclaim_removes_an_over_cap_target_and_keeps_an_under_cap_one(tmp_path,
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
     (target / "debug").mkdir(parents=True)
     (target / "debug/blob").write_text("x" * 50_000)
-    h.reclaim_cargo_target(target, cap=1.0, wait=0)
+    h.reclaim_cargo_target(target, cap=1.0, checkout=tmp_path / 'checkout', wait=0)
     assert (target / "debug/blob").exists()
-    h.reclaim_cargo_target(target, cap=1e-6, wait=0)   # 50 KB over a ~1 KB cap
+    h.reclaim_cargo_target(target, cap=1e-6, checkout=tmp_path / 'checkout', wait=0)   # 50 KB over a ~1 KB cap
     assert not target.exists()
 
 
@@ -66,13 +66,13 @@ def test_reclaim_refuses_while_a_build_holds_the_lease(tmp_path, monkeypatch):
     (target / "blob").write_text("x" * 50_000)
     with h.cargo_lease():
         with pytest.raises(OSError):
-            h.reclaim_cargo_target(target, cap=1e-6, wait=0)
+            h.reclaim_cargo_target(target, cap=1e-6, checkout=tmp_path / 'checkout', wait=0)
     assert (target / "blob").exists()
 
 
 def test_preflight_trims_an_over_cap_target_before_the_first_build(rig, monkeypatch, capsys):
     repo, log, seen = rig
-    target = repo / "target"
+    target = shared_target(repo)
     (target / "debug").mkdir(parents=True)
     (target / "debug/old-artifact").write_text("x" * 100_000)
     build(target, "old", 40 * 3600, now=__import__("time").time())
@@ -82,13 +82,14 @@ def test_preflight_trims_an_over_cap_target_before_the_first_build(rig, monkeypa
     cargo.write_text(cargo.read_text().replace(
         "open(", "open(os.environ['CARGO_TARGET_DIR'] + '.seen', 'w').write(str(sorted(p.name for p in Path(os.environ['CARGO_TARGET_DIR']).rglob('*'))))\nopen(", 1))
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
-    assert "old-artifact" not in (repo / "target.seen").read_text()
-    assert "old" not in (repo / "target.seen").read_text().replace("old-artifact", "")
+    seen_in_target = Path(str(target) + ".seen").read_text()
+    assert "old-artifact" not in seen_in_target
+    assert "old" not in seen_in_target.replace("old-artifact", "")
 
 
 def test_preflight_prunes_cli_tests_of_an_under_cap_target(rig, monkeypatch):
     repo, log, seen = rig
-    target = repo / "target"
+    target = shared_target(repo)
     for index in range(5):
         build(target, f"h{index}", index * 60, now=__import__("time").time())
     monkeypatch.setenv(h.CLI_TESTS_KEEP_ENV, "2")
@@ -100,5 +101,53 @@ def test_trim_is_never_fatal(repo, monkeypatch, capsys):
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(repo / "t"))
     (repo / "t").mkdir()
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "nonsense")
-    preflight.trim_shared_target()
+    preflight.trim_shared_target(repo)
+    assert "cargo target trim skipped" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("where", ["checkout", "inside-checkout", "home", "above-home", "root"])
+def test_a_target_that_holds_the_checkout_or_home_is_never_reclaimed(tmp_path, monkeypatch, where):
+    home = tmp_path / "users/me"
+    checkout = home / "code/repo"
+    checkout.mkdir(parents=True)
+    (checkout / "src.py").write_text("x" * 50_000)
+    monkeypatch.setenv("HOME", str(home))
+    target = {"checkout": checkout, "inside-checkout": checkout / "target", "home": home,
+              "above-home": tmp_path / "users", "root": Path("/")}[where]
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    with pytest.raises(ValueError, match="unsafe cache directory"):
+        h.reclaim_cargo_target(target, cap=1e-9, checkout=checkout, wait=0)
+    assert (checkout / "src.py").exists()
+
+
+def test_a_symlinked_target_is_never_reclaimed(tmp_path, monkeypatch):
+    real = tmp_path / "real"
+    (real / "debug").mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(link))
+    with pytest.raises(ValueError, match="unsafe cache directory"):
+        h.reclaim_cargo_target(link, cap=1e-9, checkout=tmp_path / "checkout", wait=0)
+    assert (real / "debug").exists()
+
+
+def test_a_directory_without_cargo_markers_is_not_removed_whole(tmp_path, monkeypatch):
+    target = tmp_path / "t"
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    target.mkdir()
+    (target / "notes.txt").write_text("x" * 50_000)
+    with pytest.raises(ValueError, match="not an identified cargo target"):
+        h.reclaim_cargo_target(target, cap=1e-9, checkout=tmp_path / "checkout", wait=0, identified=True)
+    assert (target / "notes.txt").exists()
+    (target / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
+    h.reclaim_cargo_target(target, cap=1e-9, checkout=tmp_path / "checkout", wait=0, identified=True)
+    assert not target.exists()
+
+
+def test_preflight_never_deletes_a_checkout_configured_as_the_target(repo, monkeypatch, capsys):
+    (repo / "src.py").write_text("x" * 50_000)
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(repo))
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "1e-9")
+    preflight.trim_shared_target(repo)
+    assert (repo / "src.py").exists() and (repo / ".git").exists()
     assert "cargo target trim skipped" in capsys.readouterr().out

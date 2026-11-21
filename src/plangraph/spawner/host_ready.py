@@ -153,10 +153,29 @@ def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
     return removed
 
 
-def reclaim_cargo_target(target, cap, wait=None):
+CARGO_TARGET_MARKERS = ('CACHEDIR.TAG', '.rustc_info.json', 'debug', 'release', 'cli-tests')
+
+
+def unsafe_cache_dir(target, checkout):
+    """Refuse a cache that is, holds or sits inside a checkout, the home directory or an ancestor of it."""
+    checkout, cache, home = Path(checkout).resolve(), Path(target).resolve(), Path.home().resolve()
+    if (Path(target).is_symlink() or checkout.is_relative_to(cache) or cache.is_relative_to(checkout)
+            or home.is_relative_to(cache) or cache == Path(cache.anchor)):
+        raise ValueError('unsafe cache directory')
+
+
+def identified_cargo_target(target):
+    """Only an empty directory or one holding Cargo's own markers may be removed whole."""
+    names = {entry.name for entry in Path(target).iterdir()}
+    return not names or bool(names & set(CARGO_TARGET_MARKERS))
+
+
+def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
     """Trim the shared target before a build: prune old cli-tests builds, then drop all of it if still over ``cap`` GB.
 
-    Holds the exclusive lease (live builds hold shared ones) and raises OSError when it cannot get it."""
+    Holds the exclusive lease (live builds hold shared ones) and raises OSError when it cannot get it,
+    ValueError for a target that is unsafe next to ``checkout`` or, with ``identified``, holds no cargo markers."""
+    unsafe_cache_dir(target, checkout)
     if wait is None:
         try:
             wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
@@ -166,6 +185,8 @@ def reclaim_cargo_target(target, cap, wait=None):
     with cargo_lease(exclusive=True, wait=wait):
         prune_cli_tests(target)
         if target.exists() and cargo_target_size_gb(target) >= cap:
+            if identified and not identified_cargo_target(target):
+                raise ValueError(f'{target} is not an identified cargo target; not removed')
             shutil.rmtree(target)
 
 
@@ -205,16 +226,13 @@ def local_disk_refusal(worktree, service):
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
         target = shared_cargo_target()
-        checkout, cache = Path(worktree).resolve(), target.resolve()
-        if (target.is_symlink() or checkout.is_relative_to(cache) or
-                cache.is_relative_to(checkout) or cache == Path.home().resolve()):
-            raise ValueError('unsafe cache directory')
+        unsafe_cache_dir(target, worktree)
         size = cargo_target_size_gb(target)
         if size >= cap:
             if any(cargo_run_busy(r) for r in service.ps()['runs']):
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy'
             try:
-                reclaim_cargo_target(target, cap)
+                reclaim_cargo_target(target, cap, worktree)
             except OSError:
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
         if cap == 0:
