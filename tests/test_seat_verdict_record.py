@@ -33,6 +33,9 @@ def record_dir(tmp_path, name, live_log=None, tail=REVIEW, writer="deepseek",
               "finish_reason": "stop", "stdout_tail": tail,
               "completion": {"head_sha": HEAD_SHA}}
     record.update(rec)
+    record.setdefault("request", {"verdict_binding": {
+        "key": record.get("item_key", "demo:A"), "epoch": 1, "round": 1,
+        "head": HEAD_SHA, "seat_run": name}})
     (d / "record.json").write_text(json.dumps(record))
     (d / "record.json").chmod(0o600)  # umask 002 would make it group-writable
     if live_log is not None:
@@ -366,3 +369,17 @@ def test_record_writer_family_not_in_cli_list_accepted(tmp_path, capsys):
                                   "family": "deepseek"})
     assert sv.main(argv) == 0
     assert json.loads(capsys.readouterr().out)["body"]["ok"] is True
+
+
+
+def test_legacy_unbound_seat_goes_to_routing_recovery(tmp_path, monkeypatch):
+    argv = record_dir(tmp_path, "legacy", item_key="demo:A")
+    directory = tmp_path / "legacy"
+    path = directory / "record.json"
+    record = json.loads(path.read_text())
+    record.pop("request")
+    path.write_text(json.dumps(record))
+    monkeypatch.setattr(sv, "send", lambda *args: pytest.fail("legacy verdict must not be sent"))
+    argv.remove("--dry-run")
+    assert sv.main(argv + ["--url", "unused"]) == sv.EXIT_REFUSED
+    assert "no proven admission binding" in (directory / "verdict.recovery.json").read_text()

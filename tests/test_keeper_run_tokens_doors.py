@@ -59,7 +59,7 @@ def test_http_run_token_is_403_everywhere_else(d):
         status, _ = d.http("runw", "GET", f"/v1/{verb}?key=demo:A")
         assert status == 403, verb
     for verb in sorted(api_routes.WRITE_VERBS - {"heartbeat", "add_evidence",
-                                                  "submit", "replay", "write_receipt"}):  # replay: M2B-OUTBOX
+                                                  "submit", "replay", "write_receipt", "bind_seat_verdict"}):  # replay: M2B-OUTBOX
         status, _ = d.http("runw", "POST", f"/v1/{verb}",
                            {"key": "demo:A", "epoch": epoch, "role": "writer",
                             "run_id": "w1", "ok": True})  # malformed or not: 403
@@ -169,3 +169,107 @@ def test_mcp_tool_routes():
     names = {t["name"] for t in mcp.TOOLS}
     assert "mint_run_token" in names
     assert mcp._ROUTES["mint_run_token"] == ("POST", "mint_run_token")
+
+
+def test_native_queue_acknowledges_receipt_quota(native_client, monkeypatch):
+    from plangraph.keeper import store_outbox
+
+    d = native_client
+    epoch = to_claimed(d.world, "demo:A")
+    d.world.tokens["runw"] = d.http("l1main", "POST", "/v1/mint_run_token", body())[1]["token"]
+    monkeypatch.setenv("PG_EPOCH", str(epoch))
+    monkeypatch.setattr(store_outbox, "MAX_SEEN_PER_TOKEN", 1)
+    assert d.pg("runw", "heartbeat", "demo:A")[0] == 0
+    code, _, err = d.pg("runw", "heartbeat", "demo:A")
+    assert code == 2 and "outbox limit" in err
+    queue = d.tmp / "outbox.jsonl.d"
+    assert not list(queue.glob("*.json"))
+    assert len(list((queue / "done").glob("*.json"))) == 2
+
+
+def test_seat_binding_refuses_late_same_head_on_direct_and_replay(d):
+    w = d.world
+    epoch = to_claimed(w, "demo:A")
+    head = "a" * 40
+    from evidence_fakes import FakeGit
+    w.store.ctx["git"] = FakeGit(trailers_by_sha={head: {"Writer": "openai/gpt-5 run-writer"}})
+    w.store.add_evidence(w.p("l1main"), "demo:A", epoch, "commit+ci", {"commit": head})
+    w.store.submit(w.p("l1main"), "demo:A", epoch)
+    binding = {"key": "demo:A", "epoch": epoch, "round": 1, "head": head, "seat_run": "run-early"}
+    assert d.http("router", "POST", "/v1/admit_seat_verdict", binding) == (200, binding)
+    seat = {"key": "demo:A", "ok": True, "reason": "seat witnessed result", "binding": binding}
+    assert d.http("reviewer", "POST", "/v1/bind_seat_verdict", seat)[0] == 200
+    w.store.verdict(w.p("reviewer2"), "demo:A", False, "manual changes")
+    w.store.submit(w.p("l1main"), "demo:A", epoch)
+
+    assert d.http("reviewer", "POST", "/v1/verdict", seat)[0] == 409
+    entry = {"id": "01" * 16, "verb": "verdict", "body": seat}
+    assert d.http("reviewer", "POST", "/v1/write_receipt", entry)[0] == 409
+    assert d.http("reviewer", "POST", "/v1/replay", {"entries": [entry]})[1]["results"][0]["result"] == "round_stale"
+    assert w.store.show(w.p("reader"), "demo:A")["round"] == 2
+
+
+def test_seat_payload_immutable_and_unbound_ingresses_refused(d):
+    w = d.world
+    epoch = to_claimed(w, "demo:A")
+    head = "b" * 40
+    from evidence_fakes import FakeGit
+    w.store.ctx["git"] = FakeGit(trailers_by_sha={head: {"Writer": "openai/gpt-5 run-writer"}})
+    w.store.add_evidence(w.p("l1main"), "demo:A", epoch, "commit+ci", {"commit": head})
+    w.store.submit(w.p("l1main"), "demo:A", epoch)
+    seat = {"key": "demo:A", "ok": False, "reason": "seat witnessed changes"}
+    entry = {"id": "01" * 16, "verb": "verdict", "body": seat}
+    for path, payload in [("verdict", seat), ("write_receipt", entry), ("bind_seat_verdict", seat)]:
+        assert d.http("reviewer", "POST", "/v1/" + path, payload)[0] == 403
+    assert d.http("reviewer", "POST", "/v1/replay", {"entries": [entry]})[1]["results"][0]["result"] == "forbidden"
+    binding = {"key": "demo:A", "epoch": epoch, "round": 1, "head": head, "seat_run": "run-payload"}
+    assert d.http("router", "POST", "/v1/admit_seat_verdict", binding)[0] == 200
+    bound = dict(seat, binding=binding)
+    assert d.http("reviewer", "POST", "/v1/bind_seat_verdict", bound)[0] == 200
+    changed = dict(bound, reason="seat other changes")
+    assert d.http("reviewer", "POST", "/v1/bind_seat_verdict", changed)[0] == 409
+    assert d.http("reviewer", "POST", "/v1/verdict", changed)[0] == 409
+    status, verdict = d.http("reviewer", "POST", "/v1/verdict", bound)
+    assert status == 200 and verdict["state"] == "claimed", verdict
+    assert d.http("reviewer", "POST", "/v1/verdict", bound) == (200, verdict)
+
+
+def test_repost_sending_seat_reads_original_receipt(d, monkeypatch):
+    from pathlib import Path
+    from evidence_fakes import FakeGit
+    from plangraph.spawner.notify import KeeperSink
+
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "tools"))
+    import seat_verdict
+    from seat_backfill import save_verdict_payload
+
+    world = d.world
+    epoch = to_claimed(world, "demo:A")
+    head = "a" * 40
+    world.store.ctx["git"] = FakeGit(trailers_by_sha={head: {"Writer": "openai/gpt-5 run-writer"}})
+    world.store.add_evidence(world.p("l1main"), "demo:A", epoch, "commit+ci", {"commit": head})
+    world.store.submit(world.p("l1main"), "demo:A", epoch)
+    run_dir = d.tmp / "run-repost"
+    run_dir.mkdir()
+    record = {"run_id": run_dir.name, "item_key": "demo:A",
+              "given_writer_families": ["openai"], "completion": {"head_sha": head}}
+    router = d.tmp / "router.token"
+    router.write_text(world.tokens["router"])
+    monkeypatch.setattr("plangraph.spawner.notify.subprocess.check_output", lambda *a, **kw: head)
+    KeeperSink(d.url, router).admit_seat_verdict(record, run_dir)
+    binding = record["request"]["verdict_binding"]
+    assert binding == {"key": "demo:A", "epoch": epoch, "round": 1, "head": head, "seat_run": run_dir.name}
+    (run_dir / "record.json").write_text(json.dumps(record))
+    (run_dir / "record.json").chmod(0o600)
+    payload = {"key": "demo:A", "ok": False, "reason": "seat requested changes", "binding": binding}
+    saved = save_verdict_payload(run_dir, "deepseek", payload)
+    assert saved["payload"] == payload
+    (run_dir / "verdict.json").write_text('{"status":"sending","attempts":0}')
+    assert d.http("reviewer", "POST", "/v1/bind_seat_verdict", payload)[0] == 200
+    assert d.http("reviewer", "POST", "/v1/verdict", payload)[0] == 200
+
+    (d.tmp / "reviewer-deepseek.token").write_text(world.tokens["reviewer"])
+    assert seat_verdict.main(["--repost-transport", "--key", "demo:A", "--seat-dir", str(run_dir),
+                              "--token-dir", str(d.tmp), "--url", d.url]) == 0
+    assert json.loads((run_dir / "verdict.json").read_text())["status"] == "delivered"
+    assert world.conn.execute("SELECT COUNT(*) FROM events WHERE type='changes_requested'").fetchone()[0] == 1

@@ -38,14 +38,20 @@ class OutboxMixin:
 
     def replay(self, principal, entries):
         """Compatibility for old clients: expose history, without sending an uncertain write."""
-        self._receipt_principal(principal)
         if not isinstance(entries, list) or not entries or len(entries) > MAX_ENTRIES:
             raise Refused("validation", f"entries must be a list of 1..{MAX_ENTRIES}")
+        if not all(isinstance(entry, dict) and entry.get("verb") == "verdict" for entry in entries):
+            self._receipt_principal(principal)
         results, recovery = [], []
         for entry in entries:
             try:
                 eid, verb, body, digest = self._receipt_entry(entry)
-                result = self._find_receipt(eid, principal.token_id, verb, digest)
+                if verb == "verdict":
+                    if not body.get("binding"):
+                        raise Refused("forbidden", "seat verdict requires an admission binding")
+                    result = self.write_receipt(principal, entry)
+                else:
+                    result = self._find_receipt(eid, principal.token_id, verb, digest)
                 if result is not None:
                     results.append(result)
                 else:
@@ -116,8 +122,19 @@ class OutboxMixin:
         return self._find_receipt(eid, token["id"], verb, digest)
 
     def write_receipt(self, principal, entry):
-        self._receipt_principal(principal)
         eid, verb, body, digest = self._receipt_entry(entry)
+        if verb == "verdict":
+            if not body.get("binding"):
+                raise Refused("forbidden", "seat verdict requires an admission binding")
+            if entry.get("legacy") is True:
+                return {"id": eid, "result": "recovery_required"}
+            key = body.get("key")
+            if not isinstance(key, str):
+                raise Refused("validation", "receipt write requires a key")
+            reply = self.verdict(principal, self.resolve_key(key), body.get("ok"),
+                                 body.get("reason", ""), binding=body["binding"])
+            return {"id": eid, "result": "ok", "reply": reply}
+        self._receipt_principal(principal)
         stored = self._find_receipt(eid, principal.token_id, verb, digest)
         if stored is not None:
             return stored
@@ -177,6 +194,137 @@ class OutboxMixin:
             "INSERT INTO op_receipts(entry_id,token_id,verb,key,request_hash,result,seen_at)"
             " VALUES(?,?,?,?,?,?,?)",
             (eid, token_id, verb, key, digest, json.dumps(outcome), self._iso(self.now())))
+
+    @staticmethod
+    def _seat_binding(binding):
+        fields = {"key", "epoch", "round", "head", "seat_run"}
+        if not isinstance(binding, dict) or fields != binding.keys():
+            raise Refused("forbidden", "seat verdict requires an admission binding")
+        if (not isinstance(binding["key"], str)
+                or type(binding["epoch"]) is not int or type(binding["round"]) is not int
+                or not isinstance(binding["head"], str)
+                or not re.fullmatch(r"[0-9a-f]{40}", binding["head"])
+                or not isinstance(binding["seat_run"], str)
+                or not re.fullmatch(r"run-[a-zA-Z0-9]{1,120}", binding["seat_run"])):
+            raise Refused("validation", "malformed seat admission binding")
+        return binding["seat_run"]
+
+    def _check_seat_round(self, item, binding):
+        if (item["state"] != "in_review" or item["epoch"] != binding["epoch"]
+                or item["round"] != binding["round"]):
+            raise Refused("round_stale", "seat admission is for a different review round")
+        heads = [e["ref"].get("commit") for e in self._evidence(item["key"])
+                 if e["epoch"] == item["epoch"] and e["kind"] == "commit+ci" and e["verified"]]
+        if not heads or heads[-1] != binding["head"]:
+            raise Refused("conflict", "seat admission head is no longer current")
+
+    def _seat_row(self, run, phase):
+        row = self.conn.execute("SELECT result FROM op_receipts WHERE entry_id=?",
+                                (f"seat:{run}:{phase}",)).fetchone()
+        return json.loads(row["result"]) if row else None
+
+    def _record_seat(self, run, phase, key, value):
+        self._insert_receipt((f"seat:{run}:{phase}", 0, f"seat_{phase}", None, key), value)
+
+    def admit_seat_verdict(self, principal, binding):
+        run = self._seat_binding(binding)
+        key = binding["key"]
+
+        def apply(now):
+            self._require_role(principal, "spawner", "router")
+            with self._write():
+                item = self._get_or_refuse(key)
+                if principal.role == "spawner":
+                    self._require_project(principal, item["project"])
+                previous = self._seat_row(run, "admission")
+                if previous is not None:
+                    if previous != binding:
+                        raise Refused("conflict", "seat run already admitted for another review")
+                    return previous
+                self._check_seat_round(item, binding)
+                self._record_seat(run, "admission", key, binding)
+            return binding
+
+        return self._run(principal, "admit_seat_verdict", key, apply)
+
+    @staticmethod
+    def _seat_credential(principal):
+        return [principal.name, getattr(principal, "token_id", None)]
+
+    def _seat_payload(self, principal, key, ok, reason, binding):
+        run = self._seat_binding(binding)
+        if key != binding["key"] or self._seat_row(run, "admission") != binding:
+            raise Refused("conflict", "seat binding differs from the admitted review")
+        if isinstance(principal, auth.RunPrincipal) and principal.run_id != run:
+            raise Refused("forbidden", "seat run does not match the reviewer credential")
+        if type(ok) is not bool or not isinstance(reason, str):
+            raise Refused("validation", "seat verdict requires a boolean and a reason")
+        digest = hashlib.sha256(json.dumps([ok, reason], separators=(",", ":")).encode()).hexdigest()
+        return run, dict(credential=self._seat_credential(principal), digest=digest)
+
+    def bind_seat_verdict(self, principal, key, ok, reason, binding):
+        def apply(now):
+            self._require_role(principal, "reviewer")
+            with self._write():
+                run, payload = self._seat_payload(principal, key, ok, reason, binding)
+                item = self._get_or_refuse(key)
+                self._require_project(principal, item["project"])
+                previous = self._seat_row(run, "payload")
+                if previous is not None:
+                    if previous != payload:
+                        raise Refused("conflict", "seat verdict payload already bound")
+                else:
+                    self._check_seat_round(item, binding)
+                    self._record_seat(run, "payload", key, payload)
+            return {"binding": binding}
+        return self._run(principal, "verdict", key, apply)
+
+    def _seat_delivery(self, principal, key, ok, reason, binding, item=None):
+        if binding is None:
+            seat_identity = principal.name.startswith("reviewer-")
+            if isinstance(principal, auth.RunPrincipal):
+                seat_identity = seat_identity or self._seat_row(principal.run_id, "admission") is not None
+                if not seat_identity and principal.token_role == "reviewer":
+                    request = self._check_run(self._get_or_refuse(key), principal.run_id, self.now()).get("request", {})
+                    seat_identity = request.get("role") in ("review", "seat")
+            if seat_identity or isinstance(reason, str) and reason.lower().startswith("seat "):
+                raise Refused("forbidden", "seat verdict requires an admission binding")
+            return
+        run, payload = self._seat_payload(principal, key, ok, reason, binding)
+        if self._seat_row(run, "payload") != payload:
+            raise Refused("conflict", "seat verdict payload differs from the bound decision")
+        outcome = self._seat_row(run, "outcome")
+        if outcome is not None:
+            raise _StoredReceipt(outcome)
+        if item is not None:
+            self._check_seat_round(item, binding)
+
+    def read_revoked_seat_verdict(self, bearer, body):
+        """Return only the exact settled verdict for its original reviewer run."""
+        if not bearer or not isinstance(body, dict) or not isinstance(body.get("binding"), dict):
+            return None
+        token = self.conn.execute(
+            "SELECT id,run_id,key FROM run_tokens WHERE token_sha256=?"
+            " AND role='reviewer' AND revoked_at IS NOT NULL",
+            (auth.hash_token(bearer),)).fetchone()
+        if token is None or token["run_id"] != body["binding"].get("seat_run") or token["key"] != body.get("key"):
+            return None
+        outcome = self._seat_row(token["run_id"], "outcome")
+        if outcome is None:
+            return None
+        principal = auth.RunPrincipal(auth.RUN_PREFIX + token["run_id"], "reviewer", [], None,
+                                      token_id=token["id"], run_id=token["run_id"])
+        try:
+            self._seat_delivery(principal, body["key"], body.get("ok"), body.get("reason", ""),
+                                body["binding"])
+        except _StoredReceipt as settled:
+            return settled.result
+        return None
+
+    def _seat_result(self, binding, result):
+        if binding is not None:
+            self._record_seat(binding["seat_run"], "outcome", binding["key"], result)
+        return result
 
     # ------------------------------------------------------------- outage
     def record_outage(self, principal, gap_s, frm, to):

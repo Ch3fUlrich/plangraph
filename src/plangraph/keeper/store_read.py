@@ -172,7 +172,7 @@ class ReadMixin:
             "kind": item["kind"], "track": item["track"], "owner": item["owner"],
             "state": item["state"], "priority": item["priority"],
             "review_tier": item["review_tier"],
-            "epoch": item["epoch"], "claimed_by": item["claimed_by"],
+            "epoch": item["epoch"], "round": item["round"], "claimed_by": item["claimed_by"],
             "delegate": item["delegate"], "lease_until": item["lease_until"],
             "reviewer": item["reviewer"], "done_criteria": item["done_criteria"],
             "review_waiver": item.get("review_waiver"), "reviews": reviews,

@@ -43,7 +43,7 @@ READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 READ_VERBS.add("messages")
 READ_VERBS |= {"host_samples", "host_samples_range", "apply_grants"}
 WRITE_VERBS |= {"ingest_host_sample", "mint_host_token", "revoke_host_token"}
-WRITE_VERBS |= {"post_message", "write_receipt"}
+WRITE_VERBS |= {"post_message", "write_receipt", "admit_seat_verdict", "bind_seat_verdict"}
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
                 "audit-meta"}
@@ -61,7 +61,7 @@ READ_CALLS = {
 }
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
-RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay", "write_receipt", "write_context"})
+RUN_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict", "replay", "write_receipt", "write_context", "bind_seat_verdict"})
 
 #: Read-only verbs reachable by the ``sweep`` role (claims, runs, PR links).
 SWEEP_READ_VERBS = frozenset({"whoami", "snapshot", "show"})

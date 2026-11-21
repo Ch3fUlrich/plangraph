@@ -167,6 +167,29 @@ class KeeperSink:
             return json.load(response)
 
 
+    def admit_seat_verdict(self, record, cwd):
+        """Pin the review target and round before the seat receives its prompt."""
+        from .prompt_input import checkout_env
+
+        key = record['item_key']
+        request = record.setdefault('request', {})
+        target = request.get('review_head') or 'HEAD'
+        head = subprocess.check_output(
+            ['git', 'rev-parse', '--verify', '--end-of-options', target + '^{commit}'],
+            cwd=cwd, env=checkout_env(), timeout=10, text=True).strip()
+        item = self.item(key)
+        binding = dict(key=key, epoch=item['epoch'], round=item['round'],
+                       head=head, seat_run=record['run_id'])
+        token = Path(self.token_file).read_text(encoding='utf-8').strip()
+        message = urllib.request.Request(self.url.rstrip('/') + '/v1/admit_seat_verdict',
+            data=json.dumps(binding).encode(), method='POST',
+            headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+        with urllib.request.build_opener(_NoRedirectHandler()).open(message, timeout=10) as response:
+            if json.load(response) != binding:
+                raise ValueError('keeper did not acknowledge seat admission')
+        request['verdict_binding'] = binding
+
+
 def deliver_verdict(directory, record, keeper):
     """Never let optional verdict delivery interrupt completion persistence."""
     if record.get('role') != 'review' or (Path(directory) / 'verdict.delivered').exists():
@@ -185,7 +208,7 @@ def _verdict_outcome(directory, status, reason):
         atomic_write_private(directory / 'verdict.delivered', 'terminal\n')
         return
     attempts = previous.get('attempts', 0) + 1
-    if status == 'retry' and attempts >= 3:
+    if status == 'retry' and attempts >= 3 and not (directory / 'verdict.payload.json').exists():
         status, reason = 'skipped', 'retry limit reached: ' + reason
     atomic_write_private(journal, json.dumps(dict(status=status, reason=reason, attempts=attempts)) + '\n')
     if status in ('skipped', 'delivered'):
@@ -217,7 +240,9 @@ def _deliver_verdict(directory, record, keeper):
             if journal.exists() and json.loads(journal.read_text()).get('status') in ('skipped', 'delivered'):
                 atomic_write_private(marker, 'terminal\n')
                 return
-            if journal.exists() and json.loads(journal.read_text()).get('status') == 'sending':
+            saved = (directory / 'verdict.payload.json').is_file()
+            if journal.exists() and json.loads(journal.read_text()).get('status') == 'sending' and not saved:
+                seat.mark_verdict_recovery(directory, 'legacy sending entry has no bound payload')
                 outcome('skipped', 'ambiguous send, not retried')
                 return
             key = record.get('item_key')
@@ -226,6 +251,15 @@ def _deliver_verdict(directory, record, keeper):
                 return
             if (directory / 'evidence.json').exists():
                 outcome('skipped', 'forward delivery requires record-derived evidence')
+                return
+            if saved:
+                token_dir = os.environ.get('PG_REVIEWER_TOKEN_DIR')
+                if not keeper or not keeper.url or not token_dir:
+                    outcome('retry', 'keeper verdict transport not configured')
+                    return
+                rc = seat.send_saved_verdict(directory, key, keeper.url, Path(token_dir))
+                outcome('delivered' if rc == 0 else 'retry' if rc == seat.EXIT_IO else 'skipped',
+                        'stored verdict delivery exit ' + str(rc))
                 return
             evidence, text = seat.evidence_from_record(directory)
             head = evidence.get('head_sha')
@@ -275,7 +309,7 @@ def _deliver_verdict(directory, record, keeper):
         except Exception as exc:
             import logging
             logging.getLogger(__name__).warning('verdict delivery deferred: %s', type(exc).__name__)
-            outcome('skipped' if verifier_started else 'retry', type(exc).__name__)
+            outcome('retry' if not verifier_started or (directory / 'verdict.payload.json').is_file() else 'skipped', type(exc).__name__)
 
 
 def completion_event(record, cwd):

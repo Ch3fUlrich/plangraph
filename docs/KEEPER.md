@@ -658,6 +658,15 @@ For rollout, apply Postgres Migration 14 (`keeper write receipts`) with `pg admi
 restart the keeper, and deploy the matching native `plangraph` client. The migration imports
 known legacy outcomes. SQLite installs the same receipt store when the keeper opens the database.
 
+### Seat verdict receipts
+
+The spawner registers the item, claim epoch, review round, verified head, and seat run before
+launch. The reviewer binds its boolean verdict and reason once. Direct delivery and replay
+both check the admission and the payload inside the verdict transaction. An exact retry
+can retrieve the committed result after the review moved on. A new round requires a new
+seat binding even when the head SHA is unchanged. The keeper stores these records in
+`op_receipts` alongside run-token write receipts.
+
 ## Placement rules migration-gates
 Migration 11 requires operator GO naming the reviewed SHA and scope, verified
 backup and disposable-schema rehearsal before application through the migrate role.

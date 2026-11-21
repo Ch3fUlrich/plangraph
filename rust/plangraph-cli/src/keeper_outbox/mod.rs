@@ -50,13 +50,18 @@ impl Queue {
             root,
             done,
         };
-        let _lock = atomic::lock(&queue.root.join("entries"))?;
+        Ok(queue)
+    }
+
+    fn open_bound(legacy: &Path, fingerprint: &str) -> io::Result<Self> {
+        let queue = Self::open(legacy)?;
+        let _entries = atomic::lock(&queue.root.join("entries"))?;
+        queue.bind_credential(fingerprint)?;
         queue.import_legacy()?;
         Ok(queue)
     }
 
     fn bind_credential(&self, fingerprint: &str) -> io::Result<()> {
-        let _entries = atomic::lock(&self.root.join("entries"))?;
         let path = self.root.join("credential");
         atomic::regular(&path)?;
         match fs::read_to_string(&path) {

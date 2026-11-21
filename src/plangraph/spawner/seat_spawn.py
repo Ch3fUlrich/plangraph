@@ -508,6 +508,13 @@ class SeatSpawnMixin:
         from .exit_outcome import stamp_harness
         stamp_harness(record, chosen)
         if record.get('role') == 'review':
+            if record.get('item_key') and not options.get('dry_run'):
+                from .notify import KeeperSink
+                sink = KeeperSink()
+                if sink.url and sink.token_file and not record.get('request', {}).get('verdict_binding'):
+                    await asyncio.to_thread(sink.admit_seat_verdict, record,
+                                            options.get('cwd') or record['cwd'])
+                    self._save(record)
             from plangraph.review.family import FamilyError, writer_headers
             try:
                 options['headers'] = dict(options.get('headers') or {},

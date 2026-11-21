@@ -165,6 +165,17 @@ class KeeperHandler(BaseHTTPRequestHandler):
                     if receipt is not None:
                         self._json(200, receipt)
                         return
+                if name in ("verdict", "bind_seat_verdict"):
+                    settled = server.store.read_revoked_seat_verdict(self._token(), body)
+                    if settled is not None:
+                        self._json(200, settled if name == "verdict" else {"binding": body["binding"]})
+                        return
+                if name == "write_receipt" and isinstance(body, dict) and body.get("verb") == "verdict":
+                    eid, _, entry, _ = server.store._receipt_entry(body)
+                    settled = server.store.read_revoked_seat_verdict(self._token(), entry)
+                    if settled is not None:
+                        self._json(200, {"id": eid, "result": "ok", "reply": settled})
+                        return
                 try:
                     principal = auth.authenticate(server.store.conn, self._token())
                 except Refused as exc:
@@ -448,12 +459,17 @@ class KeeperHandler(BaseHTTPRequestHandler):
             return store.add_evidence_router(principal, self._need(body, "key"),
                                              self._need(body, "kind"),
                                              body.get("ref") or {})
+        if name == "admit_seat_verdict":
+            return store.admit_seat_verdict(principal, body)
+        if name == "bind_seat_verdict":
+            return store.bind_seat_verdict(principal, self._need(body, "key"), body.get("ok"),
+                                           body.get("reason", ""), body.get("binding"))
         if name == "verdict":
             ok = body.get("ok")
             if not isinstance(ok, bool):   # "false" must never pass a review
                 raise Refused("validation", "ok is required and must be a boolean")
             return store.verdict(principal, self._need(body, "key"), ok,
-                                 body.get("reason") or "")
+                                 body.get("reason") or "", binding=body.get("binding"))
         if name == "cancel":
             return store.cancel(principal, self._need(body, "key"),
                                 body.get("reason") or "")

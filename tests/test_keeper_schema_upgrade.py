@@ -108,6 +108,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
 
 
 def test_schema_version_is_sixteen():
+    """Historical test identifier that now checks SQLite schema v18."""
     assert schema.SCHEMA_VERSION == 18
 
 
@@ -380,6 +381,7 @@ OVERSIGHT_TABLES = {"oversight_tokens", "oversight_ops"}
 
 
 def test_fresh_sqlite_db_is_v16_with_oversight_and_bus_tables(tmp_path):
+    """SQLite schema v18 retains the oversight and bus tables from earlier versions."""
     conn = kdb.open_db(tmp_path / "fresh.db", create=True, backend="sqlite")
     assert schema.SCHEMA_VERSION == 18
     assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
@@ -655,3 +657,45 @@ def test_sqlite_legacy_receipts_are_imported_on_upgrade(tmp_path):
             assert [tuple(row) for row in rows] == [(7, None, "ok")]
         finally:
             conn.close()
+
+
+
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=needs_pg)])
+def test_mixed_version_legacy_and_fresh_receipt_replay(tmp_path, backend):
+    from keeper_util import World, seed
+    from test_keeper_run_tokens import FakeRuns, claimed_with_token
+
+    world = World(tmp_path, backend=backend, dsn=PG_DSN)
+    seed(world, [("A", [])])
+    world.store.ctx = {"runs": FakeRuns()}
+    epoch, _, principal = claimed_with_token(world)
+    old = {"id": "01" * 16, "verb": "heartbeat", "body": {"key": "demo:A", "epoch": epoch}}
+    world.conn.execute("INSERT INTO outbox_seen VALUES(?,?,?,?,?,?)",
+                       (old["id"], principal.token_id, "heartbeat", None, "ok", "then"))
+    pg_schema = getattr(world.conn, "schema", None)
+    world.close()
+    if pg_schema is None:
+        with sqlite3.connect(world.path) as raw:
+            raw.execute("DROP TABLE op_receipts")
+    else:
+        import psycopg
+        from psycopg import sql
+
+        with psycopg.connect(PG_DSN, autocommit=True) as raw:
+            raw.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(pg_schema)))
+            raw.execute("DROP TABLE op_receipts")
+            raw.execute("DELETE FROM schema_migrations WHERE version=14")
+
+    conn = kdb.open_db(world.path, backend=backend, dsn=PG_DSN, schema=pg_schema,
+                       create=pg_schema is not None)
+    try:
+        store = Store(conn, clock=world.clock)
+        known = {"id": old["id"], "result": "duplicate", "first": "ok", "legacy": True}
+        assert conn.execute("SELECT COUNT(*) FROM op_receipts").fetchone()[0] == 1
+        assert store.replay(principal, [old]) == {"results": [known], "recovery": []}
+        assert store.write_receipt(principal, {**old, "legacy": True}) == known
+        fresh = dict(old, id="02" * 16)
+        assert store.write_receipt(principal, fresh)["result"] == "ok"
+        assert store.replay(principal, [fresh])["results"][0]["first"] == "ok"
+    finally:
+        conn.close()

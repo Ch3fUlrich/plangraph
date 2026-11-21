@@ -5,11 +5,11 @@ use serde_json::json;
 fn append_during_acknowledgement_survives_reopening() {
     let dir = tempfile::tempdir().unwrap();
     let legacy = dir.path().join("outbox.jsonl");
-    let queue = Queue::open(&legacy).unwrap();
+    let queue = Queue::open_bound(&legacy, "owner").unwrap();
     let first = queue
         .enqueue("heartbeat", json!({"key":"d:A","epoch":1}))
         .unwrap();
-    let recovered = Queue::open(&legacy).unwrap();
+    let recovered = Queue::open_bound(&legacy, "owner").unwrap();
     let mut seen = Vec::new();
     recovered
         .drain(
@@ -68,7 +68,7 @@ fn legacy_import_keeps_ids_and_order_without_replaying_unproven_entries() {
     .map(|v| format!("{v}\n"))
     .collect::<String>();
     fs::write(&legacy, &input).unwrap();
-    let queue = Queue::open(&legacy).unwrap();
+    let queue = Queue::open_bound(&legacy, "owner").unwrap();
     let live = queue.enqueue("heartbeat", json!({})).unwrap();
     let mut seen = Vec::new();
     assert!(queue
@@ -90,7 +90,7 @@ fn legacy_import_keeps_ids_and_order_without_replaying_unproven_entries() {
         .to_string()
         .contains("requires recovery"));
     assert_eq!(seen, ["a".repeat(32), "b".repeat(32)]);
-    let recovered = Queue::open(&legacy).unwrap();
+    let recovered = Queue::open_bound(&legacy, "owner").unwrap();
     recovered.resolve(&"b".repeat(32), "D-1").unwrap();
     let outcomes = recovered
         .drain(
@@ -115,7 +115,7 @@ fn symlinked_legacy_queue_does_not_touch_target() {
     fs::write(&target, "unchanged").unwrap();
     let legacy = dir.path().join("outbox.jsonl");
     std::os::unix::fs::symlink(&target, &legacy).unwrap();
-    assert!(Queue::open(&legacy).is_err());
+    assert!(Queue::open_bound(&legacy, "owner").is_err());
     assert_eq!(fs::read_to_string(target).unwrap(), "unchanged");
 }
 
@@ -123,7 +123,7 @@ fn symlinked_legacy_queue_does_not_touch_target() {
 fn bound_submit_survives_restart_after_send() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("outbox.jsonl");
-    let queue = Queue::open(&path).unwrap();
+    let queue = Queue::open_bound(&path, "owner").unwrap();
     let id = queue
         .enqueue("submit", json!({"key":"d:A","epoch":1}))
         .unwrap();
@@ -138,7 +138,7 @@ fn bound_submit_survives_restart_after_send() {
             }
         )
         .is_err());
-    let recovered = Queue::open(&path).unwrap();
+    let recovered = Queue::open_bound(&path, "owner").unwrap();
     let result = recovered
         .drain(
             Some(&id),
@@ -154,4 +154,23 @@ fn bound_submit_survives_restart_after_send() {
         )
         .unwrap();
     assert_eq!(result[0]["result"], "duplicate");
+}
+
+#[test]
+fn foreign_credential_cannot_import_into_existing_queue() {
+    let dir = tempfile::tempdir().unwrap();
+    let legacy = dir.path().join("outbox.jsonl");
+    let owner = Queue::open_bound(&legacy, "owner").unwrap();
+    fs::write(
+        &legacy,
+        format!(
+            "{}\n",
+            json!({
+                "id": "a".repeat(32), "verb": "heartbeat", "body": {}
+            })
+        ),
+    )
+    .unwrap();
+    assert!(Queue::open_bound(&legacy, "foreign").is_err());
+    assert!(owner.first_pending().unwrap().is_none());
 }

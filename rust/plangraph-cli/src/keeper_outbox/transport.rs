@@ -36,8 +36,7 @@ fn execute(args: &[String]) -> io::Result<Value> {
         .ok_or_else(|| io::Error::other("PG_TOKEN_FILE is not set"))?;
     let token = std::fs::read_to_string(token_file)?;
     let fingerprint = format!("{:x}", Sha256::digest(token.trim()));
-    let queue = Queue::open(&queue_path(&fingerprint)?)?;
-    queue.bind_credential(&fingerprint)?;
+    let queue = Queue::open_bound(&queue_path(&fingerprint)?, &fingerprint)?;
     let transport = Transport::new(url, token.trim());
     let prepare = |entry: &Entry| transport.bind_submit(&queue, entry);
     let send = |entry: &Entry| transport.send(entry);
@@ -109,6 +108,7 @@ impl<'a> Transport<'a> {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(Duration::from_secs(15)))
             .max_redirects(0)
+            .http_status_as_error(false)
             .build();
         Self {
             agent: ureq::Agent::new_with_config(config),
@@ -143,26 +143,40 @@ impl<'a> Transport<'a> {
     }
 
     fn send(&self, entry: &Entry) -> io::Result<Value> {
-        self.agent
+        let mut response = self
+            .agent
             .post(format!("{}/v1/write_receipt", self.url))
             .header("Authorization", &self.authorization)
             .send_json(entry)
-            .map_err(http_error)?
-            .body_mut()
-            .read_json()
-            .map_err(http_error)
+            .map_err(http_error)?;
+        let status = response.status().as_u16();
+        if response.status().is_success() {
+            return response.body_mut().read_json().map_err(http_error);
+        }
+        if !entry.legacy && matches!(status, 400 | 401 | 403 | 409) {
+            let refusal: Value = response.body_mut().read_json().map_err(http_error)?;
+            if let Some(code) = refusal["error"].as_str() {
+                return Ok(json!({"id": entry.id, "result": code, "msg": refusal["msg"]}));
+            }
+        }
+        Err(io::Error::other(format!("keeper HTTP {status}")))
     }
 
     fn context(&self, key: &str) -> io::Result<Value> {
-        self.agent
+        let mut response = self
+            .agent
             .get(format!("{}/v1/write_context", self.url))
             .query("key", key)
             .header("Authorization", &self.authorization)
             .call()
-            .map_err(http_error)?
-            .body_mut()
-            .read_json()
-            .map_err(http_error)
+            .map_err(http_error)?;
+        if !response.status().is_success() {
+            return Err(io::Error::other(format!(
+                "keeper HTTP {}",
+                response.status()
+            )));
+        }
+        response.body_mut().read_json().map_err(http_error)
     }
 }
 
