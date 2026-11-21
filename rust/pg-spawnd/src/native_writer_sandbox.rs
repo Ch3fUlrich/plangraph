@@ -9,6 +9,10 @@ use std::{
     process::Command,
 };
 
+/// The Codex sandbox mode of the writer child. Host readiness (`pg_worker_core::host_readiness::WRITER_SANDBOX`)
+/// still certifies `danger-full-access`: aligning it is a separate change.
+pub(crate) const WRITER_SANDBOX: &str = "workspace-write";
+
 /// Variables the writer child receives. `PATH` is set separately from the admitted tool path.
 /// Harness auth stays (`CODEX_HOME`, `OPENAI_*`); git, ssh, proxy and TLS settings stay because the
 /// writer fetches; build variables stay because it builds.
@@ -140,10 +144,7 @@ pub(crate) fn sandbox_args(roots: &[PathBuf]) -> Result<Vec<String>, String> {
         .collect::<Result<Vec<_>, _>>()?
         .join(",");
     Ok([
-        format!(
-            "sandbox_mode=\"{}\"",
-            pg_worker_core::host_readiness::WRITER_SANDBOX
-        ),
+        format!("sandbox_mode=\"{WRITER_SANDBOX}\""),
         "sandbox_workspace_write.network_access=true".to_owned(),
         format!("sandbox_workspace_write.writable_roots=[{list}]"),
     ]

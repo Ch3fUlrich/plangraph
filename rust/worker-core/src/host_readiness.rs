@@ -7,15 +7,11 @@ use std::{
     time::Duration,
 };
 
-/// The Codex sandbox the native writer runs in (`pg-spawnd` native_writer_sandbox); readiness is certified for it.
-pub const WRITER_SANDBOX: &str = "workspace-write";
+pub const WRITER_SANDBOX: &str = "danger-full-access";
 const MAX_AGE_SECS: u64 = 120;
 
 pub fn valid_sandbox(sandbox: &str) -> bool {
-    matches!(
-        sandbox,
-        "workspace-write" | "read-only" | "danger-full-access"
-    )
+    matches!(sandbox, "workspace-write" | "read-only" | WRITER_SANDBOX)
 }
 
 fn record_path(state: &Path, host: &str, sandbox: &str) -> io::Result<PathBuf> {

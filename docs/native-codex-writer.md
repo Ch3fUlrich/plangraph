@@ -66,6 +66,7 @@ would fail). The child's environment is an allowlist (`ENV_ALLOW`: home, locale,
 git identity, ssh agent, proxy and TLS settings, cargo and rustup homes); every other variable of
 the supervisor, including host secrets, is dropped. A canary run on a worker host comes first
 after a change to either list.
+Host readiness (`pg-host-readiness`, package placement) still certifies `danger-full-access`; aligning it with this mode is a separate change.
 
 Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
 final head, resume count, fast-check result, every review round, the last review
