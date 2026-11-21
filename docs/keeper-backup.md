@@ -18,7 +18,7 @@ A failed or empty dump leaves no file and no ledger line.
 
 ## Restore test
 
-`pg-keeper-backup restore-test --file DUMP` refuses, before any Postgres call, a dump whose name carries a seq below 19096 (D-5796: no restore, import or migration loads older keeper state), then lists it (`pg_restore -l`, must show 43 tables, `--tables N` to change), loads it into a scratch database `pgkb_scratch_<seq>_<pid>` on the same server, checks 43 tables and that the restored `max(seq)` is not below the seq of the name (a renamed old dump fails here), and drops the scratch database it created. `CREATE DATABASE` fails when the name is taken, and then nothing is dropped, so a database this run did not create is never touched.
+`pg-keeper-backup restore-test --file DUMP` refuses a name with a seq below 19096 before any Postgres call (D-5796). It lists the archive (`pg_restore -l`, 43 tables by default, or `--tables N`) and reads the archived event sequence as data. Archives with a sequence below the name's seq are refused before anything is loaded. The tool then restores into a scratch database `pgkb_scratch_<seq>_<pid>` on the same server, checks the table count and that the restored sequence matches the archive, then drops the scratch database it created. If the scratch name is taken, `CREATE DATABASE` fails and the existing database is left alone.
 The scratch is a database, not a schema in the live database: `pg_restore` cannot rename the dumped schema, and loading `keeper` into the live database would collide with the live schema. The connecting role needs `CREATEDB`.
 
 ## Secrets

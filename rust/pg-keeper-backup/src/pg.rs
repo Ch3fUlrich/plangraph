@@ -1,6 +1,6 @@
 //! The Postgres side, behind one trait so every rule is tested without a server.
 
-use std::io::Write;
+use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 /// What a restored scratch database holds.
@@ -17,6 +17,8 @@ pub trait Pg {
     fn dump(&self, schema: &str, out: &mut dyn Write) -> Result<(), String>;
     /// `pg_restore -l` of a dump file.
     fn list(&self, dump: &Path) -> Result<String, String>;
+    /// Highest archived `events.seq`, inspected without connecting to Postgres.
+    fn archive_seq(&self, dump: &Path, schema: &str) -> Result<u64, String>;
     /// Create the scratch database; fails when the name is taken, so a database this run
     /// did not create is never touched afterwards.
     fn create_scratch(&self, scratch: &str) -> Result<(), String>;
@@ -24,6 +26,49 @@ pub trait Pg {
     fn load_scratch(&self, dump: &Path, scratch: &str) -> Result<(), String>;
     fn scratch_state(&self, scratch: &str, schema: &str) -> Result<ScratchState, String>;
     fn drop_scratch(&self, scratch: &str) -> Result<(), String>;
+}
+
+/// Scan the `pg_restore --data-only --table events` script without executing it.
+pub(crate) fn read_archive_seq(mut script: impl BufRead, schema: &str) -> io::Result<u64> {
+    let invalid = |message| io::Error::new(io::ErrorKind::InvalidData, message);
+    let target = format!("COPY {schema}.events (");
+    let quoted = format!("COPY \"{schema}\".events (");
+    let mut line = Vec::new();
+    let mut highest = 0;
+    let mut copying = false;
+    let mut complete = false;
+    while script.read_until(b'\n', &mut line)? != 0 {
+        let bytes = line.strip_suffix(b"\n").unwrap_or(&line);
+        if copying {
+            if bytes == b"\\." {
+                copying = false;
+                complete = true;
+            } else {
+                let seq = bytes
+                    .split(|&byte| byte == b'\t')
+                    .next()
+                    .unwrap_or_default();
+                let number = std::str::from_utf8(seq)
+                    .ok()
+                    .and_then(|seq| seq.parse::<u64>().ok())
+                    .ok_or_else(|| invalid("invalid event sequence in archive"))?;
+                highest = highest.max(number);
+            }
+        } else if let Some(columns) = bytes
+            .strip_prefix(target.as_bytes())
+            .or_else(|| bytes.strip_prefix(quoted.as_bytes()))
+        {
+            if complete || !columns.starts_with(b"seq,") || !columns.ends_with(b") FROM stdin;") {
+                return Err(invalid("unexpected event COPY header in archive"));
+            }
+            copying = true;
+        }
+        line.clear();
+    }
+    if !complete || copying {
+        return Err(invalid("incomplete event COPY in archive"));
+    }
+    Ok(highest)
 }
 
 /// A schema or scratch name that is safe inside double quotes.

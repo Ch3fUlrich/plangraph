@@ -3,10 +3,10 @@
 //! put on a command line, in a log or in an error message. The container runs with
 //! `--log-driver none`, so the docker daemon keeps no copy of its output either.
 
-use crate::pg::{check_ident, redact, Pg, ScratchState};
-use std::io::{Read, Write};
+use crate::pg::{check_ident, read_archive_seq, redact, Pg, ScratchState};
+use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{ChildStdout, Command, Stdio};
 use std::thread;
 
 pub const PG_ENV: [&str; 6] = [
@@ -68,6 +68,17 @@ fn backup_path(dump: &Path) -> Result<(PathBuf, String), String> {
 impl Docker {
     /// Run a tool; stdout goes to `out`, stderr comes back redacted on failure.
     fn exec(&self, mount: Option<&Path>, tool: &[&str], out: &mut dyn Write) -> Result<(), String> {
+        self.read_stdout(mount, tool, |mut stdout| {
+            io::copy(&mut stdout, out).map(|_| ())
+        })
+    }
+
+    fn read_stdout<T>(
+        &self,
+        mount: Option<&Path>,
+        tool: &[&str],
+        read: impl FnOnce(ChildStdout) -> io::Result<T>,
+    ) -> Result<T, String> {
         let mut child = Command::new(&self.program)
             .args(run_args(&self.image, mount, tool))
             .stdin(Stdio::null())
@@ -81,7 +92,7 @@ impl Docker {
             let _ = stderr.read_to_string(&mut text);
             text
         });
-        let copied = std::io::copy(&mut child.stdout.take().ok_or("stdout")?, out);
+        let result = read(child.stdout.take().ok_or("stdout")?);
         let status = child.wait().map_err(|e| format!("docker: {e}"))?;
         let text = reader.join().unwrap_or_default();
         if !status.success() {
@@ -91,7 +102,7 @@ impl Docker {
                 redact(text.trim(), &secrets())
             ));
         }
-        copied.map(|_| ()).map_err(|e| format!("{}: {e}", tool[0]))
+        result.map_err(|e| format!("{}: {e}", tool[0]))
     }
 
     fn query(&self, db: Option<&str>, sql: &str) -> Result<String, String> {
@@ -130,6 +141,27 @@ impl Pg for Docker {
         let mut buf = Vec::new();
         self.exec(Some(&dir), &["pg_restore", "-l", &file], &mut buf)?;
         Ok(String::from_utf8_lossy(&buf).into_owned())
+    }
+
+    fn archive_seq(&self, dump: &Path, schema: &str) -> Result<u64, String> {
+        let (dir, file) = backup_path(dump)?;
+        let schema = check_ident(schema)?;
+        let tool = [
+            "pg_restore",
+            "--exit-on-error",
+            "--strict-names",
+            "--data-only",
+            "--schema",
+            schema,
+            "--table",
+            "events",
+            "--file",
+            "-",
+            &file,
+        ];
+        self.read_stdout(Some(&dir), &tool, |stdout| {
+            read_archive_seq(BufReader::new(stdout), schema)
+        })
     }
 
     fn create_scratch(&self, scratch: &str) -> Result<(), String> {
