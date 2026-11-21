@@ -11,6 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 from plangraph.routing_support.clients import without_prompt_env
+from plangraph.spawner.claude_env import with_agent_shell
 
 LAUNCH_TIMEOUT = 60
 STOP_TIMEOUT = 30
@@ -99,8 +100,8 @@ class _AgentsMixin:
         # Spec defaults: ctx_cap_tokens 300000, compact_window "400000".
         cap = cfg.get("ctx_cap_tokens") or 300000
         compact = cfg.get("compact_window") or "400000"
-        env = {**without_prompt_env(os.environ), "FLEET_SESSION_NAME": name,
-               "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact)}
+        env = with_agent_shell({**without_prompt_env(os.environ), "FLEET_SESSION_NAME": name,
+                                "CLAUDE_CODE_AUTO_COMPACT_WINDOW": str(compact)}, self._platform)
         return bg_argv, env
 
     def _launch_run_kw(self, env):

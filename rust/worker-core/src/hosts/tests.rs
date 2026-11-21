@@ -214,7 +214,12 @@ fn resolve_maps_ids_and_aliases_any_case() {
 #[test]
 fn schema_fields_required_and_patterns_match_rust() {
     let schema: Value = serde_json::from_str(SCHEMA).unwrap();
-    let doc = serde_json::to_value(HostRegistry::from_json_str(EXAMPLE).unwrap()).unwrap();
+    let mut example: Value = serde_json::from_str(EXAMPLE).unwrap();
+    example["public_repos"] = json!(["plangraph"]);
+    example["hosts"][0]["placement_fallback"] = json!(true);
+    example["hosts"][0]["wsl_distro"] = json!("Ubuntu");
+    let doc =
+        serde_json::to_value(HostRegistry::from_json_str(&example.to_string()).unwrap()).unwrap();
     let host = &doc["hosts"][0];
     let repo = host["repos"].as_object().unwrap().values().next().unwrap();
     let samples = [
@@ -254,7 +259,18 @@ fn schema_fields_required_and_patterns_match_rust() {
             .filter(|key| {
                 name != "repoEntry" || !["python", "live_dir", "health_checks"].contains(key)
             })
-            .filter(|key| name != "hostEntry" || !["class", "ssh_target", "env"].contains(key))
+            .filter(|key| name != "$root" || *key != "public_repos")
+            .filter(|key| {
+                name != "hostEntry"
+                    || ![
+                        "class",
+                        "ssh_target",
+                        "env",
+                        "wsl_distro",
+                        "placement_fallback",
+                    ]
+                    .contains(key)
+            })
             .collect();
         assert_eq!(required, expected, "required fields for {name}");
     }

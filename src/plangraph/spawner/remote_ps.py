@@ -65,8 +65,54 @@ def source_path(src):
     return shlex.quote(src)
 
 
+WSL_RUNNER = 'pg-spawnd steps'
+SHELL_SYNTAX = re.compile(r'[;&|<>$`(){}\\\n]')
+
+
+def wsl_distro(host):
+    distro = host.get('wsl_distro')
+    if distro is not None and not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*', distro):
+        raise ValueError('invalid WSL distribution')
+    return distro
+
+
+def plan_body(script, steps=None, **plan):
+    """The JSON step plan for `pg-spawnd steps`: `steps`, or the one argv of a simple `script`."""
+    if steps is None:
+        if SHELL_SYNTAX.search(script):
+            raise ValueError('compound script needs a step plan')
+        steps = [{'argv': shlex.split(script)}]
+    return json.dumps({**plan, 'steps': steps}).encode()
+
+
+def invocation(host, script, steps=None, **plan):
+    """The remote command and its stdin: a script for a POSIX login shell, or a step plan.
+
+    A WSL guest is reached through `wsl.exe --exec`, which runs no shell, so it gets the plan
+    as JSON on stdin for `pg-spawnd steps`.
+    """
+    distro = wsl_distro(host)
+    if distro is None:
+        return script, None
+    return f'wsl.exe --distribution {distro} --exec {WSL_RUNNER}', plan_body(script, steps, **plan)
+
+
+def host_invocation(host, *, query=False):
+    """Same source probe for both callers; Windows hosts keep their cmd.exe text."""
+    module = ['python3', '-m', 'plangraph.spawner.remote_ps']
+    if 'win_src' in host:
+        return host_command(host, query=query), None
+    steps = []
+    if 'src' in host:
+        steps.append({'argv': ['test', '-d', host['src']], 'fail_code': SRC_MISSING})
+    if query:
+        steps.append({'argv': module, 'env': {'PYTHONPATH': host['src']}} if 'src' in host
+                     else {'argv': module})
+    return invocation(host, host_command(host, query=query), steps)
+
+
 def host_command(host, *, query=False):
-    """Build the same source probe and shell wrapper for both callers."""
+    """Build the same source probe for both callers (the POSIX or cmd.exe script)."""
     module = 'python3 -m plangraph.spawner.remote_ps'
     if 'win_src' in host:
         command = source_check(host)
@@ -79,11 +125,6 @@ def host_command(host, *, query=False):
     command = source_check(host) if 'src' in host else ''
     if query:
         command += f'; PYTHONPATH={source_path(host["src"])} {module}' if command else module
-    if 'wsl_distro' in host:
-        distro = host['wsl_distro']
-        if not isinstance(distro, str) or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*', distro):
-            raise ValueError('invalid configuration')
-        command = f'wsl -d {distro} -- sh -c {shlex.quote(command)}'
     return command
 
 
@@ -93,23 +134,42 @@ def exit_reason(code):
 
 
 def query_host(host, timeout):
-    command = host_command(host, query=True)
+    command, plan = host_invocation(host, query=True)
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL if plan is None else subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         ) as process:
         deadline = time.monotonic() + timeout
         output = bytearray()
+        pending = memoryview(plan or b'')
         try:
             with selectors.DefaultSelector() as selector:
                 selector.register(process.stdout, selectors.EVENT_READ)
-                while selector.get_map():
+                if plan is not None:
+                    # Nonblocking writes in the same loop: a reader that never drains stdin,
+                    # even through a descendant that outlives the child, cannot pass the deadline.
+                    os.set_blocking(process.stdin.fileno(), False)
+                    selector.register(process.stdin, selectors.EVENT_WRITE)
+                reading = True
+                while reading:
                     remaining = deadline - time.monotonic()
                     events = selector.select(max(0, remaining))
                     if remaining <= 0 or not events:
                         raise TimeoutError('host query failed')
                     for key, _ in events:
+                        if key.fileobj is process.stdin:
+                            try:
+                                pending = pending[os.write(key.fd, pending[:65536]):]
+                            except BlockingIOError:
+                                continue
+                            except OSError:
+                                pending = pending[len(pending):]  # The exit status names the failure.
+                            if not pending:
+                                selector.unregister(process.stdin)
+                                process.stdin.close()
+                            continue
                         buffer = output
                         chunk = os.read(key.fd, min(65536, MAX_OUTPUT + 1 - len(buffer)))
                         buffer.extend(chunk)
@@ -117,6 +177,7 @@ def query_host(host, timeout):
                             raise ValueError('host query failed')
                         if not chunk:
                             selector.unregister(key.fileobj)
+                            reading = False
             code = process.wait(timeout=max(0, deadline - time.monotonic()))
             reason = exit_reason(code)
             if reason:
@@ -221,7 +282,7 @@ def list_runs(local, *, transport=query_host):
 
 def native_receipt(record):
     """A target PID is evidence, never an origin-side process identity."""
-    if record.get('run_kind') == 'native-codex' and record.get('overflow_remote'):
+    if record.get('overflow_remote') and (record.get('run_kind') == 'native-codex' or record.get('role') == 'review'):
         record['origin_receipt'] = True
         identity = {key: record.pop(key) for key in list(record)
                     if key in ('pid', 'pid_start', 'job_id', 'job_name', 'escapees')
@@ -233,14 +294,12 @@ def native_receipt(record):
 
 def native_result(record, *, verb='result'):
     """Refresh a native overflow receipt with target-host terminal evidence."""
-    from .private_io import read_text_retry
     from plangraph.keeper.credential_guard import mask
     try:
         if verb not in ('result', 'cancel'):
             raise ValueError('unsupported native control verb')
-        config_path = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS',
-                          '~/.config/plangraph/overflow-hosts.json')).expanduser()
-        host = json.loads(read_text_retry(config_path))['hosts'][record['host']]
+        from .overflow import placement_config, registry_caps
+        host = placement_config(registry_caps())['hosts'][record['host']]
         run_id = record['run_id']
         if not re.fullmatch(r'run-[A-Za-z0-9]+', run_id):
             raise ValueError('invalid run id')
@@ -250,22 +309,34 @@ def native_result(record, *, verb='result'):
         if host.get('env_file'):
             command += 'set -a && . ' + shlex.quote(host['env_file']) + ' >/dev/null 2>&1 && set +a && '
         command += "printf '%s\\n' " + shlex.quote(begin) + ' && '
-        command += ('PYTHONPATH=' + shlex.quote(host['spawner_src']) +
-                    ' python3 -m plangraph.spawner.cli ' + verb + ' ' + shlex.quote(run_id))
+        argv = ['python3', '-m', 'plangraph.spawner.cli']
+        if host.get('state_dir'):
+            argv.extend(['--state', host['state_dir']])
+        command += 'PYTHONPATH=' + shlex.quote(host['spawner_src']) + ' ' + shlex.join([*argv, verb, run_id])
         command += "; printf '\\n%s\\n' " + shlex.quote(end)
+        plan = {'cwd': host['repo'], 'steps': [
+            {'argv': [*argv, verb, run_id], 'env': {'PYTHONPATH': host['spawner_src']},
+             'receipt': {'begin': begin, 'end': end}}]}
+        if host.get('env_file'):
+            plan['env_file'] = host['env_file']
+        command, body = invocation(host, command, plan.pop('steps'), **plan)
         reply = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
-                                '--', host['ssh'], command], capture_output=True,
-                               text=True, encoding='utf-8', errors='replace', timeout=10)
+                                '--', host['ssh'], command], capture_output=True, timeout=10,
+                               **(dict(text=True, encoding='utf-8', errors='replace') if body is None
+                                  else dict(input=body)))
+        if body is not None:
+            reply.stdout = reply.stdout.decode('utf-8', errors='replace')
         # A terminal nonzero exit is the writer's exit, with a valid JSON record.
         text, _ = mask(reply.stdout)
         lines = text.splitlines()
         if lines.count(begin) != 1 or lines.count(end) != 1 or lines.index(begin) >= lines.index(end):
             raise ValueError('receipt unbracketed')
         remote = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
-        if remote.get('run_id') != run_id or remote.get('run_kind') != 'native-codex':
+        if (remote.get('run_id') != run_id or remote.get('host') != record.get('host') or remote.get('run_kind') != record.get('run_kind')
+                or remote.get('role') != record.get('role')):
             raise ValueError('receipt mismatch')
         return native_receipt(dict(remote, host=record['host'], overflow_remote=True,
-                    overflow_reason=record.get('overflow_reason')))
+                    overflow_reason=record.get('overflow_reason'), placement=record.get('placement')))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return native_receipt(dict(record, remote_query_error='host query failed'))
 

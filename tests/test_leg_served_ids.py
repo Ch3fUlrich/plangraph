@@ -149,8 +149,11 @@ def test_cx_leg_windows_match_provider_context():
         for key in sorted(models, key=len, reverse=True):
             if base == key or (base.startswith(key + '-') and base[len(key) + 1:] in CX_EFFORTS):
                 context = models[key]['limit']['context']
-                assert leg.max_request_tokens <= context, leg.id
-                assert ('1m' in leg.windows) == (context >= 1048576), leg.id
+                assert leg.max_request_tokens == context, leg.id
+                if key in ('cx-gpt-6.2-sol', 'cx-gpt-6.2-astra'):
+                    assert context == 1000000 and leg.windows == ('128k', '256k', '1m'), leg.id
+                else:
+                    assert '1m' not in leg.windows, leg.id
                 checked += 1
                 break
     assert checked >= 12

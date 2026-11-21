@@ -20,12 +20,14 @@ from .item_key import annotate_item
 from .base_fresh import admit_base
 def remote_native_running(record):
     """True for a running native Codex run placed on another host; only these need a remote refresh."""
-    return (record.get('run_kind') == 'native-codex' and bool(record.get('overflow_remote'))
+    return ((record.get('run_kind') == 'native-codex' or record.get('role') == 'review')
+            and bool(record.get('overflow_remote'))
             and record.get('status') == 'running')
 
 
 class SpawnService(SeatSpawnMixin):
     code_tree = staticmethod(run_tree)
+    client_probe = None   # name -> is the harness client installed on the placed host; None = the host's PATH
     def __init__(self, runner=None, state=None, leg_reader=None):
         self.fresh_tree = False  # Public CLI/MCP opt in; child supervisors never recurse.
         self.runner = runner or SpawnerRunner()
@@ -196,10 +198,15 @@ class SpawnService(SeatSpawnMixin):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
         from plangraph.planner.measured_down import measured_down
-        plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench)
-        from plangraph.planner.legs import leg_active
+        from plangraph.planner.legs import leg_active, service_probe
+        down = measured_down(self.state)
+        extra = {}
+        probe = service_probe(self)
+        if probe is not None:
+            extra['installed'] = probe
+        plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench, **extra)
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
-        return replace(plan, legs=witness_order(card, role, live(plan.legs), measured_down(self.state)), review_seats=live(plan.review_seats))
+        return replace(plan, legs=witness_order(card, role, live(plan.legs), down), review_seats=live(plan.review_seats))
     def _given_writers(self, card, role, writer_families, review_of):
         """The writer families a run record names: the caller's, the reviewed run's and, for a review, the head's."""
         families = list(writer_families)
@@ -339,6 +346,11 @@ class SpawnService(SeatSpawnMixin):
             if writers and writers <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             require_available(chosen, self.leg_reader, card)
+            from plangraph.planner.legs import refuse_foreign_pin, service_probe
+            refuse_foreign_pin(chosen, override_reason, service_probe(self))   # rule 3.53: a foreign-harness pin needs a reason
+            if role in ('implement', 'review'):
+                from plangraph.planner.route_policy import codex_leg_effort
+                chosen = codex_leg_effort(chosen, card)
             if role == 'implement' and role not in chosen.roles:
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
             if chosen.tier == 'paid':

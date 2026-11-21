@@ -223,16 +223,19 @@ def test_source_paths_are_literal(tmp_path, wsl):
     host = dict(src=str(source))
     if wsl:
         host['wsl_distro'] = 'Ubuntu'
-        binary = tmp_path / 'wsl'
-        binary.write_text('#!/bin/sh\nshift 3\nexec "$@"\n')
-        binary.chmod(0o755)
+        command, plan = remote_ps.host_invocation(host, query=True)
+        # No shell parses the path: it travels as one JSON string in the plan.
+        assert command == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
+        steps = json.loads(plan)['steps']
+        assert steps[0]['argv'] == ['test', '-d', str(source)]
+        assert steps[1]['env'] == {'PYTHONPATH': str(source)}
+        return
     command = remote_ps.host_command(host)
     result = subprocess.run(command, shell=True, cwd=tmp_path,
-                            env={'PATH': str(tmp_path) + os.pathsep + os.defpath})
+                            env={'PATH': os.defpath})
     assert result.returncode == 0
     assert not (tmp_path / 'INJECTED').exists()
-    assert remote_ps.host_command(host, query=True).startswith(
-        'wsl -d Ubuntu -- sh -c ' if wsl else remote_ps.source_check(host))
+    assert remote_ps.host_command(host, query=True).startswith(remote_ps.source_check(host))
 
 
 def test_windows_precedence_and_validation():

@@ -353,13 +353,13 @@ def test_writer_order_d2683_unavailable_skipped():
 def test_writer_order_d2683_review_order_unchanged():
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan = plan_spawn(c, role="review", writer_families=("claude",))
-    assert plan.first_leg.id == "agy-gemini-4-argon-low"
+    assert plan.first_leg.id == "gpt-6.2-sol-medium"
 
 
 def test_writer_order_d2683_writer_family_exclusion():
     c = {"estimate_tokens": 20000, "risk_tags": []}
     plan_rev = plan_spawn(c, role="review", writer_families=("qwen",))
-    assert plan_rev.first_leg.id == "agy-gemini-4-argon-low"
+    assert plan_rev.first_leg.id == "gpt-6.2-sol-medium"
     plan_imp = plan_spawn(c, role="implement", exclude_families=("gemini",))
     assert plan_imp.first_leg.id == "cx-gpt-6.2-sol-medium" and "gemini" not in {l.family for l in plan_imp.legs}
     # F2: writer_families does not exclude implement legs

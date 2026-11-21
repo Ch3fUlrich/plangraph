@@ -1,0 +1,1 @@
+- Spawner base check: an origin/HEAD that names a branch the remote does not have (a clone of a lane checkout) is unknown and the check falls back to main, so reviews in such clones are no longer refused base_stale: fetch_failed.

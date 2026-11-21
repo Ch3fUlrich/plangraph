@@ -65,8 +65,8 @@ fn every_probe_runs_even_after_a_failure_and_output_stays_one_line() {
     let rows = check(&mut host);
     assert_eq!(
         host.0,
-        ["version", "login", "prompts", "sandbox", "commit", "memory"]
+        ["version", "login", "prompts", "sandbox", "commit", "identity", "memory"]
     );
-    assert_eq!(rows.len(), 6);
+    assert_eq!(rows.len(), 7);
     assert!(rows.iter().all(|r| !r.contains('\n')));
 }

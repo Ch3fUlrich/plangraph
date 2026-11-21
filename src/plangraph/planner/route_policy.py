@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
@@ -158,3 +159,24 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
     if problems:
         raise ValueError("invalid route policy: " + "; ".join(problems))
     return RoutePolicy(banned, off, paused, review_allowed)
+
+
+def codex_leg_effort(leg, card):
+    """Apply the card's effort to a gateway GPT leg, or refuse unapproved escalation."""
+    from plangraph.planner.legs import CX_EFFORTS
+    from plangraph.routing_errors import SpawnRefused
+    if not leg.model.startswith('omniroute/cx-gpt-'):
+        return leg
+    suffix = leg.model.rsplit('-', 1)[-1]
+    pinned = suffix if suffix in CX_EFFORTS else None
+    requested = card.get('effort')
+    if requested is not None and requested not in CX_EFFORTS:
+        raise SpawnRefused('effort_invalid: card.effort is not a supported GPT effort')
+    effort = requested or pinned or leg.effort or 'medium'
+    elevated = ('high', 'xhigh', 'max')
+    if pinned in elevated or effort in elevated:
+        decision = card.get('effort_decision')
+        if (requested != effort or (pinned in elevated and pinned != requested)
+                or not isinstance(decision, str) or not re.fullmatch(r'D-[0-9]+', decision)):
+            raise SpawnRefused('effort_needs_decision: elevated GPT effort requires matching card.effort and card.effort_decision D-<n>')
+    return replace(leg, effort=effort)

@@ -168,9 +168,11 @@ class ContextMixin:
 
     def _work(self, item, fetch, fresh_lanes=False):
         gitad = self._adapter("git")
-        return {"commits": src.plan_item_commits(gitad, item["project"], item["key"],
-                                                 fetch=fetch),
-                "lanes": src.open_lanes(gitad, item["project"], item["key"], fresh_lanes)}
+        commits = src.plan_item_commits(gitad, item["project"], item["key"], fetch=fetch)
+        closed = []
+        lanes = src.open_lanes(gitad, item["project"], item["key"], fresh_lanes, closed=closed)
+        return {"commits": commits, "lanes": lanes,
+                **({"closed_pr_lanes": closed} if closed else {})}
 
     # ----------------------------------------------------------- context
     def _task_context(self, item, index, *, inputs=None, activity=None,

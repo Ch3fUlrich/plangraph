@@ -1,0 +1,1 @@
+Placement now routes an SSH-transport registry host without `ssh_target` by its host id, the rule `fleet_sync` already uses, through one `HostEntry::ssh_route`. The host-tools guide names the window of each readiness record (`host_ready` 600 s, `package-readiness` 120 s), and the writer-sandbox readiness test feeds a `workspace-write` record instead of comparing a constant.

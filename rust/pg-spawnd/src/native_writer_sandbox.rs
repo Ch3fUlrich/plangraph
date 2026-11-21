@@ -140,7 +140,10 @@ pub(crate) fn sandbox_args(roots: &[PathBuf]) -> Result<Vec<String>, String> {
         .collect::<Result<Vec<_>, _>>()?
         .join(",");
     Ok([
-        "sandbox_mode=\"workspace-write\"".to_owned(),
+        format!(
+            "sandbox_mode=\"{}\"",
+            pg_worker_core::host_readiness::WRITER_SANDBOX
+        ),
         "sandbox_workspace_write.network_access=true".to_owned(),
         format!("sandbox_workspace_write.writable_roots=[{list}]"),
     ]

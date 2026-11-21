@@ -31,7 +31,7 @@ from plangraph.spawner.clients import (
     build_command,
     build_routing_envelope_headers,
 )
-from plangraph.spawner.claude_env import claude_child_env
+from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import is_mimo_id
@@ -245,7 +245,7 @@ class SpawnerRunner:
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
-        from .target import resolve_target   # leg ids and admitted combos resolve before providers render
+        from .target import launch_model, resolve_target   # leg ids and admitted combos resolve before providers render
         model_or_combo, leg = resolve_target(model_or_combo, **({'chosen': chosen} if chosen is not None else {}))
         if leg is not None:
             if client is not None and client != leg.harness:
@@ -253,6 +253,8 @@ class SpawnerRunner:
                 raise SpawnRefused('client disagrees with leg harness: ' + leg.id)
             client = leg.harness
         validate_model(model_or_combo)
+        if leg is not None and role in ('implement', 'review'):
+            model_or_combo = launch_model(leg)
         # REMOVE-AT-R10: capture the final prompt before command construction.
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
@@ -325,7 +327,7 @@ class SpawnerRunner:
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
         if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
-            child_env = claude_child_env(child_env)
+            child_env = with_agent_shell(claude_child_env(child_env))
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
@@ -1016,6 +1018,8 @@ def spawn_service(*args, **kwargs):
                     limits = thresholds(card, role=role)
                     live_log = str(self._path(run_id).parent / 'live.log')
                     record['live_log'] = live_log
+                    from .leg_probe import ProbeBudget, before_launch
+                    probe_budget = ProbeBudget(started=record.get('started'))  # one budget for every leg, net of admission time spent
                     for _ in range(len(plan.legs) + 2):
                         if (watchdog := leg_limits(record, limits)) is None:
                             self._save(record); return
@@ -1023,8 +1027,7 @@ def spawn_service(*args, **kwargs):
                         if chosen is None or current.error:
                             break
                         tried.add(chosen.id)
-                        from .leg_probe import before_launch
-                        probe_skip = await before_launch(self.runner, chosen, role, dry_run)
+                        probe_skip = await before_launch(self.runner, chosen, role, dry_run, probe_budget)
                         if probe_skip:
                             record['attempts'].append(dict(leg=asdict(chosen), status='skipped', skip_reason=probe_skip))
                             self._save(record)

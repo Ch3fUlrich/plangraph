@@ -176,6 +176,9 @@ def _context_lines(info: dict) -> list:
             for c in commits) or "-"
     lines.append(f"merged_on_default {merged} | open_lanes "
                  + ("unknown" if lanes is None else ", ".join(lanes) or "-"))
+    if work.get("closed_pr_lanes"):
+        lines.append("closed_pr_lanes " + ", ".join(
+            f"{lane['branch']} PR#{lane['pr']}" for lane in work["closed_pr_lanes"]))
     if info.get("stale"):
         lines.append(f"STALE {info['stale']}")
     return lines

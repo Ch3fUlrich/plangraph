@@ -62,7 +62,7 @@ def service(tmp_path, monkeypatch):
 def test_resolved_slot_family_in_answer_and_record(service, dispatch):
     svc = service(dispatch, GEMINI.model)
     before = svc.route(CARD, 'review', ['mimo'], benchmark={})
-    assert before.review_seats == (GEMINI, LUNA)
+    assert before.review_seats == (GEMINI, replace(LUNA, effort='medium'))  # gateway GPT defaults to medium
     answer = asyncio.run(svc.spawn(card=CARD, role='review', writer_families=['mimo'],
                                    seats=True, wait_seconds=None, benchmark={}))
     families = []
