@@ -14,8 +14,8 @@ from pathlib import Path
 from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents, stack_sorted
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
-                              orphan_names, parse_prs, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees)
+                              orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
+                              workflow_gate, worktrees, gh_json)
 
 
 def default_worktree(name):
@@ -258,29 +258,92 @@ def policy_runner(argv):
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def part_entry_problems(base, order, heads, parent, runner=policy_runner):
+def open_pr_heads(name, repo, infos):
+    """Every open pull request of the repository outside the batch: {number: {head, ref, base}}, heads fetched.
+
+    The part-entry predicate compares a part with all open heads, not only with the parts of this build."""
+    rows = gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json",
+                   "number,headRefName,baseRefName,headRefOid")
+    outside = [r for r in rows if r["number"] not in infos]
+    found = []
+    for row in outside:   # one by one: a pull request whose head cannot be fetched carries no history to compare
+        try:
+            git("fetch", "--quiet", REMOTE, f"+refs/pull/{row['number']}/head:refs/merge-batch/{name}/open/{row['number']}")
+            found.append(row)
+        except MergeBatchError as exc:
+            print(f"merge_batch: open PR #{row['number']} not compared (head not fetchable: {first_line(str(exc))})",
+                  file=sys.stderr)
+    return {r["number"]: {"head": r["headRefOid"], "ref": r["headRefName"], "base": r["baseRefName"]} for r in found}
+
+
+def part_entry_problems(base, order, heads, parent, runner=policy_runner, opens=None, refs=None):
     """Apply the part-entry predicate (imported_history, undeclared_dependency, shared_history) to every part.
 
-    A part's parent is the part it is stacked on; the other heads are the batch's parts outside its chain."""
+    A part's parent is the pull request its base ref names (a part of the batch or another open one); the
+    other heads are every open head outside its chain, batch parts and ``opens`` alike."""
+    universe = {num: {"head": heads[num], "ref": (refs or {}).get(num), "base": None} for num in order}
+    for num, row in (opens or {}).items():
+        universe[num] = row
+    by_ref = {row["ref"]: num for num, row in universe.items() if row.get("ref")}
+    up_of = dict(parent)
+    for num, row in universe.items():
+        if num not in up_of and row.get("base") in by_ref and by_ref[row["base"]] != num:
+            up_of[num] = by_ref[row["base"]]
     problems = []
     for num in order:
         chain, up = {num}, num
-        while up in parent:
-            up = parent[up]
+        while up in up_of and up_of[up] not in chain:
+            up = up_of[up]
             chain.add(up)
         grew = True
-        while grew:  # descendants: parts whose chain reaches num
+        while grew:  # descendants: pull requests whose chain reaches num
             grew = False
-            for child, mother in parent.items():
+            for child, mother in up_of.items():
                 if mother in chain and child not in chain:
                     chain.add(child)
                     grew = True
-        others = [heads[o] for o in order if o not in chain]
+        others = [row["head"] for other, row in universe.items() if other not in chain]
         code, out, err = runner(["--part-entry", f"{REMOTE}/{base}", heads[num],
-                                 heads[parent[num]] if num in parent else "-", *others])
+                                 universe[up_of[num]]["head"] if num in up_of else "-", *others])
         if code:
             detail = "; ".join(line.strip() for line in (out or err).splitlines() if line.strip())
             problems.append(f"PR #{num}: {detail or 'part entry check failed'}")
+    return problems
+
+
+#: PR label recording the rule 3.46 flake disposition for a red attempt that a rerun turned green.
+FLAKE_LABEL = "flake-dispositioned"
+
+
+def ci_attempts(repo, head):
+    """Attempts of the tests workflow runs on this head, oldest first; an earlier attempt of a rerun run counts
+    as failed (it was rerun). [] when no run names the head."""
+    runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")
+    rows = []
+    for run in sorted((r for r in runs.get("workflow_runs", []) if r.get("head_sha") == head), key=lambda r: r["id"]):
+        last = run.get("run_attempt", 1)
+        rows += [{"attempt": n, "conclusion": "failure"} for n in range(1, last)]
+        rows.append({"attempt": last, "conclusion": run.get("conclusion") if run.get("status") == "completed" else None})
+    return rows
+
+
+def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
+    """The readiness verdict (tools/ci_select.py ready_problems) of every part, from its own CI on its head.
+
+    ci-gate is green only when every selected job passed: the always-on checks, the entry suites and, when the
+    part selects Rust, the Windows job; so its rollup stands for those three facts."""
+    import ci_select
+    problems = []
+    for num in order:
+        pr = infos[num]
+        green = pr["ci"] == "green"
+        rust = bool(ci_select.select(pr["files"])["rust"]) if pr["files"] and not pr["truncated"] else True
+        attempts = attempts_for(repo, pr["head"]) or [{"attempt": 1, "conclusion": "success" if green else "failure"}]
+        dispositions = [a["attempt"] for a in attempts[:-1]] if FLAKE_LABEL in pr["labels"] else []
+        found = ci_select.ready_problems({
+            "fast_checks": green, "entry_set": green, "windows_required": rust, "windows": green if rust else None,
+            "attempts": attempts, "flake_dispositions": dispositions})
+        problems += [f"PR #{num}: {p}" for p in found]
     return problems
 
 
@@ -310,7 +373,10 @@ def cmd_build(args):
     heads = fetch_heads(name, base, order, infos, repo)
     try:
         forced = rule_problems(args, base, [infos[num] for num in order], heads)
-        entry = part_entry_problems(base, order, heads, parent)
+        opens = open_pr_heads(name, repo, infos)
+        entry = (part_entry_problems(base, order, heads, parent, opens=opens,
+                                     refs={n: infos[n]["ref"] for n in order})
+                 + part_readiness_problems(repo, infos, order))
         if entry and not args.force_set:
             raise MergeBatchError("part entry refused: " + "; ".join(entry) + " (--force-set builds it anyway and logs it)")
         if entry:

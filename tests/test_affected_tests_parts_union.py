@@ -81,3 +81,14 @@ def test_an_explicitly_empty_hook_range_still_refuses_pushed_parts(tmp_path):
     out = subprocess.run([sys.executable, str(TOOL), "--root", str(root), "--base", base, "--head", head,
                           "--files-only", "--local", "--parts-union"], env=env, capture_output=True, text=True, check=True)
     assert "mode=normal" in out.stderr
+
+
+def test_a_moved_origin_main_does_not_hide_the_union(tmp_path):
+    """The batch starts where the train left the base: an origin/main that moved on keeps the pushed-parts mode."""
+    root, base, head = train(tmp_path)
+    git(root, "checkout", "-q", "main")
+    moved = write(root, "elsewhere.txt", "later main work\n")
+    git(root, "push", "-q", "origin", "main")
+    git(root, "checkout", "-q", "train")
+    tests, err = select(root, moved, head, "--parts-union", hook_range=False)
+    assert "tests/test_users.py" in tests and "mode=pushed-parts parts=2" in err

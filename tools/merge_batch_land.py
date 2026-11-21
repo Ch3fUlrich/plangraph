@@ -122,14 +122,27 @@ def windows_commands(workflow_text):
             continue
         indent, value = len(step.group(1)), step.group(2)
         if re.fullmatch(r"[|>][-+]?", value):
-            value = ""
+            folded, parts = value.startswith(">"), []
             while index < len(lines) and (not lines[index].strip() or len(lines[index]) - len(lines[index].lstrip()) > indent):
-                value += lines[index].strip() + "\n"
+                parts.append(lines[index].strip())
                 index += 1
+            # a literal block keeps its lines; a folded one joins them into one command line
+            value = " ".join(p for p in parts if p) if folded else "\n".join(parts)
         commands += [shlex.split(line) for line in value.splitlines() if line.strip().startswith("cargo test ")]
     if not commands:
         raise MergeBatchError("the Windows job of tests.yml selects no cargo test command: refusing to run zero tests")
     return commands
+
+
+def pr_labels(st):
+    """The labels CI sees on the batch pull request (none while it does not exist yet)."""
+    if not st.get("pr"):
+        return []
+    try:
+        view = gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "labels")
+        return [label["name"] for label in view.get("labels", [])]
+    except (MergeBatchError, KeyError, TypeError):
+        return []
 
 
 def windows_needed(paths, full=False):
@@ -171,7 +184,7 @@ def windows_gate(st, workflow_text, transport=_transport):
     wt, head = st["worktree"], git("rev-parse", "HEAD", cwd=st["worktree"]).stdout.strip()
     paths = git("diff", "--name-only", f"{st['base_head']}...{head}", cwd=wt).stdout.split()
     import ci_select
-    full = ci_select.full_run_required("pull_request", st.get("base", "main"), st["branch"], [])
+    full = ci_select.full_run_required("pull_request", st.get("base", "main"), st["branch"], pr_labels(st))
     if not windows_needed(paths, full):
         return None
     host = os.environ.get(WINDOWS_HOST_ENV, "").strip()
@@ -201,22 +214,39 @@ def windows_gate(st, workflow_text, transport=_transport):
     return line
 
 
+def _jobs_of_head(repo, head):
+    """The completed jobs of the latest tests run on this head (empty when none)."""
+    runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")
+    runs = [r for r in runs.get("workflow_runs", []) if r.get("head_sha") == head and r.get("status") == "completed"]
+    if not runs:
+        return []
+    run = max(runs, key=lambda r: r["id"])
+    jobs = gh_json("api", f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100")["jobs"]
+    return [j for j in jobs if j.get("started_at") and j.get("completed_at") and j.get("created_at")]
+
+
 def record_part_cost(st, run_id, head, telemetry_dir=None):
-    """Append the CI queue and run cost of this head to the part-cost telemetry; never fails the push."""
+    """Append the CI queue and run cost to the part-cost telemetry: one row per merged part, from the run of its
+    own head, and one for the batch candidate's run. Never fails the push."""
     import ci_select
-    try:
-        jobs = gh_json("api", f"repos/{st['repo']}/actions/runs/{run_id}/jobs?per_page=100")["jobs"]
-        jobs = [j for j in jobs if j.get("started_at") and j.get("completed_at") and j.get("created_at")]
-        if not jobs:
-            return None
-        record = ci_select.part_cost(jobs, st.get("pr") or 0, head)
-        folder = Path(telemetry_dir or os.environ.get("PLANGRAPH_TELEMETRY_DIR")
-                      or Path.home() / ".local/share/plangraph/telemetry")
-        ci_select.write_part_cost(folder / "part-cost.jsonl", record)
-        return record
-    except (MergeBatchError, KeyError, ValueError, TypeError, OSError) as exc:
-        print(f"merge_batch: part cost not recorded: {exc}", file=sys.stderr)
-        return None
+    folder = Path(telemetry_dir or os.environ.get("PLANGRAPH_TELEMETRY_DIR")
+                  or Path.home() / ".local/share/plangraph/telemetry")
+    rows = []
+    for rec in st.get("merged") or []:
+        rows.append(("part", rec["pr"], rec["head"], lambda h=rec["head"]: _jobs_of_head(st["repo"], h)))
+    rows.append(("candidate", st.get("pr") or 0, head, lambda: gh_json(
+        "api", f"repos/{st['repo']}/actions/runs/{run_id}/jobs?per_page=100")["jobs"]))
+    written = []
+    for kind, number, sha, jobs_of in rows:
+        try:
+            jobs = [j for j in jobs_of() if j.get("started_at") and j.get("completed_at") and j.get("created_at")]
+            if jobs:
+                record = dict(ci_select.part_cost(jobs, number, sha), kind=kind)
+                ci_select.write_part_cost(folder / "part-cost.jsonl", record)
+                written.append(record)
+        except (MergeBatchError, KeyError, ValueError, TypeError, OSError) as exc:
+            print(f"merge_batch: part cost of #{number} not recorded: {exc}", file=sys.stderr)
+    return written
 
 
 def windows_report(st, head):

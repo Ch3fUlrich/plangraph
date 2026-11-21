@@ -142,21 +142,53 @@ def test_a_block_scalar_run_step_is_read_and_an_empty_selection_is_refused():
         land.windows_commands("jobs:\n  rust-windows:\n    steps:\n      - run: echo hi\n  other:\n    steps: []\n")
 
 
-def test_the_part_cost_of_a_pushed_head_is_appended_to_telemetry(tmp_path, monkeypatch):
-    jobs = {"jobs": [{"name": "pytest", "created_at": "2026-11-21T10:00:00Z", "started_at": "2026-11-21T10:01:00Z",
-                      "completed_at": "2026-11-21T10:11:00Z", "labels": ["self-hosted"]}]}
-    monkeypatch.setattr(land, "gh_json", lambda *a, **k: jobs)
-    record = land.record_part_cost({"repo": "o/p", "pr": 7}, 42, HEAD, telemetry_dir=tmp_path)
-    assert record["pr"] == 7 and record["jobs"][0]["runner"] == "warm"
-    assert (tmp_path / "part-cost.jsonl").read_text().count("\n") == 1
+JOB = {"name": "pytest", "created_at": "2026-11-21T10:00:00Z", "started_at": "2026-11-21T10:01:00Z",
+       "completed_at": "2026-11-21T10:11:00Z", "labels": ["self-hosted"]}
+
+
+def test_the_part_cost_is_recorded_per_part_from_its_own_run_and_for_the_candidate(tmp_path, monkeypatch):
+    part1, part2, cand = "1" * 40, "2" * 40, HEAD
+
+    def api(*args, **kwargs):
+        endpoint = args[1]
+        if "workflows/tests.yml/runs" in endpoint:
+            sha = endpoint.split("head_sha=")[1].split("&")[0]
+            return {"workflow_runs": [{"id": {part1: 11, part2: 22}[sha], "head_sha": sha, "status": "completed"}]}
+        return {"jobs": [JOB]}
+
+    monkeypatch.setattr(land, "gh_json", api)
+    st = {"repo": "o/p", "pr": 90, "merged": [{"pr": 11, "head": part1}, {"pr": 22, "head": part2}]}
+    rows = land.record_part_cost(st, 99, cand, telemetry_dir=tmp_path)
+    assert [(r["kind"], r["pr"], r["head"]) for r in rows] == [
+        ("part", 11, part1), ("part", 22, part2), ("candidate", 90, cand)]
+    assert (tmp_path / "part-cost.jsonl").read_text().count("\n") == 3
 
 
 def test_a_failing_cost_lookup_never_fails_the_push(tmp_path, monkeypatch, capsys):
     def broken(*a, **k):
         raise MergeBatchError("gh api failed")
     monkeypatch.setattr(land, "gh_json", broken)
-    assert land.record_part_cost({"repo": "o/p"}, 1, HEAD, telemetry_dir=tmp_path) is None
-    assert "part cost not recorded" in capsys.readouterr().err
+    assert land.record_part_cost({"repo": "o/p", "merged": [{"pr": 1, "head": HEAD}]}, 1, HEAD,
+                                 telemetry_dir=tmp_path) == []
+    assert "not recorded" in capsys.readouterr().err
+
+
+def test_a_folded_run_step_is_one_command_line():
+    workflow = ("jobs:\n  rust-windows:\n    steps:\n      - run: >\n          cargo test -p pg-spawnd\n"
+                "          --lib\n  next:\n    steps: []\n")
+    assert land.windows_commands(workflow) == [["cargo", "test", "-p", "pg-spawnd", "--lib"]]
+
+
+def test_the_pull_requests_own_labels_decide_the_full_run(tmp_path, monkeypatch):
+    """A docs-only batch/* pull request labelled land-part is a part: CI selects no Windows job, so neither does the gate."""
+    root, base, head = docs_only(tmp_path, "batch/docs")
+    monkeypatch.setenv("PLANGRAPH_WINDOWS_HOST", "ws-build")
+    monkeypatch.setattr(land, "gh_json", lambda *a, **k: {"labels": [{"name": "land-part"}]})
+    transport = Transport()
+    st = state(root, base, head, "batch/docs")
+    st.update(pr=5, repo="o/p")
+    assert land.windows_gate(st, WORKFLOW, transport=transport) is None
+    assert transport.calls == []
 
 
 def test_without_a_configured_host_the_gate_says_so_and_the_go_req_has_no_windows_part(train, monkeypatch, capsys):

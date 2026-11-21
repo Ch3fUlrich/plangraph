@@ -528,7 +528,9 @@ def main(root=None):
     pushed_range = os.environ.get("PLANGRAPH_PUSH_RANGE", "").split(":")
     hook_selection = args.files_only and args.local and args.head and args.changed is None
     if hook_selection and args.parts_union and "PLANGRAPH_PUSH_RANGE" not in os.environ:
-        pushed_range = [args.base, args.head]   # standalone preflight: the batch is base..head
+        # standalone preflight: the batch starts where the train left the base, not at a base that moved on
+        start = subprocess.run(["git", "merge-base", args.base, args.head], cwd=root, capture_output=True, text=True)
+        pushed_range = [start.stdout.strip() or args.base, args.head]
     if hook_selection and len(pushed_range) == 2 and pushed_range[1] == args.head:
         batch = pushed_parts_files(root, pushed_range[0], args.head, union=args.parts_union)
     if changed is None:

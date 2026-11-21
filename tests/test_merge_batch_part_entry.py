@@ -59,3 +59,49 @@ def test_build_refuses_a_part_the_predicate_refuses_and_force_set_logs_it(env, t
     forced = env.run("build", "--name", "pe2", "--prs", "1", "--force-set")
     assert forced.returncode == 0, forced.stderr
     assert "FORCE-SET: building despite part entry" in forced.stderr
+
+
+def test_open_pull_requests_outside_the_batch_are_compared_too():
+    runner, calls = recording()
+    heads = {1: "a" * 40}
+    opens = {9: {"head": "f" * 40, "ref": "other", "base": "main"}}
+    build.part_entry_problems("main", [1], heads, {}, runner, opens=opens, refs={1: "mine"})
+    assert calls == [["--part-entry", "origin/main", heads[1], "-", "f" * 40]]
+
+
+def test_a_part_stacked_on_an_open_pull_request_outside_the_batch_names_it_as_its_parent():
+    runner, calls = recording()
+    heads = {2: "b" * 40}
+    opens = {1: {"head": "a" * 40, "ref": "parent-branch", "base": "main"},
+             3: {"head": "c" * 40, "ref": "alone", "base": "main"}}
+    build.part_entry_problems("main", [2], heads, {}, runner, opens={**opens, 2: {"head": heads[2], "ref": "child", "base": "parent-branch"}},
+                              refs={2: "child"})
+    assert calls == [["--part-entry", "origin/main", heads[2], "a" * 40, "c" * 40]]
+
+
+def info(head="a" * 40, ci="green", files=("src/plangraph/planner/provider_stop.py",), labels=()):
+    return {"head": head, "ci": ci, "files": list(files), "truncated": False, "labels": list(labels)}
+
+
+def test_a_green_part_is_ready_and_a_part_without_green_ci_is_not():
+    ok = build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=lambda r, h: [])
+    assert ok == []
+    red = build.part_readiness_problems("o/p", {1: info(ci="red")}, [1], attempts_for=lambda r, h: [])
+    assert any("seconds-fast checks did not pass" in p for p in red) and all(p.startswith("PR #1: ") for p in red)
+
+
+def test_a_rerun_that_turned_green_needs_the_flake_disposition_label():
+    rows = lambda r, h: [{"attempt": 1, "conclusion": "failure"}, {"attempt": 2, "conclusion": "success"}]  # noqa: E731
+    bare = build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=rows)
+    assert bare and "no flake disposition recorded" in bare[0]
+    labelled = build.part_readiness_problems("o/p", {1: info(labels=[build.FLAKE_LABEL])}, [1], attempts_for=rows)
+    assert labelled == []
+
+
+def test_the_attempts_of_a_rerun_run_are_listed_oldest_first(monkeypatch):
+    head = "d" * 40
+    monkeypatch.setattr(build, "gh_json", lambda *a, **k: {"workflow_runs": [
+        {"id": 5, "head_sha": head, "status": "completed", "conclusion": "success", "run_attempt": 2},
+        {"id": 4, "head_sha": "e" * 40, "status": "completed", "conclusion": "failure", "run_attempt": 1}]})
+    assert build.ci_attempts("o/p", head) == [{"attempt": 1, "conclusion": "failure"},
+                                              {"attempt": 2, "conclusion": "success"}]
