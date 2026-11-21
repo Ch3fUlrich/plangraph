@@ -189,6 +189,7 @@ def test_the_http_route_passes_the_switches_and_admits_system(env):
     assert "close_merged_auto" in api_routes.WRITE_VERBS
     route = api_routes.ROLE_CHECKED_VERBS["close_merged_auto"]
     env.repo.land("c", "Plan-Item: demo:B", 71)
+    env.store.warm_merge_scan()  # the API does this before it takes its lock; the route itself runs frozen
     result = route(env.store, env.p("system"), {"require_seats": False, "apply": False}, None)
     assert [c["key"] for c in result["would_close"]] == ["demo:B"]
     assert state(env, "demo:B")["state"] == "open"
@@ -440,8 +441,15 @@ def test_a_lane_answer_is_per_origin_and_an_expired_warm_snapshot_asks_the_forge
     slug[0] = "o/open"    # the checkout's origin changed: the old forge's answer says nothing about the new one
     assert context_sources.open_lanes(adapter, "demo", "demo:C", cache=cache) == ["c-lane"]
     assert asked == ["o/closed", "o/open"]
-    # an unwarmed (expired) run is frozen with an empty cache: the lane is unknown, the forge is not asked
+    # the API's run is frozen: warm, with the cache emptied (a tip that moved) the lane is unknown; unwarmed, the run refuses
     asked.clear()
-    result = auto(env, require_seats=False)
-    assert asked == [] and result["closed"] == []
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    warmed = len(asked)
+    env.store.__dict__["_lanes"].clear()
+    result = auto(env, require_seats=False, frozen=True)
+    assert len(asked) == warmed and result["closed"] == []
     assert "unmerged_work_or_lanes_unknown" in result["listed"][0]["reason"]
+    env.store.__dict__["_warmed"] = {}
+    result = auto(env, require_seats=False, frozen=True)
+    assert result["closed"] == [] and all("merge_index_not_warm" in r["reason"] for r in result["listed"])
+    assert len(asked) == warmed

@@ -8,7 +8,9 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import time
 
+from . import context_sources
 from .errors import Refused
 from .evidence_git import plan_items
 from .evidence_runs import RunRecordAdapter
@@ -17,6 +19,7 @@ from .evidence_types import valid_commit_ref
 __all__ = ["RunsMixin", "normalise_run"]
 
 _REVIEW_RUN = re.compile(r"Review-Run:[ \t]+(\S+)[ \t]+(run-\S+)[ \t]+([0-9a-f]{40})[ \t]*")
+_WARM_S = 60  # how long a warm scan may be read under the request lock
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
 _VERDICTS = ("pass", "fail", "invalid", None)
@@ -177,6 +180,32 @@ class RunsMixin:
                     for part in parts):
                 return False
         return True
+
+    def merge_candidates(self):
+        """``(key, project)`` of every item the automatic close may take: the input of :meth:`warm_merge_scan`."""
+        return [(item["key"], item["project"]) for item in self._all_items()
+                if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+
+    def warm_merge_scan(self, candidates=()):
+        """Fetch, index and look up the hosted lanes of the scanned repositories; the API calls it outside its lock.
+
+        The run that follows reads the warm answers (see :meth:`_warm`) instead of asking git or the
+        forge under the lock.
+        """
+        git = self._adapter("git")
+        scan = getattr(git, "scan_projects", None)
+        self.__dict__["_warmed"], self.__dict__["_lanes"] = {}, {}   # a failed refresh must not keep an old snapshot
+        for project in list(scan()) if callable(scan) else []:
+            if self._refresh_merged_default_ref(git, project):
+                index = context_sources.work_index(git, project, fresh=True)
+                if index is not None and not index.get("origin_stale"):
+                    for key, item_project in candidates:
+                        if context_sources.indexed_work(index, key)["commits"]:
+                            context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
+                    self.__dict__["_warmed"][project] = time.monotonic()
+
+    def _warm(self, project):
+        return time.monotonic() - self.__dict__.get("_warmed", {}).get(project, -1e9) < _WARM_S
 
     def _merged_open_prs(self, item, decision_id, head, now):
         try:

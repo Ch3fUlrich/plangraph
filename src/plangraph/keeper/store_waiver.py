@@ -29,6 +29,7 @@ from . import auth, context_sources
 from .coverage import writer_families
 from .errors import Refused
 from .evidence_types import Result, as_epoch, valid_commit_ref
+from .store_runs import _WARM_S
 from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
 
@@ -44,7 +45,6 @@ def _known_family(value):
 # The statement may name a pull request (``GO #12``, ``GO <project> PR #12``, ``GO <project>
 # PR 12``) and one full ``GO-HEAD`` token; both bind the verdict to one merged PR head.
 _GO_PREFIX = re.compile(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z(?:, date -u)?\)\s+")
-_WARM_S = 60  # how long a warm scan may be read under the request lock
 _GO_RULING = re.compile(r"(?:(?<=\s)|^)\((\d{1,2})\)\s+")
 _GO_HEAD = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
 
@@ -287,32 +287,6 @@ class WaiverMixin:
         except Exception:  # noqa: BLE001 - an unreadable merge never authorizes
             return set()
         return {head} if merged and merged["pr"] == pr else set()
-
-    def merge_candidates(self):
-        """``(key, project)`` of every item the automatic close may take: the input of :meth:`warm_merge_scan`."""
-        return [(item["key"], item["project"]) for item in self._all_items()
-                if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
-
-    def warm_merge_scan(self, candidates=()):
-        """Fetch, index and look up the hosted lanes of the scanned repositories; the API calls it outside its lock.
-
-        The run that follows reads the warm answers (see :meth:`_warm`) instead of asking git or the
-        forge under the lock.
-        """
-        git = self._adapter("git")
-        scan = getattr(git, "scan_projects", None)
-        self.__dict__["_warmed"], self.__dict__["_lanes"] = {}, {}   # a failed refresh must not keep an old snapshot
-        for project in list(scan()) if callable(scan) else []:
-            if self._refresh_merged_default_ref(git, project):
-                index = context_sources.work_index(git, project, fresh=True)
-                if index is not None and not index.get("origin_stale"):
-                    for key, item_project in candidates:
-                        if context_sources.indexed_work(index, key)["commits"]:
-                            context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
-                    self.__dict__["_warmed"][project] = time.monotonic()
-
-    def _warm(self, project):
-        return time.monotonic() - self.__dict__.get("_warmed", {}).get(project, -1e9) < _WARM_S
 
     def _merged_work_commits(self, item):
         """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown."""
@@ -648,13 +622,15 @@ class WaiverMixin:
     # every refusal are returned in ``listed`` with their reason, never skipped.
     AUTO_STATES = ("open", "claimed", "in_review")
 
-    def close_merged_auto(self, principal, project=None, require_seats=True, apply=True, repos_only=False):
+    def close_merged_auto(self, principal, project=None, require_seats=True, apply=True, repos_only=False,
+                          frozen=False):
         return self._run(principal, "close_merged_auto", None,
-                         lambda now: self._close_merged_auto(principal, project, require_seats, apply, now, repos_only),
+                         lambda now: self._close_merged_auto(principal, project, require_seats, apply, now, repos_only, frozen),
                          success_message=None)
 
-    def _close_merged_auto(self, principal, project, require_seats, apply, now, repos_only=False):
-        self.__dict__["_frozen_lanes"] = True
+    def _close_merged_auto(self, principal, project, require_seats, apply, now, repos_only=False, frozen=False):
+        # ``frozen`` (the API, which holds the keeper lock): read only the warm scan, ask git and the forge nothing.
+        self.__dict__["_frozen_lanes"] = bool(frozen)
         try:
             return self._close_merged_auto_run(principal, project, require_seats, apply, now, repos_only)
         finally:
@@ -675,6 +651,8 @@ class WaiverMixin:
 
         def index_of(repo_project):
             if repo_project not in indexes:
+                if self.__dict__.get("_frozen_lanes") and not self._warm(repo_project):
+                    raise Refused("evidence_unverified", f"merge_index_not_warm: {repo_project}")
                 index = context_sources.work_index(git, repo_project, fresh=not self._warm(repo_project), max_age=_WARM_S)
                 if index is not None and index.get("origin_stale"):
                     raise Refused("evidence_unverified", f"merge_index_stale: {repo_project}: {index.get('reason')}")
