@@ -13,7 +13,7 @@ pub struct Guards {
     pub pinned: Vec<PathBuf>,
     pub live: Vec<PathBuf>,
 }
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct Report {
     pub free_bytes: u64,
     pub alarm: bool,
@@ -122,7 +122,7 @@ impl Guards {
         })
     }
 }
-pub fn scan(path: &Path) -> io::Result<(u64, SystemTime)> {
+pub(crate) fn scan(path: &Path) -> io::Result<(u64, SystemTime)> {
     let meta = fs::symlink_metadata(path)?;
     let mut newest = meta.modified()?;
     let mut bytes = if meta.is_file() { meta.len() } else { 0 };

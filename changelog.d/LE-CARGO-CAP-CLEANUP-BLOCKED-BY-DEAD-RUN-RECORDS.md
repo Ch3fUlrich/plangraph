@@ -1,1 +1,0 @@
-Dead-pid `timed_out`, `stalled` and `running` records no longer keep the shared Cargo cache busy, so an over-cap idle cache is cleaned before admission; `ps` marks a dead-pid `running` record `stale`.

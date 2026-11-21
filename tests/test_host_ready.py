@@ -352,22 +352,6 @@ def test_remote_disk_floor(tmp_path, floor, free, ok):
     assert result['failures'] == ([] if ok else [f'disk: disk_low: free {free} GB'])
 
 
-@pytest.mark.parametrize('d1,d2,ok', [(2, 9, True), (9, 2, True), (2, 2, False)])
-def test_remote_work_drives_are_probed_per_drive_and_one_eligible_drive_is_ready(tmp_path, d1, d2, ok):
-    config = dict(CONFIG, work_drives=[dict(path='/invented/d1'), dict(path='/invented/d2', disk_floor_gb=3)])
-    def fake(argv, **kwargs):
-        script = argv[-1]
-        for path, free in (('/invented/d1', d1), ('/invented/d2', d2)):
-            if 'df -Pk' in script and path in script:
-                return SimpleNamespace(returncode=0, stdout=f'fake 99999999 0 {free * 1024 * 1024} 0% /\n')
-        return runner(argv, **kwargs)
-    result = h.check_host('fiction', config, tmp_path, fake)
-    assert result['work_drives'] == [
-        dict(path='/invented/d1', disk_floor_gb=5, disk_free_gb=d1),
-        dict(path='/invented/d2', disk_floor_gb=3, disk_free_gb=d2)]
-    assert result['ok'] is ok
-
-
 @pytest.mark.parametrize('missing', [[], ['pytest'], ['xdist'], ['pytest', 'xdist']])
 def test_registry_host_reports_missing_pytest_and_xdist(tmp_path, missing):
     scripts = []

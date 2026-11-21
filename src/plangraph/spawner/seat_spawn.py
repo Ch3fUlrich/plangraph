@@ -257,12 +257,12 @@ def admit(service, options, *, card=None, preview=False):
         return None
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
-    named = (options.get('cwd') or (card or {}).get('cwd') or
-             ((card or {}).get('diff_ref') or {}).get('repo') or (card or {}).get('repo'))
-    repo = Path(named or getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
-    movable = not named  # A run with no checkout named anywhere may be placed on any work drive.
+    repo = Path(options.get('cwd') or (card or {}).get('cwd') or
+                ((card or {}).get('diff_ref') or {}).get('repo') or
+                (card or {}).get('repo') or
+                getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     from .host_ready import local_disk_refusal
-    disk = local_disk_refusal(repo, service, role, movable=movable)
+    disk = local_disk_refusal(repo, service, role)
     if not (remote_first or compare_local) and not disk and not overflow.memory_refusal(memory, role_mb, floor):
         if native or placed:
             options['_placement'] = dict(host=local, reason=os.environ.get(
@@ -332,7 +332,7 @@ def admit(service, options, *, card=None, preview=False):
                     if time.time() < queued['queued_until']:
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
                         _, memory = resources(service)
-                        disk = local_disk_refusal(repo, service, role, movable=movable)
+                        disk = local_disk_refusal(repo, service, role)
                         health = disk or local_readiness_refusal()
                         rows = load_rows()
                         if not disk and not overflow.memory_refusal(memory, role_mb, floor):

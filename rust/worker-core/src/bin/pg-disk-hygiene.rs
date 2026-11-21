@@ -1,18 +1,20 @@
 use pg_worker_core::{
     disk_hygiene::{self, Guards, Report, Thresholds},
-    disk_runtime, sweep_facts,
+    disk_runtime,
+    run::record_io,
+    sweep_facts,
 };
 use std::{
     env, io,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
-    let (mut repo, mut root, mut pins, mut tmp_root) = (None, None, None, PathBuf::from("/tmp"));
+    let (mut repo, mut root, mut pins) = (None, None, None);
     let (mut apply, mut dry) = (false, false);
     let mut thresholds = Thresholds::default();
-    let mut cap = pg_worker_core::cargo_pool::configured_cap_bytes();
+    let mut cap = 10_000_000_000u64;
     let mut args = args.iter();
     while let Some(flag) = args.next() {
         match flag.as_str() {
@@ -30,7 +32,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
             }
             "--apply" => apply = true,
             "--dry-run" => dry = true,
-            "--repo" | "--root" | "--pins" | "--tmp-root" | "--state" => {
+            "--repo" | "--root" | "--pins" | "--state" => {
                 let value = PathBuf::from(
                     args.next()
                         .ok_or_else(|| io::Error::other("missing option value"))?,
@@ -39,7 +41,6 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
                     "--repo" => repo = Some(value),
                     "--root" => root = Some(value),
                     "--pins" => pins = Some(value),
-                    "--tmp-root" => tmp_root = value,
                     _ => {}
                 }
             }
@@ -99,7 +100,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
             .pinned
             .extend(pg_worker_core::cargo_cache::shared_cache_roots()?);
         if let Err(error) = pg_worker_core::private_targets::sweep(
-            &tmp_root,
+            &PathBuf::from("/tmp"),
             &worktrees,
             &private_guards,
             apply,
@@ -124,20 +125,6 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
                 report.error = Some(error.to_string());
             }
         }
-        // Pool slots are guarded by their own leases, so idle ones are trimmed even while
-        // another build runs; the primary target also waits for the process scan.
-        if let Some(primary) = pg_worker_core::cargo_cache::shared_cache_roots()?.first() {
-            let mut slots = pg_worker_core::cargo_pool::existing_pool_slots(primary);
-            if building {
-                slots.remove(0);
-            }
-            if let Err(error) =
-                pg_worker_core::cargo_pool::enforce_pool_cap(&slots, cap, apply, &mut report)
-            {
-                report.alarm = true;
-                report.error = Some(error.to_string());
-            }
-        }
     }
     Ok(report)
 }
@@ -157,7 +144,17 @@ fn run() -> io::Result<()> {
             serde_json::json!({"alarm":true,"error":error.to_string(),"freed_bytes":0,"actions":[],"skipped":[],"dry_run":!args.iter().any(|a| a == "--apply"),"free_bytes":null})
         }
     };
-    let bytes = disk_runtime::write_hygiene_report(&state, &report)?;
+    let mut report = report;
+    report["ts"] = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs()
+        .into();
+    let bytes = serde_json::to_vec(&report)?;
+    record_io::atomic_write_private(&state.join("disk-hygiene.json"), &bytes)?;
+    let mut line = bytes.clone();
+    line.push(b'\n');
+    record_io::append_private(&state.join("disk-hygiene.ndjson"), &line)?;
     println!("{}", String::from_utf8_lossy(&bytes));
     result.and_then(|r| match r.error {
         Some(e) => Err(io::Error::other(e)),
