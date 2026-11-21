@@ -25,12 +25,7 @@ from pathlib import Path
 from os.path import abspath as _abspath  # tests stub runner.os (test_w36_regressions)
 from typing import Any, Mapping, Sequence
 
-from plangraph.spawner.clients import (
-    STDIN_PROMPT_HARNESSES,
-    build_child_env,
-    build_command,
-    build_routing_envelope_headers,
-)
+from plangraph.spawner.clients import STDIN_PROMPT_HARNESSES, build_child_env, build_command, build_routing_envelope_headers
 from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import detect_model_family

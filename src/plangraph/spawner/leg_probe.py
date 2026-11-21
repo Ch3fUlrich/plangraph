@@ -16,7 +16,7 @@ from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
-REVIEW_PROMPT = 'Reply with the single word OK. Do nothing else.'
+REVIEW_PROMPT = 'Reply with the single word OK. Answer in plain text in this reply only; do not create a plan file or any other file.'
 
 #: The probe repo and its child commit ignore the operator's global/system git
 #: config (M11): a host commit.gpgsign=true or global core.hooksPath must never
