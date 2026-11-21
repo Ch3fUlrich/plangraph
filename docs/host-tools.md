@@ -1,5 +1,15 @@
 # Rust host tools: disk hygiene
 
+`host-sync --check-protoc` compiles a probe that imports
+`google/protobuf/field_mask.proto` and prints its include status. It uses
+`PROTOC` and `PROTOC_INCLUDE` when configured.
+
+NOTE Host-sync sessions. Add `host-sync --check-protoc` to the host setup check
+and record its output on all three workers. On the affected worker, install the
+well-known include files that match its system protoc and repeat the check.
+Temporal builds use the SDK's vendored descriptor compiler. Verify the worker
+build during the Dell push-gate probe with its normal shared Cargo target.
+
 Build `pg-disk-hygiene` with `cd rust && cargo build -p pg-worker-core --bin
 pg-disk-hygiene --bin pg-process-cwds --release`, using the environment's shared `CARGO_TARGET_DIR`.
 

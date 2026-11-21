@@ -35,6 +35,23 @@ fn stdout(output: &Output) -> String {
 }
 
 #[test]
+fn protoc_check_names_missing_well_known_types() {
+    let root = tempfile::tempdir().unwrap();
+    let output = run_bin(
+        env!("CARGO_BIN_EXE_host-sync"),
+        root.path(),
+        root.path(),
+        &[("PROTOC", &root.path().join("missing-protoc"))],
+        &["--check-protoc"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stdout(&output).starts_with("FAIL protoc google/protobuf/field_mask.proto:"),
+        "{output:?}"
+    );
+}
+
+#[test]
 fn correct_path_is_a_noop_even_without_data_checkout() {
     let root = tempfile::tempdir().unwrap();
     let home = root.path().join("home");

@@ -66,7 +66,7 @@ pub fn run_cli(args: &[OsString]) -> i32 {
         Ok(options) => options,
         Err(error) => {
             eprintln!("{error}");
-            eprintln!("usage: host-sync [--data-dir PATH] [--bin-dir PATH]");
+            eprintln!("usage: host-sync [--data-dir PATH] [--bin-dir PATH] | --check-protoc");
             return 2;
         }
     };
