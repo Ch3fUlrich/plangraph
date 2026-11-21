@@ -13,6 +13,7 @@ pub mod group_windows;
 #[cfg(all(test, windows))]
 mod group_windows_tests;
 pub mod job_holder_windows;
+pub mod lifecycle;
 pub mod livelog;
 mod monitor;
 #[cfg(target_os = "linux")]

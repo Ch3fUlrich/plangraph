@@ -134,7 +134,12 @@ def exit_reason(code):
 
 
 def query_host(host, timeout):
-    command, plan = host_invocation(host, query=True)
+    cursor = host.get('lifecycle_cursor')
+    if cursor is None:
+        command, plan = host_invocation(host, query=True)
+    else:
+        argv = ['pg-spawnd', 'runs', '--changed-since', str(cursor)]
+        command, plan = invocation(host, shlex.join(argv), [{'argv': argv}])
     with subprocess.Popen(
         ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=2',
          '--', host['target'], command],
@@ -278,6 +283,55 @@ def list_runs(local, *, transport=query_host):
     except RuntimeError:
         return list(local) + [dict(host=h['name'], status='unknown',
                                   reason='host query failed') for h in hosts]
+
+
+def lifecycle_command(state, *args, **kwargs):
+    from plangraph.fleet_snapshot import _projection_binary
+    return subprocess.run([_projection_binary(), *args], check=True, timeout=10,
+                          env=dict(os.environ, PLANGRAPH_SPAWN_STATE=str(state)), **kwargs)
+
+
+def changed_runs(state, bookmark, *, transport=query_host):
+    """Read independent host cursors; a failed host keeps its last bookmark."""
+    if not isinstance(bookmark, dict) or set(bookmark) - {'local', 'hosts'}:
+        raise ValueError('changed-since needs a local cursor and a map of host cursors')
+    host_cursors = bookmark.get('hosts', {})
+    if not isinstance(host_cursors, dict):
+        raise ValueError('invalid lifecycle host cursors')
+    cursors = [bookmark.get('local', 0), *host_cursors.values()]
+    if any(type(c) is not int or not 0 <= c < 2**64 for c in cursors):
+        raise ValueError('invalid lifecycle cursor')
+
+    def decode(payload, cursor):
+        page = json.loads(payload)
+        rows = page['rows']
+        if (not isinstance(rows, list) or len(rows) > 100 or
+                any(type(row.get('seq')) is not int or row['seq'] != cursor + i
+                    for i, row in enumerate(rows, 1)) or
+                page['next_cursor'] != cursor + len(rows) or type(page['more']) is not bool):
+            raise ValueError('invalid lifecycle page')
+        return page
+
+    local = bookmark.get('local', 0)
+    local_page = decode(lifecycle_command(state, 'runs', '--changed-since', str(local),
+                                          stdout=subprocess.PIPE).stdout, local)
+
+    def fetch(host):
+        cursor = host_cursors.get(host['name'], 0)
+        try:
+            if host.get('invalid'):
+                raise ValueError('invalid host')
+            return decode(transport(dict(host, lifecycle_cursor=cursor), TIMEOUT), cursor)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError):
+            return {'error': 'host lifecycle query failed'}
+
+    hosts = configured_hosts()
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        pages = dict(zip((host['name'] for host in hosts), pool.map(fetch, hosts)))
+    next_hosts = dict(host_cursors)
+    next_hosts.update({name: page['next_cursor'] for name, page in pages.items() if 'next_cursor' in page})
+    return {'local': local_page, 'hosts': pages,
+            'next_cursor': {'local': local_page['next_cursor'], 'hosts': next_hosts}}
 
 
 def native_receipt(record):

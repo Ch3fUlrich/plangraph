@@ -21,6 +21,7 @@ mod land_go_shell;
 mod land_go_tests;
 mod launch;
 mod leg_ref;
+mod lifecycle_cli;
 mod manage_key_alert;
 mod native_writer;
 mod native_writer_host;

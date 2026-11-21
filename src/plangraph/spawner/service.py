@@ -11,7 +11,7 @@ from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
-from .remote_ps import native_receipt
+from .remote_ps import lifecycle_command, native_receipt
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
@@ -66,7 +66,6 @@ class SpawnService(SeatSpawnMixin):
             annotate_tree(record)
             if record.get('tree_sha') is None:
                 record.setdefault('tree_absent', 'spawner code checkout identity unavailable at process startup')
-        from .private_io import atomic_write_private
         from .runner import redact
         from .seat_artifact import publish
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
@@ -131,7 +130,8 @@ class SpawnService(SeatSpawnMixin):
         for target in [record, *record.get('attempts', [])]:
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
-        atomic_write_private(self._path(record['run_id']), json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2))
+        body = json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})))
+        lifecycle_command(self.state, 'record-publish', input=body, text=True)
         publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)

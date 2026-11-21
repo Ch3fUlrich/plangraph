@@ -202,6 +202,19 @@ impl RunRecord {
         Ok(())
     }
     pub fn save(&self) -> Result<(), RecordError> {
+        let root = self
+            .path
+            .parent()
+            .and_then(Path::parent)
+            .filter(|runs| runs.file_name().is_some_and(|name| name == "runs"))
+            .and_then(Path::parent);
+        if let Some(root) = root {
+            return Ok(super::lifecycle::publish(
+                root,
+                &self.path,
+                &json!(self.fields),
+            )?);
+        }
         let bytes = serde_json::to_vec_pretty(&self.fields).map_err(|_| RecordError::Invalid)?;
         Ok(record_io::atomic_write_private(&self.path, &bytes)?)
     }

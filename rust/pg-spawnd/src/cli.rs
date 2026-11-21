@@ -143,6 +143,9 @@ pub(crate) fn execute(
         }
         return Ok(());
     }
+    if matches!(verb.as_deref(), Some("runs" | "record-publish")) {
+        return crate::lifecycle_cli::execute(verb.as_deref().unwrap(), &rest, out);
+    }
     if verb.as_deref() == Some("ledger-report") {
         return crate::writer_ledger::report(rest, out);
     }
