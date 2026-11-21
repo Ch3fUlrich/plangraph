@@ -67,7 +67,7 @@ carrier validation, failure behavior, fixer reports, retry bounds and the role h
 
 Review seats are hard-capped from their first output, and reasoning-only output exhaustion is
 handled without losing the verdict: see [MiMo seats](operations/spawner-mimo-seats.md)
-(MIMO-VERDICT-TIMEOUTS, MIMO-REASONING-OUTPUT-LIMIT).
+(MIMO-VERDICT-TIMEOUTS, MIMO-REASONING-OUTPUT-LIMIT); a review card with an empty diff fails once with `empty_diff` before any leg.
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
