@@ -340,19 +340,23 @@ def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", ro
     return commands
 
 
+def attempt_key(attempt):
+    return attempt.get("run_id", 0), attempt["attempt"]
+
+
 def attempt_problems(attempts: list[dict], flake_dispositions=()) -> list[str]:
     """Readiness (d): the latest completed attempt on the head must not be red; a red attempt followed by a
     green one clears only with the flake disposition of rule 3.46 recorded for the red attempt."""
-    done = sorted((a for a in attempts if a.get("conclusion")), key=lambda a: a["attempt"])
+    done = sorted((a for a in attempts if a.get("conclusion")), key=attempt_key)
     if not done:
         return ["no completed attempt on this head"]
     latest = done[-1]
     if latest["conclusion"] != "success":
         return [f"latest completed attempt {latest['attempt']} is {latest['conclusion']}"]
-    flakes = set(flake_dispositions)
+    flakes = {(0, value) if isinstance(value, int) else tuple(value) for value in flake_dispositions}
     return [f"attempt {a['attempt']} was {a['conclusion']} and attempt {latest['attempt']} green: "
             "no flake disposition recorded"
-            for a in done[:-1] if a["conclusion"] != "success" and a["attempt"] not in flakes]
+            for a in done[:-1] if a["conclusion"] != "success" and attempt_key(a) not in flakes]
 
 
 def ready_problems(facts: dict) -> list[str]:

@@ -205,3 +205,28 @@ def test_a_result_for_another_head_is_not_reported(train):
     st = state(root, base, head)
     st["windows"] = {"head": "b" * 40, "line": "windows ok head=bbbbbbbbbbbb host=h commands=2 seconds=1"}
     assert land.windows_report(st, head) is None
+
+
+def test_push_adopts_an_existing_part_before_selecting_windows(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    root, base, head = docs_only(tmp_path, "batch/docs")
+    workflow = root / ".github/workflows/tests.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(WORKFLOW)
+    st = state(root, base, head, "batch/docs")
+    st.update(status="built", repo="o/p", merged=[{"pr": 1}])
+    monkeypatch.setattr(land, "load_state", lambda _: st)
+    real_git = land.git
+    monkeypatch.setattr(land, "git", lambda *a, **k: SimpleNamespace(stdout="") if a[0] == "push" else real_git(*a, **k))
+    monkeypatch.setattr(land, "adopt_open_pr", lambda current: current.update(pr=5, url="https://example.invalid/pull/5"))
+    monkeypatch.setattr(land, "gh_json", lambda *a, **k: {"state": "OPEN", "labels": [{"name": "land-part"}]})
+    monkeypatch.setattr(land, "render_body", lambda _: "")
+    monkeypatch.setattr(land, "update_pr", lambda *a: None)
+    monkeypatch.setenv("PLANGRAPH_WINDOWS_HOST", "fixture")
+    transport = Transport()
+    gate = land.windows_gate
+    monkeypatch.setattr(land, "windows_gate", lambda st, workflow: gate(st, workflow, transport=transport))
+
+    assert land.cmd_push(SimpleNamespace(name="t", ci_run=None)) == 0
+    assert not transport.calls

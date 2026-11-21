@@ -265,6 +265,8 @@ def cmd_push(args):
     if git("status", "--porcelain", "--untracked-files=no", cwd=wt).stdout.strip():
         raise MergeBatchError(f"{wt} has uncommitted changes: commit them before push")
     head = git("rev-parse", "HEAD", cwd=wt).stdout.strip()
+    if not st.get("pr"):
+        adopt_open_pr(st)
     workflow = Path(wt, ".github/workflows/tests.yml")
     if workflow.is_file():   # a red Windows run refuses the push before anything leaves the machine
         windows_gate(st, workflow.read_text(encoding="utf-8"))
@@ -273,8 +275,6 @@ def cmd_push(args):
     with tempfile.TemporaryDirectory() as tmp:
         body = Path(tmp, "body.md")
         body.write_text(render_body(st), encoding="utf-8")
-        if not st.get("pr"):
-            adopt_open_pr(st)
         if st.get("pr"):
             if gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state")["state"] != "OPEN":
                 raise MergeBatchError(f"batch PR #{st['pr']} is not open any more: abort and build again")

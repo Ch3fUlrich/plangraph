@@ -265,15 +265,17 @@ def open_pr_heads(name, repo, infos):
     rows = gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json",
                    "number,headRefName,baseRefName,headRefOid")
     outside = [r for r in rows if r["number"] not in infos]
-    found = []
-    for row in outside:   # one by one: a pull request whose head cannot be fetched carries no history to compare
+    for row in outside:
+        number, head = row["number"], row["headRefOid"]
+        fetch_error = None
         try:
-            git("fetch", "--quiet", REMOTE, f"+refs/pull/{row['number']}/head:refs/merge-batch/{name}/open/{row['number']}")
-            found.append(row)
+            git("fetch", "--quiet", REMOTE, f"+refs/pull/{number}/head:refs/merge-batch/{name}/open/{number}")
         except MergeBatchError as exc:
-            print(f"merge_batch: open PR #{row['number']} not compared (head not fetchable: {first_line(str(exc))})",
-                  file=sys.stderr)
-    return {r["number"]: {"head": r["headRefOid"], "ref": r["headRefName"], "base": r["baseRefName"]} for r in found}
+            fetch_error = exc
+        if git("cat-file", "-t", head, ok=None).stdout.strip() != "commit":
+            detail = f": {first_line(str(fetch_error))}" if fetch_error else " after fetch"
+            raise MergeBatchError(f"open PR #{number} advertised head {head} unavailable{detail}") from fetch_error
+    return {r["number"]: {"head": r["headRefOid"], "ref": r["headRefName"], "base": r["baseRefName"]} for r in outside}
 
 
 def part_entry_problems(base, order, heads, parent, runner=policy_runner, opens=None, refs=None):
@@ -315,15 +317,28 @@ def part_entry_problems(base, order, heads, parent, runner=policy_runner, opens=
 FLAKE_LABEL = "flake-dispositioned"
 
 
-def ci_attempts(repo, head):
-    """Attempts of the tests workflow runs on this head, oldest first; an earlier attempt of a rerun run counts
-    as failed (it was rerun). [] when no run names the head."""
-    runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")
+def tests_runs(repo, pr, head, api):
+    """Tests runs explicitly associated with this pull request and commit."""
+    runs = api("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")
+    return [r for r in runs.get("workflow_runs", []) if r.get("head_sha") == head
+            and any(p.get("number") == pr for p in r.get("pull_requests") or [])]
+
+
+def ci_attempts(repo, pr, head):
+    """Read actual attempt conclusions, requiring a successful ci-gate for a green Tests run."""
     rows = []
-    for run in sorted((r for r in runs.get("workflow_runs", []) if r.get("head_sha") == head), key=lambda r: r["id"]):
-        last = run.get("run_attempt", 1)
-        rows += [{"attempt": n, "conclusion": "failure"} for n in range(1, last)]
-        rows.append({"attempt": last, "conclusion": run.get("conclusion") if run.get("status") == "completed" else None})
+    for run in sorted(tests_runs(repo, pr, head, gh_json), key=lambda r: r["id"]):
+        run_id, last = run["id"], run.get("run_attempt", 1)
+        for number in range(1, last + 1):
+            endpoint = f"repos/{repo}/actions/runs/{run_id}/attempts/{number}"
+            attempt = run if number == last else gh_json("api", endpoint)
+            conclusion = attempt.get("conclusion") if attempt.get("status") == "completed" else None
+            if conclusion == "success":
+                jobs = gh_json("api", endpoint + "/jobs?per_page=100")["jobs"]
+                if not any(job.get("name") == "ci-gate" and job.get("status") == "completed"
+                           and job.get("conclusion") == "success" for job in jobs):
+                    conclusion = "ci-gate missing or unsuccessful"
+            rows.append({"run_id": run_id, "attempt": number, "conclusion": conclusion})
     return rows
 
 
@@ -336,10 +351,11 @@ def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
     problems = []
     for num in order:
         pr = infos[num]
-        green = pr["ci"] == "green"
+        attempts = attempts_for(repo, num, pr["head"])
+        done = sorted((a for a in attempts if a.get("conclusion")), key=ci_select.attempt_key)
+        green = bool(done and done[-1]["conclusion"] == "success")
         rust = bool(ci_select.select(pr["files"])["rust"]) if pr["files"] and not pr["truncated"] else True
-        attempts = attempts_for(repo, pr["head"]) or [{"attempt": 1, "conclusion": "success" if green else "failure"}]
-        dispositions = [a["attempt"] for a in attempts[:-1]] if FLAKE_LABEL in pr["labels"] else []
+        dispositions = [ci_select.attempt_key(a) for a in done[:-1]] if FLAKE_LABEL in pr["labels"] else []
         found = ci_select.ready_problems({
             "fast_checks": green, "entry_set": green, "windows_required": rust, "windows": green if rust else None,
             "attempts": attempts, "flake_dispositions": dispositions})

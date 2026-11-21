@@ -115,6 +115,16 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
         run = {"id": 7, "head_sha": batch["headRefOid"] if batch else "0" * 40,
                "head_branch": batch["headRefName"] if batch else "main", "event": "pull_request",
                "status": "completed", "conclusion": "success", "run_attempt": 1}
+        if "head_sha=" in endpoint_get:
+            sha = endpoint_get.split("head_sha=", 1)[1].split("&", 1)[0]
+            matches = [follow_branch(pr) for pr in S["prs"].values() if pr["headRefOid"] == sha]
+            print(json.dumps({"workflow_runs": [
+                dict(run, id=pr["number"], head_sha=sha, head_branch=pr["headRefName"],
+                     pull_requests=[{"number": pr["number"]}],
+                     conclusion=pr["statusCheckRollup"][0]["conclusion"].lower())
+                for pr in matches if pr["statusCheckRollup"] and pr["statusCheckRollup"][0]["conclusion"]
+            ]}))
+            sys.exit(0)
         if "branch=main" in endpoint_get:
             run.update(head_sha=git("rev-parse", "refs/heads/main").stdout.strip(), head_branch="main", event="push")
         if "/jobs?" in endpoint_get:

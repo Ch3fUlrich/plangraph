@@ -84,14 +84,14 @@ def info(head="a" * 40, ci="green", files=("src/plangraph/planner/provider_stop.
 
 
 def test_a_green_part_is_ready_and_a_part_without_green_ci_is_not():
-    ok = build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=lambda r, h: [])
+    ok = build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=lambda *_: [{"attempt": 1, "conclusion": "success"}])
     assert ok == []
-    red = build.part_readiness_problems("o/p", {1: info(ci="red")}, [1], attempts_for=lambda r, h: [])
+    red = build.part_readiness_problems("o/p", {1: info(ci="red")}, [1], attempts_for=lambda *_: [])
     assert any("seconds-fast checks did not pass" in p for p in red) and all(p.startswith("PR #1: ") for p in red)
 
 
 def test_a_rerun_that_turned_green_needs_the_flake_disposition_label():
-    rows = lambda r, h: [{"attempt": 1, "conclusion": "failure"}, {"attempt": 2, "conclusion": "success"}]  # noqa: E731
+    rows = lambda *_: [{"attempt": 1, "conclusion": "failure"}, {"attempt": 2, "conclusion": "success"}]  # noqa: E731
     bare = build.part_readiness_problems("o/p", {1: info()}, [1], attempts_for=rows)
     assert bare and "no flake disposition recorded" in bare[0]
     labelled = build.part_readiness_problems("o/p", {1: info(labels=[build.FLAKE_LABEL])}, [1], attempts_for=rows)
@@ -100,8 +100,59 @@ def test_a_rerun_that_turned_green_needs_the_flake_disposition_label():
 
 def test_the_attempts_of_a_rerun_run_are_listed_oldest_first(monkeypatch):
     head = "d" * 40
-    monkeypatch.setattr(build, "gh_json", lambda *a, **k: {"workflow_runs": [
-        {"id": 5, "head_sha": head, "status": "completed", "conclusion": "success", "run_attempt": 2},
-        {"id": 4, "head_sha": "e" * 40, "status": "completed", "conclusion": "failure", "run_attempt": 1}]})
-    assert build.ci_attempts("o/p", head) == [{"attempt": 1, "conclusion": "failure"},
-                                              {"attempt": 2, "conclusion": "success"}]
+    def api(*args):
+        endpoint = args[1]
+        if "/jobs" in endpoint:
+            return {"jobs": [{"name": "ci-gate", "status": "completed", "conclusion": "success"}]}
+        if endpoint.endswith("/attempts/1"):
+            return {"status": "completed", "conclusion": "cancelled"}
+        return {"workflow_runs": [
+            {"id": 5, "head_sha": head, "status": "completed", "conclusion": "success", "run_attempt": 2,
+             "pull_requests": [{"number": 1}]},
+            {"id": 4, "head_sha": "e" * 40, "status": "completed", "conclusion": "failure",
+             "pull_requests": [{"number": 1}]}]}
+
+    monkeypatch.setattr(build, "gh_json", api)
+    assert build.ci_attempts("o/p", 1, head) == [{"run_id": 5, "attempt": 1, "conclusion": "cancelled"},
+                                                 {"run_id": 5, "attempt": 2, "conclusion": "success"}]
+
+
+def test_unfetchable_open_pr_uses_its_advertised_local_commit(env, monkeypatch):
+    head = env.branch_pr(9, {"outside.py": "a = 1\n"})
+    env.git("push", "origin", ":refs/pull/9/head")
+    monkeypatch.chdir(env.repo)
+    monkeypatch.setattr(build, "gh_json", lambda *args: [
+        {"number": 9, "headRefOid": head, "headRefName": "lane/p9", "baseRefName": "main"}])
+    assert build.open_pr_heads("pe", "o/p", {})[9]["head"] == head
+
+
+def test_unavailable_open_pr_refuses_entry(env, monkeypatch):
+    monkeypatch.chdir(env.repo)
+    monkeypatch.setattr(build, "gh_json", lambda *args: [
+        {"number": 9, "headRefOid": "a" * 40, "headRefName": "lane/p9", "baseRefName": "main"}])
+    with pytest.raises(build.MergeBatchError, match="open PR #9"):
+        build.open_pr_heads("pe", "o/p", {})
+
+
+def test_green_rollup_without_tests_run_cannot_admit_a_part(monkeypatch):
+    monkeypatch.setattr(build, "gh_json", lambda *args: {"workflow_runs": []})
+    assert "PR #1: no completed attempt on this head" in build.part_readiness_problems("o/p", {1: info()}, [1])
+
+
+def test_green_workflow_without_a_successful_ci_gate_cannot_admit_a_part(monkeypatch):
+    def api(*args):
+        if "/jobs" in args[1]:
+            return {"jobs": [{"name": "unrelated", "status": "completed", "conclusion": "success"}]}
+        return {"workflow_runs": [{"id": 5, "head_sha": info()["head"], "status": "completed",
+                                   "conclusion": "success", "pull_requests": [{"number": 1}]}]}
+    monkeypatch.setattr(build, "gh_json", api)
+    assert build.part_readiness_problems("o/p", {1: info()}, [1])
+
+
+def test_newer_red_workflow_overrides_older_green_rerun():
+    rows = [{"run_id": 5, "attempt": 1, "conclusion": "failure"},
+            {"run_id": 5, "attempt": 2, "conclusion": "success"},
+            {"run_id": 6, "attempt": 1, "conclusion": "failure"}]
+    problems = build.part_readiness_problems("o/p", {1: info(labels=[build.FLAKE_LABEL])}, [1],
+                                             attempts_for=lambda *args: rows)
+    assert any("latest completed attempt" in p and "failure" in p for p in problems)
