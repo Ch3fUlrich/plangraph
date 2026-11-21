@@ -229,6 +229,7 @@ impl Driver for Host {
         Ok(base)
     }
     fn refresh_base(&mut self) -> Result<String, String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         self.git(&[
             "fetch",
             "origin",
@@ -239,6 +240,7 @@ impl Driver for Host {
         self.git(&["rev-parse", "origin/main"])
     }
     fn execute(&mut self, session: Option<&str>, prompt: &str) -> Result<String, String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         // The caller PATH recorded at admission selects Codex for every launch and resume.
         let codex = crate::native_writer_tool::resolve(self.tool_path.as_ref(), &self.cwd)?;
         let directory = self
@@ -353,6 +355,7 @@ impl Driver for Host {
         self.git(&["rev-parse", "HEAD"])
     }
     fn fast_checks(&mut self, head: &str) -> Result<(), String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         if self.git(&["rev-parse", "HEAD"])? != head {
             return Err(format!("worktree is not at {head}"));
         }
@@ -375,6 +378,7 @@ impl Driver for Host {
         self.review_run(head, previous)
     }
     fn gates(&mut self) -> Result<(), String> {
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
         self.checks().map(|_| ())
     }
@@ -382,6 +386,7 @@ impl Driver for Host {
         let Some(target) = self.push_ref.clone() else {
             return Ok(None);
         };
+        let _guard = crate::writer_control::mutation_guard(&self.record_path)?;
         // No force flag: the remote refuses anything but a fast-forward.
         self.git(&["push", "origin", &format!("{head}:{target}")])?;
         Ok(Some(target))
@@ -432,7 +437,49 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     }
     let request: Value = serde_json::from_slice(&fs::read(&args[0]).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    let mut record = request["record"].clone();
+    let record_path = request["record_path"]
+        .as_str()
+        .ok_or("record_path missing")?;
+    let _supervisor = crate::writer_control::supervisor_guard(Path::new(record_path))?;
+    execute_request(&request, request["record"].clone())
+}
+
+pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
+    let [record] = args.as_slice() else {
+        return Err("usage: pg-spawnd writer-resume RECORD".into());
+    };
+    let record = Path::new(record);
+    let request_path = record
+        .parent()
+        .ok_or("writer record directory missing")?
+        .join("native-request.json");
+    let request: Value =
+        serde_json::from_slice(&fs::read(request_path).map_err(|_| "writer request unavailable")?)
+            .map_err(|_| "invalid saved writer request")?;
+    let requested = request["record_path"]
+        .as_str()
+        .ok_or("writer request record path missing")?;
+    if Path::new(requested)
+        .canonicalize()
+        .ok()
+        .zip(record.canonicalize().ok())
+        .is_none_or(|(a, b)| a != b)
+    {
+        return Err("saved writer request names another record".into());
+    }
+    let _supervisor = crate::writer_control::supervisor_guard(record)?;
+    let mut resumed = crate::writer_control::take_resume(record)?;
+    let fields = resumed
+        .as_object_mut()
+        .ok_or("invalid saved writer record")?;
+    for obsolete in ["ended", "exit_code", "reason", "result"] {
+        fields.remove(obsolete);
+    }
+    resumed["status"] = json!("running");
+    execute_request(&request, resumed)
+}
+
+fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
     record["pid"] = json!(std::process::id());
     #[cfg(target_os = "linux")]
     if let Ok(stat) = fs::read_to_string("/proc/self/stat") {
@@ -474,7 +521,7 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             .ok_or("tool PATH missing")?
             .into(),
         effort: WRITER_EFFORT.into(),
-        state: record_path_state(&request)?,
+        state: record_path_state(request)?,
         brief: request["prompt"].as_str().unwrap_or("").into(),
         push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
         reviews_started: 0,

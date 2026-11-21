@@ -10,6 +10,9 @@ Every UPDATE trigger tests **both** the old and the new key: a statement that
 moves a row *onto* a locked key is as forbidden as one that moves it off.
 """
 from __future__ import annotations
+
+from importlib.resources import files
+
 from .schema_guards import (
     _LOCKED, TRIGGERS, ALIASES_DDL, RUN_TOKENS_DDL, OUTBOX_DDL, OVERSIGHT_DDL,
 )
@@ -26,9 +29,15 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
 #: oversight step reached main first and keeps v14 (``OVERSIGHT_SCHEMA_VERSION``,
 #: installed presence-based); the bus steps renumber after it: v15 durable
-#: messages, v16 message nonces/envelopes, v17 placement rules, v18 write receipts.  Every step past v12 installs
-#: presence-based in ``db._upgrade``; nothing keys off this number at runtime.
-SCHEMA_VERSION = 18
+#: messages, v16 message nonces/envelopes, v17 placement rules, v18 write receipts,
+#: v19 landing stages, v20 landing settlement, v21 Actions job timings.
+#: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
+#: this number at runtime.
+SCHEMA_VERSION = 21
+
+LANDING_STAGES_DDL = files(__package__).joinpath("landing_stages.sql").read_text(encoding="utf-8")
+LANDING_TRAINS_DDL = files(__package__).joinpath("landing_trains.sql").read_text(encoding="utf-8")
+LANDING_JOBS_DDL = files(__package__).joinpath("landing_ci_jobs.sql").read_text(encoding="utf-8")
 
 #: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
 #: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
@@ -402,4 +411,4 @@ CREATE TABLE IF NOT EXISTS event_audience (
 
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + RECEIPTS_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
-          + GRANTS_DDL + ALERTS_DDL + EVENT_AUDIENCE_DDL)
+          + GRANTS_DDL + ALERTS_DDL + LANDING_STAGES_DDL + LANDING_TRAINS_DDL + LANDING_JOBS_DDL + EVENT_AUDIENCE_DDL)

@@ -152,6 +152,12 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);
     }
+    if verb.as_deref() == Some("writer-stop") {
+        return crate::writer_control::stop_cli(rest);
+    }
+    if verb.as_deref() == Some("writer-resume") {
+        return crate::native_writer_host::resume_saved(rest);
+    }
     if verb.as_deref() == Some("agents-view") {
         return crate::agent_view::execute(rest, out);
     }

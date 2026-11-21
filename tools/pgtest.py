@@ -51,6 +51,18 @@ def main(argv=None, *, platform=None, job_api=None):
     os.execvp(args[0], args + command)
 
 
+def test_environment(root, env, *, timeout=30):
+    """A pre-push caller's Git context must not select a fixture's repository."""
+    local = set(subprocess.check_output(
+        ["git", "rev-parse", "--local-env-vars"], cwd=root, env=env,
+        text=True, stderr=subprocess.DEVNULL, timeout=timeout).upper().splitlines())
+    local.update({"GIT_PREFIX", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
+                  "GIT_DISCOVERY_ACROSS_FILESYSTEM"})
+    return {key: value for key, value in env.items()
+            if key.upper() not in local
+            and not key.upper().startswith("GIT_CONFIG")}
+
+
 KEEPER_TEST_RE = re.compile(r"^tests/test_keeper_[^/]+\.py$")
 POSTGRES_BIN_GLOBS = ("/usr/lib/postgresql/*/bin", "/usr/local/pgsql/bin", "/opt/homebrew/opt/postgresql@16/bin")
 

@@ -297,11 +297,26 @@ def preflight_checkout(head):
 
 
 def main():
+    started = time.time_ns() // 1_000_000
     try:
-        return push_main()
+        outcome = push_main()
     except subprocess.TimeoutExpired:
         print("pre-push: subprocess timeout: push refused", file=sys.stderr)
-        return 1
+        outcome = 1
+    repo, batch, head = (os.environ.get(name) for name in
+                         ("PG_LANDING_REPO", "PG_LANDING_BATCH", "PG_LANDING_STAGE_HEAD"))
+    if repo and batch and head:
+        payload = {"action": "stage", "repo": repo, "batch_key": batch, "head": head,
+                   "stage": "fast_checks", "attempt": started, "started_at_ms": started,
+                   "ended_at_ms": max(started, time.time_ns() // 1_000_000)}
+        try:
+            receipt = subprocess.run(["plangraph", "landing", "journal"], input=json.dumps(payload),
+                                     text=True, stdout=subprocess.DEVNULL, timeout=35)
+            if receipt.returncode:
+                print("pre-push: landing timing pending keeper delivery", file=sys.stderr)
+        except (OSError, subprocess.TimeoutExpired):
+            print("pre-push: landing timing pending keeper delivery", file=sys.stderr)
+    return outcome
 
 
 def hook_checkout_status():

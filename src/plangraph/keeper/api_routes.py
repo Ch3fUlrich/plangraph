@@ -43,7 +43,7 @@ READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 READ_VERBS.add("messages")
 READ_VERBS |= {"host_samples", "host_samples_range", "apply_grants"}
 WRITE_VERBS |= {"ingest_host_sample", "mint_host_token", "revoke_host_token"}
-WRITE_VERBS |= {"post_message", "write_receipt", "admit_seat_verdict", "bind_seat_verdict"}
+WRITE_VERBS |= {"post_message", "land", "write_receipt", "admit_seat_verdict", "bind_seat_verdict"}
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
 TEXT_DEFAULT = {"ready", "show", "alerts", "blocked", "aliases", "changelog",
                 "audit-meta"}
@@ -332,6 +332,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 #: Write verbs whose store method checks the role itself and admits more than the
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
+                      "land": lambda store, principal, body, need: store.land(principal, body),
                       "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
                           principal, body.get("project"), require_seats=body.get("require_seats"),
                           apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True),

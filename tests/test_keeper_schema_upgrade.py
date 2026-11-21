@@ -108,7 +108,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
 
 
 def test_schema_version_is_sixteen():
-    assert schema.SCHEMA_VERSION == 18
+    assert schema.SCHEMA_VERSION == 21
 
 
 def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path):
@@ -141,7 +141,7 @@ def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 18
+    assert schema.SCHEMA_VERSION == 21
     assert "message_nonces" in tables(conn)
     assert "message_envelopes" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
@@ -181,7 +181,7 @@ def test_v14_db_upgrades_to_v15_creates_messages_and_keeps_chain(tmp_path):
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 18
+    assert schema.SCHEMA_VERSION == 21
     assert "messages" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert {"trg_messages_no_update", "trg_messages_no_delete"} <= triggers
@@ -217,7 +217,7 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     conn = kdb.open_db(path, backend="sqlite")
     # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
     # production upgrades detect missing columns without reading/writing the pragma.
-    assert schema.SCHEMA_VERSION == 18
+    assert schema.SCHEMA_VERSION == 21
     row = dict(Store(conn, clock=Clock())._item("demo:A"))
     for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
         assert column in row and row.pop(column) is None
@@ -365,6 +365,7 @@ def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
         assert db_pg.migrate(raw, name) == list(range(7, schema_pg.LATEST + 1))
         assert set(EXEC_COLUMNS) <= columns()
         assert "jev_shadow" in jev_tables()
+        assert "landing_stages" in jev_tables()
         assert [row[0] for row in raw.execute(
             "SELECT version FROM schema_migrations ORDER BY version")] == list(range(1, schema_pg.LATEST + 1))
         kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name).close()
@@ -380,7 +381,7 @@ OVERSIGHT_TABLES = {"oversight_tokens", "oversight_ops"}
 
 def test_fresh_sqlite_db_is_v16_with_oversight_and_bus_tables(tmp_path):
     conn = kdb.open_db(tmp_path / "fresh.db", create=True, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 18
+    assert schema.SCHEMA_VERSION == 21
     assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
     conn.close()
 
@@ -420,7 +421,6 @@ def test_main_v14_sqlite_db_with_oversight_upgrades_to_v16(tmp_path):
 
 @needs_pg
 def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
-    """Both a fresh schema and one at migration 8 gain the bus and alerts tables."""
     import uuid
 
     import psycopg
@@ -438,7 +438,7 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
 
     try:
         full = schema_pg.MIGRATIONS
-        expected = BUS_TABLES | OVERSIGHT_TABLES | {"alerts", "alert_log"}
+        expected = BUS_TABLES | OVERSIGHT_TABLES | {"alerts", "alert_log", "landing_stages", "landing_trains", "landing_ci_jobs"}
         assert db_pg.migrate(raw, fresh) == list(range(1, schema_pg.LATEST + 1))
         assert expected <= pg_tables(fresh)
 

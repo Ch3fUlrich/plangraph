@@ -38,10 +38,10 @@ def first_line(text):
     return lines[0] if lines else "no output"
 
 
-def run(argv, cwd=None, ok=(0,), timeout=600, progress=False):
+def run(argv, cwd=None, ok=(0,), timeout=600, progress=False, input=None):
     """Run argv; a return code outside ``ok`` raises (``ok=None`` accepts any), as does a timeout."""
     try:
-        proc = run_test_process(argv, cwd=cwd, stdout=sys.stderr if progress else subprocess.PIPE,
+        proc = run_test_process(argv, cwd=cwd, input=input, stdout=sys.stderr if progress else subprocess.PIPE,
                                 stderr=None if progress else subprocess.PIPE,
                                 text=True, errors="replace", timeout=timeout)
     except OSError as exc:
@@ -734,3 +734,52 @@ def windows_report(st, head):
     """The Windows run of this exact head for the GO-REQ, or None when none ran for it."""
     recorded = st.get("windows") or {}
     return recorded["line"] if recorded.get("head") == head else None
+
+
+def landing_now():
+    return time.time_ns() // 1_000_000
+
+
+def landing_batch_key(st):
+    return st.get("plan") or st["name"]
+
+
+def keeper_landing_configured():
+    default_env = Path.home() / ".config" / "plangraph" / "plangraph.env"
+    return bool(os.environ.get("PG_URL") or os.environ.get("PLANGRAPH_ENV_FILE") or default_env.is_file())
+
+
+def close_merged_items():
+    """Run the keeper merge-close job once for the landed batch; its report goes to stderr, never fails the land."""
+    try:
+        proc = run(["plangraph", "merge-close"], ok=None, timeout=330)
+    except MergeBatchError as exc:
+        print(f"merge-close not run: {exc}", file=sys.stderr)
+        return
+    sys.stderr.write(proc.stdout + proc.stderr)
+
+
+def cleanup_landed(st, landed, *, strict=False):
+    """Best effort cleanup with exact state SHAs; all sweep protections still apply."""
+    try:
+        repo = git("rev-parse", "--show-toplevel").stdout.strip()
+        trees = worktrees()
+        targets = [(st["worktree"], st["branch"], st["head"])] if st["worktree"] and Path(st["worktree"]).is_dir() else []
+        for rec in landed:
+            branch = st["prs"][str(rec["pr"])]["ref"]
+            for path, name in trees:
+                if name == branch or (not name and git("rev-parse", "HEAD", cwd=path).stdout.strip() == rec["head"]):
+                    targets.append((path, name, rec["head"]))
+        pins = os.environ.get("PG_PINS", str(Path.home() / ".config/plangraph/pins.json"))
+        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--delete-remote"]
+        for path, branch, sha in targets:
+            argv.extend(["--root", str(Path(path).parent), "--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
+        for rec in landed:
+            branch = st["prs"][str(rec["pr"])]["ref"]
+            argv.extend(["--remote-target", f"{branch}:{rec['head']}"])
+        result = run(argv)
+        print(result.stdout, end="", file=sys.stderr)
+    except MergeBatchError as exc:
+        if strict:
+            raise
+        print(f"cleanup sweep failed: {exc}", file=sys.stderr)

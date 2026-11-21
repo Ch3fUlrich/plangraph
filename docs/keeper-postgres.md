@@ -65,6 +65,41 @@ that `events.type` is text with no CHECK. The test then appends and replays
 all four new grant and question kinds. `EVENT_TYPES` is the application
 fold vocabulary.
 
+Migration 18 installs `landing_stages` with `pg admin migrate` using the schema
+owner's connection. SQLite installs the same table on open. Each completed stage
+has a repository, batch key, name, positive attempt number, exact Git head, and
+start and end times in UTC Unix milliseconds. Producers use
+`landing_stage_insert.sql` with the same identity on delivery retry. The first
+record wins. A new execution of that stage uses a new attempt number. The read
+query in `landing_stage_list.sql` returns the batch's stages in start-time order.
+
+Migration 19 installs the keeper landing journal. A configured lander writes the
+train's frozen manifest before it requests a merge. `merge_batch.py settle`
+discovers unfinished trains and verifies the merged commit against main before
+resuming the keeper cursor. Recovery uses the keeper merge lease for that repo.
+A new push can replace the prepared manifest while the train is open.
+Set `PG_LANDING_HOSTS` to the host registry for the three repository checkouts.
+Each host entry supplies `PG_LANDING_BUILD_STAMP` and, for repair,
+`PG_LANDING_SYNC_EXECUTABLE` as absolute paths. The executable receives the
+repository root and merged SHA. The stamp names the build head and installed
+binary paths with SHA-256 digests. Settlement persists all three receipts
+before advancing past host verification.
+To stop landed native writers during host verification, set
+`PG_LANDING_WRITER_RECORDS` in each host entry to an owner-local JSON array of
+candidate record paths. `pg-spawnd writer-stop MERGED_SHA RECORD...` reports
+which candidates it stopped or kept. `pg-spawnd writer-resume RECORD` resumes
+the preserved session from its original request and worktree.
+
+Migration 20 stores individual GitHub Actions job timings. The lander imports the
+exact run and attempt with `plangraph landing ci-import OWNER/REPO BATCH HEAD RUN ATTEMPT`.
+The writer and delta reviewer use `PG_LANDING_REPO` for the repository identity.
+Train push, GO observation, merge and host sync share the train's keeper batch key.
+Use `plangraph landing report OWNER/REPO BATCH` for the train card and milestone
+timestamps, or `plangraph landing report OWNER/REPO --day YYYY-MM-DD` for the slowest
+stage completed that UTC day. The GO request includes the elapsed stage summary.
+Import the green main Actions attempt under the same batch key to populate
+the exact merged-head completion and the elapsed time from the folded parts' ACCEPT.
+
 ## Hash chain
 
 `events.hash` is computed in Python from canonical JSON (sorted keys, no whitespace, ASCII) over text values; nothing in it

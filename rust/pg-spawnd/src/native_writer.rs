@@ -1,5 +1,8 @@
 //! Native CLI writer lifecycle, independent of placement and transport.
+use crate::writer_control::STOPPED;
 use serde_json::{json, Value};
+#[path = "native_writer_stage.rs"]
+mod stage;
 /// Batch writer driver (R-batch-01..04, 06): one writer session, fast checks per head,
 /// an other-family review run on the exact head, fixes in the same session.
 pub(crate) trait Driver {
@@ -74,12 +77,14 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
         record["final_head"] = json!(head);
     }
     let cancelled = driver.cancelled();
-    if cancelled {
+    if cancelled && reason.as_deref() != Some(STOPPED) {
         exit = 130;
         reason = Some("cancelled".into());
     }
     record["exit_code"] = json!(exit);
-    record["status"] = json!(if cancelled {
+    record["status"] = json!(if reason.as_deref() == Some(STOPPED) {
+        "stopped"
+    } else if cancelled {
         "cancelled"
     } else if exit == 0 {
         "completed"
@@ -111,7 +116,17 @@ fn lifecycle(
     brief: &str,
 ) -> Result<i32, (i32, String)> {
     admit_disk(driver)?;
-    record["base_sha"] = json!(driver.prepare().map_err(|e| (5, e))?);
+    let mut saved_session = if record["landing_resume"] == true {
+        Some(
+            record["session_id"]
+                .as_str()
+                .ok_or((5, "saved writer session unavailable".to_owned()))?
+                .to_owned(),
+        )
+    } else {
+        record["base_sha"] = json!(driver.prepare().map_err(|e| (5, e))?);
+        None
+    };
     // Worktree creation can consume disk after placement admitted this host.
     admit_disk(driver)?;
     record["base_admitted"] = json!(true);
@@ -135,7 +150,8 @@ fn lifecycle(
             ),
             None => prompt.clone(),
         };
-        match writer_attempt(driver, record, &launch) {
+        match writer_attempt(driver, record, &launch, saved_session.take().as_deref()) {
+            Err((_, error)) if error == STOPPED => return Err((10, error)),
             Err((6, error)) => {
                 record["last_writer_failure"] = json!(error);
                 driver.save(record).map_err(|e| (9, e))?;
@@ -146,7 +162,9 @@ fn lifecycle(
                     ));
                 }
                 admit_disk(driver).map_err(|(_, e)| (9, e))?;
-                record["base_sha"] = json!(driver.refresh_base().map_err(|e| (9, e))?);
+                record["base_sha"] = json!(driver
+                    .refresh_base()
+                    .map_err(|e| (if e == STOPPED { 10 } else { 9 }, e))?);
                 for key in ["session_id", "final_head", "resumes"] {
                     record.as_object_mut().unwrap().remove(key);
                 }
@@ -164,7 +182,12 @@ fn resume(
 ) -> Result<(), (i32, String)> {
     record["resumes"] = json!(record["resumes"].as_u64().unwrap_or(0) + 1);
     driver.save(record).map_err(|e| (6, e))?;
-    driver.execute(Some(session), prompt).map_err(|e| (6, e))?;
+    let started = stage::now();
+    let result = driver.execute(Some(session), prompt);
+    if let Ok(head) = driver.head() {
+        stage::record(record, "writing", &head, started);
+    }
+    result.map_err(|e| (6, e))?;
     Ok(())
 }
 /// One review round on `head`: refused without the fast-checks stamp; a run without a
@@ -222,10 +245,19 @@ fn writer_attempt(
     driver: &mut impl Driver,
     record: &mut Value,
     prompt: &str,
+    saved_session: Option<&str>,
 ) -> Result<i32, (i32, String)> {
     // HEAD before the turn: a relaunch keeps the commits of the earlier attempts.
     let mut turn_start = driver.head().map_err(|e| (6, e))?;
-    let session = driver.execute(None, prompt).map_err(|e| (6, e))?;
+    let started = stage::now();
+    let executed = driver.execute(saved_session, prompt);
+    if let Ok(head) = driver.head() {
+        stage::record(record, "writing", &head, started);
+    }
+    let session = executed.map_err(|e| (6, e))?;
+    if saved_session.is_some() {
+        record.as_object_mut().unwrap().remove("landing_resume");
+    }
     record["session_id"] = json!(session);
     record["resumes"] = json!(0);
     let mut fixes = 0;
@@ -252,7 +284,13 @@ fn writer_attempt(
         }
         idle = 0;
         turn_start = head.clone();
-        if let Err(failure) = driver.fast_checks(&head) {
+        let started = stage::now();
+        let checked = driver.fast_checks(&head);
+        if matches!(&checked, Err(error) if error == STOPPED) {
+            return Err((10, STOPPED.into()));
+        }
+        stage::record(record, "fast_checks", &head, started);
+        if let Err(failure) = checked {
             record["fast_checks"] = json!({"head":head, "status":"failed", "output":failure});
             fixes += 1;
             if fixes > FAST_CHECK_FIXES || session.is_empty() {
@@ -265,7 +303,10 @@ fn writer_attempt(
         record["fast_checks"] = json!({"head":head, "status":"passed"});
         let previous =
             (record["review"]["verdict"] == "REQUEST_CHANGES").then(|| record["review"].clone());
-        let review = review_round(driver, &head, previous.as_ref())?;
+        let started = stage::now();
+        let review = review_round(driver, &head, previous.as_ref());
+        stage::record(record, "review", &head, started);
+        let review = review?;
         if review["status"] == REVIEW_DEFERRED {
             final_gates(driver, &head)?;
             record["review_status"] = json!(REVIEW_DEFERRED);
@@ -284,7 +325,12 @@ fn writer_attempt(
         if record["review"]["verdict"] == "ACCEPT" {
             final_gates(driver, &head)?;
             // One push per package: only the accepted, gated head leaves the host.
-            record["pushed"] = json!(driver.push(&head).map_err(|e| (7, e))?);
+            let started = stage::now();
+            let pushed = driver.push(&head);
+            if !matches!(pushed, Ok(None)) {
+                stage::record(record, "push", &head, started);
+            }
+            record["pushed"] = json!(pushed.map_err(|e| (7, e))?);
             record["status_line"] = json!("DONE");
             return Ok(0);
         }

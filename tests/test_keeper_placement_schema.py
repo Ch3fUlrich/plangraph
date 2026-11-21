@@ -27,7 +27,7 @@ def test_fresh_and_upgrade_same_rules_tables(tmp_path):
     raw.close()
     upgraded = db.open_db(path)
     assert shape(fresh) == shape(upgraded)
-    assert schema.SCHEMA_VERSION == 18
+    assert schema.SCHEMA_VERSION == 21
     fresh.close()
     upgraded.close()
 

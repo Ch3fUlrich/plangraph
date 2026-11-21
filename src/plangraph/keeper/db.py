@@ -20,8 +20,10 @@ from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .schema_guards import RECEIPTS_DDL
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
-from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
-                     OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
+from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, JEV_DDL,
+                     LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
+                     LOCKS_DDL, METRICS_DDL, OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL,
+                     SCHEMA, TRIGGERS)
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock", "select_backend"]
 
@@ -209,6 +211,9 @@ def _upgrade(conn):
     conn.executescript(PLACEMENT_RULES_DDL)
     conn.executescript(GRANTS_DDL)
     conn.executescript(EVENT_AUDIENCE_DDL)
+    conn.executescript(LANDING_STAGES_DDL)
+    conn.executescript(LANDING_TRAINS_DDL)
+    conn.executescript(LANDING_JOBS_DDL)
     from .messages_schema import SQLITE
     conn.executescript(SQLITE)
     # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)

@@ -17,9 +17,9 @@ import time
 import tarfile
 
 try:
-    from pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres
+    from pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
 except ModuleNotFoundError:
-    from tools.pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres
+    from tools.pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
@@ -642,17 +642,6 @@ def pushed_parts_files(root, base, head, union=False, standalone=False):
         return (sorted(selected), parts) if parts else None
     except (OSError, subprocess.SubprocessError, UnicodeError):
         return None
-
-
-def test_environment(root, env):
-    """Detach test subprocesses from every Git-advertised repository binding."""
-    local = set(subprocess.check_output(
-        ['git', 'rev-parse', '--local-env-vars'], cwd=root, env=env,
-        text=True, stderr=subprocess.DEVNULL, timeout=30).upper().splitlines())
-    local.update({'GIT_PREFIX', 'GIT_NAMESPACE', 'GIT_CEILING_DIRECTORIES',
-                  'GIT_DISCOVERY_ACROSS_FILESYSTEM'})
-    return {key: value for key, value in env.items()
-            if key.upper() not in local and not key.upper().startswith('GIT_CONFIG')}
 
 
 def main(root=None):

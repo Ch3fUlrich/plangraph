@@ -17,8 +17,10 @@ import time
 import tomllib
 
 try:
+    from pgtest import test_environment
     from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
 except ModuleNotFoundError:
+    from tools.pgtest import test_environment
     from tools.ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
@@ -109,6 +111,9 @@ class FailFamily(ValueError):
 def run_test_process(command, **kwargs):
     """Kill the command's tree on timeout/interruption, including nested Linux sessions."""
     timeout = kwargs.pop('timeout')
+    input_text = kwargs.pop('input', None)
+    if input_text is not None:
+        kwargs['stdin'] = subprocess.PIPE
     tree = None
     if sys.platform.startswith('linux'):
         # Reuse checkout-local helpers without requiring an installed package.
@@ -120,7 +125,10 @@ def run_test_process(command, **kwargs):
     with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
         ident = tree.root_identity(process.pid) if tree else None
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            if input_text is None:
+                stdout, stderr = process.communicate(timeout=timeout)
+            else:
+                stdout, stderr = process.communicate(input=input_text, timeout=timeout)
         except BaseException:
             if tree:
                 members = {}
@@ -371,18 +379,6 @@ def require_protoc(root, commands, env):
         raise FailFamily("protoc not found: set PROTOC, or install it in ~/.local/bin or on PATH "
                          "(a detached systemd-run unit needs the login PATH)")
     env['PROTOC'] = found
-
-
-def test_environment(root, env):
-    """A pre-push caller's Git context must not select a fixture's repository."""
-    local = set(subprocess.check_output(
-        ["git", "rev-parse", "--local-env-vars"], cwd=root, env=env,
-        text=True, stderr=subprocess.DEVNULL, timeout=CHECK_TIMEOUT).upper().splitlines())
-    local.update({"GIT_PREFIX", "GIT_NAMESPACE", "GIT_CEILING_DIRECTORIES",
-                  "GIT_DISCOVERY_ACROSS_FILESYSTEM"})
-    return {key: value for key, value in env.items()
-            if key.upper() not in local
-            and not key.upper().startswith("GIT_CONFIG")}
 
 
 def python_interpreter(root):
@@ -710,7 +706,7 @@ def _main(argv, root, cleanup):
                                   if not key.upper().startswith('GIT_')}
                     require_protoc(root, commands, family_env)
                 if family == "tests" and commands:
-                    family_env = test_environment(root, env)
+                    family_env = test_environment(root, env, timeout=CHECK_TIMEOUT)
                 failed = []  # policy runs every check and reports all failures
                 if family == "policy" and policy_build_command(root):
                     # Outside the per-check bound; a cold compile must not fail a green diff.

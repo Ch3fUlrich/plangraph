@@ -702,7 +702,7 @@ pub fn run(args: &[String]) -> i32 {
             println!("{}", usage());
             0
         }
-        Ok(Some(parsed)) => match execute(&parsed) {
+        Ok(Some(parsed)) => match timed_review(&parsed) {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("plangraph review: {err}");
@@ -714,6 +714,25 @@ pub fn run(args: &[String]) -> i32 {
             2
         }
     }
+}
+
+fn timed_review(parsed: &ReviewArgs) -> Result<i32, String> {
+    let started = chrono::Utc::now().timestamp_millis();
+    let result = execute(parsed);
+    if let (Ok(repo), Some(batch), true) = (
+        std::env::var("PG_LANDING_REPO"),
+        parsed.item.as_deref(),
+        parsed.approval.is_some() && !parsed.dry_run,
+    ) {
+        let end = chrono::Utc::now().timestamp_millis().max(started);
+        let body = json!({"action":"stage", "repo":repo, "batch_key":batch,
+            "head":parsed.head, "stage":"delta_review", "attempt":started,
+            "started_at_ms":started, "ended_at_ms":end});
+        if crate::landing::deliver_from_env(body).is_err() {
+            eprintln!("delta review timing pending keeper delivery");
+        }
+    }
+    result
 }
 
 #[cfg(test)]

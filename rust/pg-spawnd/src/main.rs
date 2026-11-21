@@ -68,6 +68,7 @@ mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
 mod work_mode_config;
+mod writer_control;
 mod writer_ledger;
 
 use pg_worker_core::host_probe::probe;
