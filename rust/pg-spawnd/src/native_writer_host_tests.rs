@@ -594,6 +594,23 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
 #[cfg(unix)]
 #[test]
 fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_failed() {
+    const CHILD: &str = "PG_NATIVE_GATE_UMASK_FIXTURE";
+    if std::env::var_os(CHILD).is_none() {
+        // The mask is process-wide. Set it in a disposable test process so
+        // parallel tests retain their own inherited mask.
+        let test = std::thread::current();
+        let result = output(
+            Command::new("sh")
+                .args(["-c", "umask 002; exec \"$@\"", "native-gate-umask"])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", test.name().unwrap(), "--nocapture"])
+                .env(CHILD, "1"),
+        )
+        .unwrap();
+        assert!(result.contains("1 passed"), "{result}");
+        return;
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().join("worktree");
     fs::create_dir_all(cwd.join("tools")).unwrap();
