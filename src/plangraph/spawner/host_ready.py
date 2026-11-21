@@ -356,9 +356,12 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                 record['spawner_session'] = command('session', probe + shlex.quote(session)) is not None
             else:
                 fail('session', 'not_configured')
-            runs = measure('runs', prefix + 'cli ps', lambda s: json.loads(s)['runs'])
-            if runs is not None:
-                record['live_runs'] = sum(r['status'] == 'running' for r in runs)
+            def count_live_runs(output):
+                runs = json.loads(output)['runs']
+                if not isinstance(runs, list) or any(not isinstance(row['status'], str) for row in runs):
+                    raise ValueError()
+                return sum(row['status'] == 'running' for row in runs)
+            record['live_runs'] = measure('runs', prefix + 'cli ps', count_live_runs)
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
                 fail('memory', 'below_floor')
             if record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):

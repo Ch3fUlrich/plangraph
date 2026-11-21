@@ -38,6 +38,8 @@ def host(tmp_path, monkeypatch):
     python = bins / 'python3'
     python.write_text(f'#!{sys.executable}\nimport os,sys\n'
                       'if sys.argv[1] == "-m" or sys.argv[1].endswith("omnigraph_step.py"): sys.exit(0)\n'
+                      'if os.environ.get("EMPTY_CONFIG_OUTPUT") and sys.argv[1] == "-c" '
+                      'and "router_sha" in sys.argv[2]: sys.exit(0)\n'
                       'os.execv(sys.executable, [sys.executable] + sys.argv[1:])\n')
     python.chmod(0o755)
     stub = f'#!{sys.executable}\n' + '''import os, sys
@@ -215,6 +217,17 @@ def test_linux_without_systemctl_fails(host):
     result = run()
     assert result.returncode != 0
     assert 'requires working systemd --user' in result.stderr
+
+
+def test_empty_config_reader_output_fails_install(host, monkeypatch):
+    home, log, run = host
+    monkeypatch.setenv('EMPTY_CONFIG_OUTPUT', '1')
+    result = run()
+    assert result.returncode == 1
+    assert 'ctx-watchdog: config reader returned no values' in result.stderr
+    assert not (home / 'custom').exists()
+    assert not (home / '.config/systemd').exists()
+    assert not log.exists()
 
 
 @pytest.mark.parametrize('dry_run', [False, True])
