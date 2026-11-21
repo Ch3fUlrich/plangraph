@@ -198,3 +198,14 @@ fn a_type_and_a_function_of_one_name_are_one_symbol() {
     let symbols = changed_symbols(diff, &|_| Some(source.to_owned()));
     assert_eq!(symbols, [kind("Same")]);
 }
+#[test]
+fn a_trailing_comment_does_not_change_whether_a_line_opens_a_block() {
+    let closed = "pub fn one() {} // {\n\nfn two() {}\n";
+    assert_eq!(owner(closed, 2, false), None);
+    let open = "pub fn one() { // note \"{\n\n}\n";
+    assert_eq!(owner(open, 2, false).as_deref(), Some("one"));
+    let python = "def early(): # note\n\n    return 1\n";
+    assert_eq!(owner(python, 2, true).as_deref(), Some("early"));
+    let hash = "x = \"a#b\"\n\ndef later():\n    pass\n";
+    assert_eq!(owner(hash, 2, true), None);
+}

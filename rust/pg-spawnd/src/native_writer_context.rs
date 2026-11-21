@@ -155,6 +155,15 @@ fn is_where(text: &str) -> bool {
         .is_some_and(|rest| !rest.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
 }
 
+/// `line` without its trailing comment (`//` for Rust, `#` for Python), ignoring a marker
+/// inside a string literal.
+fn code_part(line: &str, python: bool) -> &str {
+    let marker = if python { "#" } else { "//" };
+    line.match_indices(marker)
+        .find(|(at, _)| line[..*at].matches('"').count().is_multiple_of(2))
+        .map_or(line, |(at, _)| &line[..at])
+}
+
 /// The indent that places line `index` in a scope: its own indent. A blank line takes the
 /// indent of the line before it: one level deeper when that line opens a block (ends in `{`,
 /// or in `:` for Python), else the block around it; lowered to the next line's indent when
@@ -167,7 +176,8 @@ fn scope_indent(lines: &[&str], index: usize, python: bool) -> Option<usize> {
     }
     let before = lines[..index].iter().rev().find(|l| !l.trim().is_empty())?;
     let after = lines[index..].iter().find(|l| !l.trim().is_empty())?;
-    let opens = before.trim_end().ends_with('{') || (python && before.trim_end().ends_with(':'));
+    let code = code_part(before, python).trim_end();
+    let opens = code.ends_with('{') || (python && code.ends_with(':'));
     if opens {
         return Some(indent(before) + 1);
     }
