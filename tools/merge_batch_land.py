@@ -7,6 +7,8 @@ import re
 import sys
 import tempfile
 import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
@@ -355,7 +357,118 @@ def included_pr(repo, number, rec, view, merge):
     return "ok", ""
 
 
+def landing_journal(repo, action, **fields):
+    response = run(["plangraph", "landing", "journal"],
+                   input=json.dumps(dict(fields, repo=repo, action=action)), timeout=35)
+    return json.loads(response.stdout)
+
+
+@contextmanager
+def landing_lease(repo):
+    owner = uuid.uuid4().hex
+    lease = landing_journal(repo, "acquire", owner=owner)
+    try:
+        yield lease
+    finally:
+        landing_journal(repo, "release", **lease)
+
+
+def read_verified_merge(train):
+    repo, number, head = train["repo"], train["pr"], train["head"]
+    pr = gh_json("pr", "view", str(number), "--repo", repo,
+                 "--json", "state,headRefOid,mergeCommit,baseRefName")
+    if pr["state"] == "CLOSED":
+        return None, "closed"
+    merge = (pr.get("mergeCommit") or {}).get("oid")
+    if pr["state"] != "MERGED" or not merge:
+        return None, "pending"
+    if pr["headRefOid"] != head or pr["baseRefName"] != "main" or not re.fullmatch(r"[0-9a-f]{40}", merge):
+        raise MergeBatchError(f"train #{number} has inconsistent merge evidence")
+    main = f"refs/remotes/{REMOTE}/main"
+    git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
+    parents = git("show", "-s", "--format=%P", merge).stdout.split()
+    if (parents != [train["base"], head] or
+            git("merge-base", "--is-ancestor", merge, main, ok=(0, 1)).returncode or
+            git("rev-parse", f"{merge}^{{tree}}").stdout != git("rev-parse", f"{head}^{{tree}}").stdout):
+        raise MergeBatchError(f"train #{number} merge {merge} did not land the exact tested tree on main")
+    for part in train["parts"]:
+        if git("merge-base", "--is-ancestor", part["head"], head, ok=(0, 1)).returncode:
+            raise MergeBatchError(f"train #{number} did not contain part #{part['pr']}")
+    return merge, "merged"
+
+
+def prepare_train(st, lease):
+    parts = [dict(part, ref=st["prs"][str(part["pr"])]["ref"]) for part in st["merged"]]
+    return landing_journal(st["repo"], "prepare", pr=st["pr"], base=st["base_head"],
+                           head=st["head"], parts=parts, **lease)
+
+
+def settle_train(train, lease, st=None):
+    repo, number = train["repo"], train["pr"]
+    merge, state = read_verified_merge(train)
+    if state == "closed" and not train["merge"]:
+        landing_journal(repo, "abandon", pr=number, **lease)
+        return
+    if not merge:
+        raise MergeBatchError(f"train #{number} is {state}; settlement remains pending")
+    train = landing_journal(repo, "landed", pr=number, merge=merge, **lease)
+    for step in train["open_steps"]:
+        if step == "evidence":
+            for part in train["parts"]:
+                print(f"MERGED {part['pr']} {merge} {','.join(part['items']) or '-'}")
+        elif step == "close_parts":
+            result = run(["plangraph", "merge-close"], timeout=330)
+            sys.stderr.write(result.stdout + result.stderr)
+        elif step == "host_sync":
+            sync = os.environ.get("PG_LANDING_HOST_VERIFY")
+            if not sync:
+                raise MergeBatchError("host sync pending: set PG_LANDING_HOST_VERIFY to the landing verifier")
+            sys.stderr.write(run([sync, repo, merge], timeout=600).stdout)
+        elif step == "cleanup":
+            if st is not None:
+                cleanup_landed(st, st["merged"], strict=True)
+                drop_state(st)
+            else:
+                parts = train["parts"]
+                state = {"head": train["head"], "worktree": "", "branch": "",
+                         "prs": {str(part["pr"]): part for part in parts if part["ref"]}}
+                cleanup_landed(state, [part for part in parts if part["ref"]], strict=True)
+        else:
+            raise MergeBatchError(f"unknown keeper landing step {step}")
+        landing_journal(repo, "advance", pr=number, merge=merge, step=step, **lease)
+
+
+def cmd_settle(args):
+    from merge_batch_util import repo_info
+
+    repo, base = repo_info()
+    if base != "main":
+        raise MergeBatchError("settlement requires the main repository checkout")
+    states = {state.get("pr"): state for state in all_states()
+              if state.get("repo", "").lower() == repo.lower()}
+    pending = landing_journal(repo, "pending")["trains"]
+    failures = []
+    for train in pending:
+        try:
+            with landing_lease(repo) as lease:
+                settle_train(train, lease, states.get(train["pr"]))
+        except MergeBatchError as exc:
+            failures.append(str(exc))
+    if failures:
+        raise MergeBatchError("; ".join(failures))
+    return 0
+
+
 def cmd_land(args):
+    default_env = Path.home() / ".config" / "plangraph" / "plangraph.env"
+    journal = bool(os.environ.get("PG_URL") or os.environ.get("PLANGRAPH_ENV_FILE") or default_env.is_file())
+    if journal:
+        with landing_lease(load_state(args.name)["repo"]) as lease:
+            return land_with_lease(args, lease)
+    return land_with_lease(args, None)
+
+
+def land_with_lease(args, lease):
     st = load_state(args.name)
     repo, number = st["repo"], args.batch_pr
     if st["status"] != "pushed" or st.get("pr") != number:
@@ -368,6 +481,7 @@ def cmd_land(args):
     if pr["headRefOid"] != st["head"]:
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
                               f"{short(st['head'])} saved at push; review and push again")
+    train = None
     if pr["state"] == "OPEN":
         if pr["isDraft"]:
             raise MergeBatchError(f"batch PR #{number} is a draft")
@@ -378,10 +492,20 @@ def cmd_land(args):
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
+        if lease:
+            main = gh_json("api", f"repos/{repo}/git/ref/heads/main")
+            if (main.get("object") or {}).get("sha") != st["base_head"]:
+                raise MergeBatchError("stale_base: main moved from the frozen landing base")
+            train = prepare_train(st, lease)
         gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
            "--body", merge_trailers(st))
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
+    if lease:
+        if train is None:
+            train = prepare_train(st, lease)
+        settle_train(train, lease, st)
+        return 0
     for _ in range(10):  # the merge commit can lag the merge by a moment
         pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
         if pr["state"] == "MERGED" and (pr.get("mergeCommit") or {}).get("oid"):
@@ -439,12 +563,12 @@ def close_merged_items():
     sys.stderr.write(proc.stdout + proc.stderr)
 
 
-def cleanup_landed(st, landed):
+def cleanup_landed(st, landed, *, strict=False):
     """Best effort cleanup with exact state SHAs; all sweep protections still apply."""
     try:
         repo = git("rev-parse", "--show-toplevel").stdout.strip()
         trees = worktrees()
-        targets = [(st["worktree"], st["branch"], st["head"])]
+        targets = [(st["worktree"], st["branch"], st["head"])] if st["worktree"] and Path(st["worktree"]).is_dir() else []
         for rec in landed:
             branch = st["prs"][str(rec["pr"])]["ref"]
             for path, name in trees:
@@ -460,6 +584,8 @@ def cleanup_landed(st, landed):
         result = run(argv)
         print(result.stdout, end="", file=sys.stderr)
     except MergeBatchError as exc:
+        if strict:
+            raise
         print(f"cleanup sweep failed: {exc}", file=sys.stderr)
 
 

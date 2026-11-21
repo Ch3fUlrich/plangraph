@@ -28,12 +28,14 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
 #: oversight step reached main first and keeps v14 (``OVERSIGHT_SCHEMA_VERSION``,
 #: installed presence-based); the bus steps renumber after it: v15 durable
-#: messages, v16 message nonces/envelopes, v17 placement rules, v18 landing stages.
+#: messages, v16 message nonces/envelopes, v17 placement rules, v18 landing stages,
+#: v19 landing settlement.
 #: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
 #: this number at runtime.
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 LANDING_STAGES_DDL = files(__package__).joinpath("landing_stages.sql").read_text(encoding="utf-8")
+LANDING_TRAINS_DDL = files(__package__).joinpath("landing_trains.sql").read_text(encoding="utf-8")
 
 #: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
 #: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
@@ -366,4 +368,4 @@ CREATE TABLE audit_findings (
 
 SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
-          + GRANTS_DDL + LANDING_STAGES_DDL)
+          + GRANTS_DDL + LANDING_STAGES_DDL + LANDING_TRAINS_DDL)

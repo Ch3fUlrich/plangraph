@@ -19,7 +19,7 @@ from pathlib import Path
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
-from .schema import (ALIASES_DDL, DESIGN3_DDL, GRANTS_DDL, JEV_DDL, LANDING_STAGES_DDL,
+from .schema import (ALIASES_DDL, DESIGN3_DDL, GRANTS_DDL, JEV_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
                      LOCKS_DDL, METRICS_DDL, OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL,
                      SCHEMA, TRIGGERS)
 
@@ -205,6 +205,7 @@ def _upgrade(conn):
     conn.executescript(PLACEMENT_RULES_DDL)
     conn.executescript(GRANTS_DDL)
     conn.executescript(LANDING_STAGES_DDL)
+    conn.executescript(LANDING_TRAINS_DDL)
     from .messages_schema import SQLITE
     conn.executescript(SQLITE)
     # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)

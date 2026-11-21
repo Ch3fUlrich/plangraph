@@ -71,6 +71,9 @@ fn run() -> i32 {
     if args.first().is_some_and(|s| s == "merge-close") {
         return plangraph_cli::merge_close::run(&effective, &args[1..]);
     }
+    if args.first().is_some_and(|s| s == "landing") {
+        return plangraph_cli::landing::run(&effective, &args[1..]);
+    }
     if args == ["env", "check"] {
         println!("environment checked {} keys", effective.len());
         return 0;

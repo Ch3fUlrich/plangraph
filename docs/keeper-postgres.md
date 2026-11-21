@@ -64,6 +64,11 @@ start and end times in UTC Unix milliseconds. Producers use
 record wins. A new execution of that stage uses a new attempt number. The read
 query in `landing_stage_list.sql` returns the batch's stages in start-time order.
 
+Migration 15 installs the keeper landing journal. A configured lander writes the
+train's frozen manifest before it requests a merge. `merge_batch.py settle`
+discovers unfinished trains and verifies the merged commit against main before
+resuming the keeper cursor. Recovery uses the keeper merge lease for that repo.
+
 ## Hash chain
 
 `events.hash` is computed in Python from canonical JSON (sorted keys, no whitespace, ASCII) over text values; nothing in it

@@ -32,10 +32,10 @@ def first_line(text):
     return lines[0] if lines else "no output"
 
 
-def run(argv, cwd=None, ok=(0,), timeout=600, progress=False):
+def run(argv, cwd=None, ok=(0,), timeout=600, progress=False, input=None):
     """Run argv; a return code outside ``ok`` raises (``ok=None`` accepts any), as does a timeout."""
     try:
-        proc = run_test_process(argv, cwd=cwd, stdout=sys.stderr if progress else subprocess.PIPE,
+        proc = run_test_process(argv, cwd=cwd, input=input, stdout=sys.stderr if progress else subprocess.PIPE,
                                 stderr=None if progress else subprocess.PIPE,
                                 text=True, errors="replace", timeout=timeout)
     except OSError as exc:

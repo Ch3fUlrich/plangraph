@@ -97,6 +97,9 @@ class FailFamily(ValueError):
 def run_test_process(command, **kwargs):
     """Kill the command's tree on timeout/interruption, including nested Linux sessions."""
     timeout = kwargs.pop('timeout')
+    input_text = kwargs.pop('input', None)
+    if input_text is not None:
+        kwargs['stdin'] = subprocess.PIPE
     tree = None
     if sys.platform.startswith('linux'):
         # Reuse checkout-local helpers without requiring an installed package.
@@ -108,7 +111,10 @@ def run_test_process(command, **kwargs):
     with subprocess.Popen(command, **kwargs, start_new_session=os.name == 'posix') as process:
         ident = tree.root_identity(process.pid) if tree else None
         try:
-            stdout, stderr = process.communicate(timeout=timeout)
+            if input_text is None:
+                stdout, stderr = process.communicate(timeout=timeout)
+            else:
+                stdout, stderr = process.communicate(input=input_text, timeout=timeout)
         except BaseException:
             if tree:
                 members = {}
