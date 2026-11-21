@@ -135,6 +135,7 @@ fn sweep_cli_dry_run_then_apply_saves_restore_and_keeps_remote() {
                             branches: vec![],
                         },
                         units: vec![],
+                        unit_refs: vec![],
                         cwds: vec![],
                     },
                     vec![Pull {
@@ -206,6 +207,7 @@ fn sweep_apply_restore_failure_prevents_removal_and_remote_requires_merged_pr() 
                         branches: vec![],
                     },
                     units: vec![],
+                    unit_refs: vec![],
                     cwds: vec![],
                 },
                 vec![Pull {
@@ -250,6 +252,7 @@ fn authority(options: &Options<'_>, _: &str) -> std::io::Result<(Protection, Vec
                 branches: vec![],
             },
             units: vec![],
+            unit_refs: vec![],
             cwds: vec![],
         },
         vec![],
