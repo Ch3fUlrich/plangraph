@@ -160,6 +160,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
             self._warm_merge_scan(server)
         with timing.RequestTimer(server.lock, "read" if method == "GET" else "write"):
             try:
+                if name == "write_receipt":
+                    receipt = server.store.read_receipt_for_bearer(self._token(), body)
+                    if receipt is not None:
+                        self._json(200, receipt)
+                        return
                 try:
                     principal = auth.authenticate(server.store.conn, self._token())
                 except Refused as exc:
@@ -293,6 +298,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         return values[0] if values else default
 
     def _read(self, name, extra, query, principal):
+        if name == "write_context":
+            return self.server.store.write_context(principal, query.get("key", [None])[0]), False
         if name in ("host_samples", "host_samples_range"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_read"]).http_read(self.server.store, principal, name, query), False
         if name == "hosts":
             registry = getattr(self.server, "bus_registry", getattr(self.server.store, "bus_registry", None))
@@ -381,6 +388,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
         raise Refused("not_found", f"no read verb {name!r}")
     def _write(self, name, body, principal, extra=""):
         if name in ("ingest_host_sample", "mint_host_token", "revoke_host_token"): return __import__("plangraph.keeper.store_host_samples", fromlist=["http_write"]).http_write(self.server.store, principal, name, body)
+        if name == "write_receipt":
+            return self.server.store.write_receipt(principal, body)
         if name == "post_message":
             if not isinstance(body, dict):
                 raise Refused("validation", "body must be a JSON object")
@@ -421,7 +430,13 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "delegate":
             return store.delegate(principal, self._need(body, "key"),
                                   self._need(body, "worker", "worker_principal"))
-        if name in ("heartbeat", "release", "submit"):
+        if name == "submit":
+            source_round = body.get("source_round")
+            if isinstance(principal, auth.RunPrincipal) and type(source_round) is not int:
+                raise Refused("validation", "run-token submit requires source_round")
+            return store.submit(principal, self._need(body, "key"), self._need(body, "epoch"),
+                                source_round=source_round)
+        if name in ("heartbeat", "release"):
             return getattr(store, name)(principal, self._need(body, "key"),
                                         self._need(body, "epoch"))
         if name == "add_evidence":

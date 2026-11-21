@@ -118,6 +118,34 @@ BEFORE DELETE ON outbox_seen
 BEGIN SELECT RAISE(ABORT, 'outbox_seen is append-only'); END;
 """
 
+# A NULL request hash denotes a historical outcome with no bound payload.
+RECEIPTS_TABLE = """
+CREATE TABLE IF NOT EXISTS op_receipts (
+    entry_id     TEXT PRIMARY KEY,
+    token_id     BIGINT NOT NULL,
+    verb         TEXT NOT NULL,
+    key          TEXT,
+    request_hash TEXT,
+    result       TEXT NOT NULL,
+    seen_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_op_receipts_token ON op_receipts(token_id);
+"""
+RECEIPTS_IMPORT = """
+INSERT INTO op_receipts(entry_id,token_id,verb,key,result,seen_at)
+SELECT entry_id,token_id,verb,key,result,seen_at FROM outbox_seen WHERE 1=1
+ON CONFLICT (entry_id) DO NOTHING;
+"""
+RECEIPTS_DDL = RECEIPTS_TABLE + RECEIPTS_IMPORT + """
+CREATE TRIGGER IF NOT EXISTS trg_op_receipts_append_only_update
+BEFORE UPDATE ON op_receipts
+BEGIN SELECT RAISE(ABORT, 'op_receipts is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_op_receipts_append_only_delete
+BEFORE DELETE ON op_receipts
+BEGIN SELECT RAISE(ABORT, 'op_receipts is append-only'); END;
+"""
+
+
 # The reviewed/cancelled test, inlined because SQLite triggers cannot call
 # Python helpers.  `:k` is replaced with the key expression of each trigger.
 # Only ``review_passed`` and ``closed_on_decision`` lock: a ``review_verdict``

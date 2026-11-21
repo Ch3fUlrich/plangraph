@@ -15,8 +15,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from plangraph.keeper import outage, outbox
+from plangraph.keeper import outage
 from plangraph.keeper.auth import Principal
+from plangraph.keeper.db_errors import INTEGRITY
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.events import verify_integrity
 
@@ -37,6 +38,10 @@ def results(out):
     return [r["result"] for r in out["results"]]
 
 
+def modern(store, principal, entries):
+    return {"results": [store.write_receipt(principal, call) for call in entries]}
+
+
 def events(w, kind):
     return w.conn.execute("SELECT COUNT(*) FROM events WHERE type=?", (kind,)).fetchone()[0]
 
@@ -45,11 +50,11 @@ def test_replay_runs_in_order_and_dedupes(w):
     epoch, tok, p = claimed_with_token(w)
     batch = [entry(1, "heartbeat", epoch),
              entry(2, "add_evidence", epoch, kind="decision", ref={"id": "D-1"}),
-             entry(3, "submit", epoch)]
-    assert results(w.store.replay(p, batch)) == ["ok", "ok", "ok"]
+             entry(3, "submit", epoch, source_round=0)]
+    assert results(modern(w.store, p, batch)) == ["ok", "ok", "ok"]
     assert w.store.show(w.p("reader"), "demo:A")["state"] == "in_review"
     before = events(w, "submitted")
-    again = w.store.replay(p, batch)                              # same ids again
+    again = modern(w.store, p, batch)                              # same ids again
     assert results(again) == ["duplicate"] * 3 and again["results"][2]["first"] == "ok"
     assert events(w, "submitted") == before                        # never re-run
     assert verify_integrity(w.conn) == []
@@ -57,11 +62,11 @@ def test_replay_runs_in_order_and_dedupes(w):
 
 def test_reordered_stale_and_revoked_entries_are_refused(w):
     epoch, tok, p = claimed_with_token(w)
-    out = w.store.replay(p, [entry(1, "submit", epoch),            # before its evidence
+    out = modern(w.store, p, [entry(1, "submit", epoch, source_round=0),            # before its evidence
                              entry(2, "heartbeat", epoch + 5)])    # stale epoch
     assert results(out)[0] != "ok" and results(out)[1] in ("epoch_stale", "forbidden")
     w.store.release(w.p("l1main"), "demo:A", epoch)                # revokes the token
-    assert results(w.store.replay(p, [entry(3, "heartbeat", epoch)])) == ["forbidden"]
+    assert results(modern(w.store, p, [entry(3, "heartbeat", epoch)])) == ["forbidden"]
 
 
 def test_only_run_tokens_replay_and_entries_are_validated(w):
@@ -69,19 +74,20 @@ def test_only_run_tokens_replay_and_entries_are_validated(w):
     assert code(w.store.replay, w.p("l1main"), [entry(1, "heartbeat", epoch)]) == "forbidden"
     assert code(w.store.replay, p, []) == "validation"
     assert code(w.store.replay, p, [entry(i, "heartbeat", epoch) for i in range(101)]) == "validation"
-    out = w.store.replay(p, [{"id": "nope", "verb": "heartbeat", "body": {}},
-                             {"id": eid(9), "verb": "claim", "body": {"key": "demo:A"}}])
-    assert results(out) == ["validation", "forbidden"]
+    assert code(w.store.write_receipt, p, {"id": "nope", "verb": "heartbeat", "body": {}}) == "validation"
+    assert code(w.store.write_receipt, p, entry(9, "claim", epoch)) == "forbidden"
+    assert code(w.store.write_receipt, w.p("l1main"), entry(9, "heartbeat", epoch)) == "forbidden"
 
 
 def test_outbox_seen_is_append_only(w):
     epoch, tok, p = claimed_with_token(w)
-    w.store.replay(p, [entry(1, "heartbeat", epoch)])
-    raw = sqlite3.connect(str(w.path))
-    for sql in ("UPDATE outbox_seen SET result='x'", "DELETE FROM outbox_seen"):
-        with pytest.raises(sqlite3.DatabaseError):
-            raw.execute(sql)
-    raw.close()
+    w.conn.execute("INSERT INTO outbox_seen VALUES(?,?,?,?,?,?)",
+                   (eid(1), p.token_id, "heartbeat", "demo:A", "ok", w.store._iso(w.store.now())))
+    w.store.write_receipt(p, entry(2, "heartbeat", epoch))
+    for table in ("outbox_seen", "op_receipts"):
+        for sql in (f"UPDATE {table} SET result='x'", f"DELETE FROM {table}"):
+            with pytest.raises((sqlite3.DatabaseError, *INTEGRITY)):
+                w.conn.execute(sql)
 
 
 def test_outage_extends_leases_and_tokens_and_verify_follows(w):
@@ -138,26 +144,13 @@ def test_check_and_record_uses_the_alive_stamp(w, tmp_path):
     assert outage.check_and_record(w.store, SYSTEM, cfg, now=now)["gap_s"] == 900
 
 
-def test_client_queues_without_the_token_and_replay_keeps_unanswered(tmp_path, monkeypatch, capsys):
-    path = tmp_path / "outbox.jsonl"
-    monkeypatch.setenv("PG_OUTBOX", str(path))
-    monkeypatch.setenv("PG_TOKEN", "pgr1_SECRET")
-    assert outbox.on_unreachable("heartbeat", {"key": "demo:A", "epoch": 1}, "down") == 4
-    assert outbox.on_unreachable("submit", {"key": "demo:A", "epoch": 1}, "down") == 4
-    assert outbox.on_unreachable("claim", {"key": "demo:A"}, "down") == 3   # not queueable
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert "pgr1_" not in path.read_text()
-    ids = [json.loads(line)["id"] for line in path.read_text().splitlines()]
-
-    class Session:
-        def call(self, method, verb, body=None):
-            assert verb == "replay"
-            return {"results": [{"id": ids[0], "result": "ok"}]}        # only the first answered
-    assert outbox.cmd_replay(None, Session()) == 0
-    left = [json.loads(line)["id"] for line in path.read_text().splitlines()]
-    assert left == ids[1:]
-    monkeypatch.delenv("PG_OUTBOX")
-    assert outbox.on_unreachable("heartbeat", {}, "down") == 3
+def test_unproven_legacy_entries_remain_unacknowledged(w):
+    epoch, _, p = claimed_with_token(w)
+    call = entry(7, "heartbeat", epoch)
+    assert w.store.replay(p, [call]) == {
+        "results": [], "recovery": [{"id": call["id"], "result": "recovery_required"}]}
+    assert w.store.write_receipt(p, {**call, "legacy": True})["result"] == "recovery_required"
+    assert w.conn.execute("SELECT COUNT(*) FROM op_receipts").fetchone()[0] == 0
 
 
 def test_outage_gap_is_capped_and_untrusted_stamps_are_ignored(w, tmp_path):
@@ -178,10 +171,11 @@ def test_outage_gap_is_capped_and_untrusted_stamps_are_ignored(w, tmp_path):
 
 def test_malformed_replay_bodies_are_validation_not_500(w):
     epoch, tok, p = claimed_with_token(w)
-    out = w.store.replay(p, [{"id": eid(1), "verb": "add_evidence",
-                              "body": {"key": "demo:A", "epoch": "e", "kind": 123, "ref": "x"}},
-                             {"id": eid(2), "verb": "heartbeat", "body": "not a dict"}])
-    assert all(r in ("validation", "forbidden", "epoch_stale") for r in results(out))
+    out = w.store.write_receipt(p, {"id": eid(1), "verb": "add_evidence",
+                                    "body": {"key": "demo:A", "epoch": "e", "kind": 123, "ref": "x"}})
+    assert out["result"] in ("validation", "forbidden", "epoch_stale")
+    assert code(w.store.write_receipt, p, {
+        "id": eid(2), "verb": "heartbeat", "body": "not a dict"}) == "validation"
 
 
 def test_outage_is_applied_once_per_start(w):
@@ -195,36 +189,14 @@ def test_outage_is_applied_once_per_start(w):
     assert verify_integrity(w.conn) == []
 
 
-def test_client_drops_non_object_lines(tmp_path, monkeypatch):
-    path = tmp_path / "outbox.jsonl"
-    path.write_text('"just a string"\n[1, 2]\n{"id": "%s", "verb": "heartbeat", "body": {}}\n' % ("a" * 32))
-    monkeypatch.setenv("PG_OUTBOX", str(path))
-
-    class Session:
-        def call(self, method, verb, body=None):
-            assert len(body["entries"]) == 1
-            return {"results": [{"id": "a" * 32, "result": "ok"}]}
-    assert outbox.cmd_replay(None, Session()) == 0
-    assert path.read_text() == ""
-
-
-def test_per_token_replay_limit(w, monkeypatch):
+def test_per_token_receipt_limit_allows_readback(w, monkeypatch):
     from plangraph.keeper import store_outbox
-    epoch, tok, p = claimed_with_token(w)
+    epoch, _, p = claimed_with_token(w)
     monkeypatch.setattr(store_outbox, "MAX_SEEN_PER_TOKEN", 3)
-    w.store.replay(p, [entry(i, "heartbeat", epoch) for i in range(3)])
-    assert code(w.store.replay, p, [entry(9, "heartbeat", epoch)]) == "conflict"
-
-
-def test_client_refuses_symlinked_outbox(tmp_path, monkeypatch):
-    target = tmp_path / "victim"
-    target.write_text("keep me\n")
-    link = tmp_path / "outbox.jsonl"
-    os.symlink(target, link)
-    monkeypatch.setenv("PG_OUTBOX", str(link))
-    with pytest.raises(OSError):
-        outbox.on_unreachable("heartbeat", {"key": "demo:A", "epoch": 1}, "down")
-    assert target.read_text() == "keep me\n"
+    calls = [entry(i, "heartbeat", epoch) for i in range(3)]
+    assert results(modern(w.store, p, calls)) == ["ok"] * 3
+    assert code(w.store.write_receipt, p, entry(9, "heartbeat", epoch)) == "conflict"
+    assert results(modern(w.store, p, calls)) == ["duplicate"] * 3
 
 
 def test_foreign_owner_stamp_is_ignored(w, tmp_path, monkeypatch):
@@ -238,15 +210,12 @@ def test_foreign_owner_stamp_is_ignored(w, tmp_path, monkeypatch):
 
 
 def test_extension_without_the_outage_event_is_flagged(w):
-    from plangraph.keeper import auth as _auth
     from test_keeper_run_tokens import to_review
     to_review(w)
     mint(w, "l1main", "demo:A", "reviewer", "rv1")
-    raw = sqlite3.connect(str(w.path))
-    raw.execute("UPDATE run_tokens SET expires_at=datetime(expires_at, '+600 seconds') || 'Z'"
-                " WHERE role='reviewer'")
-    raw.commit()
-    raw.close()
+    expires = w.conn.execute("SELECT expires_at FROM run_tokens WHERE role='reviewer'").fetchone()[0]
+    later = w.store._shift(expires, 600)
+    w.conn.execute("UPDATE run_tokens SET expires_at=? WHERE role='reviewer'", (later,))
     assert any(p["field"] == "expires_at" for p in verify_integrity(w.conn))   # no grace without the event
 
 
@@ -263,10 +232,10 @@ def test_concurrent_http_replays_of_one_id_run_once(tmp_path):
         epoch = to_claimed(world, "demo:A")
         world.tokens["runw"] = doors.http("l1main", "POST", "/v1/mint_run_token",
                                           {"key": "demo:A", "role": "writer", "run_id": "w1"})[1]["token"]
-        payload = {"entries": [entry(7, "heartbeat", epoch)]}
+        payload = entry(7, "heartbeat", epoch)
         got = []
         threads = [threading.Thread(target=lambda: got.append(
-            doors.http("runw", "POST", "/v1/replay", payload)[1]["results"][0]["result"]))
+            doors.http("runw", "POST", "/v1/write_receipt", payload)[1]["result"]))
             for _ in range(4)]
         for t in threads:
             t.start()
@@ -276,3 +245,100 @@ def test_concurrent_http_replays_of_one_id_run_once(tmp_path):
     finally:
         doors.close()
         world.close()
+
+
+def test_model_vectors_run_against_keeper(w):
+    from pathlib import Path
+
+    epoch, _, p = claimed_with_token(w)
+    w.store.add_evidence(p, "demo:A", epoch, "decision", {"id": "D-1"})
+    vectors = Path(__file__).parents[1] / "rust/pg-receipts/tests/keeper-adoption.tsv"
+    for line in vectors.read_text().splitlines():
+        verb, invocation, source, current, expected = line.split("\t")
+        w.conn.execute("UPDATE items SET round=? WHERE key='demo:A'", (int(current),))
+        call = entry(int(invocation), verb, epoch)
+        if verb == "submit":
+            call["body"]["source_round"] = int(source)
+        assert w.store.write_receipt(p, call)["result"] == expected
+    assert events(w, "submitted") == 1
+
+
+def test_http_receipt_readback_after_token_revocation(tmp_path):
+    from door_util import Doors
+    from keeper_util import World, seed
+    from test_keeper_run_tokens import FakeRuns
+
+    world = World(tmp_path)
+    seed(world, [("A", [])])
+    world.store.ctx = {"runs": FakeRuns()}
+    doors = Doors(world, tmp_path)
+    try:
+        epoch = to_claimed_for_receipt(world)
+        world.tokens["runw"] = doors.http("l1main", "POST", "/v1/mint_run_token",
+                                          {"key": "demo:A", "role": "writer", "run_id": "w1"})[1]["token"]
+        add = entry(1, "add_evidence", epoch, kind="decision", ref={"id": "D-1"})
+        path = "/v1/write_receipt"
+        assert doors.http("runw", "POST", path, add)[1]["result"] == "ok"
+        call = entry(2, "submit", epoch, source_round=0)
+        status, committed = doors.http("runw", "POST", path, call)
+        assert status == 200 and committed["result"] == "ok"
+        status, readback = doors.http("runw", "POST", path, call)
+        assert status == 200 and readback["result"] == "duplicate"
+        assert readback["reply"] == committed["reply"]
+        assert doors.http("reader", "POST", path, call)[0] == 403
+        assert doors.http("runw", "POST", path, {**call, "id": eid(3)})[0] == 401
+        assert events(world, "submitted") == 1
+    finally:
+        doors.close()
+        world.close()
+
+
+def to_claimed_for_receipt(world):
+    from keeper_util import to_claimed
+    return to_claimed(world, "demo:A")
+
+
+def test_crash_recording_receipt_rolls_back_mutation(w, monkeypatch):
+    epoch, _, p = claimed_with_token(w)
+    call = entry(1, "add_evidence", epoch, kind="decision", ref={"id": "D-1"})
+    insert = w.store._insert_receipt
+
+    def interrupt(*args, **kwargs):
+        raise RuntimeError("interrupted before receipt insert")
+
+    monkeypatch.setattr(w.store, "_insert_receipt", interrupt)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        w.store.write_receipt(p, call)
+    assert events(w, "evidence_added") == 0
+    monkeypatch.setattr(w.store, "_insert_receipt", insert)
+    assert w.store.write_receipt(p, call)["result"] == "ok"
+    assert events(w, "evidence_added") == 1
+
+
+
+
+def test_legacy_receipt_returns_historical_outcome_only(w):
+    epoch, _, p = claimed_with_token(w)
+    _, _, other = claimed_with_token(w, run="other", key="demo:B")
+    call = entry(1, "heartbeat", epoch)
+    w.conn.execute("INSERT INTO outbox_seen VALUES(?,?,?,?,?,?)",
+                   (call["id"], p.token_id, "heartbeat", None, "ok", w.store._iso(w.store.now())))
+    assert w.store.write_receipt(p, {**call, "legacy": True}) == {
+        "id": call["id"], "result": "duplicate", "first": "ok", "legacy": True}
+    assert code(w.store.write_receipt, other, call) == "forbidden"
+    assert w.conn.execute("SELECT COUNT(*) FROM op_receipts").fetchone()[0] == 0
+
+
+def test_transient_refusal_does_not_become_a_receipt(w, monkeypatch):
+    epoch, _, p = claimed_with_token(w)
+    call = entry(1, "heartbeat", epoch)
+    heartbeat = w.store.heartbeat
+
+    def busy(*args, **kwargs):
+        raise Refused("conflict", "keeper database is busy")
+
+    monkeypatch.setattr(w.store, "heartbeat", busy)
+    assert code(w.store.write_receipt, p, call) == "unavailable"
+    assert w.conn.execute("SELECT COUNT(*) FROM op_receipts").fetchone()[0] == 0
+    monkeypatch.setattr(w.store, "heartbeat", heartbeat)
+    assert w.store.write_receipt(p, call)["result"] == "ok"
