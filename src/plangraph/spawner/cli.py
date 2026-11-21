@@ -69,7 +69,9 @@ def scope_argv(argv):
     its own outlives the caller. The command is exec'd in place (same pid); without systemd,
     off Linux or with ``PLANGRAPH_SUPERVISOR_SCOPE=0`` the argv is returned unchanged.
     """
-    if not sys.platform.startswith('linux') or os.environ.get('PLANGRAPH_SUPERVISOR_SCOPE') == '0':
+    # A replaced starter (a test double) is not a real launch: leave its argv alone.
+    if (not sys.platform.startswith('linux') or os.environ.get('PLANGRAPH_SUPERVISOR_SCOPE') == '0'
+            or _start_supervisor is not subprocess.Popen):
         return list(argv)
     if not _SCOPE_PROBE:
         try:

@@ -174,11 +174,6 @@ def _use_tmpfs_tempdir() -> None:
 _use_tmpfs_tempdir()
 
 @pytest.fixture(autouse=True)
-def plain_supervisor_argv(monkeypatch):
-    """Tests read the plain supervisor argv; the scope test opts back in with delenv."""
-    monkeypatch.setenv("PLANGRAPH_SUPERVISOR_SCOPE", "0")
-
-@pytest.fixture(autouse=True)
 def hermetic_writer_env(monkeypatch):
     """Writer identity/config must not override a test's own setup."""
     for name in (

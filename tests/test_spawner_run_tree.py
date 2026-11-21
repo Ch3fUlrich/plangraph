@@ -531,7 +531,6 @@ if __name__ == '__main__': raise SystemExit(main(sys.argv[1:]))
 ''')
     git(origin, 'add', 'src')
     sha = advance(origin)
-    monkeypatch.delenv('PLANGRAPH_SUPERVISOR_SCOPE')   # this test runs the real scoped supervisor
     monkeypatch.setenv('PLANGRAPH_SPAWNER_REPO', str(repo))
     monkeypatch.setenv('TEST_SERVICE_TOKEN', 'fixture-secret-do-not-log')
     monkeypatch.setenv('PYTHONPATH', '/host-deps')
