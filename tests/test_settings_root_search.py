@@ -172,20 +172,52 @@ def test_the_controller_checks_the_shared_root_once_after_the_workers_finish(tmp
     assert worker.exitstatus == 0
 
 
-def test_the_controller_also_watches_the_tree_above_the_workers_basetemps(tmp_path, monkeypatch):
+def test_two_workers_attribute_a_private_temp_leak_to_its_owner(tmp_path, monkeypatch):
+    import _stray_git_guard as guard
+    shared = tmp_path / 'shared'
+    bystander, owner = shared / 'worker-a', shared / 'worker-b'
+    bystander.mkdir(parents=True)
+    owner.mkdir()
+    monkeypatch.setenv('PYTEST_XDIST_WORKER', 'b')
+    monkeypatch.setenv('PLANGRAPH_ROOT_CEILING', str(owner / 'pytest'))
+    monkeypatch.setattr(guard.tempfile, 'gettempdir', lambda: str(owner))
+    with pytest.raises(AssertionError, match='demo::owner left a .git'):
+        with guard.watch_stray_git('demo::owner'):
+            with monkeypatch.context() as worker:
+                worker.setenv('PYTEST_XDIST_WORKER', 'a')
+                worker.setenv('PLANGRAPH_ROOT_CEILING', str(bystander / 'pytest'))
+                worker.setattr(guard.tempfile, 'gettempdir', lambda: str(bystander))
+                with guard.watch_stray_git('demo::bystander'):
+                    (owner / '.git').mkdir()
+                assert (owner / '.git').exists()
+    assert not (owner / '.git').exists()
+
+
+def _check_controller_shared_worker_root(tmp_path, monkeypatch, leak_root):
     import _stray_git_guard as guard
     from types import SimpleNamespace
-    system_tmp, private, _ = _runs_dirs(tmp_path, monkeypatch)
-    root = tmp_path / 'controller' / 'pytest-of-user' / 'pytest-0'   # workers use root/popen-gwN
-    root.mkdir(parents=True)
-    lines = []
-    reporter = SimpleNamespace(write_line=lambda text, **kw: lines.append(text))
-    config = SimpleNamespace(pluginmanager=SimpleNamespace(get_plugin=lambda name: reporter if name != 'dsession' else object()),
-                             _tmp_path_factory=SimpleNamespace(getbasetemp=lambda: root))
-    session = SimpleNamespace(config=config, exitstatus=0)
-    plugin = guard.SharedTempCheck(strict=True)
-    plugin.pytest_sessionstart(session)
-    (root / '.git').mkdir()                        # gw1 leaks into the tree it shares with gw0, after gw0 finished
-    plugin.pytest_sessionfinish(session, 0)
-    assert session.exitstatus == 1 and str((root / '.git').resolve()) in lines[0]
-    assert (root / '.git').exists()
+    with monkeypatch.context() as controller:
+        _, private, _ = _runs_dirs(tmp_path, controller)
+        controller.delenv('PLANGRAPH_ROOT_CEILING')  # the xdist controller does not run test fixtures
+        root = tmp_path / 'controller' / 'pytest-of-user' / 'pytest-0'   # workers use root/popen-gwN
+        root.mkdir(parents=True)
+        lines = []
+        reporter = SimpleNamespace(write_line=lambda text, **kw: lines.append(text))
+        config = SimpleNamespace(pluginmanager=SimpleNamespace(get_plugin=lambda name: reporter if name != 'dsession' else object()),
+                                 _tmp_path_factory=SimpleNamespace(getbasetemp=lambda: root))
+        session = SimpleNamespace(config=config, exitstatus=0)
+        plugin = guard.SharedTempCheck(strict=True)
+        plugin.pytest_sessionstart(session)
+        leak = (root if leak_root == 'basetemp' else private) / '.git'
+        leak.mkdir()  # gw1 leaks into a shared tree after gw0 finishes
+        plugin.pytest_sessionfinish(session, 0)
+    assert session.exitstatus == 1 and str(leak.resolve()) in lines[0]
+    assert leak.exists()
+
+
+def test_the_controller_also_watches_the_tree_above_the_workers_basetemps(tmp_path, monkeypatch):
+    _check_controller_shared_worker_root(tmp_path, monkeypatch, 'basetemp')
+
+
+def test_the_controller_also_watches_its_tmpdir_with_a_separate_basetemp(tmp_path, monkeypatch):
+    _check_controller_shared_worker_root(tmp_path, monkeypatch, 'tmpdir')

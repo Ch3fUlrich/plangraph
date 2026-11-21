@@ -119,10 +119,11 @@ class SharedTempCheck:
         self.before = self._shared()
 
     def _shared(self):
-        found = shared_gits()
         if self.basetemp:
-            found |= temp_ancestor_gits(str(self.basetemp))
-        return found
+            # Workers inherit the controller's temp dir as a parent even when
+            # their pytest basetemps live in a separate tree.
+            return temp_ancestor_gits() | temp_ancestor_gits(str(self.basetemp))
+        return shared_gits()
 
     def pytest_sessionstart(self, session):
         factory = getattr(session.config, '_tmp_path_factory', None)
