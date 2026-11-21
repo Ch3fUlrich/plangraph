@@ -6,3 +6,4 @@ full suite; `pg-policy --part-entry` refuses imported_history, undeclared_depend
 Admission requires the part's own Tests run and a successful ci-gate, with reruns ordered by run ID
 and attempt number. An unfetchable outside PR is compared using its advertised commit if available locally.
 Part cost telemetry matches its Tests run by both pull request number and head.
+Entry-set Python tests import the part checkout first, even when another checkout is on PYTHONPATH.

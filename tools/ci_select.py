@@ -476,12 +476,17 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "entry-set":
-        plan = entry_set(args.root, args.base, args.head)
+        root = Path(args.root).resolve()
+        plan = entry_set(root, args.base, args.head)
         print(json.dumps(plan, sort_keys=True), flush=True)
+        # Import the part's source before any installed or inherited checkout.
+        python_path = [str(root / "src"), os.environ.get("PYTHONPATH")]
+        python_env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, python_path)))
         failed = 0
-        for command in entry_commands(plan, args.base, args.head, Path(args.root).resolve()) if args.run else []:
-            cwd = Path(args.root) / "rust" if command[0] == "cargo" else Path(args.root)
-            if subprocess.run(command, cwd=cwd).returncode:
+        for command in entry_commands(plan, args.base, args.head, root) if args.run else []:
+            is_cargo = command[0] == "cargo"
+            cwd = root / "rust" if is_cargo else root
+            if subprocess.run(command, cwd=cwd, env=None if is_cargo else python_env).returncode:
                 print(f"entry-set: FAIL: {' '.join(command[:4])}", file=sys.stderr)
                 failed = 1
         return failed

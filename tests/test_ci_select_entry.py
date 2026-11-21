@@ -122,16 +122,20 @@ def test_the_cost_record_is_appended_to_telemetry(tmp_path):
     assert [json.loads(line)["pr"] for line in path.read_text().splitlines()] == [1, 2]
 
 
-def test_a_part_whose_head_breaks_a_quota_test_fails_the_entry_run(tmp_path, capsys):
+def test_a_part_whose_head_breaks_a_quota_test_fails_the_entry_run(tmp_path, capfd, monkeypatch):
     """The entry set runs on the part's own head: a red test on it refuses entry, a green one lets it in."""
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
     broken = {"src/plangraph/planner/provider_stop.py": "X = 0\n"}
     root, base, head = tree(tmp_path, broken, BASE)
     args = ["entry-set", "--root", str(root), "--base", base, "--head", head, "--run"]
     assert ci_select.main(args) == 1
-    assert "entry-set: FAIL" in capsys.readouterr().err
+    result = capfd.readouterr()
+    assert "assert 0" in result.out
+    assert "entry-set: FAIL" in result.err
 
 
-def test_a_part_whose_head_is_green_passes_the_entry_run(tmp_path):
+def test_a_part_whose_head_is_green_passes_the_entry_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", str(TOOLS.parent / "src"))
     root, base, head = tree(tmp_path, {"src/plangraph/planner/provider_stop.py": "X = 5\n"}, BASE)
     assert ci_select.main(["entry-set", "--root", str(root), "--base", base, "--head", head, "--run"]) == 0
 
