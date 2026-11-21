@@ -241,8 +241,8 @@ impl Host {
         let prompt = self.review_prompt(base, head, prev, &families, &versioned);
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
-        let card = json!({"cwd":clone, "estimate_tokens":300000, "max_min":60, "stall_min":20,
-            "diff_ref":{"repo":clone, "base":prev.map_or(base, |p| p.0), "head":head}});
+        let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
+            "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
         let printed = self
             .command(&self.review_cli[0])
             .args(&self.review_cli[1..])

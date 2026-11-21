@@ -9,6 +9,8 @@ import threading
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import SpawnPlan
 from plangraph.spawner import cli, mcp, notify, resolver, seat_spawn
@@ -222,7 +224,7 @@ def test_overflow_keeps_explicit_cwd(checkouts, tmp_path, monkeypatch, source, d
     host = dict(ssh='invented', repo='/invented checkout', spawner_src='/invented/src')
     config = tmp_path / 'overflow.json'
     config.write_text(json.dumps({'public_repos': [str(reviewed)], 'hosts': {'remote': host}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 0))
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(overflow, 'ready_records', lambda *a: {'remote': dict(
@@ -376,7 +378,7 @@ def test_legacy_overflow_classifies_explicit_cwd(checkouts, tmp_path, monkeypatc
     config.write_text(json.dumps({'public_repos': [str(caller)], 'hosts': {}}))
     card.write_text(json.dumps({'cwd': str(reviewed)} if source == 'card' else {}))
     prompt.write_text('Review')
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(overflow, 'local_resources', lambda: (0, 0))
     monkeypatch.setattr(overflow, 'ready_records', lambda *a: {})

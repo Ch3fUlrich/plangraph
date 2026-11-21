@@ -4,6 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.spawner import overflow as o
 from plangraph.spawner.service import SpawnService
 from test_spawner_overflow import healthy, inputs  # noqa: F401 shared fixture
@@ -100,7 +102,7 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, tmp_path):
     monkeypatch.setattr(service, 'ps', lambda: {'runs': [{'status': 'running'}] * 50})
     monkeypatch.setattr(o.cli, 'SpawnService', lambda **kw: service)
     reason = 'memory: free 5047 MB, floor 3000 MB, role 2048 MB'
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent.json'))
+    use_projected_overflow_config(monkeypatch, tmp_path / 'absent.json')
     class Output(io.StringIO):
         def close(self):
             pass
@@ -233,7 +235,7 @@ def test_disk_floor_admission(tmp_path, monkeypatch, free, refused):
     monkeypatch.setattr(h, 'disk_free_gb', lambda path: free)
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 99999))
     monkeypatch.setattr(o, 'registry_caps', lambda: {})
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent'))
+    use_projected_overflow_config(monkeypatch, tmp_path / 'absent')
     service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path / 'checkout')),
                               ps=lambda: {'runs': []})
     result = seat_spawn.admit(service, {})
@@ -259,6 +261,61 @@ def test_shared_target_cap_idle_clears_busy_refuses(tmp_path, monkeypatch, busy)
     if busy:
         assert 'cargo_target_cap' in reason and '13' in reason
     assert (target / 'artifact').exists() == busy
+
+
+@pytest.mark.parametrize('role,refused', [('review', False), ('implement', True), ('fix', True)])
+def test_cargo_cap_binds_building_roles_only_and_names_its_path(tmp_path, monkeypatch, role, refused):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    target = tmp_path / 'shared'
+    target.mkdir()
+    (target / 'artifact').write_text('cached build')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 13.24)
+    service = SimpleNamespace(ps=lambda: {'runs': [{'status': 'running'}]})
+    reason = h.local_disk_refusal(tmp_path / 'checkout', service, role=role)
+    assert (reason is not None) == refused
+    if refused:
+        assert reason.startswith('cargo_target_cap: measured 13.24 GB') and str(target) in reason
+    assert (target / 'artifact').exists()
+    assert (h.running_disk_refusal(str(tmp_path / 'checkout'), role=role) is not None) == refused
+
+
+def test_review_never_measures_the_cargo_target(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
+    def unreadable(path):
+        raise PermissionError('cache scan')
+    monkeypatch.setattr(h, 'cargo_target_size_gb', unreadable)
+    service = SimpleNamespace(ps=lambda: {'runs': []})
+    assert h.local_disk_refusal(tmp_path / 'checkout', service, role='review') is None
+    assert h.running_disk_refusal(str(tmp_path / 'checkout'), role='review') is None
+    assert 'unavailable' in h.local_disk_refusal(tmp_path / 'checkout', service, role='implement')
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '0')
+    assert h.local_disk_refusal(tmp_path / 'checkout', service, role='review') is None
+
+
+@pytest.mark.parametrize('role,refused', [('review', False), ('implement', True)])
+def test_admission_above_cargo_cap_admits_review_and_refuses_implement(tmp_path, monkeypatch, role, refused):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h, seat_spawn
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 13.24)
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 99999))
+    monkeypatch.setattr(o, 'registry_caps', lambda: {})
+    use_projected_overflow_config(monkeypatch, tmp_path / 'absent')
+    service = SimpleNamespace(runner=SimpleNamespace(default_cwd=str(tmp_path / 'checkout')),
+                              ps=lambda: {'runs': [{'status': 'running'}]})
+    result = seat_spawn.admit(service, {'role': role})
+    assert (result is not None) == refused
+    if refused:
+        assert 'cargo_target_cap' in result['reason'] and str(tmp_path / 'shared') in result['reason']
 
 
 def test_shared_target_env_overrides_worktree_target(tmp_path, monkeypatch):
@@ -391,7 +448,7 @@ def test_local_disk_uses_launch_cwd(tmp_path, monkeypatch, source):
     prompt.write_text('task')
     args = ['spawn', '--repo', str(root), '--card', str(card), '--prompt', str(prompt)]
     monkeypatch.setattr(o, 'registry_caps', lambda: {})
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(root / 'missing'))
+    use_projected_overflow_config(monkeypatch, root / 'missing')
     cwd = str(root / 'other-filesystem')
     o.Path(cwd).mkdir()
     o.subprocess.run(['git', 'init', '-q', cwd], check=True)
@@ -404,7 +461,7 @@ def test_local_disk_uses_launch_cwd(tmp_path, monkeypatch, source):
         card.write_text(json.dumps({'cwd': cwd}))
     monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
     seen = []
-    def disk(worktree, service):
+    def disk(worktree, service, role='implement'):
         seen.append(worktree)
         return None if worktree == cwd else 'disk_low'
     monkeypatch.setattr(h, 'local_disk_refusal', disk)

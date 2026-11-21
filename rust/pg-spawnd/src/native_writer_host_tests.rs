@@ -395,9 +395,12 @@ assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review
 families = [argv[i + 1] for i, a in enumerate(argv) if a == '--writer-family']
 # The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
 assert sorted(families) == ['anthropic', 'google', 'openai'], families
-assert 'cwd' in card
+assert 'cwd' not in card
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 head = card['diff_ref']['head']
+repo = pathlib.Path(card['diff_ref']['repo'])
+assert repo != pathlib.Path.cwd()
+assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
 assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt

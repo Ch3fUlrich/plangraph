@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.spawner import overflow, seat_spawn
 from plangraph.spawner.service import SpawnService
 from plangraph.spawner.stall_watchdog import sweep_runs
@@ -16,7 +18,7 @@ from plangraph.spawner.stall_watchdog import sweep_runs
 @pytest.fixture
 def room(tmp_path, monkeypatch):
     """A service on a private state dir whose local memory the test scripts."""
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent.json'))
+    use_projected_overflow_config(monkeypatch, tmp_path / 'absent.json')
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(overflow, 'local_limits', lambda registry, role: (2048, 3000))
     service = SpawnService(state=tmp_path / 'state')

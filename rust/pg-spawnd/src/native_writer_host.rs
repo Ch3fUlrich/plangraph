@@ -170,7 +170,7 @@ impl Driver for Host {
     }
     fn prepare(&mut self) -> Result<String, String> {
         if !self.base_ref.starts_with("refs/heads/") && !self.base_ref.starts_with("refs/tags/") {
-            return Err("base_ref must name a pushed refs/heads/ or refs/tags/ ref".into());
+            return Err("base_ref must name a refs/heads/ or refs/tags/ ref".into());
         }
         output(
             self.command("git")
@@ -178,15 +178,9 @@ impl Driver for Host {
                 .arg(&self.repo)
                 .args(["check-ref-format", &self.base_ref]),
         )?;
-        // Pin the pushed ref in a per-run namespace: parallel fetches cannot change this base.
+        // Pin the base in a per-run namespace: parallel fetches cannot change this base.
         let pin = format!("refs/plangraph/native/{}/base", self.run_id);
-        output(self.command("git").arg("-C").arg(&self.repo).args([
-            "fetch",
-            "--no-write-fetch-head",
-            "origin",
-            &format!("+{}:{pin}", self.base_ref),
-            "+refs/heads/main:refs/remotes/origin/main",
-        ]))?;
+        self.pin_base(&pin)?;
         let base = output(
             self.command("git")
                 .arg("-C")
@@ -256,7 +250,10 @@ impl Driver for Host {
                 "-c",
                 "approval_policy=never",
                 "-c",
-                "sandbox_mode=\"danger-full-access\"",
+                &format!(
+                    "sandbox_mode=\"{}\"",
+                    pg_worker_core::host_readiness::WRITER_SANDBOX
+                ),
                 "-o",
             ])
             .arg(directory.join("native.last"))
@@ -501,11 +498,16 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
 }
 #[path = "native_writer_context.rs"]
 mod context;
+#[path = "native_writer_base.rs"]
+mod base;
 #[path = "native_writer_review.rs"]
 mod review;
 use review::review_cli;
 #[cfg(test)]
 use review::{review_run_text, review_verdict};
+#[cfg(test)]
+#[path = "native_writer_base_tests.rs"]
+mod base_tests;
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;

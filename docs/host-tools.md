@@ -154,3 +154,56 @@ existing nonblocking host lock and atomically replace the private history file.
 This first slice supplies storage, summaries and run attribution. The reference
 branch's collection module, sampler CLI and systemd service/timer remain open;
 no timer or live-host action is installed by this slice.
+
+
+### Package host readiness
+
+Run `pg-host-readiness --project PATH --registry FILE --state DIR` on each
+candidate. The registry's `self` entry sets the recorded host. The default
+sandbox is `danger-full-access`, matching the native Codex writer. The tool
+checks configuration trust, login, CLI version, and sandbox startup and commit
+in a temporary Git worktree without a model call. Use `--scratch-root` for a
+filesystem matching the intended worktree. Hooks and plugins whose trust cannot
+be established cause a failed check.
+
+The tool prints `READY` on success and `MISSING` with the check failure on exit
+1. It writes both results to
+`DIR/package-readiness/HOST/danger-full-access.json`. Make each host's latest
+record available under the placement command's state directory. `pg-package-host`
+placement refuses missing, failed, future-dated, and older-than-120-second
+package-readiness records and records for a different host or sandbox. Remote capacity samples come from the
+same state directory's `fleet/HOST.ndjson` history.
+
+### Three-host writer and review rollout
+
+Use `hosts.json` as the source for placement. Give each target its own host
+entry, current main checkout in `repos.plangraph.root`, role-specific
+reservations, and memory floor. List the repository IDs approved for SSH
+transport in the registry's `public_repos` field. A workstation WSL entry uses
+`os: linux`, the Windows SSH endpoint in `ssh_target`, and the distribution in
+`wsl_distro`. Placement, readiness and status probes reach the guest
+through `wsl.exe --exec pg-spawnd steps` with a JSON step plan on stdin, never a shell; install
+`pg-spawnd` on the guest's `PATH`. Its paths use the distribution's Linux filesystem. Set
+`placement_fallback: true` on the orchestration host to rank it after ready
+workers. Among ready worker hosts, placement uses free memory above each
+host's floor. The run record includes the selected host and placement reason.
+
+After merge, install the matching spawner and `pg-host-readiness` binaries on
+the three hosts and ensure noninteractive SSH can find them. Configure the
+registry on each host so `self` names that host. Regenerate the status and
+session projections with `python3 -m plangraph.fleet_sync genconfig write`,
+then restart the affected spawner units. Run
+`python3 -m plangraph.spawner.host_ready --json` on each placement origin.
+Confirm each host reports a trusted checkout, matching main SHA, working
+tools and login, a pre-push test interpreter (the checkout's `.venv`, else
+`PREFLIGHT_PYTHON`, else `python3`, resolved as the hook does) with `pytest` and `xdist`, the probe process's umask and the `UMask` of the host's
+session `.service` unit (when it has one) keeping the group and other write bits clear, and no failures. Refresh the `host_ready` readiness record before its
+ten-minute freshness window expires, and the `package-readiness` record before
+its 120-second window expires.
+
+Submit a writer and a review from a placement origin and verify both run types
+land on the remote Linux worker and on the workstation WSL. Record the run IDs
+and selected hosts, then attach a 24-hour sample showing work on all three
+hosts. Review requests send their exact base and head as a `diff_ref`.
+Unpublished commits in approved public repositories are transferred in a
+temporary Git bundle, so testing this path requires no push.

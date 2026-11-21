@@ -325,6 +325,8 @@ credential shapes and the configured private words run together. The legacy
 `tools/preflight_private_scrub.py --base origin/main --head HEAD --words FILE`
 entry point also runs all these rules. Hook, CI and fast checks share
 `scrub_check.scan_content`; committed checks exclude inherited line occurrences.
+The SSH tests' loopback and documentation-range IPv6 values are scoped by file,
+rule, and SHA-256 in `scrub_ci.toml`.
 
 Install the pre-push scrub gate (scans the files changed in the pushed commits with
 `tools/split/scrub_check.py`, refuses on any hit, prints only `file:line: rule`):

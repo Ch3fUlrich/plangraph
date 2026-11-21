@@ -1,10 +1,13 @@
 import json
+import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+
+from conftest import use_projected_overflow_config
 
 from plangraph.spawner import host_ready as h
 from plangraph.spawner import host_ready_source as source
@@ -77,7 +80,7 @@ def test_doctor_missing_keys(tmp_path, payload):
 def test_main_unknown_host(tmp_path, monkeypatch, capsys):
     config = tmp_path / 'config.json'
     config.write_text(json.dumps({'hosts': {'fiction': CONFIG}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     with pytest.raises(SystemExit) as exc:
         h.main(['--host', 'nosuch'])
     assert exc.value.code == 2
@@ -188,7 +191,7 @@ def test_config_error_before_probe(tmp_path, monkeypatch, capsys):
     del config['ssh']
     path = tmp_path / 'hosts.json'
     path.write_text(json.dumps({'hosts': {'fiction': config}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    use_projected_overflow_config(monkeypatch, path)
     monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
     def never_contact(*args, **kwargs):
         pytest.fail('host must not be contacted')
@@ -224,7 +227,7 @@ def test_deleted_spawner_with_invalid_ps_config(tmp_path, ps_config):
 def test_main_state_directory(tmp_path, monkeypatch, capsys, unwritable):
     config = tmp_path / 'config.json'
     config.write_text(json.dumps({'hosts': {'fiction': CONFIG, 'other': CONFIG}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
     state = tmp_path / '.local/state/plangraph/host-ready'
     original = h.check_host
@@ -257,7 +260,7 @@ def test_invalid_source_type(tmp_path, monkeypatch, src):
 def test_main_unexpected_host_errors(tmp_path, monkeypatch, capsys, error):
     path = tmp_path / 'hosts.json'
     path.write_text(json.dumps({'hosts': {'fiction': CONFIG, 'other': CONFIG}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    use_projected_overflow_config(monkeypatch, path)
     monkeypatch.setattr(h.Path, 'home', lambda: tmp_path)
     def broken(*args, **kwargs):
         raise error('secret-value')
@@ -347,6 +350,234 @@ def test_remote_disk_floor(tmp_path, floor, free, ok):
     assert result['ok'] is ok
     assert result['disk_free_gb'] == free
     assert result['failures'] == ([] if ok else [f'disk: disk_low: free {free} GB'])
+
+
+@pytest.mark.parametrize('missing', [[], ['pytest'], ['xdist'], ['pytest', 'xdist']])
+def test_registry_host_reports_missing_pytest_and_xdist(tmp_path, missing):
+    scripts = []
+
+    def fake(argv, **kwargs):
+        script = argv[-1]
+        scripts.append(script)
+        if '--test-tools' in script:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                dict(missing=missing, umask='0022', unit_umask=None)))
+        if 'remote_ps' in script:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(runs=[])))
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', dict(CONFIG, registry=True), tmp_path, fake)
+    probe = next(s for s in scripts if '--test-tools' in s)
+    assert 'plangraph.spawner.host_ready --test-tools /invented/repo' in probe and '--unit' not in probe
+    assert result['python_ok'] is (not missing)
+    assert result['ok'] is (not missing), result['failures']
+    assert [f for f in result['failures'] if f.startswith('python:')] == (
+        [f'python: missing {" ".join(missing)}'] if missing else [])
+
+
+@pytest.mark.parametrize('session,queried', [('spawner.service', True), ('spawner.pid', False), ('', False)])
+def test_registry_host_queries_the_unit_umask_of_its_service_by_name(tmp_path, session, queried):
+    scripts = []
+
+    def fake(argv, **kwargs):
+        scripts.append(argv[-1])
+        if '--test-tools' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                dict(missing=[], umask='0022', unit_umask='0002' if queried else None)))
+        if 'remote_ps' in argv[-1]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(runs=[])))
+        return runner(argv, **kwargs)
+
+    result = h.check_host('fiction', dict(CONFIG, registry=True, session_unit=session), tmp_path, fake)
+    probe = next(s for s in scripts if '--test-tools' in s)
+    assert ('--unit spawner.service' in probe) is queried
+    assert ('umask: unit umask 0002 leaves new files group- or other-writable' in result['failures']) is queried
+
+
+def shim(directory, name='shim', fails='xdist'):
+    path = directory / name
+    path.write_text('#!/bin/sh\n[ "$2" = "import %s" ] && exit 1\nexit 0\n' % fails)
+    path.chmod(0o755)
+    return path
+
+
+def test_report_follows_the_hook_interpreter_choice(tmp_path):
+    repo = tmp_path / 'repo'
+    (repo / '.venv/bin').mkdir(parents=True)
+    shim(repo / '.venv/bin', 'python', fails='xdist')
+    other = shim(tmp_path, 'configured', fails='pytest')
+    # The checkout venv wins over PREFLIGHT_PYTHON: only the venv shim lacks xdist.
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(other)})['missing'] == ['xdist']
+    (repo / '.venv/bin/python').unlink()
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(other)})['missing'] == ['pytest']
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': str(tmp_path / 'absent')})['missing'] == [
+        'pytest', 'xdist']
+
+
+def test_report_searches_a_relative_path_entry_from_the_checkout(tmp_path):
+    repo = tmp_path / 'repo'
+    (repo / 'bin').mkdir(parents=True)
+    shim(repo / 'bin', 'python3')
+    assert h.pre_push_report(str(repo), environ={'PATH': 'bin:/nonexistent'})['missing'] == ['xdist']
+
+
+@pytest.mark.parametrize('value', ['./shim', 'shim'])
+def test_report_resolves_relative_preflight_python_in_the_checkout(tmp_path, value):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    shim(repo)
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': value})['missing'] == ['xdist']
+    assert h.pre_push_report(str(repo), environ={'PREFLIGHT_PYTHON': 'not-there'})['missing'] == [
+        'pytest', 'xdist']
+
+
+@pytest.mark.parametrize('form', ['~/hook-python', '~someone/hook-python'])
+def test_report_expands_home_and_named_user_preflight_python(tmp_path, monkeypatch, form):
+    import pwd
+    home = tmp_path / 'home'
+    home.mkdir()
+    shim(home, 'hook-python')
+    monkeypatch.setenv('HOME', str(home))
+    monkeypatch.setattr(pwd, 'getpwnam', lambda name: SimpleNamespace(pw_dir=str(home)))
+    assert h.pre_push_report(str(tmp_path), environ={'PREFLIGHT_PYTHON': form})['missing'] == ['xdist']
+
+
+@pytest.mark.parametrize('mask', [0o022, 0o002, 0o020])
+def test_report_carries_this_processes_umask(tmp_path, mask):
+    old = os.umask(mask)
+    try:
+        report = h.pre_push_report(str(tmp_path), environ={})
+    finally:
+        os.umask(old)
+    assert report['umask'] == format(mask, '04o') and report['unit_umask'] is None
+
+
+def test_report_asks_systemd_for_the_named_user_unit(tmp_path, monkeypatch):
+    seen = []
+    def fake_run(argv, **kwargs):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0, stdout='0002\n') if argv[0] == 'systemctl' else real_run(argv, **kwargs)
+    real_run = subprocess.run
+    monkeypatch.setattr(h.subprocess, 'run', fake_run)
+    report = h.pre_push_report(str(tmp_path), unit='spawner.service', environ={})
+    assert report['unit_umask'] == '0002'
+    assert ['systemctl', '--user', 'show', '--property=UMask', '--value', 'spawner.service'] in seen
+
+
+@pytest.mark.parametrize('failure', [subprocess.TimeoutExpired('systemctl', 10), OSError('no systemctl')])
+def test_unit_umask_that_cannot_be_read_is_a_failure(tmp_path, monkeypatch, failure):
+    real_run = subprocess.run
+    def fake_run(argv, **kwargs):
+        if argv[0] == 'systemctl':
+            raise failure
+        return real_run(argv, **kwargs)
+    monkeypatch.setattr(h.subprocess, 'run', fake_run)
+    failures = []
+    ok = h.python_test_tools(
+        lambda check, command, parse: parse(json.dumps(h.pre_push_report(str(tmp_path), 'spawner.service', {}))),
+        lambda check, reason: failures.append(f'{check}: {reason}'), 'prefix ', str(tmp_path), 'spawner.service')
+    assert 'umask: unit umask of spawner.service unavailable' in failures
+
+
+def test_cli_with_a_relative_checkout_argument_resolves_path_entries_in_that_checkout(tmp_path, monkeypatch, capsys):
+    repo = tmp_path / 'checkout'
+    (repo / 'bin').mkdir(parents=True)
+    shim(repo / 'bin', 'python3')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv('PATH', 'bin:/nonexistent')
+    monkeypatch.delenv('PREFLIGHT_PYTHON', raising=False)
+    assert h.main(['--test-tools', 'checkout']) == 0
+    assert json.loads(capsys.readouterr().out)['missing'] == ['xdist']
+
+
+def test_unit_umask_from_a_failed_systemctl_query_is_not_accepted(tmp_path, monkeypatch):
+    real_run = subprocess.run
+    def fake_run(argv, **kwargs):
+        if argv[0] == 'systemctl':
+            return SimpleNamespace(returncode=1, stdout='0022\n')
+        return real_run(argv, **kwargs)
+    monkeypatch.setattr(h.subprocess, 'run', fake_run)
+    assert h.pre_push_report(str(tmp_path), 'spawner.service', {})['unit_umask'] is None
+
+
+def plan_runner(calls, src_code=0, missing=()):
+    """A runner that answers `pg-spawnd steps` plans like `runner` answers shell scripts."""
+    def run(argv, **kwargs):
+        plan = json.loads(kwargs['input'])
+        calls.append((argv, plan))
+        steps = plan['steps']
+        if steps[0].get('fail_code') == 10:
+            return SimpleNamespace(returncode=src_code, stdout='ok\n')
+        text = ' '.join(steps[0].get('argv', []))
+        if 'plangraph.spawner.remote_ps' in text:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(dict(runs=[])))
+        if '--test-tools' in text:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(
+                dict(missing=list(missing), umask='0022', unit_umask=None)))
+        return runner(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', '--', 'x', text], **kwargs)
+    return run
+
+
+def test_local_registry_host_runs_every_probe_as_a_step_plan_without_a_shell(tmp_path):
+    calls = []
+    config = dict(CONFIG, local=True, registry=True, env_file='/invented/env', state_dir='/invented/state')
+    result = h.check_host('fiction', config, tmp_path, plan_runner(calls))
+    assert result['ok'], result['failures']
+    assert calls and all(argv == ['pg-spawnd', 'steps'] for argv, _ in calls)
+    spawner_plans = [plan for _, plan in calls if plan.get('cwd') == '/invented/source']
+    assert spawner_plans and all(plan['env_file'] == '/invented/env' for plan in spawner_plans)
+    assert all(plan['steps'][0]['env'] == {'PYTHONPATH': 'src', 'PLANGRAPH_SPAWN_STATE': '/invented/state'}
+               for plan in spawner_plans)
+    tools = next(plan for _, plan in calls if plan['steps'][0]['argv'][1:] == ['--version'])
+    assert [step['argv'][0] for step in tools['steps']] == ['git', 'python3', 'codex']
+
+
+@pytest.mark.parametrize('code,failure', [(10, 'src_missing: failed'), (11, 'src_import: failed')])
+def test_source_probe_plan_reports_missing_and_unimportable_sources_by_exit_code(tmp_path, code, failure):
+    calls = []
+    config = dict(CONFIG, local=True, registry=True)
+    result = h.check_host('fiction', config, tmp_path, plan_runner(calls, src_code=code))
+    assert failure in result['failures']
+    src = next(plan for _, plan in calls if plan['steps'][0].get('fail_code') == 10)
+    assert [step.get('fail_code') for step in src['steps']] == [10, 11, None]
+    assert src['steps'][1]['cwd'] == '/' and src['steps'][1]['argv'][-1] == 'import plangraph'
+
+
+def test_wsl_registry_host_probes_travel_as_plans_over_ssh(tmp_path):
+    seen = []
+    def fake(argv, **kwargs):
+        seen.append((argv, kwargs.get('input')))
+        return plan_runner([], missing=())(argv, **kwargs) if 'input' in kwargs else runner(argv, **kwargs)
+    (tmp_path / 'plangraph' / 'ps-hosts.json').write_text(json.dumps({'hosts': [
+        dict(name='fiction', target=CONFIG['ssh'], src='/invented/source', wsl_distro='Ubuntu')]}))
+    config = dict(CONFIG, registry=True, wsl_distro='Ubuntu')
+    result = h.check_host('fiction', config, tmp_path, fake)
+    assert result['ok'], result['failures']
+    assert seen and all(argv[:5] == ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10']
+                        and argv[-1] == 'wsl.exe --distribution Ubuntu --exec pg-spawnd steps'
+                        and json.loads(body)['steps'] for argv, body in seen)
+
+
+@pytest.mark.parametrize('wsl', [False, True])
+def test_checkout_path_with_shell_characters_stays_literal_in_every_probe_plan(tmp_path, wsl):
+    repo = '/invented/check out (review)'
+    calls = []
+    if wsl:
+        (tmp_path / 'plangraph' / 'ps-hosts.json').write_text(json.dumps({'hosts': [
+            dict(name='fiction', target=CONFIG['ssh'], src='/invented/source', wsl_distro='Ubuntu')]}))
+        config = dict(CONFIG, registry=True, wsl_distro='Ubuntu', repo=repo)
+        def fake(argv, **kwargs):
+            return plan_runner(calls, **{})(argv, **kwargs)
+        runner_ = fake
+    else:
+        config = dict(CONFIG, local=True, registry=True, repo=repo)
+        runner_ = plan_runner(calls)
+    result = h.check_host('fiction', config, tmp_path, runner_)
+    assert result['ok'], result['failures']
+    git_plans = [plan for _, plan in calls if plan['steps'][0]['argv'][:2] == ['git', '-C']]
+    assert git_plans and all(plan['steps'][0]['argv'][2] == repo for plan in git_plans)
+    df = next(plan for _, plan in calls if plan['steps'][0]['argv'][:1] == ['df'])
+    assert df['steps'][0]['argv'][-1] == repo
 
 
 @pytest.mark.parametrize('available,ok', [(2999, False), (3000, True)])

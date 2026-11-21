@@ -3,6 +3,8 @@ import asyncio
 
 import pytest
 
+from conftest import use_projected_overflow_config
+
 from plangraph.routing_errors import ParameterRefused
 from plangraph.spawner import overflow, seat_spawn
 from plangraph.spawner.runner import SpawnerRunner, spawn_service
@@ -11,7 +13,7 @@ from test_spawner_seat_cwd import checkouts, service  # noqa: F401 shared local 
 
 @pytest.mark.parametrize('diff', [{}, {'base': 'abc', 'head': 'def'}, {'repo': None}, {'repo': ''}])
 def test_missing_diff_repo_records_parameter_refusal(checkouts, tmp_path, monkeypatch, diff):
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'missing.json'))
+    use_projected_overflow_config(monkeypatch, tmp_path / 'missing.json')
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 0))
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     service = spawn_service(SpawnerRunner(default_cwd=str(checkouts[0])), state=tmp_path / 'state')
