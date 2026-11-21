@@ -418,3 +418,7 @@ def test_flag_review_of_and_trailer_families_all_reach_the_spawned_record(tmp_pa
     record = asyncio.run(service.spawn(card=card, role="review", writer_families=["mimo"],
                                        review_of=run_id, dry_run=True))
     assert record["given_writer_families"] == ["mimo", "openai", "gemini-4-hydrogen-high"]
+    # The launch itself carries all three excluded families in its routing headers.
+    headers = service.runner.calls[-1]["headers"]
+    assert {"mimo", "gpt", "gemini"} <= {value for key, value in headers.items() if "exclude" in key.lower()
+                                         for value in str(value).split(",")}, headers
