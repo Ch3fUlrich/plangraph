@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|health|agents-view|ledger-report|check-manage-key> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|health|agents-view|ledger-report|check-manage-key|check-install> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -142,6 +142,9 @@ pub(crate) fn execute(
             std::process::exit(code);
         }
         return Ok(());
+    }
+    if verb.as_deref() == Some("check-install") {
+        return crate::install_check::execute(rest, out);
     }
     if verb.as_deref() == Some("ledger-report") {
         return crate::writer_ledger::report(rest, out);
@@ -294,3 +297,7 @@ mod tests {
         assert_eq!(result, Err(USAGE.into()));
     }
 }
+
+#[cfg(test)]
+#[path = "install_check_tests.rs"]
+mod install_check_tests;
