@@ -1,7 +1,8 @@
 '''CI commit gate: Writer attribution, hand-edit, gate-edit, test-removal, open_pr_merged reasons.
 
-Trailer checks use ``git log --no-merges base..head``. Merge parents are checked
-separately when open PR heads are supplied. Exempt commits skip only trailer rules;
+Trailer checks use ``git log --no-merges base..head``. A merge commit is checked only for
+its own gate-file edits (combined diff plus the parents' conflict list: a conflict resolution in a
+workflow needs its own Gate-Edit trailer); merge parents are checked separately when open PR heads are supplied. Exempt commits skip only trailer rules;
 an exempt entry does not waive open_pr_merged. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
 cannot exempt the commits it introduces.
@@ -185,6 +186,106 @@ def _iter_commits(base: str, head: str, cwd: str | Path | None = None) -> list[t
         sha, _, message = record.partition('\n')
         commits.append((sha.strip(), message))
     return commits
+
+
+def _iter_merges(base: str, head: str, cwd: str | Path | None = None) -> list[tuple[str, str]]:
+    '''Return (sha, message) for git log --merges base..head (newest first).'''
+    out = _git_text(['log', '--merges', '-z', '--format=%H%n%B', f'{base}..{head}'], cwd=cwd)
+    merges: list[tuple[str, str]] = []
+    for record in out.split('\0'):
+        if record.strip():
+            sha, _, message = record.partition('\n')
+            merges.append((sha.strip(), message))
+    return merges
+
+
+def _changed_since(
+    base: str, parent: str, cwd: str | Path | None
+) -> tuple[set[str], list[tuple[str, str]], bool]:
+    '''(paths changed base..parent with renames split into delete + add, the (old, new) renames,
+    whether git's rename detection ran to completion).'''
+    plain = set(_git_text(['diff', '--name-only', '--no-renames', '-z', base, parent], cwd=cwd).split('\0')) - {''}
+    # C locale: git's warnings are not translated; any stderr text still counts, translated or not.
+    env = {**os.environ, 'LC_ALL': 'C', 'LANGUAGE': 'C'}
+    proc = subprocess.run(
+        ['git', 'diff', '--name-status', '-M', '-z', base, parent], cwd=cwd, capture_output=True, env=env
+    )
+    if proc.returncode != 0:
+        raise GateError(f"git diff failed: {proc.stderr.decode('utf-8', errors='replace').strip()}")
+    # Past diff.renameLimit git skips exhaustive rename detection and warns on stderr: treat any
+    # stderr output as an incomplete result.
+    complete = not proc.stderr.strip()
+    fields = proc.stdout.decode('utf-8', errors='replace').split('\0')
+    renames, index = [], 0
+    while index < len(fields) and fields[index]:
+        status = fields[index]
+        if status.startswith(('R', 'C')) and index + 2 < len(fields):
+            renames.append((fields[index + 1], fields[index + 2]))
+            index += 3
+        else:
+            index += 2
+    return plain, renames, complete
+
+
+def _auto_merge(parents: list[str], cwd: str | Path | None) -> tuple[str, list[str]] | None:
+    '''(tree git merges the two parents to on its own, the paths it conflicts on), or None.'''
+    proc = subprocess.run(
+        ['git', 'merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', *parents],
+        cwd=cwd, capture_output=True,
+    )
+    if proc.returncode == 129:
+        return None  # usage error: a git without merge-tree --write-tree
+    if proc.returncode not in (0, 1):
+        message = proc.stderr.decode('utf-8', errors='replace').strip()
+        raise GateError(f'git merge-tree failed: {message or proc.returncode}')
+    fields = proc.stdout.decode('utf-8', errors='replace').split('\0')
+    tree, names = fields[0], fields[1:]
+    if not re.fullmatch(r'[0-9a-f]{40,64}', tree):
+        # Exit 1 with no tree id is a failure (an unknown commit), not a conflict.
+        message = proc.stderr.decode('utf-8', errors='replace').strip()
+        raise GateError(f'git merge-tree failed: {message or tree or proc.returncode}')
+    conflicts = [name for name in (names[: names.index('')] if '' in names else names) if name]
+    return tree, (conflicts if proc.returncode == 1 else [])
+
+
+def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
+    '''Paths a merge edits itself, beyond what git's own merge of its parents gives.
+
+    For a two-parent merge that is every conflicted path plus every path where the committed
+    tree differs from git's automatic merge tree: a clean integration of authorized edits
+    (even to one workflow on both sides) lists nothing, a conflict resolved by keeping one
+    side whole lists the conflict, and a hand edit on top of a clean merge lists its path.
+    Other commits and gits without merge-tree --write-tree fall back to the combined diff.
+    The batch land and the pre-push/CI gate both read this one function.
+    '''
+    parents = _git_text(['rev-list', '--parents', '-n', '1', sha], cwd=cwd).split()[1:]
+    merged = _auto_merge(parents, cwd) if len(parents) == 2 else None
+    if merged is None:
+        out = _git_text(
+            ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', '--cc', '--no-renames', sha],
+            cwd=cwd,
+        )
+        paths = {path for path in out.split('\0') if path}
+        if len(parents) == 2:
+            # No merge-tree --write-tree: a path both sides changed may be a conflict resolved by
+            # keeping one side, which the combined diff omits. Stricter, never looser.
+            base = _git_text(['merge-base', *parents], cwd=cwd).strip()
+            sides = [_changed_since(base, parent, cwd) for parent in parents]
+            both = sides[0][0] & sides[1][0]
+            paths |= both
+            if all(complete for _, _, complete in sides):
+                # A path both sides renamed away conflicts at each destination (maybe a workflow).
+                for _, renames, _ in sides:
+                    paths |= {new for old, new in renames if old in both}
+            elif both:
+                # Rename detection was skipped: any destination may hide a conflict. Fail closed.
+                paths |= sides[0][0] | sides[1][0]
+        return sorted(paths)
+    tree, conflicts = merged
+    out = _git_text(
+        ['diff-tree', '--name-only', '-r', '-z', '--no-renames', tree, f'{sha}^{{tree}}'], cwd=cwd
+    )
+    return sorted({path for path in out.split('\0') if path} | set(conflicts))
 
 
 def _trailer_block_lines(message: str) -> list[str]:
@@ -459,6 +560,18 @@ def check(
             sha, base, head, cwd=cwd, paths=touched
         ):
             violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
+
+    for sha, message in _iter_merges(base, head, cwd=cwd):
+        if sha.lower() in exempt_set:
+            continue
+        # A merge that resolves a gate-file conflict edits the gate: the same trailer rule as
+        # a plain commit (the batch land refuses it otherwise, after the frozen push).
+        if (
+            any(fnmatch.fnmatchcase(path, pattern)
+                for path in merge_edited_paths(sha, cwd=cwd) for pattern in GATE_PATHS)
+            and not _has_trailer(_trailer_block_lines(message), GATE_EDIT_RE)
+        ):
+            violations.append(f'{sha}: {GATE_EDIT_VIOLATION}')
 
     return violations
 

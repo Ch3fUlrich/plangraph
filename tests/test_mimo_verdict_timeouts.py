@@ -211,8 +211,8 @@ def test_unrecognized_finish_blocks_unfinished_tail(part):
 
 
 def test_missing_and_unknown_finish_policy_is_documented():
-    docs = (Path(__file__).parents[1] / 'docs/SPAWNER.md').read_text()
-    section = docs.split('### MiMo seat timeouts', 1)[1].split('\n### ', 1)[0]
+    docs = (Path(__file__).parents[1] / 'docs/operations/spawner-mimo-seats.md').read_text()
+    section = docs.split('## MiMo seat timeouts', 1)[1].split('\n## ', 1)[0]
     assert 'missing or unknown' in section
     assert 'fail closed' in section
     assert 'whitespace-only' in section

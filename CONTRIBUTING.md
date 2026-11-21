@@ -27,7 +27,7 @@ With sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust s
 `tools/merge_batch.py land` merges the batch PR with one `Plan-Item` trailer per item of every included part and for the batch `--plan` key, plus one `Review-Run: KEY RUN_ID PART_HEAD` line per recorded part review, in the merge commit body, and runs `plangraph merge-close` once after the batch landed, so the keeper closes the items its merge names; the job's report goes to stderr and a failure or a missing binary never fails the land.
 `tools/merge_batch.py push` also waits without an overall deadline and forwards
 git and hook output to stderr while the hook enforces its per-step bounds.
-The shared subprocess runner kills the process group on a caller-supplied
+The Rust step resolves `protoc` (`PROTOC`, then `~/.local/bin/protoc`, then `PATH`) before cargo when a target pulls a protobuf build script, and refuses within a second with a named message when it is missing. The shared subprocess runner kills the process group on a caller-supplied
 timeout or interruption, including nested worker sessions on Linux, then reaps
 git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
@@ -80,7 +80,7 @@ refreshes an existing run only on the same head; a new head clears it.
 `go-req --name NAME` prints one batch GO-REQ with PR, full head, diff stat, part
 reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
 non-green or missing CI, and workflow edits whose touching commits lack a
-`Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution. The batch key is explicit; part Plan-Items do not
+`Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution (a main-into-lane merge that resolves a workflow conflict carries the trailer in its own message: the commit gate refuses it at push and in CI, and `build` refuses a PR head with such a merge before it builds). The batch key is explicit; part Plan-Items do not
 stand in for the batch's PLAN key. After land reports included parts as merged,
 cleanup invokes `pg-worktree-sweep --apply --delete-remote` with exact saved
 SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
@@ -269,7 +269,10 @@ and in the pre-push hook. Files that were larger when the gate landed are listed
 shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers counts or removes entries that fit the 800-line cap, and CI refuses an entry added or raised against the change's base (`origin/main`
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
-(today only `CHANGELOG.md`, an append-only ledger).
+(today only `CHANGELOG.md`, an append-only ledger). A doc with a lower cap is named in
+`DOC_CAPS` of `tools/check_file_size.py` (today `docs/SPAWNER.md`, 728 lines); the check refuses it
+over its cap, naming the file and the cap, and main keeps `DOC_HEADROOM` (60) lines under it: move a
+self-contained section into `docs/operations/` and link it.
 The file-size gate refuses malformed Git batch headers with a single reason line.
 Pre-push uses `--head` for each pushed ref, reading its blobs, `.filesize-allow`
 and `.filesize-baseline` from Git. Public scrub rules also come from that head.

@@ -63,60 +63,11 @@ Prompts travel by stdin or file on every launch path (D-5233). See
 [spawner prompt rules](operations/spawner-prompt-rules.md) for transport contracts,
 carrier validation, failure behavior, fixer reports, retry bounds and the role header and skill prefix.
 
-### MiMo seat timeouts and verdict packaging (MIMO-VERDICT-TIMEOUTS)
+### MiMo seat timeouts and reasoning-only output
 
-For MiMo seats and all other `review` runs, `run_watchdog_limits.thresholds` sets
-`hard_max=True`, including default caps: reviews never wait for a writer's first
-edit and ignore a valid `hard_first_edit` opt-in. Card limits must be positive,
-finite numbers (not booleans); invalid limits refuse the spawn. Without a card
-`max_min`, an unset `PLANGRAPH_SPAWN_RUN_TIMEOUT` gives a 25-minute cap, an empty
-value keeps the default 90-minute wall, and a positive numeric value sets seconds.
-The package-wide `inline_diff_prompt` bound change was dropped to preserve main's
-cost-context contract: `max_chars` measures only the diff and exact-fit diffs pass.
-Oversized diffs keep `InlineDiffError`'s `diff too large for leg` text and diff-only
-size, prefixed with `prompt_too_large`. Seat assembly maps that refusal to
-`PromptBoundError` (`ContextError` and `InlineDiffError`) with `inline_diff_oversized`;
-the base `InlineDiffError` is not itself a context/bound error. Whole-prompt admission retains `inline_prompt_oversized`
-for oversized instructions/framing, both under the named `prompt_too_large`
-reason regardless of `PLANGRAPH_CONTEXT_STRICT`. Neither truncates;
-missing diff references, empty diffs and failed `git diff` calls fail explicitly.
-
-In `opencode_answer.final_answer`, `allow_unfinished=True` accepts pending text
-with no finish frame or after `tool-calls`, unless an earlier finish blocked it.
-Reasons other than `stop` or `tool-calls`, including missing or unknown reasons,
-fail closed: pending text is discarded and unfinished tails stay ineligible.
-Only a `stop` with non-blank pending text clears that block; empty or
-whitespace-only stops and tool calls cannot launder truncation into a verdict.
-A completed `stop` answer remains eligible.
-
-### Reasoning-only output exhaustion (MIMO-REASONING-OUTPUT-LIMIT)
-
-Before decoding display stdout, `opencode_answer.record_steps` retains each
-`step_finish` as an `opencode_step_finish` event with `finish_reason`,
-`output_tokens` and `reasoning_tokens`; absent usage remains null, not zero.
-Structured `output-limit` errors and the matching OpenCode stderr diagnostic
-add `opencode_output_limit`. These are diagnostic events, not served-model witnesses. Review tool-denial validation and its defaults live in `spawner/opencode_isolation.py`. The `spawner.runner` gate wrapper passes its own `_DENIED_TOOLS`, `_REVIEW_OPENCODE_ENV_ALLOW` and `_opencode_managed_dir` at call time, preserving rebinding of those three dependencies. The wrapper also resolves the isolation implementation at call time; isolation internals such as `json`, `Path` and `Mapping` are not runner override points. Patching the shared `sys.platform` attribute still reaches managed-directory resolution, while replacing runner module objects is outside this contract. All managed-directory, permission and child-environment checks remain mandatory; only the runner wrapper supplies explicit dependency values. Direct isolation calls resolve omitted or `None` inputs from the isolation module at call time.
-A final `length` step with output zero, or that error with no text/output,
-adds `opencode_reasoning_exhausted`; later completed output is not retried.
-Display-text decoding also protects plain/mixed stdout answers; diagnostic-only JSON, including blank separator lines, is not answer text.
-The monitor's events reach `record.json` through either dispatch path.
-
-Every supported MiMo OpenCode launch uses shared `opencode_answer.cap_reasoning` to set its own `providers.mimo.models[model].limit.output` to the catalog's 131072 combined reasoning/answer tokens, plus the per-child legacy output-max env, and caps `body.reasoning.max_tokens` (below the output limit) in shipped MiMo cards, rendered template, and runner launches unless thinking is already disabled. Model package overrides take precedence over the provider package; only the openai-compatible package is supported. Missing entries are never fabricated. Malformed config, limit/body objects, incompatible packages and invalid catalog caps refuse with named `reasoning_output_limit: ...` reasons before launch. Combos resolve before this gate; unknown MiMo IDs retain the named path refusal. Non-MiMo launches and the root config are unchanged. Structured usage counts survive record scrubbing only as nonnegative integers; token secrets stay masked.
-For an OpenCode inline `review`, shared `SeatSpawnMixin._launch_leg` still retries
-once with the same prompt, model and harness, never unchanged. MiMo v2.6 Flash
-and Pro use model-local `body.thinking.type=disabled` (zero reasoning budget)
-in the isolated child config on retry only; other roles do not disable thinking.
-An already-disabled or unsupported control is unavailable, not an unchanged retry.
-The failed attempt and its events stay in the record, with `reasoning_retry=1`
-saved before the retry. Tool denial, fresh job isolation and the original review
-wall deadline remain in force. No new retry loop or provider-health booking is added.
-The retry requires more than 30 seconds of remaining wall budget. Base-service launches keep their original shielded monitor cancellation and ownership fields.
-Repeated zero-output exhaustion, an unavailable cap, or no remaining retry budget
-ends the run `failed` with terminal `reason: reasoning_output_limit`; no spare leg
-or writer continuation runs. Cancellation, timeout and kill-incomplete still win.
-Terminal status, reason, attempts and events are saved at the shared launch boundary before either caller returns; routed exhaustion keeps normal failure witness metadata, and both callers finalize `ended` and release monitor registrations in `finally`.
-Normal output, nonzero-output truncation and non-review roles retain existing behavior except that base-service watchdog exits now retain one attempt row, matching routed dispatch; `terminal_record` adds no rows, retries do not duplicate watchdog rows, and cancellation rows are unchanged.
-Hermetic coverage is in `tests/test_spawner_review_tools_inline.py` and `tests/test_spawner_runner_answer.py`, with Rust cap contracts in `rust/pg-spawnd/tests/mimo_output_cap.rs`; live seats remain an after-merge operator check.
+Review seats are hard-capped from their first output, and reasoning-only output exhaustion is
+handled without losing the verdict: see [MiMo seats](operations/spawner-mimo-seats.md)
+(MIMO-VERDICT-TIMEOUTS, MIMO-REASONING-OUTPUT-LIMIT).
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
@@ -225,24 +176,12 @@ failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; o
 recognized availability/quota evidence does. Review `usage_limit:`/`credit_limit:` labels book only when their payload is recognized quota evidence (for example `error: usage limit reached`/`error: credits exhausted`); a label plus `task diagnostic` does not book. Writer
 generic failures keep their stop rule; cancellation, safety refusals and watchdog
 terminals still stop immediately. Safety refusal attempts precede provider-stop classification without overwriting distinct terminal reasons; specific unavailable diagnostics outrank generic provider stops. Provider-stop responses pass through spawner redaction before being added to attempts, including safety refusals. OOM wrapper marker lines (including prefixed telemetry) are not failure reasons. A `plangraph_oom` envelope on stderr is recorded only as an event and removed from the captured stderr, so each failed attempt keeps its own reason and a later attempt's OOM line cannot overwrite it.
-Plain stdout, including text saying 429, is never provider evidence.
+Plain stdout, including text saying 429, is never provider evidence; `not_served_on_host` is a host fact and is never booked as a 429 down window.
 
 ### SHA-named run-tree primitive (SPAWNER-RUN-TREE-S1)
 
-`git_guard.run_tree(state, repo)` attempts to fetch `origin/main`, selects its verified SHA, and uses the detached tree at `<state>/trees/<sha>`.
-If fetching fails or times out, it uses the verified tracking ref, not cache directory mtimes.
-It creates missing trees, including stale Git registrations even if locked (double `--force`).
-Under the SHA's creation lock, the shared ancestry checker checks the selected base against fetched `origin/main` without another fetch, refusing `base_stale` if a parallel admission advanced the ref while selection waited.
-An admission that already fetched this repository can use `run_tree(state, repo, fetch=False)`. This check leaves local `main` and live cached trees untouched.
-
-POSIX reaping keeps the selected tree, trees named by nonterminal run records
-or records with survivors, trees with held creation locks or context leases, directories
-modified within seven days, and dirty trees. A missing/invalid `tree_sha` on a
-nonterminal or survivor record, or corrupt/unreadable records, disables reaping
-for that call. Only older, clean, unpinned trees with available locks and leases
-are removed. Windows selection does no reaping.
-With a checkout or `PLANGRAPH_SPAWNER_REPO`, live Python CLI/MCP launches import a supervisor from the selected tree and stamp its SHA before persistence. Installed packages, custom transports, dry runs and direct supervision retain process-load identity. Job cwd and empty seat envelopes retain their existing behavior. The tree lease is released once when the supervisor finishes or the caller detaches; durable running records keep the tree pinned. Cancellation before the admission reply may still stop the pending supervisor. CLI `--wait` bounds the wait after the existing admission handshake. For supervised MCP jobs, use `run_id` for status, result and cancellation; `job_id` controls and steering remain local to the runner that owns the job. The launch-spec module adapter imports launch construction from the selected tree and appends a `run_tree` event, including when child events are null.
-Terminal means `runner.is_terminal`; `needs_input` and `orphaned` keep their trees.
+Every run works in a detached tree named by the verified `origin/main` SHA; creation, reaping and
+pinning are in [run tree](operations/spawner-run-tree.md).
 
 ### Opt-in per-attempt worktrees (RUN-WORKTREE slice 1)
 
