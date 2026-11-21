@@ -612,8 +612,9 @@ def main(argv=None):
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
-        disk = local_disk_refusal(cwd or args.repo, cli.SpawnService(state=args.state), args.role,
-                                 movable=not cwd)
+        named = cwd or ((card or {}).get('diff_ref') or {}).get('repo') or (card or {}).get('repo')
+        disk = local_disk_refusal(named or args.repo, cli.SpawnService(state=args.state), args.role,
+                                 movable=not named)
         if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         if card is None:

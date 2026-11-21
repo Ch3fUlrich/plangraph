@@ -645,21 +645,26 @@ def test_readiness_work_drives_reach_the_placement_decision(registry, monkeypatc
     assert o.decide(10000, 2048, 3000, rows, True, local_refusal='disk_low: free 2 GB').host is None
 
 
-def test_unnamed_checkout_is_movable_through_the_overflow_entry(tmp_path, monkeypatch):
+@pytest.mark.parametrize('card_data,named', [
+    ({}, False),
+    ({'diff_ref': {'repo': '/named/diff-repo'}}, '/named/diff-repo'),
+    ({'repo': '/named/card-repo'}, '/named/card-repo'),
+])
+def test_only_an_unnamed_checkout_is_movable_through_the_overflow_entry(tmp_path, monkeypatch, card_data, named):
     from plangraph.spawner import host_ready as h
     card = tmp_path / 'card.json'
-    card.write_text('{}')
+    card.write_text(json.dumps(card_data))
     prompt = tmp_path / 'prompt.txt'
     prompt.write_text('task')
     monkeypatch.setattr(o, 'registry_caps', lambda: {})
     use_projected_overflow_config(monkeypatch, tmp_path / 'missing')
     monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
-    moved = []
+    seen = []
     monkeypatch.setattr(h, 'local_disk_refusal', lambda worktree, service, role='implement', movable=False:
-                        moved.append(movable))
+                        seen.append((str(worktree), movable)))
     monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
     assert o.main(['spawn', '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt)]) == 3
-    assert moved == [True]
+    assert seen == [(named or str(tmp_path), not named)]
 
 
 def test_pinned_checkout_is_held_to_its_work_drive_floor(tmp_path, monkeypatch):
