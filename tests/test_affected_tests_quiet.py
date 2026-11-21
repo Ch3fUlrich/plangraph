@@ -240,3 +240,70 @@ def test_collect_only_keeps_maxfail(fx):
     args = fx.invocations()[0]
     assert "--collect-only" in args and args[args.index("--maxfail") + 1] == "3"
     assert "-q" not in args
+
+
+@pytest.mark.parametrize("workers,auto_workers", [("0", None), ("00", None), ("auto", "0")])
+def test_a_serial_fail_pass_fail_sequence_is_not_failed_in_parallel(fx, workers, auto_workers):
+    """Whatever spelling makes xdist start no workers, no label claims a parallel failure."""
+    if auto_workers is not None:
+        fx.env["PYTEST_XDIST_AUTO_NUM_WORKERS"] = auto_workers
+    fx.write("""
+        import os
+        from pathlib import Path
+        def test_sequence():
+            counter = Path(os.environ["FIXTURE_MARKER"] + ".count")
+            runs = int(counter.read_text()) + 1 if counter.exists() else 1
+            counter.write_text(str(runs))
+            assert runs == 2, f"run {runs}: fails on the first and third run"
+    """)
+    fx.commit()
+    result = fx.run(workers=workers)
+    assert result.returncode == 1
+    assert len(fx.invocations()) == 3
+    assert "FAILED-IN-PARALLEL" not in result.stdout and "FLAKY" not in result.stdout
+
+
+def test_flake_labels_name_a_parallel_failure_only_when_workers_ran():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("affected_tests_labels", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ids, same = ["t::a"], ["h"] * 4
+    passed, failed = {"t::a": "passed"}, {"t::a": "failed"}
+    assert module.flake_labels(ids, passed, failed, same) == ["FAILED-IN-PARALLEL: t::a"]
+    assert module.flake_labels(ids, passed, failed, same, parallel=False) == []
+
+
+@pytest.mark.parametrize("text", [
+    '{"outcomes": {"t::a": "failed"}, "workers": "false"}',
+    '{"outcomes": {"t::a": "failed"}, "workers": 1}',
+    '{"outcomes": {"t::a": "failed"}, "workers": null}',
+    '{"outcomes": null, "workers": true}',
+    '{"outcomes": ["t::a"], "workers": true}',
+    '{"outcomes": {"t::a": 1}, "workers": true}',
+    '{"outcomes": {"t::a": "failed"}}', '{"workers": true}', "[]", "null", "not json", ""])
+def test_a_malformed_recorder_file_means_no_outcomes_and_no_workers(text):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("affected_tests_record", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.read_record(text) == ({}, False)
+    assert module.read_record('{"outcomes": {"t::a": "failed"}, "workers": true}') == ({"t::a": "failed"}, True)
+
+
+def test_an_unreadable_recorder_file_means_no_outcomes_and_no_workers(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("affected_tests_record_file", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    good = tmp_path / "good.json"
+    good.write_text('{"outcomes": {"t::a": "failed"}, "workers": true}')
+    assert module.read_record_file(good) == ({"t::a": "failed"}, True)
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b'{"outcomes": {"t::\xff": "failed"}, "workers": true}')
+    assert module.read_record_file(bad) == ({}, False)
+    assert module.read_record_file(tmp_path / "missing.json") == ({}, False)
+    assert module.read_record_file(tmp_path) == ({}, False)       # a directory
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 100_000)
+    assert module.read_record_file(deep) == ({}, False)
