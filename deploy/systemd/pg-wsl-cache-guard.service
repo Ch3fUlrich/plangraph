@@ -5,7 +5,6 @@ ConditionVirtualization=wsl
 [Service]
 Type=oneshot
 User=root
-Environment="PG_WSL_FREE_MB=20480"
-EnvironmentFile=-/etc/plangraph/wsl-cache-guard.env
+EnvironmentFile=/etc/plangraph/wsl-cache-guard.env
 ExecStart=/usr/local/bin/pg-spawnd host wsl-cache-guard --min-free-mb ${PG_WSL_FREE_MB}
 TimeoutStartSec=120s

@@ -1,7 +1,9 @@
 //! Admission for a configured pool of mounted worktree filesystems.
 use crate::disk_runtime::DiskSpace;
 use std::{
-    env, io,
+    env,
+    ffi::OsStr,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -44,25 +46,26 @@ pub fn select_with<'a>(
     })
 }
 
-fn worktree_root(mount: &Path) -> PathBuf {
+pub fn worktree_root(mount: &Path) -> PathBuf {
     mount.join("plangraph/worktrees")
 }
 
 /// Worktree roots corresponding to every configured mount, including offline mounts.
 pub fn configured_roots() -> impl Iterator<Item = PathBuf> {
+    configured_mounts()
+        .into_iter()
+        .map(|mount| worktree_root(&mount))
+}
+
+pub fn configured_mounts() -> Vec<PathBuf> {
     env::var_os(WORKTREE_MOUNTS)
         .filter(|value| !value.is_empty())
-        .map(|value| {
-            env::split_paths(&value)
-                .map(|mount| worktree_root(&mount))
-                .collect::<Vec<_>>()
-        })
-        .into_iter()
-        .flatten()
+        .map(|value| env::split_paths(&value).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(unix)]
-fn mounted_space(mount: &Path) -> io::Result<DiskSpace> {
+pub fn mounted_space(mount: &Path) -> io::Result<DiskSpace> {
     use std::os::unix::fs::MetadataExt;
     use std::{process::Command, time::Duration};
     if !mount.is_absolute()
@@ -90,24 +93,37 @@ fn mounted_space(mount: &Path) -> io::Result<DiskSpace> {
 }
 
 #[cfg(not(unix))]
-fn mounted_space(_: &Path) -> io::Result<DiskSpace> {
+pub fn mounted_space(_: &Path) -> io::Result<DiskSpace> {
     Err(io::Error::other("configured work mounts require Unix"))
 }
 
 /// Return the worktree root on the largest eligible disk.
 pub fn worktree_disk() -> io::Result<Option<(PathBuf, DiskSpace)>> {
-    let Some(configured) = env::var_os(WORKTREE_MOUNTS).filter(|value| !value.is_empty()) else {
+    worktree_disk_with(
+        env::var_os(WORKTREE_MOUNTS).as_deref(),
+        env::var_os("PLANGRAPH_DISK_MIN_FREE_PERCENT").as_deref(),
+        mounted_space,
+    )
+}
+
+/// Resolve a mount list and percentage from host configuration using the supplied disk probe.
+pub fn worktree_disk_with(
+    configured: Option<&OsStr>,
+    percent: Option<&OsStr>,
+    sample: impl Fn(&Path) -> io::Result<DiskSpace>,
+) -> io::Result<Option<(PathBuf, DiskSpace)>> {
+    let Some(configured) = configured.filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
-    let mounts: Vec<_> = env::split_paths(&configured).collect();
+    let mounts: Vec<_> = env::split_paths(configured).collect();
     let candidates: Vec<_> = mounts.iter().map(PathBuf::as_path).collect();
-    let percent = match env::var("PLANGRAPH_DISK_MIN_FREE_PERCENT") {
-        Ok(value) => value
-            .parse()
-            .map_err(|_| io::Error::other("disk_low: invalid free percentage"))?,
-        Err(env::VarError::NotPresent) => 10,
-        Err(error) => return Err(io::Error::other(error)),
+    let percent = match percent {
+        Some(value) => value
+            .to_str()
+            .and_then(|value| value.parse().ok())
+            .ok_or_else(|| io::Error::other("disk_low: invalid free percentage"))?,
+        None => 10,
     };
-    let (mount, space) = select_with(&candidates, percent, mounted_space)?;
+    let (mount, space) = select_with(&candidates, percent, sample)?;
     Ok(Some((worktree_root(mount), space)))
 }

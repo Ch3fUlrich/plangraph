@@ -8,7 +8,6 @@ use std::{
 };
 
 const WSL_GUARD_USAGE: &str = "Usage: pg-spawnd host wsl-cache-guard [--min-free-mb N]";
-const DEFAULT_MIN_FREE_MB: u64 = 20_480;
 
 pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String> {
     let args: Vec<_> = args.iter().map(String::as_str).collect();
@@ -21,7 +20,7 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
             serde_json::to_string(path).map_err(|error| error.to_string())?
         }
         ["wsl-cache-guard", "--help" | "-h"] => WSL_GUARD_USAGE.into(),
-        ["wsl-cache-guard"] => wsl_guard(DEFAULT_MIN_FREE_MB)?,
+        ["wsl-cache-guard"] => wsl_guard(pg_worker_core::wsl::CACHE_GUARD_FLOOR_MB)?,
         ["wsl-cache-guard", "--min-free-mb", value] => {
             let min = value
                 .parse::<u64>()

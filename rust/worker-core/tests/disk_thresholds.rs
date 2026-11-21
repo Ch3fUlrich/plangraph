@@ -3,6 +3,46 @@ use pg_worker_core::disk_hygiene::{sweep, Guards, Thresholds};
 use std::{process::Command, time::SystemTime};
 
 #[test]
+fn percentage_thresholds_trigger_at_the_boundary_on_large_filesystems() {
+    let repo = tempfile::tempdir().unwrap();
+    assert!(pg_worker_core::git_test_support::command(repo.path())
+        .args(["init", "-q"])
+        .status()
+        .unwrap()
+        .success());
+    let total = 100_000_000_000;
+    let limits = Thresholds::default().for_filesystem(total);
+    let check = |free| {
+        sweep(
+            repo.path(),
+            repo.path(),
+            &Guards::default(),
+            SystemTime::now(),
+            free,
+            limits,
+            false,
+        )
+        .unwrap()
+    };
+    assert!(!check(total / 4 + 1).alarm);
+    assert!(check(total / 4).alarm);
+    let missing_repo = repo.path().join("missing");
+    let cleanup = |free| {
+        sweep(
+            &missing_repo,
+            repo.path(),
+            &Guards::default(),
+            SystemTime::now(),
+            free,
+            limits,
+            false,
+        )
+    };
+    assert!(cleanup(total / 5 + 1).is_ok());
+    assert!(cleanup(total / 5).is_err());
+}
+
+#[test]
 fn absolute_threshold_boundaries_and_custom_configuration() {
     let root = tempfile::tempdir().unwrap();
     // No Git repo: reaching cleanup produces a Git error, making the boundary observable.

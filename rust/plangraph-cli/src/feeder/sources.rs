@@ -1,7 +1,7 @@
 use super::adapters::{output, python, Env, Keeper, Transport};
 use super::*;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 pub(super) fn read_json(path: &Path) -> Result<Value, String> {
     serde_json::from_str(&fs::read_to_string(path).map_err(|_| "JSON file unreadable")?)
         .map_err(|_| "invalid JSON file".into())
@@ -194,11 +194,10 @@ pub(super) fn facts(
 ) -> Result<HostFacts, String> {
     let mut f: HostFacts =
         serde_json::from_value(read_json(path)?).map_err(|_| "invalid host facts")?;
-    if let Some((_, space)) =
-        pg_worker_core::work_disks::worktree_disk().map_err(|error| error.to_string())?
-    {
-        f.free_disk_bytes = f.free_disk_bytes.min(space.free);
-    }
+    f.free_disk_bytes = disk_limit(
+        f.free_disk_bytes,
+        pg_worker_core::work_disks::worktree_disk(),
+    )?;
     let mut cmd = python(env, repo);
     cmd.args(["-c","import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
     let rows = output(cmd).ok();
@@ -212,9 +211,40 @@ pub(super) fn facts(
         rows.as_ref(),
     )
 }
+
+fn disk_limit(
+    reported: u64,
+    work_disk: std::io::Result<Option<(PathBuf, pg_worker_core::disk_runtime::DiskSpace)>>,
+) -> Result<u64, String> {
+    let disk = work_disk.map_err(|error| error.to_string())?;
+    Ok(disk.map_or(reported, |(_, space)| reported.min(space.free)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feeder_disk_limit_uses_the_tighter_sample_and_propagates_a_mount_refusal() {
+        use pg_worker_core::disk_runtime::DiskSpace;
+        assert_eq!(disk_limit(100, Ok(None)).unwrap(), 100);
+        let sample = || {
+            Ok(Some((
+                PathBuf::from("fixture"),
+                DiskSpace {
+                    free: 80,
+                    total: 200,
+                },
+            )))
+        };
+        assert_eq!(disk_limit(100, sample()).unwrap(), 80);
+        assert_eq!(disk_limit(50, sample()).unwrap(), 50);
+        let reason = "disk_low: no eligible work mount";
+        assert_eq!(
+            disk_limit(100, Err(std::io::Error::other(reason))).unwrap_err(),
+            reason
+        );
+    }
     #[test]
     fn card_identity_and_unknown_scope_only_consume_their_host_slot() {
         let data = json!({"runs":[

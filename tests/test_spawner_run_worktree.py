@@ -6,12 +6,50 @@ import os
 from pathlib import Path
 import subprocess
 import threading
+from types import SimpleNamespace
 
 import pytest
 
 from registry_route_util import use_projected_overflow_config
 
 from plangraph.spawner import git_guard
+
+
+def test_configured_workdisk_controls_admission_and_worktree_creation(tmp_path, monkeypatch):
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.spawner import host_ready
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    root = tmp_path / 'selected'
+    root.mkdir()
+    monkeypatch.setenv('PLANGRAPH_WORKTREE_MOUNTS', str(tmp_path))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'cargo'))
+    monkeypatch.delenv('PLANGRAPH_SETTINGS', raising=False)
+    monkeypatch.setattr(host_ready, 'disk_free_gb', lambda _: 100)
+    saved = []
+    service = SimpleNamespace(state=tmp_path / 'state', _save=saved.append)
+    reason = 'disk_low: all configured work mounts are below their floor'
+    def probe(argv, **kwargs):
+        assert argv == ['pg-spawnd', 'host', 'work-disk']
+        return subprocess.CompletedProcess(argv, 2, '', reason + '\n')
+    monkeypatch.setattr(host_ready.subprocess, 'run', probe)
+    assert host_ready.local_disk_refusal(repo, service, 'review') == reason
+    with pytest.raises(SpawnRefused, match=reason):
+        asyncio.run(git_guard.prepare_worktree(service, {'run_id': 'sample'}, {}, True, repo=repo))
+
+    def choose(argv, **kwargs):
+        assert argv == ['pg-spawnd', 'host', 'work-disk']
+        return subprocess.CompletedProcess(argv, 0, json.dumps(str(root)), '')
+    monkeypatch.setattr(host_ready.subprocess, 'run', choose)
+    def create(chosen, *args, **kwargs):
+        assert chosen == root
+        return {'path': str(chosen / 'sample')}
+    monkeypatch.setattr(git_guard, 'create', create)
+    record = {'run_id': 'sample'}
+    asyncio.run(git_guard.prepare_worktree(service, record, {}, True, repo=repo))
+    assert record['cwd'] == str(root / 'sample')
+    assert saved == [record]
 
 
 def git(repo, *args):

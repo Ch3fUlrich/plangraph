@@ -305,7 +305,6 @@ pub fn sweep_checked(
     apply: bool,
     safe_to_remove: impl Fn(&Path) -> io::Result<bool>,
 ) -> io::Result<Report> {
-    let thresholds = thresholds.validate()?;
     let root = root.canonicalize()?;
     let mut report = Report {
         free_bytes,

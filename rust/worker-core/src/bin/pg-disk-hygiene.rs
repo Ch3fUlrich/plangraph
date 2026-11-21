@@ -2,7 +2,7 @@ use pg_worker_core::{
     disk_hygiene::{self, Guards, Report, Thresholds},
     disk_runtime,
     run::record_io,
-    sweep_facts,
+    sweep_facts, work_disks,
 };
 use std::{
     env, io,
@@ -11,6 +11,30 @@ use std::{
 };
 
 fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
+    execute_with(
+        args,
+        state,
+        work_disks::configured_mounts(),
+        disk_runtime::processes,
+        || {
+            let temp = env::temp_dir();
+            let tmp = Path::new("/tmp");
+            let scratch = std::iter::once(temp.as_path())
+                .chain((temp != tmp).then_some(tmp))
+                .map(Path::to_path_buf)
+                .collect();
+            Ok((scratch, pg_worker_core::cargo_cache::shared_cache_roots()?))
+        },
+    )
+}
+
+fn execute_with(
+    args: &[String],
+    state: &Path,
+    mounts: Vec<PathBuf>,
+    processes: impl Fn() -> io::Result<(Vec<PathBuf>, bool)>,
+    caches: impl FnOnce() -> io::Result<(Vec<PathBuf>, Vec<PathBuf>)>,
+) -> io::Result<Report> {
     let (mut repo, mut pins) = (None, None);
     let mut roots = Vec::new();
     let (mut apply, mut dry) = (false, false);
@@ -58,33 +82,16 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     }
     let pins = pins.ok_or_else(|| io::Error::other("--pins required"))?;
     let thresholds = thresholds.validate()?;
-    roots.extend(pg_worker_core::work_disks::configured_roots());
+    let configured: std::collections::BTreeMap<_, _> = mounts
+        .into_iter()
+        .map(|mount| (work_disks::worktree_root(&mount), mount))
+        .collect();
+    roots.extend(configured.keys().cloned());
     roots.extend(
         ["runs", "worktrees"]
             .map(|name| state.join(name))
             .into_iter()
             .filter(|path| path.is_dir()),
-    );
-    let roots = roots
-        .into_iter()
-        .map(|root| {
-            let path = root.canonicalize()?;
-            let space = disk_runtime::disk_space(&path)?;
-            Ok((path, space))
-        })
-        .collect::<io::Result<std::collections::BTreeMap<_, _>>>()?;
-    let mut guards = Guards::load(&pins, state)?;
-    // A worktree a user unit runs from keeps its caches: the build the unit starts needs them.
-    let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
-    guards.pinned.extend(
-        sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, Path::new(&home))?
-            .into_iter()
-            .map(|r| r.path),
-    );
-    let (cwds, building) = disk_runtime::processes()?;
-    guards.live.extend(
-        cwds.into_iter()
-            .filter(|path| roots.keys().any(|root| path.starts_with(root))),
     );
     let mut report = Report {
         free_bytes: u64::MAX,
@@ -95,7 +102,45 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
         skipped: vec![],
         error: None,
     };
-    for (root, space) in &roots {
+    let mut available = std::collections::BTreeMap::new();
+    for root in roots.into_iter().collect::<std::collections::BTreeSet<_>>() {
+        let sample = (|| -> io::Result<_> {
+            if let Some(mount) = configured.get(&root) {
+                return Ok((root.clone(), work_disks::mounted_space(mount)?));
+            }
+            let path = root.canonicalize()?;
+            let space = disk_runtime::disk_space(&path)?;
+            Ok((path, space))
+        })();
+        match sample {
+            Ok((path, space)) => {
+                available.insert(path, space);
+            }
+            Err(error) => {
+                report.alarm = true;
+                report
+                    .skipped
+                    .push(format!("{}: root unavailable: {error}", root.display()));
+            }
+        }
+    }
+    if available.is_empty() {
+        return Err(io::Error::other(report.skipped.join("; ")));
+    }
+    let mut guards = Guards::load(&pins, state)?;
+    // A worktree a user unit runs from keeps its caches: the build the unit starts needs them.
+    let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
+    guards.pinned.extend(
+        sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, Path::new(&home))?
+            .into_iter()
+            .map(|r| r.path),
+    );
+    let (cwds, building) = processes()?;
+    guards.live.extend(
+        cwds.into_iter()
+            .filter(|path| available.keys().any(|root| path.starts_with(root))),
+    );
+    for (root, space) in &available {
         let limits = thresholds.for_filesystem(space.total);
         report.free_bytes = report.free_bytes.min(space.free);
         if space.free < limits.alarm_free_bytes {
@@ -117,7 +162,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
                 limits,
                 apply,
                 |tree| {
-                    let (cwds, building) = disk_runtime::processes()?;
+                    let (cwds, building) = processes()?;
                     Ok(!building
                         && !cwds.iter().any(|cwd| cwd.starts_with(tree))
                         && !Guards::load(&pins, state)?.protects(tree))
@@ -133,18 +178,16 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
             .skipped
             .push("build running: cache cleanup deferred".into());
     }
+    let (scratch, shared) = caches()?;
     if !building {
         let mut private_guards = Guards {
             pinned: guards.pinned.clone(),
             live: guards.live.clone(),
         };
-        private_guards
-            .pinned
-            .extend(pg_worker_core::cargo_cache::shared_cache_roots()?);
-        private_guards.pinned.extend(roots.keys().cloned());
-        let temp = env::temp_dir();
-        let tmp = Path::new("/tmp");
-        for path in std::iter::once(temp.as_path()).chain((temp != tmp).then_some(tmp)) {
+        private_guards.pinned.extend(shared.iter().cloned());
+        private_guards.pinned.extend(available.keys().cloned());
+        private_guards.pinned.extend(configured.keys().cloned());
+        for path in &scratch {
             if let Err(error) = pg_worker_core::private_targets::sweep(
                 path,
                 &[],
@@ -158,7 +201,7 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
         }
     }
     {
-        for cache in pg_worker_core::cargo_cache::shared_cache_roots()? {
+        for cache in shared {
             let pressure = match disk_runtime::disk_space(&cache) {
                 Ok(space) => space.free < thresholds.for_filesystem(space.total).cleanup_free_bytes,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
@@ -225,6 +268,98 @@ fn main() -> std::process::ExitCode {
         Err(e) => {
             eprintln!("ALERT disk hygiene: {e}");
             std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+    use std::{fs, time::Duration};
+
+    #[test]
+    fn cli_arguments_sweep_two_roots_even_with_an_offline_mount() {
+        let fixture = tempfile::tempdir().unwrap();
+        let path = |name| fixture.path().join(name);
+        let repo = path("repo");
+        fs::create_dir(&repo).unwrap();
+        let git = |args: &[&str]| {
+            pg_worker_core::host_command::output(
+                pg_worker_core::git_test_support::command(&repo)
+                    .args([
+                        "-c",
+                        "user.name=Fixture",
+                        "-c",
+                        "user.email=test@example.invalid",
+                    ])
+                    .args(args),
+                Duration::from_secs(10),
+            )
+            .unwrap();
+        };
+        git(&["init", "-q"]);
+        fs::write(repo.join(".gitignore"), "target/\n").unwrap();
+        git(&["add", ".gitignore"]);
+        git(&["commit", "-qm", "fixture"]);
+        let mut expected = Vec::new();
+        let roots = [path("first"), path("second")];
+        for root in &roots {
+            fs::create_dir(&root).unwrap();
+            let tree = root.join("lane");
+            git(&["worktree", "add", "--detach", tree.to_str().unwrap()]);
+            let target = tree.join("target");
+            fs::create_dir(&target).unwrap();
+            fs::write(target.join("cache"), "cached").unwrap();
+            let past = SystemTime::now() - Duration::from_secs(25 * 3600);
+            for file in [
+                &tree,
+                &tree.join(".git"),
+                &tree.join(".gitignore"),
+                &target,
+                &target.join("cache"),
+            ] {
+                fs::File::open(file).unwrap().set_modified(past).unwrap();
+            }
+            expected.push(target);
+        }
+        let pins = path("pins.json");
+        fs::write(&pins, "[]").unwrap();
+        let offline = path("offline");
+        let args = [
+            "--repo",
+            repo.to_str().unwrap(),
+            "--pins",
+            pins.to_str().unwrap(),
+            "--root",
+            roots[0].to_str().unwrap(),
+            "--root",
+            roots[1].to_str().unwrap(),
+            "--alarm-free-bytes",
+            "1",
+            "--cleanup-free-bytes",
+            "18446744073709551615",
+            "--dry-run",
+        ]
+        .map(str::to_owned);
+        let report = execute_with(
+            &args,
+            fixture.path(),
+            vec![offline.clone()],
+            || Ok((vec![], false)),
+            || Ok((vec![], vec![])),
+        )
+        .unwrap();
+        assert!(report.alarm);
+        assert!(report
+            .skipped
+            .iter()
+            .any(|message| message.contains(offline.to_str().unwrap())));
+        for target in expected {
+            assert!(report
+                .actions
+                .iter()
+                .any(|message| message.contains(target.to_str().unwrap())));
+            assert!(target.is_dir());
         }
     }
 }

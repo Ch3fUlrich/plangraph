@@ -35,6 +35,29 @@ fn stdout(output: &Output) -> String {
 }
 
 #[test]
+fn wsl_guard_install_skips_non_windows_placement() {
+    let root = tempfile::tempdir().unwrap();
+    let policy = root.path().join("placement.json");
+    fs::write(
+        &policy,
+        r#"{"hosts":[{"name":"fixture","memory_source":"linux"}]}"#,
+    )
+    .unwrap();
+    let output = run_bin(
+        env!("CARGO_BIN_EXE_host-sync"),
+        root.path(),
+        root.path(),
+        &[],
+        &["--install-wsl-guard", policy.to_str().unwrap(), "fixture"],
+    );
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        stdout(&output),
+        "SKIP WSL cache guard: memory source is not Windows\n"
+    );
+}
+
+#[test]
 fn protoc_check_names_missing_well_known_types() {
     let root = tempfile::tempdir().unwrap();
     for (bin, args) in [

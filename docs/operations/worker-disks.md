@@ -68,11 +68,12 @@ worktree and cache reports, reclaim eligible data and measure usage below 85%.
 
 ## WSL cache guard
 
-NOTE Host-sync session. For placement entries with `memory_source = "windows"`,
-install a root-owned `pg-spawnd` in `/usr/local/bin` and copy the
-`pg-wsl-cache-guard` service and timer into the system unit directory. Write
-`PG_WSL_FREE_MB` in `/etc/plangraph/wsl-cache-guard.env` from the
-placement entry's `cache_guard_min_free_mb`, defaulting to 20480.
+NOTE Host-sync session. Install a root-owned `pg-spawnd` in `/usr/local/bin`.
+Run `host-sync --install-wsl-guard POLICY HOST` as root on the selected host
+using the fleet launch policy and host name. The command installs the system
+unit files only for entries with `memory_source = "windows"` and writes
+`PG_WSL_FREE_MB` in `/etc/plangraph/wsl-cache-guard.env` from the optional
+`cache_guard_min_free_mb` placement field, which defaults to 20480.
 
 NOTE Workstation host session. Check Windows interop from the system service.
 Enable the timer and run the 30-minute Cargo and pytest probe. Confirm Windows

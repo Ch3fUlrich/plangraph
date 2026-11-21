@@ -4,6 +4,10 @@
 `google/protobuf/field_mask.proto` and prints its include status. It uses
 `PROTOC` and `PROTOC_INCLUDE` when configured.
 
+`host-sync --install-wsl-guard POLICY HOST` installs the WSL guard system units
+and writes the configured floor for hosts with Windows memory placement.
+See [the WSL rollout notes](operations/worker-disks.md#wsl-cache-guard).
+
 NOTE Host-sync sessions. Add `host-sync --check-protoc` to the host setup check
 and record its output on all three workers. On the affected worker, install the
 well-known include files that match its system protoc and repeat the check.
@@ -65,7 +69,8 @@ binary under `~/.local/bin`. Set `PG_REPO`, `PG_WORKTREES`, `PG_PINS` in
 `~/.config/plangraph/disk-hygiene.env`. Review dry-run output before enabling.
 Repeat `--root` for additional worktree roots. Configured worktree mounts and
 existing state worktree roots are included automatically. Each filesystem is
-compared with its own thresholds. Set `PLANGRAPH_SPAWN_STATE` when records live
+compared with its own thresholds. An unavailable root raises the alarm while
+the other filesystems are still swept. Set `PLANGRAPH_SPAWN_STATE` when records live
 outside the default state directory.
 Threshold options are `--alarm-free-bytes` (default `5368709120`, 5 GiB),
 `--cleanup-free-bytes` (default `10000000000`) and `--shared-target-cap-bytes`

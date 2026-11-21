@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 use pg_worker_core::{
-    disk_hygiene::{sweep, Guards, Thresholds},
+    disk_hygiene::{sweep, sweep_checked, Guards, Thresholds},
     host_command,
 };
 use std::{
@@ -78,6 +78,42 @@ fn disk_hygiene_pinned_dirty_and_live_survive_real_cleanup() {
     assert!(!root.join("clean/target").exists());
     assert!(report.alarm && report.freed_bytes >= 64);
     println!("cleanup freed_bytes={}", report.freed_bytes);
+}
+
+#[test]
+fn final_guard_can_keep_a_cache_in_an_idle_worktree() {
+    let (_tmp, repo, root) = fixture();
+    let tree = root.join("clean");
+    let now = SystemTime::now() + Duration::from_secs(24 * 3600 + 1);
+    let guards = Guards {
+        pinned: vec![root.join("pinned"), root.join("live")],
+        live: vec![],
+    };
+    let run = |allow| {
+        sweep_checked(
+            &repo,
+            &root,
+            &guards,
+            now,
+            0,
+            Thresholds::default(),
+            true,
+            |candidate| {
+                assert_eq!(candidate, tree);
+                Ok(allow)
+            },
+        )
+        .unwrap()
+    };
+    let kept = run(false);
+    assert_eq!(kept.freed_bytes, 0);
+    assert!(kept
+        .skipped
+        .iter()
+        .any(|line| line.contains("active work or build")));
+    assert!(tree.join("target/cache").exists());
+    assert_eq!(run(true).freed_bytes, 64);
+    assert!(!tree.join("target").exists());
 }
 #[test]
 fn disk_hygiene_ignored_non_cache_files_preserve_the_entire_tree() {
