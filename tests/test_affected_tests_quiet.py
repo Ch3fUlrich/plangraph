@@ -289,3 +289,21 @@ def test_a_malformed_recorder_file_means_no_outcomes_and_no_workers(text):
     spec.loader.exec_module(module)
     assert module.read_record(text) == ({}, False)
     assert module.read_record('{"outcomes": {"t::a": "failed"}, "workers": true}') == ({"t::a": "failed"}, True)
+
+
+def test_an_unreadable_recorder_file_means_no_outcomes_and_no_workers(tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("affected_tests_record_file", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    good = tmp_path / "good.json"
+    good.write_text('{"outcomes": {"t::a": "failed"}, "workers": true}')
+    assert module.read_record_file(good) == ({"t::a": "failed"}, True)
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b'{"outcomes": {"t::\xff": "failed"}, "workers": true}')
+    assert module.read_record_file(bad) == ({}, False)
+    assert module.read_record_file(tmp_path / "missing.json") == ({}, False)
+    assert module.read_record_file(tmp_path) == ({}, False)       # a directory
+    deep = tmp_path / "deep.json"
+    deep.write_text("[" * 100_000)
+    assert module.read_record_file(deep) == ({}, False)

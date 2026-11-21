@@ -61,12 +61,20 @@ def read_record(text):
     try:
         record = json.loads(text)
         outcomes, workers = record["outcomes"], record["workers"]
-    except (ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError, RecursionError):
         return {}, False
     if (not isinstance(outcomes, dict) or not isinstance(workers, bool)
             or not all(isinstance(k, str) and isinstance(v, str) for k, v in outcomes.items())):
         return {}, False
     return outcomes, workers
+
+
+def read_record_file(path):
+    """read_record of a file; a missing, unreadable or non-UTF-8 file is ({}, False)."""
+    try:
+        return read_record(Path(path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        return {}, False
 
 
 def tree_hash(root):
@@ -616,10 +624,7 @@ def main(root=None):
                     [sys.executable, "-m", "pytest", "-p", "affected_outcomes", *options],
                     cwd=root, env=run_env,
                     **({"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}))
-                try:
-                    return (result.returncode, *read_record(outcomes.read_text()))
-                except OSError:
-                    return result.returncode, {}, False
+                return result.returncode, *read_record_file(outcomes)
 
             hashes = [tree_hash(root)]
             code, first, _ = pytest([*parallel, "--durations=30", *quiet, *([] if args.loud else QUIET_DURATIONS),
