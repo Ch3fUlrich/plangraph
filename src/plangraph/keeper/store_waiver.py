@@ -162,12 +162,13 @@ class WaiverMixin:
         try:
             commits = context_sources.plan_item_commits(
                 git, project, item["key"], fetch=False, limit=None)
-            repo = git.repo_path(project)
-            paths = {p for c in commits or () if valid_commit_ref(c.get("sha"))
-                     for p in git.changed_paths(repo, c["sha"])}
+            repo, ref = git.repo_path(project), git.repo_ref(project)
+            # The landed changes of each Plan-Item commit's PR, not only the tagged commits.
+            changes = {c for commit in commits or () if valid_commit_ref(commit.get("sha"))
+                       for c in git.deploy_changes(repo, commit["sha"], ref)}
         except Exception:  # noqa: BLE001 - an unreadable diff never blocks the close
             return []
-        targets = deploy_targets(paths)
+        targets = deploy_targets(changes)
         if not targets:
             return []
         return deploy_missing(targets, deploy_hosts(item), self._evidence(item["key"]))

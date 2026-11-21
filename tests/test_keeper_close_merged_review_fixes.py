@@ -178,7 +178,8 @@ def test_selected_go_of_another_item_refuses(unseated_w, monkeypatch, project, k
 
 def _ships(w, monkeypatch, paths, hosts="alpha, beta"):
     git = MergedGit()
-    git.changed_paths = lambda repo, sha: list(paths)
+    git.deploy_changes = lambda repo, sha, ref: [
+        p if isinstance(p, tuple) else ("A", p) for p in paths]
     w.store.ctx = {**w.store.ctx, "git": git}
     w.store.verifiers["deploy"] = VERIFIERS["deploy"]
     w.conn.execute("UPDATE items SET description=? WHERE key='demo:A'",
@@ -233,6 +234,93 @@ def test_host_binary_needs_installed_proof_and_other_diffs_close_as_before(w, mo
         "alpha:bin:pg-disk"]
     _ships(w, monkeypatch, ["src/plangraph/keeper/store.py", "docs/KEEPER.md"])
     assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
+
+
+def test_deploy_targets_count_a_binary_only_when_its_entry_point_is_added():
+    from plangraph.keeper.evidence import deploy_targets
+    assert deploy_targets([("M", "rust/pg-disk/src/main.rs"), ("D", "rust/pg-old/src/bin/tool.rs")]) == []
+    assert deploy_targets([("A", "rust/pg-disk/src/main.rs"), ("A", "rust/pg/src/bin/tool.rs")]) == [
+        "bin:pg-disk", "bin:tool"]
+    assert deploy_targets([("M", "deploy/systemd/a.service")]) == ["a.service"]
+    assert deploy_targets(["rust/pg-disk/src/main.rs"]) == ["bin:pg-disk"]
+
+
+def _pr_repo(tmp_path, follow_up_files, tagged_files=None):
+    """A repo whose PR has a tagged commit and an untagged follow-up that adds `follow_up_files`."""
+    import os
+    import subprocess
+    env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+           "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+           "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                              capture_output=True, text=True, env=env).stdout.strip()
+    repo = tmp_path / "pr-repo"
+    (repo / "rust/pg-old/src").mkdir(parents=True)
+    (repo / "rust/pg-old/src/main.rs").write_text("fn main() {}\n")
+    git("-c", "init.defaultBranch=main", "init", "-q")
+    git("add", "-A")
+    git("commit", "-m", "seed")
+    git("checkout", "-q", "-b", "batch")
+    (repo / "NOTES.md").write_text("tagged work\n")
+    for path, text in (tagged_files or {}).items():
+        if text is None:
+            (repo / path).unlink()
+        else:
+            (repo / path).write_text(text)
+    git("add", "-A")
+    git("commit", "-m", "work\n\nPlan-Item: demo:A")
+    for path, text in follow_up_files.items():
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        (repo / path).write_text(text)
+    git("add", "-A")
+    git("commit", "-m", "follow-up without a trailer")
+    tip = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    git("merge", "-q", "--no-ff", "-m", "batch (#1078)", "batch")
+    return repo, tip
+
+
+def _close_pr_repo(w, tmp_path, monkeypatch, follow_up_files, tagged_files=None):
+    repo, tip = _pr_repo(tmp_path, follow_up_files, tagged_files)
+    from plangraph.keeper.evidence_git import GitAdapter
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    w.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    w.conn.execute("UPDATE items SET state='open', description=? WHERE key='demo:A'",
+                   ("Why: x\nHow: y\nDeploy-Hosts: alpha\n",))
+    w.decision_path.write_text(f"| D-6395 | demo | GO #1078 demo:A; GO-HEAD {tip} | ROUTER |\n")
+    return w.store.close_merged(w.p("router"), "demo:A", "D-6395", ["google"],
+                                from_open=True, apply=True)
+
+
+def test_an_untagged_follow_up_of_the_same_pr_that_adds_a_unit_needs_deploy_proof(w, tmp_path, monkeypatch):
+    out = _close_pr_repo(w, tmp_path, monkeypatch,
+                         {"deploy/systemd/new.service": "[Service]\n"})
+    assert out["closed"] is False and out["reason"] == "deploy_pending"
+    assert out["missing"] == ["alpha:new.service"]
+
+
+def test_editing_an_existing_binary_entry_point_ships_no_new_host_binary(w, tmp_path, monkeypatch):
+    out = _close_pr_repo(w, tmp_path, monkeypatch,
+                         {"rust/pg-old/src/main.rs": "fn main() { run(); }\n"})
+    assert out["state"] == "done"
+
+
+@pytest.mark.parametrize("tagged", [{"rust/pg-old/src/main.rs": "fn main() { tagged(); }\n"},
+                                    {"rust/pg-old/src/main.rs": None}])
+def test_a_tagged_edit_or_deletion_of_an_existing_entry_point_ships_no_new_host_binary(
+        w, tmp_path, monkeypatch, tagged):
+    out = _close_pr_repo(w, tmp_path, monkeypatch, {"docs/x.md": "x\n"}, tagged)
+    assert out["state"] == "done"
+
+
+def test_an_added_host_binary_in_an_untagged_follow_up_needs_installed_proof(w, tmp_path, monkeypatch):
+    out = _close_pr_repo(w, tmp_path, monkeypatch,
+                         {"rust/pg-new/src/main.rs": "fn main() {}\n"})
+    assert out["missing"] == ["alpha:bin:pg-new"]
 
 
 # ----- LE-MERGE-SUBJECT-WITHOUT-PR-NUMBER: GO row PR fallback when merge subject lacks #N

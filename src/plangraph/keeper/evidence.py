@@ -644,15 +644,22 @@ _BIN_RE = re.compile(r"^rust/([^/]+)/src/(?:main\.rs|bin/([^/]+)\.rs)$")
 _HOSTS_RE = re.compile(r"(?mi)^[ \t]*Deploy-Hosts:[ \t]*(.+?)[ \t]*$")
 
 
-def deploy_targets(paths) -> list[str]:
-    """Units and host binaries a diff ships: ``name.service`` / ``bin:<name>``."""
+def deploy_targets(changes) -> list[str]:
+    """Units and host binaries a diff ships: ``name.service`` / ``bin:<name>``.
+
+    *changes* holds ``(status, path)`` pairs (``A``/``M``/``D``) or bare paths. A unit
+    counts for any change; a binary only when its entry point was added: editing or
+    deleting an existing one ships no new host binary. A bare path has no status and
+    counts as added.
+    """
     out = set()
-    for path in paths or ():
+    for change in changes or ():
+        status, path = ("A", change) if isinstance(change, str) else change
         unit = _UNIT_RE.match(path)
         binary = _BIN_RE.match(path)
         if unit:
             out.add(unit.group(1))
-        elif binary:
+        elif binary and status == "A":
             out.add("bin:" + (binary.group(2) or binary.group(1)))
     return sorted(out)
 

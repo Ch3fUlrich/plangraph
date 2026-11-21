@@ -441,6 +441,37 @@ class GitAdapter:
             raise RuntimeError("cannot read commit paths")
         return [path for path in proc.stdout.split("\0") if path]
 
+    def _name_status(self, repo: str, args: list[str]) -> list[tuple[str, str]]:
+        proc = self._run(repo, ["diff-tree", "--no-commit-id", "--name-status",
+                                "--no-renames", "-r", "-z", *args])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read commit changes")
+        fields = proc.stdout.split("\0")
+        return [(fields[i][:1], fields[i + 1]) for i in range(0, len(fields) - 1, 2)
+                if fields[i] and fields[i + 1]]
+
+    def deploy_changes(self, repo: str, sha: str, ref: str) -> list[tuple[str, str]]:
+        """``(status, path)`` pairs the work of *sha* landed on *ref*.
+
+        The commit's own diff plus, when a merge on *ref* brought it in, the diff of
+        that merge against its first parent: an untagged follow-up commit of the same
+        PR counts as landed work. Raises on any unreadable diff.
+        """
+        if not valid_commit_ref(sha):
+            raise ValueError("invalid commit")
+        changes = self._name_status(repo, ["--root", "-m", "--end-of-options", sha])
+        merge = self.merge_commit_of(repo, sha, ref)
+        if merge and valid_commit_ref(merge[0]):
+            proc = self._run(repo, ["rev-list", "--parents", "-n", "1",
+                                    "--end-of-options", merge[0]])
+            if proc.returncode != 0:
+                raise RuntimeError("cannot read merge parents")
+            tokens = proc.stdout.split()
+            if len(tokens) == 3 and all(valid_commit_ref(t) for t in tokens):
+                changes += self._name_status(
+                    repo, ["--end-of-options", tokens[1], tokens[0]])
+        return changes
+
     def changelog_only_edit(self, repo: str, sha: str) -> bool:
         """Prove a non-merge addition/modification of the root changelog."""
         if not valid_commit_ref(sha):
