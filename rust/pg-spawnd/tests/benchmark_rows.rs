@@ -99,10 +99,6 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     luna_legs = [leg for leg in spawnable_legs() if leg.id.startswith('cx-gpt-6-luna-')]
     assert {leg.effort for leg in luna_legs} == {'low', 'medium', 'high', 'xhigh', 'max'}
     assert all(benchmark_for_leg(data, leg)['imputed'] for leg in luna_legs)
-    claude_efforts = {'agy-sonnet-5.5': 'medium', 'agy-opus': 'medium', 'agy-opus-5.5': 'high'}
-    for leg in DEFAULT_LEGS:
-        if leg.id in claude_efforts:
-            assert benchmark_for_leg(data, leg)['effort'] == claude_efforts[leg.id]
     base = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
     assert benchmark_for_leg(data, replace(base, effort='high')) is None
     leg = replace(base, effort='low')

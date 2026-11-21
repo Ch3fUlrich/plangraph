@@ -81,12 +81,9 @@ in `catalog_benchmark_price_inputs` and requires both input and output token
 counts. The view reports model identity, index version and price changes through
 `stale_reason`, and marks token rates that differ from a supplied comparison
 price by more than five percent.
-The seed supplies Xiaomi reference rates for the OpenRouter MiMo cells. The
-publisher does not supply a per-task billable token split for those cells, so
-the refresh can flag rate disagreements and keeps the task cost unset until
-measured token counts are available. Change flags persist through later polls
-until the benchmark curator verifies the replacement observation and clears
-the flag.
+The shipped MiMo seed supplies Xiaomi reference rates for price disagreement
+checks. Its OpenRouter task costs remain unset because the source provides no
+per-task split of billable tokens. Later polls preserve prior change flags.
 
 ### Offline benchmark data contract (BENCH-DATA-TEST, slice 1)
 

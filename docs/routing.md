@@ -178,8 +178,6 @@ Benchmark ranking resolves the catalog's preferred observation against the
 model, reasoning effort and harness of each leg. Legacy benchmark databases
 remain readable. The catalog query exposes source, imputation and staleness for
 each observation. See [benchmark observations](spawner-benchmarks.md#benchmark-observations-by-effort-and-harness).
-The existing Sonnet and Opus effort-qualified aliases carry their effort in the
-route record and select the corresponding benchmark cell.
 When a leg leaves effort unspecified, a legacy catalog row can supply the
 catalog's default effort for the same model and a compatible harness.
 
@@ -210,6 +208,8 @@ recorded `failed` with reason `no_verdict`. The reviewer's family differs from t
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.
+The five-head benchmark for Flint, Big Pickle and Beam was skipped in this lane.
+The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_risk_and_families`.
 
 ## Automatic work mode (D-5952 / rule 3.41)
 

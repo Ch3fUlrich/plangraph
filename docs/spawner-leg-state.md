@@ -162,3 +162,5 @@ configuration, credentials or unreadable responses leave quota unknown.
 
 `plangraph quota [--db PATH]` prints usage by provider, account and window with the
 recorded observation time. `--db` selects an explicit read-only snapshot store.
+The CLI and routing use the same reader. The routing cache is in process.
+Durable per-leg storage and the routerctl and keeper digest integrations are deferred.

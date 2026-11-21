@@ -1,2 +1,1 @@
-Forward the effort already encoded in the routed Sonnet and Opus model IDs. Utility can resolve the corresponding catalog row for each existing leg.
-Partial delivery. Fable leg admission and the Sol lead change remain open under the current operator route and utility weights.
+SKIPPED plangraph:UTILITY-EFFORT-ROWS. The requested Sol xhigh default conflicts with D-6310 and D-6397, and D-6366 admits a Claude fallback when all Codex legs are unavailable. Fable leg admission and ranking remain part of the deferred item.
