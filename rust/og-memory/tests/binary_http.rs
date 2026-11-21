@@ -113,11 +113,12 @@ fn configured_binary_uses_pinned_http_recall() {
 
 #[test]
 fn checks_retired_mcp_url_without_opening_transport() {
+    let ipv6_loopback = format!("http://[{}]:8080", std::net::Ipv6Addr::LOCALHOST);
     for (base, expected) in [
         (None, 0),
         (Some("http://LOCALHOST:8080"), 1),
         (Some("http://127.0.0.1:8080/"), 1),
-        (Some("http://[::1]:8080"), 1),
+        (Some(ipv6_loopback.as_str()), 1),
         (Some("http://127.0.0.1:8081"), 0),
         (Some("https://local.example:8080"), 0),
     ] {
