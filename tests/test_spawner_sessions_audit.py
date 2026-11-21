@@ -9,7 +9,7 @@ import sys
 import pytest
 from plangraph.routing_errors import ParameterRefused
 from plangraph.spawner.sessions import Sessions
-from sessions_support import UUID1, PROMPT, FakeRun, write_config, make, go
+from sessions_support import UUID1, PROMPT, FakeRun, write_config, make, go, _ready
 from sessions_support import site  # noqa: F401
 
 
@@ -37,6 +37,50 @@ def test_launch_writes_record_and_audit(site):
     assert line["ok"] is True and "caller" in line and "ts" in line
     assert line["argv"][-1] == f"<{len(PROMPT)} chars>"
     assert PROMPT not in audit_lines[0]
+
+
+def test_launch_pause_refuses_with_reason_and_audits_only_real_attempts(site):
+    run = FakeRun()
+    sessions = make(site, run)
+    site.state.mkdir()
+    pause = site.state / "fleet-launch.pause"
+    pause.write_text("  settling existing launches\n", encoding="utf-8")
+    message = "launch paused: settling existing launches"
+
+    with pytest.raises(ParameterRefused, match=message):
+        go(site, sessions, dry_run=True)
+    assert not (site.state / "sessions").exists()
+    with pytest.raises(ParameterRefused, match=message):
+        go(site, sessions)
+    assert not run.calls
+    audit = site.state / "sessions" / "audit.log"
+    [row] = [json.loads(line) for line in audit.read_text().splitlines()]
+    assert row["action"] == "launch" and not row["ok"] and row["reason"] == message
+    assert not (site.state / "sessions" / "alpha.json").exists()
+    pause.unlink()
+    assert go(site, sessions)["ok"]
+
+
+def test_relaunch_pause_preserves_the_session_and_ready_marker(site):
+    run = FakeRun()
+    sessions = make(site, run)
+    record, ready = _ready(site, run, sessions)
+    before = record.read_bytes(), ready.read_bytes(), list(run.calls)
+    (site.state / "fleet-launch.pause").touch()
+
+    with pytest.raises(ParameterRefused, match="launch paused: operator pause"):
+        sessions.relaunch("alpha")
+    assert (record.read_bytes(), ready.read_bytes(), run.calls) == before
+    assert sessions.stop(name="alpha")["ok"]
+
+
+def test_unreadable_pause_file_refuses_launch(site):
+    run = FakeRun()
+    sessions = make(site, run)
+    (site.state / "fleet-launch.pause").mkdir(parents=True)
+    with pytest.raises(ParameterRefused, match=r"launch paused: cannot read fleet-launch\.pause"):
+        go(site, sessions)
+    assert not run.calls
 
 
 def test_audit_and_record_hold_no_secret(site, monkeypatch):
