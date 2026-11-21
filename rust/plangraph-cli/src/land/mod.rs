@@ -16,6 +16,9 @@ mod registrar_tests;
 pub mod split;
 #[cfg(test)]
 mod split_tests;
+pub mod timeline;
+#[cfg(test)]
+mod timeline_tests;
 pub mod train;
 #[cfg(test)]
 mod train_tests;

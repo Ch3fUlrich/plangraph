@@ -41,3 +41,12 @@ candidate (rule 3.52 (8), D-6535).
 - An evicted part goes back to its own writer with the job log; a part evicted twice goes to routing.
 - Train size: 4 parts at the start, plus one after a green train, halved after a red one, between 1 and 8 (used once
   bounded trains are authorized by the amendment of rules 3.39 and 3.63).
+
+## Stage timeline and bottleneck report
+
+`plangraph land-timeline record|report` (rust/plangraph-cli/src/land/timeline.rs) keeps one append-only row per stage of a
+batch or train (fast checks, push gate per stage, CI per job from the GitHub job list, review, GO request, merge, host sync):
+subject, head, host, start, end, result. `report --last N` prints, per train, the wall time from writer done to merge, the
+critical path (parallel jobs count once), idle time between stages and the bottleneck stage, then the stage with the most
+critical-path time over the last N trains. The rows live in a JSON-lines ledger under the plangraph state directory; moving
+them into a keeper table needs a keeper schema step that is not part of this change.
