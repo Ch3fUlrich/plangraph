@@ -116,7 +116,7 @@ fn unavailable_reasons_and_timestamps_are_allowlisted() {
 #[test]
 fn a_private_phrase_spanning_a_secret_is_withheld_whole() {
     let path = std::env::temp_dir().join(format!("pg-span-words-{}", std::process::id()));
-    std::fs::write(&path, "re:private-prefix Bearer [^ ]+\n").unwrap();
+    std::fs::write(&path, "re:private-prefix Bearer [A-Za-z0-9]+\n").unwrap();
     let secret = ["synthetic", "Credential", "0123456789"].concat();
     let mut view = json!({"hosts":[{"host":"local","readable":true,"agents":[{
         "name":format!("x private-prefix Bearer {secret} y"),"model":"fine"}]}]});
@@ -127,5 +127,6 @@ fn a_private_phrase_spanning_a_secret_is_withheld_whole() {
         !text.contains(&secret) && !text.contains("private-prefix"),
         "{text}"
     );
+    assert_eq!(view["hosts"][0]["agents"][0]["name"], "[redacted]");
     assert_eq!(view["hosts"][0]["agents"][0]["model"], "fine");
 }
