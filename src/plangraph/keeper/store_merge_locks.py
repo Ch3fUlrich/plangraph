@@ -94,7 +94,7 @@ class MergeLocksMixin:
             raise Refused("validation", "landing repository must be OWNER/NAME")
         repo = repo.lower()
         action = body.get("action")
-        if action in ("stage", "ci_timings", "timeline"):
+        if action in ("stage", "ci_timings", "timeline", "stage_day"):
             return self._landing_timing(principal, repo, action, body)
         self._require_role(principal, "router", "system")
         if action == "acquire":
@@ -172,13 +172,33 @@ class MergeLocksMixin:
     def _landing_timing(self, principal, repo, action, body):
         roles = ("router", "system", "spawner") if action == "stage" else ("router", "system")
         self._require_role(principal, *roles)
+        if action == "stage_day":
+            start = body.get("start")
+            if type(start) is not int or not 0 <= start < 2**63 - 86_400_000 or start % 86_400_000:
+                raise Refused("validation", "stage day needs a UTC Unix midnight in milliseconds")
+            rows = self.conn.execute(
+                "SELECT * FROM landing_stages WHERE repo=? AND ended_at_ms>=? AND ended_at_ms<?"
+                " ORDER BY ended_at_ms,batch_key,stage,attempt", (repo, start, start + 86_400_000))
+            return {"stages": [dict(row) for row in rows]}
         batch = _text("batch_key", body.get("batch_key"), required=True, cap=256)
         if action == "timeline":
             stages = self.conn.execute(_LIST_STAGE_SQL, (repo, batch))
             jobs = self.conn.execute(
                 "SELECT *, ended_at_ms-started_at_ms AS duration_ms FROM landing_ci_jobs WHERE repo=? AND batch_key=? "
                 "ORDER BY run_id,attempt,started_at_ms,job_id", (repo, batch))
-            return {"stages": [dict(row) for row in stages], "jobs": [dict(row) for row in jobs]}
+            trains = self.conn.execute("SELECT * FROM landing_trains WHERE repo=? ORDER BY pr DESC", (repo,))
+            train = next((data for row in trains if (data := _landing_data(row))["batch_key"] == batch), None)
+            accepts = []
+            rows = [dict(row) for row in stages]
+            for part in (train or {}).get("parts", []):
+                member = [dict(row) for row in self.conn.execute(
+                    "SELECT * FROM landing_stages WHERE repo=? AND head=? ORDER BY started_at_ms,stage,attempt",
+                    (repo, part["head"])) if row["batch_key"] in part["items"]]
+                accepted = max((row["ended_at_ms"] for row in member if row["stage"] == "review"), default=None)
+                accepts.append(accepted)
+                rows.extend(row for row in member if row["batch_key"] != batch)
+            return {"stages": sorted(rows, key=lambda row: (row["started_at_ms"], row["stage"], row["attempt"])),
+                    "jobs": [dict(row) for row in jobs], "train": train, "accepts": accepts}
         stage = body.get("stage") if action == "ci_timings" else body
         if not isinstance(stage, dict) or not isinstance(stage.get("stage"), str) or stage["stage"] not in _STAGE_NAMES:
             raise Refused("validation", "unknown landing stage")

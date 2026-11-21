@@ -79,6 +79,11 @@ Migration 16 stores individual GitHub Actions job timings. The lander imports th
 exact run and attempt with `plangraph landing ci-import OWNER/REPO BATCH HEAD RUN ATTEMPT`.
 The writer and delta reviewer use `PG_LANDING_REPO` for the repository identity.
 Train push, GO observation, merge and host sync share the train's keeper batch key.
+Use `plangraph landing report OWNER/REPO BATCH` for the train card and milestone
+timestamps, or `plangraph landing report OWNER/REPO --day YYYY-MM-DD` for the slowest
+stage completed that UTC day. The GO request includes the elapsed stage summary.
+Import the green main Actions attempt under the same batch key to populate
+the exact merged-head completion and the elapsed time from the folded parts' ACCEPT.
 
 ## Hash chain
 

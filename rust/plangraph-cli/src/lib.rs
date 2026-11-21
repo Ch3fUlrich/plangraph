@@ -11,6 +11,7 @@ pub mod host_sync;
 pub mod landing;
 mod landing_ci;
 mod landing_hosts;
+mod landing_report;
 pub mod merge_close;
 pub mod paths;
 pub mod review;

@@ -11,7 +11,8 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
+from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
+                              NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, part_review, run)
 
@@ -371,14 +372,6 @@ def landing_journal(repo, action, **fields):
     return json.loads(response.stdout)
 
 
-def landing_now():
-    return time.time_ns() // 1_000_000
-
-
-def landing_batch_key(st):
-    return st.get("plan") or st["name"]
-
-
 def record_stage(repo, batch, stage, head, started, ended=None):
     try:
         landing_journal(repo, "stage", batch_key=batch, stage=stage, head=head,
@@ -396,9 +389,13 @@ def run_timing_import(repo, batch, head, run_info, attempt):
         print(f"CI stage for {batch} pending keeper delivery: {exc}", file=sys.stderr)
 
 
-def keeper_landing_configured():
-    default_env = Path.home() / ".config" / "plangraph" / "plangraph.env"
-    return bool(os.environ.get("PG_URL") or os.environ.get("PLANGRAPH_ENV_FILE") or default_env.is_file())
+def landing_report(st):
+    try:
+        result = run(["plangraph", "landing", "report", st["repo"], landing_batch_key(st)], timeout=35)
+        return json.loads(result.stdout)
+    except (MergeBatchError, ValueError) as exc:
+        print(f"landing timeline unavailable: {exc}", file=sys.stderr)
+        return {}
 
 
 def exclude_consumed(repo, parts):
@@ -652,6 +649,10 @@ def cleanup_landed(st, landed, *, strict=False):
 
 def cmd_status(args):
     states = all_states()
+    if keeper_landing_configured():
+        for state in states:
+            if state.get("repo"):
+                state["timeline"] = landing_report(state)
     where = {branch: path for path, branch in worktrees()}
     orphans = [{"name": name, "status": "orphan", "branch": f"batch/{name}", "worktree": where.get(f"batch/{name}", "-"),
                 "merged": [], "skipped": [], "pending": []} for name in orphan_names()]
@@ -664,6 +665,8 @@ def cmd_status(args):
         print(f"{st['name']}  {st['status']}  base={st.get('base', '-')}  merged={len(st['merged'])} "
               f"skipped={len(st['skipped'])} pending={len(st['pending'])}  pr={st.get('pr') or '-'}  "
               f"head={short(st.get('head')) or '-'}  {st.get('worktree', '-')}")
+        if (st.get("timeline") or {}).get("summary"):
+            print("  timeline: " + st["timeline"]["summary"])
         if st.get("current"):
             cur = st["current"]
             print(f"  conflict in PR #{cur['pr']}: {', '.join(cur['files'])}")
@@ -783,9 +786,11 @@ def cmd_go_req(args):
     deviations = [declared] if declared != "none" else []
     deviations += st.get("forced", [])
     deviation = "; ".join(deviations) or "none"
+    summary = landing_report(st).get("summary") if keeper_landing_configured() else None
+    timeline = f"timeline: {summary}; " if summary else ""
     line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
             f"; CI run {ci['id']} state={ci['state']} conclusion={ci['conclusion']}; "
-            f"PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}")
+            f"{timeline}PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}")
     if keeper_landing_configured() and st.get("go_requested_head") != head:
         st.update(go_requested_head=head, go_requested_at_ms=landing_now())
         save_state(st)

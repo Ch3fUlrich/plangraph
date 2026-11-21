@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 from preflight import run_test_process
@@ -354,3 +355,16 @@ def workflow_gate(wt, base, head):
 
 def batch_workflow_gate(st):
     workflow_gate(st["worktree"], st["base_head"], st["head"])
+
+
+def landing_now():
+    return time.time_ns() // 1_000_000
+
+
+def landing_batch_key(st):
+    return st.get("plan") or st["name"]
+
+
+def keeper_landing_configured():
+    default_env = Path.home() / ".config" / "plangraph" / "plangraph.env"
+    return bool(os.environ.get("PG_URL") or os.environ.get("PLANGRAPH_ENV_FILE") or default_env.is_file())
