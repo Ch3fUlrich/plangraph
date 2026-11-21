@@ -71,7 +71,7 @@ worktree and cache reports, reclaim eligible data and measure usage below 85%.
 NOTE Host-sync session. For placement entries with `memory_source = "windows"`,
 install a root-owned `pg-spawnd` in `/usr/local/bin` and copy the
 `pg-wsl-cache-guard` service and timer into the system unit directory. Write
-`PG_WSL_CACHE_GUARD_MIN_FREE_MB` in `/etc/plangraph/wsl-cache-guard.env` from the
+`PG_WSL_FREE_MB` in `/etc/plangraph/wsl-cache-guard.env` from the
 placement entry's `cache_guard_min_free_mb`, defaulting to 20480.
 
 NOTE Workstation host session. Check Windows interop from the system service.

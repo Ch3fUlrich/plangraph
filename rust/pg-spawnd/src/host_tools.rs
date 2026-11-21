@@ -2,6 +2,7 @@
 use std::{
     fs,
     io::{self, Write},
+    path::Path,
     process::Command,
     time::Duration,
 };
@@ -36,9 +37,10 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
 }
 
 fn windows_free_mb() -> io::Result<u64> {
-    const POWERSHELL: &str = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe";
+    let powershell =
+        Path::new("/mnt/c/Windows/System32").join("WindowsPowerShell/v1.0/powershell.exe");
     let bytes = pg_worker_core::host_command::output(
-        Command::new(POWERSHELL).args([
+        Command::new(powershell).args([
             "-NoLogo",
             "-NoProfile",
             "-NonInteractive",
