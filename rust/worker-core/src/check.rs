@@ -457,22 +457,6 @@ AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     }
 
     #[test]
-    fn diagnostic_text_does_not_report_completion() {
-        let d = tempfile::tempdir().unwrap();
-        let r = run_check("printf 'PG-CHECK-DONE:7\\n'; exit 3", d.path(), T, 50).unwrap();
-        assert_eq!(r.tail, "PG-CHECK-DONE:7");
-        assert_eq!(r.exit_code, Some(3));
-    }
-
-    #[test]
-    fn completion_status_is_independent_of_the_cut_tail() {
-        let d = tempfile::tempdir().unwrap();
-        let cmd = "echo noise; printf '\\nPG-CHECK-DONE:7\\n'; exit 3";
-        let r = run_check_cancellable(cmd, d.path(), T, 0, &|| false).unwrap();
-        assert_eq!((r.tail.as_str(), r.exit_code), ("", Some(3)));
-    }
-
-    #[test]
     fn serde_default_for_cancelled() {
         let v = serde_json::json!({
             "exit_code": 0,

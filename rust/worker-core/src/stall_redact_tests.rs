@@ -203,13 +203,17 @@ fn diagnostic_marker_respects_the_capture_bound() {
 }
 
 #[test]
-fn partial_diagnostic_marker_at_the_swallow_transition_stays_redacted() {
+fn split_diagnostic_marker_cannot_resume_capture_before_the_footer() {
     let (block, _) = pem(40);
     let start = block.find("Zk020").unwrap();
     let mut capture = stall_capture::Capture::new(200, true);
-    capture.push(format!("{}\nPG-CHECK-", &block[..start]).as_bytes());
+    // Enter the swallow before feeding either half of the diagnostic marker.
+    assert!(start > 2 * 200);
+    capture.push(&block.as_bytes()[..start]);
+    capture.push(b"\nPG-CHECK-");
     capture.push(b"DONE:1\n");
-    capture.push(format!("{}after\n", &block[start..]).as_bytes());
+    capture.push(b"withheld-body\n");
+    capture.push(b"-----END PRIVATE KEY-----\nafter\n");
     assert_eq!(capture.finish(), b"\nafter\n");
 }
 

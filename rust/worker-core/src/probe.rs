@@ -118,18 +118,28 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_probe_wrapper_emits_only_child_output() {
+    fn the_probe_reports_status_independently_of_diagnostic_output() {
         let tmp = tempfile::tempdir().unwrap();
-        let status = tempfile::NamedTempFile::new_in(tmp.path()).unwrap();
-        let out = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(marked("echo diagnostic; exit 7", &status))
-            .env("TMPDIR", tmp.path())
-            .output()
+        let diagnostic = b"PG-CHECK-DONE:99\n";
+        for (max_output, expected) in [(200, diagnostic.as_slice()), (0, b"".as_slice())] {
+            let status = tempfile::NamedTempFile::new_in(tmp.path()).unwrap();
+            let mut cmd = std::process::Command::new("sh");
+            cmd.arg("-c")
+                .arg(marked("printf 'PG-CHECK-DONE:99\\n'; exit 7", &status))
+                .env("TMPDIR", tmp.path());
+            let run = crate::stall::supervise(
+                cmd,
+                &crate::stall::Opts {
+                    max_output,
+                    redact_discarded: true,
+                    ..Default::default()
+                },
+            )
             .unwrap();
-        assert_eq!(out.status.code(), Some(7));
-        assert_eq!(out.stdout, b"diagnostic\n");
-        assert!(started(&status).unwrap());
+            assert!(started(&status).unwrap(), "max_output={max_output}");
+            assert_eq!(run.code, Some(7), "max_output={max_output}");
+            assert_eq!(run.output, expected, "max_output={max_output}");
+        }
     }
 
     #[cfg(unix)]
@@ -180,6 +190,33 @@ mod tests {
             Some((&bin, &limits, tmp.path())),
         );
         assert!(matches!(r, Err(ProbeError::Check(_))), "{r:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_real_jailed_probe_reads_start_evidence_after_tmp_cleanup() {
+        let Some(bin) = std::env::var_os("PG_JAIL_BIN") else {
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI requires PG_JAIL_BIN and Landlock"
+            );
+            eprintln!("skipped: PG_JAIL_BIN unset (CI unset)");
+            return;
+        };
+        let (d, base) = repo();
+        write(d.path(), "work.txt", "x");
+        commit_all(d.path(), "work");
+        let tmp = tempfile::tempdir().unwrap();
+        let limits = crate::scope::ScopeLimits::default();
+        let jail = Some((Path::new(&bin), &limits, tmp.path()));
+        let command = r#"find "$TMPDIR" -type f -delete"#;
+        for (code, expected) in [(0, ProbeOutcome::AlreadyDone), (7, ProbeOutcome::Partial)] {
+            let cmd = format!("{command} && exit {code}; exit 8");
+            assert_eq!(
+                probe_scoped(d.path(), &base, &cmd, T, 0, jail).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
