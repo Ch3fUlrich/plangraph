@@ -12,8 +12,84 @@ import subprocess
 import shutil
 import shlex
 import sys
+import tempfile
 import time
 import tarfile
+
+
+# Quiet loop: a pass prints little; --loud restores pytest's default report.
+# --durations stays on, listing only tests slower than a second.
+QUIET_FLAGS = ["-q", "--tb=short", "--no-header"]
+QUIET_DURATIONS = ["--durations-min=1.0"]
+# A failed run with at most this many failed ids is rerun to name flakes.
+MAX_RERUN_FAILURES = 50
+# Controller-only outcome recorder (xdist workers carry workerinput and stay silent),
+# written to a temp dir and loaded with -p; .pytest_cache is never read.
+OUTCOME_PLUGIN = """import json, os
+_outcomes = {}
+_config = None
+
+
+def pytest_configure(config):
+    global _config
+    _config = config
+
+
+def pytest_runtest_logreport(report):
+    if hasattr(_config, "workerinput"):
+        return
+    if report.failed:
+        _outcomes[report.nodeid] = "failed"
+    elif _outcomes.get(report.nodeid) != "failed":
+        if report.when == "call" and report.passed:
+            _outcomes[report.nodeid] = "passed"
+        elif report.skipped:
+            _outcomes[report.nodeid] = "skipped"
+
+
+def pytest_sessionfinish(session):
+    if not hasattr(session.config, "workerinput"):
+        with open(os.environ["AFFECTED_OUTCOMES"], "w") as out:
+            json.dump(_outcomes, out)
+"""
+
+
+def tree_hash(root):
+    """Hash of tracked changes plus untracked, non-ignored files; None when git cannot say."""
+    import hashlib
+    try:
+        # The HEAD commit is part of the identity: a run that commits a change moves it.
+        digest = hashlib.sha256(subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, stderr=subprocess.DEVNULL))
+        digest.update(subprocess.check_output(
+            ["git", "diff", "--binary", "HEAD"], cwd=root, stderr=subprocess.DEVNULL))
+        listed = subprocess.check_output(
+            ["git", "ls-files", "-z", "-o", "--exclude-standard"], cwd=root,
+            stderr=subprocess.DEVNULL)
+        for name in sorted(item for item in listed.split(b"\0") if item):
+            digest.update(name + b"\0")
+            try:
+                digest.update((Path(root) / os.fsdecode(name)).read_bytes())
+            except OSError:
+                digest.update(b"<unreadable>")
+        return digest.hexdigest()
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def flake_labels(failed, first_rerun, second_rerun, hashes):
+    """FLAKY needs an explicit pass on both reruns and one tree hash around every run."""
+    stable = None not in hashes and len(set(hashes)) == 1
+    lines = []
+    for nodeid in failed:
+        low, high = first_rerun.get(nodeid), second_rerun.get(nodeid)
+        if "passed" in (low, high) and not stable:
+            lines.append(f"FAILED-THEN-PASSED: {nodeid}")
+        elif low == "passed" and high == "failed":
+            lines.append(f"FAILED-IN-PARALLEL: {nodeid}")
+        elif low == high == "passed":
+            lines.append(f"FLAKY (rerun -n0; a parallel race is not excluded): {nodeid}")
+    return lines
 
 
 def revision_asset(root, path, cache=None):
@@ -436,6 +512,7 @@ def main(root=None):
     parser.add_argument("--collect-only", action="store_true", help="validate the unsharded selection without running tests")
     parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
+    parser.add_argument("--loud", action="store_true", help="pytest's default report, no quiet flags")
     parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
@@ -500,11 +577,50 @@ def main(root=None):
             env.pop("PYTEST_SHARD", None)
         parallel = (["-n", args.workers, "--dist", "loadgroup"]
                     if not args.collect_only and importlib.util.find_spec("xdist") is not None else [])
-        result = subprocess.run([sys.executable, "-m", "pytest", *parallel, "--durations=30",
-                                 *(["--collect-only"] if args.collect_only else []),
-                                 *(["--maxfail", str(args.maxfail)] if args.maxfail else []), *plan["tests"]], cwd=root, env=env)
-        print(f"affected wall seconds: {time.monotonic() - start:.3f}")
-        return result.returncode
+        if args.collect_only:
+            result = subprocess.run([sys.executable, "-m", "pytest", *parallel, "--durations=30",
+                                     "--collect-only",
+                                     *(["--maxfail", str(args.maxfail)] if args.maxfail else []),
+                                     *plan["tests"]], cwd=root, env=env)
+            print(f"affected wall seconds: {time.monotonic() - start:.3f}")
+            return result.returncode
+        quiet = [] if args.loud else QUIET_FLAGS
+        with tempfile.TemporaryDirectory(prefix="affected-") as scratch:
+            Path(scratch, "affected_outcomes.py").write_text(OUTCOME_PLUGIN)
+            runs = []
+
+            def pytest(options, capture=False):
+                """One pytest run: (exit code, {nodeid: outcome}) from the controller's recorder."""
+                outcomes = Path(scratch) / f"outcomes-{len(runs)}.json"
+                runs.append(outcomes)
+                run_env = dict(env, AFFECTED_OUTCOMES=str(outcomes), PYTHONPATH=os.pathsep.join(
+                    part for part in (scratch, env.get("PYTHONPATH")) if part))
+                result = subprocess.run(
+                    [sys.executable, "-m", "pytest", "-p", "affected_outcomes", *options],
+                    cwd=root, env=run_env,
+                    **({"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}))
+                try:
+                    return result.returncode, json.loads(outcomes.read_text())
+                except (OSError, ValueError):
+                    return result.returncode, {}
+
+            hashes = [tree_hash(root)]
+            code, first = pytest([*parallel, "--durations=30", *quiet, *([] if args.loud else QUIET_DURATIONS),
+                                  *(["--maxfail", str(args.maxfail)] if args.maxfail else []),
+                                  *plan["tests"]])
+            print(f"affected wall seconds: {time.monotonic() - start:.3f}")
+            failed = sorted(nodeid for nodeid, outcome in first.items() if outcome == "failed")
+            # Exit 1 only: a collection or usage error (2, 3, 4) is not a test failure.
+            if code == 1 and 0 < len(failed) <= MAX_RERUN_FAILURES:
+                hashes.append(tree_hash(root))
+                serial = ["-n", "0"] if parallel else []
+                _, low = pytest([*serial, *QUIET_FLAGS, *failed], capture=True)
+                hashes.append(tree_hash(root))
+                _, high = pytest([*parallel, *QUIET_FLAGS, *failed], capture=True)
+                hashes.append(tree_hash(root))
+                for line in flake_labels(failed, low, high, hashes):
+                    print(line)
+        return code
     return 0
 
 
