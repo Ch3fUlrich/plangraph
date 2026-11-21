@@ -356,7 +356,7 @@ def test_pg_db_at_migration_6_jev_upgrades_to_7(monkeypatch, tmp_path):
         assert db_pg.migrate(raw, name) == [1, 2, 3, 4, 5, 6]
         assert "jev_shadow" in jev_tables()
         assert not set(EXEC_COLUMNS) & columns()
-        # Merged code needs migration 7: opening the old schema is refused first ...
+        # Opening the old schema is refused before the migration runs.
         path = tmp_path / "pg-jev.db"
         with pytest.raises(RuntimeError, match=f"code needs {schema_pg.LATEST}:"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
@@ -420,7 +420,7 @@ def test_main_v14_sqlite_db_with_oversight_upgrades_to_v16(tmp_path):
 
 @needs_pg
 def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
-    """Fresh and migration-8 schemas both gain the bus tables at current."""
+    """Both a fresh schema and one at migration 8 gain the bus and alerts tables."""
     import uuid
 
     import psycopg
@@ -438,13 +438,14 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
 
     try:
         full = schema_pg.MIGRATIONS
+        expected = BUS_TABLES | OVERSIGHT_TABLES | {"alerts", "alert_log"}
         assert db_pg.migrate(raw, fresh) == list(range(1, schema_pg.LATEST + 1))
-        assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
+        assert expected <= pg_tables(fresh)
 
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full[:8])
         assert db_pg.migrate(raw, name) == list(range(1, 9))
         assert OVERSIGHT_TABLES <= pg_tables(name)
-        assert not BUS_TABLES & pg_tables(name)
+        assert not (expected - OVERSIGHT_TABLES) & pg_tables(name)
         raw.execute("INSERT INTO outbox_seen VALUES (%s, 7, 'heartbeat', NULL, 'ok', 'then')",
                     ("01" * 16,))
         monkeypatch.setattr(schema_pg, "MIGRATIONS", full)
@@ -452,7 +453,7 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
         with pytest.raises(RuntimeError, match=f"code needs {schema_pg.LATEST}:"):
             kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name)
         assert db_pg.migrate(raw, name) == list(range(9, schema_pg.LATEST + 1))
-        assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(name)
+        assert expected <= pg_tables(name)
         kdb.open_db(path, create=False, backend="postgres", dsn=PG_DSN, schema=name).close()
         assert raw.execute("SELECT token_id,request_hash,result FROM op_receipts WHERE entry_id=%s",
                            ("01" * 16,)).fetchone() == (7, None, "ok")

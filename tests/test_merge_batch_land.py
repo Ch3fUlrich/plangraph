@@ -173,13 +173,35 @@ def test_land_merges_closes_unmerged_and_reports(env):
                                                                                "merged via batch PR #100")
     runs = [f"Review-Run: plangraph:ITEM-{k} run-part-{n}-0 {heads[n]}" for n, k in ((1, "A"), (2, "B"), (3, "C"))]
     assert env.calls("pr", "merge") == [["pr", "merge", "100", "--repo", "owner/proj", "--merge",
-                                         "--match-head-commit", head,
+                                         "--match-head-commit", head, "--subject", "batch l1: #1 #2 #3 (#100)",
                                          "--body", "\n".join(["Plan-Item: plangraph:ITEM-A", "Plan-Item: plangraph:ITEM-B",
                                                               "Plan-Item: plangraph:ITEM-C", *runs])]]
+    assert env.git("show", "-s", "--format=%s", merge, cwd=env.origin).endswith("(#100)")
     trailers = env.git("log", "-1", "--format=%(trailers:key=Plan-Item,valueonly)", merge, cwd=env.origin)
     assert trailers.split() == ["plangraph:ITEM-A", "plangraph:ITEM-B", "plangraph:ITEM-C"]
     assert env.calls("pr", "checks") == [["pr", "checks", "100", "--repo", "owner/proj", "--required"]]
     assert not env.state_file("l1").exists() and env.git("for-each-ref", "refs/merge-batch") == ""
+
+
+@pytest.mark.parametrize("subject,ok", [
+    ("Custom batch subject", False),
+    ("Custom batch #100", False),
+    ("Custom batch (#99)", False),
+    ("Custom batch (#100) trailing", False),
+    ("", False),
+    ("(#100)", False),
+    ("Custom batch (#100)", True),
+])
+def test_land_custom_subject_requires_pr_suffix(env, subject, ok):
+    approval = pushed(env, prs=(1, 2))
+    res = land(env, approval, "--subject", subject)
+    if ok:
+        assert res.returncode == 0, res.stderr
+        merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
+        assert env.git("show", "-s", "--format=%s", merge, cwd=env.origin) == subject
+    else:
+        assert res.returncode == 1 and "(#100)" in res.stderr and res.stdout == ""
+        assert not env.calls("pr", "merge") and env.state_file("l1").exists()
 
 
 def test_land_named_checks(env):

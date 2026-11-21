@@ -51,6 +51,8 @@ mod review_retry;
 mod review_split;
 mod role_header;
 mod round_progress;
+mod round_replan;
+mod round_replan_ports;
 mod runs;
 mod serve;
 mod serve_options;

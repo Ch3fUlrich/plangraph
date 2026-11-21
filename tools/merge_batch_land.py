@@ -495,6 +495,20 @@ def wait_marked_merged(repo, number, wait):
         time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
 
 
+def _merge_subject(number, title, custom):
+    """Return a single-line merge commit subject ending ``(#N)``, or raise."""
+    suffix = f"(#{number})"
+    if custom is not None:
+        if "\n" in custom or "\r" in custom:
+            raise MergeBatchError(f"merge subject must be a single line ending with '{suffix}'")
+        text = custom.strip()
+        if not re.search(rf"\S.*{re.escape(suffix)}\Z", text):
+            raise MergeBatchError(f"merge subject must end with '{suffix}'")
+        return text
+    base = re.sub(r"[\r\n]+", " ", (title or "")).strip() or f"batch #{number}"
+    return base if base.endswith(suffix) else f"{base} {suffix}"
+
+
 def cmd_land(args):
     """Land the pushed batch in the mode of the ``landing.mode`` setting of its repository.
 
@@ -518,9 +532,12 @@ def cmd_land(args):
     if st["status"] != "pushed" or st.get("pr") != number:
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
+    custom_subject = getattr(args, "subject", None)
+    if custom_subject is not None:
+        _merge_subject(number, None, custom_subject)
     check_approval(args.approval, st["head"])
     require_part_seats(st)
-    fields = "state,headRefOid,isDraft,mergeCommit,baseRefName"
+    fields = "state,headRefOid,isDraft,mergeCommit,baseRefName,title"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
     if pr["headRefOid"] != st["head"]:
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
@@ -540,9 +557,10 @@ def cmd_land(args):
             require_tested_ff_evidence(st)
             push_tested(st, args.go_row)
         else:
+            subject = _merge_subject(number, pr.get("title") or f"batch {st['name']}", custom_subject)
             require_main_green(repo, st["head"], args.go_row)
             gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
-               "--body", merge_trailers(st))
+               "--subject", subject, "--body", merge_trailers(st))
     elif pr["state"] not in ("MERGED", "OPEN"):
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
     if mode == TESTED_FF:

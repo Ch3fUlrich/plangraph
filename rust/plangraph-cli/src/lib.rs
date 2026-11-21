@@ -1,6 +1,7 @@
 pub mod atomic;
 pub mod base_fresh;
 pub mod batch_merge;
+pub mod batch_size;
 pub mod ci_watch;
 pub mod codex_readiness;
 pub mod env;
@@ -16,6 +17,7 @@ pub mod merge_close;
 pub mod paths;
 pub mod review;
 mod review_git;
+pub mod router_batch;
 pub mod runner;
 pub mod setup;
 pub mod state_shadow;

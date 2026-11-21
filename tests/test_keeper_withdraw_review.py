@@ -137,4 +137,4 @@ def test_eligibility_is_an_allowlist_of_non_code_kinds():
     from plangraph.keeper.evidence import VERIFIERS
     for kind in VERIFIERS:
         if kind not in store_withdraw._NON_CODE_KINDS:
-            assert kind in ("commit", "commit+ci", "error", "claude-seat"), kind   # all refused (fail closed)
+            assert kind in ("commit", "commit+ci", "error", "claude-seat", "deploy"), kind

@@ -132,7 +132,7 @@ def test_item_650_merges_behind_main_closes(unseated_w, monkeypatch, tmp_path):
         + "| D-6000 | demo | Waiver: merged-without-witnesses; Waives-seats: demo:H | OPERATOR | 2026-11-14 |\n")
     monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits",
                         world.real_plan_item_commits)
-    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a: [])
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **kw: [])
     world.store.ctx["git"] = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
     result = world.store.close_merged(world.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
     assert result["state"] == "done"

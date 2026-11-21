@@ -175,6 +175,8 @@ def main(argv=None):
         p.add_argument('--json', action='store_true')
         if verb == 'route':
             p.add_argument('--writer-snapshot', action='store_true', help=argparse.SUPPRESS)
+            p.add_argument('--leg-scores', action='store_true',
+                           help='add leg_scores: catalog intelligence (aa_intelligence) per routed leg id')
         if verb == 'spawn':
             p.add_argument('prompt', nargs='?')
             p.add_argument('--prompt-file')
@@ -268,7 +270,13 @@ def main(argv=None):
         if args.verb == 'route':
             if args.role == 'review' and args.json and (args.card or {}).get('repository_review_required') is True:
                 options['repository_preview'] = True
-            result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
+            routed = service.route(args.card, args.role, args.writer_family, args.review_of, **options)
+            result = routed.to_dict()
+            if args.leg_scores:
+                from plangraph.planner.review_order import catalog_score
+                from plangraph.routing_support.resolver import get_catalog_models
+                rows = get_catalog_models()
+                result['leg_scores'] = {leg.id: catalog_score(leg, rows) for leg in routed.legs}
             if args.writer_snapshot:
                 from plangraph.planner.legs import DEFAULT_LEGS
                 from plangraph.planner.review_order import catalog_score

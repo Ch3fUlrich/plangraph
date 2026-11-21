@@ -1,0 +1,38 @@
+{
+  "items": [
+    {
+      "project": "p",
+      "id": "I-S1",
+      "title": "p:I slice 1",
+      "kind": "lane",
+      "track": "T3",
+      "owner": "alice",
+      "estimate_h": 1,
+      "depends_on": [],
+      "operator": false,
+      "under": "p:I",
+      "done_criteria": "Slice of p:I: 900 changed lines in 1 files; every finding below fixed",
+      "evidence_kinds": [
+        "any"
+      ],
+      "description": "Why: the review of p:I did not converge within the round rule (rule 3.35), so the PR is replanned into slices.\nHow: implement only these files: a/one.rs.\nOpen findings of the replanned PR, verbatim:\nHIGH t\nHIGH t\nHIGH t\nHIGH t\nHIGH t"
+    },
+    {
+      "project": "p",
+      "id": "I-S2",
+      "title": "p:I slice 2",
+      "kind": "lane",
+      "track": "T3",
+      "owner": "alice",
+      "estimate_h": 1,
+      "depends_on": [],
+      "operator": false,
+      "under": "p:I",
+      "done_criteria": "Slice of p:I: 800 changed lines in 1 files; every finding below fixed",
+      "evidence_kinds": [
+        "any"
+      ],
+      "description": "Why: the review of p:I did not converge within the round rule (rule 3.35), so the PR is replanned into slices.\nHow: implement only these files: a/two.rs.\nOpen findings of the replanned PR, verbatim:\nHIGH t\nHIGH t\nHIGH t\nHIGH t\nHIGH t"
+    }
+  ]
+}

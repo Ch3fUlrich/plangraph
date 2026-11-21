@@ -58,7 +58,7 @@ def test_pre_audience_keeper_upgrade_appends_and_replays_all_four_event_types(
                 prior.setattr(db, "SCHEMA", schema.SCHEMA.removesuffix(schema.EVENT_AUDIENCE_DDL))
             else:
                 prior.setattr(schema_pg, "MIGRATIONS",
-                              tuple(step for step in schema_pg.MIGRATIONS if step.version <= 13))
+                              tuple(step for step in schema_pg.MIGRATIONS if step.version <= 15))
             with closing(db.open_db(path, create=True, **options)) as old:
                 assert_plain_event_type(old, backend)
                 with Store(old)._write():
@@ -70,7 +70,7 @@ def test_pre_audience_keeper_upgrade_appends_and_replays_all_four_event_types(
         if backend == "postgres":
             import psycopg
             with psycopg.connect(DSN, autocommit=True) as raw:
-                assert db_pg.migrate(raw, namespace) == [14]
+                assert db_pg.migrate(raw, namespace) == list(range(16, schema_pg.LATEST + 1))
         with closing(db.open_db(path, **options)) as conn:
             assert_plain_event_type(conn, backend)
             store = Store(conn)

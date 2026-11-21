@@ -327,36 +327,41 @@ class ReadMixin:
     def _alert_rows(self, now, scope):
         """Findings and refusals that are wrong now, plus counts of what was left out.
 
-        A row counts only when its item is open, claimed or in_review and it is
-        younger than ``alert_window_s``; nothing is deleted from the database.
+        Reads only the ``alerts`` table (written when an alert is raised or
+        cleared).  A row counts when it is open, its item is open, claimed or
+        in_review and it was seen inside ``alert_window_s``; a refusal row is an
+        alert from its second refusal.  Nothing is deleted from the database.
         """
         state = {it["key"]: it["state"] for it in scope}
         cutoff = now - self.alert_window_s
         findings, hidden_findings = [], 0
-        for row in self.conn.execute(
-                "SELECT ts,key,code,msg FROM audit_findings ORDER BY id"):
-            if row["key"] is not None and row["key"] not in state:
-                continue
-            when = self._parse_iso(row["ts"])
-            current = (state.get(row["key"], "open") in _OPEN_STATES
-                       and (when is None or when.timestamp() >= cutoff))
-            if current:
-                findings.append(dict(row))
-            else:
-                hidden_findings += 1
         refusals, hidden_refusals = [], 0
         for row in self.conn.execute(
-                "SELECT key, COUNT(*) AS n,"
-                " SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS recent"
-                " FROM audit_log WHERE ok=0 AND key IS NOT NULL"
-                " GROUP BY key HAVING COUNT(*) >= 2 ORDER BY key",
-                (self._iso(cutoff),)):
-            if row["key"] not in state:
+                "SELECT kind,key,code,msg,first_seen,last_seen,n,state"
+                " FROM alerts ORDER BY id"):
+            if row["key"] is not None and row["key"] not in state:
                 continue
-            if state[row["key"]] in _OPEN_STATES and (row["recent"] or 0) >= 2:
-                refusals.append({"key": row["key"], "count": row["recent"]})
+            when = self._parse_iso(row["last_seen"])
+            current = (row["state"] == "open"
+                       and state.get(row["key"], "open") in _OPEN_STATES
+                       and (when is None or when.timestamp() >= cutoff))
+            if row["kind"] == "finding":
+                if current:
+                    findings.append({"ts": row["first_seen"], "key": row["key"],
+                                     "code": row["code"], "msg": row["msg"]})
+                else:
+                    hidden_findings += 1
             else:
-                hidden_refusals += 1
+                # A refusal older than the window no longer counts, whatever the row says.
+                recent = sum(1 for t in self._refusal_times(row) if t >= cutoff)
+                if recent < 2:
+                    if row["n"] >= 2:
+                        hidden_refusals += 1
+                elif current:
+                    refusals.append({"key": row["key"], "count": recent})
+                else:
+                    hidden_refusals += 1
+        refusals.sort(key=lambda entry: entry["key"])
         return findings, refusals, {
             "window_s": self.alert_window_s,
             "findings": hidden_findings, "refusal_keys": hidden_refusals}

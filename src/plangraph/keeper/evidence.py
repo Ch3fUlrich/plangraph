@@ -25,6 +25,7 @@ secret in it.
 from __future__ import annotations
 
 import functools
+import re
 import time
 from typing import Any
 
@@ -51,6 +52,10 @@ __all__ = [
     "RunRecordVerifier",
     "SemaphoreTaskVerifier",
     "DecisionVerifier",
+    "DeployVerifier",
+    "deploy_targets",
+    "deploy_hosts",
+    "deploy_missing",
     "VERIFIERS",
     "default_context",
     "verify",
@@ -643,6 +648,72 @@ class DecisionVerifier:
 
 
 # --------------------------------------------------------------------------- #
+# deploy proof (LE-MERGED-UNIT-NEVER-DEPLOYED)
+# --------------------------------------------------------------------------- #
+
+_UNIT_RE = re.compile(r"^deploy/systemd/([^/]+\.(?:service|timer|socket|path))$")
+_BIN_RE = re.compile(r"^rust/([^/]+)/src/(?:main\.rs|bin/([^/]+)\.rs)$")
+_HOSTS_RE = re.compile(r"(?mi)^[ \t]*Deploy-Hosts:[ \t]*(.+?)[ \t]*$")
+
+
+def deploy_targets(changes) -> list[str]:
+    """Units and host binaries a diff ships: ``name.service`` / ``bin:<name>``.
+
+    *changes* holds ``(status, path)`` pairs (``A``/``M``/``D``) or bare paths. A unit
+    counts for any change; a binary only when its entry point was added: editing or
+    deleting an existing one ships no new host binary. A bare path has no status and
+    counts as added.
+    """
+    out = set()
+    for change in changes or ():
+        status, path = ("A", change) if isinstance(change, str) else change
+        unit = _UNIT_RE.match(path)
+        binary = _BIN_RE.match(path)
+        if unit:
+            out.add(unit.group(1))
+        elif binary and status == "A":
+            out.add("bin:" + (binary.group(2) or binary.group(1)))
+    return sorted(out)
+
+
+def deploy_hosts(item: dict) -> list[str]:
+    """Hosts named by ``Deploy-Hosts: a, b`` lines of the item description or note."""
+    text = f"{item.get('description') or ''}\n{item.get('note') or ''}"
+    names = []
+    for line in _HOSTS_RE.findall(text):
+        names += [h for h in re.split(r"[\s,]+", line) if re.fullmatch(r"[A-Za-z0-9_.-]+", h)]
+    return sorted(set(names))
+
+
+def deploy_missing(targets, hosts, rows) -> list[str]:
+    """``host:unit`` pairs with no verified ``deploy`` evidence; ``(hosts unnamed)`` when none are named."""
+    if not hosts:
+        return ["(hosts unnamed)"]
+    have = {(r["ref"].get("host"), r["ref"].get("unit"))
+            for r in rows if r.get("kind") == "deploy" and r.get("verified")}
+    return [f"{host}:{unit}" for host in hosts for unit in targets
+            if (host, unit) not in have]
+
+
+class DeployVerifier:
+    """A host reports a unit ``systemctl --user is-active`` = active (a binary: installed)."""
+
+    kind = "deploy"
+
+    @_guarded
+    def verify(self, item: dict, ref: dict, ctx: Any) -> Result:
+        ref = _ref(ref)
+        host, unit, state = ref.get("host"), ref.get("unit"), ref.get("is_active")
+        if not (isinstance(host, str) and re.fullmatch(r"[A-Za-z0-9_.-]+", host)
+                and isinstance(unit, str) and unit):
+            return _fail("deploy requires 'host' and 'unit'", ref)
+        want = "installed" if unit.startswith("bin:") else "active"
+        if state != want:
+            return _fail(f"deploy {unit} on {host} must report is_active={want}", ref)
+        return Result(True, f"{unit} {want} on {host}", ref)
+
+
+# --------------------------------------------------------------------------- #
 # registry and factory
 # --------------------------------------------------------------------------- #
 
@@ -656,6 +727,7 @@ VERIFIERS: dict[str, Any] = {
         SemaphoreTaskVerifier(),
         DecisionVerifier(),
         ErrorRecordVerifier(),
+        DeployVerifier(),
     )
 }
 

@@ -160,16 +160,19 @@ class WaiverMixin:
         git, found = self._adapter("git"), []
         for project in self._scan_projects(item):
             try:
-                commits = context_sources.plan_item_commits(git, project, item["key"], fetch=False)
+                pinned = self._pin_close(dict(item, _merge_project=project))
+                commits = context_sources.plan_item_commits(
+                    git, project, item["key"], fetch=False, head=pinned["_close_head"])
             except Exception:  # noqa: BLE001 - an unreadable repository names nothing
                 commits = None
             if commits:
-                found.append(project)
+                found.append(pinned)
                 if project == item["project"]:
-                    return item
+                    return pinned
         if len(found) > 1:
-            raise Refused("evidence_unverified", f"merge_repo_ambiguous: {', '.join(found)} (name one with Merge-Repo:)")
-        return dict(item, _merge_project=found[0]) if found else item
+            names = ", ".join(candidate["_merge_project"] for candidate in found)
+            raise Refused("evidence_unverified", f"merge_repo_ambiguous: {names} (name one with Merge-Repo:)")
+        return found[0] if found else item
 
     def _merge_project(self, item):
         return self._merge_repository(item)[0]
@@ -179,42 +182,13 @@ class WaiverMixin:
         if revision is None:
             return None
         git = self._adapter("git")
-        if not self._refresh_merged_default_ref(git, project):
+        head = item.get("_close_head")
+        if head is None and not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", f"merge_repo_default_refresh_failed: {project}")
-        proof = context_sources.named_merge(git, project, revision)
+        proof = context_sources.named_merge(git, project, revision, head=head)
         if proof is None:
             raise Refused("evidence_unverified", f"merge_repo_commit_not_on_default: {project} {revision}")
         return proof
-
-    def _merged_heads(self, item, all_work=False):
-        """Heads of the merges that introduced the item's Plan-Item commits."""
-        git, project = self._adapter("git"), self._merge_project(item)
-        try:
-            commits = context_sources.plan_item_commits(
-                git, project, item["key"], fetch=False,
-                **({"limit": None} if all_work else {}))
-        except Exception:  # noqa: BLE001 - an unreadable git proof never authorizes
-            commits = None
-        heads = set()
-        # A trailer-bearing commit may be inside a multi-commit PR, or a later
-        # direct follow-up. Bind to the introducing merge's second parent only.
-        for commit in commits or ():
-            sha = commit.get("sha")
-            if not valid_commit_ref(sha):
-                continue
-            try:
-                repo, ref = git.repo_path(project), git.repo_ref(project)
-                merge = git.merge_commit_of(repo, sha, ref)
-                if not merge or not valid_commit_ref(merge[0]):
-                    continue
-                proc = git._run(repo, ["show", "-s", "--format=%P",
-                                       "--end-of-options", merge[0]])
-                parents = proc.stdout.strip().split() if proc.returncode == 0 else []
-                if len(parents) == 2 and all(valid_commit_ref(p) for p in parents):
-                    heads.add(parents[1])
-            except Exception:  # noqa: BLE001 - an unknown merge never authorizes
-                continue
-        return heads
 
     def _merged_go_proof(self, item, decision_id, now, *, all_work=False):
         named = self._named_merge_proof(item)
@@ -280,7 +254,8 @@ class WaiverMixin:
             return set()
         try:
             merged = context_sources.pr_merge_of(
-                self._adapter("git"), self._merge_project(item), head)
+                self._adapter("git"), self._merge_project(item), head,
+                fallback_pr=pr, default_head=item.get("_close_head"))
         except Refused:
             raise
         except Exception:  # noqa: BLE001 - an unreadable merge never authorizes
@@ -293,15 +268,18 @@ class WaiverMixin:
         warm = self._warm(project)
         if self.__dict__.get("_frozen_lanes") and not warm:   # the proof never refreshes a frozen scan
             raise Refused("evidence_unverified", f"merge_index_not_warm: {project}")
-        if not warm and not self._refresh_merged_default_ref(git, project):
+        head = item.get("_close_head")
+        if not warm and head is None and not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
         # The automatic run never asks the forge under the lock: an expired snapshot answers nothing (unknown).
         kw = ({"cache": self.__dict__.setdefault("_lanes", {}) if warm else {}, "frozen": True}
               if warm or self.__dict__.get("_frozen_lanes") else {})
+        if head is not None:
+            kw["head"] = head
         if context_sources.open_lanes(git, project, item["key"], **kw) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
-            git, project, item["key"], fetch=False, limit=None)
+            git, project, item["key"], fetch=False, limit=None, head=head)
         if not commits:
             raise Refused("evidence_unverified", "merged_on_default_missing")
         return commits
@@ -398,8 +376,10 @@ class WaiverMixin:
         git, project = self._adapter("git"), self._merge_project(item)
         families = []
         try:
-            repo, ref = git.repo_path(project), git.repo_ref(project)
-            for commit in context_sources.plan_item_commits(git, project, item["key"], fetch=False, limit=None) or ():
+            head = item.get("_close_head")
+            repo, ref = git.repo_path(project), head or git.repo_ref(project)
+            for commit in context_sources.plan_item_commits(
+                    git, project, item["key"], fetch=False, limit=None, head=head) or ():
                 landed = [commit["sha"], (commit.get("merge") or {}).get("sha")]
                 # the commit's own range, its own trailers and the trailers of the merge that landed it
                 trailers = [*git.writer_trailers(repo, commit["sha"], ref),
@@ -532,6 +512,7 @@ class WaiverMixin:
             raise Refused("validation", "decision_id must look like D-NNN")
         # The operator waiver row itself as the decision: no GO row is read.
         waiver_only = waive_seats is not None and waive_seats == decision_id
+        item, token, changes = self._manual_deploy_scan(item, complete_history=from_open or bool(waive_seats))
         with self._decisions_snapshot(item, now):
             if waiver_only:
                 head, prs, waiver, _ = self._merged_waiver_only(item, decision_id, now, all_work=from_open)
@@ -542,6 +523,11 @@ class WaiverMixin:
             backfill = families is None and waiver is None
             witnessed, seats, flags = ([], [], None) if waiver is not None else self._seats_or_flag(
                 item, decision_id, head, now, prs, families, backfill, required)
+            pending = self._deploy_pending(item, changes)
+            if token is not None and not self._deploy_scan_current(item, token):
+                raise Refused("conflict", "merged_on_default_changed")
+            if pending:
+                return self._deploy_pending_result(item, pending, now)
             if (from_open or waiver_only) and not apply:
                 return {"key": key, "state": item["state"], "would_close": True, "prs": prs, **self._flags_of(flags)}
         with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock
@@ -551,10 +537,10 @@ class WaiverMixin:
             # Lease maintenance changes no close authority. All other fields
             # (including epoch/round, definition and writer proofs) must agree.
             stable = lambda row: {k: v for k, v in row.items()
-                                  if k not in ("updated_at", "lease_until", "_merge_project")}
+                                  if k not in ("updated_at", "lease_until", "_merge_project", "_close_head")}
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
-            fresh = dict(fresh, **({"_merge_project": item["_merge_project"]} if "_merge_project" in item else {}))
+            fresh.update({field: item[field] for field in ("_merge_project", "_close_head") if field in item})
             if waiver_only:
                 current_head, current_prs, current_waiver, result = self._merged_waiver_only(
                     fresh, decision_id, now, all_work=from_open)
@@ -590,6 +576,8 @@ class WaiverMixin:
             part = None if waiver_only else self._merged_go_scope(decision_id, fresh, now, require_key=False)[1]
             if part:
                 ref["go_part"] = part   # the named part head covering a key the row's list omits
+            if token is not None and not self._deploy_scan_current(fresh, token):
+                raise Refused("conflict", "merged_on_default_changed")
             return self._land_merged(principal, fresh, head, seats, witnessed, decision_id, from_open,
                                      ("decision", ref, result), f"router GO {decision_id} merged {head}", now,
                                      flags=flags)
@@ -709,8 +697,15 @@ class WaiverMixin:
             raise Refused("forbidden", "sensitive_card_needs_router_close: auth/secrets risk tag")
         self._assert_unlocked(item)
         seated = tier != "none"
-        proofs = self._merged_auto_proofs(item)
-        witnessed, flags = self._auto_seats(item, proofs, now, require_seats) if seated else ([], None)
+        token, changes = self._auto_deploy_scan(item)
+        pinned = dict(item, _close_head=token[0])
+        proofs = self._merged_auto_proofs(pinned)
+        pending = self._deploy_pending(pinned, changes)
+        if pending:
+            if apply:
+                self._deploy_pending_result(item, pending, now)
+            raise Refused("evidence_unverified", "deploy_pending: " + ", ".join(pending))
+        witnessed, flags = self._auto_seats(pinned, proofs, now, require_seats) if seated else ([], None)
         if not apply:
             return {"key": key, "state": item["state"], "prs": proofs, **self._flags_of(flags)}
         with self._write():
@@ -721,7 +716,7 @@ class WaiverMixin:
             stable = lambda row: {k: v for k, v in row.items() if k not in ("updated_at", "lease_until", "_merge_project")}
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
-            fresh = dict(fresh, **({"_merge_project": item["_merge_project"]} if "_merge_project" in item else {}))
+            fresh.update({field: pinned[field] for field in ("_merge_project", "_close_head") if field in pinned})
             if self._merged_auto_proofs(fresh) != proofs:
                 raise Refused("conflict", "merged_on_default_changed")
             if seated and self._auto_seats(fresh, proofs, now, require_seats) != (witnessed, flags):
@@ -731,6 +726,8 @@ class WaiverMixin:
             ref = {"sha": head, "merged_head": head, "prs": proofs, "families": seats,
                    "caller": principal.name, "source": "merge-close", "require_seats": require_seats,
                    **self._flags_of(flags)}
+            if not self._deploy_scan_current(fresh, token):
+                raise Refused("conflict", "merged_on_default_changed")
             done = self._land_merged(principal, fresh, head, seats, witnessed, f"auto-{head[:12]}",
                                      fresh["state"] != "in_review", ("commit", ref, Result(True, "merged on default")),
                                      f"merge close: merged {head}", now, release=True, flags=flags)

@@ -1,0 +1,1 @@
+- The keeper reads the PR number of a merge subject from the trailing `(#N)` that `merge_batch land` writes, so a title such as `Follow up on #42 (#1078)` binds the GO row to PR 1078, not 42; a subject without the trailing form still falls back to the first `#N`.

@@ -223,6 +223,8 @@ def parser():
     cmd.add_argument("--go-row", metavar="PATH", help="recorded GO row; red-main exception must name this full head and EXCEPTION:main-red-fix")
     cmd.add_argument("--checks", metavar="NAME,..", help="check names to require instead of the required checks")
     cmd.add_argument("--wait", type=float, default=20.0, help="seconds to wait for GitHub to mark PRs merged")
+    cmd.add_argument("--subject", metavar="TEXT",
+                     help="merge commit subject (must end with '(#N)' for the batch PR)")
     add("landing-mode", cmd_landing_mode, "print the landing.mode setting of a repository", repo=True)
     cmd = add("landing-report", cmd_landing_report, "compare the landing modes from the telemetry database")
     cmd.add_argument("--json", action="store_true")

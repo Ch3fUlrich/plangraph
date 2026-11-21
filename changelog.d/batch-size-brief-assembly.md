@@ -1,0 +1,1 @@
+- `plangraph batch-size INPUT.json --brief` assembles the batch brief from the computed size: the `# Batch size` block names the count, the reason and the items left over, `# Items` carries exactly the selected items' text in order and `# Run values` the input's run values, so the recommendation is applied and recorded in the brief instead of only printed.
