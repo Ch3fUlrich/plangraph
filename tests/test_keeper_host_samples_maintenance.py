@@ -6,14 +6,14 @@ import pytest
 from test_keeper_host_samples import world, sample, host_principal, DSN
 from plangraph.keeper import daemon, schema_pg
 
-pytestmark = pytest.mark.skipif(not DSN, reason="PLANGRAPH_TEST_PG_DSN unset: needs Postgres 16")
+pytestmark = pytest.mark.skipif(not DSN, reason="PLANGRAPH_TEST_PG_DSN (or PG_DSN) unset: needs Postgres 16")
 
 
 def test_pg_partitioned_raw_and_migration(world):
     from plangraph.keeper import store_host_samples
     assert set(store_host_samples.TABLES) == {
         "host_samples_raw", "host_samples_1m", "host_samples_1h", "host_sample_tokens"}
-    assert schema_pg.LATEST == 13
+    assert schema_pg.LATEST == 14
     row = world.conn.execute(
         "SELECT partstrat FROM pg_partitioned_table WHERE partrelid="
         "'host_samples_raw'::regclass").fetchone()
@@ -44,6 +44,25 @@ def test_pg_rollup_idempotence_and_range(world):
                                               start - 3600, world.clock(), resolution) == rows
 
 
+def test_pg_rollup_saturates_summed_sequence_gaps(world):
+    """Each sample is valid, but a bucket's summed gaps must still fit BIGINT."""
+    who, _ = host_principal(world)
+    top = 2 ** 63 - 1
+    for seq, started in [(1, 1), (top, 1), (1, 2), (top, 2)]:
+        world.store.ingest_host_sample(who, sample(seq, started))
+        world.clock.advance(1)
+    # An old raw row sits past retention: the shared maintenance step must still delete it.
+    world.clock.advance(15 * 86400)
+    world.store.maintain_host_samples()
+    world.store.maintain_host_samples()
+    row = world.conn.execute("SELECT seq_gap FROM host_samples_1m").fetchone()
+    assert row[0] == top
+    assert world.conn.execute("SELECT count(*) FROM host_samples_raw").fetchone()[0] == 0
+    world.clock.advance(80 * 86400)
+    world.store.maintain_host_samples()
+    assert world.conn.execute("SELECT seq_gap FROM host_samples_1h").fetchone()[0] == top
+
+
 def test_pg_retention_all_tiers(world):
     who, _ = host_principal(world)
     world.store.ingest_host_sample(who, sample())
@@ -70,6 +89,8 @@ def test_pg_runtime_cannot_ddl_but_maintenance_creates_partitions(world):
     schema = world.conn.schema
     raw.execute(f'GRANT USAGE ON SCHEMA "{schema}" TO keeper_rt')
     raw.execute(f'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "{schema}" TO keeper_rt')
+    # Deployment grants the partition function to the runtime role by name (PUBLIC has none).
+    raw.execute(f'GRANT EXECUTE ON FUNCTION "{schema}".host_samples_partitions(double precision) TO keeper_rt')
     raw.execute("SET ROLE keeper_rt")
     try:
         import psycopg
@@ -78,6 +99,24 @@ def test_pg_runtime_cannot_ddl_but_maintenance_creates_partitions(world):
         world.store.maintain_host_samples()
         world.clock.advance(86400)
         world.store.maintain_host_samples()
+    finally:
+        raw.execute("RESET ROLE")
+
+
+def test_pg_partition_function_is_not_executable_by_public(world):
+    import psycopg
+    raw = world.conn._raw
+    raw.execute("DO $$ BEGIN CREATE ROLE keeper_unrelated; EXCEPTION WHEN duplicate_object THEN NULL; END $$")
+    schema = world.conn.schema
+    raw.execute(f'GRANT USAGE ON SCHEMA "{schema}" TO keeper_unrelated')
+    function = f'"{schema}".host_samples_partitions'
+    signature = f'{function}(double precision)'
+    assert not raw.execute("SELECT has_function_privilege('keeper_unrelated', %s, 'EXECUTE')",
+                           (signature,)).fetchone()[0]
+    raw.execute("SET ROLE keeper_unrelated")
+    try:
+        with pytest.raises(psycopg.errors.InsufficientPrivilege):
+            raw.execute(f"SELECT {function}(%s)", (0.0,))
     finally:
         raw.execute("RESET ROLE")
 

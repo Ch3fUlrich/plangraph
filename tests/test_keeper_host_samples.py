@@ -7,8 +7,8 @@ from keeper_util import World
 from plangraph.keeper import auth
 from plangraph.keeper.errors import Refused
 
-DSN = os.environ.get("PLANGRAPH_TEST_PG_DSN")
-pytestmark = pytest.mark.skipif(not DSN, reason="PLANGRAPH_TEST_PG_DSN unset: needs Postgres 16")
+DSN = os.environ.get("PLANGRAPH_TEST_PG_DSN") or os.environ.get("PG_DSN")
+pytestmark = pytest.mark.skipif(not DSN, reason="PLANGRAPH_TEST_PG_DSN (or PG_DSN) unset: needs Postgres 16")
 
 
 @pytest.fixture
