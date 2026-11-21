@@ -221,3 +221,217 @@ def test_nested_host_key_still_redacted(tmp_path, monkeypatch):
     stored = service.result(run_id)
     assert stored["host"] == "bench-host-secretlike"
     assert "bench-host-secretlike" not in json.dumps(stored["attempts"])
+
+
+def head_card(tmp_path, monkeypatch, writer_line):
+    """A card whose diff_ref head commit carries ``writer_line`` as its Writer trailer."""
+    import subprocess
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    ident = ["-c", "user.name=Test", "-c", "user.email=test@example.invalid"]
+    def git(*args):
+        return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True).stdout.strip()
+    git("init", "-q")
+    (repo / "f.txt").write_text("a\n")
+    git("add", "f.txt")
+    git(*ident, "commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    (repo / "f.txt").write_text("b\n")
+    git(*ident, "commit", "-qam", f"change\n\nWriter: {writer_line}")
+    return dict(CARD, diff_ref={"repo": str(repo), "base": base, "head": git("rev-parse", "HEAD")})
+
+
+def families_served(plan):
+    return {leg["family"] for leg in plan["legs"]}
+
+
+def test_review_head_writer_trailer_excludes_its_family_despite_other_exclusion(tmp_path, capsys, monkeypatch):
+    """The 2026-11-19 incident: --writer-family mimo (meant 'review on mimo') plus a gemini writer head
+    must never serve a gemini leg."""
+    from plangraph.spawner.cli import main as cli_main
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    capsys.readouterr()
+    assert cli_main(["--state", str(tmp_path / "state"), "route", "--card", json.dumps(card),
+                     "--role", "review", "--exclude-family", "mimo", "--json"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["legs"] and "gemini" not in families_served(plan) and "mimo" not in families_served(plan)
+    assert any(row["reason"] == "excluded_family" and "gemini" in row["leg"] for row in plan["skipped"])
+
+
+def test_review_head_writer_trailer_alone_names_the_writer(tmp_path, capsys, monkeypatch):
+    from plangraph.spawner.cli import main as cli_main
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    capsys.readouterr()
+    assert cli_main(["--state", str(tmp_path / "state"), "route", "--card", json.dumps(card),
+                     "--role", "review", "--exclude-family", "claude", "--json"]) == 0
+    assert "gemini" not in families_served(json.loads(capsys.readouterr().out))
+
+
+def test_review_unknown_head_writer_trailer_refuses(tmp_path, monkeypatch):
+    from plangraph.spawner.service import SpawnService
+    card = head_card(tmp_path, monkeypatch, "no-such-model-xyz run-1 (writer)")
+    with pytest.raises(SpawnRefused, match="Writer trailer"):
+        SpawnService(state=tmp_path / "state").route(card, "review", ["claude"])
+
+
+def test_explicit_leg_of_head_writer_family_is_refused(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.spawner.service import SpawnService
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    service = SpawnService(state=tmp_path / "state")
+    with pytest.raises(SpawnRefused, match="excluded writer family"):
+        asyncio.run(service._spawn(card=card, role="review", writer_families=["mimo"],
+                                   leg="agy-gemini-4-neon-medium", dry_run=True))
+
+
+def test_exclude_family_flag_and_deprecated_writer_family_alias(tmp_path, capsys):
+    from plangraph.spawner.cli import main as cli_main
+    state = str(tmp_path / "state")
+    capsys.readouterr()
+    assert cli_main(["--state", state, "route", "--card", json.dumps(CARD), "--role", "review",
+                     "--exclude-family", "claude", "--json"]) == 0
+    new = capsys.readouterr()
+    assert "deprecated" not in new.err
+    assert cli_main(["--state", state, "route", "--card", json.dumps(CARD), "--role", "review",
+                     "--writer-family", "claude", "--json"]) == 0
+    old = capsys.readouterr()
+    assert "--writer-family is deprecated" in old.err and "--exclude-family" in old.err
+    assert json.loads(old.out)["legs"] == json.loads(new.out)["legs"]
+
+
+def test_explicit_leg_of_any_head_writer_family_is_refused_with_several_writers(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.spawner.service import SpawnService
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    import subprocess
+    repo = card["diff_ref"]["repo"]
+    subprocess.run(["git", "-C", repo, "-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "-q",
+                    "--amend", "-m", "change\n\nWriter: gemini-4-hydrogen-high run-1 (writer)\nWriter: claude-sonnet-5-5 s (writer)"],
+                   check=True, capture_output=True)
+    card["diff_ref"]["head"] = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], check=True,
+                                              capture_output=True, text=True).stdout.strip()
+    with pytest.raises(SpawnRefused, match="excluded writer family"):
+        asyncio.run(SpawnService(state=tmp_path / "state")._spawn(
+            card=card, role="review", writer_families=["mimo"], leg="agy-gemini-4-neon-medium", dry_run=True))
+
+
+def test_unreadable_review_head_refuses_instead_of_assuming_no_writer(tmp_path, monkeypatch):
+    from plangraph.spawner.service import SpawnService
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    card["diff_ref"]["head"] = "0" * 40
+    with pytest.raises(SpawnRefused, match="cannot read the Writer trailer"):
+        SpawnService(state=tmp_path / "state").route(card, "review", ["claude"])
+
+
+@pytest.mark.parametrize("dispatch", [False, True])
+def test_trailer_family_is_recorded_as_given_writer_family(tmp_path, monkeypatch, dispatch):
+    import asyncio
+    from registry_route_util import _Runner
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.runner import spawn_service as DispatchService
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    service = (DispatchService if dispatch else SpawnService)(_Runner(), state=tmp_path / "state")
+    plan = SpawnPlan((next(l for l in DEFAULT_LEGS if l.family == "qwen"),), (), "test", (), ())
+    monkeypatch.setattr(service, "_route", lambda *a, **kw: plan)
+    monkeypatch.setattr(service, "_leg_prompt", lambda *a, **kw: "review")
+
+    async def identity(plan, **kwargs):
+        return plan
+    monkeypatch.setattr("plangraph.spawner.resolver.plan_for_launch_async", identity)
+    record = asyncio.run(service.spawn(card=card, role="review", writer_families=["mimo"], dry_run=True))
+    assert record["given_writer_families"] == ["mimo", "gemini-4-hydrogen-high"]
+
+
+def test_routed_host_skip_failure_also_records_the_skipped_field(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.runner import spawn_service as DispatchService
+    from registry_route_util import _Runner, CARD as ROUTE_CARD
+    service = DispatchService(_Runner(), state=tmp_path / "state")
+    skipped = ({"leg": "a", "reason": "not_served_on_host: m", "skip_reason": "not_served_on_host: m"},)
+    plan = SpawnPlan((), skipped, "t", (), ())
+    monkeypatch.setattr(service, "_route", lambda *a, **kw: plan)
+    monkeypatch.setattr(service, "_leg_prompt", lambda *a, **kw: "p")
+    record = asyncio.run(service.spawn(card=ROUTE_CARD, role="implement", dry_run=False))
+    assert "not_served_on_host" in record["error"]   # a failed run keeps its host reason
+    assert record["skipped"][0]["leg"] == "a"
+
+
+def test_seat_refusal_keeps_the_skip_list_in_its_own_field(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.planner.routing import SpawnPlan
+    from registry_route_util import _Runner, CARD as ROUTE_CARD
+    service = SpawnService(_Runner(), state=tmp_path / "state")
+    skipped = ({"leg": "a", "reason": "excluded_family"},)
+    monkeypatch.setattr(service, "_route", lambda *a, **kw: SpawnPlan((), skipped, "t", (), (), error="no eligible leg"))
+    with pytest.raises(SpawnRefused):
+        asyncio.run(service.spawn(card=ROUTE_CARD, role="review", writer_families=["claude"], seats=True, dry_run=True))
+    record = service.ps()["runs"][0]
+    assert record["error"] == "no eligible leg" and record["skipped"] == list(skipped)
+
+
+@pytest.mark.parametrize("head", ["f.txt", "HEAD..HEAD", "HEAD~1..HEAD", "HEAD...HEAD", "HEAD^@"])
+def test_head_that_is_not_a_single_commit_is_refused(tmp_path, monkeypatch, head):
+    from plangraph.planner.seats import head_writer_families
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    card["diff_ref"]["head"] = head   # a tracked path, a range or a negation: never a commit to read
+    with pytest.raises(SpawnRefused, match="cannot read the Writer trailer"):
+        head_writer_families(card)
+
+
+def test_flag_and_review_of_families_are_both_recorded(tmp_path, monkeypatch):
+    from plangraph.spawner.service import SpawnService
+    service = SpawnService(state=tmp_path / "state")
+    source = service.save_refusal(SpawnRefused("x"))   # any saved run
+    run_id = "run-" + "c" * 12
+    service._save(dict(run_id=run_id, role="implement", status="completed", started=1.0, ended=2.0,
+                       attempts=[], stdout_tail="", exit_code=0, cwd=str(tmp_path),
+                       given_writer_families=["openai"], writer_family="openai"))
+    assert service._given_writers(CARD, "review", ["mimo"], run_id) == ["mimo", "openai"]
+    assert service._given_writers(CARD, "review", ["mimo"], None) == ["mimo"]
+
+
+@pytest.mark.parametrize("dispatch", [False, True])
+def test_flag_review_of_and_trailer_families_all_reach_the_spawned_record(tmp_path, monkeypatch, dispatch):
+    import asyncio
+    from registry_route_util import _Runner
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.runner import spawn_service as DispatchService
+    card = head_card(tmp_path, monkeypatch, "gemini-4-hydrogen-high run-1 (writer)")
+    service = (DispatchService if dispatch else SpawnService)(_Runner(), state=tmp_path / "state")
+    run_id = "run-" + "d" * 12
+    service._save(dict(run_id=run_id, role="implement", status="completed", started=1.0, ended=2.0,
+                       attempts=[], stdout_tail="", exit_code=0, cwd=str(tmp_path),
+                       given_writer_families=["openai"], writer_family="openai"))
+    plan = SpawnPlan((next(l for l in DEFAULT_LEGS if l.family == "qwen"),), (), "test", (), ())
+    seen = []
+    monkeypatch.setattr(service, "_route", lambda *a, **kw: seen.append(a) or plan)
+    monkeypatch.setattr(service, "_leg_prompt", lambda *a, **kw: "review")
+
+    async def identity(plan, **kwargs):
+        return plan
+    monkeypatch.setattr("plangraph.spawner.resolver.plan_for_launch_async", identity)
+    record = asyncio.run(service.spawn(card=card, role="review", writer_families=["mimo"],
+                                       review_of=run_id, dry_run=True))
+    assert record["given_writer_families"] == ["mimo", "openai", "gemini-4-hydrogen-high"]
+    # The launch itself carries all three excluded families in its routing headers.
+    headers = service.runner.calls[-1]["headers"]
+    assert {"mimo", "gpt", "gemini"} <= {value for key, value in headers.items() if "exclude" in key.lower()
+                                         for value in str(value).split(",")}, headers
+
+
+def test_plain_spawn_refusal_keeps_the_skip_list_in_its_own_field(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.planner.routing import SpawnPlan
+    from registry_route_util import _Runner, CARD as ROUTE_CARD
+    service = SpawnService(_Runner(), state=tmp_path / "state")
+    skipped = ({"leg": "a", "reason": "excluded_family"},)
+    monkeypatch.setattr(service, "_route", lambda *a, **kw: SpawnPlan((), skipped, "t", (), (), error="no eligible leg"))
+    with pytest.raises(SpawnRefused):
+        asyncio.run(service.spawn(card=ROUTE_CARD, role="review", writer_families=["claude"], dry_run=True))
+    record = service.ps()["runs"][0]
+    assert record["error"] == "no eligible leg" and record["skipped"] == list(skipped)

@@ -3,9 +3,13 @@
 Callers (L1 prompts, router rulings) do not name legs. For reviews:
 
 ```bash
-python -m plangraph.spawner.cli route --card @card.json --role review --writer-family claude --json
-python -m plangraph.spawner.cli spawn --card @card.json --role review --writer-family claude --seats "Review"
+python -m plangraph.spawner.cli route --card @card.json --role review --exclude-family claude --json
+python -m plangraph.spawner.cli spawn --card @card.json --role review --exclude-family claude --seats "Review"
 ```
+
+`--exclude-family` names the family EXCLUDED from review (the writer's), never a reviewer choice;
+`--writer-family` is a deprecated alias that warns. A review card with a `diff_ref` also excludes the
+families named by the `Writer` trailer of the head commit and refuses a leg of one, whatever the flag names.
 
 MCP: `plangraph_agent_spawn` with `role: review`, `writer_families`, `seats: true`
 and no `model_or_combo`. `--seats` spawns one run per seat `route` picked and

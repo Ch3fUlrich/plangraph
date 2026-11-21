@@ -47,6 +47,7 @@ def service(tmp_path, monkeypatch):
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'catalog_rows', ())
     # Exercise the real seat planner and dispatch, without Git, probes or a child.
     monkeypatch.setattr(SpawnService, '_leg_prompt', lambda *a, **k: 'review')
+    monkeypatch.setattr('plangraph.planner.seats.head_writer_families', lambda card: [])   # no Git here
     store = SimpleNamespace(leg_status=lambda *a, **k: dict(state='ok', evidence=None))
     reader = SimpleNamespace(enabled=True, store=store, leg_status=store.leg_status,
                              record_probe_fail=lambda *a, **k: None)

@@ -249,7 +249,7 @@ impl Host {
             .arg("--state")
             .arg(&self.state)
             .args(["spawn", "--card", &card.to_string(), "--role", "review"])
-            .args(families.iter().flat_map(|f| ["--writer-family", f]))
+            .args(families.iter().flat_map(|f| ["--exclude-family", f]))
             .arg("--prompt-file")
             .arg(&prompt_path)
             .args(["--wait", "3300", "--json"])

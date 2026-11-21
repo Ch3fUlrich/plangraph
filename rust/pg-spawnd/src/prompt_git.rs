@@ -227,6 +227,59 @@ fn reap_after_kill(
     child.wait()
 }
 
+/// The models named by the `Writer` trailers of the head commit (first word of each trailer value).
+pub(crate) fn head_writers(
+    repo: &RepoEntry,
+    diff: &DiffRef,
+) -> Result<Vec<String>, InlineDiffError> {
+    validate(diff)?;
+    // The fetch a missing head may need runs under a deadline too; the lookup gives up (and refuses) after it.
+    let (sender, receiver) = mpsc::channel();
+    let (owned, sha) = (repo.clone(), diff.head_sha.clone());
+    std::thread::spawn(move || {
+        let _ = sender.send(workspace_resolver::ensure_commit(
+            &owned,
+            &sha,
+            Duration::from_secs(10),
+        ));
+    });
+    match receiver.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(())) => {}
+        _ => return Err(InlineDiffError::Git),
+    }
+    let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
+    cmd.args([
+        "-c",
+        "core.hooksPath=",
+        "log",
+        "-1",
+        "--no-color",
+        "--format=%(trailers:key=Writer,valueonly,unfold)",
+        &diff.head_sha,
+        "--",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    // Bounded like the diff reads: the child is reaped and killed at the deadline.
+    let stdout = collect_diff(
+        cmd.spawn().map_err(|_| InlineDiffError::Git)?,
+        64 * 1024,
+        Duration::from_secs(10),
+    )
+    .map_err(|_| InlineDiffError::Git)?;
+    Ok(String::from_utf8_lossy(&stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_owned)
+        .collect())
+}
+
 pub(crate) fn validate(diff: &DiffRef) -> Result<(), InlineDiffError> {
     let id = diff.repo_id.as_bytes();
     let valid = !id.is_empty()

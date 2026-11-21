@@ -146,7 +146,7 @@ fn argv_and_passthrough() {
         serde_json::from_str::<Value>(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap(),
         json!({"ok":false,"plan":1,"work_mode":"batch","work_mode_reason":"manual batch"})
     );
-    assert_eq!(std::fs::read_to_string(f.state.path().join("argv")).unwrap(),format!("--state\n{}\nroute\n--card\n{{\"x\":1}}\n--role\nreview\n--writer-family\na\n--writer-family\nb\n--review-of\nrun-a\n--require-bench\n--bench-db\ndb\n--json\n",f.state.path().display()));
+    assert_eq!(std::fs::read_to_string(f.state.path().join("argv")).unwrap(),format!("--state\n{}\nroute\n--card\n{{\"x\":1}}\n--role\nreview\n--exclude-family\na\n--exclude-family\nb\n--review-of\nrun-a\n--require-bench\n--bench-db\ndb\n--json\n",f.state.path().display()));
     f.call(
         "probe",
         json!({"leg":["a","b"],"all_writers":true,"timeout":2}),
@@ -384,7 +384,7 @@ fn spawn_dry_run_and_no_launch() {
         format!("{:x}", Sha256::digest(b"{\"x\": 1}"))
     );
     let argv = std::fs::read_to_string(f.state.path().join("argv")).unwrap();
-    assert!(argv.contains("--writer-family\nwriter\n--review-of\nrun-a\n"));
+    assert!(argv.contains("--exclude-family\nwriter\n--review-of\nrun-a\n"));
     args["dry_run"] = json!(false);
     args["wait_seconds"] = json!(2);
     let r = f.call("spawn", args);

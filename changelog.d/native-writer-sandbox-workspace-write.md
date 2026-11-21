@@ -1,0 +1,1 @@
+The native Codex writer now starts Codex in `sandbox_mode="workspace-write"` (network on, named writable roots including the worktree's git directories) with an environment allowlist instead of `danger-full-access` and the inherited environment (AGENT-JAIL step 1).
