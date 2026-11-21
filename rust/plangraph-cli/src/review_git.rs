@@ -140,13 +140,6 @@ pub fn writer_groups(
             python_command(Some(repo))
         })?;
     let groups = group_by_families(&read.per_commit);
-    if groups.is_empty() {
-        return Err(format!(
-            "refused: could not determine any writer family from trailers/authors in {}..{}",
-            &base_sha[..12.min(base_sha.len())],
-            &head_sha[..12.min(head_sha.len())]
-        ));
-    }
     Ok(groups)
 }
 

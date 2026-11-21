@@ -150,13 +150,6 @@ pub fn writer_families(
                 .flat_map(|(_, families)| families),
         )
         .collect();
-    if all.is_empty() {
-        return Err(format!(
-            "refused: could not determine any writer family from trailers/authors in {}..{}",
-            short(base_sha),
-            short(head_sha)
-        ));
-    }
     Ok(all.into_iter().collect())
 }
 
@@ -169,7 +162,7 @@ pub struct RangeFamilies {
 
 /// Per-commit form of [`writer_families`]: the same reading rules, kept per commit so a review can
 /// give each writer-family group its own seat. A merge with ordinary commits around it, or a commit
-/// with nothing resolvable, has an empty set.
+/// with nothing resolvable, has an empty set; a range where nothing resolves at all is refused here, once, for every caller.
 pub fn commit_families(
     repo: &Path,
     base_sha: &str,
@@ -284,6 +277,13 @@ pub fn commit_families(
             }
         }
         per_commit.push((c.sha.clone(), families));
+    }
+    if models.is_empty() && per_commit.iter().all(|(_, families)| families.is_empty()) {
+        return Err(format!(
+            "refused: could not determine any writer family from trailers/authors in {}..{}",
+            short(base_sha),
+            short(head_sha)
+        ));
     }
     Ok(RangeFamilies { per_commit, models })
 }
