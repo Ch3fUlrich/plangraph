@@ -383,3 +383,31 @@ def test_new_mismatched_record_overrides_previous_proof(seat):
     assert check(300)[0]['rule'] == 'stuck-watch-report'
     check(600)
     assert not calls
+
+
+@pytest.mark.parametrize('owner', ['docker-init', 'containerd-shim-runc-v2', 'scope', 'cgroupfs', 'orphan'])
+def test_container_opencode_is_owned_but_orphan_still_alerts(seat, owner):
+    root, proc, _, calls, process, check = seat
+    process(cmd="unrelated-host-process")
+    pid = FAKE_PID + 1
+    parent = FAKE_PID + 2
+    if owner in ('docker-init', 'containerd-shim-runc-v2'):
+        process(pid=parent, cmd=f'/usr/bin/{owner} -- fixture')
+        process(pid=FAKE_PID + 3, parent=parent, cmd='intermediate')
+        process(pid=pid, parent=FAKE_PID + 3, cmd='opencode serve --stdio')
+    else:
+        process(pid=pid, cmd='opencode serve --stdio')
+    if owner == 'scope':
+        (proc / str(pid) / 'cgroup').write_text('0::/system.slice/docker-' + 'a' * 64 + '.scope\n')
+    if owner == 'cgroupfs':
+        (proc / str(pid) / 'cgroup').write_text('2:cpu:/docker/' + 'b' * 64 + '/child:fixture\n')
+    check(0)
+    findings = check(1800)
+    own = [row for row in findings if row['pid'] == pid]
+    assert bool(own) == (owner == 'orphan')
+    if own:
+        assert own[0]['reason'] == 'unclaimed opencode serve; ownership unproven'
+    else:
+        samples = json.loads((root / 'watchdog/stuck-samples.json').read_text())
+        assert samples[f'process-{pid}']['owner'] == 'container'
+    assert 'kill' not in calls
