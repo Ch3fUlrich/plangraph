@@ -1,0 +1,1 @@
+- Local affected selection stops at package initializer boundaries and caps the file list at 39. Workflow-only changes select CI regression tests in the affected PR tier, and merge candidates retain the full suite.

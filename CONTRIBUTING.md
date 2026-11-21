@@ -527,7 +527,7 @@ shards, and any failing shard still fails `ci-gate`.
 The standalone fresh-base admission carry is listed as D-5848 in
 `tools/new_code_allowlist.txt` until the spawner Rust port.
 
-Local controls run every named consumer plus a bounded smoke set; policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
+Local selection includes named consumers and bounds the file list at 39. CI covers the wider set. Policy checks use origin/main when available, including inherited stack changes. Preflight clears the complete GIT_CONFIG namespace before selector launch.
 
 Both pytest CI jobs validate collection once without `PYTEST_SHARD` on shard 0, using the PR
 affected selection or the full push/nightly suite. Empty individual shards remain

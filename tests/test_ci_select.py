@@ -133,11 +133,10 @@ def test_skill_non_page_change_is_unknown_full():
     assert res["full"] is True
 
 
-def test_ci_github_workflow_full():
-    res = select([".github/workflows/tests.yml"])
-    assert res["full"] is True
-    for s in SUITES:
-        assert res[s] is True
+def test_ci_only_workflows_select_regressions():
+    res = select([".github/workflows/tests.yml", ".github/workflows/release.yml"])
+    assert {job for job, active in res.items() if active} == {"pytest", "rust"}
+    assert select([".github/workflows/tests.yml", "src/m.py"])["full"] is True
 
 
 def test_requirements_ci_full():
@@ -440,7 +439,7 @@ def test_gate_refuses_a_candidate_that_ran_only_the_selection():
 def test_cli_select_event_picks_full_for_batch_head_and_selection_for_lane(capsys, monkeypatch):
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     args = ["select", "--event", "pull_request", "--base-ref", "main", "--labels", "[]",
-            "--files", "docs/a.md"]
+            "--files", ".github/workflows/tests.yml"]
     assert main(args + ["--head-ref", "batch/x"]) == 0
     assert "full=true" in capsys.readouterr().out
     assert main(args + ["--head-ref", "lane/x"]) == 0

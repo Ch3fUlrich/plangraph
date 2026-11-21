@@ -1,13 +1,13 @@
 # Fast writer, L2 and PR checks
 
 Install `requirements-ci.txt` in a virtual environment (includes pytest-xdist),
-activate it, then use the same command for writers, L2 and PR CI:
+activate it, then use bounded selection for writer and L2 checks:
 
 ```sh
-python3 tools/affected_tests.py --base origin/main --run
+python3 tools/affected_tests.py --base origin/main --local --files-only --run
 ```
 
-Build-L1: use that line in PR CI; this change intentionally does not edit workflows.
+Affected PR CI runs the selector without the local flags.
 The base must exist locally. The tool diffs the merge base against the working tree,
 including staged, unstaged and untracked files. JSON output explains the plan;
 without `--run` it only prints the plan. Invalid refs fail rather than selecting nothing.
@@ -20,13 +20,15 @@ an explicit pass on both reruns and equal hashes; `FAILED-IN-PARALLEL` is a pass
 failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. The exit
 status stays that of the first run, so a flake is named, never hidden.
 
-Selection follows transitive AST imports in src/ and tests/ (including relative
-imports and package initializers), plus test references to filenames for subprocess
-consumers. Changed tests select themselves. Conftest/shared test helpers, config,
-workflows, deleted/unmapped files, parse failures and source files without mapped
-tests select the full suite. This is deliberate over-selection, not an allow-list.
-AST cannot establish arbitrary runtime/plugin/file-system dependencies: when changing
-such behavior, request full verification rather than treating selection as coverage.
+Selection follows transitive AST imports in src/ and tests/, plus test references
+to filenames for subprocess consumers. Changed tests select themselves.
+The push hook uses `--local --files-only` to keep up to 39 test files, giving
+priority to policy checks, changed tests and direct consumers. A changed package
+initializer selects local tests that explicitly import the package or a changed
+export. Local selection stops at re-export boundaries. The selector reports
+additional files deferred to CI. Workflow-only changes select CI regression
+tests in local preflight and the affected PR tier. The batch tier runs the full
+suite.
 
 Run the full suite on **merge to main and nightly**, not routinely in writer loops:
 

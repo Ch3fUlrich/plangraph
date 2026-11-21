@@ -167,7 +167,11 @@ def select(paths: list[str]) -> dict[str, bool]:
         res["full"] = True
         return res
 
-    # 2. Any path that is a CI/deps path -> full run
+    if all(p.startswith(".github/workflows/") for p in norm_paths):
+        # Rust regression tests also read the workflows as repository inputs.
+        return {suite: suite in {"pytest", "rust"} for suite in SUITES} | {"full": False}
+
+    # 2. Any other CI/deps change -> full run
     if any(_is_ci_deps(p) for p in norm_paths):
         res = {s: True for s in SUITES}
         res["full"] = True
