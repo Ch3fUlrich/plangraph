@@ -1,12 +1,20 @@
 """The affected-tests bound scales with the selection (LE-PREPUSH-AFFECTED-BOUND-SPAWNER-CORE)."""
 import json
+import os
+from pathlib import Path
+import shutil
+import signal
 import subprocess
 import sys
 import types
 
 import pytest
 
+from plangraph.spawner import proc_kill
 from test_preflight import preflight, repo  # noqa: F401
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def plan_script(tmp_path, count, body=''):
@@ -89,3 +97,98 @@ def test_memavailable_line_without_value_raises_valueerror(tmp_path, monkeypatch
     with pytest.raises(ValueError):
         overflow.available_memory_mb()
     assert preflight.affected_workers({}, cores=12, memory_mb=overflow.available_memory_mb) == 6
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux") or shutil.which("cargo") is None,
+                    reason="requires Linux process inspection and Cargo")
+@pytest.mark.test_deadline(preflight.RUST_TIMEOUT + 15, reason="the guard may need a cold Cargo build")
+def test_push_gate_names_hung_rust_case_and_reaps_child(tmp_path):
+    shutil.copyfile(ROOT / "rust-toolchain.toml", tmp_path / "rust-toolchain.toml")
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "push_gate_hang_fixture"\nversion = "0.0.0"\nedition = "2021"\n')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/lib.rs").write_text(r"""
+#[test]
+fn hanging_case() {
+    use std::{fs, process::{Command, Stdio}, thread, time::Duration};
+
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let started = stat.rsplit_once(')').unwrap().1.split_whitespace().nth(19).unwrap();
+    fs::write("child.identity", format!("{pid} {started}")).unwrap();
+    // A broken guard produces a bounded test failure without leaving a sleep behind.
+    thread::sleep(Duration::from_secs(4));
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+""")
+    code, output = preflight.run(["cargo", "test", "--lib"], tmp_path,
+                                 dict(os.environ, PLANGRAPH_TEST_DEADLINE="1"))
+    if "no matching package named" in output and "offline mode" in output:
+        pytest.skip("the offline Cargo cache does not contain the runner dependencies")
+    identity = tmp_path / "child.identity"
+    assert identity.exists(), output
+    pid, started = map(int, identity.read_text().split())
+    survived = proc_kill.alive(pid, started)
+    if survived:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    assert code != 0, output
+    assert "HUNG push_gate_hang_fixture::hanging_case" in output, output
+    assert not survived, f"Rust test child {pid} survived the push gate"
+
+
+def run_deadline_fixture(tmp_path, source, seconds, *pytest_args):
+    shutil.copyfile(ROOT / "tests/conftest.py", tmp_path / "conftest.py")
+    shutil.copyfile(ROOT / "pytest.ini", tmp_path / "pytest.ini")
+    (tmp_path / "test_case.py").write_text(source)
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(map(str, (ROOT / "tests", ROOT / "src"))))
+    for name in ("PYTEST_ADDOPTS", "PYTEST_SHARD", "PYTEST_CURRENT_TEST"):
+        env.pop(name, None)
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-o", f"test_deadline={seconds}",
+         *pytest_args, "test_case.py"],
+        cwd=tmp_path, env=env, capture_output=True, text=True, timeout=20)
+
+
+@pytest.mark.parametrize(("decorated_test", "seconds", "diagnostic"), [
+    pytest.param("@pytest.mark.test_deadline(5)\ndef test_case(): pass\n",
+                 "1", "requires a named test and reason", id="no-reason"),
+    pytest.param('@pytest.mark.test_deadline(5, reason="class budget")\n'
+                 'class TestGroup:\n    def test_case(self): pass\n',
+                 "1", "requires a named test and reason", id="class-mark"),
+    pytest.param('@pytest.mark.test_deadline(0, reason="off")\ndef test_case(): pass\n',
+                 "1", "must be finite and greater than zero", id="zero-mark"),
+    pytest.param('@pytest.mark.test_deadline(float("inf"), reason="unbounded")\n'
+                 'def test_case(): pass\n',
+                 "1", "must be finite and greater than zero", id="infinite-mark"),
+    pytest.param("def test_case(): pass\n",
+                 "0", "must be finite and greater than zero", id="zero-ini"),
+    pytest.param("def test_case(): pass\n",
+                 "nan", "must be finite and greater than zero", id="nan-ini"),
+])
+def test_deadline_invalid_configuration_is_refused(tmp_path, decorated_test, seconds, diagnostic):
+    result = run_deadline_fixture(tmp_path, "import pytest\n" + decorated_test, seconds,
+                                  "--collect-only")
+    assert result.returncode == pytest.ExitCode.USAGE_ERROR, result.stdout + result.stderr
+    assert "ERROR: test_case.py::" in result.stderr and diagnostic in result.stderr
+
+
+def test_named_deadline_extends_the_ini_limit(tmp_path):
+    result = run_deadline_fixture(tmp_path, """import time
+import pytest
+
+@pytest.mark.test_deadline(10, reason="this fixture exceeds the ini deadline")
+def test_case():
+    time.sleep(2)
+""", "0.1")
+    assert result.returncode == pytest.ExitCode.OK, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
