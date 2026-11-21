@@ -355,7 +355,7 @@ def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_close
     held = []
     real = env.store.warm_merge_scan
     monkeypatch.setattr(env.store, "warm_merge_scan",
-                        lambda: held.append(doors.server.lock._is_owned()) or real())
+                        lambda *a: held.append(doors.server.lock._is_owned()) or real(*a))
     try:
         status, body = doors.http("system", "POST", "/v1/close_merged_auto", {"require_seats": False})
         assert status == 200 and [c["key"] for c in body["closed"]] == ["demo:C"]
@@ -376,3 +376,26 @@ def test_a_failed_refresh_does_not_leave_the_earlier_warm_snapshot_valid(env, mo
     assert not env.store._warm("demo")
     result = auto(env, require_seats=False)
     assert result["closed"] == [] and "merged_default_ref_refresh_failed" in result["listed"][0]["reason"]
+
+
+def test_the_hosted_lane_lookup_is_done_while_warming_and_not_again_under_the_lock(env, tmp_path, monkeypatch):
+    from plangraph.keeper import context_sources
+
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 86)
+    env.repo.land("c-lane", "side work", 0, merge=False)  # an unmerged lane of C: a closed PR is behind it
+    bare = tmp_path / "origin.git"
+    git(tmp_path, "clone", "-q", "--bare", str(env.repo.root), str(bare))
+    git(env.repo.root, "remote", "add", "origin", str(bare))
+    asked = []
+    monkeypatch.setattr(context_sources, "_github_repo", lambda origin: "o/r")
+    monkeypatch.setattr(context_sources, "_closed_lane_pr", lambda *a: asked.append(a[3]) or 77)
+    real = context_sources.work_index
+    monkeypatch.setattr(context_sources, "work_index", lambda git, project, **kw: dict(
+        real.__wrapped__(git, project, **kw) if hasattr(real, "__wrapped__") else {
+            "commits": {"demo:C": [{"sha": "a" * 40}]}, "origin_stale": False, "prs": {}, "branches": [], "order": {}}))
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    during_warm = list(asked)
+    assert during_warm, "the warm step looks the hosted lanes up"
+    result = auto(env, require_seats=False)
+    assert asked == during_warm and [c["key"] for c in result["closed"]] == ["demo:C"]

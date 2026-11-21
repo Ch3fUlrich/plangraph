@@ -490,7 +490,7 @@ def _closed_lane_pr(git, repo, hosted, branch, head):
     return 0
 
 
-def open_lanes(git, project, key, fresh=False, *, closed=None):
+def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -506,7 +506,8 @@ def open_lanes(git, project, key, fresh=False, *, closed=None):
         return None
     names, remotes = snapshot
     slug = bare.lower()
-    lanes, closed_prs, verified = {}, set(), {}
+    lanes, closed_prs = {}, set()
+    verified = {} if cache is None else cache  # hosted-PR answers a caller keeps between calls
     origin = None
     for full in names:
         remote_ref = full.startswith("refs/remotes/")

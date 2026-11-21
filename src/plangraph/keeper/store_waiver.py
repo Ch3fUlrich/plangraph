@@ -288,18 +288,27 @@ class WaiverMixin:
             return set()
         return {head} if merged and merged["pr"] == pr else set()
 
-    def warm_merge_scan(self):
-        """Fetch and index every scanned repository; the API calls it outside its request lock.
+    def merge_candidates(self):
+        """``(key, project)`` of every item the automatic close may take: the input of :meth:`warm_merge_scan`."""
+        return [(item["key"], item["project"]) for item in self._all_items()
+                if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
 
-        The run that follows reads the warm answers (see :meth:`_warm`) instead of fetching under the lock.
+    def warm_merge_scan(self, candidates=()):
+        """Fetch, index and look up the hosted lanes of the scanned repositories; the API calls it outside its lock.
+
+        The run that follows reads the warm answers (see :meth:`_warm`) instead of asking git or the
+        forge under the lock.
         """
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
-        self.__dict__["_warmed"] = {}   # a refresh that fails now must not leave an earlier snapshot valid
+        self.__dict__["_warmed"], self.__dict__["_lanes"] = {}, {}   # a failed refresh must not keep an old snapshot
         for project in list(scan()) if callable(scan) else []:
             if self._refresh_merged_default_ref(git, project):
                 index = context_sources.work_index(git, project, fresh=True)
                 if index is not None and not index.get("origin_stale"):
+                    for key, item_project in candidates:
+                        if context_sources.indexed_work(index, key)["commits"]:
+                            context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
                     self.__dict__["_warmed"][project] = time.monotonic()
 
     def _warm(self, project):
@@ -310,7 +319,8 @@ class WaiverMixin:
         git, project = self._adapter("git"), self._merge_project(item)
         if not self._warm(project) and not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
-        if context_sources.open_lanes(git, project, item["key"]) != []:
+        kw = {"cache": self.__dict__.setdefault("_lanes", {})} if self._warm(project) else {}
+        if context_sources.open_lanes(git, project, item["key"], **kw) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
             git, project, item["key"], fetch=False, limit=None)

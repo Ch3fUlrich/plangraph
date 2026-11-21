@@ -92,8 +92,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
         with suppress(Exception):
             with server.lock:
                 principal = auth.authenticate(server.store.conn, self._token())
-            if principal.role in ("system", "router"):
-                server.store.warm_merge_scan()
+                candidates = server.store.merge_candidates() if principal.role in ("system", "router") else None
+            if candidates is not None:
+                server.store.warm_merge_scan(candidates)
 
     def do_POST(self):  # noqa: N802 - stdlib signature
         self._request("POST")

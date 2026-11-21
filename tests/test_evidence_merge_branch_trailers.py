@@ -144,14 +144,19 @@ def test_git_trailer_shapes_are_read_as_git_reads_them():
     assert plan_items("subject\n\nPlan-Item: demo:A\n  continued value\n") == ["demo:A continued value"]
 
 
-def test_a_continued_or_indented_plan_item_never_binds_as_commit_ci_evidence(tmp_path):
-    for message in ("work\n\nWriter: x y\n  Plan-Item: demo:A\n", "work\n\nPlan-Item: demo:A\n  and more words\n"):
-        git(tmp_path, "init", "-q", "-b", "main")
-        git(tmp_path, "commit", "--allow-empty", "-q", "-m", message)
-        commit = git(tmp_path, "rev-parse", "HEAD")
-        ctx = make_ctx(git=GitAdapter({"demo": str(tmp_path)}), ci=FakeCI(mode="none"))
-        assert not CommitCiVerifier().verify({"key": "demo:A", "id": "A", "project": "demo"},
-                                             {"commit": commit}, ctx).ok
-        git(tmp_path, "update-ref", "-d", "refs/heads/main")
-        for sub in (tmp_path / ".git").glob("refs/heads/*"):
-            sub.unlink()
+@pytest.mark.parametrize("message", ["work\n\nWriter: x y\n  Plan-Item: demo:A\n",
+                                     "work\n\nPlan-Item: demo:A\n  and more words\n"])
+def test_a_continued_or_indented_plan_item_never_binds_as_commit_ci_evidence(tmp_path, message):
+    """A merge of green CI whose branch commit and merge both carry only the folded shape: refused for the trailer."""
+    merge = merged(tmp_path, message, "Merge pull request #5\n\n" + message.split("\n\n", 1)[1])
+    result = verify(tmp_path, merge, "demo:A")
+    assert not result.ok and "does not carry trailer 'Plan-Item: demo:A'" in result.detail
+    assert verify(tmp_path, merged_again(tmp_path), "demo:A").ok  # the same fixture shape with a real trailer passes
+
+
+def merged_again(root):
+    git(root, "checkout", "-q", "-b", "plain", "main")
+    git(root, "commit", "--allow-empty", "-q", "-m", "plain\n\nPlan-Item: demo:A\n")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #6", "plain")
+    return git(root, "rev-parse", "HEAD")
