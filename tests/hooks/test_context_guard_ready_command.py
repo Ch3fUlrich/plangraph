@@ -65,7 +65,7 @@ class ReadyCommandInLine(HookCase):
         self.assertIn("`python3 %s ready " % shlex.quote(str(GUARD.resolve())), text)
 
 
-class SkillNamesTheCommandLikeTheLine(unittest.TestCase):
+class SkillNamesTheCommandLikeTheLine(HookCase):
     def test_skill_says_to_copy_the_emitted_absolute_command_and_hardcodes_no_install_path(self):
         text = (HOOKS.parents[1] / "skills" / "fleet-handoff" / "SKILL.md").read_text(encoding="utf-8")
         step = next(x for x in text.splitlines() if x.startswith("4. "))
@@ -74,11 +74,15 @@ class SkillNamesTheCommandLikeTheLine(unittest.TestCase):
         self.assertIn("Never run the hook wrapper (`ctx_guard_session.py`)", step)  # named only as the wrong script
         self.assertEqual(step.count("ctx_guard_session.py"), 1)
         # the template the skill gives is the shape the guard emits, with only the two placeholders filled in
-        guard = load_module("context_guard")
-        os.environ.pop(guard.HANDOFF_PATH_ENV, None)
-        emitted = shlex.split(ready_command(guard.emit_line("handoff", 280000, 270000)))
+        # the line a session really sees comes through the wrapper, which appends the card rule
+        self.write(usage_line(read=280000))
+        proc = self.run_hook(WRAPPER, {"transcript_path": str(self.transcript), "session_id": SID, "cwd": "/w/x",
+                                       "hook_event_name": "PostToolUse"})
+        text = json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"]
+        emitted = shlex.split(ready_command(text))
         template = re.search(r"`(python3 <absolute-guard-path> ready <handoff-path>)`", step).group(1).split()
         self.assertEqual([emitted[0], "<absolute-guard-path>", *emitted[2:]], template)
+        self.assertEqual(len(emitted), 4)  # python3, guard, ready, handoff: no extra argument
         self.assertTrue(os.path.isabs(emitted[1]) and emitted[1].endswith("context_guard.py"))
         for hardcoded in ("tools/hooks/", ".local/share/plangraph/hooks"):
             self.assertNotIn(hardcoded, step)
