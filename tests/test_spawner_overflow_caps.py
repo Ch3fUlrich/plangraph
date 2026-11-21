@@ -463,14 +463,15 @@ def test_local_disk_uses_launch_cwd(tmp_path, monkeypatch, source):
         card = root / 'card.json'
         card.write_text(json.dumps({'cwd': cwd}))
     monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
-    seen = []
-    def disk(worktree, service, role='implement'):
+    seen, moved = [], []
+    def disk(worktree, service, role='implement', movable=False):
         seen.append(worktree)
+        moved.append(movable)
         return None if worktree == cwd else 'disk_low'
     monkeypatch.setattr(h, 'local_disk_refusal', disk)
     monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
     assert o.main(args) == 3
-    assert seen == [cwd]
+    assert seen == [cwd] and moved == [False]  # a named checkout is pinned
 
 
 def test_disk_low_runs_cleanup_once_and_raises_floor_alarm(tmp_path, monkeypatch):
@@ -642,6 +643,43 @@ def test_readiness_work_drives_reach_the_placement_decision(registry, monkeypatc
         host='remote', ok=True, live_runs=0, mem_available_mb=20000, disk_free_gb=2, work_drives=drives)))
     rows = o.ready_records({'hosts': {'remote': {'ssh': 'r'}}})
     assert o.decide(10000, 2048, 3000, rows, True, local_refusal='disk_low: free 2 GB').host is None
+
+
+def test_unnamed_checkout_is_movable_through_the_overflow_entry(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready as h
+    card = tmp_path / 'card.json'
+    card.write_text('{}')
+    prompt = tmp_path / 'prompt.txt'
+    prompt.write_text('task')
+    monkeypatch.setattr(o, 'registry_caps', lambda: {})
+    use_projected_overflow_config(monkeypatch, tmp_path / 'missing')
+    monkeypatch.setattr(o, 'local_resources', lambda: (0, 6000))
+    moved = []
+    monkeypatch.setattr(h, 'local_disk_refusal', lambda worktree, service, role='implement', movable=False:
+                        moved.append(movable))
+    monkeypatch.setattr(o.cli, 'main', lambda argv: 3)
+    assert o.main(['spawn', '--repo', str(tmp_path), '--card', str(card), '--prompt', str(prompt)]) == 3
+    assert moved == [True]
+
+
+def test_pinned_checkout_is_held_to_its_work_drive_floor(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
+    monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '5')
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 0)
+    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 7.0)
+    service = SimpleNamespace(state=tmp_path / 'state', ps=lambda: {'runs': []})
+    # No configured drive: the global floor of 5 GiB passes 7 GiB free.
+    assert h.local_disk_refusal(checkout, service, role='review') is None
+    # The drive holding the checkout (same filesystem) has a 10 GiB floor.
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps(
+        [{'path': str(tmp_path), 'disk_floor_gb': 10}]))
+    assert h.local_disk_refusal(checkout, service, role='review') == 'disk_low: free 7.00 GB, floor 10 GB'
+    # A drive on another filesystem does not apply to this checkout.
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps([{'path': '/proc', 'disk_floor_gb': 10}]))
+    assert h.local_disk_refusal(checkout, service, role='review') is None
 
 
 def test_remote_work_drives_selects_eligible_drive_or_overflows(tmp_path):

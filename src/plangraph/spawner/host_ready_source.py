@@ -180,3 +180,23 @@ def select_drive(drives, cleanup, free_gb):
         return selected, None
     first_path, first_floor = drives[0]
     return None, (free_gb(first_path), first_floor)
+
+
+def checkout_floor(worktree, drives, default):
+    """The configured floor of the work drive holding ``worktree`` (same filesystem), else ``default``."""
+    def device(path):
+        path = Path(path)
+        while not path.exists() and path != path.parent:
+            path = path.parent
+        return path.stat().st_dev
+    try:
+        mine = device(worktree)
+    except OSError:
+        return default
+    for path, floor in drives or ():
+        try:
+            if device(path) == mine:
+                return floor
+        except OSError:
+            continue
+    return default

@@ -40,6 +40,24 @@ def test_local_room_ignores_counts(setup, monkeypatch, memory):
     remote.assert_not_called()
 
 
+@pytest.mark.parametrize('options,card,movable', [
+    ({}, None, True),
+    ({'cwd': '/named/checkout'}, None, False),
+    ({}, {'cwd': '/named/checkout'}, False),
+    ({'role': 'review'}, {'diff_ref': {'repo': '/named/checkout'}}, False),
+    ({}, {'repo': '/named/checkout'}, False),
+])
+def test_admission_passes_the_placement_decision_to_the_disk_check(setup, monkeypatch, options, card, movable):
+    from plangraph.spawner import host_ready
+    service, _, _ = setup
+    monkeypatch.setattr(a, 'resources', lambda service: (100, 9000))
+    seen = []
+    monkeypatch.setattr(host_ready, 'local_disk_refusal',
+                        lambda worktree, svc, role='implement', movable=False: seen.append(movable))
+    assert service.admit_spawn(options, card=card) is None
+    assert seen == [movable]
+
+
 def test_dry_run_preserves_local(setup):
     service, path, remote = setup
     assert service.admit_spawn({'dry_run': True}) is None
