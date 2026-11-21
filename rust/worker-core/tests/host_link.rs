@@ -157,3 +157,78 @@ fn cli_failed_peer_queues_bridge_event_and_healthy_peer_resets_state() {
     assert!(value["down_since"].is_null());
     assert_eq!(events(&root).len(), 1);
 }
+
+#[cfg(unix)]
+#[test]
+fn ssh_watch_alerts_once_with_peer_and_ip_evidence_then_recovers() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::process::Command;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("state");
+    let ssh = dir.path().join("ssh");
+    symlink("/usr/bin/false", &ssh).unwrap();
+    for (program, line) in [
+        (
+            "tailscale",
+            r#"{"Peer":{"node":{"HostName":"peer-a","Online":false,"Active":true,"Relay":"fra"}}}"#,
+        ),
+        (
+            "journalctl",
+            "portmap: monitor: gateway and self IP changed: fixture",
+        ),
+    ] {
+        let path = dir.path().join(program);
+        fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{line}'\n")).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let tick = || {
+        let result = Command::new(env!("CARGO_BIN_EXE_pg-host-link"))
+            .args(["ssh-tick"])
+            .arg(&root)
+            .args(["observer", "worker", "user@worker", "peer-a"])
+            .env("PATH", dir.path())
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{result:?}");
+        String::from_utf8(result.stdout).unwrap()
+    };
+
+    tick();
+    assert!(events(&root).is_empty());
+    let alert_line = tick();
+    assert!(alert_line.contains("worker unreachable since "));
+    assert!(!tick().contains("unreachable since "));
+    let status = || {
+        Command::new(env!("CARGO_BIN_EXE_pg-host-link"))
+            .arg("ssh-status")
+            .arg(&root)
+            .arg("user@worker")
+            .output()
+            .unwrap()
+    };
+    let unavailable = status();
+    assert!(!unavailable.status.success());
+    assert!(String::from_utf8_lossy(&unavailable.stderr).contains("user@worker unreachable since "));
+    let alerts = events(&root);
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0]["rule"], "host-ssh-down");
+    assert_eq!(alerts[0]["peer_state"]["Online"], false);
+    assert_eq!(alerts[0]["peer_state"]["Relay"], "fra");
+    assert!(alerts[0]["last_ip_change"]
+        .as_str()
+        .unwrap()
+        .contains("gateway and self IP changed"));
+    fs::remove_file(&ssh).unwrap();
+    symlink("/usr/bin/true", &ssh).unwrap();
+    assert!(tick().contains("worker recovered"));
+    assert!(!tick().contains("worker recovered"));
+    assert!(status().status.success());
+    assert_eq!(
+        events(&root)
+            .iter()
+            .filter(|event| event["rule"] == "host-ssh-recovered")
+            .count(),
+        1
+    );
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check the SSH link to worker %i
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/host-links/%i.env
+ExecStart=%h/.local/bin/pg-host-link ssh-tick ${PLANGRAPH_SPAWN_STATE} ${HOST_LINK_OBSERVER} %i ${HOST_LINK_SSH} ${HOST_LINK_PEER}
+TimeoutStartSec=20s
+UMask=0077
+NoNewPrivileges=true

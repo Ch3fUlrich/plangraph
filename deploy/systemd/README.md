@@ -94,3 +94,16 @@ Notes:
 - Reads the same `projector.env` (`%h/.config/plangraph/projector.env`) as the reconcile service.
 - Does not replace the nightly reconcile timer.
 - Production placement stays with the release/deploy item.
+
+### Worker SSH link
+
+Install `pg-host-link` in `~/.local/bin`. Install both
+`pg-host-ssh-link@.service` and `pg-host-ssh-link@.timer` in
+`~/.config/systemd/user/`. Each instance reads
+`~/.config/plangraph/host-links/<worker-id>.env` with
+`PLANGRAPH_SPAWN_STATE`, `HOST_LINK_OBSERVER`, `HOST_LINK_SSH` (the exact SSH
+destination callers use), and `HOST_LINK_PEER` (the Tailscale hostname, DNS
+name, or address). Run `systemctl --user daemon-reload` and
+`systemctl --user enable --now pg-host-ssh-link@<worker-id>.timer`.
+Use `pg-host-link ssh-status STATE_ROOT DESTINATION` before an SSH step to
+report a confirmed outage. The local journal logs the evidence for host L1.
