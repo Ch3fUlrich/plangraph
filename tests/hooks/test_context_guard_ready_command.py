@@ -8,6 +8,7 @@ ready command): the line carries `python3 <absolute context_guard.py> ready <han
 """
 import json
 import os
+import re
 import shlex
 import sys
 import unittest
@@ -70,7 +71,15 @@ class SkillNamesTheCommandLikeTheLine(unittest.TestCase):
         step = next(x for x in text.splitlines() if x.startswith("4. "))
         self.assertIn("python3 <absolute-guard-path> ready <handoff-path>", step)
         self.assertIn("copy it from the message", step)
-        self.assertIn("ctx_guard_session.py", step)  # the wrapper is named as the wrong script
+        self.assertIn("Never run the hook wrapper (`ctx_guard_session.py`)", step)  # named only as the wrong script
+        self.assertEqual(step.count("ctx_guard_session.py"), 1)
+        # the template the skill gives is the shape the guard emits, with only the two placeholders filled in
+        guard = load_module("context_guard")
+        os.environ.pop(guard.HANDOFF_PATH_ENV, None)
+        emitted = shlex.split(ready_command(guard.emit_line("handoff", 280000, 270000)))
+        template = re.search(r"`(python3 <absolute-guard-path> ready <handoff-path>)`", step).group(1).split()
+        self.assertEqual([emitted[0], "<absolute-guard-path>", *emitted[2:]], template)
+        self.assertTrue(os.path.isabs(emitted[1]) and emitted[1].endswith("context_guard.py"))
         for hardcoded in ("tools/hooks/", ".local/share/plangraph/hooks"):
             self.assertNotIn(hardcoded, step)
 
