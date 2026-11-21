@@ -160,7 +160,7 @@ Cards may also be inline JSON; `spawn --prompt-file FILE` replaces the prompt ar
 relative, missing, non-checkout and conflicting flag/card paths are refused.
 Without either, the caller's cwd is unchanged. The selected path is recorded in
 `record.cwd` and passed to the runner; `completion.head_sha` is that checkout's
-HEAD at completion, not at launch. `seat_verdict --head` must still match it.
+HEAD at completion. Review records also carry it as `head_sha`, and `seat_verdict --head` checks it even when response artifacts are present.
 Explicit cwd takes precedence over `diff_ref.repo` for placement; explicit-cwd runs stay local regardless of the public allowlist (below-floor runs queue). SSH overflow is only eligible without explicit cwd and requires every checkout/diff repository to pass the public allowlist; a supplied `diff_ref` without `repo` is refused. Run worktrees retain `selected_cwd` for fresh attempts and fixer continuations even after the parent's attempt is pruned; legacy records recover the service's default checkout. Cwd must be a checkout root with a committed HEAD and is stored as its resolved absolute path. Validation runs once off the async loop; checkout Git operations ignore repository redirects, injected config parameters and alternate object directories.
 `--dry-run` plans without a child. Spawn returns a `wait_cmd`:
 `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).
@@ -637,7 +637,7 @@ older databases. D-5903 enables Hydrogen high for implement after Sol and medium
 Both inherit the agy Claude capability bounds and remain unwitnessed: AGY emits no served-model telemetry.
 Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
-Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md). Admission refuses missing cargo/git/codex with `tool_missing`; records retain the caller PATH and resolved tools, and the writer and final gates reuse that PATH.
+Native Codex writer placement and lifecycle: [run contract](native-codex-writer.md). Admission refuses missing cargo/git/codex with `tool_missing`; the writer and final gates reuse the recorded caller PATH. Inline-only native reviews receive shared item context and the inline change. Tools-capable reviews also receive the original writer brief and repository instructions.
 
 Native agy CLI reviews (D-6054) use a disposable `git clone --shared` at the
 stamped HEAD with origin removed. Commands are pre-approved inside that checkout

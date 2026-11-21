@@ -110,3 +110,31 @@ def test_gemini_md_links_agents_md():
     # A repository scrub forbids symlinks, so GEMINI.md imports AGENTS.md the way CLAUDE.md does.
     assert (ROOT / 'GEMINI.md').read_text() == '@AGENTS.md\n' == (ROOT / 'CLAUDE.md').read_text()
     assert (ROOT / 'AGENTS.md').is_file()
+
+
+def test_native_writer_review_composes_the_entire_brief_for_inline_leg():
+    from plangraph.review.prompt import render_brief
+
+    head = "a" * 40
+    native_brief = render_brief("writer", {"item_key": "demo:INLINE"},
+                                rules="Open src/example.rs and run cargo test.")
+    versioned = render_brief("review", {"item_key": "demo:INLINE", "head_sha": head},
+                              rules=_skill("review"))
+    rules, item = versioned.split("\n=== ITEM CONTEXT\n", 1)
+    brief = (f"{rules}\n\nWriter brief (item keys and Done-when lines):\n{native_brief}\n"
+             "Open callers, tests and docs. Run read-only commands.\n"
+             "<!-- PLANGRAPH NATIVE REVIEW TOOLS END -->\n"
+             f"=== ITEM CONTEXT\n{item}\nName a finding with file:line evidence.\n"
+             f"HEAD: {head}\nVERDICT: ACCEPT or REQUEST_CHANGES\n"
+             "\n=== INLINE DIFF ===\n+fn evidence() {}\n")
+    task_prompt = _prompt("review", brief, model="mimo/mimo-v2.6-pro")
+    assert "NO tools" in task_prompt
+    for instruction in ("Read the named files", "Open callers", "Run read-only commands",
+                        "Open src/example.rs", "cargo test", "Writer brief", "Skills"):
+        assert instruction not in task_prompt
+    for evidence in ("demo:INLINE", head, "VERDICT: ACCEPT", "+fn evidence() {}"):
+        assert evidence in task_prompt
+
+    tools = _prompt("review", brief, model="agy-gemini-4-argon-low", client="agy")
+    assert "Open src/example.rs and run cargo test." in tools
+    assert "Open callers, tests and docs." in tools

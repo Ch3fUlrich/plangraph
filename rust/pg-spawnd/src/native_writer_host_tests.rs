@@ -406,6 +406,7 @@ assert 'excluded from this review): anthropic, google, openai.' in prompt, promp
 assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
 skill, context = prompt.index('REVIEW-SKILL-FIXTURE-LINE'), prompt.index('=== ITEM CONTEXT')
 assert prompt.index('Rules:') < skill < context, prompt  # the review skill is a rule, ahead of the context
+assert prompt.index('Open callers') < prompt.index('<!-- PLANGRAPH NATIVE REVIEW TOOLS END -->') < context, prompt
 assert 'Item key: plangraph:HOST-TEST-ITEM' in prompt, prompt
 assert 'Done criteria: By test: first line\nsecond criteria line\n' in prompt, prompt  # multi-line, whole
 assert 'Invariants named by the item: never push\n' in prompt, prompt

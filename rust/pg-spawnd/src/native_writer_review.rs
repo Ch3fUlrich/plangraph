@@ -148,8 +148,8 @@ impl Host {
         .map_err(|e| e.to_string())?;
         fs::write(&marker, data.len().to_string()).map_err(|e| e.to_string())
     }
-    /// Review prompt for `head`: review skill, writer brief, diff range (the delta from the
-    /// previous review's head when it is an ancestor) and the required closing lines.
+    /// Put repository-dependent instructions and the original writer brief ahead of
+    /// the item context so an inline-only seat can read just the self-contained tail.
     fn review_prompt(
         &mut self,
         base: &str,
@@ -157,14 +157,17 @@ impl Host {
         previous: Option<(&str, &str)>,
         families: &[String],
         versioned: &str,
-    ) -> String {
-        let mut prompt = format!("{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+    ) -> Result<String, String> {
+        let (rules, context) = versioned
+            .split_once("\n=== ITEM CONTEXT\n")
+            .ok_or("native review brief has no item context")?;
+        let mut prompt = format!("{rules}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\n<!-- PLANGRAPH NATIVE REVIEW TOOLS END -->\n=== ITEM CONTEXT\n{context}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
         match previous {
-            Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
-            None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),
+            Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head}, decide whether the evidence resolves every earlier HIGH and MED finding, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
+            None => prompt.push_str(&format!("The diff is base {base}..head {head}.\n")),
         }
-        prompt.push_str(&format!("Name each finding as file:line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
-        prompt
+        prompt.push_str(&format!("Name each finding as file:line. Include one TEST-GAMING: line using the seat's required format. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
+        Ok(prompt)
     }
     /// One review run through the spawner, role review with every writer family of the range excluded,
     /// in a disposable no-push clone at `head`; the verdict comes from that run's record.
@@ -238,7 +241,7 @@ impl Host {
             &skill,
             &trusted_python,
         )?;
-        let prompt = self.review_prompt(base, head, prev, &families, &versioned);
+        let prompt = self.review_prompt(base, head, prev, &families, &versioned)?;
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
