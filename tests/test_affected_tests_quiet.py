@@ -191,7 +191,11 @@ def test_a_stale_lastfailed_entry_prints_no_label(fx):
 
 @needs_xdist
 def test_the_recorder_lists_each_nodeid_once_under_workers(fx):
-    fx.write("import pytest\n@pytest.mark.parametrize('n', range(6))\ndef test_p(n): assert n < 5\n")
+    fx.write("""
+        import pytest
+        @pytest.mark.parametrize('n', range(6))
+        def test_p(n): assert n < 5
+    """)
     fx.commit()
     result = fx.run(workers="2")
     assert result.returncode == 1
