@@ -327,6 +327,72 @@ def test_router_http_well_formed_without_citations_is_audited_no_witness(w, door
     assert w.store._item(KEY)["state"] == "in_review"
 
 
+def test_router_http_off_closes_without_citations_and_stores_the_flag(w, doors):
+    w.store.require_seats = False
+    status, response = doors.http("router", "POST", "/v1/close_merged",
+                                  {"key": KEY, "decision_id": "D-5504"})
+    assert status == 200 and response["state"] == "done"
+    assert "NO-WITNESS" in response["flags"]["seats_missing"]["reason"]
+    assert w.store._item(KEY)["state"] == "done"
+    assert w.store._evidence(KEY)[-1]["ref"]["flags"] == response["flags"]
+
+
+def test_router_http_require_seats_on_still_refuses_no_witness(w, doors):
+    w.store.require_seats = True
+    status, response = doors.http("router", "POST", "/v1/close_merged",
+                                  {"key": KEY, "decision_id": "D-5504"})
+    assert status == 400 and "NO-WITNESS" in response["msg"]
+    assert w.store._item(KEY)["state"] == "in_review"
+
+
+def test_router_http_explicit_require_seats_overrides_the_setting(w, doors):
+    body = {"key": KEY, "decision_id": "D-5504"}
+    w.store.require_seats = False
+    status, response = doors.http("router", "POST", "/v1/close_merged", {**body, "require_seats": True})
+    assert status == 400 and "NO-WITNESS" in response["msg"]
+    assert w.store._item(KEY)["state"] == "in_review"
+    status, response = doors.http("router", "POST", "/v1/close_merged", {**body, "require_seats": "yes"})
+    assert status == 400 and response["error"] == "validation"
+    w.store.require_seats = True
+    status, response = doors.http("router", "POST", "/v1/close_merged", {**body, "require_seats": False})
+    assert status == 200 and "seats_missing" in response["flags"]
+
+
+@pytest.mark.parametrize("source", ["writer_model", "run-model"])
+def test_off_does_not_flag_away_an_unknown_writer(w, source):
+    w.store.require_seats = False
+    if source == "writer_model":
+        w.conn.execute("UPDATE items SET writer_model='foo' WHERE key=?", (KEY,))
+    else:
+        w.store.record_run(w.p("spawner"), KEY, {
+            "run_id": "unknown-writer", "phase": "finished", "rc": 0, "writer": {"model": "foo"}})
+        w.conn.execute("UPDATE items SET writer_model=NULL WHERE key=?", (KEY,))
+    # no families: the seat proof fails first with NO-WITNESS, and the writer check must still refuse
+    with pytest.raises(Refused) as exc:
+        w.store.close_merged(w.p("router"), KEY, "D-5504")
+    assert exc.value.code == "writer_unknown"
+    assert w.store._item(KEY)["state"] == "in_review"
+
+
+def test_cli_prints_flagged_for_a_close_with_a_missing_seat(w, doors):
+    w.store.require_seats = False
+    code, out, err = doors.pg("router", "close-merged", KEY, "D-5504")
+    assert code == 0, err
+    assert f"{KEY} done FLAGGED seats_missing" in out and "NO-WITNESS" not in out
+
+
+def test_cli_from_open_class_is_flagged_not_no_witness(w, doors, monkeypatch):
+    monkeypatch.setattr("plangraph.keeper.context_sources.open_lanes", lambda *a, **_: [])
+    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    w.store.require_seats = False
+    code, out, err = doors.pg("router", "close-merged", KEY, "D-5504", "--from-open")
+    assert code == 0, err
+    assert f"{KEY}\tFLAGGED\t" in out and "NO-WITNESS" not in out
+    w.store.require_seats = True
+    code, out, err = doors.pg("router", "close-merged", KEY, "D-5504", "--from-open")
+    assert code == 2 and f"{KEY}\tNO-WITNESS\t" in out
+
+
 def test_main_trailer_per_fixed_key_allows_close_merged_dry_run(w, doors, monkeypatch, tmp_path):
     import subprocess
     from plangraph.keeper.evidence_git import GitAdapter
