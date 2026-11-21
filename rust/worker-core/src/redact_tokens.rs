@@ -113,6 +113,14 @@ pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
 /// The credential-name pattern shared by the assignment rules and the nested-assignment scan.
 pub(crate) const CREDENTIAL_NAME: &str = r"[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*";
 
+/// The two env-style assignment rules (4a, 4b of redact.rs), built from CREDENTIAL_NAME.
+pub(crate) fn assignment_patterns() -> [String; 2] {
+    [
+        [r#"(?i)\b("#, CREDENTIAL_NAME, r#")(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#].concat(),
+        [r#"(?i)\b("#, CREDENTIAL_NAME, r#")(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#].concat(),
+    ]
+}
+
 /// True when `value` holds a credential-name assignment. Headers are found apart
 /// from their values, so one after an `==` is seen too; `==` itself compares and
 /// assigns nothing, while `:=` assigns.
@@ -346,13 +354,14 @@ mod tests {
             "plain_name",
         ] {
             let text = format!("{name} = value");
-            let rules = crate::redact::assignment_rules_for_tests();
-            let rule = rules.iter().any(|rule| rule.is_match(&text));
+            let rule = assignment_patterns()
+                .iter()
+                .any(|rule| regex::Regex::new(rule).unwrap().is_match(&text));
             assert_eq!(rule, has_nested_assignment(&text), "{name}");
         }
-        assert!(crate::redact::assignment_rules_for_tests()[0]
-            .as_str()
-            .contains(CREDENTIAL_NAME));
+        assert!(assignment_patterns()
+            .iter()
+            .all(|rule| rule.contains(CREDENTIAL_NAME)));
     }
 
     #[test]

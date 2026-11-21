@@ -16,18 +16,7 @@ fn patterns() -> &'static [regex::Regex] {
     static RS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     RS.get_or_init(|| {
         let tokens = super::redact_tokens::pattern();
-        let assign_0 = [
-            r#"(?i)\b("#,
-            super::redact_tokens::CREDENTIAL_NAME,
-            r#")(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
-        ]
-        .concat();
-        let assign_1 = [
-            r#"(?i)\b("#,
-            super::redact_tokens::CREDENTIAL_NAME,
-            r#")(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
-        ]
-        .concat();
+        let [assign_0, assign_1] = super::redact_tokens::assignment_patterns();
         let specs: [&str; 9] = [
             // 1. PEM private-key blocks, complete: header through the matching
             //    footer, newlines included. Applied FIRST and to the whole
@@ -78,12 +67,6 @@ fn patterns() -> &'static [regex::Regex] {
             .map(|s| regex::Regex::new(s).expect("redact pattern compiles"))
             .collect()
     })
-}
-
-/// The two assignment rules, for the test that keeps their name pattern in sync.
-#[cfg(test)]
-pub(crate) fn assignment_rules_for_tests() -> &'static [regex::Regex] {
-    &patterns()[3..5]
 }
 
 /// Replace secret-shaped text, including credential-name assignments.
