@@ -140,12 +140,26 @@ def test_a_cited_head_that_never_landed_is_not_a_seat(batch):
     land(batch, cited=("A",), body_keys=("A",))
     result = batch.store.close_merged_auto(batch.p("system"))
     assert "demo:A" not in {c["key"] for c in result["closed"]}
+    assert any(r["key"] == "demo:A" and "NO-WITNESS" in r["reason"] for r in result["listed"])
 
 
 def test_a_batch_that_brought_more_of_the_item_than_its_cited_parts_needs_its_own_seat(batch):
     # a second commit of A inside the batch that no citation covers
     git(batch.repo.root, "checkout", "-q", "batch")
     git(batch.repo.root, "commit", "--allow-empty", "-q", "-m", "more of A\n\nPlan-Item: demo:A\n")
+    batch.batch_head = git(batch.repo.root, "rev-parse", "HEAD")
+    git(batch.repo.root, "checkout", "-q", "main")
+    land(batch)
+    result = batch.store.close_merged_auto(batch.p("system"))
+    assert "demo:A" not in {c["key"] for c in result["closed"]}
+    assert any(r["key"] == "demo:A" and "NO-WITNESS" in r["reason"] for r in result["listed"])
+
+
+def test_a_nested_merge_carrying_the_item_must_be_covered_by_a_cited_part(batch):
+    git(batch.repo.root, "checkout", "-q", "-b", "inner", "main")
+    git(batch.repo.root, "commit", "--allow-empty", "-q", "-m", "inner work")
+    git(batch.repo.root, "checkout", "-q", "batch")
+    git(batch.repo.root, "merge", "--no-ff", "-q", "-m", "Merge inner\n\nPlan-Item: demo:A\n", "inner")
     batch.batch_head = git(batch.repo.root, "rev-parse", "HEAD")
     git(batch.repo.root, "checkout", "-q", "main")
     land(batch)

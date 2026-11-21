@@ -141,4 +141,17 @@ def test_git_trailer_shapes_are_read_as_git_reads_them():
 
     assert plan_items("subject\n\nPlan-Item:demo:C\n") == ["demo:C"]                # no space after the colon
     assert plan_items("subject\n\nWriter: x\n  Plan-Item: demo:C\n") == []           # a continuation is no trailer
-    assert plan_items("subject\n\nPlan-Item: demo:A\n  continued value\n") == ["demo:A"]
+    assert plan_items("subject\n\nPlan-Item: demo:A\n  continued value\n") == ["demo:A continued value"]
+
+
+def test_a_continued_or_indented_plan_item_never_binds_as_commit_ci_evidence(tmp_path):
+    for message in ("work\n\nWriter: x y\n  Plan-Item: demo:A\n", "work\n\nPlan-Item: demo:A\n  and more words\n"):
+        git(tmp_path, "init", "-q", "-b", "main")
+        git(tmp_path, "commit", "--allow-empty", "-q", "-m", message)
+        commit = git(tmp_path, "rev-parse", "HEAD")
+        ctx = make_ctx(git=GitAdapter({"demo": str(tmp_path)}), ci=FakeCI(mode="none"))
+        assert not CommitCiVerifier().verify({"key": "demo:A", "id": "A", "project": "demo"},
+                                             {"commit": commit}, ctx).ok
+        git(tmp_path, "update-ref", "-d", "refs/heads/main")
+        for sub in (tmp_path / ".git").glob("refs/heads/*"):
+            sub.unlink()

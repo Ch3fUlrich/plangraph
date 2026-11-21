@@ -23,7 +23,7 @@ from typing import Any, Callable, Mapping
 
 from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
-__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "plan_items", "valid_ref",
+__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "trailer_entries", "plan_items", "valid_ref",
            "resolve_commit"]
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+\Z")
@@ -67,10 +67,21 @@ def trailer_lines(message: str) -> list[str]:
     return block
 
 
+def trailer_entries(message: str) -> list[tuple[str, str]]:
+    """``(key, value)`` per trailer of *message*; an indented line continues the value before it."""
+    entries: list[list[str]] = []
+    for line in trailer_lines(message):
+        if line[:1] in " \t" and entries:
+            entries[-1][1] += " " + line.strip()
+        else:
+            key, _, value = line.partition(":")
+            entries.append([key.strip(), value.strip()])
+    return [(key, value) for key, value in entries]
+
+
 def plan_items(message: str) -> list[str]:
-    """The ``Plan-Item`` values among :func:`trailer_lines` of *message*."""
-    return [line.partition(":")[2].strip() for line in trailer_lines(message)
-            if line[:1] not in " \t" and line.partition(":")[0].strip().lower() == "plan-item"]
+    """The ``Plan-Item`` values among :func:`trailer_entries` of *message* (a continued value is longer than a key)."""
+    return [value for key, value in trailer_entries(message) if key.lower() == "plan-item"]
 
 
 def parse_trailers(text: str) -> dict[str, str | list[str]]:
@@ -81,8 +92,16 @@ def parse_trailers(text: str) -> dict[str, str | list[str]]:
     values bind a phase merge to each card; other keys retain last-value wins.
     """
     trailers: dict[str, str | list[str]] = {}
-    for line in text.splitlines():
-        line = line.strip()
+    last: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if raw[:1] in " \t" and line and last is not None:  # a continuation of the value before it
+            current = trailers[last]
+            if isinstance(current, list):
+                current[-1] += " " + line
+            else:
+                trailers[last] = current + " " + line
+            continue
         if not line or ":" not in line:
             continue
         key, _, value = line.partition(":")
@@ -91,10 +110,12 @@ def parse_trailers(text: str) -> dict[str, str | list[str]]:
             if key.lower() == "plan-item":
                 previous = next((k for k in trailers if k.lower() == "plan-item"), None)
                 if previous is not None:
-                    raw = trailers[previous]
-                    trailers[previous] = [*(raw if isinstance(raw, list) else [raw]), value]
+                    existing = trailers[previous]
+                    trailers[previous] = [*(existing if isinstance(existing, list) else [existing]), value]
+                    last = previous
                     continue
             trailers[key] = value
+            last = key
     return trailers
 
 
@@ -461,7 +482,7 @@ class GitAdapter:
         proc = self._run(repo, ["show", "-s", "--format=%B", "--end-of-options", sha])
         if proc.returncode != 0:
             return {}
-        return parse_trailers("\n".join(trailer_lines(proc.stdout)))
+        return parse_trailers("\n".join(f"{key}: {value}" for key, value in trailer_entries(proc.stdout)))
 
     def changed_paths(self, repo: str, sha: str) -> list[str]:
         """Exact changed paths (including both sides of renames); raise on error."""

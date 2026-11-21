@@ -44,6 +44,7 @@ def _known_family(value):
 # The statement may name a pull request (``GO #12``, ``GO <project> PR #12``, ``GO <project>
 # PR 12``) and one full ``GO-HEAD`` token; both bind the verdict to one merged PR head.
 _GO_PREFIX = re.compile(r"^\(~?(?:[01][0-9]|2[0-3]):[0-5][0-9x]Z(?:, date -u)?\)\s+")
+_WARM_S = 60  # how long a warm scan may be read under the request lock
 _GO_RULING = re.compile(r"(?:(?<=\s)|^)\((\d{1,2})\)\s+")
 _GO_HEAD = re.compile(r"(?<![\w-])GO-HEAD\s+`?([0-9a-fA-F]{40})(?![\w])")
 
@@ -294,13 +295,15 @@ class WaiverMixin:
         """
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
+        self.__dict__["_warmed"] = {}   # a refresh that fails now must not leave an earlier snapshot valid
         for project in list(scan()) if callable(scan) else []:
             if self._refresh_merged_default_ref(git, project):
-                context_sources.work_index(git, project, fresh=True)
-                self.__dict__.setdefault("_warmed", {})[project] = time.monotonic()
+                index = context_sources.work_index(git, project, fresh=True)
+                if index is not None and not index.get("origin_stale"):
+                    self.__dict__["_warmed"][project] = time.monotonic()
 
     def _warm(self, project):
-        return time.monotonic() - self.__dict__.get("_warmed", {}).get(project, -1e9) < 60
+        return time.monotonic() - self.__dict__.get("_warmed", {}).get(project, -1e9) < _WARM_S
 
     def _merged_work_commits(self, item):
         """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown."""
@@ -652,7 +655,7 @@ class WaiverMixin:
 
         def index_of(repo_project):
             if repo_project not in indexes:
-                index = context_sources.work_index(git, repo_project, fresh=not self._warm(repo_project))
+                index = context_sources.work_index(git, repo_project, fresh=not self._warm(repo_project), max_age=_WARM_S)
                 if index is not None and index.get("origin_stale"):
                     raise Refused("evidence_unverified", f"merge_index_stale: {repo_project}: {index.get('reason')}")
                 indexes[repo_project] = index

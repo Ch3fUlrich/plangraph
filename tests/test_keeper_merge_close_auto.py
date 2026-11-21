@@ -339,7 +339,7 @@ def test_a_warmed_scan_is_not_fetched_again_under_the_lock(env, monkeypatch):
     calls = []
     real = context_sources.work_index
     monkeypatch.setattr(context_sources, "work_index",
-                        lambda git, project, *, fresh=False: calls.append(fresh) or real(git, project, fresh=fresh))
+                        lambda git, project, *, fresh=False, max_age=None: calls.append(fresh) or real(git, project, fresh=fresh))
     env.store.warm_merge_scan()
     assert calls == [True]
     result = auto(env, require_seats=False)
@@ -364,3 +364,15 @@ def test_over_http_the_scan_is_warmed_before_the_request_lock_and_the_verb_close
         assert held == [False]  # a non-system caller never starts the fetch
     finally:
         doors.close()
+
+
+def test_a_failed_refresh_does_not_leave_the_earlier_warm_snapshot_valid(env, monkeypatch):
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 85)
+    env.store.warm_merge_scan()
+    assert env.store._warm("demo")
+    monkeypatch.setattr(type(env.store), "_refresh_merged_default_ref", staticmethod(lambda git, project: False))
+    env.store.warm_merge_scan()
+    assert not env.store._warm("demo")
+    result = auto(env, require_seats=False)
+    assert result["closed"] == [] and "merged_default_ref_refresh_failed" in result["listed"][0]["reason"]

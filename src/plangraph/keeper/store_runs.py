@@ -164,9 +164,9 @@ class RunsMixin:
 
     @staticmethod
     def _parts_cover_merge(git_repo_args, merge, names, parts):
-        """True when every commit the merge introduced for the item lies at or under a cited part head."""
+        """True when every commit (nested merges too) the merge introduced for the item lies at or under a cited part head."""
         git, repo = git_repo_args
-        listed = git._run(repo, ["log", "--no-merges", "--format=%H%x1f%B%x1d", "--end-of-options",
+        listed = git._run(repo, ["log", "--format=%H%x1f%B%x1d", "--end-of-options",
                                  f"{merge}^2", f"^{merge}^1"])
         if listed.returncode != 0:
             return False
