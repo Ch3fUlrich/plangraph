@@ -192,8 +192,13 @@ pub(super) fn facts(
     p: &Policy,
     local: Option<&str>,
 ) -> Result<HostFacts, String> {
-    let f: HostFacts =
+    let mut f: HostFacts =
         serde_json::from_value(read_json(path)?).map_err(|_| "invalid host facts")?;
+    if let Some((_, space)) =
+        pg_worker_core::work_disks::worktree_disk().map_err(|error| error.to_string())?
+    {
+        f.free_disk_bytes = f.free_disk_bytes.min(space.free);
+    }
     let mut cmd = python(env, repo);
     cmd.args(["-c","import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
     let rows = output(cmd).ok();

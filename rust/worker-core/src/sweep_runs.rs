@@ -55,7 +55,7 @@ fn root(state: &Path, name: &str) -> io::Result<PathBuf> {
         Err(error) => Err(error),
     }
 }
-fn paths(row: &Value) -> io::Result<Vec<PathBuf>> {
+pub(crate) fn paths(row: &Value) -> io::Result<Vec<PathBuf>> {
     let mut values = vec![row.get("checkout"), row.get("cwd")];
     if let Some(worktree) = row.get("run_worktree").filter(|v| !v.is_null()) {
         values.push(Some(&worktree["path"]));
@@ -105,7 +105,9 @@ pub fn check(state: &Path, path: &Path) -> io::Result<()> {
         if !finished(&read(&native.join(run).join("record.json"))?)? {
             return Err(io::Error::other("nonterminal run"));
         }
-    } else if path.starts_with(legacy) {
+    } else if path.starts_with(legacy)
+        || crate::work_disks::configured_roots().any(|root| path.starts_with(root))
+    {
         let mut owned = false;
         for entry in fs::read_dir(&native)? {
             let row = read(&entry?.path().join("record.json"))?;

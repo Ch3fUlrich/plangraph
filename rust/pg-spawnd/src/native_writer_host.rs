@@ -445,6 +445,18 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         .parent()
         .ok_or("record directory missing")?
         .join("worktree");
+    let cwd = match pg_worker_core::work_disks::worktree_disk() {
+        Ok(Some((root, _))) => root.join(id),
+        Ok(None) => cwd,
+        Err(error) => {
+            record["cwd"] = json!(cwd);
+            record["status"] = json!("refused");
+            record["exit_code"] = json!(8);
+            record["reason"] = json!(error.to_string());
+            return atomic_write_private(&record_path, record.to_string().as_bytes())
+                .map_err(|error| error.to_string());
+        }
+    };
     let reviews = request["card"]["review_dir"]
         .as_str()
         .map(PathBuf::from)

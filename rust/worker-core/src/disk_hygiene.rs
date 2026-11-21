@@ -93,15 +93,11 @@ impl Guards {
                 return Err(io::Error::other("unknown run status"));
             }
             if survivors || !crate::sweep_runs::terminal(status) {
-                let path = row["checkout"]
-                    .as_str()
-                    .or_else(|| row["cwd"].as_str())
-                    .ok_or_else(|| io::Error::other("active run checkout unavailable"))?;
-                let path = PathBuf::from(path);
-                if !path.is_absolute() {
-                    return Err(io::Error::other("active run checkout must be absolute"));
+                let paths = crate::sweep_runs::paths(&row)?;
+                if paths.is_empty() {
+                    return Err(io::Error::other("active run checkout unavailable"));
                 }
-                guards.live.push(path);
+                guards.live.extend(paths);
             }
         }
         Ok(guards)

@@ -37,6 +37,20 @@ def disk_free_gb(path):
     return shutil.disk_usage(path).free / (1024 ** 3)
 
 
+def worktree_disk_root():
+    if not os.environ.get('PLANGRAPH_WORKTREE_MOUNTS'):
+        return None
+    probe = subprocess.run(['pg-spawnd', 'host', 'work-disk'], capture_output=True,
+                           text=True, timeout=30, check=False)
+    if probe.returncode:
+        reason = probe.stderr.strip()
+        raise OSError(reason if reason.startswith('disk_low:') else 'disk_low: work mount probe failed')
+    root = Path(json.loads(probe.stdout))
+    if not root.is_absolute():
+        raise OSError('disk_low: invalid work mount probe response')
+    return root
+
+
 def cargo_target_size_gb(path):
     # Do not follow links into another cache or repository.
     total = 0
@@ -290,12 +304,16 @@ def local_disk_refusal(worktree, service, role='implement'):
             return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
         paths = [worktree, target]
         if getattr(service, 'state', None) is not None:
-            paths.append(policy.get('worktree_root') or service.state / 'worktrees')
+            paths.append(worktree_disk_root() or policy.get('worktree_root') or service.state / 'worktrees')
             paths.append(service.state / 'trees')
         free = min(disk_free_gb(p) for p in paths)
         if free < floor:
             return f'disk_low: free {free:.2f} GB, floor {floor:g} GB'
-    except (OSError, ValueError, TypeError, KeyError):
+    except OSError as error:
+        if str(error).startswith('disk_low:'):
+            return str(error)
+        return 'disk_low: measurement or configuration unavailable'
+    except (ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
         return 'disk_low: measurement or configuration unavailable'
     return None
 
