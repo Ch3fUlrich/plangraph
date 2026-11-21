@@ -423,11 +423,14 @@ class CreateMixin:
         # else fails on authorisation, not state.
         tier_edit = (item["state"] in ("claimed", "in_review")
                      and _active_edit_only(rest))
+        merge_note_edit = (principal.role == "router" and item["state"] == "in_review"
+                           and isinstance(rest, dict) and set(rest) == {"note"}
+                           and self._only_merge_repo_note_changed(item.get("note"), rest["note"]))
         if tier_edit and principal.role != "router" and not holder_edit:
             raise Refused("forbidden", "only the router may edit tier fields, "
                           "done_criteria or depends_on while an item is "
                           "claimed or in review")
-        if item["state"] != "open" and not tier_edit:
+        if item["state"] != "open" and not (tier_edit or merge_note_edit):
             raise Refused("bad_state", f"{key} is {item['state']}, not open")
         if not isinstance(rest, dict):
             raise Refused("validation", "edit body must be a mapping")
@@ -559,8 +562,11 @@ class CreateMixin:
             fresh = self._get_or_refuse(key)
             audit_before = {name: fresh.get(name) for name in edit_fields}
             self._assert_unlocked(fresh)
-            # ``tier_edit`` implies router; guard the write on the states the read passed.
             states = ("claimed", "in_review") if tier_edit else ("open",)
+            if merge_note_edit:
+                states = ("in_review",)
+                if fresh.get("note") != item.get("note"):
+                    raise Refused("conflict", f"{key} note changed under the transaction")
             if fresh["state"] not in states or fresh["epoch"] != item["epoch"]:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")

@@ -5,6 +5,7 @@ use serde_json::json;
 fn registry() -> HostRegistry {
     HostRegistry {
         version: 1,
+        public_repos: Default::default(),
         self_host: "alpha".into(),
         hosts: ["beta", "alpha"]
             .into_iter()
@@ -13,6 +14,8 @@ fn registry() -> HostRegistry {
                 class: HostClass::Worker,
                 aliases: vec![format!("{id}-alias")],
                 transport: Transport::Local,
+                wsl_distro: None,
+                placement_fallback: false,
                 ssh_target: None,
                 env: BTreeMap::new(),
                 os: Os::Linux,

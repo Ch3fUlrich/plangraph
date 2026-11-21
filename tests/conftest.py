@@ -431,13 +431,31 @@ def isolated_build_cache(tmp_path, monkeypatch):
     default_memory, default_read = overflow.available_memory_mb, Path.read_text
     def guarded_memory():
         """The real admission reader only runs where a test fed it a fake /proc/meminfo."""
-        if overflow.os.name != 'nt' and overflow.Path is Path and Path.read_text is default_read:
+        if overflow.os.name == 'nt':
+            return default_memory()
+        import io
+        real_open, opened = io.open, []
+        def spy(file, *args, **kwargs):
+            opened.append(str(file))
+            return real_open(file, *args, **kwargs)
+        io.open = spy
+        try:
+            memory = default_memory()
+        finally:
+            io.open = real_open
+        if '/proc/meminfo' in opened:
             raise AssertionError('spawner test reached the real host memory reader; pin it with the admission_memory fixture')
-        return default_memory()
+        return memory
     monkeypatch.setattr(overflow, 'available_memory_mb', guarded_memory)
     def resources(service):
         return 0, (64000 if overflow.available_memory_mb is guarded_memory and Path.read_text is default_read else overflow.available_memory_mb())
     monkeypatch.setattr(seat_spawn, 'resources', resources)
+
+@pytest.fixture(autouse=True)
+def own_harness_off(monkeypatch):
+    """Route tests see each leg's registered harness, not the host's installed clients; tests of
+    own-harness routing set ``SpawnService.client_probe`` or unset this variable."""
+    monkeypatch.setenv('PLANGRAPH_OWN_HARNESS', 'off')
 
 @pytest.fixture
 def admission_memory(monkeypatch):

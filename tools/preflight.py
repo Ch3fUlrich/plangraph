@@ -19,6 +19,7 @@ import tomllib
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, disk_free_gb,
                                           capped_cargo_lease, running_disk_refusal, shared_cargo_target)
+from plangraph.spawner.overflow import available_memory_mb
 
 CHECK_TIMEOUT = 60
 # Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
@@ -31,6 +32,26 @@ TEST_TIMEOUT = 240
 # paths x PER_PATH seconds, never below TEST_TIMEOUT and capped at MAX_TEST_TIMEOUT.
 TEST_PER_PATH_TIMEOUT = 2
 MAX_TEST_TIMEOUT = 1200
+# pytest-xdist workers of the affected-test step: half the cores, at most one per
+# TEST_WORKER_GIB of available memory (the spawner's probe, Linux and Windows), between 2 and
+# MAX_TEST_WORKERS; cores only when memory cannot be read; PREFLIGHT_TEST_WORKERS overrides.
+TEST_WORKER_GIB = 2
+MAX_TEST_WORKERS = 16
+
+
+def affected_workers(env=None, cores=None, memory_mb=None):
+    configured = (env if env is not None else os.environ).get("PREFLIGHT_TEST_WORKERS", "")
+    try:
+        if int(configured) > 0:
+            return int(configured)
+    except ValueError:
+        pass
+    cores = cores if cores is not None else (os.cpu_count() or 2)
+    try:
+        by_mem = int((memory_mb or available_memory_mb)() // (TEST_WORKER_GIB * 1024))
+    except (OSError, ValueError):
+        by_mem = cores
+    return max(2, min(cores // 2, by_mem, MAX_TEST_WORKERS))
 
 
 def is_affected_step(command):
@@ -250,6 +271,52 @@ def rust_commands(root, base, head, env=None):
     return commands
 
 
+PROST_LOCK_MARKERS = ('name = "prost-build"', 'name = "prost-wkt-types"')
+
+
+def needs_protoc(root, commands):
+    """True when a cargo build or test targets a manifest whose lock pulls a protobuf build script."""
+    for command in commands:
+        if command[0] != 'cargo' or command[1:2] == ['fmt']:
+            continue
+        manifest = (Path(command[command.index('--manifest-path') + 1]) if '--manifest-path' in command
+                    else Path(root) / 'rust/Cargo.toml')
+        lock = manifest.parent / 'Cargo.lock'
+        if lock.is_file() and any(marker in lock.read_text() for marker in PROST_LOCK_MARKERS):
+            return True
+    return False
+
+
+def require_protoc(root, commands, env):
+    """Resolve protoc (PROTOC, ~/.local/bin, PATH) into env, or fail in a second: a detached unit's PATH
+    lacks ~/.local/bin and the build script would fail only after minutes of compiling."""
+    if not needs_protoc(root, commands):
+        return
+    given = env.get('PROTOC')
+    if given:
+        # Cargo runs in rust/: a relative path is taken from there, a bare name from the child's PATH.
+        if '/' in given:
+            resolved = Path(given) if Path(given).is_absolute() else Path(root) / 'rust' / given
+            found = str(resolved) if resolved.is_file() and os.access(resolved, os.X_OK) else None
+        else:
+            # Relative and empty PATH entries mean the Cargo working directory, not ours; an
+            # explicitly empty PATH is one such entry.
+            cargo_path = os.pathsep.join(
+                entry if entry and os.path.isabs(entry) else str(Path(root) / 'rust' / entry)
+                for entry in env['PATH'].split(os.pathsep)) if 'PATH' in env else None
+            found = shutil.which(given, path=cargo_path)
+        if not found:
+            raise FailFamily(f"PROTOC={given} is not an executable file: fix or unset PROTOC")
+        env['PROTOC'] = found
+        return
+    local = Path.home() / '.local/bin/protoc'
+    found = str(local) if local.is_file() and os.access(local, os.X_OK) else shutil.which('protoc', path=env.get('PATH', ''))
+    if not found:
+        raise FailFamily("protoc not found: set PROTOC, or install it in ~/.local/bin or on PATH "
+                         "(a detached systemd-run unit needs the login PATH)")
+    env['PROTOC'] = found
+
+
 def test_environment(root, env):
     """A pre-push caller's Git context must not select a fixture's repository."""
     local = set(subprocess.check_output(
@@ -438,7 +505,7 @@ def _main(argv, root, cleanup):
     tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
                    "--root", str(root), "--files-only", "--local", "--run")
     if importlib.util.find_spec("xdist") is not None:
-        tests += ["--workers", "2"]
+        tests += ["--workers", str(affected_workers())]
     families = [("scrub", scrubs),
                 ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),
@@ -461,6 +528,7 @@ def _main(argv, root, cleanup):
                     print(f"rust CARGO_TARGET_DIR: {rust_env.get('CARGO_TARGET_DIR', root / 'rust/target')}", flush=True)
                     family_env = {key: value for key, value in rust_env.items()
                                   if not key.upper().startswith('GIT_')}
+                    require_protoc(root, commands, family_env)
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)
                 failed = []  # policy runs every check and reports all failures

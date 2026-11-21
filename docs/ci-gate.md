@@ -20,7 +20,7 @@ A `Commit trailers` step (`tools/ci_commit_gate.py`) checks each PR commit for a
 
 - Gate-Edit and Test-Removal ids are checked for shape (D-<digits>) only, not against the decision log.
 - The first push of a new ref (all-zero before sha) is not gated, a pull request into main still is.
-- Merge commits are skipped, their parent commits are checked.
+- Merge commits are skipped for the Writer and test rules, their parent commits are checked. A merge that edits a gate file itself (a conflict resolved in `.github/workflows/*`, seen in its combined diff or in the conflict list of its two parents, so keeping one side whole counts too) needs its own `Gate-Edit: D-<digits>` trailer; a clean main-into-lane merge does not. The pre-push hook and the CI step run this, and `merge_batch build` runs the workflow Gate-Edit check on every PR head before it builds.
 - The Writer may name a Claude model only as `claude-<model> <run|session|uuid id> [(note)]` (shape-only check; `claude-<model>` and the run-hex id are lowercase only, a uuid may be any case; the optional note is one parenthesised span that may not contain `)` (so no nested parens), a newline, or a second `Writer:` marker in any case); the Claude marker list otherwise matches the Writer value by substring and relies on the writer naming itself.
 - Copies of gate files under other names are not path-matched (only suffix variants such as .bak are).
 - Test removal is detected by name in files whose path looks like a test (tests/ directories, test_* files, *_test.* and *.test.*/*.spec.* files), unconventional locations and deleted conftest.py fixtures are not detected.

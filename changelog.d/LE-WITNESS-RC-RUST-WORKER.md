@@ -1,0 +1,2 @@
+- Reattached runs continue to check for an empty process group and enforce their runtime deadline while an activity warning awaits persistence.
+- The turn-budget hook allows the first read of each wake. The Temporal worker regression covers fallback parking and re-observation after all observation attempts fail.

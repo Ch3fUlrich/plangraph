@@ -1,4 +1,4 @@
-use super::{check, command, row, source_checks, valid, MAX_WORKERS, TIMEOUT};
+use super::{check, command, plan, row, source_checks, valid, MAX_WORKERS, TIMEOUT};
 use serde_json::{json, Value};
 use std::io;
 
@@ -16,16 +16,16 @@ fn states_and_private_errors() {
         (-1, "host query failed"),
     ] {
         assert_eq!(
-            check(&host(), &|_, _| Ok(Some(code))),
+            check(&host(), &|_, _, _| Ok(Some(code))),
             row("ps_host_a", detail)
         );
     }
     assert_eq!(
-        check(&host(), &|_, _| Ok(None)),
+        check(&host(), &|_, _, _| Ok(None)),
         row("ps_host_a", "host query failed")
     );
     assert_eq!(
-        check(&host(), &|_, _| Err(io::Error::other("PRIVATE"))),
+        check(&host(), &|_, _, _| Err(io::Error::other("PRIVATE"))),
         row("ps_host_a", "unreachable")
     );
     for h in [
@@ -35,7 +35,7 @@ fn states_and_private_errors() {
         json!({"name":"a", "src":"/src", "wsl_distro":3}),
     ] {
         assert_eq!(
-            check(&h, &|_, _| panic!()),
+            check(&h, &|_, _, _| panic!()),
             row("ps_host_a", "invalid configuration")
         );
     }
@@ -43,7 +43,7 @@ fn states_and_private_errors() {
 
 #[test]
 fn config_and_filtering() {
-    let run = |_: &str, _: &str| Ok(Some(0));
+    let run = |_: &str, _: &str, _: Option<&str>| Ok(Some(0));
     for data in ["bad", "{}", "{\"hosts\":{}}"] {
         assert_eq!(
             source_checks(Ok(data.into()), &run),
@@ -71,7 +71,7 @@ fn config_and_filtering() {
 fn assert_filtered(h: Value) {
     assert!(!valid(&h), "unexpectedly valid: {h}");
     assert!(
-        source_checks(Ok(json!({"hosts":[h]}).to_string()), &|_, _| panic!(
+        source_checks(Ok(json!({"hosts":[h]}).to_string()), &|_, _, _| panic!(
             "filtered host must not run SSH"
         ))
         .is_empty()
@@ -127,7 +127,7 @@ fn parallel_bounded_and_ordered() {
     let barrier = std::sync::Barrier::new(MAX_WORKERS);
     let active = std::sync::atomic::AtomicUsize::new(0);
     let data = json!({"hosts": (0..32).map(|i| json!({"name":format!("h{i}"),"target":"a","src":"/src"})).collect::<Vec<_>>()});
-    let rows = source_checks(Ok(data.to_string()), &|_, _| {
+    let rows = source_checks(Ok(data.to_string()), &|_, _, _| {
         assert!(active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < MAX_WORKERS);
         barrier.wait();
         active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
@@ -150,7 +150,21 @@ fn commands() {
         command(&json!({"win_src":"C:/src"})).unwrap(),
         "if not exist \"C:/src\\\" exit /b 44"
     );
-    assert!(command(&json!({"src":"/src", "wsl_distro":"Ubuntu"}))
-        .unwrap()
-        .starts_with("wsl -d Ubuntu -- sh -c '"));
+    assert_eq!(
+        command(&json!({"src":"/src with space", "wsl_distro":"Ubuntu"})).unwrap(),
+        "wsl.exe --distribution Ubuntu --exec pg-spawnd steps"
+    );
+    let plan: Value = serde_json::from_str(
+        &plan(&json!({"src":"/src with space", "wsl_distro":"Ubuntu"})).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        plan,
+        json!({"steps": [{"argv": ["test", "-d", "/src with space"], "fail_code": 44}]})
+    );
+    assert!(plan_absent_for_posix());
+}
+
+fn plan_absent_for_posix() -> bool {
+    plan(&host()).is_none()
 }

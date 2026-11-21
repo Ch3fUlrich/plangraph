@@ -21,12 +21,14 @@ their owning `Cargo.toml` with `--manifest-path`, including excluded packages
 without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
 
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
-affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s), scaled up to 2 seconds per selected test path and capped at 1200 seconds for a large selection; when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
+affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s), scaled up to 2 seconds per selected test path and capped at 1200 seconds for a large selection; it runs with pytest-xdist workers sized from the host (half the cores, at most one per 2 GiB of available memory, cores only when memory cannot be read, 2 to 16; `PREFLIGHT_TEST_WORKERS` overrides); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 
 Push preflight uses the same capped Cargo cache as the spawner and reclaims an idle over-cap cache before compiling. See [Testing](docs/TESTING.md#preflight-rust-target-and-sccache) for direct preflight and sccache settings.
+With sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned before a private target is created. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). See docs/TESTING.md.
+`tools/merge_batch.py land` merges the batch PR with one `Plan-Item` trailer per item of every included part and for the batch `--plan` key, plus one `Review-Run: KEY RUN_ID PART_HEAD` line per recorded part review, in the merge commit body, and runs `plangraph merge-close` once after the batch landed, so the keeper closes the items its merge names; the job's report goes to stderr and a failure or a missing binary never fails the land.
 `tools/merge_batch.py push` also waits without an overall deadline and forwards
 git and hook output to stderr while the hook enforces its per-step bounds.
-The shared subprocess runner kills the process group on a caller-supplied
+The Rust step resolves `protoc` (`PROTOC`, then `~/.local/bin/protoc`, then `PATH`) before cargo when a target pulls a protobuf build script, and refuses within a second with a named message when it is missing. The shared subprocess runner kills the process group on a caller-supplied
 timeout or interruption, including nested worker sessions on Linux, then reaps
 git before reporting the failure.
 Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
@@ -68,23 +70,30 @@ batch helper reports a label as added only when the returned label list contains
 its name; missing labels or malformed responses leave `labeled` false and warn.
 
 `tools/merge_batch.py build --name NAME --prs 1,2 --plan plangraph:KEY` records the
-batch PLAN key; `--deviations TEXT` records nonconformance (forced build exceptions
-also appear as deviations). Record every included part with `review --name NAME
---pr N --file PATH`: evidence must end in `HEAD: <full part sha>` then
-`VERDICT: ACCEPT` (or `REQUEST_CHANGES` / `REJECT`, which replace an earlier
-ACCEPT and block the request). `push --name NAME --ci-run ID` records the full batch CI run's
+batch PLAN key. `--deviations TEXT` records nonconformance, including forced
+build exceptions. Record a keeper-bound spawner review for each included
+Plan-Item with `review --name NAME --pr N --run-id RUN_ID`. Both `go-req` and
+`land` recheck the recorded item key, head, and verdict. Use `--file PATH` to
+record a supplementary review with a full `HEAD` and final `VERDICT`.
+`push --name NAME --ci-run ID` records the full batch CI run's
 head, status and conclusion; repeat push after CI completes. A push without an ID
 refreshes an existing run only on the same head; a new head clears it.
 `go-req --name NAME` prints one batch GO-REQ with PR, full head, diff stat, part
 reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
 non-green or missing CI, and workflow edits whose touching commits lack a
-`Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution. The batch key is explicit; part Plan-Items do not
+`Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution (a main-into-lane merge that resolves a workflow conflict carries the trailer in its own message: the commit gate refuses it at push and in CI, and `build` refuses a PR head with such a merge before it builds). The batch key is explicit; part Plan-Items do not
 stand in for the batch's PLAN key. After land reports included parts as merged,
 cleanup invokes `pg-worktree-sweep --apply --delete-remote` with exact saved
 SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
 `PG_PINS` and `PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"`; authority failures
 protect host state and cleanup errors never fail land. See [pg-reap](docs/pg-reap.md)
 for idle thresholds, run records, restore TSVs and remote SHA leases.
+
+CI runs the full suite once, on the merge candidate: a `batch/*` head, a merge queue
+event, or a head a router GO row labels `ci-full` (push to main, dispatch and schedule also run it).
+Every other pull request, draft or ready, runs the affected selection
+(`tools/ci_select.py`, `full_run_required`); ci-gate refuses a candidate whose selection was not full.
+Marking a draft ready starts no run; `merge_batch land` names a pending required check and exits.
 
 Every writer commit fixing keeper items needs one `Plan-Item` trailer per fixed
 key, including subitems of a larger item. `ci_commit_gate.py check --base BASE
@@ -148,6 +157,8 @@ literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs must be added to `RUST_INPUTS`, not inline to the workflow. `rust/pg-spawnd/`
 and `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
 Python files executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
+`ci_select.RUST_WORKER_INPUTS` lists inputs that also select the standalone
+Temporal worker job, including `tools/probe_admission_policy_guard.py`.
 Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,
 `docs/rust-hooks.md`, `tools/new_code_allowlist.txt` and its parity corpus at
 `tests/hooks/parity_payloads.json`; all four are explicit selector inputs.
@@ -259,7 +270,10 @@ and in the pre-push hook. Files that were larger when the gate landed are listed
 shrinks: `--update-baseline` writes it once when none exists, afterwards only lowers counts or removes entries that fit the 800-line cap, and CI refuses an entry added or raised against the change's base (`origin/main`
 on a PR, the pushed-over commit on a push to main). Data and vendored
 files are not counted; a deliberate exemption goes in `.filesize-allow` with a reason
-(today only `CHANGELOG.md`, an append-only ledger).
+(today only `CHANGELOG.md`, an append-only ledger). A doc with a lower cap is named in
+`DOC_CAPS` of `tools/check_file_size.py` (today `docs/SPAWNER.md`, 728 lines); the check refuses it
+over its cap, naming the file and the cap, and main keeps `DOC_HEADROOM` (60) lines under it: move a
+self-contained section into `docs/operations/` and link it.
 The file-size gate refuses malformed Git batch headers with a single reason line.
 Pre-push uses `--head` for each pushed ref, reading its blobs, `.filesize-allow`
 and `.filesize-baseline` from Git. Public scrub rules also come from that head.
@@ -315,6 +329,8 @@ credential shapes and the configured private words run together. The legacy
 `tools/preflight_private_scrub.py --base origin/main --head HEAD --words FILE`
 entry point also runs all these rules. Hook, CI and fast checks share
 `scrub_check.scan_content`; committed checks exclude inherited line occurrences.
+The SSH tests' loopback and documentation-range IPv6 values are scoped by file,
+rule, and SHA-256 in `scrub_ci.toml`.
 
 Install the pre-push scrub gate (scans the files changed in the pushed commits with
 `tools/split/scrub_check.py`, refuses on any hit, prints only `file:line: rule`):
@@ -441,7 +457,8 @@ isolate each live door table and verify the refusal disappears without it.
 The Python `tools/hooks/context_guard.py` carries the AutoOS compaction scan in
 `context_compaction.py` and `ready <handoff-path> [--reason cap|router|operator|planned]`.
 Ready requires a sibling `<stem>.card.md` validated by PATH's `handoff-check`
-(or executable `AUTOOS_HANDOFF_CHECK`), records v2 hashes, and best-effort kicks
+(or executable `AUTOOS_HANDOFF_CHECK`; waits at most `HANDOFF_CHECK_TIMEOUT_S`, 60 s, and names a
+timeout), records v2 hashes, and best-effort kicks
 the watchdog unless `AUTOOS_READY_KICK=0`. Once `<state_dir>/<session_id>.ready.json`
 exists as a v2 marker for the calling `session_id`, `context_guard.py` (and
 `ctx_guard_session.py`) registered on `PreToolUse` (matcher for all tools, `"*"`)

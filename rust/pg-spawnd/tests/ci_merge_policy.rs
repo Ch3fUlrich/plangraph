@@ -132,15 +132,24 @@ assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
     for input in [
         "PR_BASE_REF",
         "PR_HEAD_REF",
-        "PR_DRAFT",
-        "batch/*",
-        "--full",
+        "PR_LABELS",
+        "--event",
+        "--base-ref",
+        "--head-ref",
+        "--labels",
         "steps.sel.outputs.browser",
+        "steps.sel.outputs.full",
     ] {
         assert!(selection.contains(input), "missing {input}");
     }
+    assert!(!selection.contains("PR_DRAFT"));
+    assert!(!selection.contains("--full"));
+    for input in ["--event", "--base-ref", "--head-ref", "--labels"] {
+        assert!(gate.contains(input), "ci-gate missing {input}");
+    }
     assert_eq!(workflow.matches("needs.select.outputs.full").count(), 4);
-    assert!(workflow.contains("types: [opened, synchronize, reopened, ready_for_review, edited]"));
+    assert!(workflow.contains("types: [opened, synchronize, reopened, edited, labeled]"));
+    assert!(!workflow.contains("ready_for_review"));
 }
 
 #[test]

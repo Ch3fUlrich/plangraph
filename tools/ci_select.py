@@ -29,6 +29,9 @@ KNOWN_PREFIXES: tuple[str, ...] = (
     "rust/",
 )
 
+# The standalone Temporal worker job also runs the probe admission guard tests.
+RUST_WORKER_INPUTS: tuple[str, ...] = ("tools/probe_admission_policy_guard.py",)
+
 # D-5294: Rust tests also compile/read repository inputs outside rust/.
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
@@ -108,10 +111,11 @@ RUST_INPUTS: tuple[str, ...] = (
     "tools/gate_wiring_check.py",
     "tools/split/**",
     "tools/hooks/pre-push",
+    "tools/merge_batch.py",
     "tools/merge_batch_land.py",
     "tools/dell_ci_jobs.py",
     "tools/new_code_allowlist.txt",
-    "tools/probe_admission_policy_guard.py",
+    *RUST_WORKER_INPUTS,
     "tools/seat_verdict.py",
     "tools/preflight.py",
     "tools/preflight_private_scrub.py",
@@ -184,6 +188,8 @@ def select(paths: list[str]) -> dict[str, bool]:
             res["browser"] = True
         if any(fnmatchcase(p, pattern) for pattern in RUST_INPUTS):
             res["rust"] = True
+        if p in RUST_WORKER_INPUTS:
+            res["rust-worker"] = True
         if p.startswith("skills/") and p.endswith(".md"):
             # skill pages are guarded by tests/test_skill_*.py
             res["pytest"] = True
@@ -210,7 +216,25 @@ def select(paths: list[str]) -> dict[str, bool]:
     return res
 
 
-def gate(needs: dict) -> list[str]:
+#: Label a router GO row puts on a pull request head to name it the merge candidate (D-6392 run-once order).
+FULL_LABEL = "ci-full"
+BATCH_PREFIX = "batch/"
+
+
+def full_run_required(event: str, base_ref: str = "", head_ref: str = "", labels=()) -> bool:
+    """The full suite runs once per merge candidate; every other pull request gets the affected selection.
+
+    A pull_request event gets the full suite only for a batch/* head or a head carrying FULL_LABEL, and only
+    when it targets main (a draft or ready lane pull request, or one stacked on another branch, is a selection).
+    Push, schedule, workflow_dispatch and merge_group events are the record or the candidate itself: full."""
+    if event != "pull_request":
+        return True
+    if base_ref != "main":
+        return False
+    return head_ref.startswith(BATCH_PREFIX) or FULL_LABEL in set(labels or ())
+
+
+def gate(needs: dict, require_full: bool = False) -> list[str]:
     if not isinstance(needs, dict) or "select" not in needs or not isinstance(needs["select"], dict):
         return ["select: missing"]
 
@@ -224,6 +248,8 @@ def gate(needs: dict) -> list[str]:
         outputs = {}
 
     problems: list[str] = []
+    if require_full and outputs.get("full") != "true":
+        problems.append("select: merge candidate ran the affected selection, not the full suite")
     for suite in ALWAYS + SUITES + ("rust-windows",):
         selection = "rust" if suite == "rust-windows" else suite
         selected = outputs.get("full") == "true" or suite in ALWAYS or outputs.get(selection) != "false"
@@ -251,14 +277,30 @@ def main(argv: list[str] | None = None) -> int:
     select_parser.add_argument("--base", type=str, default=None, help="Base commit SHA")
     select_parser.add_argument("--head", type=str, default=None, help="Head commit SHA")
     select_parser.add_argument("--files", nargs="*", default=None, help="Explicit list of files")
-
     gate_parser = subparsers.add_parser("gate")
+    for sub in (select_parser, gate_parser):
+        sub.add_argument("--event", default=None, help="GitHub event name; picks full or affected selection")
+        sub.add_argument("--base-ref", default="", help="Pull request base branch name")
+        sub.add_argument("--head-ref", default="", help="Pull request head branch name")
+        sub.add_argument("--labels", default="[]", help="JSON list of the pull request label names")
+
     gate_parser.add_argument("--needs", type=str, required=True, help="JSON string of needs object")
 
     args = parser.parse_args(argv)
 
+    candidate = False
+    if args.command in ("select", "gate") and args.event is not None:
+        try:
+            labels = json.loads(args.labels) if args.labels else []
+            if not isinstance(labels, list):
+                raise ValueError
+        except ValueError:
+            sys.stderr.write("ci_select: --labels must be a JSON list\n")
+            return 1
+        candidate = full_run_required(args.event, args.base_ref, args.head_ref, labels)
+
     if args.command == "select":
-        if args.full:
+        if args.full or candidate:
             selection = {s: True for s in SUITES} | {"full": True}
         elif args.base is not None or args.head is not None:
             if args.base is not None and args.head is not None:
@@ -299,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write("ci-gate: bad needs json\n")
             return 1
 
-        problems = gate(needs_obj)
+        problems = gate(needs_obj, require_full=candidate)
         if problems:
             for prob in problems:
                 sys.stderr.write(f"{prob}\n")

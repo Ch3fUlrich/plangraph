@@ -1,0 +1,13 @@
+[Unit]
+Description=Close the keeper items a merge into main names (merge-close)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+EnvironmentFile=-%h/.config/plangraph/plangraph.env
+# PG_URL and PG_TOKEN_FILE name a keeper token of role `system`; the closed and the flagged keys go to the journal.
+# PG_MERGE_CLOSE_REQUIRE_SEATS=0 turns the seat check off; it ships on.
+ExecStart=%h/.local/bin/plangraph merge-close
+TimeoutStartSec=420
+UMask=0077

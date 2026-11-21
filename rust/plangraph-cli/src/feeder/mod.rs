@@ -6,6 +6,7 @@ mod runtime;
 mod selection;
 mod sources;
 mod workflow;
+pub use adapters::{Env, SlowKeeper, Transport};
 pub use runtime::run;
 pub use selection::{decode_task, pick, prepare_ready, validate_ready};
 use serde::{Deserialize, Serialize};

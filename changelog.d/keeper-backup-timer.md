@@ -1,0 +1,1 @@
+New crate `pg-keeper-backup` and a daily user timer: dump the keeper schema (pg_dump 17 in docker, mode 0600, ledger line with seq, size and sha256), keep the newest 14, and restore-test the dump into a scratch database; a dump older than seq 19096 is never restored (D-5796). See `docs/keeper-backup.md`.

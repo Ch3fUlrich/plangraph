@@ -1,4 +1,4 @@
-"""Generate the existing SSH consumers' formats, without enabling public overflow."""
+"""Derive SSH routes and public repository paths from the host registry."""
 import json
 import os
 import re
@@ -13,31 +13,48 @@ def config_dir():
 
 def generate(registry):
     ps, overflow = [], {}
+    local_name = registry.get('self', '').lower()
+    public_ids = set(registry.get('public_repos', []))
+    public = {}
     for host in registry['hosts']:
+        name = host['id']
+        repos = host.get('repos', {})
+        if local_name and local_name in {v.lower() for v in [name, *host.get('aliases', [])]}:
+            public.update({key: repo['root'] for key, repo in repos.items() if key in public_ids})
         if host['transport'] == 'local':
             continue
-        repo = host['repos'].get('plangraph')
+        repo = repos.get('plangraph')
         if repo is None:
             continue
         if host['transport'] != 'ssh':
             raise ValueError('config consumers require ssh transport')
-        live = repo.get('live_dir')
-        if not live:
-            raise ValueError('plangraph.live_dir is required for generated hosts')
-        name = host['id']
-        pattern = (r'[A-Za-z]:[/\\][A-Za-z0-9_./\\-]*' if host['os'] == 'windows'
-                   else r'/[A-Za-z0-9_./-]*')
-        if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}', name) or not re.fullmatch(pattern, live):
-            raise ValueError('invalid host id or live directory')
-        src = live.rstrip('/\\') + '/src'
+        root = repo['root']
+        windows = host['os'] == 'windows'
+        pattern = r'[A-Za-z]:[/\\][A-Za-z0-9_ ./\\-]*' if windows else r'/[A-Za-z0-9_ ./-]*'
+        if (not re.fullmatch(r'[a-z][a-z0-9-]{0,31}', name)
+                or not isinstance(root, str) or not re.fullmatch(pattern, root)):
+            raise ValueError('invalid host id or checkout directory')
         target = host.get('ssh_target') or name
-        ps.append(dict(name=name, target=target, **{
-            'win_src' if host['os'] == 'windows' else 'src': src}))
-        if host['os'] == 'linux':
-            overflow[name] = {'ssh': target, 'repo': live, 'spawner_src': src,
-                              'floor_mb': host['caps']['mem_floor_mb']}
-    return {'ps-hosts.json': {'hosts': ps},
-            'overflow-hosts.json': {'hosts': overflow, 'public_repos': []}}
+        if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_@.:-]*', target):
+            raise ValueError('invalid SSH destination')
+        distro = host.get('wsl_distro')
+        if distro is not None and (windows
+                or not re.fullmatch(r'[A-Za-z0-9_.][A-Za-z0-9_.-]*', distro)):
+            raise ValueError('invalid WSL distribution')
+        src = root.rstrip('/\\') + '/src'
+        hop = {'wsl_distro': distro} if distro else {}
+        ps.append(dict(name=name, target=target, **hop, **{'win_src' if windows else 'src': src}))
+        if not windows:
+            overflow[name] = dict(ssh=target, repo=root, spawner_src=src,
+                floor_mb=host['caps']['mem_floor_mb'], **hop)
+            if 'roles' in host:
+                overflow[name].update(roles=host['roles'], state_dir=host['state_dir'],
+                    placement_fallback=host.get('placement_fallback', False),
+                    repos={key: entry['root'] for key, entry in repos.items() if key in public_ids},
+                    session_unit=host.get('env', {}).get('PG_SESSION_UNIT'), registry=True)
+    return {'ps-hosts.json': {'hosts': ps}, 'overflow-hosts.json': {
+        'hosts': overflow, 'public_repos': list(public.values()), **(
+            {'public_repo_ids': public} if public else {})}}
 
 
 def sync(registry, write=False, directory=None):
