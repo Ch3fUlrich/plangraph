@@ -255,7 +255,7 @@ class SpawnPlan:
 
 def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reader=None, now=None,
                 legs=DEFAULT_LEGS, benchmark=None, strict=False, policy=None, placement=None,
-                catalog_rows=None) -> SpawnPlan:
+                catalog_rows=None, installed=None) -> SpawnPlan:
     """Plan by canonical rules; benchmark utility can only permute one tier.
     Measured inputs rank within cost tiers; implement writer priority is final.
     ``exclude_families`` excludes the specified family names from candidate legs.
@@ -266,12 +266,19 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     ``catalog_rows`` injects tier/admission data; None reads the live catalog once.
     Readers may be a LegStateStore or a callable with the leg_status contract.
     Account/combo scope comes from the card and is never a wildcard.
+    ``installed`` (client name -> bool) puts each leg into its own harness before policy, seats and
+    ordering run (rule 3.53); None keeps the registered harnesses.
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_SONNET
+    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET
     if native_review:
         legs = review_route_pool(legs)
+    harness_skipped = []
+    if installed is not None:
+        from .legs import resolve_legs
+        legs, skips = resolve_legs(legs, installed)
+        harness_skipped = list(skips)
     check_route_targets(card, legs)
     placement = dict(placement) if placement is not None else dict(host=None, reason='placement_not_evaluated', free_mb=None)
     if not isinstance(card, Mapping) or not card or "estimate_tokens" not in card:
@@ -335,8 +342,13 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in gaps), gaps)
     if native_implement:   # Claude writers join the route behind Codex (rule 3.58); see codex_out.
         from .legs import EXPLICIT_LEGS   # Added after the strict gap check: explicit legs carry no benchmark row.
-        candidates += tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
-                            and role in l.roles and leg_active(l, now=now))
+        fallbacks = tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
+                          and role in l.roles and leg_active(l, now=now))
+        if installed is not None:   # the Claude fallback writers need their client too
+            from .legs import resolve_legs
+            fallbacks, skips = resolve_legs(fallbacks, installed)
+            harness_skipped.extend(skips)
+        candidates += fallbacks
     bench_reasons = [f"{g['leg']} ({g['model']}): no benchmark row" for g in gaps]
     if benchmark is None:
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
@@ -371,7 +383,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
                for l in legs if role in l.roles and not leg_active(l, now=now)]
-    skipped = []
+    skipped = list(harness_skipped)
     from plangraph.routing_support.resolver import score_model
     from plangraph.routing_support.liveness import agy_limit_reason
     from plangraph.routing_support.quota_snapshots import skip_reason as quota_skip_reason
@@ -468,7 +480,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         ordered.sort(key=lambda leg: review_key(leg, TIERS.index(leg.tier), table_order[leg.id],
                      measured=rows.get(leg.model, rows.get(leg.id)) is not None))
     if native_review:
-        ordered.sort(key=lambda leg: REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
+        # Argon is last of the whole route (rule 3.61), behind the non-order extras too.
+        ordered.sort(key=lambda leg: len(REVIEW_ORDER) + 2 + REVIEW_ORDER.index(leg.id) if leg.id in (REVIEW_ARGON_LOW, REVIEW_ARGON)
+                     else REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
                      else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
         source = "operator-order"
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last

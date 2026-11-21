@@ -73,7 +73,8 @@ def test_every_json_leg_field_is_preserved(tmp_path, field):
     # Non-default optional values catch validated fields silently dropped at construction.
     row = sol_row(claude_family=True, note="operator JSON preservation regression",
                   roles=["review", "implement"], tool_mode="inline-only",
-                  disabled="operator policy", trains_on_data=True, effort="high", expires=123)
+                  disabled="operator policy", trains_on_data=True, effort="high", expires=123,
+                  harness_fallback="client_missing")
     leg = load_row(tmp_path, row)
     assert set(row) == {field.name for field in dataclasses.fields(Leg)}
     expected = tuple(row[field]) if field in ("windows", "roles") else row[field]

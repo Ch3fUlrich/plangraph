@@ -55,18 +55,29 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
         String::from_utf8_lossy(&output.stderr)
     );
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(
-        result["initial"]["first_leg"]["model"],
-        "gemini-4-argon-low"
-    );
-    assert_eq!(
-        result["hydrogen"]["first_leg"]["model"],
-        "gemini-4-argon-low"
-    );
-    assert_eq!(
-        result["argon"]["first_leg"]["model"],
-        "opencode-go/deepseek-v4.1-flash"
-    );
+    // Argon runs last since rule 3.61, so the first leg is the free OpenCode one in
+    // every stage; the argon legs show the independent quota in the leg list.
+    let models_of = |stage: &str| -> Vec<String> {
+        result[stage]["legs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l["model"].as_str().unwrap().to_string())
+            .collect()
+    };
+    for stage in ["initial", "hydrogen", "argon"] {
+        assert_eq!(
+            result[stage]["first_leg"]["model"],
+            "opencode/deepseek-v4.1-flash-free"
+        );
+    }
+    assert_eq!(models_of("hydrogen"), models_of("initial"));
+    assert!(models_of("initial")
+        .iter()
+        .any(|m| m == "gemini-4-argon-low"));
+    assert!(!models_of("argon")
+        .iter()
+        .any(|m| m.contains("gemini-4-argon")));
     assert_eq!(result["later"]["state"], "limited");
     assert_eq!(
         result["snapshot"]["agy_quota_states"]["agy:gemini-4-argon"]["state"],
@@ -111,13 +122,13 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
     assert_eq!(
         models,
         [
-            "gemini-4-argon-low",
-            "gemini-4-argon-medium",
-            "opencode-go/deepseek-v4.1-flash",
             "opencode/deepseek-v4.1-flash-free",
+            "opencode-go/deepseek-v4.1-flash",
             "opencode-go/glm-5.3-flash",
             "gemini-4-neon-medium",
-            "claude-sonnet-5-5-high"
+            "claude-sonnet-5-5-high",
+            "gemini-4-argon-low",
+            "gemini-4-argon-medium"
         ]
     );
 }

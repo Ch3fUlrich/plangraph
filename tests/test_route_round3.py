@@ -19,10 +19,11 @@ def assert_review_seat_safety(estimate):
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        # D-6366: argon-low leads; inline-only mimo-v2.6-pro follows only with diff
-        # metadata, otherwise the opencode-go deepseek flash leg is the second seat.
-        second = "mimo-v2.6-pro" if diff else "opencode-go-deepseek-v4-flash"
-        expected = ["agy-gemini-4-argon-low", second]
+        # Rule 3.61: gpt writers skip the gpt leg; the seats are the first two families of the order.
+        # Inline-only mimo-v2.6-pro seats only with diff metadata; deepseek-free takes at most 100000 tokens.
+        first = "mimo-v2.6-pro" if diff else ("opencode-deepseek-v4.1-flash-free" if estimate < 100000 else "opencode-go-deepseek-v4-flash")
+        second = ("opencode-deepseek-v4.1-flash-free" if estimate < 100000 else "opencode-go-deepseek-v4-flash") if diff else "opencode-go-glm-5.3-flash"
+        expected = [first, second]
         assert [leg.id for leg in review.review_seats] == expected
 
 
