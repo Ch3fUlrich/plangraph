@@ -112,9 +112,8 @@ def test_manual_edit_on_top_of_a_clean_merge_needs_a_trailer(repo: Path):
     assert check(base, merge, cwd=repo) == [f"{merge}: gate edit without Gate-Edit trailer"]
 
 
-def test_workflow_gate_reads_the_shared_detector_for_a_rename_conflict(tmp_path: Path, tools_importable):
-    from merge_batch_util import MergeBatchError, workflow_gate
-
+def _rename_conflict_merge(tmp_path: Path) -> tuple[Path, str, str]:
+    """Both sides rename one workflow differently; the merge keeps main's side whole."""
     repo = tmp_path / "rename"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -133,13 +132,19 @@ def test_workflow_gate_reads_the_shared_detector_for_a_rename_conflict(tmp_path:
     _git(repo, "rm", "-q", "-f", ".github/workflows/z.yml")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "Merge side")
-    head = _head(repo)
-    assert ".github/workflows" not in _git(repo, "diff-tree", "--cc", "--name-only", "-r", head)
-    # A base that already holds both parents leaves the merge as the only commit in range, so only
-    # the shared conflict detector can name the workflow paths it touched.
-    p1, p2 = (_git(repo, "rev-parse", f"{head}^{n}").strip() for n in (1, 2))
-    tree = _git(repo, "rev-parse", f"{p1}^{{tree}}").strip()
-    base = _git(repo, "commit-tree", tree, "-p", p1, "-p", p2, "-m", "base holding both parents").strip()
+    return repo, base, _head(repo)
+
+
+def test_without_merge_tree_a_rename_conflict_still_needs_a_trailer(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(ci_commit_gate_module(), "_auto_merge", lambda parents, cwd: None)
+    repo, base, head = _rename_conflict_merge(tmp_path)
+    assert check(base, head, cwd=repo) == [f"{head}: gate edit without Gate-Edit trailer"]
+
+
+def test_workflow_gate_reads_the_shared_detector_for_a_rename_conflict(tmp_path: Path, tools_importable):
+    from merge_batch_util import MergeBatchError, workflow_gate
+
+    repo, base, head = _rename_conflict_merge(tmp_path)
     try:
         workflow_gate(repo, base, head)
     except MergeBatchError as exc:

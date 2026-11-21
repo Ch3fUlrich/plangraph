@@ -236,7 +236,7 @@ def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
             # keeping one side, which the combined diff omits. Stricter, never looser.
             base = _git_text(['merge-base', *parents], cwd=cwd).strip()
             sides = [
-                set(_git_text(['diff', '--name-only', '-z', base, parent], cwd=cwd).split('\0')) - {''}
+                set(_git_text(['diff', '--name-only', '--no-renames', '-z', base, parent], cwd=cwd).split('\0')) - {''}
                 for parent in parents
             ]
             paths |= sides[0] & sides[1]
