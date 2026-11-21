@@ -110,15 +110,17 @@ pub fn supervise_with_cancel(
     opts: &Opts,
     cancelled: &dyn Fn() -> bool,
 ) -> io::Result<Supervised> {
-    supervise_with_diagnostics(cmd, opts, cancelled, |_| {})
+    supervise_with_diagnostics(cmd, opts, cancelled, |_| {}, || Ok(()))
 }
 
-/// Run timeout diagnostics against the live child before terminating its group.
+/// Diagnose the live child on timeout, then clean up any caller-owned processes
+/// after the group stops and before joining the output reader.
 pub fn supervise_with_diagnostics(
     mut cmd: Command,
     opts: &Opts,
     cancelled: &dyn Fn() -> bool,
     diagnose: impl FnOnce(u32),
+    cleanup: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<Supervised> {
     let (reader, writer) = io::pipe()?;
     cmd.stdin(Stdio::null())
@@ -146,8 +148,9 @@ pub fn supervise_with_diagnostics(
         || Ok(cancelled()),
         diagnose,
     );
-    let output = reader.join().unwrap_or_default();
+    cleanup()?;
     let result = result?;
+    let output = reader.join().unwrap_or_default();
     Ok(Supervised {
         code: result.status.code(),
         signal: platform::exit_signal(&result.status),

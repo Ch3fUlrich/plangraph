@@ -3,7 +3,7 @@ use crate::native_writer::REVIEW_CLEANUP_UNCONFIRMED;
 use pg_worker_core::stall::{supervise_redirected, Opts};
 use serde_json::Value;
 use std::{
-    io::{Read, Seek},
+    io::{self, Read, Seek},
     path::Path,
     process::Stdio,
     thread,
@@ -37,10 +37,28 @@ fn terminal(record: &Value) -> bool {
         )
 }
 
+pub(super) struct ReviewRequestError {
+    pub message: String,
+    pub admission_unknown: bool,
+}
+
+impl From<io::Error> for ReviewRequestError {
+    fn from(error: io::Error) -> Self {
+        Self {
+            message: error.to_string(),
+            admission_unknown: false,
+        }
+    }
+}
+
 impl Host {
-    pub(super) fn review_request(&self, clone: &Path, args: &[&str]) -> Result<Value, String> {
-        let mut stdout = tempfile::tempfile().map_err(|e| e.to_string())?;
-        let mut stderr = tempfile::tempfile().map_err(|e| e.to_string())?;
+    pub(super) fn review_request(
+        &self,
+        clone: &Path,
+        args: &[&str],
+    ) -> Result<Value, ReviewRequestError> {
+        let mut stdout = tempfile::tempfile()?;
+        let mut stderr = tempfile::tempfile()?;
         let mut command = self.command(&self.review_cli[0]);
         command
             .args(&self.review_cli[1..])
@@ -49,14 +67,14 @@ impl Host {
             .args(args)
             .current_dir(clone)
             .stdin(Stdio::null())
-            .stdout(stdout.try_clone().map_err(|e| e.to_string())?)
-            .stderr(stderr.try_clone().map_err(|e| e.to_string())?);
+            .stdout(stdout.try_clone()?)
+            .stderr(stderr.try_clone()?);
         let timeout = match args.first() {
             Some(&"status") => Duration::from_secs(5),
             Some(&"cancel") => CANCEL_REQUEST_TIMEOUT,
             _ => Duration::from_secs(60),
         };
-        supervise_redirected(
+        let status = supervise_redirected(
             command,
             &Opts {
                 timeout: Some(timeout),
@@ -65,18 +83,32 @@ impl Host {
             },
             || Ok(false),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| ReviewRequestError {
+            admission_unknown: !matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+            ),
+            message: error.to_string(),
+        })?;
+        // A signal may interrupt the CLI after it has launched a review.
+        let admission_unknown = status.success() || status.code().is_none();
         let mut result = String::new();
-        stdout.rewind().map_err(|e| e.to_string())?;
         stdout
-            .read_to_string(&mut result)
-            .map_err(|e| e.to_string())?;
+            .rewind()
+            .and_then(|()| stdout.read_to_string(&mut result))
+            .map_err(|error| ReviewRequestError {
+                message: error.to_string(),
+                admission_unknown,
+            })?;
         printed_record(&result).ok_or_else(|| {
             let mut error = String::new();
             let _ = stderr
                 .rewind()
                 .and_then(|()| stderr.read_to_string(&mut error));
-            format!("review run returned no record: {}", error.trim())
+            ReviewRequestError {
+                message: format!("review run returned no record: {}", error.trim()),
+                admission_unknown,
+            }
         })
     }
 
@@ -88,7 +120,7 @@ impl Host {
         let id = record["run_id"]
             .as_str()
             .filter(|id| pg_worker_core::run::record::valid_run_id(id))
-            .ok_or("review returned invalid run id")?
+            .ok_or_else(|| format!("{REVIEW_CLEANUP_UNCONFIRMED}: review returned invalid run id; checkout retained"))?
             .to_owned();
         self.finish_review_in(checkout, &mut record, &id, Duration::from_secs(3300))?;
         Ok(record)
@@ -133,7 +165,9 @@ impl Host {
                 response if verb == "status" => {
                     status_errors += 1;
                     if status_errors >= STATUS_ERROR_LIMIT {
-                        let detail = response.err().unwrap_or_else(|| "unexpected run id".into());
+                        let detail = response
+                            .err()
+                            .map_or_else(|| "unexpected run id".into(), |error| error.message);
                         return Err(format!(
                             "{REVIEW_CLEANUP_UNCONFIRMED}: {id}: {detail}; checkout retained"
                         ));

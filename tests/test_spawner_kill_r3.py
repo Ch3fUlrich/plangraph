@@ -25,8 +25,15 @@ def _job():
     return type('J', (), {'events': [], 'survivors': [], 'status': 'running', 'exit_code': 0})()
 
 
-def _sleeper():
-    return subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)
+def _sleeper(*, ignore_term=False):
+    code = 'import time; time.sleep(60)'
+    if not ignore_term:
+        return subprocess.Popen([sys.executable, '-c', code], start_new_session=True)
+    code = "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('ready', flush=True); " + code
+    process = subprocess.Popen([sys.executable, '-c', code], stdout=subprocess.PIPE, start_new_session=True)
+    with process.stdout:
+        assert process.stdout.readline() == b'ready\n'
+    return process
 
 
 def _gone(pid):
@@ -55,7 +62,7 @@ def test_v1_dead_root_unproven_ownership_reports_surviving_group_member():
 
 @posix
 def test_v2_kill_recorded_proves_root_by_persisted_start_and_kills_it():
-    p = _sleeper()
+    p = _sleeper(ignore_term=True)
     try:
         survivors = asyncio.run(SpawnerRunner().kill_recorded(p.pid, proc_kill.root_identity(p.pid)))
         p.wait(timeout=10)
@@ -93,7 +100,7 @@ def test_v2_cancel_after_restart_with_live_unprovable_root_is_kill_incomplete_no
 
 @posix
 def test_v2_pid_reuse_stale_owned_entry_never_refuses_the_real_kill():
-    p = _sleeper()
+    p = _sleeper(ignore_term=True)
     try:
         async def run():
             runner = SpawnerRunner()

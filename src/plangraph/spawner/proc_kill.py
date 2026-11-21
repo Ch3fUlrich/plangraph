@@ -358,78 +358,7 @@ def record_oom_envelope(events, envelope):
     if not any(isinstance(old, dict) and old.get('event') == name for old in events):
         events.append({'event': name})
 
-
-def _test_watchdog():
-    """Monitor a pytest process over stdin, independently of its GIL."""
-    import queue
-    import signal
-    import subprocess
-    import threading
-
-    parent = os.getppid()
-    token = _stat(parent) if sys.platform.startswith('linux') else None
-    events = queue.Queue()
-
-    def read_events():
-        for line in sys.stdin:
-            events.put(json.loads(line))
-        events.put(None)
-
-    threading.Thread(target=read_events, daemon=True).start()
-    while (event := events.get()) is not None:
-        if not event:
-            continue
-        while event:
-            node, deadline = event
-            try:
-                event = events.get(timeout=max(0, deadline - time.monotonic()))
-            except queue.Empty:
-                break
-        if event is None:
-            return
-        if not event:
-            continue
-
-        os.write(2, (f'HUNG {node}\n').encode('utf-8', 'backslashreplace'))
-        if token is not None and alive(parent, token[4]):
-            # Pytest adopts double-forked descendants as a subreaper. Freeze
-            # their tree before killing its root so they cannot race reparenting.
-            os.kill(parent, signal.SIGSTOP)
-            stopped = {parent: token[4]}
-            freeze_deadline = time.monotonic() + 0.25
-            while True:
-                procs = _scan()
-                new = _descendants(procs, {parent}, {os.getpid()}).items() - stopped.items()
-                for pid, start in new:
-                    if alive(pid, start):
-                        try:
-                            os.kill(pid, signal.SIGSTOP)
-                        except ProcessLookupError:
-                            pass
-                stopped.update(new)
-                if not new and (time.monotonic() >= freeze_deadline or all(
-                    pid not in procs or procs[pid][4] != start or procs[pid][0] in 'TtZX'
-                    for pid, start in stopped.items()
-                )):
-                    break
-                time.sleep(0.01)
-            for pid, start in reversed(tuple(stopped.items())):
-                if alive(pid, start):
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-        elif os.name == 'nt':
-            subprocess.run(['taskkill', '/F', '/T', '/PID', str(parent)], timeout=10)
-        elif sys.platform != 'linux' and os.getppid() == parent:
-            os.kill(parent, signal.SIGKILL)
-        return
-
-
 if __name__ == '__main__':
-    if sys.argv[1:] == ['--test-watchdog']:
-        _test_watchdog()
-        sys.exit(0)
     if len(sys.argv) < 3:
         os.write(2, b'oom wrapper: expected score path and command\n')
         sys.exit(2)

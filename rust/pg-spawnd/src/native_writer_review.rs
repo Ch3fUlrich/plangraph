@@ -270,11 +270,17 @@ impl Host {
         ]);
         // A lost admission reply cannot prove the review stopped. Keep its checkout.
         checkout.removable = false;
-        let admitted = self.review_request(clone, &args).map_err(|err| {
-            format!(
-                "{}: {err}; checkout retained",
-                crate::native_writer::REVIEW_CLEANUP_UNCONFIRMED
-            )
+        let admitted = self.review_request(clone, &args).map_err(|error| {
+            if error.admission_unknown {
+                format!(
+                    "{}: {}; checkout retained",
+                    crate::native_writer::REVIEW_CLEANUP_UNCONFIRMED,
+                    error.message
+                )
+            } else {
+                checkout.removable = true;
+                error.message
+            }
         })?;
         let record = self.finish_review(checkout, admitted)?;
         let text = review_run_text(&self.state, &record)?;

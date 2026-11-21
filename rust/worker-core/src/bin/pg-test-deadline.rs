@@ -1,4 +1,7 @@
 //! Cargo runner for libtest binaries. Give each case its own deadline and process group.
+#[path = "test_deadline/children.rs"]
+mod children;
+
 use pg_worker_core::stall::{supervise, supervise_with_diagnostics, Opts};
 use std::{
     env,
@@ -141,6 +144,7 @@ fn run() -> io::Result<bool> {
         .and_then(OsStr::to_str)
         .unwrap_or("libtest");
     let suite = stem.rsplit_once('-').map_or(stem, |(name, _)| name);
+    children::adopt()?;
     let mut failures = 0;
     for (index, case) in listed.iter().enumerate() {
         let mut cmd = Command::new(&binary);
@@ -162,10 +166,16 @@ fn run() -> io::Result<bool> {
         }
         cmd.arg(case);
         debug_child(&mut cmd);
-        let result = supervise_with_diagnostics(cmd, &opts, &|| false, |pid| {
-            eprintln!("HUNG {suite}::{case}");
-            stack(pid);
-        })?;
+        let result = supervise_with_diagnostics(
+            cmd,
+            &opts,
+            &|| false,
+            |pid| {
+                eprintln!("HUNG {suite}::{case}");
+                stack(pid);
+            },
+            children::reap,
+        )?;
         if result.timed_out || result.code != Some(0) {
             failures += 1;
             io::stderr().write_all(&result.output)?;

@@ -165,7 +165,7 @@ def pytest_runtest_protocol(item, nextitem):
     if not hasattr(config, '_pg_deadline_watchdog'):
         if sys.platform.startswith('linux'):
             config._pg_previous_subreaper = _test_subreaper()
-        helper = Path(__file__).resolve().parents[1] / 'src/plangraph/spawner/proc_kill.py'
+        helper = Path(__file__).resolve()
         config._pg_deadline_watchdog = subprocess.Popen(
             [sys.executable, str(helper), '--test-watchdog'],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=config._pg_deadline_stderr,
@@ -193,3 +193,79 @@ def pytest_unconfigure(config):
         _test_subreaper(config._pg_previous_subreaper)
     if hasattr(config, '_pg_deadline_stderr'):
         os.close(config._pg_deadline_stderr)
+
+
+def _test_watchdog():
+    """Monitor a pytest process over stdin, independently of its GIL."""
+    import json
+    import queue
+    import signal
+    import threading
+    import time
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+    from plangraph.spawner.proc_kill import _descendants, _scan, _stat, alive
+
+    parent = os.getppid()
+    token = _stat(parent) if sys.platform.startswith('linux') else None
+    events = queue.Queue()
+
+    def read_events():
+        for line in sys.stdin:
+            events.put(json.loads(line))
+        events.put(None)
+
+    threading.Thread(target=read_events, daemon=True).start()
+    while (event := events.get()) is not None:
+        if not event:
+            continue
+        while event:
+            node, deadline = event
+            try:
+                event = events.get(timeout=max(0, deadline - time.monotonic()))
+            except queue.Empty:
+                break
+        if event is None:
+            return
+        if not event:
+            continue
+
+        os.write(2, (f'HUNG {node}\n').encode('utf-8', 'backslashreplace'))
+        if token is not None and alive(parent, token[4]):
+            # Pytest adopts double-forked descendants as a subreaper. Freeze
+            # their tree before killing its root so they cannot race reparenting.
+            os.kill(parent, signal.SIGSTOP)
+            stopped = {parent: token[4]}
+            freeze_deadline = time.monotonic() + 0.25
+            while True:
+                procs = _scan()
+                new = _descendants(procs, {parent}, {os.getpid()}).items() - stopped.items()
+                for pid, start in new:
+                    if alive(pid, start):
+                        try:
+                            os.kill(pid, signal.SIGSTOP)
+                        except ProcessLookupError:
+                            pass
+                stopped.update(new)
+                if not new and (time.monotonic() >= freeze_deadline or all(
+                    pid not in procs or procs[pid][4] != start or procs[pid][0] in 'TtZX'
+                    for pid, start in stopped.items()
+                )):
+                    break
+                time.sleep(0.01)
+            for pid, start in reversed(tuple(stopped.items())):
+                if alive(pid, start):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        elif os.name == 'nt':
+            subprocess.run(['taskkill', '/F', '/T', '/PID', str(parent)], timeout=10)
+        elif sys.platform != 'linux' and os.getppid() == parent:
+            os.kill(parent, signal.SIGKILL)
+        return
+
+
+
+if __name__ == '__main__' and sys.argv[1:] == ['--test-watchdog']:
+    _test_watchdog()

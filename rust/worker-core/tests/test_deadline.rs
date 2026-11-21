@@ -1,6 +1,11 @@
 #![cfg(target_os = "linux")]
 
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 #[test]
 fn pytest_hang_names_case_dumps_stack_and_kills_child() {
@@ -143,8 +148,10 @@ fn run_rust_hang(debugger_dir: Option<&Path>) -> String {
 #[ignore = "subprocess fixture driven by the timeout tests"]
 fn hang_fixture() {
     let path = std::env::var_os("PG_HANG_FIXTURE").expect("fixture requires a PID file");
-    let mut child = Command::new("sh")
-        .args(["-c", "trap '' TERM INT; exec sleep 60"])
+    let mut child = Command::new("setsid")
+        .args(["sh", "-c", "trap '' TERM INT; exec sleep 60"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .unwrap();
     fs::write(path, child.id().to_string()).unwrap();
