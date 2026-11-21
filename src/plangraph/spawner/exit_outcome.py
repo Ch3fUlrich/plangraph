@@ -332,6 +332,12 @@ def terminal_reason(record, job=None):
             if named + ':' in diagnostic:
                 record['reason'] = named
                 return
+    if record.get('role') == 'review' and record.get('status') == 'failed' and leg.get('harness') == 'agy':
+        from .opencode_answer import AGY_MISSING_RESULT
+        stderr = real[-1].get('stderr_tail') or ''
+        if AGY_MISSING_RESULT in stderr.splitlines():
+            record.update(reason='no_verdict', review_status='no_verdict', review_reason=AGY_MISSING_RESULT)
+            return
     if (record.get('role') == 'review' and record.get('status') == 'completed'
             and record.get('exit_code') in (None, 0)):
         from plangraph.review.verdict import judge

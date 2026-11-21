@@ -11,12 +11,14 @@ import subprocess
 import tempfile
 import time
 
+from plangraph.planner.legs import REVIEW_HYDROGEN
 from plangraph.routing_support import leg_state
 from plangraph.routing_support.leg_state import leg_key as key
 from plangraph.routing_errors import ParameterRefused
 
 PROMPT = 'Create a file ok.txt containing the single word ok, then git add it and git commit -m probe. Do nothing else.'
-REVIEW_PROMPT = 'Reply with the single word OK. Do nothing else.'
+REVIEW_PROMPT = ('Reply with the single word OK. '
+                 'Answer in plain text in this reply only; do not create a plan file or any other file.')
 
 #: The probe repo and its child commit ignore the operator's global/system git
 #: config (M11): a host commit.gpgsign=true or global core.hooksPath must never
@@ -268,14 +270,16 @@ async def probe(runner, leg, *, timeout_s=None, store=None, role=None):
             if review_mode:
                 exhausted = any(e.get('event') == 'opencode_reasoning_exhausted'
                                 for e in (getattr(job, 'events', None) or ()))
-                answered = bool((getattr(job, 'stdout', None) or '').strip())
+                answer = (getattr(job, 'stdout', None) or '').strip()
+                answered = answer == 'OK' if getattr(leg, 'id', None) == REVIEW_HYDROGEN else bool(answer)
                 ok = (getattr(job, 'status', None) == 'completed'
                       and not getattr(job, 'exit_code', 0)
                       and answered and not exhausted)
                 reason = ('' if ok else
                           'reasoning_output_limit' if exhausted else
                           f'exit {job.exit_code}' if getattr(job, 'exit_code', None) else
-                          'empty output' if not answered else
+                          'empty output' if not answer else
+                          'unexpected review answer' if not answered else
                           str(getattr(job, 'status', 'failed')))
             else:
                 try:
@@ -481,7 +485,8 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
     for leg in SPAWNABLE_LEGS:
         if leg_active(leg) and (leg.id in ids or (all_writers and leg in DEFAULT_LEGS and
                                                   any(r in leg.roles for r in ('implement', 'fix')))):
-            add(leg)
+            # A named Hydrogen probe checks the D-6550 review seat. Writer sweeps still probe commits.
+            add(leg, review=leg.id == REVIEW_HYDROGEN and leg.id in ids and not all_writers and role is None)
     if all_reviewers:
         for leg in routed_review_legs():
             add(leg, review=True)
@@ -500,7 +505,7 @@ async def probe_many(runner, legs=(), all_writers=False, timeout=None, *, all_re
                                 skipped='limited',
                                 reset_at=(status.get('evidence') or {}).get('reset_at')))
             continue
-        # Review mode only for legs added by the reviewer selection; named legs keep the writer path.
+        # Honor the recorded review selection for dual-role legs.
         probe_role = 'review' if role == 'review' or leg.id in review_ids else role
         probe_kwargs = {'role': probe_role} if probe_role is not None else {}
         results.append(dict(id=leg.id, **await probe(runner, leg, timeout_s=timeout, store=state, **probe_kwargs)))

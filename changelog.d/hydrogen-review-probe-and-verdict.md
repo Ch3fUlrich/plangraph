@@ -1,0 +1,1 @@
+- Probe the named Hydrogen review seat through its isolated review transport. Ask for a plain-text reply, require the probe answer, and record a missing result as no verdict with its diagnostic.

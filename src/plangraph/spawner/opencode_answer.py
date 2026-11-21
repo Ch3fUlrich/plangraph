@@ -116,6 +116,9 @@ def cap_reasoning(env, model, *, refuse=False, thinking_off=False, reasoning_cap
         return False
 
 
+AGY_MISSING_RESULT = 'agy_stream_missing_result'
+
+
 def native_answer(job, stdout, stderr, exit_code):
     """Decode only agy's explicitly selected stream transport, failing closed."""
     if not (job.command and job.command[0] == 'agy' and '--input-format' in job.command
@@ -130,7 +133,7 @@ def native_answer(job, stdout, stderr, exit_code):
         if isinstance(event, dict) and event.get('event') == 'result':
             result = event.get('result')
     if not isinstance(result, dict):
-        return '', stderr + '\nagy_stream_missing_result', exit_code or 1
+        return '', '\n'.join(filter(None, (stderr, AGY_MISSING_RESULT))), exit_code or 1
     response = result.get('response')
     if result.get('status') != 'SUCCESS' or not isinstance(response, str):
         error = result.get('error') or 'invalid or unsuccessful result'
