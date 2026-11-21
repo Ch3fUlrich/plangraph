@@ -77,13 +77,10 @@ fn collect(
                     base.join(target)
                 };
                 // Symlinks in the directory part resolve physically (`alias/..` is the alias
-                // target's parent); the final name stays as named. A dangling directory part
-                // falls back to lexical `..` handling.
+                // target's parent); the final name stays as named. Where a directory is missing
+                // the rest is read lexically.
                 let lexical_path = lexical(&joined);
-                let named = match (joined.parent().map(Path::canonicalize), joined.file_name()) {
-                    (Some(Ok(parent)), Some(file)) => parent.join(file),
-                    _ => lexical_path.clone(),
-                };
+                let named = resolve_directories(&joined);
                 let exact = words::is_whole_word_path(&named.to_string_lossy());
                 // Guesses that protect too: the lexical reading, and where a final link leads.
                 let mut guesses = vec![lexical_path];
@@ -133,6 +130,32 @@ fn collect(
         active.pop();
     }
     Ok(())
+}
+
+/// `path` with every directory component resolved physically (symlinks followed, so `..` after a
+/// link is the link target's parent) and the last component left as named; components below a
+/// missing directory stay literal.
+fn resolve_directories(path: &Path) -> PathBuf {
+    let parts: Vec<_> = path.components().collect();
+    let mut out = PathBuf::new();
+    for (index, part) in parts.iter().enumerate() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(name) => {
+                out.push(name);
+                if index + 1 < parts.len() {
+                    if let Ok(canonical) = out.canonicalize() {
+                        out = canonical;
+                    }
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// `.` and `..` resolved without touching the file system (a dangling link has no canonical form).
@@ -195,5 +218,7 @@ pub fn unit_names(refs: &[UnitRef], tree: &Path, canonical: &Path) -> Vec<String
 
 mod words;
 
+#[cfg(all(test, unix))]
+mod link_tests;
 #[cfg(all(test, unix))]
 mod tests;
