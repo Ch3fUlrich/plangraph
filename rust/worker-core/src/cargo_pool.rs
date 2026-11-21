@@ -20,7 +20,7 @@ pub use crate::cargo_pool_telemetry::{
 pub use crate::cargo_pool_trim::enforce_pool_cap;
 use crate::cargo_pool_trim::slot_size;
 
-pub const DEFAULT_CARGO_TARGET_CAP_GB: u64 = 20;
+pub const DEFAULT_CARGO_TARGET_CAP_GB: u64 = 12;
 pub const DEFAULT_POOL_SLOTS: usize = 3;
 const GIB: u64 = 1024 * 1024 * 1024;
 

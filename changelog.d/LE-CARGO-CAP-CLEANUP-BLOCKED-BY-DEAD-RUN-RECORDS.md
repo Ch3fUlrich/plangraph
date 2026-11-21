@@ -1,1 +1,1 @@
-Treat the Cargo target cap as an admission limit rather than stopping running writers on a healthy disk. An emergency disk-floor breach still stops running work.
+Dead-pid `timed_out`, `stalled` and `running` records no longer keep the shared Cargo cache busy, so an over-cap idle cache is cleaned before admission; `ps` marks a dead-pid `running` record `stale`.

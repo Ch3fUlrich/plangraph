@@ -280,8 +280,7 @@ def test_cargo_cap_binds_building_roles_only_and_names_its_path(tmp_path, monkey
     if refused:
         assert reason.startswith('cargo_target_cap: measured 13.24 GB') and str(target) in reason
     assert (target / 'artifact').exists()
-    # The cap is an admission limit: an admitted run is never stopped for the cache size.
-    assert h.running_disk_refusal(str(tmp_path / 'checkout')) is None
+    assert (h.running_disk_refusal(str(tmp_path / 'checkout'), role=role) is not None) == refused
 
 
 def test_review_never_measures_the_cargo_target(tmp_path, monkeypatch):
@@ -294,7 +293,7 @@ def test_review_never_measures_the_cargo_target(tmp_path, monkeypatch):
     monkeypatch.setattr(h, 'cargo_target_size_gb', unreadable)
     service = SimpleNamespace(ps=lambda: {'runs': []})
     assert h.local_disk_refusal(tmp_path / 'checkout', service, role='review') is None
-    assert h.running_disk_refusal(str(tmp_path / 'checkout')) is None
+    assert h.running_disk_refusal(str(tmp_path / 'checkout'), role='review') is None
     assert 'unavailable' in h.local_disk_refusal(tmp_path / 'checkout', service, role='implement')
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '0')
     assert h.local_disk_refusal(tmp_path / 'checkout', service, role='review') is None
@@ -607,18 +606,6 @@ def test_local_work_drives_branch_admits_selected_drive_and_records_alarm(tmp_pa
     reason = h.local_disk_refusal(tmp_path / 'checkout', service)
     assert reason == 'disk_low: free 4.00 GB, floor 5 GB'
     assert json.loads((state / 'disk-hygiene.json').read_text())['alarm'] is True
-
-
-def test_cargo_cap_refusal_binds_a_standalone_build_not_a_running_run(tmp_path, monkeypatch):
-    from plangraph.spawner import host_ready as h
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(tmp_path / 'shared'))
-    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
-    monkeypatch.setattr(h, 'disk_free_gb', lambda path: 100)
-    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 11.9)
-    assert h.cargo_cap_refusal() is None
-    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 12.0)
-    assert h.cargo_cap_refusal().startswith('cargo_target_cap: measured 12.00 GB in ')
-    assert h.running_disk_refusal(str(tmp_path / 'checkout')) is None
 
 
 def test_readiness_work_drives_reach_the_placement_decision(registry, monkeypatch):

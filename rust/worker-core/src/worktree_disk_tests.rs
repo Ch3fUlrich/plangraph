@@ -52,7 +52,7 @@ fn rust_directory_link_does_not_delete_external_target() {
 // Real concurrent writer processes, driven through the production Python guard.
 // The subprocess bridge is necessary until the spawner's Python file is ported.
 #[test]
-fn parallel_writers_are_stopped_at_emergency_floor_and_idle_cache_is_reclaimed() {
+fn parallel_writers_are_stopped_at_shared_cap_and_idle_cache_is_reclaimed() {
     let root = tempfile::tempdir().unwrap();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = std::process::Command::new("python3")
@@ -105,10 +105,7 @@ async def main():
         runner._cargo_leases[key] = h.cargo_lease()
         tasks.append(asyncio.create_task(h.collect_with_disk_guard(runner, key, proc)))
     try:
-        real_disk_free = h.disk_free_gb
-        h.disk_free_gb = lambda path: 1.99
         await asyncio.wait_for(asyncio.gather(*tasks), 15)
-        h.disk_free_gb = real_disk_free
         await asyncio.gather(*(proc.wait() for proc in processes))
         assert not runner._cargo_leases, runner._cargo_leases
         assert not any(j.survivors for j in runner.jobs.values())
@@ -155,7 +152,7 @@ asyncio.run(main())
         serde_json::json!(["failed", "failed", "failed"])
     );
     for reason in result["reasons"].as_array().unwrap() {
-        assert!(reason.as_str().unwrap().starts_with("disk_low:"));
+        assert!(reason.as_str().unwrap().starts_with("cargo_target_cap:"));
     }
     assert!(result["busy"]
         .as_str()
@@ -197,7 +194,7 @@ h.cargo_target_size_gb = lambda path: 0
 boundary = h.running_disk_refusal('.')
 def unreadable(path):
     raise PermissionError()
-h.disk_free_gb = unreadable
+h.cargo_target_size_gb = unreadable
 error = h.running_disk_refusal('.')
 print(json.dumps([low, boundary, error]))
 "#,
@@ -263,7 +260,7 @@ async def case(cancel):
         verified.append(True)
     run_watchdog.collect = collect
     r.reap = reap
-    h.running_disk_refusal = lambda cwd: 'disk_low: test'
+    h.running_disk_refusal = lambda cwd, role='implement': 'cargo_target_cap: test'
     runner = r.SpawnerRunner()
     job = r.JobInfo('j', 'running', 'task', 'test', cwd='.')
     runner.jobs['j'] = job

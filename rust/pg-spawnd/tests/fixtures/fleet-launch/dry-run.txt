@@ -1,0 +1,1 @@
+cd $ROOT/work && CLAUDE_CODE_AUTO_COMPACT_WINDOW=$WINDOW claude --bg --strict-mcp-config --mcp-config $ROOT/mcp.json --remote-control $ROLE-0000 -n $ROLE-0000 --model sonnet --effort high --permission-mode bypassPermissions --settings $SETTINGS --disallowed-tools Artifact,SendFeedback,Workflow,ReportFindings$DENY_QUESTION --append-system-prompt <881 chars> <14 chars>

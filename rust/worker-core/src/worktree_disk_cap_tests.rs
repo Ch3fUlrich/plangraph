@@ -1,20 +1,6 @@
 use super::disk_bridge;
 
 #[test]
-fn runtime_guard_leaves_over_cap_builds_running_when_disk_is_healthy() {
-    let result = disk_bridge(
-        r#"
-import json
-from plangraph.spawner import host_ready as h
-h.cargo_target_size_gb = lambda target: 100
-h.disk_free_gb = lambda path: 41
-print(json.dumps(h.running_disk_refusal('.')))
-"#,
-    );
-    assert!(result.is_null(), "{result}");
-}
-
-#[test]
 fn cap_cleanup_ignores_dead_records_and_ps_marks_dead_running_record_stale() {
     let result = disk_bridge(
         r#"

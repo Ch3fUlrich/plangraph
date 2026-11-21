@@ -17,8 +17,9 @@ import time
 import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, disk_free_gb,
-                                          cargo_cap_refusal, running_disk_refusal, shared_cargo_target)
+from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb,
+                                          disk_free_gb, reclaim_cargo_target,
+                                          running_disk_refusal, shared_cargo_target)
 from plangraph.spawner.overflow import available_memory_mb
 
 CHECK_TIMEOUT = 60
@@ -78,7 +79,7 @@ def scaled_test_timeout(count):
 
 
 def check_timeout(command, cwd=None, env=None):
-    if command[:2] in (["cargo", "clippy"], ["cargo", "test"]):
+    if command[:2] in (["cargo", "clippy"], ["cargo", "test"], ["cargo", "build"]):
         return RUST_TIMEOUT
     if is_affected_step(command):
         return scaled_test_timeout(planned_paths(command, cwd, env))
@@ -438,6 +439,112 @@ def rust_target_env(env, cleanup):
     return out
 
 
+def policy_build_command(root):
+    """The one build of pg-policy: the policy step runs this binary, never a cold cargo run."""
+    manifest = Path(root) / 'rust/Cargo.toml'
+    if not manifest.is_file():
+        return None
+    return ['cargo', 'build', '--quiet', '--locked', '--message-format=json',
+            '--manifest-path', str(manifest), '-p', 'pg-policy']
+
+
+def policy_artifact(output):
+    """The pg-policy executable Cargo reports for this checkout, and the human-readable rest."""
+    executable, text = None, []
+    for line in output.splitlines():
+        try:
+            message = json.loads(line) if line.startswith('{') else None
+        except ValueError:
+            message = None
+        if message is None:
+            text.append(line)
+        elif message.get('reason') == 'compiler-message':
+            text.append(message.get('message', {}).get('rendered', ''))
+        elif (message.get('reason') == 'compiler-artifact' and message.get('executable')
+              and message.get('target', {}).get('name') == 'pg-policy'
+              and 'bin' in message['target'].get('kind', [])):
+            executable = message['executable']
+    return executable, ''.join(line + '\n' for line in text if line)
+
+
+def policy_target(root):
+    """A Cargo target of its own for pg-policy, inside the shared target and keyed by what the binary is built from.
+
+    target/debug/pg-policy of the shared target is one file that any checkout's build may replace, so a
+    checkout's own artifact cannot be told from another's there. Equal sources share one directory
+    (a warm build for every later clone); different sources never do."""
+    import hashlib
+    rust, digest = Path(root) / 'rust', hashlib.sha256()
+    crate = rust / 'pg-policy'
+    # Build output under the crate is not source; the exclusion is relative to the crate, so a
+    # checkout that lives under a directory named target still hashes its sources.
+    names = sorted(p for p in crate.rglob('*')
+                   if p.is_file() and 'target' not in p.relative_to(crate).parts)
+    names += [p for p in (rust / 'Cargo.toml', rust / 'Cargo.lock', Path(root) / 'rust-toolchain.toml',
+                          rust / 'rust-toolchain.toml') if p.is_file()]
+    for path in names:
+        digest.update(path.relative_to(root).as_posix().encode() + b'\0' + path.read_bytes() + b'\0')
+    return shared_cargo_target() / 'policy-bin' / digest.hexdigest()[:16]
+
+
+def stage_policy_binary(executable, cleanup):
+    """Private copy of the built pg-policy, taken under the build lease."""
+    private = tempfile.mkdtemp(prefix='preflight-policy-')
+    cleanup.append(private)
+    return shutil.copy2(executable, Path(private) / Path(executable).name)
+
+
+def build_policy(root, env, cleanup):
+    """Build pg-policy and stage this checkout's own artifact while the shared lease is held.
+
+    The build target is keyed by the sources (policy_target), so no other checkout's build can
+    replace this artifact, and cleanup needs the exclusive lease, so the copy happens before release.
+    Returns (code, text, staged binary or None); an unusable lease is a failed build named in the
+    text, so the independent policy checks still run."""
+    try:
+        lease = cargo_lease()
+    except OSError as exc:
+        return 1, f'cargo lease unavailable: {type(exc).__name__}: {exc}\n', None
+    with lease:
+        refusal = running_disk_refusal(root)
+        if refusal:
+            return 1, refusal + '\n', None
+        keydir = policy_target(root)
+        code, output = run(policy_build_command(root), root, dict(env, CARGO_TARGET_DIR=str(keydir)))
+        executable, text = policy_artifact(output)
+        binary = None
+        if not code:
+            try:
+                binary = stage_policy_binary(executable, cleanup) if executable else None
+            except OSError:
+                binary = None
+            try:
+                os.utime(keydir)  # a reused key stays newer than the prune window
+            except OSError:
+                pass
+            if binary is None:
+                code, text = 1, text + 'pg-policy build reported no usable executable\n'
+        refusal = running_disk_refusal(root)
+        if refusal:
+            return 1, text + refusal + '\n', None
+        return code, text, binary
+
+
+# A live build holds a shared lease on the target; trimming waits this long, then skips.
+TRIM_WAIT_SECONDS = 5.0
+
+
+def trim_shared_target(root):
+    """Before any build: cap the shared target and prune its old cli-tests builds (LE-PUSH-WARM-TARGET-UNCAPPED)."""
+    target = shared_cargo_target()
+    try:
+        if target.exists():
+            reclaim_cargo_target(target, cargo_target_cap_gb(), root,
+                                 wait=TRIM_WAIT_SECONDS, identified=True)
+    except (OSError, ValueError) as exc:
+        print(f"cargo target trim skipped: {exc}", flush=True)
+
+
 def main(argv=None, root=None):
     cleanup = []
     try:
@@ -481,11 +588,11 @@ def _main(argv, root, cleanup):
             return run(command, cwd, command_env)
         # Share the spawner's target, cap checks and cleanup lease.
         with cargo_lease():
-            refusal = running_disk_refusal(root) or cargo_cap_refusal()
+            refusal = running_disk_refusal(root)
             if refusal:
                 return 1, refusal + '\n'
             code, output = run(command, cwd, command_env)
-            refusal = running_disk_refusal(root) or cargo_cap_refusal()
+            refusal = running_disk_refusal(root)
             return (1, output + refusal + '\n') if refusal else (code, output)
 
     scrub = python("split/scrub_check.py", ".", "--base", args.scrub_base or args.base, "--head", args.head,
@@ -511,6 +618,7 @@ def _main(argv, root, cleanup):
                                    "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt"))]),
                 ("rust", None), ("tests", [] if args.fast else [tests])]
     summary, exit_code, stopped, scrub_bad = [], 0, False, False
+    trim_shared_target(root)
     for family, commands in families:
         start = time.monotonic()
         status = "SKIP"
@@ -530,6 +638,15 @@ def _main(argv, root, cleanup):
                 if family == "tests" and commands:
                     family_env = test_environment(root, env)
                 failed = []  # policy runs every check and reports all failures
+                if family == "policy" and policy_build_command(root):
+                    # Outside the per-check bound; a cold compile must not fail a green diff.
+                    code, output, binary = build_policy(root, env, cleanup)
+                    print(output, end="", flush=True)
+                    if binary:
+                        family_env = dict(family_env, PG_POLICY_BIN=binary)
+                    else:
+                        failed.append(("FAIL", "pg-policy build", first_error(output)))
+                        commands = [c for c in commands if Path(c[1]).name != "check_new_code_lang.py"]
                 for command in commands:
                     cwd = root / "rust" if family == "rust" else root
                     command_env = family_env

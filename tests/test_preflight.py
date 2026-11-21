@@ -1,5 +1,7 @@
 """Hermetic preflight orchestration, without real policy tools or cargo."""
 import importlib.util
+import json
+import tempfile
 from pathlib import Path
 import os
 import re
@@ -42,6 +44,12 @@ def fake_runner(monkeypatch, failure=None, output="policy rejected\n"):
     def run(command, cwd, env):
         calls.append((command, cwd, env))
         name = Path(command[1]).name if command[0] != "cargo" else "cargo"
+        if command[:2] == ["cargo", "build"]:
+            # The policy step's pg-policy build: Cargo reports the executable it built.
+            built = Path(tempfile.mkdtemp(prefix="fake-policy-")) / "pg-policy"
+            built.write_text("")
+            return 0, json.dumps({"reason": "compiler-artifact", "executable": str(built),
+                                  "target": {"name": "pg-policy", "kind": ["bin"]}}) + "\n"
         return (1, output) if name == failure else (0, "")
 
     monkeypatch.setattr(preflight, "run", run)
