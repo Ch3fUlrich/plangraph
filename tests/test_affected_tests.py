@@ -1,4 +1,5 @@
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -398,6 +399,8 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setenv('GIT_DIR', 'caller-binding')
+    installed = tmp_path / 'installed'
+    monkeypatch.setenv('PYTHONPATH', str(installed))
     monkeypatch.setattr(sel.subprocess, 'check_output', lambda *a, **k: 'GIT_DIR\n' if '--local-env-vars' in a[0] else b'')
     monkeypatch.setattr(sel.subprocess, 'run', fake_run)
     monkeypatch.chdir(tmp_path)
@@ -413,6 +416,8 @@ def test_run_invocation_passes_dist_loadgroup(tmp_path, monkeypatch):
     rc = sel.main(root=tmp_path)
     assert rc == 0
     assert "GIT_DIR" not in argv["env"]
+    assert argv["env"]["PYTHONPATH"].split(os.pathsep)[-2:] == [
+        str(tmp_path / 'src'), str(installed)]
     cmd = argv["cmd"]
     assert "--dist" in cmd
     assert cmd[cmd.index("--dist") + 1] == "loadgroup"

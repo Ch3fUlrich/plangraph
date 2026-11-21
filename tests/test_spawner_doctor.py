@@ -5,6 +5,7 @@ import http.server
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import threading
 from types import SimpleNamespace
@@ -413,6 +414,75 @@ def test_doctor_probe_passes_review_role(isolated, monkeypatch):
     result = run(d.diagnose(probe=True))
     assert result['ok'], result
     assert calls == [(calls[0][0], None), (calls[1][0], 'review')]
+
+
+def test_memory_probe_is_opt_in(isolated, monkeypatch, capsys):
+    original = d.subprocess.run
+    calls = []
+    success = b'HealthOk AuthenticatedReadOk plangraph HTTP 0.13'
+
+    def local_run(args, **kwargs):
+        if args[0] != 'og-memory':
+            return original(args, **kwargs)
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0, success + b'\n', b'')
+
+    monkeypatch.setattr(d.subprocess, 'run', local_run)
+    assert d.main(['--json']) == 0
+    assert not calls
+    assert all(row['name'] != 'omnigraph_access'
+               for row in json.loads(capsys.readouterr().out)['checks'])
+    assert d.main(['--json', '--memory-probe']) == 0
+    assert calls == [(['og-memory', 'probe-access'], dict(
+        check=False, stdin=subprocess.DEVNULL, capture_output=True, timeout=2 * d.TIMEOUT + 2))]
+    assert dict(name='omnigraph_access', status='pass', detail=success.decode()) in (
+        json.loads(capsys.readouterr().out)['checks'])
+
+
+@pytest.mark.parametrize('reason', [
+    'HttpUnconfigured', 'HttpConfigurationUnavailable', 'HealthUnavailable', 'HealthTimeout',
+    'WrongGraph', 'MissingHub', 'Unauthorized', 'Forbidden', 'UnsupportedApi',
+    'ReadUnavailable', 'ReadTimeout',
+])
+def test_memory_probe_preserves_fixed_failure(monkeypatch, reason):
+    def failure(args, **kwargs):
+        return subprocess.CompletedProcess(args, 1, b'', reason.encode() + b'\n')
+    monkeypatch.setattr(d.subprocess, 'run', failure)
+    assert d._memory_access() == ('fail', reason)
+
+
+@pytest.mark.parametrize(('error', 'detail'), [
+    (FileNotFoundError(), 'og-memory unavailable'),
+    (subprocess.TimeoutExpired(['og-memory', 'probe-access'], 22), 'og-memory probe timed out'),
+    (PermissionError(), 'og-memory probe unavailable'),
+])
+def test_memory_probe_handles_process_failures(monkeypatch, error, detail):
+    def failure(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(d.subprocess, 'run', failure)
+    assert d._memory_access() == ('fail', detail)
+
+
+@pytest.mark.parametrize(('code', 'stdout', 'stderr'), [
+    (0, b'HealthOk AuthenticatedReadOk plangraph HTTP 0.13\n', b'private diagnostic'),
+    (1, b'private diagnostic', b'Unauthorized\n'),
+    (2, b'', b'Unauthorized\n'),
+    (1, b'private diagnostic', b'Unauthorized\nprivate diagnostic'),
+])
+def test_memory_probe_rejects_unexpected_child_output(isolated, monkeypatch, capsys, code, stdout, stderr):
+    original = d.subprocess.run
+
+    def local_run(args, **kwargs):
+        if args[0] == 'og-memory':
+            return subprocess.CompletedProcess(args, code, stdout, stderr)
+        return original(args, **kwargs)
+
+    monkeypatch.setattr(d.subprocess, 'run', local_run)
+    assert d.main(['--json', '--memory-probe']) == 1
+    output = capsys.readouterr().out
+    assert 'private diagnostic' not in output
+    assert dict(name='omnigraph_access', status='fail', detail='unexpected og-memory probe response') in (
+        json.loads(output)['checks'])
 
 
 def test_review_probe_systemd_units():
