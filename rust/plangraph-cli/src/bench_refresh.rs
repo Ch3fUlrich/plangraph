@@ -3,6 +3,7 @@ mod openrouter;
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde_json::json;
+use std::net::Ipv6Addr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -63,9 +64,14 @@ fn download(
     known: &Validators,
 ) -> Result<Option<(Validators, Vec<u8>)>> {
     let uri: ureq::http::Uri = url.parse()?;
-    let local = uri
-        .host()
-        .is_some_and(|host| matches!(host, "localhost" | "127.0.0.1" | "[::1]"));
+    let local = uri.host().is_some_and(|host| {
+        matches!(host, "localhost" | "127.0.0.1")
+            || host
+                .strip_prefix('[')
+                .and_then(|host| host.strip_suffix(']'))
+                .and_then(|host| host.parse::<Ipv6Addr>().ok())
+                == Some(Ipv6Addr::LOCALHOST)
+    });
     if uri.host().is_none()
         || !matches!(uri.scheme_str(), Some("https"))
             && !(local && uri.scheme_str() == Some("http"))
