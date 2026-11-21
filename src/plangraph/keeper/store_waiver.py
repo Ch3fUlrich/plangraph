@@ -291,9 +291,11 @@ class WaiverMixin:
     def _merged_work_commits(self, item):
         """Every Plan-Item commit of the item on the default ref; refuses while a lane is open or unknown."""
         git, project = self._adapter("git"), self._merge_project(item)
-        if not self._warm(project) and not self._refresh_merged_default_ref(git, project):
-            raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
         warm = self._warm(project)
+        if self.__dict__.get("_frozen_lanes") and not warm:   # the proof never refreshes a frozen scan
+            raise Refused("evidence_unverified", f"merge_index_not_warm: {project}")
+        if not warm and not self._refresh_merged_default_ref(git, project):
+            raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
         # The automatic run never asks the forge under the lock: an expired snapshot answers nothing (unknown).
         kw = ({"cache": self.__dict__.setdefault("_lanes", {}) if warm else {}, "frozen": True}
               if warm or self.__dict__.get("_frozen_lanes") else {})
@@ -651,9 +653,11 @@ class WaiverMixin:
 
         def index_of(repo_project):
             if repo_project not in indexes:
-                if self.__dict__.get("_frozen_lanes") and not self._warm(repo_project):
+                frozen = self.__dict__.get("_frozen_lanes")
+                if frozen and not self._warm(repo_project):
                     raise Refused("evidence_unverified", f"merge_index_not_warm: {repo_project}")
-                index = context_sources.work_index(git, repo_project, fresh=not self._warm(repo_project), max_age=_WARM_S)
+                index = context_sources.work_index(git, repo_project, fresh=not self._warm(repo_project),
+                                                   max_age=_WARM_S, cached_only=bool(frozen))
                 if index is not None and index.get("origin_stale"):
                     raise Refused("evidence_unverified", f"merge_index_stale: {repo_project}: {index.get('reason')}")
                 indexes[repo_project] = index
@@ -669,6 +673,8 @@ class WaiverMixin:
                 hinted = None if (hinted, revision) == (item["project"], None) else hinted
                 if hinted and callable(scan) and hinted not in repos:
                     raise Refused("evidence_unverified", f"merge_repo_not_scanned: {hinted}")
+                if hinted:
+                    index_of(hinted)  # a hinted repository is held to the same warm-index rule
                 found = [hinted] if hinted else [
                     p for p in self._scan_projects(item)
                     if index_of(p) is not None and context_sources.indexed_work(index_of(p), key)["commits"]]

@@ -108,7 +108,7 @@ def _split(key):
     return (project or None), bare
 
 
-def work_index(git, project, *, fresh=False, max_age=None):
+def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
     Read all commit trailers and topology together, including hosted open PR
@@ -120,6 +120,10 @@ def work_index(git, project, *, fresh=False, max_age=None):
     cache = getattr(git, "_context_work_index", {})
     cache_key = (repo, ref)
     hit = cache.get(cache_key)
+    if cached_only:  # a caller holding the keeper lock: the warm answer or nothing, never git or the forge
+        if hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
+            return hit[1]
+        raise Refused("evidence_unverified", f"merge_index_not_warm: {project}")
     if not fresh and hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
         return hit[1]
     problems = []

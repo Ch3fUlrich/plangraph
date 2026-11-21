@@ -340,7 +340,7 @@ def test_a_warmed_scan_is_not_fetched_again_under_the_lock(env, monkeypatch):
     calls = []
     real = context_sources.work_index
     monkeypatch.setattr(context_sources, "work_index",
-                        lambda git, project, *, fresh=False, max_age=None: calls.append(fresh) or real(git, project, fresh=fresh))
+                        lambda git, project, *, fresh=False, max_age=None, cached_only=False: calls.append(fresh) or real(git, project, fresh=fresh))
     env.store.warm_merge_scan()
     assert calls == [True]
     result = auto(env, require_seats=False)
@@ -453,3 +453,51 @@ def test_a_lane_answer_is_per_origin_and_an_expired_warm_snapshot_asks_the_forge
     result = auto(env, require_seats=False, frozen=True)
     assert result["closed"] == [] and all("merge_index_not_warm" in r["reason"] for r in result["listed"])
     assert len(asked) == warmed
+
+
+class RecordingGit(GitAdapter):
+    """A git adapter that remembers every fetch it was asked to run."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.fetches = []
+
+    def _run(self, repo, args, **kw):
+        if "fetch" in args:
+            self.fetches.append(list(args))
+        return super()._run(repo, args, **kw)
+
+
+def test_a_marker_that_outlives_the_cached_index_is_not_warm_and_nothing_is_fetched(env):
+    import time
+
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 88)
+    env.store.ctx["git"] = recorder = RecordingGit({"demo": str(env.repo.root)})
+    env.store.warm_merge_scan()
+    recorder.fetches.clear()
+    for key, (stamp, index) in list(recorder._context_work_index.items()):
+        recorder._context_work_index[key] = (stamp - 61, index)      # the index is 61 s old, the marker 0 s
+    assert env.store._warm("demo")
+    result = auto(env, require_seats=False, frozen=True)
+    assert result["closed"] == [] and "merge_index_not_warm" in result["listed"][0]["reason"]
+    assert recorder.fetches == []
+
+
+def test_a_revision_qualified_hint_is_held_to_the_warm_index_and_the_proof_never_refreshes(env):
+    set_states(env)
+    head = env.repo.land("c", "Plan-Item: demo:C", 89)
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:C'", (f"Merge-Repo: demo {merge}",))
+    env.store.ctx["git"] = recorder = RecordingGit({"demo": str(env.repo.root)})
+    env.store.__dict__["_warmed"] = {}                                 # the marker has expired
+    result = auto(env, require_seats=False, frozen=True)
+    assert result["closed"] == [] and "merge_index_not_warm" in result["listed"][0]["reason"]
+    assert recorder.fetches == []
+    with pytest.raises(Refused, match="merge_index_not_warm"):       # nor does the proof path refresh when frozen
+        env.store.__dict__["_frozen_lanes"] = True
+        try:
+            env.store._merged_work_commits(env.store._item("demo:C"))
+        finally:
+            env.store.__dict__["_frozen_lanes"] = False
+    assert recorder.fetches == []
