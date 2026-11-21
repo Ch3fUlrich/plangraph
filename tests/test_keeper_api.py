@@ -4,11 +4,12 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from dataclasses import replace
 
 import pytest
 
 from keeper_util import World, defn, seed, to_done
-from plangraph.keeper import api, config, snapshot_io
+from plangraph.keeper import api, auth, config, snapshot_io
 from plangraph.keeper.cli_verbs import Session, Unreachable
 
 
@@ -161,6 +162,36 @@ def test_retry_after_timeout_replays_committed_write(srv, w, monkeypatch, verb, 
         item = w.store._item("demo:A")
         assert (item["state"], item["claimed_by"], item["epoch"], item["lease_until"]) == (
             "claimed", actor, first["epoch"], first["lease_until"])
+
+
+def test_claim_retry_replays_receipt_after_project_grants_change(srv, w, monkeypatch):
+    token = w.tok("workerA")
+    body = {"key": "demo:A", "lease_s": 600}
+    status, _, first = call(srv, "/v1/claim", method="POST", body=body, token=token,
+                            idempotency_key="same-claim")
+    assert status == 200
+    assert jbody(first)["epoch"] == 1
+
+    authenticate = auth.authenticate
+
+    def authenticate_with_new_grants(conn, bearer):
+        return replace(authenticate(conn, bearer), projects=["other"])
+
+    monkeypatch.setattr(auth, "authenticate", authenticate_with_new_grants)
+
+    status, _, replayed = call(srv, "/v1/claim", method="POST", body=body, token=token,
+                               idempotency_key="same-claim")
+    assert status == 200, replayed
+    assert jbody(replayed) == jbody(first)
+
+    status, _, refused = call(srv, "/v1/claim", method="POST", body=body, token=token,
+                              idempotency_key="new-claim")
+    assert status == 403
+    assert jbody(refused)["error"] == "forbidden"
+    with srv.lock:
+        claims = w.conn.execute("SELECT COUNT(*) FROM events WHERE type='claimed' AND key=?",
+                                ("demo:A",)).fetchone()[0]
+    assert claims == 1
 
 
 def test_slow_snapshot_publication_does_not_block_reads(srv, w, monkeypatch):

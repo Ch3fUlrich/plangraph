@@ -163,8 +163,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         if isinstance(principal, auth.RunPrincipal):
             credential = f"run:{principal.token_id}"
         key = "!http/" + _request_hash([credential, request_key])
-        fingerprint = _request_hash([principal.name, principal.role, principal.projects,
-                                     action, route, body])
+        fingerprint = _request_hash([action, route, body])
         receipt = (key, fingerprint)
         result = self._http_write_result(receipt)
         if result is not None:
