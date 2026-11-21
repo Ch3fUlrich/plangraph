@@ -679,7 +679,7 @@ class WaiverMixin:
         self._assert_unlocked(item)
         seated = require_seats and tier != "none"
         proofs = self._merged_auto_proofs(item)
-        pending = self._auto_deploy_pending(item)  # preview and apply alike
+        pending, token = self._auto_deploy_pending(item)  # preview and apply alike
         if pending:
             if apply:
                 self._deploy_pending_result(item, pending, now)
@@ -697,6 +697,12 @@ class WaiverMixin:
                 raise Refused("conflict", f"{key} changed under the transaction")
             fresh = dict(fresh, **({"_merge_project": item["_merge_project"]} if "_merge_project" in item else {}))
             if self._merged_auto_proofs(fresh) != proofs:
+                raise Refused("conflict", "merged_on_default_changed")
+            try:  # the deploy scan was read at this ref head and these commits: still so, or no close
+                moved = self._deploy_token(fresh) != token
+            except Exception:  # noqa: BLE001 - unreadable is not confirmed
+                moved = True
+            if moved:
                 raise Refused("conflict", "merged_on_default_changed")
             if seated and self._merged_backfill(fresh, None, proofs[0]["head"], now, proofs) != witnessed:
                 raise Refused("conflict", "review_witness_changed")

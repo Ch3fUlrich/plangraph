@@ -265,3 +265,47 @@ def test_a_snapshot_of_a_rebuilt_ref_is_stale_even_with_the_same_tagged_commit(e
     assert env.store._item("demo:A")["state"] == "open"
     again = frozen(env, require_seats=False)
     assert again["closed"] == [] and "deploy_pending" in again["listed"][0]["reason"]
+
+
+def test_a_ref_that_moves_away_and_back_during_the_scan_cannot_hide_the_unit(env, monkeypatch):  # noqa: F811
+    _land_with_unit(env.repo.root, pr=55)
+    root = env.repo.root
+    final = git(root, "rev-parse", "HEAD")
+    tagged = git(root, "rev-parse", "main^2~1")  # the tagged commit, before the untagged follow-up
+    # An alternative history: the same tagged commit merged without the follow-up.
+    git(root, "checkout", "-q", "-b", "alt", "main~1")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #55 from x/feat", tagged)
+    alt = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "main")
+    git(root, "branch", "-q", "-D", "alt")  # a lane would hold the close; the commit stays for update-ref
+    real = GitAdapter.deploy_changes
+
+    def excursion(self, repo, sha, ref):
+        git(root, "update-ref", "refs/heads/main", alt)  # the ref is elsewhere while the diff is read
+        try:
+            return real(self, repo, sha, ref)
+        finally:
+            git(root, "update-ref", "refs/heads/main", final)
+
+    monkeypatch.setattr(GitAdapter, "deploy_changes", excursion)
+    result = frozen(env, require_seats=False)
+    assert result["closed"] == [] and "deploy_pending" in result["listed"][0]["reason"]
+
+
+def test_a_ref_that_moves_between_the_check_and_the_write_closes_nothing(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 56)
+    root = env.repo.root
+    parents = git(root, "rev-list", "--parents", "-n", "1", "HEAD").split()
+    # The same PR and topic head through a replacement merge: the proofs (pr, head) are equal.
+    replacement = git(root, "commit-tree", f"{parents[0]}^{{tree}}", "-p", parents[1], "-p", parents[2],
+                      "-m", "Merge pull request #56 from x/docs (replacement)")
+    real = type(env.store)._write
+
+    def moved(store):
+        git(root, "update-ref", "refs/heads/main", replacement)
+        return real(store)
+
+    monkeypatch.setattr(type(env.store), "_write", moved)
+    result = auto(env, require_seats=False)
+    assert result["closed"] == []
+    assert "merged_on_default_changed" in result["listed"][0]["reason"]

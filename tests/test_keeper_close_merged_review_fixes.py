@@ -178,6 +178,7 @@ def test_selected_go_of_another_item_refuses(unseated_w, monkeypatch, project, k
 
 def _ships(w, monkeypatch, paths, hosts="alpha, beta"):
     git = MergedGit()
+    git.ref_commit = lambda repo, ref: "1" * 40
     git.deploy_changes = lambda repo, sha, ref: [
         p if isinstance(p, tuple) else ("A", p) for p in paths]
     w.store.ctx = {**w.store.ctx, "git": git}
