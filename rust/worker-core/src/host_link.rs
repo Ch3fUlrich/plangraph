@@ -53,9 +53,14 @@ impl<'a> Link<'a> {
     }
 
     fn enqueue(&self, rule: &str, since: u64, mut event: Value) -> io::Result<()> {
+        let namespace = if rule == "host-link-down" {
+            "host-link"
+        } else {
+            rule
+        };
         let event_id = format!(
             "{:x}",
-            Sha256::digest(format!("{rule}:{}:{since}", self.key))
+            Sha256::digest(format!("{namespace}:{}:{since}", self.key))
         );
         event["kind"] = json!("alert");
         event["recipient"] = json!("routing");
@@ -67,7 +72,7 @@ impl<'a> Link<'a> {
             &self
                 .root
                 .join("watchdog/outbox")
-                .join(format!("{event_id}.json")),
+                .join(format!("{since:020}-{rule}-{event_id}.json")),
             &serde_json::to_vec(&event)?,
         )
     }
@@ -138,7 +143,7 @@ pub fn observe(root: &Path, host: &str, peer: &str, now: u64, reachable: bool) -
 }
 
 fn ssh_link<'a>(root: &'a Path, destination: &str) -> io::Result<Link<'a>> {
-    Link::read(root, &("ssh", destination))
+    Link::read(root, &json!({"ssh": destination}))
 }
 
 /// Record a coordinator-side probe, with diagnostics collected on transition only.

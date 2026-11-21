@@ -16,6 +16,9 @@ fn run() -> i32 {
         let rest: Vec<std::ffi::OsString> = std::env::args_os().skip(2).collect();
         return plangraph_cli::host_sync::run_cli(&rest);
     }
+    if args == ["host-link-deliver"] {
+        return plangraph_cli::host_link_bridge::cli();
+    }
     if let Some(code) = plangraph_cli::watchers::cli(&args) {
         return code;
     }

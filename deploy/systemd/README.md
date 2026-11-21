@@ -107,3 +107,24 @@ name, or address). Run `systemctl --user daemon-reload` and
 `systemctl --user enable --now pg-host-ssh-link@<worker-id>.timer`.
 Use `pg-host-link ssh-status STATE_ROOT DESTINATION` before an SSH step to
 report a confirmed outage. The local journal logs the evidence for host L1.
+The monitoring user needs read access to the `tailscaled.service` journal.
+
+On workers, install `pg-host-link.service` and `pg-host-link.timer` and set
+`PLANGRAPH_SPAWN_STATE`, `HOST_LINK_ID` and `HOST_LINK_PEER` (the coordinator
+peer) in `~/.config/plangraph/host-link.env`. Run
+`systemctl --user enable --now pg-host-link.timer` after daemon reload.
+
+The existing stall-watchdog timer delivers the outbox. In its
+`~/.config/plangraph/watchdog.env`, move the existing bridge argv to
+`PLANGRAPH_WATCHDOG_FALLBACK` and set `PLANGRAPH_WATCHDOG_DELIVERY` to the JSON
+argv for `plangraph host-link-deliver`, using the binary's absolute path.
+Set `PG_URL`, `PG_TOKEN_FILE` (a principal allowed to post keeper messages),
+and `PG_HOST_LINK_SENDER` (that principal's name). The keeper endpoint must be reachable independently of the link under
+test. Successful delivery uses the watchdog event ID as the keeper message ID.
+
+Read-only SSH waiters can use
+`pg-host-link ssh-wait STATE_ROOT DESTINATION -- COMMAND [ARG...]`. It retries
+SSH transport failures up to three checks and reports the confirmed outage
+time when the monitor has one. Use `ssh-status` to guard steps with side effects.
+`pg-package-host --state` uses the same state directory to queue launches when
+the selected SSH route has a confirmed outage.
