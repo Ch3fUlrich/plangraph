@@ -138,6 +138,31 @@ def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
                 error=f'host_memory_floor: MemAvailable {memory} MB, floor {floor} MB, role {role_mb} MB; {detail}')
 
 
+def _disk_refusal(row):
+    drives = row.get('work_drives')
+    if drives is not None:
+        if not isinstance(drives, list) or not drives:
+            return 'malformed readiness'
+        low = []
+        for d in drives:
+            if not isinstance(d, dict):
+                return 'malformed readiness'
+            free, floor = d.get('disk_free_gb'), d.get('disk_floor_gb', row.get('disk_floor_gb', 5))
+            if any(type(v) not in (int, float) or not 0 <= v < float('inf') for v in (free, floor)):
+                return 'malformed readiness'
+            if free >= floor:
+                return None
+            low.append(free)
+        return f'disk_low: free {low[0]} GB'
+    if row.get('disk_free_gb') is not None and any(
+            type(value) not in (int, float) or not 0 <= value < float('inf')
+            for value in (row['disk_free_gb'], row.get('disk_floor_gb', 5))):
+        return 'malformed readiness'
+    if row.get('disk_free_gb') is not None and row['disk_free_gb'] < row.get('disk_floor_gb', 5):
+        return f"disk_low: free {row['disk_free_gb']} GB"
+    return None
+
+
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
             remote_first=False, local_refusal=None, host_order=(),
             compare_local=False, local_fallback=False):
@@ -160,12 +185,8 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
                 reason = 'failed readiness'
             elif row.get('fresh') is not True:
                 reason = 'stale readiness'
-            elif row.get('disk_free_gb') is not None and any(
-                    type(value) not in (int, float) or not 0 <= value < float('inf')
-                    for value in (row['disk_free_gb'], row.get('disk_floor_gb', 5))):
-                reason = 'malformed readiness'
-            elif row.get('disk_free_gb') is not None and row['disk_free_gb'] < row.get('disk_floor_gb', 5):
-                reason = f"disk_low: free {row['disk_free_gb']} GB"
+            elif (disk_reason := _disk_refusal(row)):
+                reason = disk_reason
             elif any(type(row.get(key)) is not int or row[key] < 0
                      for key in ('live_runs', 'mem_available_mb')):
                 reason = 'malformed readiness'
@@ -216,6 +237,8 @@ def ready_records(config, role='implement'):
             row = dict(host)
             data = read_readiness(name)
             row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb', 'fresh')})
+            if data.get('work_drives') is not None:
+                row['work_drives'] = data['work_drives']
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
         caps = host_caps(registry, name, role)

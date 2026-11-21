@@ -3,15 +3,20 @@
 Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 `overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 5
 (GiB); the checkout, configured `worktree_root`, and state tree filesystems must
-all meet it. A refusal reports `disk_low` and measured GB and uses RAM's overflow
-or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5); the
-receiving spawner also checks live disk before launching.
+all meet it (or, when `work_drives` are configured, at least one drive meets its
+floor). Before refusing `disk_low`, admission cleans idle rebuildable caches
+(`shared_cargo_target`, its pool slots `<target>-pool/slot-N`, `~/.cache/pg-target-po`,
+`~/.cache/pg-target-warm`, and idle worktree `rust/target` directories) once and re-measures free space; a
+persistent breach records a `disk-hygiene.json` floor alarm (`alarm: true`).
+A refusal reports `disk_low` and measured GB and uses RAM's overflow
+or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5) and
+optional `work_drives`; the receiving spawner also checks live disk before launching.
 
 Every harness child, including writers and fixers, receives `CARGO_TARGET_DIR`
 from `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`).
 Caller and per-worktree target overrides are replaced; children also receive
 `CARGO_INCREMENTAL=0`. The cache cap is
-`PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB). Over-cap busy hosts refuse a building role with
+`PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB, per slot; one value shared with the Rust pool). Over-cap busy hosts refuse a building role with
 `cargo_target_cap`, which names the measured cache path; a `review` builds nothing and is exempt from
 the cap at admission and during the run (the free-space floor still binds it); idle hosts clear the cache before checking free space. A run keeps the
 host busy only while a recorded child or supervisor pid is alive (or it has survivors): ended,

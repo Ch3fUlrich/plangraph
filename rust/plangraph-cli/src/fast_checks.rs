@@ -1,10 +1,15 @@
 //! Bounded local projection of CI selection; the selector remains authoritative.
 use crate::fast_check_packages::packages;
+use pg_worker_core::cargo_cache;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 pub(super) type Result<T> = std::result::Result<T, String>;
+
+#[path = "fast_check_target.rs"]
+mod target;
+use target::{jail_binary, resolve_cargo_target, run_step};
 
 #[derive(Debug)]
 struct Step {
@@ -303,28 +308,28 @@ fn execute(args: &[String]) -> Result<()> {
             }
         }
     }
+    let primary = cargo_cache::shared_cache_roots().map_err(|e| e.to_string())?;
+    let target = resolve_cargo_target(&root, &primary[0], "fast-checks")?;
     let mut failures = Vec::new();
     for step in steps {
         let tick = Instant::now();
         let mut command = Command::new(&step.args[0]);
+        command
+            .env("CARGO_TARGET_DIR", &target.path)
+            .env("CARGO_INCREMENTAL", "0")
+            .env("PG_JAIL_BIN", jail_binary(&target.path));
         if step.label == "pg-worker/test" {
             command
                 .env("PG_JAIL", "off")
                 .env("PG_TEST_ALLOW_UNJAILED", "1");
-        } else {
-            command.env(
-                "PG_JAIL_BIN",
-                jail_binary(&root, std::env::var_os("CARGO_TARGET_DIR")),
-            );
         }
-        let status = command
+        command
             .args(&step.args[1..])
             .current_dir(&root)
             .env("FILESIZE_REQUIRE_BASE", &base)
             .env("NEWCODE_BASE", &base)
-            .env("CHANGELOG_BASE", &base)
-            .status()
-            .map_err(|e| e.to_string())?;
+            .env("CHANGELOG_BASE", &base);
+        let status = run_step(&mut command, &step.args[0], &target).map_err(|e| e.to_string())?;
         println!(
             "{} wall seconds: {:.3}",
             step.label,
@@ -349,28 +354,4 @@ fn execute(args: &[String]) -> Result<()> {
     } else {
         Err(format!("failed: {}", failures.join(", ")))
     }
-}
-
-fn jail_binary(root: &Path, target: Option<std::ffi::OsString>) -> PathBuf {
-    root.join(
-        target
-            .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("rust/target")),
-    )
-    .join("debug")
-    .join(format!("pg-jail{}", std::env::consts::EXE_SUFFIX))
-}
-
-#[test]
-fn jail_binary_uses_the_built_helper_without_a_target_override() {
-    let root = std::env::temp_dir();
-    let suffix = format!("debug/pg-jail{}", std::env::consts::EXE_SUFFIX);
-    assert_eq!(
-        jail_binary(&root, None),
-        root.join("rust/target").join(&suffix)
-    );
-    assert_eq!(
-        jail_binary(&root, Some("cache".into())),
-        root.join("cache").join(suffix)
-    );
 }
