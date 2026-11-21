@@ -233,27 +233,47 @@ pub(crate) fn head_writers(
     diff: &DiffRef,
 ) -> Result<Vec<String>, InlineDiffError> {
     validate(diff)?;
-    workspace_resolver::ensure_commit(repo, &diff.head_sha, Duration::from_secs(10))
-        .map_err(|_| InlineDiffError::Git)?;
-    let out = workspace_resolver::git_command(Path::new(&repo.root))
-        .args([
-            "-c",
-            "core.hooksPath=",
-            "log",
-            "-1",
-            "--no-color",
-            "--format=%(trailers:key=Writer,valueonly,unfold)",
-            &diff.head_sha,
-            "--",
-        ])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|_| InlineDiffError::Git)?;
-    if !out.status.success() {
-        return Err(InlineDiffError::Git);
+    // The fetch a missing head may need runs under a deadline too; the lookup gives up (and refuses) after it.
+    let (sender, receiver) = mpsc::channel();
+    let (owned, sha) = (repo.clone(), diff.head_sha.clone());
+    std::thread::spawn(move || {
+        let _ = sender.send(workspace_resolver::ensure_commit(
+            &owned,
+            &sha,
+            Duration::from_secs(10),
+        ));
+    });
+    match receiver.recv_timeout(Duration::from_secs(30)) {
+        Ok(Ok(())) => {}
+        _ => return Err(InlineDiffError::Git),
     }
-    Ok(String::from_utf8_lossy(&out.stdout)
+    let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
+    cmd.args([
+        "-c",
+        "core.hooksPath=",
+        "log",
+        "-1",
+        "--no-color",
+        "--format=%(trailers:key=Writer,valueonly,unfold)",
+        &diff.head_sha,
+        "--",
+    ])
+    .stdin(Stdio::null())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    // Bounded like the diff reads: the child is reaped and killed at the deadline.
+    let stdout = collect_diff(
+        cmd.spawn().map_err(|_| InlineDiffError::Git)?,
+        64 * 1024,
+        Duration::from_secs(10),
+    )
+    .map_err(|_| InlineDiffError::Git)?;
+    Ok(String::from_utf8_lossy(&stdout)
         .lines()
         .filter_map(|line| line.split_whitespace().next())
         .map(str::to_owned)

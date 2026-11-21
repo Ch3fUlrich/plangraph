@@ -290,3 +290,39 @@ fn an_unreadable_registered_head_refuses_instead_of_assuming_no_writer() {
         "refused with another error"
     );
 }
+
+#[test]
+fn unresolved_registered_refs_refuse_without_echoing_or_starting_the_adapter() {
+    let (dir, spec) = fixture();
+    let marker = dir.join("started");
+    let adapter = script(
+        &dir,
+        &format!("touch {}; printf '%s' '{}'", marker.display(), spec),
+    );
+    // An unknown repository id, a malformed ref and a non-ASCII sha (a byte slice at 12 would panic).
+    for diff_ref in [
+        json!({"repo_id":"nowhere","base_sha":"a".repeat(40),"head_sha":"b".repeat(40)}),
+        json!({"repo_id":"nowhere"}),
+        json!({"repo_id":"nowhere","base_sha":"a".repeat(40),"head_sha":"ééééééééééééééé"}),
+    ] {
+        let request =
+            json!({"role":"review","writer_families":["openai"],"card":{"diff_ref":diff_ref}});
+        let error = adapter
+            .request(&dir, &request, Duration::from_secs(5))
+            .err()
+            .expect("refusal");
+        match error {
+            crate::errors::ToolError::Refused { message, .. } => {
+                assert!(
+                    !message.contains("ééé") && !message.contains(&"b".repeat(12)),
+                    "{message}"
+                );
+            }
+            _ => panic!("expected a refusal"),
+        }
+        assert!(
+            !marker.exists(),
+            "the adapter child started before the lookup"
+        );
+    }
+}
