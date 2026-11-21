@@ -9,6 +9,25 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The diff base of a review card: the previous review's head when the head moved on, else
+/// the batch base. A re-review of the same head (after a refuted finding) would otherwise
+/// ask for the empty delta head..head.
+pub(super) fn review_diff_base<'a>(
+    base: &'a str,
+    head: &str,
+    previous: Option<(&'a str, &str)>,
+) -> &'a str {
+    previous
+        .map(|p| p.0)
+        .filter(|prev| *prev != head)
+        .unwrap_or(base)
+}
+
+/// Native review prompts start with tool instructions, then a separately delimited
+/// skill, then the versioned brief. The spawner drops the first two blocks for inline seats.
+pub(super) const TOOLS_ONLY_OPEN: &str = "[tools-only]";
+pub(super) const TOOLS_ONLY_CLOSE: &str = "[/tools-only]";
+
 impl Host {
     /// Fast-checks stamp of `head`, in the worktree's own git directory.
     pub(super) fn stamp(&self, head: &str) -> Result<PathBuf, String> {
@@ -150,18 +169,26 @@ impl Host {
     }
     /// Review prompt for `head`: review skill, writer brief, diff range (the delta from the
     /// previous review's head when it is an ancestor) and the required closing lines.
-    fn review_prompt(
+    pub(super) fn review_prompt(
         &mut self,
         base: &str,
         head: &str,
         previous: Option<(&str, &str)>,
         families: &[String],
         versioned: &str,
+        skill: &str,
     ) -> String {
-        let mut prompt = format!("{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let diff_base = review_diff_base(base, head, previous);
+        let skill_block = if skill.is_empty() {
+            String::new()
+        } else {
+            format!("[review-skill]\n{skill}\n[/review-skill]\n\n")
+        };
+        let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR. To read the review diff, use git diff {diff_base} {head}.{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
         match previous {
-            Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
-            None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),
+            Some((prev, text)) if prev == head => prompt.push_str(&format!("This is a later round on the same head {head}: the previous review (its text follows) judged it and the writer answered its findings with evidence. Review the whole change {base}..{head} and check that every earlier HIGH and MED finding is fixed or refuted with evidence.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
+            Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head}, check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
+            None => prompt.push_str(&format!("The diff is base {base}..head {head}.\n")),
         }
         prompt.push_str(&format!("Name each finding as file:line. List the repository files you opened in a FILES READ: line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
         prompt
@@ -232,7 +259,7 @@ impl Host {
         )?;
         let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
             "repository_review_required":true,
-            "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
+            "diff_ref":{"repo":self.repo, "base":review_diff_base(base, head, prev), "head":head}});
         if self.reviews_started == 1 && self.review_override.is_none() {
             if let Some(deferred) = self.review_preflight(clone, &card, &families, head)? {
                 return Ok(deferred);
@@ -241,12 +268,9 @@ impl Host {
         // Fixed prefix, the review skill as rules and the item context of the versioned
         // review brief, from the one renderer; the context carries the actual evidence.
         let context = self.brief_context(base, head);
-        let versioned = pg_worker_core::writer_families::render_review_brief(
-            &context,
-            &skill,
-            &trusted_python,
-        )?;
-        let prompt = self.review_prompt(base, head, prev, &families, &versioned);
+        let versioned =
+            pg_worker_core::writer_families::render_review_brief(&context, "", &trusted_python)?;
+        let prompt = self.review_prompt(base, head, prev, &families, &versioned, &skill);
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         let serialized_card = card.to_string();

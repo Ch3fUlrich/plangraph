@@ -332,6 +332,12 @@ def main(argv=None):
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
+            from .inline_diff import refuse_empty_diff
+            try:
+                refuse_empty_diff(args.card, args.role, dry_run=args.dry_run)
+            except SpawnRefused as exc:
+                service.save_refusal(exc, args.role)
+                raise
             # Explicit model/leg overrides intentionally bypass routing, not admission.
             if not args.model and not args.leg and (args.card or {}).get('run_kind') != 'native-codex':
                 # service.route saves the refusal record itself (one record per route error).

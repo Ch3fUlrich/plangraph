@@ -65,13 +65,14 @@ Exact word-boundary 40-hex commit SHAs (either case) resolved from `card.diff_re
 
 Prompts travel by stdin or file on every launch path (D-5233). See
 [spawner prompt rules](operations/spawner-prompt-rules.md) for transport contracts,
-carrier validation, failure behavior, fixer reports, retry bounds and the role header and skill prefix.
+carrier validation, failure behavior, fixer reports, retry bounds, and how native review
+prompts mark the tool instructions and skill for inline composition.
 
 ### MiMo seat timeouts and reasoning-only output
 
 Review seats are hard-capped from their first output, and reasoning-only output exhaustion is
 handled without losing the verdict: see [MiMo seats](operations/spawner-mimo-seats.md)
-(MIMO-VERDICT-TIMEOUTS, MIMO-REASONING-OUTPUT-LIMIT).
+(MIMO-VERDICT-TIMEOUTS, MIMO-REASONING-OUTPUT-LIMIT); a review card with an empty diff fails once with `empty_diff` before any leg.
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:

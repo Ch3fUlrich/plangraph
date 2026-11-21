@@ -107,7 +107,9 @@ def test_launch_variants_cannot_bypass(repository, dispatch, hardened, mode):
         card.update(lane_branch='lane/resume', continuation=True)
         options['run_worktree'] = True
     if mode in ('seats', 'seats_plain'):
-        card['diff_ref'] = dict(repo=str(repo), base=old, head=old if mode == 'seats_plain' else git(repo, 'rev-parse', 'HEAD'))
+        # seats_plain reviews the stale head itself; its diff is the last commit, never empty.
+        card['diff_ref'] = dict(repo=str(repo), base=old + '~1' if mode == 'seats_plain' else old,
+                                head=old if mode == 'seats_plain' else git(repo, 'rev-parse', 'HEAD'))
         options.update(seats=True, role='review', writer_families=['deepseek'])
         route = service._route
         service._route = lambda *a, **k: replace(route(*a, **k), review_seats=route(*a, **k).legs)

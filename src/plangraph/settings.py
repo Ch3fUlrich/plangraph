@@ -152,22 +152,30 @@ def _card_layers(card):
     return card.get('project') or project_of(card.get('key')), card.get('phase')
 
 
+def _is_git_root(candidate):
+    """A checkout (.git file) or a repository (.git directory holding HEAD); an empty .git is stray."""
+    entry = candidate / '.git'
+    return entry.is_file() or (entry.is_dir() and (entry / 'HEAD').exists())
+
+
 def _policy_data(root):
     """Load the policy table for ``root``; None when PLANGRAPH_SETTINGS is unset.
 
-    Relative paths are relative to the repository root (nearest .git ancestor).
+    Relative paths are relative to the repository root (nearest ancestor with a real .git,
+    never one at or above GIT_CEILING_DIRECTORIES or PLANGRAPH_ROOT_CEILING).
     No file is read unless the environment variable is set.
     """
     filename = os.environ.get('PLANGRAPH_SETTINGS')
     if not filename:
         return None
     base = Path(root or os.environ.get('PLANGRAPH_REPO_ROOT') or Path.cwd())
-    ceilings = {Path(p).resolve() for p in os.environ.get('GIT_CEILING_DIRECTORIES', '').split(os.pathsep) if p}
+    ceilings = {Path(p).resolve() for name in ('GIT_CEILING_DIRECTORIES', 'PLANGRAPH_ROOT_CEILING')
+                for p in os.environ.get(name, '').split(os.pathsep) if p}
     root = base
     for candidate in (base, *base.parents):
         if candidate.resolve() in ceilings:
             break
-        if (candidate / '.git').exists():
+        if _is_git_root(candidate):
             root = candidate
             break
     path = root / filename

@@ -143,16 +143,39 @@ fn writer_families_extracted_from_trailers_and_fallback() {
         .lines()
         .map(|l| serde_json::from_str::<Value>(l).unwrap())
         .collect();
-    assert_eq!(entries.len(), 2); // route + spawn
-    for entry in entries {
-        let fams = entry["writer_families"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(fams, vec!["deepseek", "google", "openai"]);
+    // Three writer families: one route + spawn pass per family, each excluding only its own.
+    assert_eq!(entries.len(), 6);
+    let mut seen = std::collections::BTreeSet::new();
+    let mut seat_families = std::collections::BTreeSet::new();
+    for pair in entries.chunks(2) {
+        assert_eq!(pair[0]["verb"], "route");
+        assert_eq!(pair[1]["verb"], "spawn");
+        let fams = |entry: &Value| {
+            entry["writer_families"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(fams(&pair[0]), fams(&pair[1]));
+        assert_eq!(fams(&pair[0]).len(), 1, "{pair:?}");
+        // The seat comes from outside its own group's family (the mock prefers google, openai,
+        // then deepseek: it would pick xiaomi only if every writer family were excluded at once).
+        let seat = pair[1]["seat_family"].as_str().unwrap().to_owned();
+        assert!(!fams(&pair[0]).contains(&seat), "{pair:?}");
+        seat_families.insert(seat);
+        seen.extend(fams(&pair[0]));
     }
+    assert_eq!(
+        seat_families.into_iter().collect::<Vec<_>>(),
+        vec!["google", "openai"]
+    );
+    assert_eq!(
+        seen.into_iter().collect::<Vec<_>>(),
+        vec!["deepseek", "google", "openai"]
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("seats=3 verdict=PASS"));
 
     // Verify merge_batch_land.py check_approval accepts the generated approval file.
     let tools_dir = repo_root().join("tools");
@@ -539,4 +562,80 @@ fn binary_file_is_measured_as_the_inlined_base85_patch() {
     );
     assert!(String::from_utf8_lossy(&out.stderr).contains("blob.bin"));
     assert!(!fs::read_to_string(&log).unwrap().contains("\"spawn\""));
+}
+
+#[test]
+fn single_writer_family_range_yields_one_seat_and_a_failing_group_blocks() {
+    let (tmp, work, _bare, base_sha) = init_repo_with_origin();
+    git(&work, &["checkout", "-b", "feat"]);
+    for (name, trailer) in [
+        ("a.rs", "Writer: gemini run-1"),
+        ("b.rs", "Writer: gemini run-2"),
+    ] {
+        fs::write(work.join(name), "pub fn f() {}\n").unwrap();
+        git(&work, &["add", name]);
+        git(&work, &["commit", "-m", &format!("c\n\n{trailer}")]);
+    }
+    let head_sha = git(&work, &["rev-parse", "HEAD"]);
+    let run = |mode: &str, dir: &str| {
+        let root = tmp.path().join(dir);
+        fs::create_dir_all(&root).unwrap();
+        let state = root.join("state");
+        let log = root.join("spawner.jsonl");
+        let mock = write_mock_spawner(&root, &state, &log, mode);
+        let out = Command::new(plangraph_bin())
+            .args([
+                "review",
+                "--repo",
+                work.to_str().unwrap(),
+                "--base",
+                &base_sha,
+                "--head",
+                &head_sha,
+            ])
+            .args(["--state", state.to_str().unwrap(), "--no-fetch"])
+            .env("PLANGRAPH_SPAWNER_CMD", &mock)
+            .env("PYTHONPATH", repo_root().join("src"))
+            .output()
+            .unwrap();
+        let entries = fs::read_to_string(&log).unwrap().lines().count();
+        (out, entries)
+    };
+    let (out, entries) = run("pass", "single");
+    assert_eq!(entries, 2, "one route + one spawn for one family");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("seats=1 verdict=PASS"));
+
+    // Add a second family: the combined verdict is ACCEPT only when every seat accepts.
+    fs::write(work.join("c.rs"), "pub fn g() {}\n").unwrap();
+    git(&work, &["add", "c.rs"]);
+    git(&work, &["commit", "-m", "c\n\nWriter: gpt run-3"]);
+    let head_sha = git(&work, &["rev-parse", "HEAD"]);
+    let run_two = |mode: &str, dir: &str| {
+        let root = tmp.path().join(dir);
+        fs::create_dir_all(&root).unwrap();
+        let state = root.join("state");
+        let log = root.join("spawner.jsonl");
+        let mock = write_mock_spawner(&root, &state, &log, mode);
+        Command::new(plangraph_bin())
+            .args([
+                "review",
+                "--repo",
+                work.to_str().unwrap(),
+                "--base",
+                &base_sha,
+                "--head",
+                &head_sha,
+            ])
+            .args(["--state", state.to_str().unwrap(), "--no-fetch"])
+            .env("PLANGRAPH_SPAWNER_CMD", &mock)
+            .env("PYTHONPATH", repo_root().join("src"))
+            .output()
+            .unwrap()
+    };
+    let accepted = run_two("pass", "two-pass");
+    assert!(String::from_utf8_lossy(&accepted.stdout).contains("seats=2 verdict=PASS"));
+    let blocked = run_two("split_fail_second", "two-fail");
+    let text = String::from_utf8_lossy(&blocked.stdout);
+    assert!(text.contains("verdict=REQUEST_CHANGES"), "{text}");
+    assert_eq!(blocked.status.code(), Some(1));
 }
