@@ -613,7 +613,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     git(&["init", "-q", "-b", "main"]);
     fs::write(
         cwd.join("tools/ci_commit_gate.py"),
-        "import pathlib, sys\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
+        "import os, pathlib, sys\nprint('gate umask:', oct(os.umask(0o022)))\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
     )
     .unwrap();
     git(&["add", "."]);
@@ -649,6 +649,10 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     git(&["commit", "-q", "--allow-empty", "-m", "C"]);
     let head_c = git(&["rev-parse", "HEAD"]);
     host.fast_checks(&head_c).unwrap();
+    let gate_log = host.stamp(&head_c).unwrap().with_extension("log");
+    assert!(fs::read_to_string(gate_log)
+        .unwrap()
+        .contains("gate umask: 0o22\n"));
     let excerpt = host.stamp(&head_c).unwrap().with_extension("session.log");
     assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
 }

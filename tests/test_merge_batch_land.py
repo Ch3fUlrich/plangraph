@@ -321,14 +321,18 @@ def test_plain_review_cannot_authorize_go_or_land(env):
     ("head_sha", "b" * 40), ("stdout_tail", "TEST_GAMING: no\n"),
     ("stdout_tail", "TEST_GAMING: no\nVERDICT: REQUEST_CHANGES\n"),
     ("stdout_tail", "TEST_GAMING: no\nVERDICT: FIX (LOW: typo)\n"),
+    ("file_mode", 0o660),
 ])
 def test_go_req_revalidates_the_keeper_bound_review(env, field, value):
     st = go_ready(env)
     run = next(iter(st["merged"][0]["review_runs"].values()))
     path = env.tmp / "mirror" / "fixture" / run / "record.json"
-    record = json.loads(path.read_text())
-    record[field] = value
-    path.write_text(json.dumps(record))
+    if field == "file_mode":
+        path.chmod(value)
+    else:
+        record = json.loads(path.read_text())
+        record[field] = value
+        path.write_text(json.dumps(record))
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 1 and "keeper-bound" in result.stderr
 

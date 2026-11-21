@@ -86,6 +86,19 @@ impl Host {
     fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
         let mut command = Command::new(program);
         command.env("PATH", &self.tool_path);
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+
+            // Apply the run's mask in the child so concurrent daemon work keeps its own mask.
+            // SAFETY: umask is async-signal-safe and the closure touches no shared Rust state.
+            unsafe {
+                command.pre_exec(|| {
+                    libc::umask(0o022);
+                    Ok(())
+                });
+            }
+        }
         command
     }
     fn git(&self, args: &[&str]) -> Result<String, String> {
