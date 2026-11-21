@@ -19,6 +19,15 @@ Open. `200 {"status":"ok"}` [Health].
 ### `GET /v1/whoami`
 Any role. `200 {name, role, projects[], family|null}` [WhoAmI].
 
+### `GET /v1/events`
+JSON page `{rows, next_cursor, more}` of the event log. Pass `since` (exclusive
+sequence, default 0) and `limit` (scanned sequences, 1–500, default 100). Each
+visible row includes its sequence, timestamp, actor, role, model, key, type and
+payload. Resume at `next_cursor` even for an empty page. `more` describes the
+committed snapshot at the time of the request. Recipient membership is captured
+when an event is written, and the token must still have project access. Events
+from before the audience migration lack recipient membership.
+
 ### `GET /v1/ready`
 Any role. Query: `n` (default 10), `all` (any value: no limit), `project`,
 `owner`, `mine` (`1`/`true`: items whose `owner` is the caller), `agent`

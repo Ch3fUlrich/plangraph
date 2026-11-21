@@ -65,6 +65,21 @@ fn run() -> i32 {
             return 2;
         }
     };
+    if matches!(args.as_slice(), [keeper, events, ..] if keeper == "keeper" && events == "events") {
+        return match plangraph_cli::keeper_events::cli(&effective, &args[2..]) {
+            Ok(page) => {
+                println!(
+                    "{}",
+                    serde_json::to_string(&page).expect("serializable event page")
+                );
+                0
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                2
+            }
+        };
+    }
     if args.first().is_some_and(|s| s == "feed") {
         return feeder::run(&home, &effective, &args[1..]);
     }
@@ -98,7 +113,7 @@ fn run() -> i32 {
         ["setup", "check"] => setup::Mode::Check,
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | --version"
+                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | keeper events [--since SEQ] [--limit N] | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | --version"
             );
             return 2;
         }

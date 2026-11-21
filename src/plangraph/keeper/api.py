@@ -363,6 +363,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "snapshot":
             data = store.snapshot(principal)
             return (fmt.snapshot_text(data), True) if as_text else (data, False)
+        if name == "events":
+            since = self._int(self._one(query, "since", 0), "since")
+            limit = self._int(self._one(query, "limit", 100), "limit")
+            return store.event_page(principal, since, limit), False
         if name == "changelog":
             data = store.changelog(principal, self._one(query, "since"))
             return (changelog.render(data), True) if as_text else (data, False)

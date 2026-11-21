@@ -173,3 +173,33 @@ def test_admin_verify_covers_the_whole_chain_after_many_writes(kp):
     write(kp, "cancel", "router", {"key": keys[0], "reason": "x"})
     out = kp.admin("verify")
     assert out.returncode == 0 and "integrity ok" in out.stdout, out.stdout + out.stderr
+
+
+def test_scoped_event_feed_replays_release_and_interleaved_writes(kp):
+    key, private = make_plan(kp, n=2)
+    cursor = head(kp)[0]
+    epoch = write(kp, "claim", "worker1", {"key": key})["epoch"]
+    other_epoch = write(kp, "claim", "worker2", {"key": private})["epoch"]
+
+    def page(who, after):
+        reply = kp.get(f"/v1/events?since={after}&limit=1", who)
+        assert reply.status == 200, reply.raw
+        return reply.json
+
+    first = page("worker1", cursor)
+    write(kp, "release", "router", {"key": key, "epoch": epoch})
+    write(kp, "release", "worker2", {"key": private, "epoch": other_epoch})
+
+    def replay(who, data):
+        rows = []
+        while True:
+            rows.extend(data["rows"])
+            if not data["more"]:
+                return rows
+            data = page(who, data["next_cursor"])
+
+    rows = replay("worker1", first)
+    assert [(r["key"], r["type"]) for r in rows] == [(key, "claimed"), (key, "released")]
+    assert [r["seq"] for r in rows] == sorted({r["seq"] for r in rows})
+    assert replay("reader", page("reader", cursor)) == []
+    assert kp.get("/v1/events?since=-1", "worker1").status == 400
