@@ -40,9 +40,14 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
 
+from . import context_sources
 from .errors import Refused
+from .evidence import deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
+from .evidence_types import valid_commit_ref
+from .store_runs import _WARM_S
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
@@ -393,3 +398,156 @@ class CloseMixin:
                           "batch_ref": batch_ref, "sha256": sha}, now)
             return {"key": key, "state": "done",
                     "decision_ids": decision_ids, "sha256": sha}
+
+    # --- what a merged item shipped (LE-MERGED-UNIT-NEVER-DEPLOYED), read by the merged GO close
+    def _merged_heads(self, item, all_work=False):
+        """Heads of the merges that introduced the item's Plan-Item commits."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        try:
+            commits = context_sources.plan_item_commits(
+                git, project, item["key"], fetch=False,
+                **({"limit": None} if all_work else {}))
+        except Exception:  # noqa: BLE001 - an unreadable git proof never authorizes
+            commits = None
+        heads = set()
+        # A trailer-bearing commit may be inside a multi-commit PR, or a later
+        # direct follow-up. Bind to the introducing merge's second parent only.
+        for commit in commits or ():
+            sha = commit.get("sha")
+            if not valid_commit_ref(sha):
+                continue
+            try:
+                repo, ref = git.repo_path(project), git.repo_ref(project)
+                merge = git.merge_commit_of(repo, sha, ref)
+                if not merge or not valid_commit_ref(merge[0]):
+                    continue
+                proc = git._run(repo, ["show", "-s", "--format=%P",
+                                       "--end-of-options", merge[0]])
+                parents = proc.stdout.strip().split() if proc.returncode == 0 else []
+                if len(parents) == 2 and all(valid_commit_ref(p) for p in parents):
+                    heads.add(parents[1])
+            except Exception:  # noqa: BLE001 - an unknown merge never authorizes
+                continue
+        return heads
+
+    def _deploy_changes(self, item, *, named=True, strict=False):
+        """``(ref head, tagged commit shas, {(status, path)})``: the landed PRs of the item's merged work.
+
+        Reads the item's Plan-Item commits and, with ``named``, the commit a ``Merge-Repo:`` line
+        names (fetching). Raises when any input cannot be read, a failed history read (``None``)
+        included, or when the default ref moved while it ran; with ``strict`` an unverifiable named
+        merge raises too, otherwise it is left out. The ref is resolved once and every diff is read
+        against that commit, so a ref that moves away and back cannot show a different history.
+        """
+        git, project = self._adapter("git"), self._merge_project(item)
+        repo, ref = git.repo_path(project), git.repo_ref(project)
+        head = git.ref_commit(repo, ref)
+        commits = context_sources.plan_item_commits(git, project, item["key"], fetch=False, limit=None)
+        if commits is None:
+            raise RuntimeError("commit history unreadable")
+        shas = [commit.get("sha") for commit in commits]
+        tagged = frozenset(shas)
+        if named:
+            try:  # the landed commit of a named merge counts like a Plan-Item merge
+                merge = self._named_merge_proof(item)
+            except Refused:
+                if strict:
+                    raise
+                merge = None
+            shas += [merge["landed"]] if merge else []
+        # The landed changes of each merged PR, not only the tagged commits.
+        changes = {c for sha in shas if valid_commit_ref(sha) for c in git.deploy_changes(repo, sha, head)}
+        if git.ref_commit(repo, ref) != head:
+            raise RuntimeError("the default ref moved during the deploy scan")
+        return head, tagged, changes
+
+    def _deploy_pending(self, item, *, named=True, changes=None):
+        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for.
+
+        An item whose merged commits touch ``deploy/systemd`` or add a host binary is not done
+        until every host it names reports the unit active. ``changes`` is a scan taken earlier;
+        otherwise the scan runs here and an unreadable one answers nothing (the manual close).
+        """
+        if changes is None:
+            try:
+                changes = self._deploy_changes(item, named=named)[2]
+            except Exception:  # noqa: BLE001 - an unreadable diff never blocks the manual close
+                return []
+        targets = deploy_targets(changes)
+        if not targets:
+            return []
+        return deploy_missing(targets, deploy_hosts(item), self._evidence(item["key"]))
+
+    @staticmethod
+    def _merge_text(item):
+        return f"{item.get('description') or ''}\n{item.get('note') or ''}"
+
+    def _snapshot_deploy(self, key):
+        """Scan one candidate's deploy changes outside the request lock; ``warm_merge_scan`` calls it.
+
+        The answer (``None`` when anything could not be read) is what the frozen automatic close
+        consumes, so it asks git and the forge nothing under the lock.
+        """
+        item = self.__dict__.get("_deploy_inputs", {}).get(key)
+        if item is None:
+            return
+        try:
+            tagged = self._with_merge_repo(item)
+            head, shas, changes = self._deploy_changes(tagged, named=True, strict=True)
+            changes = frozenset(changes)
+        except Exception:  # noqa: BLE001 - recorded as unreadable
+            head, shas, changes = None, None, None
+        self.__dict__.setdefault("_deploy_warm", {})[key] = {
+            "at": time.monotonic(), "text": self._merge_text(item), "head": head, "shas": shas,
+            "changes": changes}
+
+    def _deploy_token(self, item):
+        """``(ref head, tagged commit shas)`` now: what a deploy scan must have been read at."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        head = git.ref_commit(git.repo_path(project), git.repo_ref(project))
+        commits = context_sources.plan_item_commits(git, project, item["key"], fetch=False, limit=None)
+        if commits is None:
+            raise RuntimeError("commit history unreadable")
+        return head, frozenset(c.get("sha") for c in commits)
+
+    def _auto_deploy_pending(self, item):
+        """``(pending pairs, token)``: the deploy gate of the automatic close. It fails closed.
+
+        A frozen run (under the request lock) reads only the snapshot taken outside the lock, and
+        only while the ref and the Plan-Item commits are still the ones it was read at; an
+        unfrozen run scans here, the named merge included. The token is checked again inside the
+        write transaction (`_auto_close_one`), so a ref that moves in between closes nothing.
+        """
+        if self.__dict__.get("_frozen_lanes"):
+            hit = self.__dict__.get("_deploy_warm", {}).get(item["key"])
+            if (hit is None or time.monotonic() - hit["at"] >= _WARM_S
+                    or hit["text"] != self._merge_text(item)):
+                raise Refused("evidence_unverified", "deploy_scan_not_warm")
+            changes, token = hit["changes"], None
+            if changes is not None:
+                try:
+                    token = self._deploy_token(item)
+                except Exception:  # noqa: BLE001 - what cannot be read cannot confirm the snapshot
+                    token = None
+                if token != (hit["head"], hit["shas"]):
+                    raise Refused("evidence_unverified", "deploy_scan_not_warm")
+        else:
+            try:
+                head, shas, changes = self._deploy_changes(item, named=True, strict=True)
+                token = (head, shas)
+            except Exception:  # noqa: BLE001 - see the docstring
+                changes, token = None, None
+        if changes is None:
+            raise Refused("evidence_unverified", "deploy_scan_unreadable")
+        return self._deploy_pending(item, changes=changes), token
+
+    def _deploy_pending_result(self, item, pending, now):
+        """Leave the item open: record the reason as an alert and report it."""
+        msg = "deploy_pending: " + ", ".join(pending)
+        with self._write():
+            if self._has_finding(item["key"], "deploy_pending"):
+                self._alerts_raise_finding(item["key"], "deploy_pending", msg, now)
+            else:
+                self._finding(item["key"], "deploy_pending", msg, now)
+        return {"key": item["key"], "state": item["state"], "closed": False,
+                "reason": "deploy_pending", "missing": pending}

@@ -37,6 +37,17 @@ _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 _PR_RE = re.compile(r"#(\d+)")
+# The canonical merge subject ends ``(#N)`` (tools/merge_batch_land.py); an earlier ``#42`` in
+# the title is prose, not the PR.
+_PR_TRAILING_RE = re.compile(r"\(#(\d+)\)\s*\Z")
+
+
+def subject_pr(subject):
+    """The PR number of a merge subject: the trailing ``(#N)``, else the first ``#N``, else None."""
+    match = _PR_TRAILING_RE.search(subject) or _PR_RE.search(subject)
+    return int(match.group(1)) if match else None
+
+
 MERGE_REPO_LINE = re.compile(
     r"[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)"
     r"(?:[ \t]+([a-fA-F0-9]{40}|#[1-9][0-9]*))?[ \t]*")
@@ -214,9 +225,8 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             introduced.append(sha)
             todo.extend(records.get(sha, ([],))[0])
         if len(parents) > 1:
-            match = _PR_RE.search(commit["subject"])
             merge = {"sha": landing, "subject": commit["subject"],
-                     "pr": int(match.group(1)) if match else None}
+                     "pr": subject_pr(commit["subject"])}
             for sha in introduced:
                 if sha != landing and sha in records:
                     records[sha][1]["merge"] = merge
@@ -366,8 +376,7 @@ def _merge_of(git, repo, ref, sha):
         if chain is not None and sha in chain.split():
             subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                        "--end-of-options", sha]) or "").strip()
-            match = _PR_RE.search(subject)
-            return {"sha": sha, "subject": subject, "pr": int(match.group(1)) if match else None}
+            return {"sha": sha, "subject": subject, "pr": subject_pr(subject)}
     # Combining --ancestry-path with --first-parent prunes paths through
     # second parents (nested batches and PR branches refreshed from main).
     # Walk ancestry separately, then intersect with the ref's landing merges.
@@ -388,29 +397,57 @@ def _merge_of(git, repo, ref, sha):
         return None
     subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                "--end-of-options", found[-1]]) or "").strip()
-    match = _PR_RE.search(subject)
-    return {"sha": found[-1], "subject": subject,
-            "pr": int(match.group(1)) if match else None}
+    return {"sha": found[-1], "subject": subject, "pr": subject_pr(subject)}
 
 
-def pr_merge_of(git, project, head):
-    """``{pr, merge, head}`` when *head* is the second parent of the first-parent merge
-    on the default ref that introduced it, else ``None`` (also when git cannot answer)."""
+def _head_introduced_by_merge(git, repo, parents, head):
+    """True when *head* entered via *parents[1]* of a two-parent merge, not *parents[0]*."""
+    if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents) or not valid_commit_ref(head):
+        return False
+    if parents[1] == head:
+        return True
+    p0_code, _ = _git(git, repo, ["merge-base", "--is-ancestor", "--end-of-options", head, parents[0]])
+    if p0_code != 1:
+        return False
+    p1_code, _ = _git(git, repo, ["merge-base", "--is-ancestor", "--end-of-options", head, parents[1]])
+    return p1_code == 0
+
+
+def pr_merge_of(git, project, head, *, fallback_pr=None):
+    """``{pr, merge, head}`` when *head* was introduced on the second parent of the
+    first-parent merge on the default ref, else ``None`` (also when git cannot answer).
+
+    When the merge subject carries no ``#N``, *fallback_pr* (from the GO row) supplies
+    the PR number and *head* may be any commit introduced on the merge's second parent;
+    otherwise the subject's ``#N`` is authoritative and *head* must equal the second parent.
+    """
     repo, ref = _repo_ref(git, project)
     if repo is None or not valid_commit_ref(head):
         return None
     merge = _merge_of(git, repo, ref, head)
-    if not merge or merge["pr"] is None:
+    if not merge:
         return None
     parents = (_ok(git, repo, ["show", "-s", "--format=%P", "--end-of-options",
                                merge["sha"]]) or "").split()
-    if len(parents) != 2 or parents[1] != head:
+    if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
         return None
-    return {"pr": merge["pr"], "merge": merge["sha"], "head": head}
+    if merge["pr"] is not None:
+        if parents[1] != head:
+            return None
+        return {"pr": merge["pr"], "merge": merge["sha"], "head": head}
+    if type(fallback_pr) is not int or fallback_pr <= 0:
+        return None
+    if not _head_introduced_by_merge(git, repo, parents, head):
+        return None
+    return {"pr": fallback_pr, "merge": merge["sha"], "head": head}
 
 
 def named_merge(git, project, revision):
-    """Verify a named merge on the default ref. Refuse a PR known to be unmerged."""
+    """Verify a named merge on the default ref. Refuse a PR known to be unmerged.
+
+    Returns ``head`` (the PR head), ``pr`` and ``landed``: the commit that is on the default ref,
+    which the deploy scan reads (a squash merge leaves the PR head off the ref).
+    """
     repo, ref = _repo_ref(git, project)
     if repo is None:
         return None
@@ -443,7 +480,7 @@ def named_merge(git, project, revision):
             git, repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, ref])[0] != 0:
         return None
     if pr is not None:
-        return {"head": pr_head, "pr": pr}
+        return {"head": pr_head, "pr": pr, "landed": sha}
     introduced = _merge_of(git, repo, ref, sha)
     landed = sha
     if introduced:
@@ -458,9 +495,8 @@ def named_merge(git, project, revision):
         return None
     parent_text, _, subject = shown.partition("\x1f")
     parents = parent_text.split()
-    match = _PR_RE.search(subject)
-    return {"head": parents[1] if len(parents) == 2 else sha,
-            "pr": int(match[1]) if match else None}
+    return {"head": parents[1] if len(parents) == 2 else sha, "pr": subject_pr(subject),
+            "landed": landed}
 
 
 _REFS_LOCK = threading.Lock()

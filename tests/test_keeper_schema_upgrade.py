@@ -440,7 +440,7 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
 
     try:
         full = schema_pg.MIGRATIONS
-        assert schema_pg.LATEST == 13
+        assert schema_pg.LATEST == 14
         assert db_pg.migrate(raw, fresh) == list(range(1, 14))
         assert (BUS_TABLES | OVERSIGHT_TABLES) <= pg_tables(fresh)
 

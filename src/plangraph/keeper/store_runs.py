@@ -188,8 +188,11 @@ class RunsMixin:
 
     def merge_candidates(self):
         """``(key, project)`` of every item the automatic close may take: the input of :meth:`warm_merge_scan`."""
-        return [(item["key"], item["project"]) for item in self._all_items()
-                if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+        items = [item for item in self._all_items()
+                 if item["state"] in self.AUTO_STATES and item["kind"] not in ("goal", "operator_task")]
+        # What the deploy scan needs of each item, read here under the lock so the scan does not touch the database.
+        self.__dict__["_deploy_inputs"] = {item["key"]: dict(item) for item in items}
+        return [(item["key"], item["project"]) for item in items]
 
     def warm_merge_scan(self, candidates=()):
         """Fetch, index and look up the hosted lanes of the scanned repositories; the API calls it outside its lock.
@@ -200,6 +203,7 @@ class RunsMixin:
         git = self._adapter("git")
         scan = getattr(git, "scan_projects", None)
         self.__dict__["_warmed"], self.__dict__["_lanes"] = {}, {}   # a failed refresh must not keep an old snapshot
+        self.__dict__["_deploy_warm"] = {}
         for project in list(scan()) if callable(scan) else []:
             if self._refresh_merged_default_ref(git, project):
                 index = context_sources.work_index(git, project, fresh=True)
@@ -207,6 +211,7 @@ class RunsMixin:
                     for key, item_project in candidates:
                         if context_sources.indexed_work(index, key)["commits"]:
                             context_sources.open_lanes(git, project, key, cache=self.__dict__["_lanes"])
+                            self._snapshot_deploy(key)
                     self.__dict__["_warmed"][project] = time.monotonic()
 
     def _warm(self, project):
@@ -335,24 +340,42 @@ class RunsMixin:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
             git, project, item["key"], fetch=False, limit=None)
+        from .store_waiver import _go_binding, _go_statement, _strip_prefix
+        go_pr, go_head = None, None
+        try:
+            text = _strip_prefix(self._ctx(item, now).decisions.text(decision_id))
+            go_pr, go_head = _go_binding(_go_statement(text), item["project"])
+        except Exception:  # noqa: BLE001 - unreadable GO row falls back to None
+            pass
         named = self._named_merge_proof(item)
-        proofs = ({named["head"]: named} if named and named["pr"] else {})
+        proofs = ({named["head"]: {"pr": named["pr"], "head": named["head"]}}
+                  if named and named["pr"] else {})
+        repo = git.repo_path(project)
+        ref = git.repo_ref(project)
         for commit in commits or ():
             merge = commit.get("merge") or {}
-            if type(merge.get("pr")) is not int or merge["pr"] <= 0:
+            pr = merge.get("pr")
+            has_subject_pr = type(pr) is int and pr > 0
+            if not has_subject_pr and (
+                    type(go_pr) is not int or go_pr <= 0 or not valid_commit_ref(go_head)):
                 raise Refused("evidence_unverified", "merged_pr_missing")
-            merged = git.merge_commit_of(git.repo_path(project), commit["sha"],
-                                         git.repo_ref(project))
-            proc = git._run(git.repo_path(project),
-                            ["show", "-s", "--format=%P", "--end-of-options", merged[0]]) if merged else None
+            merged = git.merge_commit_of(repo, commit["sha"], ref)
+            proc = git._run(repo, ["show", "-s", "--format=%P", "--end-of-options", merged[0]]) if merged else None
             parents = proc.stdout.strip().split() if proc and proc.returncode == 0 else []
             if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
                 raise Refused("evidence_unverified", "merged_pr_head_missing")
-            proofs[parents[1]] = {"pr": merge["pr"], "head": parents[1]}
+            if has_subject_pr:
+                proofs[parents[1]] = {"pr": pr, "head": parents[1]}
+            elif context_sources._head_introduced_by_merge(git, repo, parents, go_head):
+                proof_head = go_head if go_head == head else parents[1]
+                proofs[proof_head] = {"pr": go_pr, "head": proof_head}
+            else:
+                raise Refused("evidence_unverified", "merged_pr_missing")
         if proofs and head not in proofs:
             # A GO row bound to its own merged PR (merged_go_row) may name a head
             # the trailer search did not reach; that PR is proof in its own right.
-            bound = context_sources.pr_merge_of(git, project, head)
+            bound = context_sources.pr_merge_of(
+                git, project, head, fallback_pr=go_pr if head == go_head else None)
             if bound:
                 proofs[head] = {"pr": bound["pr"], "head": head}
         if not proofs or head not in proofs:

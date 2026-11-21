@@ -9,6 +9,7 @@ transaction/authorisation core.
 from __future__ import annotations
 
 import json
+from collections import Counter
 from datetime import datetime, timezone
 
 from .. import views
@@ -19,6 +20,12 @@ from .evidence_types import Context, valid_commit_ref
 from .item_fixes import ErrorRecordVerifier, check_error_ref
 
 __all__ = ["SupportMixin", "iso", "parse_iso"]
+
+#: Refusal timestamps kept per key; a key refused more often inside the window counts this many.
+REFUSAL_TIMES_CAP = 256
+
+_TERMINAL_EVENTS = frozenset({"cancelled", "closed_on_decision", "answered",
+                              "review_passed"})
 
 
 def iso(ts) -> str:
@@ -161,7 +168,206 @@ class SupportMixin:
             getattr(principal, "audit_role", None) or getattr(principal, "role", None),
             None, key, type, payload)
         self._revoke_for_event(principal, key, type, now, payload)
+        if key is not None and (type in _TERMINAL_EVENTS or (
+                type in ("legacy_state_set", "state_set")
+                and (payload or {}).get("state") in ("done", "cancelled"))):
+            self._alerts_resolve(key, now)
         return out
+
+    # ------------------------------------------------------- alerts table
+    # KEEPER-ALERTS-TABLE-ON-RAISE-CLEAR: ``alerts`` holds what is wrong now.  A row
+    # is written when an alert is raised and resolved when it is cleared, each with
+    # one ``alert_log`` telemetry row; ``alerts()`` reads only this table.
+    def _alert_telemetry(self, action, key, code, now):
+        self.conn.execute(
+            "INSERT INTO alert_log(ts,action,key,code) VALUES(?,?,?,?)",
+            (iso(now), action, key, code))
+
+    def _alert_row(self, kind, key, code):
+        where = "key IS NULL" if key is None else "key=?"
+        args = (kind,) if key is None else (kind, key)
+        sql = f"SELECT * FROM alerts WHERE kind=? AND {where} AND code=?"
+        return self.conn.execute(sql, (*args, code)).fetchone()
+
+    def _alerts_raise_finding(self, key, code, msg, now):
+        ts = iso(now)
+        row = self._alert_row("finding", key, code)
+        if row is None or row["state"] != "open":
+            if row is None:
+                self.conn.execute(
+                    "INSERT INTO alerts(kind,key,code,msg,first_seen,last_seen,n,state)"
+                    " VALUES('finding',?,?,?,?,?,1,'open')", (key, code, msg, ts, ts))
+            else:
+                self.conn.execute(
+                    "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=1,"
+                    " state='open' WHERE id=?", (msg, ts, ts, row["id"]))
+            self._alert_telemetry("alert_raised", key, code, now)
+        else:
+            self.conn.execute(
+                "UPDATE alerts SET msg=?, last_seen=?, n=n+1 WHERE id=?",
+                (msg, ts, row["id"]))
+
+    def _refusal_times(self, row):
+        """Epoch seconds of the refusals a refusal row remembers, oldest first.
+
+        ``msg`` holds the JSON list; a row without it (written before the list existed)
+        counts its ``n`` refusals at ``last_seen``.
+        """
+        try:
+            times = json.loads(row["msg"]) if row["msg"] else None
+        except ValueError:
+            times = None
+        if isinstance(times, list) and all(
+                isinstance(t, (int, float)) and not isinstance(t, bool) for t in times):
+            return [float(t) for t in times]
+        last = parse_iso(row["last_seen"])
+        return [last.timestamp()] * min(row["n"], REFUSAL_TIMES_CAP) if last else []
+
+    def _alerts_count_refusal(self, key, now):
+        """One refused call on *key*: an alert from the second refusal inside the window.
+
+        The row remembers each refusal's time; a refusal older than ``alert_window_s`` stops
+        counting on its own, however recent the refusals after it are.
+        """
+        ts = iso(now)
+        row = self._alert_row("refusal", key, "refused")
+        if row is None:
+            self.conn.execute(
+                "INSERT INTO alerts(kind,key,code,msg,first_seen,last_seen,n,state)"
+                " VALUES('refusal',?,'refused',?,?,?,1,'open')", (key, json.dumps([now]), ts, ts))
+            return
+        cutoff = now - self.alert_window_s
+        current = ([t for t in self._refusal_times(row) if t >= cutoff]
+                   if row["state"] == "open" else [])
+        times = (current + [now])[-REFUSAL_TIMES_CAP:]
+        self.conn.execute(
+            "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=?, state='open' WHERE id=?",
+            (json.dumps(times), iso(times[0]), ts, len(times), row["id"]))
+        if len(current) == 1:
+            self._alert_telemetry("alert_raised", key, "refused", now)
+
+    def _alerts_resolve(self, key, now, older_than=None):
+        """Clear every open alert of *key* (or, with *key* None, those not seen since *older_than*)."""
+        if key is None:
+            rows = self.conn.execute(
+                "SELECT id,key,code,kind,n FROM alerts WHERE state='open'"
+                " AND last_seen < ?", (older_than,)).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT id,key,code,kind,n FROM alerts WHERE state='open' AND key=?",
+                (key,)).fetchall()
+        for row in rows:
+            self.conn.execute("UPDATE alerts SET state='resolved' WHERE id=?",
+                              (row["id"],))
+            if row["kind"] == "finding" or row["n"] >= 2:
+                self._alert_telemetry("alert_cleared", row["key"], row["code"], now)
+        return len(rows)
+
+    def _alerts_expire(self, now):
+        """Resolve alerts not seen inside ``alert_window_s`` (called by the reaper)."""
+        return self._alerts_resolve(None, now, older_than=iso(now - self.alert_window_s))
+
+    def backfill_alerts(self, now=None):
+        """One-time, idempotent: build ``alerts`` from ``audit_findings`` and refused ``audit_log`` rows.
+
+        The ``alerts_backfill`` ``alert_log`` row is the marker, checked and written in the same
+        transaction as the rows. An alert identity (finding: key and code; refusal: key) the
+        table already holds, raised live since the table appeared, is merged into its one row:
+        the earlier first sight, the later last sight, the larger count.
+        """
+        now = self.now() if now is None else now
+        cutoff = now - self.alert_window_s
+        open_states = ("open", "claimed", "in_review")
+        with self._write():
+            if self.conn.execute("SELECT 1 FROM alert_log WHERE action='alerts_backfill'"
+                                 " LIMIT 1").fetchone() is not None:
+                return {"findings": 0, "refusals": 0, "skipped": True}
+            state = {r["key"]: r["state"] for r in
+                     self.conn.execute("SELECT key,state FROM items")}
+            merged = {}
+            for row in self.conn.execute(
+                    "SELECT ts,key,code,msg FROM audit_findings ORDER BY id"):
+                if row["key"] is not None and row["key"] not in state:
+                    continue
+                entry = merged.setdefault((row["key"], row["code"]),
+                                          {"first": row["ts"], "last": row["ts"],
+                                           "msg": row["msg"], "n": 0})
+                # Bounds by time, not by row order: a clock set back must not invert them.
+                entry["first"] = min(entry["first"], row["ts"])
+                if row["ts"] >= entry["last"]:
+                    entry.update(last=row["ts"], msg=row["msg"])
+                entry["n"] += 1
+            refused = {}
+            for row in self.conn.execute(
+                    "SELECT key, ts FROM audit_log WHERE ok=0 AND key IS NOT NULL ORDER BY id"):
+                refused.setdefault(row["key"], []).append(row["ts"])
+            for (key, code), e in merged.items():
+                when = parse_iso(e["last"])
+                current = (state.get(key, "open") in open_states
+                           and (when is None or when.timestamp() >= cutoff))
+                have = self._alert_row("finding", key, code)
+                if have is None:
+                    self.conn.execute(
+                        "INSERT INTO alerts(kind,key,code,msg,first_seen,last_seen,n,state)"
+                        " VALUES('finding',?,?,?,?,?,?,?)",
+                        (key, code, e["msg"], e["first"], e["last"], e["n"],
+                         "open" if current else "resolved"))
+                    continue
+                later = e["last"] >= (have["last_seen"] or "")
+                self.conn.execute(
+                    "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=?, state=? WHERE id=?",
+                    (e["msg"] if later else have["msg"],
+                     min(have["first_seen"] or e["first"], e["first"]),
+                     max(have["last_seen"] or "", e["last"]), max(have["n"], e["n"]),
+                     "open" if current or have["state"] == "open" else "resolved", have["id"]))
+            for key, stamps in refused.items():
+                if key not in state:
+                    continue
+                stamps = sorted(stamps)
+                audited = [t.timestamp() for t in (parse_iso(x) for x in stamps)
+                           if t is not None and t.timestamp() >= cutoff]
+                first, last, total = stamps[0], stamps[-1], len(stamps)
+                have = self._alert_row("refusal", key, "refused")
+                live_open = have is not None and have["state"] == "open"
+                # A live row keeps its precise times; the audit log (whole seconds) only adds
+                # the refusals the row does not already hold, counted per second.
+                live = ([t for t in self._refusal_times(have) if t >= cutoff]
+                        if live_open else [])
+                # Per whole second: the audit rows beyond the live times of that second.
+                held = Counter(int(t) for t in live)
+                extra = []
+                for second, count in Counter(int(t) for t in audited).items():
+                    extra += [float(second)] * max(0, count - held[second])
+                times = sorted(live + extra)[-REFUSAL_TIMES_CAP:]
+                current = state[key] in open_states and len(times) >= 2
+                if have is None:
+                    self.conn.execute(
+                        "INSERT INTO alerts(kind,key,code,msg,first_seen,last_seen,n,state)"
+                        " VALUES('refusal',?,'refused',?,?,?,?,?)",
+                        (key, json.dumps(times) if current else None, first, last,
+                         len(times) if current else total, "open" if current else "resolved"))
+                    continue
+                bounds = (min(have["first_seen"] or first, first),
+                          max(have["last_seen"] or "", last))
+                if live_open:
+                    # The count stays what the row had raised, so the history of an alert that
+                    # lost a refusal to the window stays in `history.refusal_keys`.
+                    self.conn.execute(
+                        "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=? WHERE id=?",
+                        (json.dumps(times), *bounds, max(have["n"], len(times)), have["id"]))
+                elif current:
+                    self.conn.execute(
+                        "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=?, state='open'"
+                        " WHERE id=?", (json.dumps(times), *bounds, len(times), have["id"]))
+                else:
+                    self.conn.execute(
+                        "UPDATE alerts SET first_seen=?, last_seen=?, n=? WHERE id=?",
+                        (*bounds, max(have["n"], total), have["id"]))
+            self.conn.execute(
+                "INSERT INTO alert_log(ts,action,msg) VALUES(?,?,?)",
+                (iso(now), "alerts_backfill",
+                 f"findings={len(merged)} refusals={len(refused)}"))
+        return {"findings": len(merged), "refusals": len(refused), "skipped": False}
 
     # -------------------------------------------------------------- reads
     def _item(self, key):

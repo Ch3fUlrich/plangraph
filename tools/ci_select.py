@@ -69,6 +69,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "docs/rust-hooks.md",
     "docs/spawner-reliability.md",
     "docs/workspace-resolver.md",
+    "skills/router-core/SKILL.md",
     "changelog.d/FLEET-WINDOW-CATALOG.md",
     "changelog.d/PLACEMENT-RULES-AUDIT.md",
     "changelog.d/SPAWNER-RL12-B1.md",
@@ -97,6 +98,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "tests/fixtures/keeper_mcp_replies.json",
     "tests/fixtures/keeper_mcp_tools.json",
     "tests/fixtures/redact_parity.json",
+    # rust/pg-spawnd/src/round_replan_ports_tests.rs asserts the golden slice definitions.
+    "tests/fixtures/replan_slice_definition.json",
     "tests/fixtures/writer_docs_map.json",
     "tests/hooks/parity_payloads.json",
     "tools/changelog_fold.py",

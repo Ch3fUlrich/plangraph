@@ -147,11 +147,15 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             (iso(now if now is not None else self.now()),
              getattr(principal, "name", None), getattr(principal, "role", None),
              action, key, 1 if ok else 0, code or None, msg or None))
+        if not ok and key is not None:
+            self._alerts_count_refusal(
+                key, now if now is not None else self.now())
 
     def _finding(self, key, code, msg, now):
         self.conn.execute(
             "INSERT INTO audit_findings(ts,key,code,msg) VALUES(?,?,?,?)",
             (iso(now), key, code, msg))
+        self._alerts_raise_finding(key, code, msg, now)
 
     def audit_auth_failure(self, reason="", now=None):
         """Record a rejected authentication by reason only, never a token.

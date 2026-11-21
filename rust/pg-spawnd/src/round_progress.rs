@@ -46,7 +46,12 @@ pub(crate) fn stop_reason(counts: &[u64], next: u64, used_exception: bool) -> Op
         _ => None,
     }
 }
-fn summarize(value: &Value, run: &str, item: &str, pr: &Value) -> Result<Value, ToolError> {
+pub(crate) fn summarize(
+    value: &Value,
+    run: &str,
+    item: &str,
+    pr: &Value,
+) -> Result<Value, ToolError> {
     let invalid = || refused("round_verdict_invalid");
     if value["writer_run_id"] != run || value["item_key"] != item || &value["pr"] != pr {
         return Err(invalid());
@@ -86,7 +91,7 @@ fn summarize(value: &Value, run: &str, item: &str, pr: &Value) -> Result<Value, 
         "narrow_fix_eligible":high == 0 && (1..=2).contains(&med) && clear,
         "verdict":value}))
 }
-fn read_json(path: &Path) -> Result<Value, ToolError> {
+pub(crate) fn read_json(path: &Path) -> Result<Value, ToolError> {
     let read = || -> std::io::Result<Value> {
         // Reuse the record reader's no-follow, regular-file checks, including FIFOs.
         let file = crate::records::open_record(path)?;
@@ -98,6 +103,45 @@ fn read_json(path: &Path) -> Result<Value, ToolError> {
         Ok(serde_json::from_slice(&bytes)?)
     };
     read().map_err(|_| refused("round_verdict_invalid"))
+}
+
+/// The writer rounds of `item` that count toward the stop rule (voided and refused attempts
+/// excluded), ordered by round.
+pub(crate) fn round_history(state: &Path, item: &str) -> Result<Vec<Value>, ToolError> {
+    let mut history = Vec::new();
+    match std::fs::read_dir(state.join("runs")) {
+        Ok(entries) => {
+            for entry in entries {
+                let entry = entry.map_err(|_| refused("round_history_unavailable"))?;
+                let name = entry.file_name();
+                let Some(id) = name.to_str().filter(|s| s.starts_with("run-")) else {
+                    continue;
+                };
+                if let Err(error) = std::fs::symlink_metadata(entry.path().join("record.json")) {
+                    if error.kind() == std::io::ErrorKind::NotFound {
+                        continue; // Prompt storage precedes creation of the run record.
+                    }
+                    return Err(refused("round_history_unavailable"));
+                }
+                let record = crate::records::read_record(state, &json!(id))
+                    .map_err(|_| refused("round_history_unavailable"))?;
+                if record["role"] == "implement"
+                    && record["item_key"] == item
+                    && record["writer_round"].is_u64()
+                    && !(record["round_void"] == true
+                        && crate::runs::terminal(&record)
+                        && record["status"] != "completed")
+                    && !matches!(record["status"].as_str(), Some("dry_run" | "refused"))
+                {
+                    history.push(record);
+                }
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err(refused("round_history_unavailable")),
+    }
+    history.sort_by_key(|r| r["writer_round"].as_u64().unwrap());
+    Ok(history)
 }
 
 pub(crate) struct Admission {
@@ -138,39 +182,7 @@ pub(crate) fn admit(state: &Path, args: &Args) -> Result<Admission, ToolError> {
     let lock = pg_worker_core::lockfile::try_lock(&state.join(lock_name))
         .map_err(|_| refused("round_history_unavailable"))?
         .ok_or_else(|| refused("round_admission_busy"))?;
-    let mut history = Vec::new();
-    match std::fs::read_dir(state.join("runs")) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = entry.map_err(|_| refused("round_history_unavailable"))?;
-                let name = entry.file_name();
-                let Some(id) = name.to_str().filter(|s| s.starts_with("run-")) else {
-                    continue;
-                };
-                if let Err(error) = std::fs::symlink_metadata(entry.path().join("record.json")) {
-                    if error.kind() == std::io::ErrorKind::NotFound {
-                        continue; // Prompt storage precedes creation of the run record.
-                    }
-                    return Err(refused("round_history_unavailable"));
-                }
-                let record = crate::records::read_record(state, &json!(id))
-                    .map_err(|_| refused("round_history_unavailable"))?;
-                if record["role"] == "implement"
-                    && record["item_key"] == item
-                    && record["writer_round"].is_u64()
-                    && !(record["round_void"] == true
-                        && crate::runs::terminal(&record)
-                        && record["status"] != "completed")
-                    && !matches!(record["status"].as_str(), Some("dry_run" | "refused"))
-                {
-                    history.push(record);
-                }
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(_) => return Err(refused("round_history_unavailable")),
-    }
-    history.sort_by_key(|r| r["writer_round"].as_u64().unwrap());
+    let history = round_history(state, item)?;
     let next = history.len() as u64 + 1;
     let used_exception = history.iter().any(|r| r["narrow_fix"] == true);
     let mut summaries = vec![];
@@ -260,6 +272,14 @@ pub(crate) fn record_refusal(
     let mut base = json!({"role":"implement", "reason":reason,
         "refusal":"SpawnRefused", "error":error.message, "exit_code":2});
     crate::records::annotate_item(&mut base, &args["card"], &mut vec![]);
+    // A stop of the round rule starts the durable replan of the PR (round_replan).
+    if let (Some(item), Some(pr)) = (base["item_key"].as_str(), args["card"]["pr"].as_str()) {
+        match crate::round_replan::enqueue(state, item, pr, reason) {
+            Ok(true) => base["replan"] = json!("queued"),
+            Ok(false) => {}
+            Err(e) => base["replan_error"] = json!(e.into_error_data().message),
+        }
+    }
     crate::runs::create(
         state,
         &pg_worker_core::run::record::new_run_id(),

@@ -186,36 +186,6 @@ class WaiverMixin:
             raise Refused("evidence_unverified", f"merge_repo_commit_not_on_default: {project} {revision}")
         return proof
 
-    def _merged_heads(self, item, all_work=False):
-        """Heads of the merges that introduced the item's Plan-Item commits."""
-        git, project = self._adapter("git"), self._merge_project(item)
-        try:
-            commits = context_sources.plan_item_commits(
-                git, project, item["key"], fetch=False,
-                **({"limit": None} if all_work else {}))
-        except Exception:  # noqa: BLE001 - an unreadable git proof never authorizes
-            commits = None
-        heads = set()
-        # A trailer-bearing commit may be inside a multi-commit PR, or a later
-        # direct follow-up. Bind to the introducing merge's second parent only.
-        for commit in commits or ():
-            sha = commit.get("sha")
-            if not valid_commit_ref(sha):
-                continue
-            try:
-                repo, ref = git.repo_path(project), git.repo_ref(project)
-                merge = git.merge_commit_of(repo, sha, ref)
-                if not merge or not valid_commit_ref(merge[0]):
-                    continue
-                proc = git._run(repo, ["show", "-s", "--format=%P",
-                                       "--end-of-options", merge[0]])
-                parents = proc.stdout.strip().split() if proc.returncode == 0 else []
-                if len(parents) == 2 and all(valid_commit_ref(p) for p in parents):
-                    heads.add(parents[1])
-            except Exception:  # noqa: BLE001 - an unknown merge never authorizes
-                continue
-        return heads
-
     def _merged_go_proof(self, item, decision_id, now, *, all_work=False):
         named = self._named_merge_proof(item)
         heads = self._merged_heads(item, all_work)
@@ -280,7 +250,8 @@ class WaiverMixin:
             return set()
         try:
             merged = context_sources.pr_merge_of(
-                self._adapter("git"), self._merge_project(item), head)
+                self._adapter("git"), self._merge_project(item), head,
+                fallback_pr=pr)
         except Refused:
             raise
         except Exception:  # noqa: BLE001 - an unreadable merge never authorizes
@@ -542,6 +513,9 @@ class WaiverMixin:
             backfill = families is None and waiver is None
             witnessed, seats, flags = ([], [], None) if waiver is not None else self._seats_or_flag(
                 item, decision_id, head, now, prs, families, backfill, required)
+            pending = self._deploy_pending(item)
+            if pending:
+                return self._deploy_pending_result(item, pending, now)
             if (from_open or waiver_only) and not apply:
                 return {"key": key, "state": item["state"], "would_close": True, "prs": prs, **self._flags_of(flags)}
         with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock
@@ -707,6 +681,11 @@ class WaiverMixin:
         self._assert_unlocked(item)
         seated = tier != "none"
         proofs = self._merged_auto_proofs(item)
+        pending, token = self._auto_deploy_pending(item)  # preview and apply alike
+        if pending:
+            if apply:
+                self._deploy_pending_result(item, pending, now)
+            raise Refused("evidence_unverified", "deploy_pending: " + ", ".join(pending))
         witnessed, flags = self._auto_seats(item, proofs, now, require_seats) if seated else ([], None)
         if not apply:
             return {"key": key, "state": item["state"], "prs": proofs, **self._flags_of(flags)}
@@ -720,6 +699,12 @@ class WaiverMixin:
                 raise Refused("conflict", f"{key} changed under the transaction")
             fresh = dict(fresh, **({"_merge_project": item["_merge_project"]} if "_merge_project" in item else {}))
             if self._merged_auto_proofs(fresh) != proofs:
+                raise Refused("conflict", "merged_on_default_changed")
+            try:  # the deploy scan was read at this ref head and these commits: still so, or no close
+                moved = self._deploy_token(fresh) != token
+            except Exception:  # noqa: BLE001 - unreadable is not confirmed
+                moved = True
+            if moved:
                 raise Refused("conflict", "merged_on_default_changed")
             if seated and self._auto_seats(fresh, proofs, now, require_seats) != (witnessed, flags):
                 raise Refused("conflict", "review_witness_changed")

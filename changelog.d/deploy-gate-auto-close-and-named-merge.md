@@ -1,0 +1,1 @@
+- The deploy gate also guards the automatic merge close (preview and apply list the item as `deploy_pending` while a landed unit has no deploy proof) and the merge a `Merge-Repo:` line names; merge subjects with several `#N` give their trailing `(#N)` on the first-parent and the named-merge path alike.

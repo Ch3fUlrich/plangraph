@@ -1,0 +1,311 @@
+"""The deploy gate reads the same merged work on every close path (LE-MERGED-UNIT-NEVER-DEPLOYED)."""
+import sys
+
+import pytest
+
+from plangraph.keeper import context_sources
+from plangraph.keeper.evidence_git import GitAdapter
+from test_keeper_close_merged_scan import HEADER, _git, merged_repo
+from test_keeper_merge_close_auto import auto, env, git  # noqa: F401 - env is a fixture
+from test_keeper_close_merged import unseated_w, w  # noqa: F401 - the manual-close world fixtures
+
+
+def _land_with_unit(root, name="feat", pr=41, tagged=True):
+    """A PR whose tagged commit edits a note and whose untagged follow-up adds a unit."""
+    git(root, "checkout", "-q", "-b", name, "main")
+    (root / "NOTES.md").write_text("work\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "work" + ("\n\nPlan-Item: demo:A" if tagged else ""))
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/new.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "follow-up without a trailer")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", f"Merge pull request #{pr} from x/{name}", name)
+
+
+def test_the_automatic_close_waits_for_deploy_proof_in_preview_and_apply(env):  # noqa: F811
+    _land_with_unit(env.repo.root)
+    preview = auto(env, require_seats=False, apply=False)
+    assert preview["would_close"] == [] and preview["closed"] == []
+    assert [r["key"] for r in preview["listed"]] == ["demo:A"]
+    assert "deploy_pending" in preview["listed"][0]["reason"]
+    applied = auto(env, require_seats=False)
+    assert applied["closed"] == []
+    assert "deploy_pending" in applied["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+    codes = [f["code"] for f in env.store.alerts(env.p("reader"))["findings"] if f["key"] == "demo:A"]
+    assert codes == ["deploy_pending"]
+
+
+def test_the_automatic_close_still_closes_a_merge_that_ships_no_unit(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 42)
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+
+
+def test_the_manual_close_counts_the_merge_a_merge_repo_note_names(w, monkeypatch, tmp_path):  # noqa: F811
+    repo = tmp_path / "other-repo"
+    merged_repo(repo, [(165, None, "2026-11-01T12:00:00Z")])
+    _land_with_unit(repo, name="untagged", pr=166, tagged=False)
+    landed = _git(repo, "rev-parse", "main")
+    empty = tmp_path / "demo-repo"
+    heads = merged_repo(empty, [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
+                                     "other": {"path": str(repo), "ref": "main"}})
+    w.store.verifiers["deploy"] = __import__("plangraph.keeper.evidence", fromlist=["VERIFIERS"]).VERIFIERS["deploy"]
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    head = _git(repo, "rev-parse", "main^2")
+    w.decision_path.write_text(
+        HEADER + f"| D-5504 | demo | GO #166 demo:A; GO-HEAD {head} | ROUTER | 2026-11-05 |\n")
+    w.store.edit_definition(w.p("router"), "demo:A", {"note": f"Merge-Repo: other {landed}"})
+    out = w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
+    assert out["closed"] is False and out["reason"] == "deploy_pending"
+    assert w.store._item("demo:A")["state"] == "in_review"
+
+
+@pytest.mark.parametrize("subject,pr", [("batch l1: #1 #2 #3 (#100)", 100), ("Fix #7 (#9)", 9)])
+def test_both_merge_subject_paths_read_the_trailing_pr(tmp_path, subject, pr):
+    """A merge that carries the trailers itself, and a merge named by its sha, give the PR of `(#N)`."""
+    repo = tmp_path / "repo"
+    merged_repo(repo, [])
+    git(repo, "checkout", "-q", "-b", "feat", "main")
+    git(repo, "commit", "-q", "--allow-empty", "-m", "work")
+    git(repo, "checkout", "-q", "main")
+    git(repo, "merge", "--no-ff", "-q", "-m", f"{subject}\n\nPlan-Item: demo:A", "feat")
+    merge = git(repo, "rev-parse", "HEAD")
+    adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    r, ref = adapter.repo_path("demo"), adapter.repo_ref("demo")
+    assert context_sources._merge_of(adapter, r, ref, merge)["pr"] == pr
+    assert context_sources.named_merge(adapter, "demo", merge)["pr"] == pr
+
+
+def frozen(env, **kw):  # noqa: F811
+    """What the API does: warm the scan outside the lock, then run the verb frozen."""
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    return env.store.close_merged_auto(env.p("system"), frozen=True, **kw)
+
+
+def test_the_frozen_automatic_close_resolves_no_named_merge_under_its_lock(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 43)
+    merge = git(env.repo.root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:A'", (f"Merge-Repo: demo {merge}",))
+    env.store.warm_merge_scan(env.store.merge_candidates())  # outside the lock: may fetch and resolve
+    resolved = []
+    real = env.store._named_merge_proof
+    monkeypatch.setattr(env.store, "_named_merge_proof", lambda *a: resolved.append(a) or real(*a))
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert [c["key"] for c in result["closed"]] == ["demo:A"]
+    assert resolved == [], "under the request lock the scan comes from the warm snapshot"
+
+
+def test_a_frozen_close_holds_an_item_whose_separately_named_merge_ships_a_unit(env):  # noqa: F811
+    """A tagged docs merge, plus a `Merge-Repo:` SHA naming another merge that adds a unit."""
+    env.repo.land("docs", "Plan-Item: demo:A", 45)
+    root = env.repo.root
+    git(root, "checkout", "-q", "-b", "unit", "main")
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/new.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "unit without a trailer")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #46 from x/unit", "unit")
+    named = git(root, "rev-parse", "HEAD")
+    env.conn.execute("UPDATE items SET description=? WHERE key='demo:A'", (f"Merge-Repo: demo {named}",))
+    for run in (lambda: frozen(env, require_seats=False),
+                lambda: auto(env, require_seats=False)):
+        result = run()
+        assert result["closed"] == []
+        assert "deploy_pending" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_a_frozen_close_without_a_warm_deploy_scan_closes_nothing(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 47)
+    env.store.warm_merge_scan()  # no candidates: the indexes are warm, the deploy scan is not
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+
+
+def test_a_failed_history_read_is_not_an_empty_deploy_scan(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 48)
+    real = context_sources.plan_item_commits
+    broken = {"on": False}
+
+    def history(git_, project, key, **kw):
+        # Only the deploy scan's own read fails; the close's proof of the merge still sees the commits.
+        scan = sys._getframe(1).f_code.co_name == "_deploy_changes"
+        return None if broken["on"] and scan else real(git_, project, key, **kw)
+
+    monkeypatch.setattr(context_sources, "plan_item_commits", history)
+    broken["on"] = True
+    for run in (lambda: auto(env, require_seats=False),
+                lambda: frozen(env, require_seats=False)):  # frozen: the snapshot read the failure
+        result = run()
+        assert result["closed"] == []
+        assert "deploy_scan_unreadable" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_an_unreadable_deploy_scan_leaves_the_item_open_on_the_automatic_close(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 44)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("cannot read commit changes")
+
+    monkeypatch.setattr(env.store.ctx["git"], "deploy_changes", broken)
+    for apply in (False, True):
+        result = auto(env, require_seats=False, apply=apply)
+        assert result["closed"] == [] and result["would_close"] == []
+        assert "deploy_scan_unreadable" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_a_squash_merged_hosted_pr_is_scanned_at_its_landed_commit_not_its_topic_head(w, monkeypatch, tmp_path):  # noqa: F811
+    import json
+    import subprocess
+    repo = tmp_path / "other"
+    merged_repo(repo, [])
+    # The PR's topic head never reaches main; main gets one squash commit that adds the unit.
+    _git(repo, "checkout", "-q", "-b", "topic")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "topic work")
+    topic = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "main")
+    (repo / "deploy/systemd").mkdir(parents=True)
+    (repo / "deploy/systemd/new.service").write_text("[Service]\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "feature (#166)")
+    squash = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "remote", "add", "origin", "https://github.com/example/other")
+    empty = tmp_path / "demo"
+    merged_repo(empty, [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
+                                     "other": {"path": str(repo), "ref": "main"}})
+    w.store.verifiers["deploy"] = __import__("plangraph.keeper.evidence", fromlist=["VERIFIERS"]).VERIFIERS["deploy"]
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    w.decision_path.write_text(
+        HEADER + f"| D-5504 | demo | GO other PR #166 demo:A; GO-HEAD {topic} | ROUTER | 2026-11-05 |\n")
+    run = subprocess.run
+
+    def hosted(args, **kwargs):
+        if args[0] != "gh":
+            return run(args, **kwargs)
+        info = {"state": "MERGED", "mergeCommit": {"oid": squash}, "headRefOid": topic}
+        return subprocess.CompletedProcess(args, 0, json.dumps(info))
+
+    monkeypatch.setattr(subprocess, "run", hosted)
+    router = w.p("router")
+    w.store.edit_definition(router, "demo:A", {"note": "Merge-Repo: other #166"})
+    out = w.store.close_merged(router, "demo:A", "D-5504", ["google"])
+    assert out["closed"] is False and out["reason"] == "deploy_pending"
+    assert out["missing"] == ["(hosts unnamed)"]
+
+
+def test_a_snapshot_older_than_the_work_the_close_proves_is_stale(env):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 50)
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    # After the warm-up a second PR of the same item lands and ships a unit.
+    root = env.repo.root
+    git(root, "checkout", "-q", "-b", "later", "main")
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/late.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "late unit\n\nPlan-Item: demo:A")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #51 from x/later", "later")
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+    # A fresh warm-up sees both PRs and finds the unit.
+    again = frozen(env, require_seats=False)
+    assert again["closed"] == [] and "deploy_pending" in again["listed"][0]["reason"]
+
+
+def test_a_failed_merge_lookup_is_an_unreadable_scan_not_the_commits_own_diff(env, monkeypatch):  # noqa: F811
+    _land_with_unit(env.repo.root, pr=52)
+    monkeypatch.setattr(GitAdapter, "merge_commit_of", lambda *a, **k: None)  # as after a git failure
+    for run in (lambda: auto(env, require_seats=False), lambda: frozen(env, require_seats=False)):
+        result = run()
+        assert result["closed"] == []
+        assert "deploy_scan_unreadable" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+
+
+def test_a_direct_commit_on_the_ref_has_no_merge_to_find(tmp_path):
+    repo = tmp_path / "repo"
+    merged_repo(repo, [])
+    (repo / "deploy/systemd").mkdir(parents=True)
+    (repo / "deploy/systemd/direct.service").write_text("[Service]\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "direct unit\n\nPlan-Item: demo:A")
+    sha = _git(repo, "rev-parse", "HEAD")
+    adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    r, ref = adapter.repo_path("demo"), adapter.repo_ref("demo")
+    assert ("A", "deploy/systemd/direct.service") in adapter.deploy_changes(r, sha, ref)
+    # An older direct commit, with newer work after it, is still on the chain.
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "later")
+    assert ("A", "deploy/systemd/direct.service") in adapter.deploy_changes(r, sha, ref)
+
+
+def test_a_snapshot_of_a_rebuilt_ref_is_stale_even_with_the_same_tagged_commit(env):  # noqa: F811
+    tagged = env.repo.land("docs", "Plan-Item: demo:A", 53)
+    env.store.warm_merge_scan(env.store.merge_candidates())
+    # The default ref is rebuilt: the same tagged commit comes in through a different merge that
+    # also brings an untagged unit commit.
+    root = env.repo.root
+    git(root, "reset", "-q", "--hard", "HEAD^")
+    git(root, "checkout", "-q", "-b", "redo", tagged)
+    (root / "deploy/systemd").mkdir(parents=True)
+    (root / "deploy/systemd/redo.service").write_text("[Service]\n")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "unit without a trailer")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #54 from x/redo", "redo")
+    result = env.store.close_merged_auto(env.p("system"), require_seats=False, frozen=True)
+    assert result["closed"] == [] and "deploy_scan_not_warm" in result["listed"][0]["reason"]
+    assert env.store._item("demo:A")["state"] == "open"
+    again = frozen(env, require_seats=False)
+    assert again["closed"] == [] and "deploy_pending" in again["listed"][0]["reason"]
+
+
+def test_a_ref_that_moves_away_and_back_during_the_scan_cannot_hide_the_unit(env, monkeypatch):  # noqa: F811
+    _land_with_unit(env.repo.root, pr=55)
+    root = env.repo.root
+    final = git(root, "rev-parse", "HEAD")
+    tagged = git(root, "rev-parse", "main^2~1")  # the tagged commit, before the untagged follow-up
+    # An alternative history: the same tagged commit merged without the follow-up.
+    git(root, "checkout", "-q", "-b", "alt", "main~1")
+    git(root, "merge", "--no-ff", "-q", "-m", "Merge pull request #55 from x/feat", tagged)
+    alt = git(root, "rev-parse", "HEAD")
+    git(root, "checkout", "-q", "main")
+    git(root, "branch", "-q", "-D", "alt")  # a lane would hold the close; the commit stays for update-ref
+    real = GitAdapter.deploy_changes
+
+    def excursion(self, repo, sha, ref):
+        git(root, "update-ref", "refs/heads/main", alt)  # the ref is elsewhere while the diff is read
+        try:
+            return real(self, repo, sha, ref)
+        finally:
+            git(root, "update-ref", "refs/heads/main", final)
+
+    monkeypatch.setattr(GitAdapter, "deploy_changes", excursion)
+    result = frozen(env, require_seats=False)
+    assert result["closed"] == [] and "deploy_pending" in result["listed"][0]["reason"]
+
+
+def test_a_ref_that_moves_between_the_check_and_the_write_closes_nothing(env, monkeypatch):  # noqa: F811
+    env.repo.land("docs", "Plan-Item: demo:A", 56)
+    root = env.repo.root
+    parents = git(root, "rev-list", "--parents", "-n", "1", "HEAD").split()
+    # The same PR and topic head through a replacement merge: the proofs (pr, head) are equal.
+    replacement = git(root, "commit-tree", f"{parents[0]}^{{tree}}", "-p", parents[1], "-p", parents[2],
+                      "-m", "Merge pull request #56 from x/docs (replacement)")
+    real = type(env.store)._write
+
+    def moved(store):
+        git(root, "update-ref", "refs/heads/main", replacement)
+        return real(store)
+
+    monkeypatch.setattr(type(env.store), "_write", moved)
+    result = auto(env, require_seats=False)
+    assert result["closed"] == []
+    assert "merged_on_default_changed" in result["listed"][0]["reason"]

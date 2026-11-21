@@ -374,6 +374,35 @@ def test_dry_run_bad_op_uses_resume_format(world, srv, token_file, tmp_path):
     assert item_count(world) == 0
 
 
+def test_one_refused_entry_of_three_applies_nothing_and_lists_every_refused_entry(
+        world, srv, token_file, tmp_path):
+    ops = [{"op": "create", "item": [dict(LANE_B)]},
+           {"op": "edit", "key": "novote", "fields": {"title": "x"}},
+           {"op": "cancel", "key": "demo:B"},
+           {"op": "nonsense", "key": "demo:B"}]
+    for extra in ((), ("--dry-run",)):
+        rc, out, errtxt = run(write_batch(tmp_path, name="three", ops=ops),
+                              srv.base_url, token_file, extra=extra)
+        assert rc == 1, out + errtxt
+        assert "op 2 edit novote: error" in out
+        assert "op 4 nonsense demo:B: error" in out
+        assert "refused 2 of 4 entries; nothing applied" in out
+        assert "resume with --from 2" in out
+        assert item_count(world) == 0
+
+
+def test_keeper_refusal_of_one_entry_in_atomic_mode_applies_nothing(
+        world, srv, token_file, tmp_path):
+    ops = [{"op": "create", "item": [dict(LANE_B)]},
+           {"op": "cancel", "key": "demo:MISSING"},
+           {"op": "create", "item": [dict(GOAL)]}]
+    rc, out, errtxt = run(write_batch(tmp_path, name="atomicref", ops=ops),
+                          srv.base_url, token_file)
+    assert rc == 1, out + errtxt
+    assert "demo:MISSING" in out
+    assert item_count(world) == 0
+
+
 def test_summary_reports_applied_and_skipped(world, srv, token_file,
                                              tmp_path):
     world.store.create_items(world.p("router"), [

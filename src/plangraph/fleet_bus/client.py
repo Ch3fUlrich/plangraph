@@ -506,13 +506,16 @@ class BusClient:
             raise Refused(f"message body exceeds the {BODY_MAX}-byte bus cap")
         return payload
 
-    def send(self, agent, text, *, body=None):
+    def send(self, agent, text, *, body=None, msg_id=None):
         """Queue and write one message; returns a ``msg_id`` receipt.
 
         Per G1-1: signed envelope requires body == {"text": <str>} and verifies
         against that str.  If ``body`` is passed, it is converted to string
-        text (EXTRA).
+        text (EXTRA).  ``msg_id`` (32 lowercase hex) is a caller's idempotency
+        key: a repeat of the same key is dropped by the receiver's dedupe.
         """
+        if msg_id is not None and not MSG_ID_RE.fullmatch(str(msg_id)):
+            raise Refused("msg_id must be 32 lowercase hex characters")
         if body is not None:
             if isinstance(body, str):
                 text = body
@@ -520,7 +523,7 @@ class BusClient:
                 text = json.dumps(body, sort_keys=True, separators=(",", ":"))
         self._check_text(text)
         endpoint = self.resolve(agent)         # refusal before anything queues
-        entry = {"msg_id": uuid.uuid4().hex, "host": self.cfg.host,
+        entry = {"msg_id": msg_id or uuid.uuid4().hex, "host": self.cfg.host,
                  "to": agent, "text": text,
                  "created": int(self.clock()), "attempts": 0}
         self._payload(entry)                   # caps and key file: refuse first
@@ -698,6 +701,8 @@ def _parser():
     send = commands.add_parser("send", help="fleet-msg send <agent> <text> [--json]")
     send.add_argument("agent", help="agent alias or host name (discovery)")
     send.add_argument("text", help="message text, or a JSON document with --json")
+    send.add_argument("--msg-id", dest="msg_id", default=None,
+                      help="idempotency key (32 lowercase hex): a retry with the same key is dropped by the receiver")
     send.add_argument("--json", dest="as_json", action="store_true",
                       help="validate TEXT as JSON and serialize canonical JSON string as message text")
     read = commands.add_parser("read", help="fleet-msg read [--since <seq|time>]")
@@ -719,7 +724,8 @@ def main(argv=None, *, client=None):
                 except ValueError:
                     raise Refused("--json text is not valid JSON") from None
                 text = json.dumps(parsed, sort_keys=True, separators=(",", ":"))
-            result = active.send(args.agent, text)
+            result = (active.send(args.agent, text, msg_id=args.msg_id) if args.msg_id
+                      else active.send(args.agent, text))
             if result["queued"]:
                 print(f"queued {result['msg_id']} (will retry)")
             else:
