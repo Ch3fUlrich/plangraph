@@ -12,6 +12,22 @@ import pytest
 from test_preflight import fake_runner, preflight, repo
 
 
+def test_conftest_prioritizes_its_checkout_over_inherited_pythonpath(tmp_path):
+    source = Path(__file__).resolve().parents[1]
+    planted = tmp_path / 'plangraph'
+    planted.mkdir()
+    (planted / '__init__.py').touch()
+    script = (
+        'import runpy, sys\nfrom pathlib import Path\n'
+        'runpy.run_path(sys.argv[1])\nimport plangraph\n'
+        'assert Path(plangraph.__file__).is_relative_to(Path.cwd() / "src"), plangraph.__file__\n'
+    )
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(tmp_path), str(source / 'tests'), 'src')))
+    result = subprocess.run([sys.executable, '-c', script, str(source / 'tests/conftest.py')],
+                            cwd=source, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("refuse", [False, True])
 def test_nested_fixture_keeps_its_installed_hook(repo, monkeypatch, refuse):
     caller_hooks = repo / "caller-hooks"
