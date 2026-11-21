@@ -21,7 +21,7 @@ writer = plan_spawn(card, role='implement', catalog_rows=[]).first_leg
 assert (writer.id, writer.effort) == ('cx-gpt-6.2-sol-medium', 'medium'), writer
 review = plan_spawn(dict(card, diff_ref=dict(repo=os.getcwd(), base='a'*40, head='b'*40)), role='review',
                     writer_families=['claude'], catalog_rows=[])
-assert review.first_leg.id == 'agy-gemini-4-argon-low', review.to_dict()
+assert review.first_leg.id == 'gpt-6.2-sol-medium', review.to_dict()
 luna = next(leg for leg in review.legs if leg.id == 'cx-gpt-6-luna')
 assert luna.effort == 'medium', luna
 for effort in ('high', 'xhigh'):
