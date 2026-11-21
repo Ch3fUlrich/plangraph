@@ -361,8 +361,8 @@ CLI route/spawn and MCP load an existing `PLANGRAPH_CATALOG_DB` (default `~/.cac
 Route JSON `candidates` exposes each leg's tier, `u_core` (null without a row), `p_source` (`prior`/`measured`), and skip reason/evidence; live limited legs are skipped.
 
 `benchmark_rows_from_db(path)` returns `(rows_by_model_id, errors)` using SQLite
-read-only mode; it never creates a missing database. It accepts `catalog_benchmarks`
-or OmniRoute `model_benchmarks` (catalog takes precedence if both exist).
+read-only mode and prefers the catalog view by effort and harness. It never creates a database.
+Older images expose `catalog_benchmarks` or OmniRoute `model_benchmarks`.
 `BENCHMARK_COLUMNS` documents the small column alias map. Missing/unreadable files,
 missing tables and malformed model IDs return an empty mapping with explicit errors. Shared default registrations do not change explicit effort-model alias resolution.
 Duplicate model rows expose `benchmark_row_count`; the first row supplies metrics. Bare harness model ids also resolve exact provider-qualified benchmark rows; explicit bare rows win, missing rows remain gaps, and the Opus high-effort leg maps to `agy/claude-opus-5-5-high`. No probe latency is treated as a benchmark measurement.
@@ -582,7 +582,7 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 
 ---
 
-Benchmark catalog and ranking invariants: see [verified benchmarks](spawner-benchmarks.md).
+The catalog query exposes sourced observations, effort, harness and staleness in `benchmark_rows`. See [verified benchmarks](spawner-benchmarks.md).
 
 Continue with [review protocol, interfaces, and operations](spawner-operations.md); see [OOM policy](../deploy/oom-policy.md) for repository checks versus live-pressure evidence.
 The served-model probe cache has a five-minute freshness bound,
