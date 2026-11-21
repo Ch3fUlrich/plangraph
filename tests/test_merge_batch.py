@@ -194,7 +194,8 @@ def test_build_stack_order_and_refusals(env):
     env.branch_pr(4, {"a.txt": "a\n"}, ref="lane/s4")
     env.branch_pr(5, {"b.txt": "b\n"}, base="lane/s4", ref="lane/s5")
     env.branch_pr(6, {"c.txt": "c\n"}, draft=True, labels=())
-    env.add_pr(7, "lane/p7", base="release")
+    env.git("push", "origin", "main:refs/heads/release")
+    env.branch_pr(7, {"release.txt": "release\n"}, base="release")
     assert "draft without the batch-ready label" in env.run("build", "--name", "r0", "--prs", "4,6").stderr
     assert "#7 -> 'release'" in env.run("build", "--name", "r0", "--prs", "4,7").stderr
     assert "bad batch name" in env.run("build", "--name", "../x", "--prs", "4").stderr
@@ -285,7 +286,7 @@ def test_skip_conflicts_labels_and_continues(env):
     assert env.git("status", "--porcelain", cwd=wt) == ""
     assert not Path(env.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=wt)).exists()
     label = ["api", "--method", "POST", "repos/owner/proj/issues/2/labels", "-f", "labels[]=needs-update"]
-    assert env.calls("api") == [label, label]  # the first try finds no such label, the retry follows its creation
+    assert [c for c in env.calls("api") if "--method" in c] == [label, label]  # the first try finds no such label, the retry follows its creation
     assert env.calls("label", "create")[0][2] == "needs-update" and not env.calls("pr", "edit")
     assert {"name": "needs-update"} in env.load()["prs"]["2"]["labels"]
 

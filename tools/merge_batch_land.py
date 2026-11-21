@@ -11,9 +11,11 @@ import tempfile
 import time
 from pathlib import Path
 
+from merge_batch_build import record_part_cost
 from merge_batch_util import (NEEDS_UPDATE, TESTED_FF, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
-                              batch_workflow_gate, part_review, run, write_landing)
+                              batch_workflow_gate, part_review, run, write_landing,
+                              windows_commands, windows_gate, windows_needed, windows_report, windows_script)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -99,6 +101,8 @@ def adopt_open_pr(st):
             return
 
 
+# --- Windows tests of the merged head before the push (LAND-TRAIN-WINDOWS-TESTS-BEFORE-PUSH) ------------------
+#: Env: the ssh host with native Windows (ws-build); unset skips the gate and says so.
 def cmd_push(args):
     st = load_state(args.name)
     wt = st["worktree"]
@@ -109,13 +113,16 @@ def cmd_push(args):
     if git("status", "--porcelain", "--untracked-files=no", cwd=wt).stdout.strip():
         raise MergeBatchError(f"{wt} has uncommitted changes: commit them before push")
     head = git("rev-parse", "HEAD", cwd=wt).stdout.strip()
+    if not st.get("pr"):
+        adopt_open_pr(st)
+    workflow = Path(wt, ".github/workflows/tests.yml")
+    if workflow.is_file():   # a red Windows run refuses the push before anything leaves the machine
+        windows_gate(st, workflow.read_text(encoding="utf-8"))
     git("push", REMOTE, f"refs/heads/{st['branch']}:refs/heads/{st['branch']}", cwd=wt)
     title = f"batch {st['name']}: " + " ".join(f"#{rec['pr']}" for rec in st["merged"])
     with tempfile.TemporaryDirectory() as tmp:
         body = Path(tmp, "body.md")
         body.write_text(render_body(st), encoding="utf-8")
-        if not st.get("pr"):
-            adopt_open_pr(st)
         if st.get("pr"):
             if gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state")["state"] != "OPEN":
                 raise MergeBatchError(f"batch PR #{st['pr']} is not open any more: abort and build again")
@@ -139,6 +146,7 @@ def cmd_push(args):
             raise MergeBatchError(f"CI run {run_id} does not name pushed head {head}")
         st["ci"] = {"id": run_id, "head": head, "state": ci.get("status"), "conclusion": ci.get("conclusion")}
         save_state(st)
+        record_part_cost(st, run_id, head)
     print(f"pushed {st['branch']} {head}; {st['url']}; land needs an approval ending in 'HEAD: {head}' and "
           "'VERDICT: PASS'", file=sys.stderr)
     print(st["pr"])
@@ -786,6 +794,7 @@ def cmd_go_req(args):
     deviation = "; ".join(deviations) or "none"
     line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
             f"; CI run {ci['id']} state={ci['state']} conclusion={ci['conclusion']}; "
-            f"PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}")
+            f"PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}"
+            + (f"; {windows_report(st, head)}" if windows_report(st, head) else ""))
     print(" ".join(line.split()))
     return 0

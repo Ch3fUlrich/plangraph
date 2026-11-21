@@ -16,6 +16,11 @@ import tempfile
 import time
 import tomllib
 
+try:
+    from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
+except ModuleNotFoundError:
+    from tools.ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb,
                                           disk_free_gb, reclaim_cargo_target,
@@ -23,18 +28,13 @@ from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_ta
 from plangraph.spawner.overflow import available_memory_mb
 
 CHECK_TIMEOUT = 60
-# Measured on a build host: pg-spawnd clippy 17.8 s, shim/windows_pipe tests 48.4 s.
-# Leave ample room for slower hosts, multiple affected crates and test suites.
-RUST_TIMEOUT = 600
-# The affected-test step is bounded well under the 5 minute push target; the
-# measured normal run is about 50 s.
+MIN_BUILD_JOBS = 4
+# A normal affected run takes around 50 s, with a larger bound for hundreds of test paths.
 TEST_TIMEOUT = 240
 # Callers without file-only selection can scale the bound for larger test sets.
 TEST_PER_PATH_TIMEOUT = 2
 MAX_TEST_TIMEOUT = 1200
-# pytest-xdist workers of the affected-test step: half the cores, at most one per
-# TEST_WORKER_GIB of available memory (the spawner's probe, Linux and Windows), between 2 and
-# MAX_TEST_WORKERS; cores only when memory cannot be read; PREFLIGHT_TEST_WORKERS overrides.
+# Cap xdist by available memory as well as cores on both Linux and Windows.
 TEST_WORKER_GIB = 2
 MAX_TEST_WORKERS = 16
 
@@ -77,9 +77,20 @@ def scaled_test_timeout(count):
     return min(MAX_TEST_TIMEOUT, max(TEST_TIMEOUT, count * TEST_PER_PATH_TIMEOUT))
 
 
+def build_jobs(env, cores, load):
+    """CARGO_BUILD_JOBS: the configured positive value, else the free cores, floor MIN_BUILD_JOBS."""
+    configured = env.get("CARGO_BUILD_JOBS", "")
+    if configured.isascii() and configured.isdigit() and int(configured) > 0:
+        return int(configured)
+    if configured:
+        return MIN_BUILD_JOBS
+    return max(MIN_BUILD_JOBS, min(cores, int(cores - load)))
+
+
 def check_timeout(command, cwd=None, env=None):
     if command[:2] in (["cargo", "clippy"], ["cargo", "test"], ["cargo", "build"]):
-        return RUST_TIMEOUT
+        load, cores = host_load()
+        return rust_bound(planned_test_binaries([command], cwd or Path.cwd()), load, cores)
     if is_affected_step(command):
         if "--files-only" in command:
             return TEST_TIMEOUT
@@ -183,7 +194,9 @@ def run(command, cwd, env):
         if is_affected_step(command):
             return 1, (f"tests: affected-tests step exceeded its {timeout} second bound "
                        f"({selected_count(exc.stdout)} selected test paths)\n")
-        return 1, f"check exceeded {timeout} second timeout\n"
+        binary = running_test_binary(exc.stdout)
+        named = f" (running test binary: {binary})" if binary else ""
+        return 1, f"check exceeded {timeout} second timeout{named}\n"
     except OSError as exc:
         return 1, f"unable to start check: {type(exc).__name__}\n"
 
@@ -196,6 +209,24 @@ def selected_count(partial):
         return len(json.loads((partial or "").splitlines()[0])["tests"])
     except (ValueError, KeyError, IndexError, TypeError):
         return "unknown"
+
+
+def lane_rust_commands(commands):
+    """The lane keeps only the seconds-fast Rust check: formatting. Clippy and cargo test run in CI."""
+    return [command for command in commands if command[:2] == ["cargo", "fmt"]]
+
+
+def with_no_fail_fast(command):
+    """cargo test stops at the first failing binary unless told not to: every binary runs in one pass."""
+    if command[:2] == ["cargo", "test"] and "--no-fail-fast" not in command:
+        return command[:2] + ["--no-fail-fast"] + command[2:]
+    return command
+
+
+def failing_tests(output):
+    """Ids of every test cargo reported as FAILED, in order, without repeats."""
+    ids = re.findall(r"^test (\S+) \.\.\. FAILED$", output, re.M)
+    return list(dict.fromkeys(ids))
 
 
 def first_error(output):
@@ -597,6 +628,8 @@ def _main(argv, root, cleanup):
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--scrub-base", help="scrub range start when affected tests use a nearer base")
     parser.add_argument("--fast", action="store_true")
+    parser.add_argument("--lane", action="store_true",
+                        help="push-gate mode: seconds-fast checks (scrub, policy, skill lint, cargo fmt) and no test")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--keep-going", action="store_true", help="default behaviour")
     mode.add_argument("--fail-fast", action="store_true")
@@ -608,7 +641,8 @@ def _main(argv, root, cleanup):
     policy_base = policy_baseline(root, args.base)
     policy_bases = dict(FILESIZE_REQUIRE_BASE=policy_base, NEWCODE_BASE=policy_base,
                         CHANGELOG_BASE=policy_base)
-    env = cargo_child_env(dict(os.environ, CARGO_BUILD_JOBS="4"))
+    load, cores = host_load()
+    env = cargo_child_env(dict(os.environ, CARGO_BUILD_JOBS=str(build_jobs(os.environ, cores, load))))
     cargo_bin = Path.home() / '.cargo/bin'
     if cargo_bin.is_dir():
         env['PATH'] = str(cargo_bin) + os.pathsep + env.get('PATH', '')
@@ -645,15 +679,16 @@ def _main(argv, root, cleanup):
     if words:
         scrub.extend(["--words", words])
     tests = python("affected_tests.py", "--base", test_baseline(root, args.base), "--head", args.head,
-                   "--root", str(root), "--files-only", "--local", "--run")
+                   "--root", str(root), "--files-only", "--local", "--parts-union", "--run")
     if importlib.util.find_spec("xdist") is not None:
         tests += ["--workers", str(affected_workers())]
     families = [("scrub", scrubs),
                 ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),
                             python("ci_commit_gate.py", "check", "--base", policy_base,
-                                   "--head", args.head)]),
-                ("rust", None), ("tests", [] if args.fast else [tests])]
+                                   "--head", args.head),
+                            *([python("skill-rules.py", "all")] if args.lane else [])]),
+                ("rust", None), ("tests", [] if args.fast or args.lane else [tests])]
     summary, exit_code, stopped, scrub_bad = [], 0, False, False
     trim_shared_target(root)
     for family, commands in families:
@@ -665,6 +700,8 @@ def _main(argv, root, cleanup):
             try:
                 if commands is None:
                     commands = rust_commands(root, args.base, args.head, env)
+                    if args.lane:
+                        commands = lane_rust_commands(commands)
                 family_env = policy_env if family == "policy" else env
                 if family == 'rust':
                     rust_env = rust_target_env(env, cleanup)
@@ -697,6 +734,7 @@ def _main(argv, root, cleanup):
                         command_env = dict(family_env)
                         command_env.setdefault("PG_JAIL", "off")
                         command_env.setdefault("PG_TEST_ALLOW_UNJAILED", "1")
+                    command = with_no_fail_fast(command)
                     code, output = invoke(command, cwd, command_env)
                     if (code and family == "rust"
                             and command_env["CARGO_TARGET_DIR"] == env["CARGO_TARGET_DIR"]
@@ -719,14 +757,18 @@ def _main(argv, root, cleanup):
                         print(output, end="", flush=True)
                         infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     status = "PASS" if not code else ("INFRA" if infra else "FAIL")
-                    if code and family == "policy":
-                        failed.append((status, Path(command[1]).name, first_error(output)))
+                    if code and family in ("policy", "rust"):
+                        # Every check of these families runs, and every failure is reported in one pass.
+                        name = Path(command[1]).name if family == "policy" else " ".join(command[:2])
+                        failed.append((status, name, first_error(output)))
+                        failed.extend(("FAIL", "failing test", test_id) for test_id in failing_tests(output)
+                                      if family == "rust")
                         continue
                     if code:
                         break
                 if failed:
                     status = "FAIL" if any(f[0] == "FAIL" for f in failed) else "INFRA"
-                    print(f"policy: {len(failed)} check(s) failed:", flush=True)
+                    print(f"{family}: {len(failed)} check(s) failed:", flush=True)
                     for _, name, line in failed:
                         print(f"  {name}: {line}", flush=True)
                 if family == "scrub" and not words and status == "PASS":

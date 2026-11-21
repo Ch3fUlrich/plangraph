@@ -1,4 +1,5 @@
 //! New-code language policy. All authority is read from committed revisions.
+mod part_entry;
 mod plan_items;
 mod test_sources;
 
@@ -231,6 +232,8 @@ fn main() {
         .is_some_and(|arg| arg == "--plan-item-trailers")
     {
         plan_items::run(&args[1..])
+    } else if args.first().is_some_and(|arg| arg == "--part-entry") {
+        part_entry::run(&args[1..]).map_err(|e| format!("part-entry: {e}"))
     } else {
         run()
     };

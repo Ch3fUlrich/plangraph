@@ -9,6 +9,9 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
+from datetime import datetime
+from pathlib import Path
 
 #: Jobs that run on every change: never selected, always required by the gate.
 ALWAYS: tuple[str, ...] = ("scrub", "file-size", "new-code-lang", "changelog-docs")
@@ -236,19 +239,29 @@ def select(paths: list[str]) -> dict[str, bool]:
 #: Label a router GO row puts on a pull request head to name it the merge candidate (D-6392 run-once order).
 FULL_LABEL = "ci-full"
 BATCH_PREFIX = "batch/"
+#: A landing train's head branch: always the full suite, once, directly before the merge into main.
+TRAIN_PREFIX = "land/train-"
+#: Label of a part pull request (a batch waiting for a train): it runs the affected selection even on a batch/* head.
+PART_LABEL = "land-part"
 
 
 def full_run_required(event: str, base_ref: str = "", head_ref: str = "", labels=()) -> bool:
-    """The full suite runs once per merge candidate; every other pull request gets the affected selection.
+    """The full suite runs once per merge candidate; every part and lane pull request gets the affected selection.
 
-    A pull_request event gets the full suite only for a batch/* head or a head carrying FULL_LABEL, and only
-    when it targets main (a draft or ready lane pull request, or one stacked on another branch, is a selection).
+    A pull_request event gets the full suite only for a train head (TRAIN_PREFIX), a batch/* head or a head
+    carrying FULL_LABEL, and only when it targets main. A part (PART_LABEL) that is not a train head runs the
+    affected-only mode, whatever its branch name, draft state or other labels.
     Push, schedule, workflow_dispatch and merge_group events are the record or the candidate itself: full."""
     if event != "pull_request":
         return True
     if base_ref != "main":
         return False
-    return head_ref.startswith(BATCH_PREFIX) or FULL_LABEL in set(labels or ())
+    names = set(labels or ())
+    if head_ref.startswith(TRAIN_PREFIX):
+        return True
+    if PART_LABEL in names:   # a part is never a candidate, not even with a stray ci-full label
+        return False
+    return FULL_LABEL in names or head_ref.startswith(BATCH_PREFIX)
 
 
 #: Commit-status contexts of the landing mode ``tested-ff`` (LAND-MODE-TESTED-FF). ``land-auth`` is the
@@ -331,6 +344,124 @@ def gate(needs: dict, require_full: bool = False) -> list[str]:
     return problems
 
 
+# --- part entry: the entry set, the readiness verdict and the per-part cost (LAND-PART-ENTRY-CHECKS) -------------
+
+TOOLS_DIR = Path(__file__).resolve().parent
+
+
+def _load_tool(name: str):
+    """Import a sibling tool lazily: the CI select job runs without the package installed."""
+    import importlib.util
+
+    sys.path.insert(0, str(TOOLS_DIR.parent / "src"))
+    spec = importlib.util.spec_from_file_location(f"ci_select_{name}", TOOLS_DIR / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def entry_set(root, base: str, head: str) -> dict:
+    """What a part must pass on its head before it enters a train.
+
+    Suites come from select(); Rust crates (with their reverse dependencies) from tools/preflight.py;
+    Python tests from the affected selector, whose unknown-input fallback is the full suite (rule 3.9).
+    A change that selects Rust CI, also a Python-only one, needs the native Windows job."""
+    root = Path(root)
+    raw = subprocess.run(["git", "diff", "--name-only", "-z", f"{base}...{head}"], cwd=root,
+                         capture_output=True, check=True).stdout.decode("utf-8", errors="replace")
+    paths = [p for p in raw.split("\0") if p]
+    suites = select(paths)
+    python_tests = _load_tool("affected_tests").select_tests(root, paths, local=True, base=base, head=head)["tests"]
+    fallback = "tests" in python_tests or suites["full"]
+    packages: list[str] = []
+    rust_tests: list[list[str]] = []
+    if any(p.startswith("rust/") or p == "rust-toolchain.toml" for p in paths):
+        preflight = _load_tool("preflight")
+        try:
+            commands = preflight.rust_commands(root, base, head)
+        except preflight.SkipFamily:
+            commands = []
+        for command in commands:
+            if command[:2] == ["cargo", "test"]:
+                rust_tests.append(command[2:])   # every selected test command, standalone manifests included
+                packages += [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
+    return {"paths": paths, "suites": {k: v for k, v in suites.items()}, "python_tests": python_tests,
+            "rust_packages": sorted(set(packages)), "rust_tests": rust_tests, "fallback": fallback, "windows": bool(suites["rust"])}
+
+
+def entry_commands(plan: dict, base: str = "origin/main", head: str = "HEAD", root=None) -> list[list[str]]:
+    """The commands that run an entry set on Linux; the Windows run is separate (a plan's `windows`)."""
+    commands: list[list[str]] = []
+    if plan.get("fallback"):
+        commands.append([sys.executable, "-m", "pytest", "tests", "-q"])   # unknown input: the full suite
+    elif plan.get("python_tests"):
+        commands.append([sys.executable, str(TOOLS_DIR / "affected_tests.py"), "--base", base, "--head", head,
+                         *(["--root", str(root)] if root else []), "--local", "--run"])
+    tests = plan.get("rust_tests")
+    if tests is None and plan.get("rust_packages"):
+        tests = [[arg for package in plan["rust_packages"] for arg in ("-p", package)]]
+    commands += [["cargo", "test", "--no-fail-fast", *arguments] for arguments in tests or []]
+    return commands
+
+
+def attempt_key(attempt):
+    return attempt.get("run_id", 0), attempt["attempt"]
+
+
+def attempt_problems(attempts: list[dict], flake_dispositions=()) -> list[str]:
+    """Readiness (d): the latest completed attempt on the head must not be red; a red attempt followed by a
+    green one clears only with the flake disposition of rule 3.46 recorded for the red attempt."""
+    done = sorted((a for a in attempts if a.get("conclusion")), key=attempt_key)
+    if not done:
+        return ["no completed attempt on this head"]
+    latest = done[-1]
+    if latest["conclusion"] != "success":
+        return [f"latest completed attempt {latest['attempt']} is {latest['conclusion']}"]
+    flakes = {(0, value) if isinstance(value, int) else tuple(value) for value in flake_dispositions}
+    return [f"attempt {a['attempt']} was {a['conclusion']} and attempt {latest['attempt']} green: "
+            "no flake disposition recorded"
+            for a in done[:-1] if a["conclusion"] != "success" and attempt_key(a) not in flakes]
+
+
+def ready_problems(facts: dict) -> list[str]:
+    """What still stands between a part and READY on its exact head (the run facts are gathered by the caller)."""
+    problems = []
+    if not facts.get("fast_checks"):
+        problems.append("seconds-fast checks did not pass on this head")
+    if not facts.get("entry_set"):
+        problems.append("entry set did not pass on this head")
+    if facts.get("windows_required"):
+        if facts.get("windows") is None:
+            problems.append("native Windows entry run missing")
+        elif not facts["windows"]:
+            problems.append("native Windows entry run failed")
+    return problems + attempt_problems(facts.get("attempts", []), facts.get("flake_dispositions", []))
+
+
+def _seconds(start: str, end: str) -> int:
+    parse = lambda t: datetime.fromisoformat(t.replace("Z", "+00:00"))  # noqa: E731
+    return int((parse(end) - parse(start)).total_seconds())
+
+
+def part_cost(jobs: list[dict], pr: int, head: str) -> dict:
+    """Queue and run seconds of the CI jobs of one part head, and whether each ran on a warm (self-hosted) runner."""
+    rows = [{"name": j["name"], "queue_seconds": _seconds(j["created_at"], j["started_at"]),
+             "run_seconds": _seconds(j["started_at"], j["completed_at"]),
+             "runner": "warm" if "self-hosted" in j.get("labels", []) else "cold"} for j in jobs]
+    first = min(j["created_at"] for j in jobs)
+    last = max(j["completed_at"] for j in jobs)
+    return {"pr": pr, "head": head, "jobs": rows, "queue_seconds": sum(r["queue_seconds"] for r in rows),
+            "run_seconds": sum(r["run_seconds"] for r in rows), "wall_seconds": _seconds(first, last)}
+
+
+def write_part_cost(path, record: dict) -> None:
+    """Append one JSON line to the part-cost telemetry file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="CI selector and gate verdict")
     subparsers = parser.add_subparsers(dest="command")
@@ -340,6 +471,17 @@ def main(argv: list[str] | None = None) -> int:
     select_parser.add_argument("--base", type=str, default=None, help="Base commit SHA")
     select_parser.add_argument("--head", type=str, default=None, help="Head commit SHA")
     select_parser.add_argument("--files", nargs="*", default=None, help="Explicit list of files")
+    entry_parser = subparsers.add_parser("entry-set", help="the entry set of a part head; --run executes it")
+    entry_parser.add_argument("--base", required=True)
+    entry_parser.add_argument("--head", required=True)
+    entry_parser.add_argument("--root", default=".")
+    entry_parser.add_argument("--run", action="store_true")
+    cost_parser = subparsers.add_parser("part-cost", help="append the CI cost of a part head to telemetry")
+    cost_parser.add_argument("--jobs-json", required=True, help="file with the jobs of the run (GitHub jobs API)")
+    cost_parser.add_argument("--pr", type=int, required=True)
+    cost_parser.add_argument("--head", required=True)
+    cost_parser.add_argument("--telemetry-dir", default=os.environ.get("PLANGRAPH_TELEMETRY_DIR") or
+                             str(Path.home() / ".local/share/plangraph/telemetry"))
     gate_parser = subparsers.add_parser("gate")
     for sub in (select_parser, gate_parser):
         sub.add_argument("--event", default=None, help="GitHub event name; picks full or affected selection")
@@ -425,6 +567,29 @@ def main(argv: list[str] | None = None) -> int:
                 f.write(output_str)
         return 0
 
+    if args.command == "entry-set":
+        root = Path(args.root).resolve()
+        plan = entry_set(root, args.base, args.head)
+        print(json.dumps(plan, sort_keys=True), flush=True)
+        # Import the part's source before any installed or inherited checkout.
+        python_path = [str(root / "src"), os.environ.get("PYTHONPATH")]
+        python_env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, python_path)))
+        failed = 0
+        for command in entry_commands(plan, args.base, args.head, root) if args.run else []:
+            is_cargo = command[0] == "cargo"
+            cwd = root / "rust" if is_cargo else root
+            if subprocess.run(command, cwd=cwd, env=None if is_cargo else python_env).returncode:
+                print(f"entry-set: FAIL: {' '.join(command[:4])}", file=sys.stderr)
+                failed = 1
+        return failed
+
+    if args.command == "part-cost":
+        jobs = json.loads(Path(args.jobs_json).read_text(encoding="utf-8"))
+        record = part_cost(jobs["jobs"] if isinstance(jobs, dict) else jobs, args.pr, args.head)
+        write_part_cost(Path(args.telemetry_dir) / "part-cost.jsonl", record)
+        print(json.dumps(record, sort_keys=True))
+        return 0
+
     if args.command == "gate":
         try:
             needs_obj = json.loads(args.needs)
@@ -443,6 +608,65 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.print_help(sys.stderr)
     return 1
+
+
+# Train 1 took 414 s when idle and 655 s at load ~27 on the same host.
+RUST_TIMEOUT = 600
+RUST_PER_BINARY_TIMEOUT = 15
+MAX_RUST_TIMEOUT = 3600
+
+
+def rust_bound(binaries, load, cores):
+    base = max(RUST_TIMEOUT, binaries * RUST_PER_BINARY_TIMEOUT)
+    saturation = min(max(load, 0.0), cores) / max(cores, 1)
+    return min(MAX_RUST_TIMEOUT, base * (1 + saturation))
+
+
+def host_load():
+    """(1-minute load average, cores); load 0 where the platform has none."""
+    try:
+        load = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        load = 0.0
+    return load, os.cpu_count() or 2
+
+
+def planned_test_binaries(commands, root):
+    """Test binaries the cargo test commands build: one lib/bin target plus every tests/*.rs per crate."""
+    root = Path(root)
+    if root.name == "rust":   # cargo commands run inside rust/
+        root = root.parent
+    owners = {}
+    for manifest in (root / "rust").rglob("Cargo.toml"):
+        if "target" in manifest.parts:
+            continue
+        try:
+            name = tomllib.loads(manifest.read_text()).get("package", {}).get("name")
+        except (OSError, ValueError):
+            continue
+        if name:
+            owners[name] = manifest.parent
+        owners[str(manifest.resolve())] = manifest.parent
+    total = 0
+    for command in commands:
+        if command[:2] != ["cargo", "test"]:
+            continue
+        crates = [command[i + 1] for i, arg in enumerate(command[:-1]) if arg == "-p"]
+        crates += [str(Path(command[i + 1]).resolve()) for i, arg in enumerate(command[:-1])
+                   if arg == "--manifest-path"]
+        for crate in crates or list({str(d): d for n, d in owners.items() if n and not n.endswith("Cargo.toml")}):
+            directory = owners.get(crate, Path(crate) if Path(crate).is_dir() else None)
+            if directory is not None:
+                total += 1 + len(list((directory / "tests").glob("*.rs")))
+    return total
+
+
+def running_test_binary(partial):
+    """The test binary named by the last cargo "Running" line of the output so far, else None."""
+    if isinstance(partial, bytes):
+        partial = partial.decode("utf-8", "replace")
+    found = re.findall(r"^\s*Running (\S+(?: \S+)?) \(", partial or "", re.M)
+    return found[-1] if found else None
 
 
 if __name__ == "__main__":

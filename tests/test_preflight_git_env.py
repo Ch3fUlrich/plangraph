@@ -428,8 +428,9 @@ def test_worker_test_environment_defaults_are_scoped(repo, monkeypatch, configur
     calls = fake_runner(monkeypatch)
     monkeypatch.setattr(preflight, 'rust_commands', lambda *a: commands)
     assert preflight.main(['--base', 'HEAD', '--fast'], repo) == 0
-    worker = next(env for command, _, env in calls if command == commands[2])
+    worker_command = preflight.with_no_fail_fast(commands[2])
+    worker = next(env for command, _, env in calls if command == worker_command)
     assert {key: worker[key] for key in names if key in worker} == expected
-    others = [env for command, _, env in calls if command != commands[2]]
+    others = [env for command, _, env in calls if command != worker_command]
     assert all({key: env[key] for key in names if key in env} == configured for env in others)
     assert {key: os.environ[key] for key in names if key in os.environ} == configured

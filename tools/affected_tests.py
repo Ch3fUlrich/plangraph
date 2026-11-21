@@ -16,6 +16,11 @@ import tempfile
 import time
 import tarfile
 
+try:
+    from pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres
+except ModuleNotFoundError:
+    from tools.pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres
+
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.
 # --durations stays on, listing only tests slower than a second.
@@ -572,8 +577,11 @@ def changed_files(root, base, head=None):
     return sorted(set(p.decode() for p in (tracked + untracked).split(b"\0") if p))
 
 
-def pushed_parts_files(root, base, head):
-    """Return interaction paths only for a verifiable batch; otherwise use normal diff."""
+def pushed_parts_files(root, base, head, union=False, standalone=False):
+    """Return interaction paths only for a verifiable batch; otherwise use normal diff.
+
+    union=True returns every file any part changed, so a train selects the tests a part
+    breaks in a file no other part touched (imports and fixtures follow from select_tests)."""
     def git(*args):
         return subprocess.check_output(
             ["git", "--no-replace-objects", *args], cwd=root,
@@ -587,13 +595,23 @@ def pushed_parts_files(root, base, head):
         # (notably the origin/main refresh base chosen by the hook).
         if git("rev-parse", "--is-shallow-repository").strip() != b"false":
             return None
-        previous = git("rev-parse", "--verify", base + "^{commit}").strip().decode()
+        if standalone:
+            # Only the two first-parent histories define the range. A part independently
+            # merged into main is a side parent and cannot replace the train's base.
+            commits = git("rev-list", "--first-parent", "--exclude-first-parent-only",
+                          "--reverse", "--parents", head, "^" + base).decode().splitlines()
+            first = commits[0].split() if commits else []
+            if len(first) < 2:
+                return None
+            previous = first[1]
+        else:
+            previous = git("rev-parse", "--verify", base + "^{commit}").strip().decode()
+            commits = git("rev-list", "--first-parent", "--reverse", "--parents",
+                          f"{base}..{head}").decode().splitlines()
         # A previously pushed feature/batch tip can already contain interacting
         # changes outside this range. Keep its normal selection, including #957's
         # divergent-main fallback; optimize only a base in known main history.
         git("merge-base", "--is-ancestor", previous, "refs/remotes/origin/main")
-        commits = git("rev-list", "--first-parent", "--reverse", "--parents",
-                      f"{base}..{head}").decode().splitlines()
         selected, touched, parts = set(), set(), 0
         for row in commits:
             commit, *parents = row.split()
@@ -619,6 +637,8 @@ def pushed_parts_files(root, base, head):
             selected.update(paths("show", "--remerge-diff", "--format=",
                                   "--name-only", "--no-renames", "-z", commit))
             parts += 1
+        if union:
+            selected.update(touched)
         return (sorted(selected), parts) if parts else None
     except (OSError, subprocess.SubprocessError, UnicodeError):
         return None
@@ -644,6 +664,7 @@ def main(root=None):
     parser.add_argument("--local", action="store_true", help="follow shared-asset consumers; refuse full-suite execution")
     parser.add_argument("--files-only", action="store_true", help="local hook: explicit affected files and bounded suite-control checks; never collect the whole tree")
     parser.add_argument("--loud", action="store_true", help="pytest's default report, no quiet flags")
+    parser.add_argument("--parts-union", action="store_true", help="a pushed batch or train selects the union of every part's changed files, not only the files parts share")
     parser.add_argument("--maxfail", type=int, default=0)
     parser.add_argument("--changed", action="append", help="explicit sample path (repeatable); bypass git diff")
     parser.add_argument("-n", "--workers", default="auto")
@@ -664,8 +685,10 @@ def main(root=None):
     batch = None
     pushed_range = os.environ.get("PLANGRAPH_PUSH_RANGE", "").split(":")
     hook_selection = args.files_only and args.local and args.head and args.changed is None
-    if hook_selection and len(pushed_range) == 2 and pushed_range[1] == args.head:
-        batch = pushed_parts_files(root, pushed_range[0], args.head)
+    if hook_selection and args.parts_union and "PLANGRAPH_PUSH_RANGE" not in os.environ:
+        batch = pushed_parts_files(root, args.base, args.head, union=True, standalone=True)
+    elif hook_selection and len(pushed_range) == 2 and pushed_range[1] == args.head:
+        batch = pushed_parts_files(root, pushed_range[0], args.head, union=args.parts_union)
     if changed is None:
         changed = batch[0] if batch else changed_files(root, args.base, args.head)
     plan = select_tests(root, changed, within=args.within, files_only=args.files_only, local=args.local,
@@ -763,7 +786,10 @@ def main(root=None):
                 hashes.append(tree_hash(root))
                 for line in flake_labels(failed, low, high, hashes, parallel=ran_workers):
                     print(line)
-        return code
+        if args.within is not None:
+            return code
+        postgres = run_keeper_postgres(root, changed, env)
+        return code or postgres
     return 0
 
 

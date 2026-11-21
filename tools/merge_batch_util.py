@@ -4,11 +4,13 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sqlite3
 import statistics
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -615,3 +617,120 @@ def write_landing(st, mode, merge, reruns, go_row):
         raise MergeBatchError(f"landing telemetry row not written: {exc}") from None
     save_state(st)
     print(f"landing receipt: mode={mode} train={st['name']} sha={merge}", file=sys.stderr)
+
+
+WINDOWS_HOST_ENV = "PLANGRAPH_WINDOWS_HOST"
+WINDOWS_TARGET_CAP_GB = 20
+WINDOWS_TIMEOUT = 3600
+
+
+def windows_commands(workflow_text):
+    """Read cargo test commands from the CI Windows steps using YAML scalar semantics."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise MergeBatchError("reading the Windows job requires PyYAML from requirements-ci.txt") from exc
+    try:
+        steps = yaml.safe_load(workflow_text)["jobs"]["rust-windows"]["steps"]
+    except yaml.YAMLError as exc:
+        raise MergeBatchError(f"cannot parse tests.yml: {exc}") from exc
+    except (KeyError, TypeError) as exc:
+        raise MergeBatchError("tests.yml has no Windows job steps (rust-windows)") from exc
+
+    commands = []
+    try:
+        for step in steps:
+            value = step.get("run", "")
+            commands.extend(shlex.split(line) for line in value.splitlines()
+                            if line.lstrip().startswith("cargo test "))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise MergeBatchError(f"invalid run step in the Windows job of tests.yml: {exc}") from exc
+    if not commands:
+        raise MergeBatchError("the Windows job of tests.yml selects no cargo test command: refusing to run zero tests")
+    return commands
+
+
+def pr_labels(st):
+    """The labels CI sees on the batch pull request (none while it does not exist yet)."""
+    if not st.get("pr"):
+        return []
+    try:
+        view = gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "labels")
+        return [label["name"] for label in view.get("labels", [])]
+    except (MergeBatchError, KeyError, TypeError):
+        return []
+
+
+def windows_needed(paths, full=False):
+    """The Windows job runs whenever CI selects Rust, also for a Python-only change (tools/ci_select.py), and
+    always when CI runs the full suite: a train or batch candidate (ci_select.full_run_required)."""
+    import ci_select
+    return bool(full or ci_select.select(list(paths))["rust"])
+
+
+def windows_script(bundle, head, commands, cap_gb):
+    """PowerShell for the disposable checkout: clone the bundle, test with its own capped target, always clean up."""
+    steps = "\n".join(
+        f"  Push-Location \"$root\\src\\rust\"; {' '.join(c)} --no-fail-fast 2>&1 | Write-Output; "
+        "$code = $LASTEXITCODE; Pop-Location\n"
+        f"  if ($code -ne 0) {{ $failed = $code }}\n"
+        "  $size = (Get-ChildItem $env:CARGO_TARGET_DIR -Recurse -File -ErrorAction SilentlyContinue | "
+        "Measure-Object Length -Sum).Sum / 1GB\n"
+        f"  if ($size -gt {cap_gb}) {{ Write-Output 'target cap {cap_gb} GB exceeded'; $failed = 3; break }}"
+        for c in commands)
+    return (f"$ErrorActionPreference = 'Stop'\n$root = Join-Path $env:TEMP ('pg-train-' + [guid]::NewGuid().ToString('N').Substring(0,8))\n"
+            f"$bundle = Join-Path $HOME '{bundle}'\n$failed = 0\n"
+            "try {\n  New-Item -ItemType Directory -Path $root | Out-Null\n"
+            "  git clone -q --no-checkout $bundle \"$root\\src\"\n"
+            f"  git -C \"$root\\src\" checkout -q {head}\n"
+            "  $env:CARGO_TARGET_DIR = \"$root\\target\"\n  $ErrorActionPreference = 'Continue'\n"
+            f"{steps}\n}} finally {{\n  Set-Location $HOME\n  Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue\n"
+            f"  Remove-Item -Force $bundle -ErrorAction SilentlyContinue\n}}\nexit $failed\n")
+
+
+def _transport(argv, input_text=None, timeout=None):
+    return subprocess.run(argv, input=input_text, capture_output=True, text=True, errors="replace", timeout=timeout)
+
+
+def windows_gate(st, workflow_text, transport=_transport):
+    """Run the CI Windows selection against the batch head on the Windows host; return the result line.
+
+    None when the train needs no Windows job or no host is configured; MergeBatchError, naming the failing test
+    ids, when the run is red. The line and its duration are kept in the state for the GO-REQ."""
+    wt, head = st["worktree"], git("rev-parse", "HEAD", cwd=st["worktree"]).stdout.strip()
+    paths = git("diff", "--name-only", f"{st['base_head']}...{head}", cwd=wt).stdout.split()
+    import ci_select
+    full = ci_select.full_run_required("pull_request", st.get("base", "main"), st["branch"], pr_labels(st))
+    if not windows_needed(paths, full):
+        return None
+    host = os.environ.get(WINDOWS_HOST_ENV, "").strip()
+    if not host:
+        print(f"merge_batch: Windows tests not run: set {WINDOWS_HOST_ENV} to the native Windows ssh host", file=sys.stderr)
+        return None
+    commands = windows_commands(workflow_text)
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory() as tmp:
+        bundle_name = f"train-{head[:12]}.bundle"
+        bundle = Path(tmp, bundle_name)
+        git("bundle", "create", str(bundle), f"refs/heads/{st['branch']}", cwd=wt)
+        sent = transport(["scp", "-q", str(bundle), f"{host}:{bundle_name}"], None, WINDOWS_TIMEOUT)
+        if sent.returncode:
+            raise MergeBatchError(f"windows: cannot send the bundle to {host}: {first_line(sent.stderr)}")
+        done = transport(["ssh", host, "powershell", "-NoProfile", "-NonInteractive", "-Command", "-"],
+                         windows_script(bundle_name, head, commands, WINDOWS_TARGET_CAP_GB), WINDOWS_TIMEOUT)
+    seconds = int(time.monotonic() - started)
+    if done.returncode:
+        import ci_select
+        ids = ci_select._load_tool("preflight").failing_tests(done.stdout or "")
+        detail = ", ".join(ids) if ids else first_line(done.stdout or done.stderr)
+        raise MergeBatchError(f"windows tests failed on {host} for {head[:12]} after {seconds}s: {detail}")
+    line = f"windows ok head={head[:12]} host={host} commands={len(commands)} seconds={seconds}"
+    st["windows"] = {"head": head, "line": line}
+    save_state(st)
+    return line
+
+
+def windows_report(st, head):
+    """The Windows run of this exact head for the GO-REQ, or None when none ran for it."""
+    recorded = st.get("windows") or {}
+    return recorded["line"] if recorded.get("head") == head else None
