@@ -205,13 +205,16 @@ def _changed_since(
     '''(paths changed base..parent with renames split into delete + add, the (old, new) renames,
     whether git's rename detection ran to completion).'''
     plain = set(_git_text(['diff', '--name-only', '--no-renames', '-z', base, parent], cwd=cwd).split('\0')) - {''}
+    # C locale: git's warnings are not translated; any stderr text still counts, translated or not.
+    env = {**os.environ, 'LC_ALL': 'C', 'LANGUAGE': 'C'}
     proc = subprocess.run(
-        ['git', 'diff', '--name-status', '-M', '-z', base, parent], cwd=cwd, capture_output=True
+        ['git', 'diff', '--name-status', '-M', '-z', base, parent], cwd=cwd, capture_output=True, env=env
     )
     if proc.returncode != 0:
         raise GateError(f"git diff failed: {proc.stderr.decode('utf-8', errors='replace').strip()}")
-    # Past diff.renameLimit git skips exhaustive rename detection and says so on stderr.
-    complete = b'rename detection was skipped' not in proc.stderr
+    # Past diff.renameLimit git skips exhaustive rename detection and warns on stderr: treat any
+    # stderr output as an incomplete result.
+    complete = not proc.stderr.strip()
     fields = proc.stdout.decode('utf-8', errors='replace').split('\0')
     renames, index = [], 0
     while index < len(fields) and fields[index]:

@@ -245,3 +245,29 @@ def test_without_merge_tree_a_skipped_rename_detection_fails_closed(tmp_path: Pa
     _git(repo, "commit", "-q", "-m", "Merge side")
     head = _head(repo)
     assert check(base, head, cwd=repo) == [f"{head}: gate edit without Gate-Edit trailer"]
+
+
+def test_any_git_diff_warning_makes_rename_detection_incomplete(repo: Path, monkeypatch):
+    module = ci_commit_gate_module()
+    real = subprocess.run
+
+    def translated(command, *args, **kwargs):
+        done = real(command, *args, **kwargs)
+        if command[:3] == ["git", "diff", "--name-status"]:
+            done.stderr = "avertissement : la d\u00e9tection des renommages a \u00e9t\u00e9 ignor\u00e9e\n".encode()
+        return done
+
+    monkeypatch.setattr(module.subprocess, "run", translated)
+    base = _head(repo)
+    head = _commit(repo, OK_MSG, files={"f.txt": "f\n"})
+    assert module._changed_since(base, head, repo) == ({"f.txt"}, [], False)
+    # The same call keeps the C locale, so git's own warning is not translated.
+    seen = {}
+
+    def spy(command, *args, **kwargs):
+        seen.update(kwargs.get("env") or {})
+        return real(command, *args, **kwargs)
+
+    monkeypatch.setattr(module.subprocess, "run", spy)
+    module._changed_since(base, head, repo)
+    assert seen.get("LC_ALL") == "C"
