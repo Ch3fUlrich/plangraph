@@ -9,7 +9,7 @@ import pytest
 
 from keeper_util import World, defn, seed, to_done
 from plangraph.keeper import api, config, snapshot_io
-from plangraph.keeper.cli_verbs import RefusedCli, Session, Unreachable
+from plangraph.keeper.cli_verbs import Session, Unreachable
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ def srv(w, tmp_path):
     thread.join(timeout=5)
 
 
-def call(srv, path, *, method="GET", body=None, token=None, raw=False):
+def call(srv, path, *, method="GET", body=None, token=None, raw=False, idempotency_key=None):
     url = srv.base_url + path
     data = None
     if body is not None:
@@ -54,6 +54,8 @@ def call(srv, path, *, method="GET", body=None, token=None, raw=False):
     req = urllib.request.Request(url, data=data, method=method)
     if token:
         req.add_header("Authorization", f"Bearer {token}")
+    if idempotency_key is not None:
+        req.add_header("Idempotency-Key", idempotency_key)
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
@@ -113,34 +115,52 @@ def test_the_token_principal_is_used_not_the_body(srv, w):
     assert jbody(raw)["error"] == "forbidden"
 
 
-def test_retry_after_timeout_replays_committed_priority(srv, w, monkeypatch):
+@pytest.mark.parametrize("verb,actor,fields,different_fields,event", [
+    ("set_priority", "router", {"n": 7}, {"n": 8}, "priority_set"),
+    ("claim", "workerA", {"lease_s": 600}, {"lease_s": 1200}, "claimed"),
+], ids=["priority", "claim"])
+def test_retry_after_timeout_replays_committed_write(srv, w, monkeypatch, verb, actor,
+                                                     fields, different_fields, event):
     session = Session(url=srv.base_url)
-    monkeypatch.setattr(session, "token", lambda: w.tok("router"))
+    monkeypatch.setattr(session, "token", lambda: w.tok(actor))
     entered, release = threading.Event(), threading.Event()
     send = api.KeeperHandler._json
+    replies = []
 
     def delayed_response(handler, status, payload):
-        if status == 200 and payload.get("priority") == 7 and not entered.is_set():
+        if status == 200 and not entered.is_set():
+            replies.append(payload)
             entered.set()
             assert release.wait(5)
         return send(handler, status, payload)
 
     monkeypatch.setattr(api.KeeperHandler, "_json", delayed_response)
-    body = {"key": "demo:A", "n": 7}
+    body = {"key": "demo:A", **fields}
+    request_key = f"retry-{verb}"
+    expected = ({"key": "demo:A", "epoch": 1, "lease_until": w.store._iso(w.store.now() + 600)}
+                if verb == "claim" else {"key": "demo:A", "priority": 7})
     try:
         with pytest.raises(Unreachable, match="timed out"):
-            session.call("POST", "set_priority", body=body, timeout=.25,
-                         idempotency_key="retry-priority")
+            session.call("POST", verb, body=body, timeout=.25, idempotency_key=request_key)
         assert entered.is_set()
     finally:
         release.set()
-    assert session.call("POST", "set_priority", body=body,
-                        idempotency_key="retry-priority") == {"key": "demo:A", "priority": 7}
-    with pytest.raises(RefusedCli, match="conflict: idempotency key already used"):
-        session.call("POST", "set_priority", body={**body, "n": 8},
-                     idempotency_key="retry-priority")
-    rows = w.conn.execute("SELECT COUNT(*) FROM events WHERE type='priority_set'").fetchone()
+    first, = replies
+    assert first == expected
+    assert session.call("POST", verb, body=body, idempotency_key=request_key) == first
+    status, _, response = call(
+        srv, f"/v1/{verb}", method="POST", body={**body, **different_fields},
+        token=w.tok(actor), idempotency_key=request_key)
+    assert status == 409
+    assert jbody(response)["error"] == "conflict"
+    assert "idempotency key" in jbody(response)["msg"]
+    rows = w.conn.execute("SELECT COUNT(*) FROM events WHERE type=? AND key=?",
+                          (event, "demo:A")).fetchone()
     assert rows[0] == 1
+    if verb == "claim":
+        item = w.store._item("demo:A")
+        assert (item["state"], item["claimed_by"], item["epoch"], item["lease_until"]) == (
+            "claimed", actor, first["epoch"], first["lease_until"])
 
 
 def test_slow_snapshot_publication_does_not_block_reads(srv, w, monkeypatch):

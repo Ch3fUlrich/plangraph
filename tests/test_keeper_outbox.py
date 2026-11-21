@@ -80,6 +80,33 @@ def test_heartbeat_outbox_keeps_the_original_write_key(w, tmp_path, monkeypatch)
     assert w.store._item("demo:A")["lease_until"] == lease
 
 
+@pytest.mark.parametrize("verb,fields", [("claim", {"lease_s": 600}), ("set_priority", {"n": 7})])
+@pytest.mark.parametrize("outbox_enabled", [False, True])
+def test_unqueued_writes_print_the_key_sent_to_keeper(verb, fields, outbox_enabled,
+                                                     tmp_path, monkeypatch, capsys):
+    path = tmp_path / "outbox.jsonl"
+    monkeypatch.delenv("PG_OUTBOX", raising=False)
+    monkeypatch.delenv("PG_IDEMPOTENCY_KEY", raising=False)
+    if outbox_enabled:
+        monkeypatch.setenv("PG_OUTBOX", str(path))
+    session = Session(url="http://127.0.0.1:1")
+    monkeypatch.setattr(session, "token", lambda: "test-token")
+    sent_keys = []
+
+    def lost_reply(request, *, timeout):
+        sent_keys.append(request.get_header("Idempotency-key"))
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("urllib.request.urlopen", lost_reply)
+    assert write(session, verb, {"key": "demo:A", **fields}) == 3
+    key, = sent_keys
+    assert key
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert f"outcome unknown, repeat with PG_IDEMPOTENCY_KEY={key}\n" in captured.err
+    assert not path.exists()
+
+
 def test_reordered_stale_and_revoked_entries_are_refused(w):
     epoch, tok, p = claimed_with_token(w)
     out = w.store.replay(p, [entry(1, "submit", epoch),            # before its evidence
