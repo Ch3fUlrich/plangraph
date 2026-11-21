@@ -58,7 +58,8 @@ pub(super) fn mask_words(data: &mut Value, path: &Path) {
         for (start, end) in merged.into_iter().rev() {
             result.replace_range(start..end, "[redacted]");
         }
-        result
+        // The shared secret redactor runs on every stored and printed string.
+        pg_worker_core::redact::redact(&result)
     };
     for host in data["hosts"].as_array_mut().into_iter().flatten() {
         if patterns.is_none() {

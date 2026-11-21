@@ -70,3 +70,15 @@ fn malformed_hosts_and_rows_isolated() {
 fn future_age_is_unknown() {
     assert!(project(&json!({"started":30}), "local", None, Some(20.0))["age_s"].is_null());
 }
+#[test]
+fn secret_shaped_strings_are_redacted_with_an_empty_word_list() {
+    let path = std::env::temp_dir().join(format!("pg-secret-words-{}", std::process::id()));
+    std::fs::write(&path, "# no private words\n").unwrap();
+    let secret = ["synthetic", "Credential", "0123456789"].concat();
+    let mut view = json!({"hosts":[{"host":format!("Bearer {secret}"),"readable":true,"agents":[{
+        "name":format!("Authorization: Bearer {secret}"),"model":"model"}]}]});
+    mask_words(&mut view, &path);
+    std::fs::remove_file(&path).unwrap();
+    assert!(!view.to_string().contains(&secret), "{view}");
+    assert_eq!(view["hosts"][0]["agents"][0]["model"], "model");
+}

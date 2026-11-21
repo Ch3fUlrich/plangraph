@@ -257,6 +257,27 @@ fn overflow_config_missing_empty_and_unreadable() {
     cleanup(&home);
 }
 #[test]
+fn local_run_keeps_configured_remote_hosts_visible_as_unknown() {
+    let home = fixture();
+    let config = home.join("overflow.json");
+    assert!(local_run_hosts(&config).is_empty());
+    put(
+        &home,
+        "overflow.json",
+        json!({"hosts":{"far":{"ssh":"far.invalid","spawner_src":"/x"}}}),
+    );
+    let hosts = local_run_hosts(&config);
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0]["host"], "far");
+    assert_eq!(hosts[0]["readable"], false);
+    assert_eq!(hosts[0]["reason"], "not_collected");
+    assert_eq!(hosts[0]["agents"], json!([]));
+    fs::remove_file(&config).unwrap();
+    fs::create_dir(&config).unwrap();
+    assert_eq!(local_run_hosts(&config)[0]["reason"], "source_unreadable");
+    cleanup(&home);
+}
+#[test]
 fn collector_units_are_local_and_ordered() {
     let service = include_str!("../../../deploy/systemd/plangraph-agents-view.service");
     for line in [

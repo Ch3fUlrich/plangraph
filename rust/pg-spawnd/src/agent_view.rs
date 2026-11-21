@@ -242,11 +242,22 @@ fn gather(
         .collect()
 }
 fn configured_hosts(config: &Path) -> Vec<Value> {
+    hosts_with(config, remote)
+}
+/// The scheduled `--local` run cannot reach other hosts: it lists each configured host as
+/// unknown instead of dropping it from the stored inventory.
+fn local_run_hosts(config: &Path) -> Vec<Value> {
+    hosts_with(config, |host, _, _| unavailable(host, "not_collected"))
+}
+fn hosts_with(
+    config: &Path,
+    run: impl Fn(&str, &Value, Duration) -> Value + Send + Sync + 'static,
+) -> Vec<Value> {
     match read(config) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
         Err(_) => vec![unavailable("unknown", "source_unreadable")],
         Ok(config) => match config["hosts"].as_object() {
-            Some(entries) => gather(entries, Duration::from_secs(20), remote),
+            Some(entries) => gather(entries, Duration::from_secs(20), run),
             None => vec![unavailable("unknown", "config_unreadable")],
         },
     }
@@ -284,6 +295,8 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         .unwrap_or_else(|| home.join(".config/plangraph/overflow-hosts.json"));
     if !seen.contains("--local") {
         hosts.extend(configured_hosts(&config));
+    } else if seen.contains("--write") {
+        hosts.extend(local_run_hosts(&config));
     }
     // ISO UTC without an additional clock dependency (milliseconds are unnecessary).
     let secs = now as u64;

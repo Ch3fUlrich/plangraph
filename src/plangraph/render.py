@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from plangraph.keeper.credential_guard import mask_all
+from plangraph.spawner.env_redact import redact as redact_secrets
 
 __all__ = ["render", "main", "default_vendor_dir", "cdn_script_tags", "build_sha"]
 
@@ -283,6 +284,62 @@ def _project_agents_view(data: dict) -> dict | None:
         data.get('generated_at'), str) else None, hosts=hosts)
 
 
+_ALNUM = r"[^\W_]"
+
+
+def _private_word_patterns() -> list | None:
+    """Compile the current private-word list; ``None`` when it is unusable.
+
+    Same list and rules as the collector: one word per line, ``#`` comments,
+    ``re:`` regexes, plain words are case-insensitive whole tokens.
+    """
+    path = os.environ.get("PLANGRAPH_SCRUB_WORDS")
+    path = Path(path) if path else Path.home() / ".config/plangraph/scrub-words.txt"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        patterns = []
+        for line in lines:
+            word = line.strip()
+            if not word or word.startswith("#"):
+                continue
+            body = word[3:] if word.startswith("re:") else (
+                rf"(?<!{_ALNUM})" + re.escape(word) + rf"(?!{_ALNUM})")
+            patterns.append(re.compile(body, re.IGNORECASE))
+        return patterns
+    except (OSError, ValueError, re.error, OverflowError, RecursionError, MemoryError):
+        return None
+
+
+def _mask_view_text(text: str, patterns: list) -> str:
+    text = redact_secrets(text)
+    for pattern in patterns:
+        text = pattern.sub("[redacted]", text)
+    return text
+
+
+def _enforce_publication_policy(view: dict | None) -> dict | None:
+    """Apply the secret redactor and the *current* private-word list at publication.
+
+    A stored inventory may predate the list; when the list is unusable every
+    host is replaced by an unavailable placeholder (fail closed).
+    """
+    if view is None:
+        return None
+    patterns = _private_word_patterns()
+    hosts = []
+    for entry in view["hosts"]:
+        if patterns is None:
+            hosts.append(dict(host="[redacted]", readable=False,
+                              reason="scrub_words_unavailable", agents=[]))
+            continue
+        hosts.append(dict(entry, host=_mask_view_text(entry["host"], patterns), agents=[
+            {k: _mask_view_text(v, patterns) if isinstance(v, str) else v
+             for k, v in row.items()} for row in entry["agents"]]))
+    generated = view["generated_at"]
+    return dict(generated_at=_mask_view_text(generated, patterns or []) if isinstance(
+        generated, str) else None, hosts=hosts)
+
+
 def render(
     snapshot: dict,
     vendor_dir: Path,
@@ -314,7 +371,7 @@ def render(
                 (Path.home() / '.local/state/plangraph/agents-view.json').read_text(encoding='utf-8')))
         except (OSError, ValueError, TypeError):
             private_agents = None
-        safe_snapshot['agents_view'], _ = mask_all(private_agents)
+        safe_snapshot['agents_view'], _ = mask_all(_enforce_publication_policy(private_agents))
     safe_snapshot["items"] = items
 
     if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)

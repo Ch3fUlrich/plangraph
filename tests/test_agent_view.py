@@ -16,6 +16,15 @@ def put(root, path, value):
 def home(tmp_path):
     return tmp_path
 
+
+@pytest.fixture(autouse=True)
+def words_file(tmp_path_factory, monkeypatch):
+    """A present, empty private-word policy; tests of the policy overwrite it."""
+    path = tmp_path_factory.mktemp('words') / 'scrub-words.txt'
+    path.write_text('# no private words\n')
+    monkeypatch.setenv('PLANGRAPH_SCRUB_WORDS', str(path))
+    return path
+
 def unavailable(host, reason):
     return dict(host=host, readable=False, reason=reason, agents=[])
 
@@ -191,3 +200,59 @@ def test_live_missing_private_never_uses_snapshot(home, monkeypatch, private):
     document = render({'items': [], 'agents_view': {'hosts': [unavailable('unvetted', 'timeout')]}}, home, live_agents=True)
     assert 'unvetted' not in document
     assert '"agents_view":null' in document
+
+
+def _published_view(document):
+    return json.loads(re.search(
+        r'"agents_view":(.*?)(?:,"items"|\}\s*</script>)', document, re.S).group(1))
+
+
+def test_render_masks_bearer_credential_in_view(tmp_path, monkeypatch):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    secret = 'synthetic' + 'Credential' + '0123456789'
+    put(tmp_path, '.local/state/plangraph/agents-view.json', dict(
+        generated_at='stamp', hosts=[dict(host='Bearer ' + secret, readable=True, agents=[dict(
+            name='Authorization: Bearer ' + secret, model='model', state='idle',
+            item='x', age_s=3, runtime='opencode')])]))
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert secret not in document
+
+
+def test_render_applies_current_private_words_to_stored_view(tmp_path, monkeypatch, words_file):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    label = 'synth' + 'label'
+    put(tmp_path, '.local/state/plangraph/agents-view.json', dict(
+        generated_at='stamp', hosts=[dict(host=label, readable=True, agents=[dict(
+            name='x-' + label, model='model', state='idle', item=None, age_s=3,
+            runtime='opencode')])]))
+    words_file.write_text(label + '\n')
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert label not in document
+    assert '[redacted]' in document
+
+
+@pytest.mark.parametrize('policy', ['missing', 'bad_regex'])
+def test_render_suppresses_stored_view_without_usable_private_words(
+        tmp_path, monkeypatch, words_file, policy):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    label = 'synth' + 'label'
+    put(tmp_path, '.local/state/plangraph/agents-view.json', dict(
+        generated_at='stamp', hosts=[dict(host=label, readable=True, agents=[dict(
+            name='x', model='model', state='idle', item=None, age_s=3,
+            runtime='opencode')])]))
+    if policy == 'missing':
+        words_file.unlink()
+    else:
+        words_file.write_text('re:[\n')
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert label not in document
+    view = _published_view(document)
+    assert view['hosts'][0]['readable'] is False
+    assert view['hosts'][0]['reason'] == 'scrub_words_unavailable'
+    assert view['hosts'][0]['agents'] == []
