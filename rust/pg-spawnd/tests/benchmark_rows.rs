@@ -41,6 +41,12 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
         ('agy/gemini-4-argon-medium', 'medium', 'agy'),
         ('mimo/mimo-v2.6-pro', '', 'opencode'),
         ('mimo/mimo-v2.6-flash', '', 'opencode'),
+        ('agy/gemini-4-hydrogen-high', 'high', 'agy'),
+        ('agy/gemini-4-hydrogen-medium', 'medium', 'agy'),
+        ('agy/gemini-4-neon-medium', 'medium', 'agy'),
+        ('agy/claude-opus-5-5-low', 'low', 'agy'),
+        ('agy/claude-opus-5-5-medium', 'medium', 'agy'),
+        ('agy/claude-opus-5-5-high', 'high', 'agy'),
     }
     seeded = {(r['model_id'], r['effort'], r['harness']): r for r in db.conn.execute(
         'SELECT * FROM catalog_benchmark_rows WHERE legacy = 0')}
@@ -79,6 +85,9 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     assert {(r['effort'], r['harness']): r for r in data[model]['benchmark_rows']} == rows
     codex = next(leg for leg in spawnable_legs() if leg.id == 'gpt-6.2-sol-medium')
     assert benchmark_for_leg(data, codex)['score'] == 53
+    luna_legs = [leg for leg in spawnable_legs() if leg.id.startswith('cx-gpt-6-luna-')]
+    assert {leg.effort for leg in luna_legs} == {'low', 'medium', 'high', 'xhigh', 'max'}
+    assert all(benchmark_for_leg(data, leg)['imputed'] for leg in luna_legs)
     base = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
     assert benchmark_for_leg(data, replace(base, effort='high')) is None
     leg = replace(base, effort='low')

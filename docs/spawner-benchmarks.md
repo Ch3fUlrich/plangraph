@@ -67,6 +67,9 @@ view against the leg's effort and harness. Legacy databases remain readable.
 The top-level `benchmark_rows` also includes sourced identities that have no
 legacy model row. `source_date` records when a publisher's result was checked.
 A separate `measured_at` records the task run date when the source reports it.
+Publisher results for named model efforts are priors for the serving harness.
+The legacy contract and its pending list still track the original seed rows and
+their provenance. No publisher result was established for the Muse Amber name.
 
 ### Offline benchmark data contract (BENCH-DATA-TEST, slice 1)
 
