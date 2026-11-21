@@ -110,6 +110,9 @@ pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
         .into_owned()
 }
 
+/// The credential-name pattern shared by the assignment rules and the nested-assignment scan.
+pub(crate) const CREDENTIAL_NAME: &str = r"[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*";
+
 /// True when `value` holds a credential-name assignment. Headers are found apart
 /// from their values, so one after an `==` is seen too; `==` itself compares and
 /// assigns nothing, while `:=` assigns.
@@ -117,10 +120,8 @@ fn has_nested_assignment(value: &str) -> bool {
     use std::sync::OnceLock;
     static HEADER: OnceLock<regex::Regex> = OnceLock::new();
     let header = HEADER.get_or_init(|| {
-        regex::Regex::new(
-            r#"(?i)\b[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*["']?[^\S\r\n]*([=:])"#,
-        )
-        .unwrap()
+        regex::Regex::new(&[r"(?i)\b", CREDENTIAL_NAME, r#"["']?[^\S\r\n]*([=:])"#].concat())
+            .unwrap()
     });
     header
         .captures_iter(value)
@@ -326,6 +327,33 @@ fn hex_shaped(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn assignment_rules_and_nested_scan_share_one_name_pattern() {
+        for name in [
+            "PASSWORD",
+            "API_KEY",
+            "ApiKey",
+            "token",
+            "Secret",
+            "passwd",
+            "ACCESS_KEY",
+            "PRIVATE_KEY",
+            "credential",
+            "my_secret_1",
+            "KEYS",
+            "monkey",
+            "plain_name",
+        ] {
+            let text = format!("{name} = value");
+            let rules = crate::redact::assignment_rules_for_tests();
+            let rule = rules.iter().any(|rule| rule.is_match(&text));
+            assert_eq!(rule, has_nested_assignment(&text), "{name}");
+        }
+        assert!(crate::redact::assignment_rules_for_tests()[0]
+            .as_str()
+            .contains(CREDENTIAL_NAME));
+    }
 
     #[test]
     fn dense_single_line_assignments_stay_linear() {

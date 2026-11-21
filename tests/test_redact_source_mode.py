@@ -383,3 +383,11 @@ def test_equality_inside_a_computed_value_is_not_a_nested_assignment(value):
 def test_walrus_and_a_later_assignment_after_an_equality_are_nested_assignments(value):
     text = 'API_' + 'KEY = ' + value
     assert 'hunter2value' not in env_redact.redact_source(text)
+
+
+@pytest.mark.parametrize('name', ['PASSWORD', 'API_' + 'KEY', 'pair_' + 'key', 'PG_DSN', 'TOKEN', 'SECRET', 'secret',
+                                  'MY_' + 'SECRET', 'KEYS', 'monkey', 'tokens', 'passwd', 'plain_name'])
+def test_header_scan_and_assignment_rule_share_one_name_pattern(name):
+    text = name + ' = value'
+    assert bool(env_redact._ASSIGNMENT.search(text)) == bool(env_redact._ASSIGN_HEADER.search(text))
+    assert env_redact._NAME in env_redact._ASSIGNMENT.pattern and env_redact._NAME in env_redact._ASSIGN_HEADER.pattern

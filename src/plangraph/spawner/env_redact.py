@@ -66,14 +66,16 @@ class PrivateKeyScan:
         return touched
 
 
+# The one credential-name pattern of the assignment rule and of the nested-assignment scan.
+_NAME = r'(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
 _ASSIGNMENT = re.compile(
-    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+    r'(?im)((?:["\x27])?\b' + _NAME +
     r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
     r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
 
 
 # The name and separator of an assignment, without its value (group 1 is the separator).
-_ASSIGN_HEADER = re.compile(r'(?im)(?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)(?:["\x27])?\s*([=:])')
+_ASSIGN_HEADER = re.compile(r'(?im)(?:["\x27])?\b' + _NAME + r'(?:["\x27])?\s*([=:])')
 
 
 def _computed(value):

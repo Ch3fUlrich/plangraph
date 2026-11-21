@@ -16,6 +16,18 @@ fn patterns() -> &'static [regex::Regex] {
     static RS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     RS.get_or_init(|| {
         let tokens = super::redact_tokens::pattern();
+        let assign_0 = [
+            r#"(?i)\b("#,
+            super::redact_tokens::CREDENTIAL_NAME,
+            r#")(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
+        ]
+        .concat();
+        let assign_1 = [
+            r#"(?i)\b("#,
+            super::redact_tokens::CREDENTIAL_NAME,
+            r#")(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
+        ]
+        .concat();
         let specs: [&str; 9] = [
             // 1. PEM private-key blocks, complete: header through the matching
             //    footer, newlines included. Applied FIRST and to the whole
@@ -40,7 +52,7 @@ fn patterns() -> &'static [regex::Regex] {
             //     the rest of the line (no closing delimiter semantics). A
             //     backslash before a line feed (or CRLF) continues the value
             //     onto the next line, quoted, unquoted, or unterminated.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
+            &assign_0,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` only when at least one
             //     more character follows before the next delimiter. A bare
@@ -49,7 +61,7 @@ fn patterns() -> &'static [regex::Regex] {
             //     whitespace is horizontal Unicode whitespace only, never
             //     CR/LF. The tail class is unchanged; 4a runs first and handles
             //     the `[REDACTED]` placeholder and any glued tail after it.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
+            &assign_1,
             // 5. Prefixed tokens share their body policy with wrapped joins.
             &tokens,
             // 6. JWT-like: three base64url segments, header always starts "eyJ".
@@ -66,6 +78,12 @@ fn patterns() -> &'static [regex::Regex] {
             .map(|s| regex::Regex::new(s).expect("redact pattern compiles"))
             .collect()
     })
+}
+
+/// The two assignment rules, for the test that keeps their name pattern in sync.
+#[cfg(test)]
+pub(crate) fn assignment_rules_for_tests() -> &'static [regex::Regex] {
+    &patterns()[3..5]
 }
 
 /// Replace secret-shaped text, including credential-name assignments.
