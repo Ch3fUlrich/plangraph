@@ -64,6 +64,17 @@ class ReadyCommandInLine(HookCase):
         self.assertIn("`python3 %s ready " % shlex.quote(str(GUARD.resolve())), text)
 
 
+class SkillNamesTheCommandLikeTheLine(unittest.TestCase):
+    def test_skill_says_to_copy_the_emitted_absolute_command_and_hardcodes_no_install_path(self):
+        text = (HOOKS.parents[1] / "skills" / "fleet-handoff" / "SKILL.md").read_text(encoding="utf-8")
+        step = next(x for x in text.splitlines() if x.startswith("4. "))
+        self.assertIn("python3 <absolute-guard-path> ready <handoff-path>", step)
+        self.assertIn("copy it from the message", step)
+        self.assertIn("ctx_guard_session.py", step)  # the wrapper is named as the wrong script
+        for hardcoded in ("tools/hooks/", ".local/share/plangraph/hooks"):
+            self.assertNotIn(hardcoded, step)
+
+
 class WrapperHasNoReadyCommand(HookCase):
     def test_wrapper_called_with_ready_exits_2_and_names_the_guard_command(self):
         proc = self.run_hook(WRAPPER, "", args=("ready", HANDOFF))
