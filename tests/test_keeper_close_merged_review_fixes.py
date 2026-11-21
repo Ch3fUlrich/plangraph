@@ -305,7 +305,7 @@ def test_key_in_no_part_still_refuses(unseated_w, monkeypatch, tmp_path):
 
 def test_the_go_head_itself_is_not_a_part(unseated_w, monkeypatch, tmp_path):
     """A table that names the train head as a part would vouch for every key of the train."""
-    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 1, train head {train}, keys demo:X")
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 1, part head {train}, keys demo:X")
     assert not _scope(unseated_w, "demo:H")
 
 
@@ -331,3 +331,13 @@ def test_part_heads_in_code_spans_and_lists_are_read(unseated_w, monkeypatch, tm
     _part_table_world(unseated_w, monkeypatch, tmp_path,
                       "Batch 22 (folded PR #1088, closed unmerged), heads `{partQ}` and fix `{partP}`, keys demo:X")
     assert _scope(unseated_w, "demo:H") and _scope(unseated_w, "demo:A")
+
+
+def test_a_part_listed_under_another_ruling_of_the_row_does_not_vouch(unseated_w, monkeypatch, tmp_path):
+    heads = _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partQ}, keys demo:X")
+    path = unseated_w.decision_path
+    text = path.read_text().replace("| D-5504 | demo | GO #9 demo:X;", "| D-5504 | demo | RULINGS (1) HOLD Batch 23, part head "
+                                    + heads["partP"] + ", keys demo:Z; (2) GO #9 demo:X;")
+    path.write_text(text)
+    assert not _scope(unseated_w, "demo:H")
+    assert _scope(unseated_w, "demo:A")

@@ -347,6 +347,8 @@ class RunsMixin:
         Only the heads the row names after ``head``/``heads`` count, never the GO-HEAD itself (it would
         vouch for every key of the train); a commit with the exact trailer must be an ancestor of that part.
         """
+        from .store_waiver import _go_statement  # lazy: store_waiver imports this module
+        text = _go_statement(text) or ""  # only the accepted GO ruling speaks, never a sibling ruling of the row
         go_heads = {h.lower() for h in _GO_HEAD_TOKEN.findall(text)}
         tokens = list(dict.fromkeys(t for run in _PART_HEADS.findall(text)
                                     for t in re.findall(r"[0-9a-f]{7,40}", run)))
