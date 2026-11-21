@@ -292,35 +292,38 @@ pub fn deliver_pending(
     deliver: &mut impl Deliver,
     now: i64,
 ) -> Result<Vec<String>> {
-    // Claimed under the lock: a concurrent pass does not pick the same record.
-    let todo: Vec<(String, String, String, FailureRecord)> = update_failures(dir, |records| {
-        let work: Vec<(String, String)> = batch_failure::pending_deliveries(records, owners, now);
-        let mut out = Vec::new();
-        for (id, writer) in work {
-            if let Some(token) = batch_failure::claim(records, &id, &writer, now) {
-                if let Some(rec) = records.iter().find(|r| r.id == id) {
-                    out.push((id, writer, token, rec.clone()));
-                }
+    // The work list is only a candidate list; each delivery is claimed under the lock immediately before it
+    // is sent, so a queued delivery never starts after its claim expired.
+    let candidates: Vec<(String, String)> = update_failures(dir, |records| {
+        Ok(batch_failure::pending_deliveries(records, owners, now))
+    })?;
+    let mut lines = Vec::new();
+    for (id, writer) in candidates {
+        let claimed = update_failures(dir, |records| {
+            let still = batch_failure::pending_deliveries(records, owners, now);
+            if !still.iter().any(|(i, w)| *i == id && *w == writer) {
+                return Ok(None);
             }
-        }
-        Ok(out)
-    })?;
-    let mut results = Vec::new();
-    for (id, writer, token, record) in todo {
+            let Some(token) = batch_failure::claim(records, &id, &writer, now) else {
+                return Ok(None);
+            };
+            Ok(records
+                .iter()
+                .find(|r| r.id == id)
+                .map(|r| (token, r.clone())))
+        })?;
+        let Some((token, record)) = claimed else {
+            continue;
+        };
         let ok = deliver.send(&writer, &record).is_ok();
-        results.push((id, writer, token, ok));
-    }
-    let lines = results
-        .iter()
-        .filter(|r| r.3)
-        .map(|(id, w, _, _)| format!("delivered {id} to {w}"))
-        .collect();
-    update_failures(dir, |records| {
-        for (id, writer, token, ok) in &results {
-            batch_failure::settle(records, id, writer, token, *ok);
+        update_failures(dir, |records| {
+            batch_failure::settle(records, &id, &writer, &token, ok);
+            Ok(())
+        })?;
+        if ok {
+            lines.push(format!("delivered {id} to {writer}"));
         }
-        Ok(())
-    })?;
+    }
     Ok(lines)
 }
 

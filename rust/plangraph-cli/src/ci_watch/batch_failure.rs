@@ -145,16 +145,15 @@ pub fn claim(records: &mut [FailureRecord], id: &str, writer: &str, now: i64) ->
     Some(token)
 }
 
-/// Settles a claim. Only the holder of the record's current claim token clears it, so an expired delivery
-/// cannot release its replacement's claim; a delivery that did happen is recorded either way. An
-/// acknowledgement that arrived meanwhile is kept.
+/// Settles a claim. Only the holder of the record's current claim token changes anything: an expired
+/// delivery can neither release its replacement's claim nor overwrite the replacement's confirmed delivery.
 pub fn settle(records: &mut [FailureRecord], id: &str, writer: &str, token: &str, delivered: bool) {
     if let Some(r) = records.iter_mut().find(|r| r.id == id) {
         if r.claim.as_ref().is_some_and(|c| c.token == token) {
             r.claim = None;
-        }
-        if delivered {
-            r.delivered_to = Some(writer.to_owned());
+            if delivered {
+                r.delivered_to = Some(writer.to_owned());
+            }
         }
     }
 }

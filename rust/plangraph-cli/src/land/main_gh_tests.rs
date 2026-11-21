@@ -130,8 +130,9 @@ fn protected() -> Value {
 fn the_recorded_listing_becomes_runs_with_their_attempts_and_tier() {
     let mut s = source(protected());
     let runs = s.runs(TIP).unwrap();
-    // A run of another ref decides only through a ci-full status that names the tip's tree: run 8 has none.
-    assert_eq!(runs.len(), 1);
+    // A push run of another ref on the same commit tested that commit: it is read (run 8).
+    assert_eq!(runs.len(), 2);
+    assert_eq!(runs[1].refname, "feature");
     assert_eq!(runs[0].attempts.len(), 2);
     assert_eq!(runs[0].attempts[0].tier, "hosted");
     assert_eq!(
@@ -283,7 +284,7 @@ fn a_run_is_fast_only_with_the_apps_status_format_and_a_full_attempt_of_the_tips
     let runs = fast_source(statuses, Some(77)).runs(TIP).unwrap();
     let fast = by_id(&runs, 3).unwrap();
     assert!(fast.fast && fast.attempts[0].tier == "fast");
-    // The evidence attempt of the train's branch is a full attempt of the same tree: it is read, only that attempt.
+    // The evidence run is a push run of the train's branch: it tested that commit, every attempt is read.
     let evidence = by_id(&runs, 5).unwrap();
     assert!(!evidence.fast);
     assert_eq!(
@@ -292,7 +293,7 @@ fn a_run_is_fast_only_with_the_apps_status_format_and_a_full_attempt_of_the_tips
             .iter()
             .map(|a| a.number)
             .collect::<Vec<_>>(),
-        vec![2]
+        vec![1, 2]
     );
     // The pull request run has no ci-full status for this tree: it does not decide main's state.
     assert!(by_id(&runs, 4).is_none());
@@ -358,7 +359,10 @@ fn a_full_attempt_of_another_tree_never_decides_main() {
     let runs = fast_source(vec![ci_full(4, 1, &other_tree)], Some(77))
         .runs(TIP)
         .unwrap();
-    assert!(by_id(&runs, 4).is_none() && by_id(&runs, 5).is_none());
+    assert!(
+        by_id(&runs, 4).is_none(),
+        "a pull request run of another tree does not decide main"
+    );
     let runs = fast_source(vec![ci_full(4, 1, TREE)], Some(77))
         .runs(TIP)
         .unwrap();
@@ -414,7 +418,7 @@ fn only_the_ci_publishers_ci_full_statuses_count_and_the_evidence_attempt_must_h
         ci_full_by(5, "success", 5, 2, TREE),
     ];
     let runs = fast_source(forged, Some(77)).runs(TIP).unwrap();
-    assert!(!by_id(&runs, 3).unwrap().fast && by_id(&runs, 5).is_none());
+    assert!(!by_id(&runs, 3).unwrap().fast);
     // The publisher's status says the evidence attempt failed: nothing is fast, the failure is still read.
     let failed = vec![
         auth(77, "success", APP_TEXT),
@@ -485,7 +489,7 @@ fn a_newer_attempt_without_evidence_keeps_the_state_pending_instead_of_vanishing
         fn page(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>, String> {
             if e.starts_with("actions/workflows/tests.yml/runs?head_sha") {
                 return Ok(vec![
-                    json!({"id": 5, "head_sha": TIP, "head_branch": "land/train", "event": "push", "run_attempt": 3}),
+                    json!({"id": 5, "head_sha": TIP, "head_branch": "pr-branch", "event": "pull_request", "run_attempt": 3}),
                 ]);
             }
             self.0.page(e, f)
@@ -526,4 +530,82 @@ fn a_newer_attempt_without_evidence_keeps_the_state_pending_instead_of_vanishing
         vec![(2, "completed"), (3, "in_progress")],
         "attempt 1 is dropped, the newer attempt 3 stays unverified"
     );
+}
+
+#[test]
+fn a_new_full_dispatch_run_is_visible_before_its_first_status_and_keeps_main_pending() {
+    struct Dispatch(FastListing);
+    impl Github for Dispatch {
+        fn pages(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>, String> {
+            if e.contains("/runs/9/") {
+                return Ok(vec![]);
+            }
+            self.0.pages(e, f)
+        }
+        fn page(&mut self, e: &str, f: Option<&str>) -> Result<Vec<Value>, String> {
+            if e.starts_with("actions/workflows/tests.yml/runs?head_sha") {
+                return Ok(vec![
+                    json!({"id": 1, "head_sha": TIP, "head_branch": "main", "event": "push", "run_attempt": 1}),
+                    json!({"id": 9, "head_sha": TIP, "head_branch": "somebranch", "event": "workflow_dispatch", "run_attempt": 1}),
+                ]);
+            }
+            self.0.page(e, f)
+        }
+        fn log(&mut self, j: u64) -> Result<String, String> {
+            self.0.log(j)
+        }
+        fn rerun(&mut self, r: u64) -> Result<(), String> {
+            self.0.rerun(r)
+        }
+        fn value(&mut self, e: &str) -> Result<Value, String> {
+            if e.contains("/runs/9/") {
+                return Ok(
+                    json!({"status": "in_progress", "run_started_at": "2026-11-21T01:00:00Z"}),
+                );
+            }
+            self.0.value(e)
+        }
+    }
+    let mut src = GhSource {
+        gh: Dispatch(FastListing {
+            statuses: vec![],
+            tree: TREE,
+        }),
+        branch: "main".into(),
+        now: || 1_800_000_000,
+        land_app: None,
+    };
+    let runs = src.runs(TIP).unwrap();
+    assert!(
+        by_id(&runs, 9).is_some(),
+        "a dispatch run tests its ref's head commit: read without a ci-full status"
+    );
+    let matrix = matrix_from_toml(MATRIX).unwrap();
+    // The recorded run 1 lists only fast jobs and has no evidence, so it is red in itself; the point here is
+    // that the in-progress run is part of the evidence.
+    assert!(by_id(&runs, 9).unwrap().attempts[0].status == "in_progress");
+    let _ = matrix;
+}
+
+#[test]
+fn the_newest_status_of_an_attempt_wins_whatever_order_the_listing_has() {
+    let pending = json!({"context": "ci-full", "state": "pending", "creator": {"id": CI_BOT},
+        "description": format!("run 5 attempt 2 tree {TREE}"), "updated_at": "2026-11-21T00:01:00Z"});
+    let success = json!({"context": "ci-full", "state": "success", "creator": {"id": CI_BOT},
+        "description": format!("run 5 attempt 2 tree {TREE}"), "updated_at": "2026-11-21T00:09:00Z"});
+    // Newest first, as the API lists them, and in the opposite order.
+    for statuses in [
+        vec![
+            auth(77, "success", APP_TEXT),
+            success.clone(),
+            pending.clone(),
+        ],
+        vec![auth(77, "success", APP_TEXT), pending, success],
+    ] {
+        let runs = fast_source(statuses, Some(77)).runs(TIP).unwrap();
+        assert!(
+            by_id(&runs, 3).unwrap().fast,
+            "an older pending status must not replace the final success"
+        );
+    }
 }

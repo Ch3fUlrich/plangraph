@@ -537,3 +537,90 @@ fn a_delivery_command_is_killed_at_its_lease() {
         "it did not wait for the 30 second command"
     );
 }
+
+#[test]
+fn each_delivery_is_claimed_immediately_before_it_is_sent_not_when_the_pass_started() {
+    use super::batch_failure::{Deliver, FailureRecord, Owners};
+    struct Inspect<'a>(&'a std::path::Path, Vec<(String, usize)>);
+    impl Deliver for Inspect<'_> {
+        fn send(&mut self, _: &str, record: &FailureRecord) -> Result<(), String> {
+            // At the moment of sending, only this record is claimed.
+            let claimed = load_failures(self.0)
+                .unwrap()
+                .iter()
+                .filter(|r| r.claim.is_some())
+                .count();
+            self.1.push((record.id.clone(), claimed));
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let owners = Owners {
+        prs: [
+            ("7".to_owned(), "b".to_owned()),
+            ("8".to_owned(), "b".to_owned()),
+        ]
+        .into(),
+        writers: [("b".to_owned(), "w1".to_owned())].into(),
+        successors: Default::default(),
+    };
+    for pr in [7, 8] {
+        let task = Task {
+            key: "k".into(),
+            head: format!("pr-{pr}"),
+            pr: Some(pr),
+            run_id: pr,
+            job: "j".into(),
+            test: "t".into(),
+            excerpt: "x".into(),
+            priority: 10,
+            keeper_defined: false,
+            keeper_key: None,
+        };
+        update_failures(dir.path(), |records| {
+            Ok(super::batch_failure::record_failure(
+                records, &owners, &task, 0,
+            ))
+        })
+        .unwrap();
+    }
+    let mut deliver = Inspect(dir.path(), vec![]);
+    deliver_pending(dir.path(), &owners, &mut deliver, 10).unwrap();
+    assert_eq!(deliver.1.len(), 2);
+    assert!(
+        deliver.1.iter().all(|(_, claimed)| *claimed == 1),
+        "one claim at a time: {:?}",
+        deliver.1
+    );
+}
+
+#[test]
+fn an_expired_deliverys_success_does_not_overwrite_the_replacements_confirmed_delivery() {
+    use super::batch_failure::{claim, settle, Owners};
+    let owners = Owners {
+        prs: [("7".to_owned(), "b".to_owned())].into(),
+        writers: [("b".to_owned(), "w2".to_owned())].into(),
+        successors: Default::default(),
+    };
+    let task = Task {
+        key: "k".into(),
+        head: "pr-7".into(),
+        pr: Some(7),
+        run_id: 1,
+        job: "j".into(),
+        test: "t".into(),
+        excerpt: "x".into(),
+        priority: 10,
+        keeper_defined: false,
+        keeper_key: None,
+    };
+    let mut records = vec![];
+    let id = super::batch_failure::record_failure(&mut records, &owners, &task, 0).unwrap();
+    let old = claim(&mut records, &id, "w1", 0).unwrap();
+    // The batch was handed to w2; the stale claim is replaced and w2's delivery is confirmed.
+    let new = claim(&mut records, &id, "w2", 400).unwrap();
+    settle(&mut records, &id, "w2", &new, true);
+    // The overrun delivery to the old writer finishes late and reports success: it changes nothing.
+    settle(&mut records, &id, "w1", &old, true);
+    assert_eq!(records[0].delivered_to.as_deref(), Some("w2"));
+}

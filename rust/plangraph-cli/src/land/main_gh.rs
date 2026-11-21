@@ -43,6 +43,9 @@ fn tier_of(jobs: &[Job]) -> String {
     if own { "self" } else { "hosted" }.into()
 }
 
+/// run id -> attempt -> (newest status time, succeeded): the attempts a `ci-full` status ties to the tip's tree.
+type TestedTree = BTreeMap<u64, BTreeMap<u32, (String, bool)>>;
+
 pub struct GhSource<G: Github> {
     pub gh: G,
     pub branch: String,
@@ -104,17 +107,13 @@ impl<G: Github> GhSource<G> {
     /// The runs and attempts whose `ci-full` status names the tree of the tip itself (`run <id> attempt <n>
     /// tree <sha>`): the only full attempts of other refs that may decide main's state. A pull request run
     /// reports the tip as its head but may have tested a merge ref of another tree.
-    fn tested_tree(
-        &mut self,
-        tip: &str,
-        statuses: &[Value],
-    ) -> Result<BTreeMap<u64, BTreeMap<u32, bool>>, String> {
+    fn tested_tree(&mut self, tip: &str, statuses: &[Value]) -> Result<TestedTree, String> {
         let tree = self.gh.value(&format!("git/commits/{tip}"))?["tree"]["sha"]
             .as_str()
             .unwrap_or_default()
             .to_owned();
         let publisher = ci_publisher();
-        let mut out: BTreeMap<u64, BTreeMap<u32, bool>> = BTreeMap::new();
+        let mut out: TestedTree = BTreeMap::new();
         // Only the CI publisher's statuses count; a later failure is kept for recovery, success is `true`.
         for s in statuses
             .iter()
@@ -124,10 +123,21 @@ impl<G: Github> GhSource<G> {
             let w: Vec<&str> = text.split_whitespace().collect();
             if let ["run", run, "attempt", n, "tree", sha] = w[..] {
                 if sha == tree {
-                    if let (Ok(run), Ok(n)) = (run.parse(), n.parse()) {
-                        out.entry(run)
-                            .or_default()
-                            .insert(n, s["state"] == "success");
+                    if let (Ok(run), Ok(n)) = (run.parse::<u64>(), n.parse::<u32>()) {
+                        // The newest status of an attempt wins (the API lists newest first, `updated_at`
+                        // decides when present): an older pending status never replaces a result.
+                        let ts = s["updated_at"].as_str().unwrap_or("").to_owned();
+                        let ok = s["state"] == "success";
+                        match out.entry(run).or_default().entry(n) {
+                            std::collections::btree_map::Entry::Vacant(v) => {
+                                v.insert((ts, ok));
+                            }
+                            std::collections::btree_map::Entry::Occupied(mut o) => {
+                                if ts > o.get().0 {
+                                    o.insert((ts, ok));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -192,8 +202,7 @@ impl<G: Github> Source for GhSource<G> {
             Some("workflow_runs"),
         )?;
         let mut out = Vec::new();
-        #[allow(clippy::type_complexity)]
-        let mut cache: Option<(Option<(u64, u32)>, BTreeMap<u64, BTreeMap<u32, bool>>)> = None;
+        let mut cache: Option<(Option<(u64, u32)>, TestedTree)> = None;
         for row in rows {
             // Runs of any ref on this commit are read: a fast-only tip is judged by the latest full attempt
             // of any ref (the evidence run ran on the train's branch); the evaluation filters by ref.
@@ -201,27 +210,28 @@ impl<G: Github> Source for GhSource<G> {
                 continue;
             }
             let id = row["id"].as_u64().ok_or("run without id")?;
-            // Only events that test the protected ref directly are exempt from the tree check: a pull request run
-            // tests a merge ref whatever its head branch is called (a fork can name its branch `main`).
-            let own_ref = row["head_branch"] == self.branch.as_str()
-                && !matches!(
-                    row["event"].as_str(),
-                    Some("pull_request" | "pull_request_target")
-                );
+            // A pull request run tests a merge ref whatever its head branch is called (a fork can name its
+            // branch `main`), so it decides only through a ci-full status naming the tip's tree. Every other
+            // event tests its ref's head commit, which is the tip: such a run is read as soon as it exists.
+            let is_pr = matches!(
+                row["event"].as_str(),
+                Some("pull_request" | "pull_request_target")
+            );
+            let own_branch = row["head_branch"] == self.branch.as_str();
             let latest = row["run_attempt"].as_u64().unwrap_or(1) as u32;
             let mut attempts = Vec::new();
             for n in 1..=latest {
                 attempts.push(self.attempt(id, n)?);
             }
             let looks_fast = attempts.last().is_some_and(|a| a.tier == "fast");
-            if (!own_ref || looks_fast) && cache.is_none() {
+            if (is_pr || looks_fast) && cache.is_none() {
                 let statuses = self.statuses(tip)?;
                 let tested = self.tested_tree(tip, &statuses)?;
                 cache = Some((self.land_evidence(&statuses), tested));
             }
             let (evidence, tested) = cache.clone().unwrap_or_default();
-            if !own_ref {
-                // A run of another ref decides only through a ci-full status that names the tip's tree.
+            if is_pr {
+                // A pull request run decides only through a ci-full status that names the tip's tree.
                 let Some(listed) = tested.get(&id) else {
                     continue;
                 };
@@ -243,10 +253,14 @@ impl<G: Github> Source for GhSource<G> {
             // own push run can be it, the evidence attempt must be a full attempt of the tip's tree, and the
             // evidence run itself stays in the full generation however short its job list.
             let fast = looks_fast
-                && own_ref
+                && own_branch
                 && row["event"] == "push"
                 && evidence.is_some_and(|(run, n)| {
-                    run != id && tested.get(&run).and_then(|l| l.get(&n)) == Some(&true)
+                    run != id
+                        && tested
+                            .get(&run)
+                            .and_then(|l| l.get(&n))
+                            .is_some_and(|s| s.1)
                 });
             if looks_fast && !fast {
                 for a in attempts.iter_mut().filter(|a| a.tier == "fast") {
