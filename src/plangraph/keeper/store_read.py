@@ -327,21 +327,26 @@ class ReadMixin:
     def _alert_rows(self, now, scope):
         """Findings and refusals that are wrong now, plus counts of what was left out.
 
-        A row counts only when its item is open, claimed or in_review and it is
-        younger than ``alert_window_s``; nothing is deleted from the database.
+        A row counts only while its item is active and within ``alert_window_s``.
+        An overdue finding belongs to the review round that produced it.
         """
         state = {it["key"]: it["state"] for it in scope}
         cutoff = now - self.alert_window_s
         findings, hidden_findings = [], 0
         for row in self.conn.execute(
-                "SELECT ts,key,code,msg FROM audit_findings ORDER BY id"):
+                "SELECT f.ts,f.key,f.code,f.msg,"
+                " CASE WHEN f.code='review_overdue' THEN EXISTS (SELECT 1 FROM events"
+                " WHERE key=f.key AND type='submitted' AND ts>f.ts) ELSE FALSE END AS resubmitted"
+                " FROM audit_findings f ORDER BY f.id"):
             if row["key"] is not None and row["key"] not in state:
                 continue
             when = self._parse_iso(row["ts"])
             current = (state.get(row["key"], "open") in _OPEN_STATES
                        and (when is None or when.timestamp() >= cutoff))
+            if row["code"] == "review_overdue":
+                current = current and state.get(row["key"]) == "in_review" and not row["resubmitted"]
             if current:
-                findings.append(dict(row))
+                findings.append({field: row[field] for field in ("ts", "key", "code", "msg")})
             else:
                 hidden_findings += 1
         refusals, hidden_refusals = [], 0
