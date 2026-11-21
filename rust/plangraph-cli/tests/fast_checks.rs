@@ -107,18 +107,19 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q"]);
-    fs::create_dir_all(root.join("tools/split")).unwrap();
+    let tools = root.join("tools");
+    fs::create_dir_all(tools.join("split")).unwrap();
     for path in [
-        "tools/split/scrub_check.py",
-        "tools/check_file_size.py",
-        "tools/check_new_code_lang.py",
-        "tools/check_changelog_docs.py",
-        "tools/ci_commit_gate.py",
+        "split/scrub_check.py",
+        "check_file_size.py",
+        "check_new_code_lang.py",
+        "check_changelog_docs.py",
+        "ci_commit_gate.py",
     ] {
-        fs::write(root.join(path), "pass\n").unwrap();
+        fs::write(tools.join(path), "pass\n").unwrap();
     }
-    fs::write(root.join("tools/ci_select.py"), "print('pytest=true')\n").unwrap();
-    fs::write(root.join("tools/affected_tests.py"),
+    fs::write(tools.join("ci_select.py"), "print('pytest=true')\n").unwrap();
+    fs::write(tools.join("affected_tests.py"),
         "import os\nassert 'AUTOOS_CTX_HARD' not in os.environ\nassert 'CLAUDE_JOB_DIR' not in os.environ\nprint('affected environment verified')\n").unwrap();
     fs::write(root.join("test_example.py"), "result = 'pass'\n").unwrap();
     fs::write(
