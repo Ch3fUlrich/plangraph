@@ -424,6 +424,18 @@ def test_a_title_with_an_earlier_reference_closes_on_the_trailing_pr(w, tmp_path
         {"pr": 1078, "head": tip_head, "decision_id": "D-6395"}]
 
 
+def test_the_work_index_records_the_trailing_pr_of_the_merge_that_introduced_a_commit(tmp_path):
+    repo, _, _, tip_head, _ = _subjectless_repo(tmp_path, "Follow up on #42 (#1078)")
+    from plangraph.keeper import context_sources
+    from plangraph.keeper.evidence_git import GitAdapter
+    adapter = GitAdapter({"demo": {"path": str(repo), "ref": "main"}})
+    index = context_sources.work_index(adapter, "demo", fresh=True)
+    assert [c["merge"]["pr"] for c in index["commits"]["demo:A"]] == [1078]
+    commits = context_sources.plan_item_commits(adapter, "demo", "demo:A", fetch=False)
+    assert [c["merge"]["pr"] for c in commits] == [1078]
+    assert context_sources.pr_merge_of(adapter, "demo", tip_head, fallback_pr=None)["pr"] == 1078
+
+
 @pytest.mark.parametrize("case", ["no_pr_in_go", "prior_head", "unmerged_head", "other_pr_on_ancestor"])
 def test_subjectless_merge_refuses_bad_pr_or_head(w, tmp_path, monkeypatch, case):
     subject = ("batch (#1078)" if case == "other_pr_on_ancestor"
