@@ -1,0 +1,1 @@
+- Bound the Rust CI job's pytest installation with the shared step timeout action.

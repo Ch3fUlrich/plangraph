@@ -469,7 +469,12 @@ jobs:
         run: cargo check --target x86_64-pc-windows-gnu -p pg-worker-core -p pg-spawnd --all-targets
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: python -m pip install "pytest<9.2"
+      - name: Install pytest for the test deadline fixture
+        timeout-minutes: 5
+        uses: ./.github/actions/bounded-step
+        with:
+          seconds: 285
+          command: python -m pip install "pytest<9.2"
       - name: Install debugger for hung Rust tests
         run: command -v gdb || sudo apt-get -o DPkg::Lock::Timeout=600 install -y gdb
       - name: Build pg-jail helper
