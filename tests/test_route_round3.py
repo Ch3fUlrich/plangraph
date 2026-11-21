@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
-from plangraph.planner.routing import plan_spawn
+from plangraph.planner.routing import USABLE_FRACTION_PCT, plan_spawn
 
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
@@ -20,9 +20,12 @@ def assert_review_seat_safety(estimate):
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
         # Rule 3.61: gpt writers skip the gpt leg; the seats are the first two families of the order.
-        # Inline-only mimo-v2.6-pro seats only with diff metadata; deepseek-free takes at most 100000 tokens.
-        first = "mimo-v2.6-pro" if diff else ("opencode-deepseek-v4.1-flash-free" if estimate < 100000 else "opencode-go-deepseek-v4-flash")
-        second = ("opencode-deepseek-v4.1-flash-free" if estimate < 100000 else "opencode-go-deepseek-v4-flash") if diff else "opencode-go-glm-5.3-flash"
+        # Inline-only mimo-v2.6-pro seats only with diff metadata; deepseek-free serves a card up to the usable share
+        # of its own request limit (per-leg context).
+        free_limit = next(leg.max_request_tokens for leg in DEFAULT_LEGS if leg.id == "opencode-deepseek-v4.1-flash-free")
+        deepseek = "opencode-deepseek-v4.1-flash-free" if estimate * 100 <= USABLE_FRACTION_PCT * free_limit else "opencode-go-deepseek-v4-flash"
+        first = "mimo-v2.6-pro" if diff else deepseek
+        second = deepseek if diff else "opencode-go-glm-5.3-flash"
         expected = [first, second]
         assert [leg.id for leg in review.review_seats] == expected
 

@@ -335,6 +335,7 @@ def test_cache_lease_blocks_idle_cleanup(tmp_path, monkeypatch):
     target.mkdir()
     (target / 'artifact').write_text('keep active build')
     monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(target))
+    monkeypatch.delenv('PLANGRAPH_CARGO_TARGET_CAP_GB', raising=False)  # the default cap, whatever the host sets
     monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 13)
     service = SimpleNamespace(ps=lambda: {'runs': []})
     with h.cargo_lease():
