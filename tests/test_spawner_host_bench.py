@@ -422,3 +422,16 @@ def test_flag_review_of_and_trailer_families_all_reach_the_spawned_record(tmp_pa
     headers = service.runner.calls[-1]["headers"]
     assert {"mimo", "gpt", "gemini"} <= {value for key, value in headers.items() if "exclude" in key.lower()
                                          for value in str(value).split(",")}, headers
+
+
+def test_plain_spawn_refusal_keeps_the_skip_list_in_its_own_field(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.planner.routing import SpawnPlan
+    from registry_route_util import _Runner, CARD as ROUTE_CARD
+    service = SpawnService(_Runner(), state=tmp_path / "state")
+    skipped = ({"leg": "a", "reason": "excluded_family"},)
+    monkeypatch.setattr(service, "_route", lambda *a, **kw: SpawnPlan((), skipped, "t", (), (), error="no eligible leg"))
+    with pytest.raises(SpawnRefused):
+        asyncio.run(service.spawn(card=ROUTE_CARD, role="review", writer_families=["claude"], dry_run=True))
+    record = service.ps()["runs"][0]
+    assert record["error"] == "no eligible leg" and record["skipped"] == list(skipped)

@@ -373,7 +373,9 @@ class SpawnService(SeatSpawnMixin):
             # for standalone route requests, otherwise one error is saved twice.
             plan = self._route(card, role, writer_families, review_of, benchmark=benchmark, require_bench=require_bench)
         if plan.error or not plan.first_leg:
-            raise SpawnRefused(plan.error or 'no eligible leg')
+            refused = SpawnRefused(plan.error or 'no eligible leg')
+            refused.reason, refused.skipped = refused.args[0], [dict(row) for row in plan.skipped]
+            raise refused
         plan = replace(plan, legs=witness_gate_legs(card, role, plan.legs), placement=_placement or plan.placement)  # before run artifacts
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
