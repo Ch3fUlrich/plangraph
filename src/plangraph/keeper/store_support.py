@@ -288,8 +288,12 @@ class SupportMixin:
                 if row["key"] is not None and row["key"] not in state:
                     continue
                 entry = merged.setdefault((row["key"], row["code"]),
-                                          {"first": row["ts"], "n": 0})
-                entry.update(last=row["ts"], msg=row["msg"])
+                                          {"first": row["ts"], "last": row["ts"],
+                                           "msg": row["msg"], "n": 0})
+                # Bounds by time, not by row order: a clock set back must not invert them.
+                entry["first"] = min(entry["first"], row["ts"])
+                if row["ts"] >= entry["last"]:
+                    entry.update(last=row["ts"], msg=row["msg"])
                 entry["n"] += 1
             refused = {}
             for row in self.conn.execute(
@@ -317,6 +321,7 @@ class SupportMixin:
             for key, stamps in refused.items():
                 if key not in state:
                     continue
+                stamps = sorted(stamps)
                 times = [t.timestamp() for t in (parse_iso(s) for s in stamps)
                          if t is not None and t.timestamp() >= cutoff][-REFUSAL_TIMES_CAP:]
                 current = state[key] in open_states and len(times) >= 2
@@ -332,6 +337,12 @@ class SupportMixin:
                     self.conn.execute(
                         "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=?, state='open'"
                         " WHERE id=?",
+                        (json.dumps(times), min(have["first_seen"] or first, first),
+                         max(have["last_seen"] or "", last), len(times), have["id"]))
+                elif have["state"] == "open":
+                    # A live open row counts what is current: the history never raises it.
+                    self.conn.execute(
+                        "UPDATE alerts SET msg=?, first_seen=?, last_seen=?, n=? WHERE id=?",
                         (json.dumps(times), min(have["first_seen"] or first, first),
                          max(have["last_seen"] or "", last), len(times), have["id"]))
                 else:

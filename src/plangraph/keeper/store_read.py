@@ -340,9 +340,14 @@ class ReadMixin:
                                      "code": row["code"], "msg": row["msg"]})
                 else:
                     hidden_findings += 1
-            elif row["n"] >= 2:
-                if current:
-                    refusals.append({"key": row["key"], "count": row["n"]})
+            else:
+                # A refusal older than the window no longer counts, whatever the row says.
+                recent = sum(1 for t in self._refusal_times(row) if t >= cutoff)
+                if recent < 2:
+                    if row["n"] >= 2:
+                        hidden_refusals += 1
+                elif current:
+                    refusals.append({"key": row["key"], "count": recent})
                 else:
                     hidden_refusals += 1
         refusals.sort(key=lambda entry: entry["key"])

@@ -215,10 +215,11 @@ def test_backfill_builds_the_table_from_history_and_is_idempotent(w):
 
 def test_a_refusal_older_than_the_window_stops_counting_while_newer_ones_continue(w):
     window = w.store.alert_window_s
-    for _ in range(3):
+    for n in range(3):
+        if n:
+            w.clock.advance(window * 0.75)
         with pytest.raises(Refused):
             w.store.claim(w.p("reader"), "demo:A")
-        w.clock.advance(window * 0.75)
     # Refusals at 0, 0.75 and 1.5 windows: when the third landed only two were current.
     assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 2)]
     # Raised at the second refusal, expired by the third, raised again by it.
@@ -248,13 +249,64 @@ def test_first_backfill_merges_into_the_live_rows_of_the_same_identity(w):
 
 def test_backfill_checks_its_marker_inside_the_write_transaction(w):
     _refuse_twice(w)
-    statements = []
-    w.conn.set_trace_callback(statements.append)
-    w.store.backfill_alerts()
-    w.conn.set_trace_callback(None)
-    marker = next(i for i, sql in enumerate(statements) if "action='alerts_backfill'" in sql)
-    begin = next(i for i, sql in enumerate(statements) if sql.startswith("BEGIN"))
+
+    class Spy:
+        """Records every statement on whichever backend the fixture runs."""
+
+        def __init__(self, conn):
+            self._conn, self.sql = conn, []
+
+        def execute(self, sql, *args):
+            self.sql.append(" ".join(sql.split()))
+            return self._conn.execute(sql, *args)
+
+        def __getattr__(self, name):
+            return getattr(self._conn, name)
+
+    spy = Spy(w.store.conn)
+    w.store.conn = spy
+    try:
+        w.store.backfill_alerts()
+    finally:
+        w.store.conn = spy._conn
+    marker = next(i for i, sql in enumerate(spy.sql) if "action='alerts_backfill'" in sql)
+    begin = next(i for i, sql in enumerate(spy.sql) if sql.startswith("BEGIN"))
     assert begin < marker
+
+
+def test_backfill_does_not_make_an_expired_refusal_count_toward_an_alert(w):
+    window = w.store.alert_window_s
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    w.clock.advance(window + 60)
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 1)]
+    w.store.backfill_alerts()
+    # One current refusal and one expired one: still no alert, one row.
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 1)]
+    assert w.store.alerts(w.p("reader"))["refusals"] == []
+
+
+def test_backfill_orders_its_bounds_by_time_when_the_clock_went_back(w):
+    w.store._finding("demo:A", "late", "later", w.store.now() + 100)
+    w.store._finding("demo:A", "late", "earlier", w.store.now())
+    w.conn.execute("DELETE FROM alerts")
+    w.store.backfill_alerts()
+    row = w.conn.execute("SELECT first_seen, last_seen, msg FROM alerts").fetchone()
+    assert row["first_seen"] < row["last_seen"] and row["msg"] == "later"
+
+
+def test_alerts_reads_the_refusals_inside_the_window_not_the_stored_count(w):
+    window = w.store.alert_window_s
+    for _ in range(2):
+        with pytest.raises(Refused):
+            w.store.claim(w.p("reader"), "demo:A")
+        w.clock.advance(window * 0.75)
+    # The row still says 2; the first refusal has left the window, so no alert.
+    assert _alert_rows(w)[0][4] == 2
+    assert w.store.alerts(w.p("reader"))["refusals"] == []
+    assert w.store.alerts(w.p("reader"))["history"]["refusal_keys"] == 1
 
 
 # ------------------------------------------------------------------ digest
