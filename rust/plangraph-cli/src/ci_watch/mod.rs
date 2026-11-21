@@ -1,4 +1,6 @@
 //! One bounded CI scan; all external effects are behind the Github adapter.
+#[cfg(test)]
+mod batch_delivery_tests;
 pub mod batch_failure;
 #[cfg(test)]
 mod batch_failure_tests;
