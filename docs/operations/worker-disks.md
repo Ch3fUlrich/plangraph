@@ -45,3 +45,11 @@ hygiene and sweep units at the configured worktree roots. Include
 trees to the corresponding run records. Verify
 `pg-spawnd host work-disk`, the recorded paths and disk usage, refusals at the
 floor, and admission of 15 parallel writers.
+
+## Reclamation and reporting
+
+NOTE Dell and workstation host sessions. Install and enable the 30-minute
+disk-hygiene user timer and the merged-worktree sweep timer. Configure their pin,
+claims, run state and root paths. Inspect the dry run and record a real cleanup
+with freed bytes. Give the heartbeat collector the newest `disk-hygiene.json`
+report for that host and surface its `alarm` or failure.

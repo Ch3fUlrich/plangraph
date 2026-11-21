@@ -48,7 +48,8 @@ fn worktree_root(mount: &Path) -> PathBuf {
     mount.join("plangraph/worktrees")
 }
 
-pub(crate) fn configured_roots() -> impl Iterator<Item = PathBuf> {
+/// Worktree roots corresponding to every configured mount, including offline mounts.
+pub fn configured_roots() -> impl Iterator<Item = PathBuf> {
     env::var_os(WORKTREE_MOUNTS)
         .filter(|value| !value.is_empty())
         .map(|value| {

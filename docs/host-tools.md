@@ -4,10 +4,11 @@ Build `pg-disk-hygiene` with `cd rust && cargo build -p pg-worker-core --bin
 pg-disk-hygiene --bin pg-process-cwds --release`, using the environment's shared `CARGO_TARGET_DIR`.
 
 `pg-disk-hygiene --repo PATH --root WORKTREES --pins PINS.json --dry-run`
-reports an alarm below 5 GiB available. Below 10 GB available, `--apply`
+reports an alarm at 75% used or below 5 GiB available. At 80% used or below
+10 GB available, `--apply`
 reclaims ignored `target/`, `rust/target/`, `node_modules/`, and nested
 `__pycache__/` / `.pytest_cache/` in registered clean worktrees
-idle over six hours. It never removes worktrees or tracked source. Git probe
+idle over 24 hours. It never removes worktrees or tracked source. Git probe
 failures skip that tree. Freed bytes count only removed rebuildable files.
 The main checkout, locked trees, pinned paths, `plangraph-md-sync`, keeper
 `live-*` paths, active runs and process working directories are protected.
@@ -49,9 +50,13 @@ Collection failures write `alarm:true` and `error` and exit nonzero, replacing
 stale healthy reports. `--state DIR` overrides the destination. An unwritable
 state directory is a hard error. `--apply --dry-run` is refused.
 
-Install the service and 15-minute timer under `~/.config/systemd/user/` and the
+Install the service and 30-minute timer under `~/.config/systemd/user/` and the
 binary under `~/.local/bin`. Set `PG_REPO`, `PG_WORKTREES`, `PG_PINS` in
 `~/.config/plangraph/disk-hygiene.env`. Review dry-run output before enabling.
+Repeat `--root` for additional worktree roots. Configured worktree mounts and
+existing state worktree roots are included automatically. Each filesystem is
+compared with its own thresholds. Set `PLANGRAPH_SPAWN_STATE` when records live
+outside the default state directory.
 Threshold options are `--alarm-free-bytes` (default `5368709120`, 5 GiB),
 `--cleanup-free-bytes` (default `10000000000`) and `--shared-target-cap-bytes`
 (default `10000000000`); options take byte counts (10 GB is decimal). Alarm must be positive and no

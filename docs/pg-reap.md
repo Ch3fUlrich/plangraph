@@ -72,7 +72,7 @@ recorded SHA, and a remote SHA lease. The timer never passes it. A missing PR do
 not relax ancestry or push safety. `--apply --dry-run` is a refusal.
 
 The separate `pg-worktree-sweep.timer` invokes the sweep hourly; disk checks stay
-on their 15-minute timer. Install both sweep units and both binaries. See
+on their 30-minute timer. Install both sweep units and both binaries. See
 `deploy/systemd/disk-hygiene.env.example` for all four roots, pins, and the
 claims-reader settings (`PG_SWEEP_CLAIMS_READER`, `PG_URL`, `PG_TOKEN_FILE`).
 Per host, the operator mints an unscoped read-only `sweep` principal

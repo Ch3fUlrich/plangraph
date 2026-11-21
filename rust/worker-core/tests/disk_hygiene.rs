@@ -163,7 +163,7 @@ fn disk_hygiene_dry_run_and_recent_worktrees_preserve_everything() {
         &repo,
         &root,
         &Guards::default(),
-        SystemTime::now(),
+        SystemTime::now() + Duration::from_secs(23 * 3600),
         4_000_000_000,
         Thresholds::default(),
         true,

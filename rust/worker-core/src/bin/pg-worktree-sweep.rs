@@ -28,7 +28,10 @@ fn run() -> io::Result<()> {
         };
     }
     let (mut repo, mut roots, mut pins) = (None, Vec::new(), None);
-    let mut state = env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state/plangraph"));
+    let mut state = env::var_os("PLANGRAPH_SPAWN_STATE")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state/plangraph")));
     let mut reader = env::var_os("PG_SWEEP_CLAIMS_READER").map(PathBuf::from);
     let (mut apply, mut dry, mut daily, mut remote) = (false, false, false, false);
     let mut remote_targets = Vec::new();
@@ -84,6 +87,7 @@ fn run() -> io::Result<()> {
     if roots.is_empty() {
         return Err(io::Error::other("--root required"));
     }
+    roots.extend(pg_worker_core::work_disks::configured_roots());
     let pins = pins.ok_or_else(|| io::Error::other("--pins required"))?;
     let state = state.ok_or_else(|| io::Error::other("HOME or --state required"))?;
     let marker = state.join("merged-sweep.last");

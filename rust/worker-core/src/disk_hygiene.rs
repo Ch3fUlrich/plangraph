@@ -46,6 +46,15 @@ impl Thresholds {
         }
         Ok(self)
     }
+
+    /// Trigger at the absolute thresholds or when 75%/80% of the filesystem is used.
+    pub fn for_filesystem(self, total: u64) -> Self {
+        let free_threshold = |percent| (u128::from(total) * percent / 100 + 1) as u64;
+        Self {
+            alarm_free_bytes: self.alarm_free_bytes.max(free_threshold(25)),
+            cleanup_free_bytes: self.cleanup_free_bytes.max(free_threshold(20)),
+        }
+    }
 }
 pub fn git(repo: &Path, args: &[&str]) -> io::Result<String> {
     let bytes = host_command::output(
@@ -170,6 +179,7 @@ fn clean_caches(
     now: SystemTime,
     apply: bool,
     report: &mut Report,
+    safe_to_remove: &impl Fn(&Path) -> io::Result<bool>,
 ) -> io::Result<()> {
     let mut caches = Vec::new();
     collect_caches(path, path, &mut caches)?;
@@ -229,7 +239,7 @@ fn clean_caches(
         return Ok(());
     }
     let (_, newest) = scan(path)?;
-    if now.duration_since(newest).unwrap_or_default() <= Duration::from_secs(6 * 3600) {
+    if now.duration_since(newest).unwrap_or_default() <= Duration::from_secs(24 * 3600) {
         return Ok(());
     }
     for cache in caches {
@@ -243,6 +253,12 @@ fn clean_caches(
         }
         let bytes = scan(&cache)?.0;
         if apply {
+            if !safe_to_remove(path)? {
+                report
+                    .skipped
+                    .push(format!("{}: active work or build", path.display()));
+                break;
+            }
             fs::remove_dir_all(&cache)?;
             report.freed_bytes = report.freed_bytes.saturating_add(bytes);
         }
@@ -264,6 +280,30 @@ pub fn sweep(
     free_bytes: u64,
     thresholds: Thresholds,
     apply: bool,
+) -> io::Result<Report> {
+    sweep_checked(
+        repo,
+        root,
+        guards,
+        now,
+        free_bytes,
+        thresholds,
+        apply,
+        |_| Ok(true),
+    )
+}
+
+/// Recheck host protection after scanning and immediately before removing each cache.
+#[allow(clippy::too_many_arguments)]
+pub fn sweep_checked(
+    repo: &Path,
+    root: &Path,
+    guards: &Guards,
+    now: SystemTime,
+    free_bytes: u64,
+    thresholds: Thresholds,
+    apply: bool,
+    safe_to_remove: impl Fn(&Path) -> io::Result<bool>,
 ) -> io::Result<Report> {
     let thresholds = thresholds.validate()?;
     let root = root.canonicalize()?;
@@ -305,7 +345,7 @@ pub fn sweep(
                 .push(format!("{}: protected", path.display()));
             continue;
         }
-        if let Err(error) = clean_caches(&path, guards, now, apply, &mut report) {
+        if let Err(error) = clean_caches(&path, guards, now, apply, &mut report, &safe_to_remove) {
             report.skipped.push(format!(
                 "{}: probe/cleanup unavailable: {error}",
                 path.display()
