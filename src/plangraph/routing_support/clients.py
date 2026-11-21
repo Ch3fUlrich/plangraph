@@ -36,6 +36,47 @@ AGY_PLAN_REVIEW_MODELS: tuple[str, ...] = (
 AGY_REVIEW_SETTINGS = json.dumps({"permissions": {"allow": [
     "command(*)", "read_file(*)", "list_dir(*)", "grep_search(*)", "find_by_name(*)"]}})
 
+def isolate_agy_review_home(env: dict[str, str]) -> str:
+    """Prepare a private AGY home with account state and no global customizations."""
+    import shutil
+    import tempfile
+    from .private_io import atomic_write_private
+
+    source = Path(env.get("USERPROFILE" if os.name == "nt" else "HOME") or Path.home())
+    config = Path(env.get("XDG_CONFIG_HOME") or source / ".config")
+    root = Path(tempfile.mkdtemp(prefix="plangraph-agy-home-"))
+    gemini = Path(".gemini")
+    login = gemini / "antigravity-cli" / "antigravity-oauth-token"
+    accounts = gemini / "google_accounts.json"
+    scope = Path("antigravity") / "credential-user-scope"
+    try:
+        for original, relative in ((source / login, login), (source / accounts, accounts),
+                                   (config / scope, Path(".config") / scope)):
+            try:
+                account_state = original.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                continue
+            atomic_write_private(root / relative, account_state)
+    except (OSError, UnicodeError):
+        shutil.rmtree(root, ignore_errors=True)
+        raise
+    env["HOME"] = str(root)
+    env["XDG_CONFIG_HOME"] = str(root / ".config")
+    if os.name == "nt" or "USERPROFILE" in env:
+        env["USERPROFILE"] = str(root)
+    return str(root)
+
+def prepare_agy_review_home(env, role, model, owned_dirs, job_id):
+    """Register an isolated Hydrogen review home with the child cleanup owner."""
+    if role != "review" or not model.lower().removeprefix("agy/").startswith("gemini-4-hydrogen-"):
+        return None
+    try:
+        owned_dirs[job_id] = isolate_agy_review_home(env)
+    except (OSError, UnicodeError):
+        return "agy_review_home_unavailable"
+    return None
+
+
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
 STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
 
