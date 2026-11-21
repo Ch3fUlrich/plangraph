@@ -33,7 +33,7 @@ pub fn systemd_user_dir() -> io::Result<PathBuf> {
 /// entry refuses (the caller protects everything).
 pub fn unit_file_refs(dir: &Path, home: &Path) -> io::Result<Vec<UnitRef>> {
     let mut refs = BTreeSet::new();
-    collect(dir, None, home, 0, &mut BTreeSet::new(), &mut refs)?;
+    collect(dir, None, home, 0, &mut Vec::new(), &mut refs)?;
     Ok(refs.into_iter().collect())
 }
 
@@ -42,14 +42,17 @@ fn collect(
     owner: Option<&str>,
     home: &Path,
     depth: usize,
-    seen: &mut BTreeSet<PathBuf>,
+    active: &mut Vec<PathBuf>,
     refs: &mut BTreeSet<UnitRef>,
 ) -> io::Result<()> {
-    // A directory reached twice through links is read once: no cycle can loop.
-    if let Ok(canonical) = dir.canonicalize() {
-        if !seen.insert(canonical) {
+    // A directory already being read further up this traversal is a link cycle; one reached again
+    // by another unit's link is read again, so each unit keeps its own attribution.
+    let physical = dir.canonicalize().ok();
+    if let Some(canonical) = &physical {
+        if active.contains(canonical) {
             return Ok(());
         }
+        active.push(canonical.clone());
     }
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -65,16 +68,29 @@ fn collect(
             // A linked unit: the link target is itself a path the unit runs from. A relative
             // target resolves against the link's directory.
             if let Ok(target) = fs::read_link(&path) {
-                let target = if target.is_absolute() {
+                // A relative target resolves against the link's physical directory (the
+                // canonical `dir`: `dir` itself may be reached through a linked directory).
+                let base = physical.clone().unwrap_or_else(|| dir.to_path_buf());
+                let named = lexical(&if target.is_absolute() {
                     target
                 } else {
-                    dir.join(target)
-                };
-                let target = target.canonicalize().unwrap_or_else(|_| lexical(&target));
-                let exact = words::is_whole_word_path(&target.to_string_lossy());
+                    base.join(target)
+                });
+                let exact = words::is_whole_word_path(&named.to_string_lossy());
+                // The named path protects; where it finally leads (a link into another tree)
+                // protects too, as a guess.
+                if let Ok(canonical) = named.canonicalize() {
+                    if canonical != named {
+                        refs.insert(UnitRef {
+                            unit: unit.clone(),
+                            path: canonical,
+                            exact: false,
+                        });
+                    }
+                }
                 refs.insert(UnitRef {
                     unit: unit.clone(),
-                    path: target,
+                    path: named,
                     exact,
                 });
             }
@@ -91,7 +107,7 @@ fn collect(
                 .strip_suffix(".d")
                 .filter(|n| n.contains('.'))
                 .or(owner);
-            collect(&path, owner, home, depth + 1, seen, refs)?;
+            collect(&path, owner, home, depth + 1, active, refs)?;
         } else if meta.is_file() {
             let bytes = fs::read(&path)?;
             if bytes.len() > 1 << 20 {
@@ -105,6 +121,9 @@ fn collect(
                 });
             }
         }
+    }
+    if physical.is_some() {
+        active.pop();
     }
     Ok(())
 }

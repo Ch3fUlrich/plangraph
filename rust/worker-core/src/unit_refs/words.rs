@@ -99,16 +99,27 @@ fn is_path_list_key(key: &str) -> bool {
     key.ends_with("Paths")
 }
 
-/// systemd's `%%` is a literal percent: it travels as this character until a path is built, so
-/// the unresolved-specifier test (`%n`, `%i`, ...) does not mistake it for a specifier.
-const PERCENT: char = '\u{1}';
-
+/// A piece as a path: `%%` is a literal percent, any other `%` is an unresolved specifier
+/// (`%n`, `%i`, ...) that names nothing.
 fn path_of(piece: &str) -> Option<PathBuf> {
     let piece = piece
         .trim_start_matches(['-', '@', '+', '!'])
         .trim_end_matches('/');
-    (piece.len() > 1 && piece.starts_with('/') && !piece.contains('%'))
-        .then(|| PathBuf::from(piece.replace(PERCENT, "%")))
+    if piece.len() < 2 || !piece.starts_with('/') {
+        return None;
+    }
+    let mut path = String::with_capacity(piece.len());
+    let mut chars = piece.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            path.push(c);
+        } else if chars.next() == Some('%') {
+            path.push('%');
+        } else {
+            return None;
+        }
+    }
+    Some(PathBuf::from(path))
 }
 
 /// Paths of the unit text, with whether each is exact (reportable); see the module contract.
@@ -120,9 +131,7 @@ pub(super) fn text_paths(text: &str, home: &Path) -> Vec<(PathBuf, bool)> {
         if line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        let line = line
-            .replace("%%", &PERCENT.to_string())
-            .replace("%h", &home.to_string_lossy());
+        let line = line.replace("%h", &home.to_string_lossy());
         // `Key = value`: the key ends at the first `=`; an Exec value may start with `-@+!:`.
         let (key, value) = match line.split_once('=') {
             Some((key, value))

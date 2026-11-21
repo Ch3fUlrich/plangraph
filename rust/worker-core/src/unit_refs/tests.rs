@@ -259,3 +259,91 @@ fn an_unreadable_parent_is_not_a_missing_worktree() {
     fs::set_permissions(&trees, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(reported.is_empty(), "{reported:?}");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_link_target_keeps_its_named_path_even_when_it_is_itself_a_link() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let wt = tmp.path().join("app-worktrees/wt1");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&wt).unwrap();
+    fs::create_dir_all(tmp.path().join("elsewhere")).unwrap();
+    fs::write(tmp.path().join("elsewhere/real.service"), "[Service]\n").unwrap();
+    symlink(
+        tmp.path().join("elsewhere/real.service"),
+        wt.join("unit.service"),
+    )
+    .unwrap();
+    symlink(wt.join("unit.service"), dir.join("x.service")).unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    assert!(
+        refs.iter()
+            .any(|r| r.exact && r.path == wt.join("unit.service")),
+        "{refs:?}"
+    );
+    let canonical = wt.canonicalize().unwrap();
+    assert_eq!(
+        unit_names(&refs, &wt, &canonical),
+        ["x.service"],
+        "{refs:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_relative_link_in_a_linked_drop_in_directory_resolves_from_its_physical_parent() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let real = tmp.path().join("shared/real.d");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&real).unwrap();
+    symlink("../app-worktrees/d3/u.service", real.join("link.service")).unwrap();
+    symlink(&real, dir.join("app.service.d")).unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    let expected = tmp.path().join("shared/app-worktrees/d3/u.service");
+    assert!(
+        refs.iter().any(|r| r.exact && r.path == expected),
+        "{refs:?}"
+    );
+    assert!(
+        !refs
+            .iter()
+            .any(|r| r.path == tmp.path().join("systemd/app-worktrees/d3/u.service")),
+        "{refs:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn two_units_sharing_a_linked_drop_in_directory_are_both_attributed() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let common = tmp.path().join("shared/common.d");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&common).unwrap();
+    fs::write(
+        common.join("o.conf"),
+        "[Service]\nExecStart=/wt/app-worktrees/shared1/run\n",
+    )
+    .unwrap();
+    symlink(&common, dir.join("a.service.d")).unwrap();
+    symlink(&common, dir.join("b.service.d")).unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    let tree = Path::new("/wt/app-worktrees/shared1");
+    assert_eq!(
+        unit_names(&refs, tree, tree),
+        ["a.service", "b.service"],
+        "{refs:?}"
+    );
+}
+
+#[test]
+fn a_decoded_control_byte_is_not_confused_with_a_percent_escape() {
+    let refs = refs_of("[Service]\nExecStart=/wt/app-worktrees/a\\x01b/run\n");
+    assert!(exact(&refs, "/wt/app-worktrees/a\u{1}b/run"), "{refs:?}");
+    assert!(!protected(&refs, "/wt/app-worktrees/a%b/run"), "{refs:?}");
+}
