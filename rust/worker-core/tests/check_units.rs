@@ -96,3 +96,24 @@ fn shell_text_and_separator_words_are_never_reported() {
     let (ok, text) = check(tmp.path());
     assert!(ok && text.is_empty(), "{text}");
 }
+
+#[test]
+fn an_unquoted_working_directory_with_spaces_is_one_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let units = tmp.path().join("systemd/user");
+    let trees = tmp.path().join("app-worktrees");
+    fs::create_dir_all(&units).unwrap();
+    fs::create_dir_all(trees.join("team blue")).unwrap();
+    let t = trees.display();
+    unit(&units, "alive", &format!("WorkingDirectory={t}/team blue"));
+    unit(&units, "gone", &format!("WorkingDirectory={t}/gone blue"));
+    let (ok, text) = check(tmp.path());
+    assert!(!ok);
+    assert!(
+        text.contains(&format!(
+            "unit-worktree-missing gone.service: {t}/gone blue"
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("alive.service"), "{text}");
+}

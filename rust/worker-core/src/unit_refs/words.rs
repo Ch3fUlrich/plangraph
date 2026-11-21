@@ -72,18 +72,17 @@ fn is_piece_break(c: char) -> bool {
 }
 
 /// A whole word the report may name: it starts with `/` and holds no whitespace or `; & | ( ) < >`.
-fn is_whole_word_path(word: &str) -> bool {
+pub(super) fn is_whole_word_path(word: &str) -> bool {
     word.starts_with('/') && !word.contains(|c: char| c.is_whitespace() || ";&|()<>".contains(c))
 }
 
-/// Unit keys whose value is one literal path: exact whatever characters it holds.
-fn is_literal_path_key(key: &str) -> bool {
+/// Unit keys whose value is one literal path, spaces and all (`WorkingDirectory=/x/team blue`).
+fn is_single_path_key(key: &str) -> bool {
     matches!(
         key,
         "WorkingDirectory" | "RootDirectory" | "RootImage" | "EnvironmentFile" | "PIDFile"
     ) || [
         "Path",
-        "Paths",
         "Directory",
         "File",
         "Exists",
@@ -95,12 +94,21 @@ fn is_literal_path_key(key: &str) -> bool {
     .any(|suffix| key.ends_with(suffix))
 }
 
+/// Unit keys whose value is a list of paths, one per word (`ReadWritePaths=/a /b`).
+fn is_path_list_key(key: &str) -> bool {
+    key.ends_with("Paths")
+}
+
+/// systemd's `%%` is a literal percent: it travels as this character until a path is built, so
+/// the unresolved-specifier test (`%n`, `%i`, ...) does not mistake it for a specifier.
+const PERCENT: char = '\u{1}';
+
 fn path_of(piece: &str) -> Option<PathBuf> {
     let piece = piece
         .trim_start_matches(['-', '@', '+', '!'])
         .trim_end_matches('/');
     (piece.len() > 1 && piece.starts_with('/') && !piece.contains('%'))
-        .then(|| PathBuf::from(piece))
+        .then(|| PathBuf::from(piece.replace(PERCENT, "%")))
 }
 
 /// Paths of the unit text, with whether each is exact (reportable); see the module contract.
@@ -112,7 +120,9 @@ pub(super) fn text_paths(text: &str, home: &Path) -> Vec<(PathBuf, bool)> {
         if line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        let line = line.replace("%h", &home.to_string_lossy());
+        let line = line
+            .replace("%%", &PERCENT.to_string())
+            .replace("%h", &home.to_string_lossy());
         // `Key = value`: the key ends at the first `=`; an Exec value may start with `-@+!:`.
         let (key, value) = match line.split_once('=') {
             Some((key, value))
@@ -131,10 +141,22 @@ pub(super) fn text_paths(text: &str, home: &Path) -> Vec<(PathBuf, bool)> {
         } else {
             value
         };
-        let literal_key = is_literal_path_key(key);
+        let single = is_single_path_key(key);
+        if single {
+            // One literal path: the whole value, unquoted or quoted, exact.
+            let whole = value.trim().trim_start_matches('-');
+            let whole = whole
+                .strip_prefix('"')
+                .and_then(|w| w.strip_suffix('"'))
+                .or_else(|| whole.strip_prefix('\'').and_then(|w| w.strip_suffix('\'')))
+                .unwrap_or(whole);
+            paths.extend(path_of(whole).map(|path| (path, true)));
+        }
+        let list_key = is_path_list_key(key);
         for word in split_words(value) {
-            // Report: a whole word, or a path-valued field's literal value.
-            if is_whole_word_path(&word) || (literal_key && word.starts_with('/')) {
+            // Report: a whole word, or a word of a path-list field.
+            // (A single-valued field's words are pieces of its whole value, already exact above.)
+            if !single && (is_whole_word_path(&word) || (list_key && word.starts_with('/'))) {
                 paths.extend(path_of(&word).map(|path| (path, true)));
             } else {
                 // A word with spaces may still be one path: protect it whole as well.

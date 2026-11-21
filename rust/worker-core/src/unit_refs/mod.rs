@@ -33,7 +33,7 @@ pub fn systemd_user_dir() -> io::Result<PathBuf> {
 /// entry refuses (the caller protects everything).
 pub fn unit_file_refs(dir: &Path, home: &Path) -> io::Result<Vec<UnitRef>> {
     let mut refs = BTreeSet::new();
-    collect(dir, None, home, 0, &mut refs)?;
+    collect(dir, None, home, 0, &mut BTreeSet::new(), &mut refs)?;
     Ok(refs.into_iter().collect())
 }
 
@@ -42,8 +42,15 @@ fn collect(
     owner: Option<&str>,
     home: &Path,
     depth: usize,
+    seen: &mut BTreeSet<PathBuf>,
     refs: &mut BTreeSet<UnitRef>,
 ) -> io::Result<()> {
+    // A directory reached twice through links is read once: no cycle can loop.
+    if let Ok(canonical) = dir.canonicalize() {
+        if !seen.insert(canonical) {
+            return Ok(());
+        }
+    }
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -53,20 +60,30 @@ fn collect(
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        let kind = fs::symlink_metadata(&path)?.file_type();
-        if kind.is_symlink() {
-            // A linked unit: the link target is itself a path the unit runs from.
-            if let Ok(target) = fs::read_link(&path).map(|t| t.to_path_buf()) {
-                if target.is_absolute() {
-                    refs.insert(UnitRef {
-                        unit: owner.unwrap_or(&name).to_string(),
-                        path: target,
-                        exact: true,
-                    });
-                }
+        let unit = owner.unwrap_or(&name).to_string();
+        if fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            // A linked unit: the link target is itself a path the unit runs from. A relative
+            // target resolves against the link's directory.
+            if let Ok(target) = fs::read_link(&path) {
+                let target = if target.is_absolute() {
+                    target
+                } else {
+                    dir.join(target)
+                };
+                let target = target.canonicalize().unwrap_or_else(|_| lexical(&target));
+                let exact = words::is_whole_word_path(&target.to_string_lossy());
+                refs.insert(UnitRef {
+                    unit: unit.clone(),
+                    path: target,
+                    exact,
+                });
             }
         }
-        if kind.is_dir() {
+        // Metadata follows links: a linked directory (`app.service.d`) is read like a real one.
+        let Ok(meta) = fs::metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
             if depth >= 4 {
                 return Err(io::Error::other("unit directory nesting too deep"));
             }
@@ -74,13 +91,12 @@ fn collect(
                 .strip_suffix(".d")
                 .filter(|n| n.contains('.'))
                 .or(owner);
-            collect(&path, owner, home, depth + 1, refs)?;
-        } else if fs::metadata(&path).is_ok_and(|m| m.is_file()) {
+            collect(&path, owner, home, depth + 1, seen, refs)?;
+        } else if meta.is_file() {
             let bytes = fs::read(&path)?;
             if bytes.len() > 1 << 20 {
                 return Err(io::Error::other("unit file too large"));
             }
-            let unit = owner.unwrap_or(&name).to_string();
             for (path, exact) in words::text_paths(&String::from_utf8_lossy(&bytes), home) {
                 refs.insert(UnitRef {
                     unit: unit.clone(),
@@ -91,6 +107,21 @@ fn collect(
         }
     }
     Ok(())
+}
+
+/// `.` and `..` resolved without touching the file system (a dangling link has no canonical form).
+fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// The worktree root a path lives in, when it lives in one: the first component below a
@@ -112,7 +143,13 @@ fn worktree_root(path: &Path) -> Option<PathBuf> {
 /// A ref whose worktree root is missing.
 pub fn missing_worktree_refs(refs: &[UnitRef]) -> Vec<UnitRef> {
     refs.iter()
-        .filter(|r| r.exact && worktree_root(&r.path).is_some_and(|root| !root.exists()))
+        .filter(|r| {
+            // Only "not found" is missing: a permission error says nothing about the worktree.
+            r.exact
+                && worktree_root(&r.path).is_some_and(|root| {
+                    matches!(fs::metadata(&root), Err(e) if e.kind() == io::ErrorKind::NotFound)
+                })
+        })
         .cloned()
         .collect()
 }

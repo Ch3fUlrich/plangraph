@@ -138,3 +138,124 @@ fn drop_ins_name_their_owner_and_a_missing_directory_names_nothing() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn a_single_valued_path_field_keeps_its_whole_value_with_spaces() {
+    let refs = refs_of("[Service]\nWorkingDirectory=/wt/app-worktrees/team blue\n");
+    assert!(exact(&refs, "/wt/app-worktrees/team blue"), "{refs:?}");
+    let tree = Path::new("/wt/app-worktrees/team blue");
+    assert_eq!(unit_names(&refs, tree, tree), ["t.service"]);
+    // Quoted, or with a systemd prefix, it is the same one value.
+    let refs = refs_of("[Service]\nEnvironmentFile=-\"/wt/app-worktrees/env blue/e\"\n");
+    assert!(exact(&refs, "/wt/app-worktrees/env blue/e"), "{refs:?}");
+    // A list field names one path per word.
+    let refs = refs_of("[Service]\nReadWritePaths=/wt/app-worktrees/l1 /wt/app-worktrees/l2\n");
+    assert!(
+        exact(&refs, "/wt/app-worktrees/l1") && exact(&refs, "/wt/app-worktrees/l2"),
+        "{refs:?}"
+    );
+}
+
+#[test]
+fn the_percent_escape_is_a_literal_percent_in_a_path() {
+    let refs = refs_of("[Service]\nExecStart=/wt/app-worktrees/go%%ne/run\n");
+    assert!(exact(&refs, "/wt/app-worktrees/go%ne/run"), "{refs:?}");
+    // An unresolved specifier still names nothing.
+    let refs = refs_of("[Service]\nExecStart=/wt/app-worktrees/%n/run\n");
+    assert!(
+        !refs.iter().any(|r| r.path.to_string_lossy().contains("%n")),
+        "{refs:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_drop_in_directories_and_relative_link_targets_are_followed() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let real = tmp.path().join("shared/app.service.d");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&real).unwrap();
+    fs::write(
+        real.join("o.conf"),
+        "[Service]\nExecStart=/wt/app-worktrees/d1/run\n",
+    )
+    .unwrap();
+    symlink(&real, dir.join("app.service.d")).unwrap();
+    // A relative link target resolves against the link's directory.
+    fs::create_dir_all(tmp.path().join("systemd/app-worktrees/d2")).unwrap();
+    symlink(
+        "../app-worktrees/d2/unit.service",
+        dir.join("linked.service"),
+    )
+    .unwrap();
+    // A directory link back to its parent must not loop forever.
+    symlink(&dir, dir.join("loop.d")).unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    assert!(
+        refs.iter()
+            .any(|r| r.unit == "app.service" && r.path == Path::new("/wt/app-worktrees/d1/run")),
+        "{refs:?}"
+    );
+    let linked = tmp
+        .path()
+        .join("systemd/app-worktrees/d2/unit.service")
+        .canonicalize()
+        .unwrap_or_else(|_| tmp.path().join("systemd/app-worktrees/d2/unit.service"));
+    assert!(
+        refs.iter()
+            .any(|r| r.unit == "linked.service" && r.path == linked),
+        "{refs:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_target_with_spaces_only_protects() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    fs::create_dir_all(&dir).unwrap();
+    symlink(
+        "/wt/app-worktrees/gone blue/unit.service",
+        dir.join("a.service"),
+    )
+    .unwrap();
+    symlink(
+        "/wt/app-worktrees/gone2/unit.service",
+        dir.join("b.service"),
+    )
+    .unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    assert!(
+        protected(&refs, "/wt/app-worktrees/gone blue/unit.service"),
+        "{refs:?}"
+    );
+    assert!(
+        !exact(&refs, "/wt/app-worktrees/gone blue/unit.service"),
+        "{refs:?}"
+    );
+    assert!(
+        exact(&refs, "/wt/app-worktrees/gone2/unit.service"),
+        "{refs:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn an_unreadable_parent_is_not_a_missing_worktree() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let trees = tmp.path().join("app-worktrees");
+    fs::create_dir_all(trees.join("alive")).unwrap();
+    let refs = vec![UnitRef {
+        unit: "a.service".into(),
+        path: trees.join("alive/run"),
+        exact: true,
+    }];
+    fs::set_permissions(&trees, fs::Permissions::from_mode(0o000)).unwrap();
+    let reported = missing_worktree_refs(&refs);
+    fs::set_permissions(&trees, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(reported.is_empty(), "{reported:?}");
+}
