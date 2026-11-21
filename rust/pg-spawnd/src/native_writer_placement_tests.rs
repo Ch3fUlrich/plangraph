@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory() as directory:
         hosts=hosts, public_repos=['plangraph'])))
     (config / 'overflow-hosts.json').write_text(json.dumps({'hosts': {'unregistered': {}}}))
     run = dict(run_id='run-review', role='review', status='running')
-    with patch.dict(os.environ, HOME=directory, XDG_CONFIG_HOME=str(config.parent),
+    with patch.dict(os.environ, HOME=directory, USERPROFILE=directory, XDG_CONFIG_HOME=str(config.parent),
                     PLANGRAPH_HOST_NAME='local'), patch.object(seat_spawn, 'resources', return_value=(0, 30000)), (
             patch.object(host_ready, 'local_disk_refusal', return_value=None)), (
             patch.object(overflow, 'remote_spawn', return_value=run)) as spawn:
