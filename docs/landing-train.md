@@ -25,3 +25,19 @@
   `state_unknown` or `ref_not_forward_only`.
 
 `plangraph land-train verify --repo DIR --manifest FILE --parts FILE` repeats the proof on a published train branch.
+
+## A red train
+
+`land::split` (rust/plangraph-cli/src/land/split.rs) plans the retries of a red train; every retry is a new frozen
+candidate (rule 3.52 (8), D-6535).
+
+- The failing test paths name the part to leave out first: it is evicted with the job log, the parts above it wait
+  (they are not blamed), the rest freezes as the next candidate.
+- Without a hint, independent stacks are split into two halves at the stack boundary that balances them best (halves may
+  be uneven). One failing stack is cut at a dependency-closed prefix; its descendants are blocked until the prefix landed and
+  its exact head is verified in main, then the remainder is rebuilt against the new main.
+- Two halves that both pass alone: the first lands, the second is rebuilt, reviewed and runs full CI again against the new
+  main; a red second run leaves it unmerged.
+- An evicted part goes back to its own writer with the job log; a part evicted twice goes to routing.
+- Train size: 4 parts at the start, plus one after a green train, halved after a red one, between 1 and 8 (used once
+  bounded trains are authorized by the amendment of rules 3.39 and 3.63).
