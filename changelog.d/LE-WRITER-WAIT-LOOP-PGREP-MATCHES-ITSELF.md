@@ -1,1 +1,1 @@
-- Refuse self-matching Bash wait loops, reap verified Linux session tools on stop, and alert on stale shells with deleted working directories.
+- Refuse self-matching Bash wait loops, reap verified Linux session tools even when Python lacks PID file descriptor bindings, and alert on stale shells with deleted working directories.

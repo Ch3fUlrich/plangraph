@@ -59,6 +59,11 @@ gates on the clean final head, then pushes it once to the card's optional
 The card's `review_dir` selects a target-host directory; the default is
 `<worktree>/reviews`.
 
+When a native batch brief provides no status-file path, put one
+`SKIPPED <key> <reason>` line per skipped item in a commit body above its trailer
+paragraph. The review prompt includes these lines for items in the brief and
+the exact committed range. A later `Plan-Item` trailer clears an earlier skip.
+
 Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
 final head, resume count, fast-check result, every review round, the last review
 path/text/verdict/run ID, pushed ref and exit code. Exits are 0 accepted, 3 review

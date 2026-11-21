@@ -351,7 +351,7 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
             "commit",
             "-q",
             "-m",
-            "writer\n\nWriter: gemini-4-hydrogen-high run-6f00f4b3",
+            "writer\n\nSKIPPED plangraph:OTHER-HOST-ITEM Fixture contract unavailable.\nSKIPPED plangraph:UNLISTED-ITEM Not in this brief.\nSKIPPED plangraph:HOST-TEST-ITEM Waiting for fixture.\n\nWriter: gemini-4-hydrogen-high run-6f00f4b3",
         ],
     );
     fs::write(cwd.join("src/more.rs"), "pub fn fixture_symbol() {}\n").unwrap();
@@ -362,7 +362,7 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
             "commit",
             "-q",
             "-m",
-            "claude\n\nWriter: claude-opus-5-5 session_abc",
+            "claude\n\nPlan-Item: plangraph:HOST-TEST-ITEM\nWriter: claude-opus-5-5 session_abc",
         ],
     );
     let head = git(&cwd, &["rev-parse", "HEAD"]);
@@ -402,6 +402,9 @@ repo = pathlib.Path(card['diff_ref']['repo'])
 assert repo != pathlib.Path.cwd()
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
+assert 'SKIPPED plangraph:OTHER-HOST-ITEM Fixture contract unavailable.\n' in prompt, prompt
+assert 'SKIPPED plangraph:UNLISTED-ITEM' not in prompt, prompt
+assert 'SKIPPED plangraph:HOST-TEST-ITEM' not in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
 assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
 skill, context = prompt.index('REVIEW-SKILL-FIXTURE-LINE'), prompt.index('=== ITEM CONTEXT')
@@ -440,7 +443,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         tool_path: std::env::var("PATH").unwrap(),
         effort: WRITER_EFFORT.into(),
         state: state.clone(),
-        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n"
+        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n\nPlan item: plangraph:OTHER-HOST-ITEM\n"
             .into(),
         push_ref: None,
         reviews_started: 0,

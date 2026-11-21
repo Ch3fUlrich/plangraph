@@ -125,7 +125,8 @@ def test_stop_argv_is_never_rm_or_kill(site):
 
 
 @pytest.mark.parametrize("state", ["running", "done"])
-def test_stop_reaps_session_tools_without_signalling_other_sessions(site, state):
+@pytest.mark.parametrize("without_pidfd_bindings", [False, True])
+def test_stop_reaps_session_tools_without_signalling_other_sessions(site, state, without_pidfd_bindings, monkeypatch):
     import os
     import signal
     import subprocess
@@ -135,6 +136,9 @@ def test_stop_reaps_session_tools_without_signalling_other_sessions(site, state)
 
     if sys.platform != "linux":
         pytest.skip("requires Linux process identities")
+    if without_pidfd_bindings:
+        monkeypatch.delattr(os, "pidfd_open", raising=False)
+        monkeypatch.delattr(signal, "pidfd_send_signal", raising=False)
     code = ("import subprocess,sys; "
             "child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "
             "env={}, start_new_session=True); print(child.pid, flush=True); child.wait()")

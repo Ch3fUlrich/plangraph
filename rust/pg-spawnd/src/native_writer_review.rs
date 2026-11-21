@@ -5,9 +5,38 @@ use crate::native_writer::Driver;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
+
+/// Oldest-first Git records pair the commit body with its Plan-Item trailer values.
+fn skipped_items(brief: &str, log: &str) -> Vec<String> {
+    let keys = context::item_keys(brief);
+    let mut skipped = BTreeMap::new();
+    let mut records = log.split_terminator('\0');
+    while let (Some(body), Some(trailers)) = (records.next(), records.next()) {
+        for line in body.lines() {
+            let Some((key, reason)) = line
+                .strip_prefix("SKIPPED ")
+                .and_then(|s| s.split_once(' '))
+            else {
+                continue;
+            };
+            let reason = reason.trim();
+            if keys.binary_search_by(|item| item.as_str().cmp(key)).is_ok()
+                && !reason.is_empty()
+                && !reason.chars().any(char::is_control)
+            {
+                skipped.insert(key, format!("SKIPPED {key} {reason}"));
+            }
+        }
+        for key in trailers.lines() {
+            skipped.remove(key.trim());
+        }
+    }
+    skipped.into_values().collect()
+}
 
 impl Host {
     /// Fast-checks stamp of `head`, in the worktree's own git directory.
@@ -157,14 +186,28 @@ impl Host {
         previous: Option<(&str, &str)>,
         families: &[String],
         versioned: &str,
-    ) -> String {
+    ) -> Result<String, String> {
         let mut prompt = format!("{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let messages = self.git(&[
+            "log",
+            "--reverse",
+            "--topo-order",
+            "-z",
+            "--format=%B%x00%(trailers:key=Plan-Item,valueonly,unfold)",
+            &format!("{base}..{head}"),
+        ])?;
+        let skipped = skipped_items(&self.brief, &messages);
+        if !skipped.is_empty() {
+            prompt.push_str("Writer-reported skipped items from the committed range:\n");
+            prompt.push_str(&skipped.join("\n"));
+            prompt.push_str("\n\n");
+        }
         match previous {
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),
         }
         prompt.push_str(&format!("Name each finding as file:line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
-        prompt
+        Ok(prompt)
     }
     /// One review run through the spawner, role review with every writer family of the range excluded,
     /// in a disposable no-push clone at `head`; the verdict comes from that run's record.
@@ -238,7 +281,7 @@ impl Host {
             &skill,
             &trusted_python,
         )?;
-        let prompt = self.review_prompt(base, head, prev, &families, &versioned);
+        let prompt = self.review_prompt(base, head, prev, &families, &versioned)?;
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,

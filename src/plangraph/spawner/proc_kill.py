@@ -77,31 +77,35 @@ def descendants(procs, seeds):
         found |= children
 
 
+def _libc_pidfd(name):
+    import ctypes
+    operation = getattr(ctypes.CDLL(None, use_errno=True), name, None)
+    if operation is None:
+        raise OSError(f'{name} is unavailable')
+
+    def checked(*args):
+        result = operation(*args)
+        if result < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+        return result
+
+    return checked
+
+
 def kill_identities(members):
     """Signal Linux PID/start-time pairs without a PID reuse window."""
     import signal
 
-    open_pid = getattr(os, 'pidfd_open', None)
-    if open_pid is None:
-        import ctypes
-        libc = ctypes.CDLL(None, use_errno=True)
-        native_open = getattr(libc, 'pidfd_open', None)
-        if native_open is None:
-            raise OSError('pidfd_open is unavailable')
-
-        def open_pid(pid):
-            fd = native_open(pid, 0)
-            if fd < 0:
-                error = ctypes.get_errno()
-                raise OSError(error, os.strerror(error))
-            return fd
+    open_pid = getattr(os, 'pidfd_open', None) or _libc_pidfd('pidfd_open')
+    send_signal = getattr(signal, 'pidfd_send_signal', None) or _libc_pidfd('pidfd_send_signal')
 
     for pid, start in members.items():
         try:
-            fd = open_pid(pid)
+            fd = open_pid(pid, 0)
             try:
                 if alive(pid, start):
-                    signal.pidfd_send_signal(fd, signal.SIGKILL)
+                    send_signal(fd, signal.SIGKILL, None, 0)
             finally:
                 os.close(fd)
         except ProcessLookupError:

@@ -88,7 +88,8 @@ applies only to the launch); the launch smoke checks that `claude agents` lists 
 other cwds.
 On Linux, stop snapshots local processes with the resolved full Claude session ID
 and their descendants before calling Claude. After confirmation it signals surviving
-members through PID file descriptors and checks for late session tools. A cleanup
+members through PID file descriptors and checks for late session tools. It uses
+libc when the Python runtime lacks the PID file descriptor bindings. A cleanup
 failure leaves the record retryable. An orphan that lost its session ID before the
 snapshot has no ownership evidence and remains eligible for stale-shell reporting.
 Concurrent actions on one name are serialised by a per-name lock covering `launch`, `relaunch`,
