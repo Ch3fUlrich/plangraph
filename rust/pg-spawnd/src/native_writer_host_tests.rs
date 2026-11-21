@@ -653,6 +653,24 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
 }
 
+/// One spelling of a path for comparison: the canonical long form where it exists (else its parent's),
+/// `\\?\` stripped, one separator, case-folded on Windows (8.3 names and separators differ by source).
+fn same_path(path: &Path) -> String {
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| {
+        match (path.parent().map(fs::canonicalize), path.file_name()) {
+            (Some(Ok(parent)), Some(name)) => parent.join(name),
+            _ => path.to_path_buf(),
+        }
+    });
+    let text = resolved.to_string_lossy().replace('\\', "/");
+    let text = text.strip_prefix("//?/").unwrap_or(&text).to_owned();
+    if cfg!(windows) {
+        text.to_lowercase()
+    } else {
+        text
+    }
+}
+
 #[test]
 fn writer_command_is_workspace_write_and_never_danger_full_access() {
     let dir = tempfile::tempdir().unwrap();
@@ -690,19 +708,21 @@ fn writer_command_is_workspace_write_and_never_danger_full_access() {
             "{line}"
         );
         assert!(!line.contains("danger-full-access"), "{line}");
-        let roots = args
-            .iter()
-            .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
-            .unwrap();
+        let roots: Vec<String> = serde_json::from_str(
+            args.iter()
+                .find_map(|a| a.strip_prefix("sandbox_workspace_write.writable_roots="))
+                .unwrap(),
+        )
+        .unwrap();
+        let roots: Vec<String> = roots.iter().map(|r| same_path(Path::new(r))).collect();
         for named in [
             dir.path().join("reviews"),
             dir.path().join("run"),
             repo.join(".git"),
         ] {
-            let named = fs::canonicalize(&named).unwrap_or(named);
             assert!(
-                roots.contains(named.to_str().unwrap()),
-                "{roots} lacks {named:?}"
+                roots.contains(&same_path(&named)),
+                "{roots:?} lacks {named:?}"
             );
         }
         assert_eq!(args.contains(&"resume".to_owned()), session.is_some());
