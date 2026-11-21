@@ -398,18 +398,60 @@ def policy_build_command(root):
     manifest = Path(root) / 'rust/Cargo.toml'
     if not manifest.is_file():
         return None
-    return ['cargo', 'build', '--quiet', '--locked', '--manifest-path', str(manifest), '-p', 'pg-policy']
+    return ['cargo', 'build', '--quiet', '--locked', '--message-format=json',
+            '--manifest-path', str(manifest), '-p', 'pg-policy']
 
 
-def stage_policy_binary(target, cleanup):
-    """Private copy of the built pg-policy: a concurrent checkout may rebuild the shared one."""
-    name = 'pg-policy.exe' if os.name == 'nt' else 'pg-policy'
-    built = Path(target) / 'debug' / name
-    if not built.is_file():
-        return None
+def policy_artifact(output):
+    """The pg-policy executable Cargo reports for this checkout, and the human-readable rest."""
+    executable, text = None, []
+    for line in output.splitlines():
+        try:
+            message = json.loads(line) if line.startswith('{') else None
+        except ValueError:
+            message = None
+        if message is None:
+            text.append(line)
+        elif message.get('reason') == 'compiler-message':
+            text.append(message.get('message', {}).get('rendered', ''))
+        elif (message.get('reason') == 'compiler-artifact' and message.get('executable')
+              and message.get('target', {}).get('name') == 'pg-policy'
+              and 'bin' in message['target'].get('kind', [])):
+            executable = message['executable']
+    return executable, ''.join(line + '\n' for line in text if line)
+
+
+def stage_policy_binary(executable, cleanup):
+    """Private copy of the built pg-policy, taken under the build lease."""
     private = tempfile.mkdtemp(prefix='preflight-policy-')
     cleanup.append(private)
-    return shutil.copy2(built, Path(private) / name)
+    return shutil.copy2(executable, Path(private) / Path(executable).name)
+
+
+def build_policy(root, env, cleanup):
+    """Build pg-policy and stage this checkout's own artifact while the shared lease is held.
+
+    Another checkout can replace target/debug/pg-policy and cleanup needs the exclusive
+    lease, so the artifact path comes from Cargo's JSON output and is copied before release.
+    Returns (code, text, staged binary or None)."""
+    with cargo_lease():
+        refusal = running_disk_refusal(root)
+        if refusal:
+            return 1, refusal + '\n', None
+        code, output = run(policy_build_command(root), root, env)
+        executable, text = policy_artifact(output)
+        binary = None
+        if not code:
+            try:
+                binary = stage_policy_binary(executable, cleanup) if executable else None
+            except OSError:
+                binary = None
+            if binary is None:
+                code, text = 1, text + 'pg-policy build reported no usable executable\n'
+        refusal = running_disk_refusal(root)
+        if refusal:
+            return 1, text + refusal + '\n', None
+        return code, text, binary
 
 
 # A live build holds a shared lease on the target; trimming waits this long, then skips.
@@ -521,12 +563,11 @@ def _main(argv, root, cleanup):
                 failed = []  # policy runs every check and reports all failures
                 if family == "policy" and policy_build_command(root):
                     # Outside the per-check bound; a cold compile must not fail a green diff.
-                    code, output = invoke(policy_build_command(root), root, env)
+                    code, output, binary = build_policy(root, env, cleanup)
                     print(output, end="", flush=True)
-                    binary = None if code else stage_policy_binary(env["CARGO_TARGET_DIR"], cleanup)
                     if binary:
                         family_env = dict(family_env, PG_POLICY_BIN=binary)
-                    elif code:
+                    else:
                         failed.append(("FAIL", "pg-policy build", first_error(output)))
                         commands = [c for c in commands if Path(c[1]).name != "check_new_code_lang.py"]
                 for command in commands:

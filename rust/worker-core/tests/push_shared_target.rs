@@ -10,7 +10,7 @@ fn preflight_overrides_private_target_and_holds_shared_lease() {
         .env("PLANGRAPH_CARGO_TARGET_DIR", tmp.path().join("shared"))
         .env("CARGO_TARGET_DIR", tmp.path().join("private"))
         .args(["-c", r#"
-import importlib.util, os
+import importlib.util, json, os, tempfile
 from pathlib import Path
 from unittest.mock import patch
 from plangraph.spawner.host_ready import cargo_lease, shared_cargo_target
@@ -28,6 +28,11 @@ def run(command, cwd, env):
         except OSError:
             pass
         seen.append(command)
+        if command[1] == 'build':
+            built = Path(tempfile.mkdtemp()) / 'pg-policy'
+            built.write_text('')
+            return 0, json.dumps(dict(reason='compiler-artifact', executable=str(built),
+                                      target=dict(name='pg-policy', kind=['bin'])))
     return 0, ''
 with patch.object(p, 'run', run), patch.object(p, 'rust_commands', return_value=[['cargo', 'test']]):
     assert p.main(['--base', 'HEAD', '--fast']) == 0

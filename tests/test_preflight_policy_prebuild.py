@@ -48,6 +48,10 @@ if sys.argv[1] == 'build':
         raise SystemExit(101)
     out = Path(os.environ['CARGO_TARGET_DIR']) / 'debug/pg-policy'
     out.parent.mkdir(parents=True, exist_ok=True)
+    import json
+    print(json.dumps(dict(reason='compiler-message', message=dict(rendered='warning: noise'))))
+    print(json.dumps(dict(reason='compiler-artifact', target=dict(name='other', kind=['bin']), executable='/nope')))
+    print(json.dumps(dict(reason='compiler-artifact', target=dict(name='pg-policy', kind=['bin']), executable=str(out))))
     out.write_text({PY!r} + "open({str(seen)!r}, 'a').write(' '.join(__import__('sys').argv[1:]) + chr(10))\\n")
     out.chmod(0o755)
 elif sys.argv[1] == 'run':
@@ -78,18 +82,54 @@ def test_cold_build_counts_outside_the_policy_check_bound(rig, monkeypatch, caps
     assert len(calls) == 2 and calls[0].startswith("--test-sources")
 
 
-def test_the_built_binary_is_a_private_copy_removed_afterwards(rig, monkeypatch):
+def test_the_artifact_comes_from_cargo_json_and_is_copied_privately(rig, monkeypatch):
     repo, log, seen = rig
-    cleanup = []
     built = shared_target(repo) / "debug/pg-policy"
     built.parent.mkdir(parents=True)
     built.write_text("x")
-    staged = preflight.stage_policy_binary(shared_target(repo), cleanup)
+    cleanup = []
+    staged = preflight.stage_policy_binary(str(built), cleanup)
     assert Path(staged).read_text() == "x" and Path(staged) != built
     assert str(Path(staged).parent) in cleanup
     built.write_text("replaced by another checkout")
     assert Path(staged).read_text() == "x"
-    assert preflight.stage_policy_binary(repo / "none", cleanup) is None
+    out = "\n".join([
+        '{"reason":"compiler-message","message":{"rendered":"warning: noise\\n"}}',
+        '{"reason":"compiler-artifact","target":{"name":"dep","kind":["lib"]},"executable":null}',
+        '{"reason":"compiler-artifact","target":{"name":"pg-policy","kind":["bin"]},"executable":"/x/pg-policy"}',
+        "plain line"])
+    executable, text = preflight.policy_artifact(out)
+    assert executable == "/x/pg-policy" and "warning: noise" in text and "plain line" in text
+    assert preflight.policy_artifact("")[0] is None
+
+
+def test_the_build_and_the_copy_happen_under_one_shared_lease(rig, monkeypatch):
+    """Another checkout's rebuild or a cleanup cannot swap the artifact between build and copy."""
+    from plangraph.spawner import host_ready
+    repo, log, seen = rig
+    held = []
+    real_stage = preflight.stage_policy_binary
+
+    def stage(executable, cleanup):
+        try:
+            with host_ready.cargo_lease(exclusive=True):
+                held.append(False)
+        except OSError:
+            held.append(True)
+        return real_stage(executable, cleanup)
+
+    monkeypatch.setattr(preflight, "stage_policy_binary", stage)
+    cleanup = []
+    code, text, binary = preflight.build_policy(repo, dict(os.environ, CARGO_TARGET_DIR=str(shared_target(repo))), cleanup)
+    assert (code, held) == (0, [True]) and Path(binary).is_file()
+
+
+def test_a_build_that_reports_no_executable_fails_explicitly(rig, monkeypatch, capsys):
+    repo, log, seen = rig
+    monkeypatch.setattr(preflight, "run", lambda command, cwd, env: (0, ""))
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == 1
+    out = capsys.readouterr().out
+    assert "pg-policy build reported no usable executable" in out and "FAIL policy" in out
 
 
 def test_without_the_prebuilt_binary_the_check_falls_back_to_cargo_run(rig, monkeypatch):
