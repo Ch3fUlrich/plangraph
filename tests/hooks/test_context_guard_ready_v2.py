@@ -186,11 +186,11 @@ def _slow_checker(checker, seconds):
     checker.write_text(f"#!{sys.executable}\nimport time\ntime.sleep({seconds})\n")
 
 
-def test_ready_waits_for_a_slow_checker_within_the_bound(ready):
+def test_ready_waits_for_a_15_second_checker_with_the_default_bound(ready):
     handoff, _, checker, env, marker, _ = ready
     guard = load_module("context_guard")
-    _slow_checker(checker, 1.5)
-    with patch.dict(os.environ, env, clear=True), patch.object(guard, "HANDOFF_CHECK_TIMEOUT_S", 4):
+    _slow_checker(checker, 15)
+    with patch.dict(os.environ, env, clear=True):
         assert guard.cmd_ready([str(handoff)]) == 0
     assert marker.is_file()
 
