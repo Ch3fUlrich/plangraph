@@ -111,6 +111,12 @@ pub struct Answer {
     pub tip: String,
     pub state: State,
     pub runs: Vec<Run>,
+    /// The stall bound T the state was judged with (seconds).
+    #[serde(default)]
+    pub bound_t: i64,
+    /// The time of the read (epoch seconds).
+    #[serde(default)]
+    pub at: i64,
 }
 
 /// The bound T: twice the median duration of the last 20 green push runs, at least 30 minutes.
@@ -356,10 +362,12 @@ pub fn observe(source: &mut impl Source, ledger: &mut impl TipLedger, matrix: &M
                 tip: String::new(),
                 state: State::RefNotForwardOnly,
                 runs: vec![],
+                bound_t: 0,
+                at: source.now(),
             }
         }
         Err(e) => {
-            return unknown(format!("read protection: {e}"));
+            return unknown(format!("read protection: {e}"), source.now());
         }
     }
     let mut failing = String::new();
@@ -368,19 +376,27 @@ pub fn observe(source: &mut impl Source, ledger: &mut impl TipLedger, matrix: &M
             Ok((tip, runs, first_seen, t)) => {
                 let now = source.now();
                 let state = evaluate(matrix, &runs, first_seen, now, t);
-                return Answer { tip, state, runs };
+                return Answer {
+                    tip,
+                    state,
+                    runs,
+                    bound_t: t,
+                    at: now,
+                };
             }
             Err(e) => failing = e,
         }
     }
-    unknown(failing)
+    unknown(failing, source.now())
 }
 
-fn unknown(failing_read: String) -> Answer {
+fn unknown(failing_read: String, at: i64) -> Answer {
     Answer {
         tip: String::new(),
         state: State::StateUnknown { failing_read },
         runs: vec![],
+        bound_t: 0,
+        at,
     }
 }
 

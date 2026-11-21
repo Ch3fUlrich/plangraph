@@ -1,7 +1,16 @@
 //! One bounded CI scan; all external effects are behind the Github adapter.
+pub mod batch_failure;
+#[cfg(test)]
+mod batch_failure_tests;
 pub(crate) mod github;
 mod keeper;
 pub(crate) mod logs;
+pub mod main_freeze;
+pub mod main_freeze_gh;
+#[cfg(test)]
+mod main_freeze_gh_tests;
+#[cfg(test)]
+mod main_freeze_tests;
 #[cfg(test)]
 mod tests;
 
@@ -62,6 +71,20 @@ fn save_tasks(path: &Path, tasks: &BTreeMap<String, Task>) -> Result<()> {
     }
     atomic::write(path, &bytes).map_err(|e| e.to_string())
 }
+fn load_tasks(path: &Path) -> Result<BTreeMap<String, Task>> {
+    let mut tasks = BTreeMap::<String, Task>::new();
+    match fs::read_to_string(path) {
+        Ok(raw) => {
+            for line in raw.lines() {
+                let task: Task = serde_json::from_str(line).map_err(|_| "invalid task state")?;
+                tasks.insert(task.key.clone(), task);
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+        Err(_) => return Err("cannot read tasks".into()),
+    }
+    Ok(tasks)
+}
 fn number(value: &Value, field: &str) -> Result<u64> {
     value[field]
         .as_u64()
@@ -81,11 +104,13 @@ fn failed(value: &Value) -> bool {
 }
 
 pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Result<()> {
-    if args
-        .iter()
-        .any(|a| !matches!(a.as_str(), "--dry-run" | "--keeper"))
-    {
-        return Err("usage: plangraph ci-watch [--dry-run] [--keeper]".into());
+    if args.iter().any(|a| {
+        !matches!(a.as_str(), "--dry-run" | "--keeper" | "--main-freeze")
+            && !a.starts_with("--ack=")
+    }) {
+        return Err(
+            "usage: plangraph ci-watch [--dry-run] [--keeper] [--main-freeze] [--ack=ID]".into(),
+        );
     }
     let dry = args.iter().any(|a| a == "--dry-run");
     let use_keeper = args.iter().any(|a| a == "--keeper");
@@ -96,6 +121,21 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
         .map_err(|_| "cannot read deploy/ci-watch/flakes.toml")?;
     let flakes: Flakes = toml::from_str(&mapping).map_err(|_| "invalid flake mapping")?;
     let dir = home.join(".local/state/plangraph/ci-watch");
+    let keeper_define = |task: &mut Task| {
+        if use_keeper {
+            keeper::define(env, task)
+        } else {
+            Ok(false)
+        }
+    };
+    if let Some(id) = args.iter().find_map(|a| a.strip_prefix("--ack=")) {
+        let mut records = main_freeze_gh::load_failures(&dir)?;
+        if !batch_failure::acknowledge(&mut records, id) {
+            return Err("unknown failure record".into());
+        }
+        return main_freeze_gh::save_failures(&dir, &records);
+    }
+    let now = chrono::Utc::now().timestamp();
     let rows = scan(
         &mut Gh { repo: repo.clone() },
         &repo,
@@ -103,13 +143,23 @@ pub fn run(home: &Path, env: &BTreeMap<String, String>, args: &[String]) -> Resu
         &flakes.flakes,
         dry,
         |task| {
-            if use_keeper {
-                keeper::define(env, task)
-            } else {
-                Ok(false)
+            // A failing head of a batch with a recorded owner goes to that batch's writer, not to a fix lane.
+            if dry {
+                return keeper_define(task);
             }
+            main_freeze_gh::route_or_define(&dir, task, now, keeper_define)
         },
     )?;
+    let mut rows = rows;
+    if args.iter().any(|a| a == "--main-freeze") && !dry {
+        rows.extend(run_main_freeze(
+            &repo,
+            &dir,
+            &flakes.flakes,
+            now,
+            keeper_define,
+        )?);
+    }
     let pending = rows
         .iter()
         .any(|row| row.starts_with("keeper delivery pending:"));
@@ -138,17 +188,7 @@ fn scan(
         Some(atomic::lock(&dir.join("scan")).map_err(|e| e.to_string())?)
     };
     let task_path = dir.join("tasks.jsonl");
-    let mut tasks = BTreeMap::<String, Task>::new();
-    match fs::read_to_string(&task_path) {
-        Ok(raw) => {
-            for line in raw.lines() {
-                let task: Task = serde_json::from_str(line).map_err(|_| "invalid task state")?;
-                tasks.insert(task.key.clone(), task);
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-        Err(_) => return Err("cannot read tasks".into()),
-    }
+    let mut tasks = load_tasks(&task_path)?;
     let mut reruns: Reruns = read(&dir.join("reruns.json"))?;
     let prs = gh.pages("pulls?state=open&per_page=100", None)?;
     let mut heads = BTreeMap::new();
@@ -285,7 +325,7 @@ fn scan(
                 .get(&key)
                 .is_some_and(|t| t.keeper_defined && t.run_id == run_id);
             let keeper_key = tasks.get(&key).and_then(|t| t.keeper_key.clone());
-            let mut task = Task {
+            let task = Task {
                 key: key.clone(),
                 head: head.clone(),
                 pr,
@@ -303,23 +343,76 @@ fn scan(
                 serde_json::to_string(&task).map_err(|e| e.to_string())?
             ));
             if !dry {
-                // Persist first so a keeper outage never loses a fix task.
-                tasks.insert(key.clone(), task.clone());
-                save_tasks(&task_path, &tasks)?;
-                if !task.keeper_defined {
-                    match define(&mut task) {
-                        Ok(defined) => task.keeper_defined = defined,
-                        Err(error) => output.push(format!(
-                            "keeper delivery pending: {}: {}",
-                            task.key,
-                            logs::scrub(&error)
-                        )),
-                    }
-                }
-                tasks.insert(key, task);
-                save_tasks(&task_path, &tasks)?;
+                store_task(&task_path, &mut tasks, task, &mut define, &mut output)?;
             }
         }
     }
     Ok(output)
+}
+
+/// Persists a fix task first, so a keeper outage never loses it, then defines it in the keeper.
+fn store_task(
+    path: &Path,
+    tasks: &mut BTreeMap<String, Task>,
+    mut task: Task,
+    define: &mut impl FnMut(&mut Task) -> Result<bool>,
+    output: &mut Vec<String>,
+) -> Result<()> {
+    let key = task.key.clone();
+    tasks.insert(key.clone(), task.clone());
+    save_tasks(path, tasks)?;
+    if !task.keeper_defined {
+        match define(&mut task) {
+            Ok(defined) => task.keeper_defined = defined,
+            Err(error) => output.push(format!(
+                "keeper delivery pending: {}: {}",
+                task.key,
+                logs::scrub(&error)
+            )),
+        }
+    }
+    tasks.insert(key, task);
+    save_tasks(path, tasks)
+}
+
+fn run_main_freeze(
+    repo: &str,
+    dir: &Path,
+    flakes: &BTreeMap<String, String>,
+    now: i64,
+    define: impl FnMut(&mut Task) -> Result<bool>,
+) -> Result<Vec<String>> {
+    use crate::land::main_gh::{matrix_from_toml, FileLedger, GhSource, MATRIX};
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let compare = repo.to_owned();
+    let mut ledger = FileLedger {
+        path: dir.join("main-tips.json"),
+        descends: move |old: &str, new: &str| {
+            Gh {
+                repo: compare.clone(),
+            }
+            .value(&format!("compare/{old}...{new}"))
+            .map(|v| matches!(v["status"].as_str(), Some("ahead" | "identical")))
+            .unwrap_or(false)
+        },
+    };
+    let mut source = GhSource {
+        gh: Gh {
+            repo: repo.to_owned(),
+        },
+        branch: "main".into(),
+        now: || chrono::Utc::now().timestamp(),
+    };
+    let answer =
+        crate::land::main_state::observe(&mut source, &mut ledger, &matrix_from_toml(MATRIX)?);
+    let mut gh = Gh {
+        repo: repo.to_owned(),
+    };
+    let mut fx = main_freeze_gh::GhEffects {
+        gh: &mut gh,
+        repo: repo.to_owned(),
+        dir,
+        define,
+    };
+    main_freeze_gh::pass(dir, &answer, flakes, &mut fx, now)
 }
