@@ -2,6 +2,9 @@ use crate::atomic;
 use serde::Deserialize;
 use std::path::{Component, Path};
 
+#[path = "setup_artifact.rs"]
+mod artifact;
+
 pub const MANIFEST: &str = include_str!("../../../setup/manifest.toml");
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -13,10 +16,16 @@ pub struct Manifest {
 pub struct Entry {
     #[serde(default)]
     pub platforms: Vec<String>,
+    #[serde(default)]
+    pub architectures: Vec<String>,
+    #[serde(default)]
+    pub explicit: bool,
     pub component: String,
     pub target: String,
     pub format: String,
+    #[serde(default)]
     pub content: String,
+    pub artifact: Option<artifact::Spec>,
 }
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
@@ -26,6 +35,15 @@ pub enum Mode {
 }
 
 pub fn run(home: &Path, manifest: &str, mode: Mode) -> (i32, Vec<String>) {
+    run_selected(home, manifest, mode, None)
+}
+
+pub fn run_selected(
+    home: &Path,
+    manifest: &str,
+    mode: Mode,
+    component: Option<&str>,
+) -> (i32, Vec<String>) {
     let manifest: Manifest = match toml::from_str(manifest) {
         Ok(m) => m,
         Err(_) => return (2, vec!["setup manifest refused invalid manifest".into()]),
@@ -34,8 +52,19 @@ pub fn run(home: &Path, manifest: &str, mode: Mode) -> (i32, Vec<String>) {
     let mut changed = 0;
     let mut failed = 0;
     for entry in manifest.files {
+        if component.map_or(entry.explicit, |name| name != entry.component) {
+            continue;
+        }
         if !entry.platforms.is_empty()
             && !entry.platforms.iter().any(|os| os == std::env::consts::OS)
+        {
+            continue;
+        }
+        if !entry.architectures.is_empty()
+            && !entry
+                .architectures
+                .iter()
+                .any(|arch| arch == std::env::consts::ARCH)
         {
             continue;
         }
@@ -69,6 +98,14 @@ pub fn run(home: &Path, manifest: &str, mode: Mode) -> (i32, Vec<String>) {
                 ));
             }
         }
+    }
+    if let Some(name) = component.filter(|_| rows.is_empty()) {
+        return (
+            2,
+            vec![format!(
+                "setup component {name} unavailable on this platform"
+            )],
+        );
     }
     let code = if failed > 0 {
         if changed > 0 {
@@ -107,6 +144,14 @@ fn apply(home: &Path, path: &Path, entry: &Entry, mode: Mode) -> Result<&'static
         Err(_) => return Err("read".into()),
     };
     let bytes = match entry.format.as_str() {
+        "tar-executable" => {
+            return artifact::install(
+                path,
+                old.as_deref(),
+                entry.artifact.as_ref().ok_or("missing artifact")?,
+                mode,
+            );
+        }
         "env" => {
             let text = old
                 .as_deref()

@@ -87,23 +87,26 @@ fn run() -> i32 {
             }
         };
     }
-    let mode = match args
+    let (mode, component) = match args
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["setup", "apply"] => setup::Mode::Apply,
-        ["setup", "apply", "--dry-run"] => setup::Mode::DryRun,
-        ["setup", "check"] => setup::Mode::Check,
+        ["setup", "apply"] => (setup::Mode::Apply, None),
+        ["setup", "apply", "--dry-run"] => (setup::Mode::DryRun, None),
+        ["setup", "check"] => (setup::Mode::Check, None),
+        ["setup", "apply", "--component", name] => (setup::Mode::Apply, Some(*name)),
+        ["setup", "apply", "--component", name, "--dry-run"] => (setup::Mode::DryRun, Some(*name)),
+        ["setup", "check", "--component", name] => (setup::Mode::Check, Some(*name)),
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--dry-run] | setup check | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | --version"
+                "usage: plangraph setup apply [--component NAME] [--dry-run] | setup check [--component NAME] | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] | runner plan|install|check | feed --once [--dry-run] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | --version"
             );
             return 2;
         }
     };
-    let (code, rows) = setup::run(&home, setup::MANIFEST, mode);
+    let (code, rows) = setup::run_selected(&home, setup::MANIFEST, mode, component);
     for row in rows {
         println!("{row}");
     }

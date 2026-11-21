@@ -113,12 +113,29 @@ fn lock_within(
 }
 
 pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_with(path, bytes, |_| Ok(()))
+}
+
+#[cfg(unix)]
+pub fn write_executable(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    write_with(path, bytes, |file| {
+        file.set_permissions(fs::Permissions::from_mode(0o755))
+    })
+}
+
+fn write_with(
+    path: &Path,
+    bytes: &[u8],
+    prepare: impl FnOnce(&File) -> io::Result<()>,
+) -> io::Result<()> {
     regular(path)?;
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::other("missing parent"))?;
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(bytes)?;
+    prepare(file.as_file())?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|e| e.error)?;
     #[cfg(unix)]

@@ -21,6 +21,23 @@ build process running and a nonblocking exclusive lease on the sibling
 `<target>.plangraph-lock` file. Spawner runs hold shared leases on that same
 file; cleanup skips a leased root and holds its exclusive lease through scanning
 and deletion. The lock file stays in place after release.
+
+On approved x86-64 Linux and WSL hosts, install the pinned compiler cache with
+`plangraph setup apply --component sccache`. The installer checks both the
+release archive and the executable before replacing `~/.local/bin/sccache`.
+Inspect the installed binary with `plangraph setup check --component sccache`.
+
+Spawner builds, pre-push preflight, Git hook installation and CI use
+`~/.cache/plangraph/sccache` for compiled objects. Set
+`PLANGRAPH_SCCACHE_CACHE_SIZE` in the host's build environment to change the
+default `20G` cap. Start a fresh sccache server after changing the cap.
+Self-hosted CI uses the host's installed binary through the shared Rust setup
+action. Each runner without sccache uses the same missing-wrapper fallback.
+`SCCACHE_BASEDIRS` can list the absolute roots of equivalent checkouts before
+server startup to normalize paths in cache keys.
+`sccache --show-stats` shows hits, misses and cache usage. With sccache absent,
+the build environment warns once and Cargo continues without a wrapper.
+
 The shared target cap defaults to 10 GB per root. Under disk pressure or above
 that cap, cleanup removes oldest idle incremental sessions and stale
 `build/<crate>-<hash>` variants, keeping the newest compile unit and run unit per crate and profile.
