@@ -263,7 +263,7 @@ the destination session and keeper item. The private parent inbox does not by
 itself inject a message into an agent session. Terminal run records are the
 durable retry journal. The pluggable `deliver(recipient, event)` sink can bridge
 a fleet bus. The default keeper sink uses the spawner-role `record_run` API;
-it does not close items or bypass the keeper's authorization checks. Itemless completions still reach `inbox/parent.jsonl`; the keeper marker records `not-applicable: no item` regardless of transport configuration. Silent-run alerts persist in `watchdog/alerts/*.json` as `kind=stall` with `stalled_at` and `noticed_at`, while bridge outbox events keep `kind=completion`.
+it does not close items or bypass the keeper's authorization checks. Itemless completions still reach `inbox/parent.jsonl`; the keeper marker records `not-applicable: no item` regardless of transport configuration. Silent-run alerts persist in `watchdog/alerts/*.json` as `kind=stall` with `stalled_at` and `noticed_at`, while bridge outbox events keep `kind=completion`. See [stall watchdog operations](stall-watchdog.md) for pre-dispatch alerts, child CPU sampling, and container ownership.
 `PLANGRAPH_SPAWN_NOTIFY_CMD` optionally names an argv-style command (no shell);
 it receives recipient as its final argument and event JSON on stdin. Consumers
 must deduplicate by event_id: external delivery is at-least-once across crashes.

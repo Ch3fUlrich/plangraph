@@ -81,6 +81,14 @@ Check failures are isolated from completion and claim processing.
 
 `read_runs` only reads snapshots; `sweep_runs` owns queued-run expiry and corrupt-record diagnostics during a watchdog tick.
 
+Docker and containerd processes identified by runtime ancestry or Docker
+cgroups are recorded as container-owned in the process samples. They are
+excluded from unclaimed OpenCode alerts.
+
+The per-run stuck deadline resets on a change in tree CPU, Linux descendant
+identity, or stdout activity. Windows samples the Job Object's total CPU
+with child membership unobserved.
+
 Current role caps and `tool_loop`/`stuck` monitoring are documented in [SPAWNER.md](SPAWNER.md). Host probes use the same role and measured card-class stall limits as run monitors.
 
 Silent-run findings retain the bridge-compatible `completion` kind and distinct event IDs for new stall episodes and cancellation escalations.
