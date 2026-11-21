@@ -582,7 +582,7 @@ Candidates with noticeably inferior core utility ($> \epsilon$ points lower) can
 
 ---
 
-The catalog query exposes sourced observations, effort, harness and staleness in `benchmark_rows`. See [verified benchmarks](spawner-benchmarks.md).
+The catalog query exposes sourced observations, effort, harness and staleness in `benchmark_rows`. See [verified benchmarks](spawner-benchmarks.md). [Snapshot recovery](spawner-leg-state.md#snapshot-read-errors-slice-1) covers bare model reads at launch.
 
 Continue with [review protocol, interfaces, and operations](spawner-operations.md); see [OOM policy](../deploy/oom-policy.md) for repository checks versus live-pressure evidence.
 The served-model probe cache has a five-minute freshness bound,

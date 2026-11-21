@@ -100,7 +100,10 @@ remain read/probe-free. This slice changes neither seat ordering nor route slots
 The default service reader retains its declared-state fallback for snapshot read
 errors. The service plan exposes the detailed error on the matching candidate
 as `leg_state_reason`. The launch boundary still retries the snapshot and probes
-the leg when the retry fails.
+the leg when the retry fails. If routing recorded an error for a bare model
+and launch uses a qualified state key, admission also rereads the bare model
+after checking the qualified state. The archived attempts preserve the skip
+labels from the run. The gateway response that produced the error is unavailable.
 
 `src/plangraph/routing_support/quota_snapshots.py:_build` interprets a connection's
 `testStatus` independently. Strings such as `refreshing` or `expired`, and an

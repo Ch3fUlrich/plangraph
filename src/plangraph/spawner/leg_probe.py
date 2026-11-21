@@ -357,7 +357,7 @@ class ProbeBudget:
         self.left -= time.monotonic() - started
 
 
-async def before_launch(runner, leg, role, dry_run, budget=None):
+async def before_launch(runner, leg, role, dry_run, budget=None, *, route_state_reason=None):
     from .target import quota_paused
     from .env_redact import redact_output, redact_env_values
     root = (getattr(runner, 'state', None) or getattr(runner, '_state', None)
@@ -377,9 +377,14 @@ async def before_launch(runner, leg, role, dry_run, budget=None):
         root = Path(path).parent
     if quota_paused(root, role, leg):
         return 'quota pause'
+    scoped_model = key(leg)
+    retry_route_snapshot = scoped_model != leg.model and (route_state_reason or '').startswith('leg_state_snapshot_error:')
     def admission(retry=True, probe_ok=False):
         if adapter:
-            status = adapter.leg_status(key(leg), account=getattr(leg, 'account', None), combo=getattr(leg, 'combo', None))
+            scope = dict(account=getattr(leg, 'account', None), combo=getattr(leg, 'combo', None))
+            status = adapter.leg_status(scoped_model, **scope)
+            if status['state'] == 'ok' and retry_route_snapshot:
+                status = adapter.leg_status(leg.model, **scope)
             reason = status.get('reason') or status['state']
             if reason.startswith('leg_state_snapshot_error:'):
                 logging.getLogger(__name__).warning('%s: %s', key(leg), redact_output(redact_env_values(reason, os.environ)))

@@ -179,6 +179,52 @@ def test_route_names_anthropic_second_family_without_reordering(service):
     assert '`route.review_seats` names planned slots; their family is final only after dispatch.' in docs
 
 
+def test_recorded_snapshot_skips_probe_before_unwitnessed_opus_fallback(service, monkeypatch):
+    from plangraph.spawner import leg_probe
+    from plangraph.spawner.runner import JobInfo
+
+    # Relevant attempts from run-e99aae22, archived in 03951f85b.
+    recorded = [('agy-gemini-3.8-flash', 'leg_state_snapshot_error'),
+                ('agy-sonnet-5.5', 'leg_state_snapshot_error'), ('agy-opus-5.5', None)]
+    gemini = replace(GEMINI, id=recorded[0][0], model='gemini-3.8-flash', effort=None)
+    legs = (gemini, SONNET, OPUS)
+    assert [leg.id for leg in legs] == [leg for leg, _ in recorded]
+    # The archived attempts preserve the skip label, not the provider payload.
+    reason = 'leg_state_snapshot_error: OmniRouteUnreachable: bad_snapshot'
+    svc = service()
+    plan = svc._route(CARD, 'review', ['gpt'], benchmark={})
+    plan = replace(plan, legs=legs, candidates=tuple(
+        dict(leg=leg, leg_state_reason=reason) for leg, skip in recorded if skip))
+    monkeypatch.setattr(svc, '_route', lambda *a, **kw: plan)
+    raw_models = {leg.model for leg in legs[:2]}
+    svc.runner.leg_reader.leg_status = lambda model, **kw: dict(
+        state='ok', evidence=None, reason=reason if model in raw_models else 'ok')
+    probes = []
+
+    async def probe(runner, leg, **kwargs):
+        probes.append(leg.id)
+        return dict(ok=leg == SONNET, reason='fixture timeout')
+
+    async def witness(*args, **kwargs):
+        model = kwargs['model_or_combo']
+        job = JobInfo('replay-job', 'completed', '', model)
+        job.stdout, job.exit_code = 'VERDICT: PASS\nTEST_GAMING: no\n', 0
+        if model == SONNET.model:
+            job.served_model, job.served_family = model, SONNET.family
+        return job
+
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    monkeypatch.setattr(svc, '_launch_leg', witness)
+    answer = asyncio.run(svc.spawn(card=CARD, prompt='review', role='review',
+                                   writer_families=['gpt'], wait_seconds=None, benchmark={}))
+    assert probes == [gemini.id, SONNET.id], (answer.get('status'), answer.get('reason'), answer.get('error'), answer.get('attempts'))
+    assert answer['chosen_leg']['id'] == SONNET.id and answer['served_model'] == SONNET.model
+    assert answer['attempts'][0]['skip_reason'] == reason + '; probe: fixture timeout'
+    opus, = (attempt for attempt in answer['attempts'] if isinstance(attempt['leg'], dict)
+             and attempt['leg']['id'] == OPUS.id)
+    assert opus['skip_reason'] == 'earlier_leg_succeeded'
+
+
 def test_route_cannot_fill_two_families_names_reason(service, monkeypatch):
     monkeypatch.setitem(routing.plan_spawn.__kwdefaults__, 'legs', (SONNET, OPUS))
     svc = service()
