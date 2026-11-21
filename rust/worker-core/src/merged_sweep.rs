@@ -205,7 +205,21 @@ fn run_using(
             );
             if !facts.clean || !matches!(classification, Classification::Eligible { .. }) {
                 blocked.insert(current.branch.clone().unwrap_or_default());
-                report.push_str(&format!("protected {}: {:?}\n", tree.path, classification));
+                let units = path
+                    .canonicalize()
+                    .map(|canonical| {
+                        sweep_facts::unit_names(&protection.unit_refs, path, &canonical)
+                    })
+                    .unwrap_or_default();
+                let named = if units.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (named by user unit {})", units.join(", "))
+                };
+                report.push_str(&format!(
+                    "protected {}: {:?}{named}\n",
+                    tree.path, classification
+                ));
                 return Ok(());
             }
             let merged_pr = prs

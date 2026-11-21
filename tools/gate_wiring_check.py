@@ -103,10 +103,23 @@ def _commit_message(sha: str, cwd: str | Path | None) -> str:
     return _git_out(['show', '-s', '--format=%B', sha], cwd)
 
 
-def _commit_paths(sha: str, cwd: str | Path | None, include_merges: bool = False) -> list[str]:
-    # Combined diffs show a merge's own edits, omitting clean integration of an authorized parent.
-    text = _git_out(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root',
-                     *(['--cc', '--no-renames'] if include_merges else []), sha], cwd)
+def _shared_gate():
+    # One implementation of "what a merge edits" lives in ci_commit_gate; load it beside this file.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('ci_commit_gate', Path(__file__).with_name('ci_commit_gate.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _commit_paths(sha: str, cwd: str | Path | None = None, include_merges: bool = False) -> list[str]:
+    if include_merges:
+        # Combined diff plus the paths a merge's parents conflict on (a side kept whole shows in neither).
+        try:
+            return _shared_gate().merge_edited_paths(sha, cwd=cwd)
+        except Exception as exc:  # the shared reader's GateError is a different class per load
+            raise GateError(str(exc), 2) from exc
+    text = _git_out(['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', sha], cwd)
     return [path for path in text.split('\x00') if path]
 
 

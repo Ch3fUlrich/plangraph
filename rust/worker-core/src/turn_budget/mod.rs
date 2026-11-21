@@ -234,6 +234,8 @@ fn update(
     let event = payload["hook_event_name"].as_str().unwrap_or("");
     if matches!(event, "UserPromptSubmit" | "Notification") {
         status.wake_calls = 0;
+        status.polls.clear();
+        status.reads.clear();
     }
     let mut denied = false;
     let mut local_read = false;

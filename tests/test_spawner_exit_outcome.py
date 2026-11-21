@@ -30,7 +30,8 @@ def test_quota_state_and_compound_reset(tmp_path, monkeypatch):
     assert state['state'] == 'limited'
     assert state['evidence']['reset_at'] == 1000 + 38426
     store.record_harness_limit('agy/other', 'Resets in 2h 5m', 'test', now=1000)
-    assert store.leg_status('agy/other', now=1000)['evidence']['reset_at'] == 8500
+    assert store.leg_status('agy/other', now=1000)['evidence']['reset_at'] == 1000 + 38426
+    assert store.leg_status('agy/other', now=1000 + 38426)['state'] == 'ok'
     assert first_reason('\x1b[0m\n\nactual error') == 'actual error'
     assert harness_limit_line(0, '', QUOTA) is None
     # Agent prose on stdout never marks a leg; an error-shaped stdout line does.
@@ -155,7 +156,7 @@ def test_routing_reads_a_bare_non_agy_leg_under_its_own_key(tmp_path):
     from plangraph.spawner.leg_probe import read_status
     store = LegStateStore(tmp_path / 'legs.sqlite')
     store.record_harness_limit('Qwen3.8-Flash', QUOTA, 'test')
-    store.record_harness_limit('agy/gemini-4-argon-high', QUOTA, 'test')
+    store.record_harness_limit('agy/gemini-4-argon-high', 'Per-model quota reached. Resets in 2h', 'test')
     assert read_status(store.leg_status, 'Qwen3.8-Flash')['state'] == 'limited'
     assert read_status(store.leg_status, 'gemini-4-argon-high')['state'] == 'limited'
     assert read_status(store.leg_status, 'other-model')['state'] == 'ok'

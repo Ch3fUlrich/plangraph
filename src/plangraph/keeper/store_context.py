@@ -168,9 +168,11 @@ class ContextMixin:
 
     def _work(self, item, fetch, fresh_lanes=False):
         gitad = self._adapter("git")
-        return {"commits": src.plan_item_commits(gitad, item["project"], item["key"],
-                                                 fetch=fetch),
-                "lanes": src.open_lanes(gitad, item["project"], item["key"], fresh_lanes)}
+        commits = src.plan_item_commits(gitad, item["project"], item["key"], fetch=fetch)
+        closed = []
+        lanes = src.open_lanes(gitad, item["project"], item["key"], fresh_lanes, closed=closed)
+        return {"commits": commits, "lanes": lanes,
+                **({"closed_pr_lanes": closed} if closed else {})}
 
     # ----------------------------------------------------------- context
     def _task_context(self, item, index, *, inputs=None, activity=None,
@@ -252,7 +254,7 @@ class ContextMixin:
         rows = [dict(row) for row in
                 views.ready(items, project=project, owner=owner, agent=agent)]
         inputs, activity = self._inputs(index), self._last_activity_map()
-        indexes = {p: src.work_index(self._adapter("git"), p)
+        indexes = {p: src.work_index_cached(self._adapter("git"), p)
                    for p in {r["project"] for r in rows}}
         for row in rows:
             ctx = self._task_context(row, index, inputs=inputs,
@@ -264,6 +266,12 @@ class ContextMixin:
                     "project": row["project"], "status": "stale",
                     "age_seconds": max(0, int(time.time() - verified)) if verified is not None else None,
                     "reason": work_index["reason"]}
+            if work_index and work_index.get("refreshing"):
+                row["work_index_note"] = {
+                    "project": row["project"], "status": "refreshing",
+                    "age_seconds": work_index["built_age_s"],
+                    "reason": "work index built "
+                              f"{work_index['built_age_s']}s ago, refresh running"}
             ctx["work_exists"] = src.indexed_work(work_index, row["key"])
             ctx["stale"] = self._stale_reason(row, ctx)
             row["context"] = ctx
@@ -288,7 +296,7 @@ class ContextMixin:
         groups = {"items": [], "needs_reconcile": [], "in_progress": [],
                   "unknown": [], "warnings": []}
         for row in rows:
-            warning = row.get("work_index")
+            warning = row.get("work_index") or row.get("work_index_note")
             if warning and not any(w["project"] == warning["project"]
                                    for w in groups["warnings"]):
                 groups["warnings"].append(warning)

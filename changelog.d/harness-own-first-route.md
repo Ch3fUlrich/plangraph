@@ -1,0 +1,1 @@
+- Route resolves model family to its own harness (gpt: codex, gemini: agy, claude: claude or agy) when the client is installed; otherwise the OpenCode leg runs with `harness_fallback=client_missing`. A foreign-harness pin needs `--override-reason`.

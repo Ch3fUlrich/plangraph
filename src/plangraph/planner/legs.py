@@ -8,29 +8,33 @@ file (``{"legs": [...]}``) replaces the whole list via :func:`load_legs`.
 
 Tiers run cheapest first: ``trial``, ``free``, ``subscription``, ``paid``.  The trial
 tier is empty by default.  Pure data and validation; the only I/O is reading the
-optional JSON override file.
+optional JSON override file and the client probe of own-harness routing (PATH lookup).
 """
 from __future__ import annotations
 
 import dataclasses
 import json
 import math
+import os
+import shutil
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.keeper.schema import WINDOW_CLASSES
 from plangraph.mimo_policy import MimoPathError, check_mimo_path
 
-__all__ = ["TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
+__all__ = ["OWN_HARNESS", "CLIENT_MISSING", "HarnessChoice", "client_installed", "resolve_harness",
+           "resolve_legs", "own_harness_legs", "harness_skips", "refuse_foreign_pin", "own_harness_enabled", "service_probe",
+           "TIERS", "HARNESSES", "TOOL_MODES", "Leg", "DEFAULT_LEGS", "WRITER_ORDER", "leg_active",
            "load_legs", "with_measured", "EXPLICIT_LEGS", "EXPLICIT_WRITERS", "spawnable_legs",
            "CX_EFFORTS"]
 
 #: Cost tiers, cheapest first.
 TIERS = ("trial", "free", "subscription", "paid")
 #: Harness names a leg may run under.
-HARNESSES = ("qodercli", "opencode", "agy", "claude")
+HARNESSES = ("qodercli", "opencode", "agy", "claude", "codex")
 #: How a review leg reads the change: with its own tools, or only from a diff the
 #: spawner inlines into the prompt (D-3134/D-3173: luna, mimo-pro give no verdict
 #: in tool mode).
@@ -42,6 +46,16 @@ NO_VERDICT_SEATS = frozenset({"opencode-go/qwen3.8-flash"})
 REVIEW_UNFIT_SEATS = frozenset({"mimo/mimo-v2.6-flash"})
 #: Reasoning-effort suffixes OmniRoute's cx provider serves (/v1/models, 2026-11-09).
 CX_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _codex_context(model):
+    from plangraph.routing_support.opencode_overlay import load_root_providers
+    shipped = Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json'
+    models = (load_root_providers(shipped) or {}).get('omniroute', {}).get('models', {})
+    return models.get(model, {}).get('limit', {}).get('context', 1_000_000)
+
+
+_SOL_CONTEXT = _codex_context('cx-gpt-6.2-sol')
 
 
 @dataclass(frozen=True)
@@ -63,6 +77,9 @@ class Leg:
     disabled: str | None = None
     expires: float | None = None
     effort: str | None = None
+    benchmark_optional: bool = False  # Missing data skips this leg in strict routes.
+    #: Why the model's own harness was not used (``client_missing``); None when it was.
+    harness_fallback: str | None = None
 
 
 def _leg(id, tier, harness, model, family, windows, max_req, trains, claude=False,
@@ -100,10 +117,10 @@ DEFAULT_LEGS = (
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.2-sol", "subscription", "opencode", "omniroute/cx-gpt-6.2-sol",
-        "gpt", ("128k", "256k"), 500000, False, roles=("implement",),
+        "gpt", WINDOW_CLASSES, _SOL_CONTEXT, False, roles=("implement",),
         note="D-6310: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6.2-astra", "subscription", "opencode", "omniroute/cx-gpt-6.2-astra",
-        "gpt", ("128k", "256k"), 272000, False, roles=("implement",),
+        "gpt", WINDOW_CLASSES, _codex_context('cx-gpt-6.2-astra'), False, roles=("implement",),
         note="D-6310: operator implement leg (GPT-6.2 Astra via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k"), 475000, False, roles=("review",),
@@ -127,7 +144,7 @@ DEFAULT_LEGS = (
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
         "glm", ("128k",), 100000, True, roles=("implement", "review")),
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
-        "openai", ("128k",), 100000, False, roles=("review",)),
+        "openai", ("128k",), 100000, False, roles=("review",), benchmark_optional=True),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
@@ -173,22 +190,29 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# Rule 3.58 (OPERATOR D-6366, 2026-11-20; overrides the D-6310 and D-6357 review lists):
-# reviews run first on agy gemini-4-argon-low (argon-medium follows as same-family
-# fallback), then mimo-v2.6-pro, then the OpenCode DeepSeek legs, then glm-5.3-flash;
-# neon and Sonnet high follow as fallbacks.  The reviewer's family always differs from the writer's.
+# Rule 3.61 (OPERATOR D-6481, 2026-11-20; amends rule 3.58 / D-6366): reviews run first on
+# gpt-6.2-sol-medium in Codex, then mimo-v2.6-pro, the OpenCode DeepSeek legs and glm-5.3-flash;
+# neon, Sonnet high and mimo flash follow, agy argon low and medium come last.  The reviewer's
+# family always differs from the writer's.
 REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH = "mimo-v2.6-pro", "mimo-v2.6-flash"
 REVIEW_HYDROGEN, REVIEW_NEON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-neon-medium"
 REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"
 REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
 REVIEW_SONNET = "claude-sonnet-5-5-high"
-REVIEW_ORDER = (REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_MIMO_PRO, "opencode-go-deepseek-v4-flash", REVIEW_DEEPSEEK,
-                "opencode-go-glm-5.3-flash", REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH)
+#: Rule 3.61 (D-6481, 2026-11-20): gpt-6.2-sol-medium reviews first, as a native Codex run
+#: with repository access; the OpenCode review child has no repository tools (D-4681).
+REVIEW_GPT = "gpt-6.2-sol-medium"
+REVIEW_ORDER = (REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK, "opencode-go-deepseek-v4-flash",
+                "opencode-go-glm-5.3-flash", REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH,
+                REVIEW_ARGON_LOW, REVIEW_ARGON)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
+    Leg(REVIEW_GPT, "subscription", "codex", "gpt-6.2-sol-medium", "gpt",
+        ("128k", "256k"), 475000, False, roles=("review",), effort="medium", tool_mode="tools",
+        note="D-6481 rule 3.61: native Codex review run with repository access; a gpt-written diff skips it"),
     Leg(REVIEW_ARGON_LOW, "subscription", "agy", "gemini-4-argon-low", "gemini",
         ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="low",
-        tool_mode="tools", note="D-6366 rule 3.58 (1): first review leg; retired for implement (D-6310)"),
+        tool_mode="tools", note="D-6366: review leg, last since rule 3.61 (D-6481); retired for implement (D-6310)"),
     Leg(REVIEW_ARGON, "subscription", "agy", "gemini-4-argon-medium", "gemini",
         ("128k", "256k", "1m"), 900000, False, roles=("review",), effort="medium",
         tool_mode="tools", note="D-6366: same-family fallback after argon-low; retired for implement (D-6310)"),
@@ -231,7 +255,7 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.2-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.2-sol-{e}",
-          "gpt", ("128k", "256k"), 500000, False, roles=("implement",), effort=e)
+          "gpt", WINDOW_CLASSES, _SOL_CONTEXT, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
           "gpt", ("128k", "256k"), 475000, False, roles=("review",),
@@ -369,7 +393,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         mrt = raw["max_request_tokens"]
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
-    for key in ("trains_on_data", "claude_family"):
+    for key in ("trains_on_data", "claude_family", "benchmark_optional"):
         if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
     if len(problems) > start:
@@ -423,3 +447,108 @@ def with_measured(legs: Iterable[Leg], measured: Mapping[str, int]) -> tuple[Leg
             leg = dataclasses.replace(leg, max_request_tokens=value)
         out.append(leg)
     return tuple(out)
+
+
+# Own-harness-first routing (rule 3.53, D-6310; operator 2026-11-20): a model runs in the
+# harness it is trained on, OpenCode serves it only while that client is not installed on the
+# host, and the leg then says why (``harness_fallback``).  The only I/O is the default probe.
+#: Model family -> the harnesses that are its own; the first is the one the route starts.
+OWN_HARNESS: dict[str, tuple[str, ...]] = {
+    "gpt": ("codex",), "gemini": ("agy",), "claude": ("claude", "agy")}
+CLIENT_MISSING = "client_missing"
+#: ``PLANGRAPH_OWN_HARNESS=off`` turns own-harness routing off (legs keep their registered harness).
+DISABLE_ENV = "PLANGRAPH_OWN_HARNESS"
+#: Shortest override reason a foreign-harness pin accepts (same bar as the paid pin).
+MIN_REASON = 10
+
+
+@dataclass(frozen=True)
+class HarnessChoice:
+    """The harness a leg runs in; ``leg`` is the leg to run (None: no usable harness on this host)."""
+
+    harness: str | None
+    fallback: str | None = None
+    leg: Leg | None = None
+
+
+def own_harness_enabled() -> bool:
+    return os.environ.get(DISABLE_ENV, "").strip().lower() != "off"
+
+
+def client_installed(name: str) -> bool:
+    return shutil.which(name) is not None
+
+
+def service_probe(service) -> Callable[[str], bool] | None:
+    """The client probe of a spawn service: its own ``client_probe``, else the host's PATH, or None
+    (own-harness routing off) while ``PLANGRAPH_OWN_HARNESS=off``."""
+    probe = getattr(service, "client_probe", None)
+    if probe is not None:
+        return probe
+    return client_installed if own_harness_enabled() else None
+
+
+def _opencode_counterpart(leg: Leg) -> Leg | None:
+    """The registered OpenCode leg serving the same gpt model (its ``omniroute/cx-`` alias), review-packaged."""
+    if leg.family != "gpt":
+        return None
+    model = "omniroute/cx-" + leg.model.removeprefix("omniroute/").removeprefix("cx-")
+    if not any(known.model == model for known in (*DEFAULT_LEGS, *EXPLICIT_LEGS)):
+        return None
+    tool_mode = "inline-only" if "implement" not in leg.roles else leg.tool_mode
+    return dataclasses.replace(leg, harness="opencode", model=model, tool_mode=tool_mode, harness_fallback=CLIENT_MISSING)
+
+
+def resolve_harness(leg: Leg, installed: Callable[[str], bool] | None = client_installed) -> HarnessChoice:
+    """The harness a leg runs in: its family's own client when installed; else the OpenCode leg of the
+    same model with ``client_missing``; else no usable leg.  ``installed=None`` switches the rule off."""
+    harness = getattr(leg, "harness", None)
+    own = OWN_HARNESS.get(getattr(leg, "family", None))
+    # An inline-only leg is packaged for its OpenCode child; its model name is not the client's.
+    if installed is None or not own or (getattr(leg, "tool_mode", "tools") != "tools" and harness not in own):
+        return HarnessChoice(harness, None, leg)
+    if harness in own:
+        if installed(harness):
+            return HarnessChoice(harness, None, leg)
+        fallback = _opencode_counterpart(leg)
+        return HarnessChoice("opencode", CLIENT_MISSING, fallback) if fallback else HarnessChoice(None, CLIENT_MISSING)
+    if installed(own[0]):
+        return HarnessChoice(own[0], None, dataclasses.replace(leg, harness=own[0]))
+    return HarnessChoice(harness, CLIENT_MISSING, dataclasses.replace(leg, harness_fallback=CLIENT_MISSING))
+
+
+def resolve_legs(legs: Iterable[Leg], installed: Callable[[str], bool] | None = client_installed
+                 ) -> tuple[tuple[Leg, ...], tuple[dict, ...]]:
+    """One resolution per leg: the legs moved into their own harness (or onto their OpenCode fallback),
+    and the `route` skip rows of the legs with no usable harness on this host."""
+    kept, skips = [], []
+    for leg in legs:
+        choice = resolve_harness(leg, installed)
+        if choice.leg is not None:
+            kept.append(choice.leg)
+        else:
+            skips.append({"leg": leg.id, "reason": CLIENT_MISSING, "evidence": {
+                "kind": CLIENT_MISSING, "harness": leg.harness}})
+    return tuple(kept), tuple(skips)
+
+
+def own_harness_legs(legs: Iterable[Leg], installed: Callable[[str], bool] | None = client_installed) -> tuple[Leg, ...]:
+    """The legs of :func:`resolve_legs`."""
+    return resolve_legs(legs, installed)[0]
+
+
+def harness_skips(legs: Iterable[Leg], installed: Callable[[str], bool] | None = client_installed) -> tuple[dict, ...]:
+    """The skip rows of :func:`resolve_legs`."""
+    return resolve_legs(legs, installed)[1]
+
+
+def refuse_foreign_pin(leg: Leg, override_reason, installed: Callable[[str], bool] | None = client_installed) -> None:
+    """A pin to a model's OpenCode leg needs an override reason while its own client is installed."""
+    from plangraph.routing_support.leg_state_flag import SpawnRefused
+    choice = resolve_harness(leg, installed)
+    if choice.fallback is not None or choice.harness == leg.harness:
+        return
+    if not isinstance(override_reason, str) or len(override_reason.strip()) < MIN_REASON:
+        raise SpawnRefused(
+            f"foreign-harness pin refused: {leg.id} runs in {leg.harness} but {leg.family} runs in "
+            f"{OWN_HARNESS[leg.family][0]}; --override-reason required (rule 3.53)")

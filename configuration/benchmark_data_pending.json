@@ -4,7 +4,7 @@
   {"subject":"leg:agy-claude-opus-5-5-low@agy/claude-opus-5-5-low","effort":"low","problems":["missing_row"],"reason":"Explicit low-effort Opus leg has no row; high effort cannot cover it."},
   {"subject":"leg:agy-claude-opus-5-5-medium@agy/claude-opus-5-5-medium","effort":"medium","problems":["missing_row"],"reason":"Explicit medium-effort Opus leg has no matching row."},
   {"subject":"leg:agy-claude-sonnet-5-5-low@agy/claude-sonnet-5-5-low","effort":"low","problems":["missing_row"],"reason":"Explicit low-effort Sonnet leg has no matching row."},
-  {"subject":"leg:agy-gpt-oss-120b@agy/gpt-oss-120b-medium","effort":"medium","problems":["missing_row"],"reason":"Medium-effort GPT OSS leg has no benchmark row."},
+  {"subject":"leg:agy-gpt-oss-120b@agy/gpt-oss-120b-medium","effort":"medium","problems":["missing_row"],"reason":"Medium-effort GPT OSS has no verified benchmark row. Strict review routing skips this explicitly unmeasured leg while the row is pending."},
   {"subject":"leg:agy-opus@agy/claude-opus-5-5-medium","effort":"medium","problems":["missing_row"],"reason":"Routed medium-effort Opus leg has no row; high effort cannot cover it."},
   {"subject":"leg:claude-haiku-5.5@claude/claude-haiku-5-5","effort":null,"problems":["missing_row"],"reason":"No row for claude/claude-haiku-5-5; Haiku 4.5 is a different model."},
   {"subject":"leg:cx-gpt-6-luna-high@omniroute/cx-gpt-6-luna-high","effort":"high","problems":["missing_row"],"reason":"No row for this effort-qualified cx route; neither cxa nor unsuffixed cx proves coverage."},

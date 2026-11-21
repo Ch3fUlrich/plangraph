@@ -417,7 +417,7 @@ def test_provider_resets_are_uncapped_while_flat_down_s_stays_capped(store, monk
     now = 1_795_000_000.0
     store.record_harness_limit(
         "agy/gemini-4-hydrogen-high",
-        "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 135h6m15s",
+        "RESOURCE_EXHAUSTED (code 429): Per-model quota reached. Resets in 135h6m15s",
         "spawner:harness",
         now=now,
         down_s=1800,

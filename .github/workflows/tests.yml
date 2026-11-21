@@ -4,19 +4,25 @@ name: tests
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    types: [opened, synchronize, reopened, edited, labeled]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   workflow_dispatch:
   schedule:
     - cron: '23 3 * * *'
 
-# Draft/sub-PRs use bounded selection; ready PRs into main and batch/* run all tests.
-# A newer push to the PR cancels the stale run,
-# but never a workflow_dispatch run (timing measurements must finish).
+# The full suite runs once, on the merge candidate: a batch/* head, a merge queue event, or a head a router GO row
+# labels ci-full (a push to main and a dispatch also run it). Every other pull request, draft or ready, runs the
+# affected selection (tools/ci_select.py full_run_required).
+# Marking a draft ready starts no run: the head already has its required ci-gate from the run its last push
+# started, and a second run would leave the required check pending for an hour (landing a draft part).
+# A newer push to the PR cancels the stale run, but never a workflow_dispatch run (timing measurements
+# must finish) and never a run a label started.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'pr' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' }}
 
 permissions:
   contents: read
@@ -43,15 +49,11 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ] &&
-             [[ "$PR_HEAD_REF" != batch/* ]] &&
-             { [ "$PR_BASE_REF" != "main" ] || [ "$PR_DRAFT" = "true" ]; }; then
-            python3 tools/ci_select.py select --base "$BASE_SHA" --head "$HEAD_SHA"
-          else
-            python3 tools/ci_select.py select --full
-          fi
+          python3 tools/ci_select.py select --event "${{ github.event_name }}" \
+            --base-ref "$PR_BASE_REF" --head-ref "$PR_HEAD_REF" --labels "$PR_LABELS" \
+            --base "$BASE_SHA" --head "$HEAD_SHA"
 
   # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
   # the private word list never enters CI; output is path:line:rule only. Runs on every change.
@@ -638,7 +640,13 @@ jobs:
       - name: Gate
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-        run: python3 tools/ci_select.py gate --needs "$NEEDS_JSON"
+          EVENT: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          python3 tools/ci_select.py gate --needs "$NEEDS_JSON" --event "$EVENT" \
+            --base-ref "$PR_BASE_REF" --head-ref "$PR_HEAD_REF" --labels "$PR_LABELS"
       # Use BASE: a PR cannot weaken the gate that judges it; L1 needs green ci-gate at merge.
       - name: Commit trailers
         if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'push') }}

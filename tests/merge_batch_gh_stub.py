@@ -103,6 +103,13 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
     if "/git/ref/heads/main" in endpoint_get:
         print(json.dumps({"object": {"sha": git("rev-parse", "refs/heads/main").stdout.strip()}}))
         sys.exit(0)
+    if "/compare/" in endpoint_get:  # compare/main...HEAD: how far the head is behind main
+        head_sha = endpoint_get.split("...", 1)[1]
+        behind = S.get("behind_by")
+        if behind is None:
+            behind = int(git("rev-list", "--count", f"{head_sha}..refs/heads/main").stdout.strip() or 0)
+        print(json.dumps({"behind_by": behind, "ahead_by": 1}))
+        sys.exit(0)
     if "/actions/" in endpoint_get:
         batch = next((follow_branch(p) for p in S["prs"].values() if p["headRefName"].startswith("batch/")), None)
         run = {"id": 7, "head_sha": batch["headRefOid"] if batch else "0" * 40,
@@ -179,7 +186,8 @@ elif cmd == ["pr", "merge"]:
     head, base = pr["headRefOid"], f"refs/heads/{pr['baseRefName']}"
     tree = git("rev-parse", f"{head}^{{tree}}").stdout.strip()  # base has not moved in these tests
     merge = git("commit-tree", tree, "-p", git("rev-parse", base).stdout.strip(), "-p", head,
-                "-m", f"Merge pull request #{pr['number']}").stdout.strip()
+                "-m", f"Merge pull request #{pr['number']}",
+                *(["-m", opt("--body")] if opt("--body") else [])).stdout.strip()
     git("update-ref", base, merge)
     for other in S["prs"].values():  # GitHub marks a PR merged once its head is on the base
         if other["state"] == "OPEN" and other["number"] not in S["no_auto_merge"] \

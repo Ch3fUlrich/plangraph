@@ -48,8 +48,7 @@ credentials stay in the parent. Existing explicit child URLs and config-only
 root-placeholder precedence remain unchanged.
 
 The management token for the gateway management API (call logs, the
-provider-state reader in `omniroute_state`, and the quota-utilization reader in
-`quota_snapshots`) is read by `opencode_render.load_token`:
+provider-state and quota-utilization readers in `quota_snapshots`) is read by `opencode_render.load_token`:
 `PLANGRAPH_GATEWAY_LOG_TOKEN`, then the file named by
 `PLANGRAPH_GATEWAY_LOG_TOKEN_FILE`, then `plangraph/omniroute-mgmt.key` under
 HOME/.config; the file must be a regular owner-only (0600) file. The gateway

@@ -98,6 +98,7 @@ fn merged_sweep_nested_merge_live_facts_and_safe_removal() {
             branches: vec![],
         },
         units: vec![],
+        unit_refs: vec![],
         cwds: vec![],
     };
     let now = SystemTime::now() + Duration::from_secs(90000);

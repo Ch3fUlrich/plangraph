@@ -1,0 +1,1 @@
+- Run records carry `harness`, `harness_version`, `harness_fallback` and `host`, written at launch (native Codex writer included); `spawn harness-report` lists runs and failures per harness.

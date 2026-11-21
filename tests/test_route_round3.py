@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from plangraph.planner.legs import DEFAULT_LEGS
-from plangraph.planner.routing import plan_spawn
+from plangraph.planner.routing import USABLE_FRACTION_PCT, plan_spawn
 
 pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
@@ -19,10 +19,18 @@ def assert_review_seat_safety(estimate):
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        # D-6366: argon-low leads; inline-only mimo-v2.6-pro follows only with diff
-        # metadata, otherwise the opencode-go deepseek flash leg is the second seat.
-        second = "mimo-v2.6-pro" if diff else "opencode-go-deepseek-v4-flash"
-        expected = ["agy-gemini-4-argon-low", second]
+        # Rule 3.61 order for a gpt writer, two families: inline-only mimo-v2.6-pro needs diff metadata; every leg
+        # serves a card up to the usable share of its own request limit (per-leg context).
+        limit = {leg.id: leg.max_request_tokens for leg in DEFAULT_LEGS}
+        fits = lambda leg_id: estimate * 100 <= USABLE_FRACTION_PCT * limit[leg_id]
+        order = (["mimo-v2.6-pro"] if diff else []) + ["opencode-deepseek-v4.1-flash-free",
+                                                     "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash"]
+        expected, families = [], set()
+        for leg_id in order:
+            family = "mimo" if "mimo" in leg_id else ("glm" if "glm" in leg_id else "deepseek")
+            if fits(leg_id) and family not in families and len(expected) < 2:
+                expected.append(leg_id)
+                families.add(family)
         assert [leg.id for leg in review.review_seats] == expected
 
 
@@ -96,3 +104,8 @@ def test_each_role_falls_through_failed_and_limited():
             plan = plan_spawn({"estimate_tokens": 1000}, role=role, legs=legs,
                               policy=RoutePolicy(), leg_reader=reader, writer_families=("gpt",))
             assert [leg.id for leg in plan.legs] == ["second"]
+
+
+@pytest.mark.parametrize("estimate", [100000, 110000, 110001, 300000])
+def test_review_seats_follow_each_legs_request_limit(estimate):
+    assert_review_seat_safety(estimate)

@@ -2,10 +2,11 @@ use pg_worker_core::{
     disk_hygiene::{self, Guards, Report, Thresholds},
     disk_runtime,
     run::record_io,
+    sweep_facts,
 };
 use std::{
     env, io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -55,6 +56,13 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     let thresholds = thresholds.validate()?;
     let free = disk_runtime::disk_usage(&root)?;
     let mut guards = Guards::load(&pins, state)?;
+    // A worktree a user unit runs from keeps its caches: the build the unit starts needs them.
+    let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
+    guards.pinned.extend(
+        sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, Path::new(&home))?
+            .into_iter()
+            .map(|r| r.path),
+    );
     let (cwds, building) = disk_runtime::processes()?;
     let canonical_root = root.canonicalize()?;
     guards

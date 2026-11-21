@@ -79,18 +79,18 @@ timestamp, not API response order; equal-time conflicting results fail closed.
 under `$XDG_CONFIG_HOME/plangraph` (default `~/.config/plangraph`). Each file is
 atomically replaced; the pair is not a transaction. `genconfig check` exits 1
 on semantic drift, including hand edits. Both print a one-line summary.
-The default registry is that directory's hosts.json. SSH destinations must resolve
-through SSH configuration or `ssh_target`. Set optional `repos.plangraph.live_dir` to the pinned live
-checkout; no fallback to a developer checkout is allowed. Local entries are
-excluded from remote configs; keeper entries fail closed. Windows SSH hosts
-are ps-only. Overflow retains a deny-by-default empty public_repos allowlist.
+The default registry is that directory's `hosts.json`. The projections use
+the current main checkout at `repos.plangraph.root` and route to `ssh_target`
+or the host ID. Add a Linux registry entry with `wsl_distro` for a WSL host
+reached through Windows SSH. Use Linux checkout paths in that entry. Native
+Windows entries appear in the ps projection. Local entries stay local.
 
-Generated Linux overflow host entries include `floor_mb`, copied from the
-registry's `caps.mem_floor_mb`, for `host_ready.check_host`. Overflow admission
-reads the floor and role reservation directly from the registry, overwrites the
-generated floor, and fails closed when registry caps are missing or malformed.
-Regenerate the configs after changing that registry value; generated ps-host
-entries do not include RAM admission fields.
+The spawner derives overflow routes from the registry at admission. Set the
+top-level `public_repos` list to repository IDs approved for SSH transport.
+An empty list keeps those repositories local. The generated overflow
+projection retains `floor_mb` from the registry for status consumers.
+Regenerate the projections after changing the registry. See
+[post-merge verification](host-tools.md#three-host-writer-and-review-rollout).
 
 `drift --registry PATH` prints host, live SHA, release SHA, commits behind.
 `drift --json` emits an array. Missing objects or unreachable transports produce

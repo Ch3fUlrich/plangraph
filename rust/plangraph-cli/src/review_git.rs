@@ -1,11 +1,9 @@
 //! Git freshness, writer-family trailer extraction, and per-file diff helpers for `plangraph review`.
 use crate::base_fresh::{check_ref, python_command};
 use pg_worker_core::review_split::valid_diff_path;
-use serde_json::Value;
-use std::collections::{BTreeSet, HashMap};
-use std::io::Write;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedRange {
@@ -98,179 +96,6 @@ pub fn resolve_and_check_fresh(
     })
 }
 
-/// Map each text to its model family through `plangraph.review.family.model_family`,
-/// the one name-to-family table; `None` means unknown or ambiguous.
-fn resolve_families(
-    texts: &BTreeSet<String>,
-    src_root: &Path,
-) -> Result<HashMap<String, Option<String>>, String> {
-    const CODE: &str = "import json, sys; from plangraph.review.family import model_family; print(json.dumps({t: model_family(t) for t in json.load(sys.stdin)}))";
-    let mut child = python_command(Some(src_root))
-        .args(["-c", CODE])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("refused: family table unavailable: {e}"))?;
-    let payload = serde_json::to_vec(&texts.iter().collect::<Vec<_>>())
-        .map_err(|e| format!("serialize family texts: {e}"))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or("refused: family table has no stdin")?;
-    let writer = std::thread::spawn(move || stdin.write_all(&payload));
-    let out = child
-        .wait_with_output()
-        .map_err(|e| format!("refused: family table failed: {e}"))?;
-    let _ = writer.join();
-    if !out.status.success() {
-        return Err(format!(
-            "refused: family table failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
-    let parsed: Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("refused: family table output: {e}"))?;
-    Ok(parsed
-        .as_object()
-        .map(|m| {
-            m.iter()
-                .map(|(k, v)| (k.clone(), v.as_str().map(str::to_owned)))
-                .collect()
-        })
-        .unwrap_or_default())
-}
-
-fn is_non_family_hand_edit(value: &str) -> bool {
-    let lower = value.trim().to_ascii_lowercase();
-    lower.starts_with("changelog")
-        || lower.starts_with("docs")
-        || lower.starts_with("status")
-        || lower.starts_with("rebase")
-        || lower.starts_with("merge")
-}
-
-/// One non-merge commit's attribution strings, before they are mapped to families.
-struct CommitText {
-    sha: String,
-    writers: Vec<String>,
-    hand_edits: Vec<String>,
-    fallback: Vec<String>,
-    author: String,
-}
-
-fn short(sha: &str) -> &str {
-    &sha[..12.min(sha.len())]
-}
-
-/// The writer families of one commit set: one writer family set per commit of `base..head`.
-type CommitFamilies = Vec<(String, BTreeSet<String>)>;
-
-/// Read `base..head` and map every commit's `Writer`, `Hand-Edit` and fallback author info to families.
-fn commit_families(repo: &Path, base_sha: &str, head_sha: &str) -> Result<CommitFamilies, String> {
-    let range = format!("{base_sha}..{head_sha}");
-    let format = "--format=%H%n%an%n%ae%n%(trailers:separator=%x0a)";
-    let mut raw = git_stdout(repo, &["log", "--no-merges", "-z", format, &range])?;
-    if raw.is_empty() {
-        raw = git_stdout(repo, &["log", "-z", format, &range])?;
-    }
-    if raw.is_empty() {
-        return Err(format!(
-            "refused: no commits found in {}..{}",
-            short(base_sha),
-            short(head_sha)
-        ));
-    }
-
-    let mut commits = Vec::new();
-    for chunk in raw.split(|&b| b == 0).filter(|c| !c.is_empty()) {
-        let text = String::from_utf8_lossy(chunk);
-        let mut lines = text.splitn(4, '\n');
-        let sha = lines.next().unwrap_or("").trim().to_owned();
-        let name = lines.next().unwrap_or("").trim();
-        let email = lines.next().unwrap_or("").trim();
-        let mut commit = CommitText {
-            sha,
-            writers: Vec::new(),
-            hand_edits: Vec::new(),
-            fallback: Vec::new(),
-            author: format!("{name} {email}"),
-        };
-        for line in lines.next().unwrap_or("").lines() {
-            let Some((key, val)) = line.trim().split_once(':') else {
-                continue;
-            };
-            let val = val.trim().to_owned();
-            match key.trim().to_ascii_lowercase().as_str() {
-                "writer" => commit.writers.push(val),
-                "hand-edit" => commit.hand_edits.push(val),
-                "author" | "co-authored-by" | "signed-off-by" => commit.fallback.push(val),
-                _ => {}
-            }
-        }
-        commits.push(commit);
-    }
-
-    let texts: BTreeSet<String> = commits
-        .iter()
-        .flat_map(|c| {
-            c.writers
-                .iter()
-                .chain(&c.hand_edits)
-                .chain(&c.fallback)
-                .chain(std::iter::once(&c.author))
-        })
-        .cloned()
-        .collect();
-    let table = resolve_families(&texts, repo)?;
-    let family_of = |text: &str| table.get(text).cloned().flatten();
-
-    let mut per_commit = Vec::new();
-    for c in &commits {
-        let mut families = BTreeSet::new();
-        let mut explicit = !c.writers.is_empty();
-        for w in &c.writers {
-            match family_of(w) {
-                Some(f) => {
-                    families.insert(f);
-                }
-                None => {
-                    return Err(format!(
-                        "refused: unknown writer family in Writer trailer on {}: {w}",
-                        short(&c.sha)
-                    ));
-                }
-            }
-        }
-        let mut fallback = c.fallback.clone();
-        for h in &c.hand_edits {
-            if let Some(f) = family_of(h) {
-                explicit = true;
-                families.insert(f);
-            } else if !is_non_family_hand_edit(h) && h != "none" {
-                fallback.push(h.clone());
-            }
-        }
-        if !explicit {
-            let found: Vec<String> = fallback.iter().filter_map(|t| family_of(t)).collect();
-            if found.is_empty() {
-                families.extend(family_of(&c.author));
-            } else {
-                families.extend(found);
-            }
-        }
-        per_commit.push((c.sha.clone(), families));
-    }
-    if per_commit.iter().all(|(_, families)| families.is_empty()) {
-        return Err(format!(
-            "refused: could not determine any writer family from trailers/authors in {}..{}",
-            short(base_sha),
-            short(head_sha)
-        ));
-    }
-    Ok(per_commit)
-}
-
 /// The commits of one writer-family set: the review seat for them comes from outside `families`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriterGroup {
@@ -310,9 +135,19 @@ pub fn writer_groups(
     base_sha: &str,
     head_sha: &str,
 ) -> Result<Vec<WriterGroup>, String> {
-    Ok(group_by_families(&commit_families(
-        repo, base_sha, head_sha,
-    )?))
+    let read =
+        pg_worker_core::writer_families::commit_families(repo, base_sha, head_sha, &[], &|| {
+            python_command(Some(repo))
+        })?;
+    let groups = group_by_families(&read.per_commit);
+    if groups.is_empty() {
+        return Err(format!(
+            "refused: could not determine any writer family from trailers/authors in {}..{}",
+            &base_sha[..12.min(base_sha.len())],
+            &head_sha[..12.min(head_sha.len())]
+        ));
+    }
+    Ok(groups)
 }
 
 // Same flags as pg-spawnd's inline diff (prompt_git.rs), so the CLI measures what the seat gets.

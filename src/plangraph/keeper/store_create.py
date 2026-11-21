@@ -42,6 +42,15 @@ _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id"
              "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
+#: KEEPER-PRIORITY-LEVELS-AND-AGING: a lesson that happened once starts here;
+#: each repeat INCIDENT LOG line raises it one level (10 at most).
+LE_DEFAULT_PRIORITY = 8
+_INCIDENT_LINE = re.compile(r"(?m)^\s*INCIDENT LOG\b")
+
+
+def incident_lines(*texts) -> int:
+    """How many INCIDENT LOG lines the item texts carry."""
+    return sum(len(_INCIDENT_LINE.findall(t)) for t in texts if isinstance(t, str))
 
 
 def _blank(value):
@@ -224,24 +233,19 @@ class CreateMixin:
             if gate is not None:
                 attach.append((definition, gate))
         before = self._all_items()
+        # A standing ``depends_on_cancelled`` edge on the gate is not this define's
+        # doing (``_validate_change`` only refuses what a change newly introduces),
+        # so the define goes through and says so; repair the edge with the
+        # ``depends_on`` remove form.
         blocked = {}
         for gate_key, dep in cancelled_gate_dependencies(before):
             blocked.setdefault(gate_key, []).append(dep)
-        refused = []
-        for definition, gate in attach:
-            if gate["key"] in blocked:
-                deps = ", ".join(blocked[gate["key"]])
-                message = (f"{gate['key']} depends on cancelled item(s) {deps}; "
-                           "use remove_dep on the gate for each cancelled dependency, "
-                           "then define this item again")
-                if self._batch is not None:
-                    raise Refused("depends_on_cancelled", message)
-                refused.append({"key": definition["key"],
-                                "code": "depends_on_cancelled", "message": message})
-        refused_keys = {entry["key"] for entry in refused}
-        defs = [d for d in defs if d["key"] not in refused_keys]
+        standing = [f"{gate['key']} depends on cancelled item(s) "
+                    f"{', '.join(blocked[gate['key']])}; this define did not create "
+                    "that edge (drop it with depends_on {remove: [...]})"
+                    for gate in {g["key"]: g for _, g in attach}.values()
+                    if gate["key"] in blocked]
         keys = [d["key"] for d in defs]
-        attach = [(d, g) for d, g in attach if d["key"] not in refused_keys]
         check_fix_limit(before + defs, set(keys))
         # Validate cycles/reachability with gate -> new edges before inserting.
         candidate = [dict(item) for item in before] + defs
@@ -253,7 +257,10 @@ class CreateMixin:
                 gate_item["depends_on"] = sorted(
                     set(gate_item.get("depends_on") or [])
                     | {definition["key"]})
-                affected.add(gate["key"])
+                # A gate whose standing depends_on_cancelled is not this define's
+                # doing is not "touched": anything NEW on it is refused all the same.
+                if gate["key"] not in blocked:
+                    affected.add(gate["key"])
         self._validate_change(candidate, before, affected=affected)
         with self._write():
             for definition in defs:
@@ -275,14 +282,15 @@ class CreateMixin:
                 self._append(principal, gate["key"], "item_defined",
                              {"fields": ["depends_on"]}, now)
         result = {"created": keys}
-        if refused:
-            result["refused"] = refused
         if attach:
             result["attached"] = [{"key": definition["key"],
                                    "under": gate["key"]}
                                   for definition, gate in attach]
+        if standing and defs:
+            result["warnings"] = list(standing)
         if any(not definition.get("description") for definition in defs):
-            result["warnings"] = ["description missing: brief will be empty"]
+            result.setdefault("warnings", []).append(
+                "description missing: brief will be empty")
         conflicts = sum(decision_tier_conflict(d["review_tier"], d["evidence_kinds"]) for d in defs)
         if legacy and conflicts:
             result.setdefault("warnings", []).append(
@@ -314,6 +322,9 @@ class CreateMixin:
     def _normalise_create(self, raw, principal, *, stored=False):
         self._checked_priority(raw.get("priority", 0))
         definition = self._normalise(raw)
+        if not stored and raw.get("priority") is None \
+                and definition["id"].startswith("LE-"):
+            definition["priority"] = LE_DEFAULT_PRIORITY
         definition["review_tier"] = (creation_tier(raw, definition, principal, stored=True)
                                      if stored else self._tier_for(raw, definition, principal))
         return definition
@@ -394,7 +405,7 @@ class CreateMixin:
         return self._run(principal, "edit_definition", key,
                          lambda now: self._edit(principal, key, fields, now))
 
-    def _edit(self, principal, key, fields, now):
+    def _edit(self, principal, key, fields, now, deps_derived=False):
         has_priority = isinstance(fields, dict) and "priority" in fields
         prio = fields["priority"] if has_priority else None
         rest = ({name: value for name, value in fields.items()
@@ -423,17 +434,26 @@ class CreateMixin:
         # else fails on authorisation, not state.
         tier_edit = (item["state"] in ("claimed", "in_review")
                      and _active_edit_only(rest))
+        merge_note_edit = (principal.role == "router" and item["state"] == "in_review"
+                           and isinstance(rest, dict) and set(rest) == {"note"}
+                           and self._only_merge_repo_note_changed(item.get("note"), rest["note"]))
         if tier_edit and principal.role != "router" and not holder_edit:
             raise Refused("forbidden", "only the router may edit tier fields, "
                           "done_criteria or depends_on while an item is "
                           "claimed or in review")
-        if item["state"] != "open" and not tier_edit:
+        if item["state"] != "open" and not (tier_edit or merge_note_edit):
             raise Refused("bad_state", f"{key} is {item['state']}, not open")
         if not isinstance(rest, dict):
             raise Refused("validation", "edit body must be a mapping")
         unknown = set(rest) - set(_EDITABLE)
         if unknown:
             raise Refused("validation", f"not editable: {sorted(unknown)}")
+        rest = dict(rest)
+        if isinstance(rest.get("depends_on"), dict):
+            # ``{"add": [...], "remove": [...]}``: edges named one by one, so a gate
+            # over the list cap can still drop one without passing the whole list.
+            rest["depends_on"] = self._deps_from_form(item, rest["depends_on"])
+            deps_derived = True
         edit_fields = dict(rest)
         self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
@@ -487,9 +507,13 @@ class CreateMixin:
             if field == "depends_on":
                 if not isinstance(value, (list, tuple)):
                     raise Refused("validation", "depends_on must be a list")
-                if len(value) > _MAX_DEPS:
+                # A list derived from add/remove may not grow past the cap or the
+                # list the item already holds (a legacy gate over the cap shrinks).
+                limit = max(_MAX_DEPS, len(item.get("depends_on") or [])) \
+                    if deps_derived else _MAX_DEPS
+                if len(value) > limit:
                     raise Refused("validation",
-                                  f"depends_on exceeds {_MAX_DEPS} entries")
+                                  f"depends_on exceeds {limit} entries")
                 if any(not isinstance(d, str) for d in value):
                     raise Refused("validation",
                                   "depends_on entries must be strings")
@@ -559,8 +583,11 @@ class CreateMixin:
             fresh = self._get_or_refuse(key)
             audit_before = {name: fresh.get(name) for name in edit_fields}
             self._assert_unlocked(fresh)
-            # ``tier_edit`` implies router; guard the write on the states the read passed.
             states = ("claimed", "in_review") if tier_edit else ("open",)
+            if merge_note_edit:
+                states = ("in_review",)
+                if fresh.get("note") != item.get("note"):
+                    raise Refused("conflict", f"{key} note changed under the transaction")
             if fresh["state"] not in states or fresh["epoch"] != item["epoch"]:
                 raise Refused("conflict",
                               f"{key} changed under the transaction")
@@ -644,6 +671,8 @@ class CreateMixin:
             self._append(principal, key, "item_defined", payload, now)
             if has_priority:
                 self._apply_priority(principal, key, prio, now)
+            else:
+                self._raise_for_incidents(principal, item, edit_fields, now)
         result = {"key": key}
         if bump_epoch:
             result["epoch"] = new_epoch
@@ -716,7 +745,22 @@ class CreateMixin:
             raise Refused("validation", "priority must be between 0 and 10")
         return int(n)
 
-    def _apply_priority(self, principal, key, n, now):
+    def _raise_for_incidents(self, principal, item, fields, now):
+        """A new INCIDENT LOG line on an LE item raises it one level (max 10)."""
+        if not item["id"].startswith("LE-"):
+            return
+        old = incident_lines(item.get("description"), item.get("note"))
+        new = incident_lines(fields.get("description", item.get("description")),
+                             fields.get("note", item.get("note")))
+        current = int(self._item(item["key"])["priority"] or 0)
+        target = min(10, current + max(0, new - old))
+        if target > current:
+            self._apply_priority(
+                principal, item["key"], target, now,
+                reason=f"incident: {new - old} new INCIDENT LOG line(s), "
+                       f"{current} -> {target}")
+
+    def _apply_priority(self, principal, key, n, now, reason=None):
         # Read and assert inside the transaction: the item may have been
         # cancelled or marked DONE before we take the write lock, and must then
         # get no priority change and no event.  The guarded UPDATE proves the
@@ -728,7 +772,10 @@ class CreateMixin:
             " WHERE key=? AND state=? AND epoch=?",
             (int(n), self._iso(now), key, item["state"], item["epoch"]))
         self._row_guard(cursor, key, item["state"], item["epoch"])
-        self._append(principal, key, "priority_set", {"priority": int(n)}, now)
+        payload = {"priority": int(n)}
+        if reason:
+            payload.update({"was": int(item["priority"] or 0), "reason": reason})
+        self._append(principal, key, "priority_set", payload, now)
 
 
 def oversight_definition(raw):

@@ -35,12 +35,14 @@ pub(crate) fn writer_effort(card: &Value) -> Result<String, String> {
     Ok(effort.into())
 }
 /// Model and effort flags for the codex invocation; the ledger row records the same values.
-fn model_args(effort: &str) -> [String; 4] {
+fn model_args(effort: &str) -> [String; 6] {
     [
         "-m".into(),
         WRITER_MODEL.into(),
         "-c".into(),
         format!("model_reasoning_effort={effort}"),
+        "-c".into(),
+        "model_context_window=1000000".into(),
     ]
 }
 
@@ -62,13 +64,20 @@ struct Host {
     reviews_started: usize,
     /// Spawner CLI argv prefix that starts review runs (`review_cli`).
     review_cli: Vec<String>,
+    /// Checkout of trusted plangraph sources for the family table; None uses the installed
+    /// package. Never the writer's worktree: the change under review must not pick the
+    /// families it is reviewed against.
+    python_src: Option<PathBuf>,
 }
 fn output(command: &mut Command) -> Result<String, String> {
     let result = command.output().map_err(|e| e.to_string())?;
     if !result.status.success() {
+        // A tool may report on stdout only; the failure carries both streams in full.
         return Err(format!(
-            "command failed: {}",
-            String::from_utf8_lossy(&result.stderr)
+            "command failed ({}):\nstdout: {}\nstderr: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stdout).trim(),
+            String::from_utf8_lossy(&result.stderr).trim()
         ));
     }
     Ok(String::from_utf8_lossy(&result.stdout).trim().into())
@@ -161,7 +170,7 @@ impl Driver for Host {
     }
     fn prepare(&mut self) -> Result<String, String> {
         if !self.base_ref.starts_with("refs/heads/") && !self.base_ref.starts_with("refs/tags/") {
-            return Err("base_ref must name a pushed refs/heads/ or refs/tags/ ref".into());
+            return Err("base_ref must name a refs/heads/ or refs/tags/ ref".into());
         }
         output(
             self.command("git")
@@ -169,15 +178,9 @@ impl Driver for Host {
                 .arg(&self.repo)
                 .args(["check-ref-format", &self.base_ref]),
         )?;
-        // Pin the pushed ref in a per-run namespace: parallel fetches cannot change this base.
+        // Pin the base in a per-run namespace: parallel fetches cannot change this base.
         let pin = format!("refs/plangraph/native/{}/base", self.run_id);
-        output(self.command("git").arg("-C").arg(&self.repo).args([
-            "fetch",
-            "--no-write-fetch-head",
-            "origin",
-            &format!("+{}:{pin}", self.base_ref),
-            "+refs/heads/main:refs/remotes/origin/main",
-        ]))?;
+        self.pin_base(&pin)?;
         let base = output(
             self.command("git")
                 .arg("-C")
@@ -247,7 +250,10 @@ impl Driver for Host {
                 "-c",
                 "approval_policy=never",
                 "-c",
-                "sandbox_mode=\"danger-full-access\"",
+                &format!(
+                    "sandbox_mode=\"{}\"",
+                    pg_worker_core::host_readiness::WRITER_SANDBOX
+                ),
                 "-o",
             ])
             .arg(directory.join("native.last"))
@@ -338,10 +344,15 @@ impl Driver for Host {
         if self.git(&["rev-parse", "HEAD"])? != head {
             return Err(format!("worktree is not at {head}"));
         }
-        self.checks()?;
         let stamp = self.stamp(head)?;
         fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
             .map_err(|e| e.to_string())?;
+        // The turns up to this head are bound to it before the gates run, so a head whose gate
+        // fails keeps its own output and the next head starts after it.
+        self.session_excerpt(&stamp)?;
+        let log = self.checks()?;
+        // The exact-head gate output, named in the review brief next to the stamp.
+        fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
         fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
             .map_err(|e| e.to_string())
     }
@@ -353,7 +364,7 @@ impl Driver for Host {
     }
     fn gates(&mut self) -> Result<(), String> {
         self.git(&["diff", "--exit-code", "HEAD", "--"])?;
-        self.checks()
+        self.checks().map(|_| ())
     }
     fn push(&mut self, head: &str) -> Result<Option<String>, String> {
         let Some(target) = self.push_ref.clone() else {
@@ -455,6 +466,7 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
         reviews_started: 0,
         review_cli: review_cli()?,
+        python_src: None,
     };
     if let Some(target) = &host.push_ref {
         if !target.starts_with("refs/heads/") {
@@ -484,11 +496,18 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     );
     Ok(())
 }
+#[path = "native_writer_base.rs"]
+mod base;
+#[path = "native_writer_context.rs"]
+mod context;
 #[path = "native_writer_review.rs"]
 mod review;
 use review::review_cli;
 #[cfg(test)]
 use review::{review_diff_base, review_run_text, review_verdict};
+#[cfg(test)]
+#[path = "native_writer_base_tests.rs"]
+mod base_tests;
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;

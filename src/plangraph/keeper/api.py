@@ -87,6 +87,15 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - stdlib signature
         self._request("GET")
 
+    def _warm_merge_scan(self, server):
+        """Fetch the scanned repositories before the request takes the lock; the verb itself answers any refusal."""
+        with suppress(Exception):
+            with server.lock:
+                principal = auth.authenticate(server.store.conn, self._token())
+                candidates = server.store.merge_candidates() if principal.role in ("system", "router") else None
+            if candidates is not None:
+                server.store.warm_merge_scan(candidates)
+
     def do_POST(self):  # noqa: N802 - stdlib signature
         self._request("POST")
 
@@ -147,6 +156,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 return  # 413 already sent
 
         server = self.server
+        if name == "close_merged_auto":
+            self._warm_merge_scan(server)
         with timing.RequestTimer(server.lock, "read" if method == "GET" else "write"):
             try:
                 try:
@@ -323,11 +334,9 @@ class KeeperHandler(BaseHTTPRequestHandler):
             mine = str(self._one(query, "mine")).lower() in ("1", "true")   # MCP sends "True"
             agent = str(self._one(query, "agent")).lower() in ("1", "true")
             owner = principal.name if mine else self._one(query, "owner")
-            text = store.ready(principal, project=project, n=n, owner=owner, agent=agent)
             if as_text:
-                return text, True
-            groups = store._ready_groups(project=project, n=n, owner=owner, agent=agent)
-            return {**groups, "unblocks": views.unblocks(store._all_items())}, False
+                return store.ready(principal, project=project, n=n, owner=owner, agent=agent), True
+            return store.ready_data(principal, project=project, n=n, owner=owner, agent=agent), False
         if name == "show":
             key = store.resolve_key(self._one(query, "key") or extra)
             return brief.show(store, principal, key,

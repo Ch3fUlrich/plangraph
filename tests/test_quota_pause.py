@@ -202,7 +202,7 @@ def test_claude_judge_admission_before_probe(tmp_path, monkeypatch):
     assert asyncio.run(leg_probe.before_launch(runner, leg, 'review', False)) is None
     assert store.leg_status.call_count == 2
     assert asyncio.run(leg_probe.before_launch(runner, leg, 'implement', False)) is None
-    probe.assert_awaited_once_with(runner, leg, store=store)
+    probe.assert_awaited_once_with(runner, leg, store=store, timeout_s=60)
 
 
 @pytest.mark.parametrize('dry', [False, True])

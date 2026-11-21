@@ -295,10 +295,9 @@ async def collect(runner, job_id, proc):
                         proc.stdin.write(payload)
                         await proc.stdin.drain()
                     except (BrokenPipeError, ConnectionResetError):
-                        job.status, job.exit_code = 'failed', 1
-                        job.stderr = 'stdin_delivery_failed: pipe unavailable or closed'
+                        # A child may refuse before reading the prompt. Keep draining
+                        # both streams so the existing refusal classifier sees why.
                         job.events.append({'event': 'stdin_delivery_failed'})
-                        raise RuntimeError(job.stderr) from None
                     finally:
                         if proc.stdin is not None:
                             proc.stdin.close()
@@ -322,6 +321,8 @@ async def collect(runner, job_id, proc):
                     # monitor reads proc.returncode next, so let it land (bounded).
                     await asyncio.wait([gone], timeout=READER_GRACE_S)
                 gone.cancel()
+                if job.status == 'running' and any(e['event'] == 'stdin_delivery_failed' for e in job.events):
+                    job.status, job.exit_code = 'failed', proc.returncode or 1
                 return tuple(''.join(captured[n]).encode('utf-8') for n in ('stdout', 'stderr'))
             finally:
                 for task in readers:

@@ -28,7 +28,22 @@ pub fn regular(path: &Path) -> io::Result<()> {
 pub fn lock(path: &Path) -> io::Result<File> {
     lock_with(path, |_| {})
 }
+
+/// How long a lock attempt retries a `WouldBlock`, in `LOCK_STEP` steps. A flock belongs to the
+/// open file description, so a thread that forks while the lock fd is open (before the child's
+/// exec closes it) keeps the lock alive briefly after the owner dropped its `File`.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+const LOCK_STEP: std::time::Duration = std::time::Duration::from_millis(50);
+
 fn lock_with(path: &Path, after_check: impl FnOnce(&Path)) -> io::Result<File> {
+    lock_within(path, after_check, LOCK_WAIT)
+}
+
+fn lock_within(
+    path: &Path,
+    after_check: impl FnOnce(&Path),
+    wait: std::time::Duration,
+) -> io::Result<File> {
     let name = path
         .file_name()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "missing target name"))?;
@@ -70,10 +85,16 @@ fn lock_with(path: &Path, after_check: impl FnOnce(&Path)) -> io::Result<File> {
             return Err(io::Error::other("invalid lock ownership or links"));
         }
     }
-    match file.try_lock() {
-        Ok(()) => (),
-        Err(std::fs::TryLockError::WouldBlock) => return Err(io::ErrorKind::WouldBlock.into()),
-        Err(std::fs::TryLockError::Error(error)) => return Err(error),
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(LOCK_STEP);
+            }
+            Err(std::fs::TryLockError::WouldBlock) => return Err(io::ErrorKind::WouldBlock.into()),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error),
+        }
     }
     #[cfg(unix)]
     {
@@ -147,5 +168,56 @@ mod tests {
         })
         .is_err());
         assert_eq!(fs::read(victim).unwrap(), b"unchanged");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lock_outlives_drop_while_a_forked_child_holds_the_fd_and_is_then_acquired() {
+        use std::os::unix::process::CommandExt;
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        let first = lock(&target).unwrap();
+        let mut fds = [0 as libc::c_int; 2];
+        // SAFETY: fds is a two-element array, as pipe(2) requires.
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let (read_fd, write_fd) = (fds[0], fds[1]);
+        let mut command = std::process::Command::new("true");
+        // SAFETY: the hook only calls write(2) and usleep(3) between fork and exec.
+        unsafe {
+            command.pre_exec(move || {
+                libc::write(write_fd, b"f".as_ptr().cast(), 1);
+                libc::usleep(200_000);
+                Ok(())
+            });
+        }
+        let child = std::thread::spawn(move || command.status().unwrap());
+        let mut byte = [0u8; 1];
+        // SAFETY: byte is one writable byte; the child writes one once it has forked.
+        assert_eq!(
+            unsafe { libc::read(read_fd, byte.as_mut_ptr().cast(), 1) },
+            1
+        );
+        drop(first); // the child still holds a copy of the open file description for ~200 ms
+        let started = std::time::Instant::now();
+        assert!(lock(&target).is_ok());
+        assert!(started.elapsed() >= std::time::Duration::from_millis(50));
+        assert!(child.join().unwrap().success());
+        // SAFETY: both ends were opened above and are closed once.
+        unsafe {
+            libc::close(read_fd);
+            libc::close(write_fd);
+        }
+    }
+
+    #[test]
+    fn lock_held_beyond_the_wait_still_refuses_with_would_block() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("target");
+        let _held = lock(&target).unwrap();
+        let started = std::time::Instant::now();
+        let error =
+            lock_within(&target, |_| {}, std::time::Duration::from_millis(150)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+        assert!(started.elapsed() >= std::time::Duration::from_millis(150));
     }
 }

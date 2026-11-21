@@ -91,9 +91,9 @@ missing review cards, and retains multiple existing review cards. Consumers
 must schedule one batch review per phase. Scope admission alone is not a count
 check. This limitation is intentional pending orchestration support.
 
-Explicit scope on a non-review spawn is rejected as `SettingsError`, including model/leg overrides;
-any review_scope given when `role != "review"` raises `SettingsError('review_scope only valid for role=review')`
-before policy refusal. Both stamped and explicit scopes are validated before choosing the effective
+Spawn admission rejects an explicit scope on a non-review spawn with
+`SpawnRefused('review_scope only valid for role=review')`, including model and
+leg overrides. The underlying settings validator raises `SettingsError`. Both stamped and explicit scopes are validated before choosing the effective
 scope. Stamped scopes are evaluated against current project/phase policy.
 
 ## Policy refusals vs. malformed input
@@ -103,7 +103,7 @@ scope. Stamped scopes are evaluated against current project/phase policy.
 | Policy refusal | Batch policy in effect and `review_scope="per-fixer"` | `SpawnRefused` (exit code 2) | `review_method_batch_per_fixer` |
 | Policy refusal | Settings file missing, unreadable, or invalid JSON/TOML | `SpawnRefused` (exit code 2) | `review_method_invalid` |
 | Policy refusal | Settings file missing, unreadable, or invalid JSON/TOML (phase runner) | `Refused` | `validation` (message prefix `review_method_invalid:`) |
-| Malformed input | Unsupported `review_scope` value (not `batch` or `per-fixer`) | `SettingsError` / `ValueError` | `review_scope: expected batch or per-fixer` |
-| Malformed input | `review_scope` provided when `role != "review"` | `SettingsError` / `ValueError` | `review_scope only valid for role=review` |
+| Malformed input | Unsupported `review_scope` value (not `batch` or `per-fixer`) | `SpawnRefused` (exit code 2 at spawn admission) | `review_scope: expected batch or per-fixer` |
+| Malformed input | `review_scope` provided when `role != "review"` | `SpawnRefused` (exit code 2 at spawn admission) | `review_scope only valid for role=review` |
 | Malformed input | Unknown field name in settings override | `SettingsError` / `ValueError` | `<name>: unknown review_method setting` |
 

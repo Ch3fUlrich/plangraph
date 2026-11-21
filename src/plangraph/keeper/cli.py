@@ -46,6 +46,7 @@ HANDLERS = {
     "close": cli_verbs.cmd_close,
     "legacy": cli_verbs.cmd_legacy,
     "priority": cli_verbs.cmd_priority,
+    "grant-apply": cli_output_verbs.cmd_grant_apply,
     "migrate-descriptions": cli_names.cmd_migrate_descriptions,
     "rehome": cli_names.cmd_rehome,
     "aliases": cli_names.cmd_aliases,
@@ -158,7 +159,7 @@ def _add_writes(sub):
     waive.add_argument("key")
     waive.add_argument("decision_id", metavar="D-NNN")
 
-    withdraw = _p(sub, "withdraw", help="router: take a decision-closable item out of review")
+    withdraw = _p(sub, "withdraw", help="router: take a decision-closable item out of review (in_review only; an open item is not withdrawn, cancel it)")
     withdraw.add_argument("key")
     withdraw.add_argument("decision_id", metavar="D-NNN")
 
@@ -206,6 +207,13 @@ def _add_writes(sub):
     priority = _p(sub, "priority", help="set priority 0-10 (10 most important, 0 optional)")
     priority.add_argument("key")
     priority.add_argument("n", type=int, help="integer 0-10: 10 most important, 0 optional")
+
+    grant = _p(sub, "grant-apply", help="router: let an l1 principal apply batches in a "
+                                        "project (--revoke takes it away; --list shows them)")
+    grant.add_argument("principal", nargs="?")
+    grant.add_argument("project", nargs="?")
+    grant.add_argument("--revoke", action="store_true")
+    grant.add_argument("--list", action="store_true")
 
     define = _p(sub, "define", help="create or edit definitions from JSON")
     define.add_argument("key", nargs="?")

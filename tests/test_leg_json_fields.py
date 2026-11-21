@@ -36,6 +36,9 @@ def test_json_effort_reaches_implement_route_and_saved_record(tmp_path, monkeypa
     leg = load_row(tmp_path, sol_row(id=model.split("/", 1)[1], model=model, effort=effort))
     assert leg.effort == effort
     card = {"estimate_tokens": 1000}
+    if effort in ("high", "xhigh", "max"):
+        card.update(effort=effort, effort_decision="D-6397")
+    effort = effort or "medium"
     reader = lambda *a, **kw: {"state": "available", "evidence": None}
     plan = plan_spawn(card, role="implement", legs=(leg,), policy=RoutePolicy(),
                       leg_reader=reader, catalog_rows=())
@@ -70,8 +73,13 @@ def test_every_json_leg_field_is_preserved(tmp_path, field):
     # Non-default optional values catch validated fields silently dropped at construction.
     row = sol_row(claude_family=True, note="operator JSON preservation regression",
                   roles=["review", "implement"], tool_mode="inline-only",
-                  disabled="operator policy", trains_on_data=True, effort="high", expires=123)
+                  disabled="operator policy", trains_on_data=True, effort="high", expires=123,
+                  benchmark_optional=True, harness_fallback="client_missing")
     leg = load_row(tmp_path, row)
     assert set(row) == {field.name for field in dataclasses.fields(Leg)}
     expected = tuple(row[field]) if field in ("windows", "roles") else row[field]
     assert getattr(leg, field) == expected
+
+def test_json_benchmark_optional_requires_boolean(tmp_path):
+    with pytest.raises(ValueError, match=r"legs\[0\]\.benchmark_optional"):
+        load_row(tmp_path, sol_row(benchmark_optional="false"))

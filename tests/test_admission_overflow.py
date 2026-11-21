@@ -7,6 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from registry_route_util import use_projected_overflow_config
+
 from plangraph.spawner import seat_spawn as a, overflow
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
@@ -15,7 +17,7 @@ from plangraph.spawner.seat_spawn import SeatSpawnMixin
 def setup(tmp_path, monkeypatch):
     path = tmp_path / 'hosts.json'
     path.write_text(json.dumps({'public_repos': [str(tmp_path)], 'hosts': {'ash': {}, 'birch': {}}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    use_projected_overflow_config(monkeypatch, path)
     monkeypatch.setattr(overflow, 'local_limits', lambda registry, role: (2048, 3000))
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(a, 'resources', lambda service: (100, 4000))
@@ -250,7 +252,7 @@ def orchestration(tmp_path, monkeypatch):
     path = tmp_path / 'overflow.json'
     config = {'public_repos': [str(tmp_path)], 'hosts': {'host-b': {'ssh': 'host-b'}}}
     path.write_text(json.dumps(config))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(path))
+    use_projected_overflow_config(monkeypatch, path)
     monkeypatch.setattr(overflow, 'available_memory_mb', lambda: 8000)
     monkeypatch.setattr(overflow, 'swap_used_pct', lambda: 0, raising=False)
     rows = {'host-b': dict(ssh='host-b', ok=True, fresh=True, live_runs=1000,
@@ -325,7 +327,7 @@ def test_orchestration_real_remote_launch(orchestration, monkeypatch, tmp_path):
     commands = tmp_path / 'bin'
     commands.mkdir()
     scripts = {
-        'ssh': '#!/bin/sh\nexec /bin/sh -c "$3"\n',
+        'ssh': '#!/bin/sh\nfor arg do script="$arg"; done\nexec /bin/sh -c "$script"\n',
         'scp': f'#!{sys.executable}\nimport shlex, shutil, sys\n'
                'for path in sys.argv[2:4]: shutil.copy(path, shlex.split(sys.argv[4].split(":", 1)[1])[0])\n',
         'python3': f'#!{sys.executable}\nimport json, pathlib, sys\n'

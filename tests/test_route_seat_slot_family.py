@@ -61,7 +61,7 @@ def service(tmp_path, monkeypatch):
 def test_resolved_slot_family_in_answer_and_record(service, dispatch):
     svc = service(dispatch, GEMINI.model)
     before = svc.route(CARD, 'review', ['mimo'], benchmark={})
-    assert before.review_seats == (GEMINI, LUNA)
+    assert before.review_seats == (GEMINI, replace(LUNA, effort='medium'))  # gateway GPT defaults to medium
     answer = asyncio.run(svc.spawn(card=CARD, role='review', writer_families=['mimo'],
                                    seats=True, wait_seconds=None, benchmark={}))
     families = []
@@ -112,7 +112,7 @@ def test_unknown_adapter_skip_has_named_reason(service, monkeypatch, reason):
 
 def test_snapshot_auth_refused_in_plan_and_run_record(service, monkeypatch, tmp_path):
     from plangraph.routing_support.leg_state import LegAdapter, LegStateStore
-    from plangraph.routing_support.omniroute_state import from_env
+    from plangraph.routing_support.quota_snapshots import from_env
     svc = service()
     healthy = svc._route(CARD, 'review', ['mimo'], benchmark={})
     calls = []
@@ -157,8 +157,9 @@ def test_unfilled_slot_names_distinct_family_refusal(service, monkeypatch):
     filled = [r for r in answer['seats'] if r['chosen_leg']]
     assert len(filled) == 1 and filled[0]['chosen_leg']['id'] == LUNA.id
     unfilled, = [r for r in answer['seats'] if not r['chosen_leg']]
-    assert 'distinct_family_unavailable' in unfilled['error']
-    assert 'provider_stop' in unfilled['error']
+    slot, = unfilled['plan']['seat_coverage']
+    assert 'distinct_family_unavailable' in slot['reason']
+    assert 'provider_stop' in slot['reason']
     assert unfilled['plan']['review_seats'] == []
     assert 'distinct_family_unavailable' in '\n'.join(answer['reasons'])
     assert json.loads(svc._path(unfilled['run_id']).read_text())['error'] == unfilled['error']
@@ -434,3 +435,16 @@ def test_mixed_coverage_cannot_label_an_unrelated_leg(nonseat):
     assert coverage[0] == dict(leg=LUNA.id, seat_group='seats-fixture')
     assert record['plan']['review_seats'] == [asdict(LUNA)]
     assert record['chosen_leg']['id'] == GEMINI.id
+
+
+@pytest.mark.parametrize('status', ['failed', 'cancelled'])
+def test_unsuccessful_seat_preserves_terminal_diagnostics(status):
+    from plangraph.spawner.seat_artifact import sync_seat
+
+    record = dict(role='review', status=status, chosen_leg=None, ended=1,
+                  error='child diagnostic', reason='original_reason',
+                  plan=dict(seat_coverage=[dict(leg=LUNA.id, seat_group='seats-fixture')]))
+    sync_seat(record)
+    slot, = record['plan']['seat_coverage']
+    assert slot['reason'] == 'original_reason'
+    assert record['error'] == 'child diagnostic'

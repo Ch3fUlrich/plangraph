@@ -26,10 +26,15 @@ pub struct Pull {
     #[serde(rename = "headRefOid")]
     pub sha: String,
 }
+pub use crate::unit_refs::{
+    missing_worktree_refs, systemd_user_dir, unit_file_refs, unit_names, UnitRef,
+};
 pub struct Protection {
     pub guards: Guards,
     pub claims: Claims,
     pub units: Vec<PathBuf>,
+    /// Paths named in the user unit files and drop-ins (ExecStart, Environment, ...).
+    pub unit_refs: Vec<UnitRef>,
     pub cwds: Vec<PathBuf>,
 }
 fn output(command: &mut Command) -> io::Result<String> {
@@ -126,6 +131,8 @@ impl Protection {
         let cwds = disk_runtime::processes()?.0;
         // Live process cwds are matched below only when inside the candidate.
         let units = unit_paths()?;
+        let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
+        let unit_refs = unit_file_refs(&systemd_user_dir()?, Path::new(&home))?;
         let claims: Claims = serde_json::from_str(&output(
             Command::new("sh")
                 .env("PG_SWEEP_STATE", state)
@@ -139,6 +146,7 @@ impl Protection {
             guards,
             claims,
             units,
+            unit_refs,
             cwds,
         })
     }
@@ -242,7 +250,8 @@ pub fn facts(
             .iter()
             .any(|p| p.state == "OPEN" && (tree.branch.is_some() || p.sha == tree.head)),
         in_use_by_process: protection.cwds.iter().any(|p| p.starts_with(&canonical)),
-        in_use_by_unit: protection.units.iter().any(|p| p.starts_with(&canonical)),
+        in_use_by_unit: protection.units.iter().any(|p| p.starts_with(&canonical))
+            || !unit_names(&protection.unit_refs, path, &canonical).is_empty(),
         is_clone_path: meta.file_type().is_symlink()
             || canonical == repo.canonicalize()?
             || branch == "refs/heads/main"

@@ -1,0 +1,10 @@
+[Unit]
+Description=Dump the keeper schema (pg_dump 17 in docker), keep the newest 14, test the restore
+
+[Service]
+Type=oneshot
+# PG* connection variables (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE): a mode-0600 file
+# under ~/.config/plangraph, see keeper-backup.env.example. Never put a value in this unit.
+EnvironmentFile=%h/.config/plangraph/keeper-backup.env
+UMask=0077
+ExecStart=%h/.local/bin/pg-keeper-backup dump --verify --dir %h/.local/share/plangraph/backups
