@@ -51,6 +51,10 @@ class RefusedCli(Exception):
 class Unreachable(Exception):
     """The keeper could not be reached (connection error or 5xx)."""
 
+    def __init__(self, message, *, idempotency_key=None):
+        super().__init__(message)
+        self.idempotency_key = idempotency_key
+
 
 class MissingKeeperURL(RefusedCli):
     """No keeper URL configured (D-A=2: the client has no default port)."""
@@ -114,6 +118,16 @@ class Session:
 
     # ---------------------------------------------------------------- HTTP
     def call(self, method, verb, params=None, body=None, timeout=None, *, idempotency_key=None):
+        if method == "POST":
+            from .api_routes import RETRYABLE_WRITES, check_write_key
+            from .errors import Refused
+            if verb in RETRYABLE_WRITES:
+                if idempotency_key is None:
+                    idempotency_key = os.environ.get("PG_IDEMPOTENCY_KEY") or uuid.uuid4().hex
+                try:
+                    check_write_key(idempotency_key)
+                except Refused as exc:
+                    raise RefusedCli(exc.code, exc.msg) from None
         query = dict(params or {})
         query.setdefault("fmt", "json")
         query = {k: v for k, v in query.items() if v is not None}
@@ -131,12 +145,13 @@ class Session:
         except urllib.error.HTTPError as exc:
             code, msg = _parse_error(exc.read(), exc.code)
             if exc.code >= 500:
-                raise Unreachable(msg or f"server error {exc.code}") from None
+                raise Unreachable(msg or f"server error {exc.code}",
+                                  idempotency_key=idempotency_key) from None
             raise RefusedCli(code, msg) from None
         except (urllib.error.URLError, http.client.HTTPException,
                 TimeoutError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
-            raise Unreachable(str(reason)) from None
+            raise Unreachable(str(reason), idempotency_key=idempotency_key) from None
         try:
             return json.loads(raw.decode("utf-8"))
         except ValueError:
@@ -212,24 +227,14 @@ def read(session, verb, params, renderer, local=None) -> int:
 
 
 def write(session, verb, body, renderer=None) -> int:
-    from .api_routes import RETRYABLE_WRITES, check_write_key
-    from .errors import Refused
-    options = {}
-    request_key = None
-    if verb in RETRYABLE_WRITES:
-        request_key = os.environ.get("PG_IDEMPOTENCY_KEY") or uuid.uuid4().hex
-        try:
-            check_write_key(request_key)
-        except Refused as exc:
-            return _refuse(RefusedCli(exc.code, exc.msg))
-        options["idempotency_key"] = request_key
     try:
-        result = session.call("POST", verb, body=body, **options)
+        result = session.call("POST", verb, body=body)
         status = _emit(session, result, renderer or (lambda r: fmt.result_text(verb, r)))
         return EXIT_REFUSED if isinstance(result, dict) and result.get("refused") else status
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:   # M2B-OUTBOX: a run token with PG_OUTBOX queues instead
+        request_key = exc.idempotency_key
         if request_key:
             exc = Unreachable(f"{exc}; outcome unknown, repeat with PG_IDEMPOTENCY_KEY={request_key}")
         return outbox.on_unreachable(verb, body, exc, exit_unreachable=EXIT_UNREACHABLE,

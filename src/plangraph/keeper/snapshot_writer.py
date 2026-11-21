@@ -110,7 +110,7 @@ class SnapshotWriter(threading.Thread):
 
     def flush(self):
         """Synchronously bring the file level with the database (raises on a write error)."""
-        with timing.RequestTimer(self.server.lock, event="writer_timing"):
+        with timing.RequestTimer(self.server.lock, event="snapshot_timing"):
             with self._cond:
                 gen, pending = self._gen, self._written != self._gen
             if not pending:

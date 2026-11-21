@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from plangraph.keeper import outage, outbox
-from plangraph.keeper.cli_verbs import Session, Unreachable, write
+from plangraph.keeper.cli_verbs import Session, write
 from plangraph.keeper.auth import Principal
 from plangraph.keeper.errors import Refused
 from plangraph.keeper.events import verify_integrity
@@ -60,15 +60,18 @@ def test_heartbeat_outbox_keeps_the_original_write_key(w, tmp_path, monkeypatch)
     epoch, _, principal = claimed_with_token(w)
     path = tmp_path / "outbox.jsonl"
     monkeypatch.setenv("PG_OUTBOX", str(path))
-    session = Session()
+    session = Session(url="http://127.0.0.1:1")
+    monkeypatch.setattr(session, "token", lambda: "test-token")
 
-    def call(method, verb, *, body, idempotency_key):
-        assert (method, verb) == ("POST", "heartbeat")
-        w.store.retry_http_write(principal, None, idempotency_key, verb, "", body,
+    def lost_reply(request, *, timeout):
+        body = json.loads(request.data)
+        key = request.get_header("Idempotency-key")
+        assert request.get_method() == "POST" and key
+        w.store.retry_http_write(principal, None, key, "heartbeat", "", body,
                                  lambda: w.store.heartbeat(principal, body["key"], body["epoch"]))
-        raise Unreachable("timed out")
+        raise TimeoutError("timed out")
 
-    monkeypatch.setattr(session, "call", call)
+    monkeypatch.setattr("urllib.request.urlopen", lost_reply)
     body = {"key": "demo:A", "epoch": epoch}
     assert write(session, "heartbeat", body) == outbox.EXIT_QUEUED
     lease = w.store._item("demo:A")["lease_until"]
