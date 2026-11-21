@@ -36,7 +36,6 @@ from plangraph.spawner.claude_stream import final_text, last_stop_reason, render
 from plangraph.spawner.resolver import MODEL_FAMILIES, detect_model_family
 from plangraph.spawner.mimo_policy import is_mimo_id
 from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
-from plangraph.planner.seats import with_head_writers
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
 from plangraph.routing_support import background_process_options
 
