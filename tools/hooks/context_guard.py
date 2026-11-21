@@ -63,6 +63,8 @@ _SKIP = object()
 
 _PY_SAFE_FLAGS = frozenset({"-B", "-E", "-I", "-O", "-OO", "-S", "-s", "-u"})
 _SHELL_PUNCT = frozenset("();<>|&")
+# Longest wait for the handoff checker in ready; sized for its live remote child-session reads.
+HANDOFF_CHECK_TIMEOUT_S = 60
 _READY_REASONS = ("cap", "router", "operator", "planned")
 _PREFIX_KEYS = ("hook_event_name", "session_id")
 _PREFIX_MAX_FIELDS = 256
@@ -530,7 +532,12 @@ def cmd_ready(args) -> int:
         checker = shutil.which(command, path=os.environ.get("PATH", ""))
         if checker is None:
             raise OSError("handoff-check not found on PATH: %s" % command)
-        result = subprocess.run([checker, str(card)], capture_output=True, text=True, timeout=10)
+        try:
+            result = subprocess.run([checker, str(card)], capture_output=True, text=True,
+                                    timeout=HANDOFF_CHECK_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            raise OSError("handoff-check timed out after %s seconds; ready needs it to finish"
+                          % HANDOFF_CHECK_TIMEOUT_S) from None
         if result.returncode:
             print("context_guard: handoff-check refused ready (exit %s):\n%s%s"
                   % (result.returncode, result.stdout, result.stderr), file=sys.stderr)

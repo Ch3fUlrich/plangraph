@@ -177,6 +177,35 @@ def test_checker_timeout_is_loud_but_hook_ignores_broken_checker(ready):
         "handoff", 280000, 270000)
 
 
+def test_checker_timeout_bound_covers_a_remote_child_probe():
+    guard = load_module("context_guard")
+    assert guard.HANDOFF_CHECK_TIMEOUT_S >= 60
+
+
+def _slow_checker(checker, seconds):
+    checker.write_text(f"#!{sys.executable}\nimport time\ntime.sleep({seconds})\n")
+
+
+def test_ready_waits_for_a_slow_checker_within_the_bound(ready):
+    handoff, _, checker, env, marker, _ = ready
+    guard = load_module("context_guard")
+    _slow_checker(checker, 1.5)
+    with patch.dict(os.environ, env, clear=True), patch.object(guard, "HANDOFF_CHECK_TIMEOUT_S", 4):
+        assert guard.cmd_ready([str(handoff)]) == 0
+    assert marker.is_file()
+
+
+def test_ready_names_the_checker_timeout_above_the_bound(ready, capsys):
+    handoff, _, checker, env, marker, _ = ready
+    guard = load_module("context_guard")
+    _slow_checker(checker, 5)
+    with patch.dict(os.environ, env, clear=True), patch.object(guard, "HANDOFF_CHECK_TIMEOUT_S", 1):
+        assert guard.cmd_ready([str(handoff)]) == 2
+    err = capsys.readouterr().err
+    assert "handoff-check timed out after 1 seconds" in err and "ready" in err
+    assert not marker.exists()
+
+
 @pytest.mark.parametrize("outcome", ["success", "refused", "failed", "missing", "timeout", "disabled"])
 def test_ready_kick_and_checker_resolution(ready, outcome, capsys):
     handoff, _, checker, env, marker, _ = ready
@@ -190,7 +219,7 @@ def test_ready_kick_and_checker_resolution(ready, outcome, capsys):
         calls.append(argv)
         if argv[0] != "systemctl":
             assert argv == [resolved, str(handoff.with_suffix(".card.md"))]
-            assert kwargs["timeout"] == 10
+            assert kwargs["timeout"] == guard.HANDOFF_CHECK_TIMEOUT_S
             return subprocess.CompletedProcess(argv, int(outcome == "refused"), "", "")
         assert marker.is_file() and kwargs["timeout"] == 5 and kwargs["check"] is True
         assert argv == ["systemctl", "--user", "start", "--no-block", "ctx-watchdog.service"]
