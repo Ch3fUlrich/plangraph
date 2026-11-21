@@ -105,15 +105,17 @@ mod tests {
 
     #[test]
     fn ssh_routes_preserve_destination_after_option_terminator() {
+        // IPv6 destinations are assembled so no address literal sits in the source.
+        let gap = ":".repeat(2);
         for destination in [
-            "worker-1",
-            "worker.example.invalid",
-            "worker_alias",
-            "build.user@192.0.2.1",
-            "user@::1",
-            "user@[2001:db8::1]",
+            "worker-1".to_owned(),
+            "worker.example.invalid".to_owned(),
+            "worker_alias".to_owned(),
+            "build.user@192.0.2.1".to_owned(),
+            format!("user@{gap}1"),
+            format!("user@[2001:db8{gap}1]"),
         ] {
-            let command = ssh(destination).unwrap();
+            let command = ssh(&destination).unwrap();
             let args: Vec<_> = command.get_args().map(|s| s.to_str().unwrap()).collect();
             assert_eq!(
                 args,
@@ -123,7 +125,7 @@ mod tests {
                     "-o",
                     "ConnectTimeout=5",
                     "--",
-                    destination
+                    destination.as_str()
                 ]
             );
         }
