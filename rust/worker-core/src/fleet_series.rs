@@ -45,9 +45,31 @@ pub fn valid_host(host: &str) -> bool {
 pub const HISTORY_SAMPLES: usize = 1440;
 pub const HISTORY_BYTES: usize = 4 * 1024 * 1024;
 
+/// Open a history file without blocking: a symlink or any non-regular file (a FIFO would block
+/// a plain open before the byte limit applies) is refused, a missing file stays `NotFound`.
+fn open_regular(path: &Path) -> io::Result<fs::File> {
+    let refuse = || io::Error::new(io::ErrorKind::InvalidInput, "history is not a regular file");
+    if !fs::symlink_metadata(path)?.file_type().is_file() {
+        return Err(refuse());
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let file = options.open(path)?;
+    if file.metadata()?.is_file() {
+        Ok(file)
+    } else {
+        Err(refuse())
+    }
+}
+
 /// Read only complete rows in the bounded tail, including legacy oversized files.
 pub fn read(path: &Path) -> io::Result<Vec<Sample>> {
-    let mut file = fs::File::open(path)?;
+    let mut file = open_regular(path)?;
     let offset = file.metadata()?.len().saturating_sub(HISTORY_BYTES as u64);
     // Include the preceding byte to distinguish a boundary from a partial row.
     file.seek(SeekFrom::Start(offset.saturating_sub(1)))?;
@@ -187,7 +209,8 @@ pub fn run_delta(dir: &Path, host: &str, start: f64, end: f64) -> Option<u64> {
         .iter()
         .rposition(|s| s.ts as f64 <= start && start - s.ts as f64 <= 120.0)?;
     let interval = &rows[baseline..];
-    if end - interval.last()?.ts as f64 > 120.0 {
+    // The baseline precedes the run: a distinct sample taken during it must exist.
+    if interval.len() < 2 || end - interval.last()?.ts as f64 > 120.0 {
         return None;
     }
     Some(

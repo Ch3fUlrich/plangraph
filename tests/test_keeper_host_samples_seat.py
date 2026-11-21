@@ -3,13 +3,13 @@ import json
 
 import pytest
 
-from test_keeper_host_samples import DSN, world, sample, host_principal
+from test_keeper_host_samples import SKIP_WITHOUT_PG, world, sample, host_principal
 from test_keeper_host_samples_http import srv
 from test_keeper_api import call
 from plangraph.keeper import store_host_samples
 from plangraph.keeper.errors import Refused
 
-pytestmark = pytest.mark.skipif(not DSN, reason="needs Postgres")
+pytestmark = SKIP_WITHOUT_PG
 
 
 @pytest.mark.parametrize("body", [[], "fixture", None, 1])
