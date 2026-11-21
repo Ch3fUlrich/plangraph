@@ -29,6 +29,9 @@ KNOWN_PREFIXES: tuple[str, ...] = (
     "rust/",
 )
 
+# The standalone Temporal worker job also runs the probe admission guard tests.
+RUST_WORKER_INPUTS: tuple[str, ...] = ("tools/probe_admission_policy_guard.py",)
+
 # D-5294: Rust tests also compile/read repository inputs outside rust/.
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py
 # scans Rust sources and rejects repository reads missing from this list.
@@ -112,7 +115,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "tools/merge_batch_land.py",
     "tools/dell_ci_jobs.py",
     "tools/new_code_allowlist.txt",
-    "tools/probe_admission_policy_guard.py",
+    *RUST_WORKER_INPUTS,
     "tools/seat_verdict.py",
     "tools/preflight.py",
     "tools/preflight_private_scrub.py",
@@ -185,6 +188,8 @@ def select(paths: list[str]) -> dict[str, bool]:
             res["browser"] = True
         if any(fnmatchcase(p, pattern) for pattern in RUST_INPUTS):
             res["rust"] = True
+        if p in RUST_WORKER_INPUTS:
+            res["rust-worker"] = True
         if p.startswith("skills/") and p.endswith(".md"):
             # skill pages are guarded by tests/test_skill_*.py
             res["pytest"] = True
