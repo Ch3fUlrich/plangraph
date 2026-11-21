@@ -255,7 +255,7 @@ async def case(cancel):
         verified.append(True)
     run_watchdog.collect = collect
     r.reap = reap
-    h.running_disk_refusal = lambda cwd: 'cargo_target_cap: test'
+    h.running_disk_refusal = lambda cwd, role='implement': 'cargo_target_cap: test'
     runner = r.SpawnerRunner()
     job = r.JobInfo('j', 'running', 'task', 'test', cwd='.')
     runner.jobs['j'] = job

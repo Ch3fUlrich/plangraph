@@ -8,13 +8,15 @@ pub(super) fn validate_fields(value: &serde_json::Value) -> Result<(), HostsErro
         repo: &str,
     ) -> Result<(), HostsError> {
         let allowed: &[&str] = match kind {
-            "registry" => &["version", "self", "hosts"],
+            "registry" => &["version", "self", "hosts", "public_repos"],
             "host" => &[
                 "id",
                 "class",
                 "aliases",
                 "transport",
                 "ssh_target",
+                "wsl_distro",
+                "placement_fallback",
                 "env",
                 "os",
                 "state_dir",
@@ -280,6 +282,19 @@ fn check_path(
 }
 
 pub(super) fn validate_host(h: &HostEntry, is_self: bool) -> Result<(), HostsError> {
+    if h.wsl_distro.as_ref().is_some_and(|distro| {
+        h.os != Os::Linux
+            || h.transport != Transport::Ssh
+            || h.ssh_target.is_none()
+            || !crate::host_command::valid_wsl_distro(distro)
+    }) {
+        return Err(HostsError::Namespace(v(
+            &h.id,
+            "-",
+            "wsl_distro",
+            "expected a distribution on a Linux SSH entry",
+        )));
+    }
     for (index, role) in h.roles.iter().enumerate() {
         if h.roles[..index].contains(role) {
             return Err(HostsError::DuplicateRole(v(

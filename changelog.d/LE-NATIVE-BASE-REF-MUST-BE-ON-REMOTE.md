@@ -1,0 +1,1 @@
+A native-codex run now starts from a `base_ref` that exists only in the host repository (an unpushed lane head, as in a fix round): the driver pins the pushed ref when `origin` has it and the host repository's own ref otherwise, and a ref found in neither place is refused by name before any worktree is made.

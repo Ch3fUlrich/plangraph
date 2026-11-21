@@ -70,7 +70,7 @@ def test_bootstrap_dry_run_writes_nothing(host):
 
 
 def test_count_precedes_install(host):
-    result, commands = host[0]()
+    result, commands = host[0]('--skip-ctx-watchdog')
     assert result.returncode == 0, result.stderr
     assert next(i for i, c in enumerate(commands) if 'tick --dry-run' in c) < next(i for i, c in enumerate(commands) if 'init-and-seed' in c) < next(i for i, c in enumerate(commands) if 'install --host linux' in c)
 
@@ -86,7 +86,7 @@ def test_count_failure_blocks_install(host, monkeypatch, failure):
 
 
 def test_default_path_never_calls_autoos(host):
-    result, commands = host[0]()
+    result, commands = host[0]('--skip-ctx-watchdog')
     assert result.returncode == 0
     assert not any('AutoOS' in c or 'setup' in c for c in commands)
     assert 'AutoOS' not in result.stderr
@@ -94,7 +94,7 @@ def test_default_path_never_calls_autoos(host):
 
 def test_fake_systemctl_enables_watchdog_only(host, monkeypatch):
     monkeypatch.setenv('REAL_INSTALL', '1')
-    result, commands = host[0]()
+    result, commands = host[0]('--skip-ctx-watchdog')
     assert result.returncode == 0, result.stderr
     assert [c for c in commands if ' enable ' in c] == ['systemctl --user enable --now plangraph-stall-watchdog.timer']
     assert 'systemctl --user disable --now plangraph-remote-probe.timer' in commands

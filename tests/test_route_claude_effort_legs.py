@@ -137,8 +137,12 @@ def test_explicit_claude_review_seat(tmp_path, leg_id):
 
 @pytest.mark.parametrize('leg_id', ['agy-claude-opus-5-5-high', 'cx-gpt-6.2-sol', *SOL, 'agy-gemini-4-hydrogen-high'])
 def test_explicit_writer_implement_allowed(tmp_path, leg_id):
+    card = {'estimate_tokens': 20000}
+    effort = leg_id.rsplit('-', 1)[-1]
+    if leg_id.startswith('cx-gpt-') and effort in ('high', 'xhigh', 'max'):
+        card.update(effort=effort, effort_decision='D-6397')
     result = asyncio.run(_svc(tmp_path).spawn(
-        card={'estimate_tokens': 20000}, prompt='Implement public code', role='implement',
+        card=card, prompt='Implement public code', role='implement',
         leg=leg_id, dry_run=True, override_reason='operator 2026-11-09 explicit writer'))
     assert result['chosen_leg']['id'] == leg_id
 
@@ -215,7 +219,7 @@ def test_effort_variant_gets_a_per_run_opencode_model(model):
 
 
 def test_effort_variant_takes_its_base_model_limit():
-    base = {'modelID': 'cx/gpt-6.2-sol', 'limit': {'context': 500000, 'output': 128000}}
+    base = {'modelID': 'cx/gpt-6.2-sol', 'limit': {'context': 1000000, 'output': 128000}}
     models = _render('omniroute/cx-gpt-6.2-sol-xhigh', {'cx-gpt-6.2-sol': base})
     assert models['cx-gpt-6.2-sol-xhigh']['limit'] == base['limit']
     assert models['cx-gpt-6.2-sol'] == base

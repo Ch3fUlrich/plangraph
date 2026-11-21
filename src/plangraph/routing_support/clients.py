@@ -40,6 +40,17 @@ AGY_REVIEW_SETTINGS = json.dumps({"permissions": {"allow": [
 STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
 
 
+def codex_model(model):
+    """(name, effort) the Codex client takes for a registered gpt leg model: OmniRoute's
+    ``omniroute/cx-`` alias is the plain id and a trailing effort suffix is the reasoning effort."""
+    if not model:
+        return None, None
+    name = model.removeprefix("omniroute/").removeprefix("cx-")
+    base, _, effort = name.rpartition("-")
+    from plangraph.planner.legs import CX_EFFORTS
+    return (base, effort) if base and effort in CX_EFFORTS else (name, None)
+
+
 def without_prompt_env(env):
     """Remove known legacy task carriers, not shell/theme/template configuration."""
     carriers = {'PROMPT', 'PROMPT_TEXT', 'PROMPT_SUFFIX', 'TASK_PROMPT', 'PLANGRAPH_TASK_PROMPT'}
@@ -342,7 +353,9 @@ def build_standalone_fallback_command(
             cmd.extend(["--model", model])
         return cmd
     if cname == "codex":
-        return ["codex", "exec", *(["--model", model] if model else []), "-"]
+        name, effort = codex_model(model)
+        return ["codex", "exec", *(["--model", name] if name else []),
+                *(["-c", f"model_reasoning_effort={effort}"] if effort else []), "-"]
     if cname in ("claude", "gemini", "qwen"):   # D-3605: claude takes its prompt on stdin, plan mode
         cmd = [cname, "-p", *([] if cname == "claude" else [""]), *(["--model", model] if model else [])]
         if cname == "claude" and model == "claude-sonnet-5-5-high":

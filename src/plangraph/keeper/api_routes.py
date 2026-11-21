@@ -30,7 +30,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "grant_apply", "revoke_apply",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                 "withdraw_review", "reopen", "set_kind", "set_metrics", "requeue",
-               "close_merged",
+               "close_merged", "close_merged_auto",
                # phase_plan is POST transport only; the verb is read-only (planner/phase.py)
                "governor_override", "phase_plan",
                # phase_finish mutates only GitHub, never the store; transport is POST
@@ -301,7 +301,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                     # Omission requests recovery; explicit JSON null is malformed.
                     body.get("families") if body.get("families", ()) is not None else (),
                     from_open=body.get("from_open", False), apply=body.get("apply", False),
-                    waive_seats=body.get("waive_seats")),
+                    waive_seats=body.get("waive_seats"), dry_run=body.get("dry_run", False)),
                 "replay": _replay,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,
@@ -321,8 +321,11 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 
 
 #: Write verbs whose store method checks the role itself and admits more than the
-#: router (set_metrics: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
+#: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
+                      "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
+                          principal, body.get("project"), require_seats=body.get("require_seats", True),
+                          apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True),
                       "close_on_decision": _close_on_decision,
                       "governor_override": _governor_override,
                       "phase_plan": _phase_plan,

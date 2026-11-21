@@ -2167,6 +2167,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-keeper-backup"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "pg-mainff"
 version = "0.1.0"
 dependencies = [
@@ -2279,6 +2287,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror",
+ "toml",
  "windows-sys 0.61.2",
 ]
 

@@ -87,6 +87,15 @@ class KeeperHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802 - stdlib signature
         self._request("GET")
 
+    def _warm_merge_scan(self, server):
+        """Fetch the scanned repositories before the request takes the lock; the verb itself answers any refusal."""
+        with suppress(Exception):
+            with server.lock:
+                principal = auth.authenticate(server.store.conn, self._token())
+                candidates = server.store.merge_candidates() if principal.role in ("system", "router") else None
+            if candidates is not None:
+                server.store.warm_merge_scan(candidates)
+
     def do_POST(self):  # noqa: N802 - stdlib signature
         self._request("POST")
 
@@ -147,6 +156,8 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 return  # 413 already sent
 
         server = self.server
+        if name == "close_merged_auto":
+            self._warm_merge_scan(server)
         with timing.RequestTimer(server.lock, "read" if method == "GET" else "write"):
             try:
                 try:

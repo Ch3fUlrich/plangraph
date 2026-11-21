@@ -23,7 +23,8 @@ from typing import Any, Callable, Mapping
 
 from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
-__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "valid_ref", "resolve_commit"]
+__all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "trailer_entries", "plan_items", "valid_ref",
+           "resolve_commit"]
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+\Z")
 _SHA_ARG_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
@@ -45,6 +46,44 @@ def valid_ref(ref: Any) -> bool:
     return bool(_REF_RE.fullmatch(ref))
 
 
+_TRAILER_LINE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*:[ \t]*\S")
+
+
+def trailer_lines(message: str) -> list[str]:
+    """The trailer lines of a commit message: its trailing paragraphs made only of ``Key: value`` lines.
+
+    Git reads only the last paragraph, so a ``Plan-Item`` and ``Writer`` paragraph followed by a
+    ``Co-Authored-By`` paragraph of its own would read as no trailers at all; both count here.
+    The subject paragraph and any prose paragraph end the block.
+    """
+    paragraphs = re.split(r"\n[ \t]*\n", (message or "").strip("\n"))
+    block: list[str] = []
+    for paragraph in reversed(paragraphs[1:]):
+        lines = paragraph.splitlines()
+        if not lines or not all(_TRAILER_LINE.match(line) or (n and line[:1] in " \t")
+                                for n, line in enumerate(lines)):
+            break
+        block[:0] = lines
+    return block
+
+
+def trailer_entries(message: str) -> list[tuple[str, str]]:
+    """``(key, value)`` per trailer of *message*; an indented line continues the value before it."""
+    entries: list[list[str]] = []
+    for line in trailer_lines(message):
+        if line[:1] in " \t" and entries:
+            entries[-1][1] += " " + line.strip()
+        else:
+            key, _, value = line.partition(":")
+            entries.append([key.strip(), value.strip()])
+    return [(key, value) for key, value in entries]
+
+
+def plan_items(message: str) -> list[str]:
+    """The ``Plan-Item`` values among :func:`trailer_entries` of *message* (a continued value is longer than a key)."""
+    return [value for key, value in trailer_entries(message) if key.lower() == "plan-item"]
+
+
 def parse_trailers(text: str) -> dict[str, str | list[str]]:
     """Parse ``git show -s --format=%(trailers)`` output into key → value.
 
@@ -53,8 +92,16 @@ def parse_trailers(text: str) -> dict[str, str | list[str]]:
     values bind a phase merge to each card; other keys retain last-value wins.
     """
     trailers: dict[str, str | list[str]] = {}
-    for line in text.splitlines():
-        line = line.strip()
+    last: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if raw[:1] in " \t" and line and last is not None:  # a continuation of the value before it
+            current = trailers[last]
+            if isinstance(current, list):
+                current[-1] += " " + line
+            else:
+                trailers[last] = current + " " + line
+            continue
         if not line or ":" not in line:
             continue
         key, _, value = line.partition(":")
@@ -63,10 +110,12 @@ def parse_trailers(text: str) -> dict[str, str | list[str]]:
             if key.lower() == "plan-item":
                 previous = next((k for k in trailers if k.lower() == "plan-item"), None)
                 if previous is not None:
-                    raw = trailers[previous]
-                    trailers[previous] = [*(raw if isinstance(raw, list) else [raw]), value]
+                    existing = trailers[previous]
+                    trailers[previous] = [*(existing if isinstance(existing, list) else [existing]), value]
+                    last = previous
                     continue
             trailers[key] = value
+            last = key
     return trailers
 
 
@@ -112,8 +161,10 @@ class GitAdapter:
         timeout: float = 30.0,
         clock: Callable[[], float] = time.monotonic,
         fetch_interval: float = 60.0,
+        merge_scan: list[str] | None = None,
     ) -> None:
         self._repos = dict(repos or {})
+        self._merge_scan = None if merge_scan is None else list(merge_scan)
         self._git = git
         self._timeout = float(timeout)
         self._clock = clock
@@ -122,6 +173,11 @@ class GitAdapter:
         self._last_fetch: dict[str, float] = {}
 
     # -- config -------------------------------------------------------------
+    def scan_projects(self) -> list[str]:
+        """The projects whose repositories the merged-on-default scan reads (all registered by default)."""
+        names = self._repos if self._merge_scan is None else self._merge_scan
+        return sorted(name for name in names if name in self._repos)
+
     def repo_path(self, project: str) -> str | None:
         """Return the registered repository path for *project*, or ``None``."""
         entry = self._repos.get(project)
@@ -423,12 +479,10 @@ class GitAdapter:
     def trailers(self, repo: str, sha: str) -> dict[str, str]:
         if not valid_commit_ref(sha) or not self._commit_object(repo, sha):
             return {}
-        proc = self._run(
-            repo, ["show", "-s", "--format=%(trailers)", "--end-of-options", sha]
-        )
+        proc = self._run(repo, ["show", "-s", "--format=%B", "--end-of-options", sha])
         if proc.returncode != 0:
             return {}
-        return parse_trailers(proc.stdout)
+        return parse_trailers("\n".join(f"{key}: {value}" for key, value in trailer_entries(proc.stdout)))
 
     def changed_paths(self, repo: str, sha: str) -> list[str]:
         """Exact changed paths (including both sides of renames); raise on error."""
@@ -503,6 +557,22 @@ class GitAdapter:
         if trailers.get("Hand-Edit") and not trailers.get("Writer"):
             trailers = dict(trailers, _writer_commit=sha)
         return trailers
+
+    def merge_plan_items(self, repo: str, sha: str) -> list[str]:
+        """``Plan-Item`` values of every commit *sha* introduced (first parent excluded), nested merges included.
+
+        Only a two-parent merge answers; anything else, or a git failure, answers nothing.
+        """
+        if not valid_commit_ref(sha) or not self._commit_object(repo, sha):
+            return []
+        parents = self._run(repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha])
+        if parents.returncode != 0 or len(_stdout(parents).split()) != 3:
+            return []
+        first = _stdout(parents).split()[1]
+        proc = self._run(repo, ["log", "--format=%B%x1d", "--end-of-options", sha, f"^{first}"])
+        if proc.returncode != 0:
+            return []
+        return [v for record in _stdout(proc).split("\x1d") for v in plan_items(record)]
 
     def writer_trailers(self, repo: str, sha: str, ref: str | None = None) -> list[dict[str, str]]:
         """Trailer dicts of the commits that authored the change behind *sha*.

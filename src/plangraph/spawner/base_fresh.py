@@ -4,8 +4,11 @@ import os
 import re
 import subprocess
 import time
+from contextvars import ContextVar
 
 ADMISSION_TIMEOUT = 180
+#: time.monotonic() at the start of the admission wait of the current spawn (set by admitted_spawn).
+ADMISSION_STARTED = ContextVar('admission_started', default=None)
 def _git_env():
     from .prompt_input import checkout_env
     return checkout_env()
@@ -21,6 +24,10 @@ def _check(repo, default=None, fetch=True, timeout=60, ref='HEAD'):
         if default is None:
             symbolic = git('symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD', check=False)
             default = symbolic.stdout.strip().removeprefix('refs/remotes/origin/') if symbolic.returncode == 0 else 'main'
+            # A clone of a lane checkout names a lane branch the remote lacks: unknown, not the default.
+            if default != 'main' and fetch and not default.startswith('-') \
+                    and git('ls-remote', '--exit-code', '--heads', 'origin', 'refs/heads/' + default, check=False).returncode == 2:
+                default = 'main'
         result['default_branch'] = default
         if not isinstance(default, str) or default.startswith('-'): return result
         git('check-ref-format', 'refs/heads/' + default)
@@ -139,7 +146,9 @@ async def admit_base(service, record, card, *, launch=False):
     if await accepted(result) and diff is not None:
         diff_repo = diff.get('repo') or repo
         same_repo = os.path.normcase(os.path.realpath(diff_repo)) == os.path.normcase(os.path.realpath(repo))
-        reviewed = await asyncio.to_thread(_check, diff_repo, fetch=not same_repo, ref=diff.get('head', ''))
+        # The cached check reuses the worker check's refs, so it also reuses its resolved default branch.
+        reviewed = await asyncio.to_thread(_check, diff_repo, default=result.get('default_branch') if same_repo else None,
+                                           fetch=not same_repo, ref=diff.get('head', ''))
         if not await accepted(reviewed):
             result = reviewed
     if await accepted(result):
@@ -195,6 +204,14 @@ def spawn_exit_code(record):
 
 async def admitted_spawn(service, payload):
     """The detached handshake acknowledges admission, not mere task creation."""
+    # Routing and record creation count against the window; tasks the spawn creates keep this
+    # value (they copy the context), the caller's own context is restored afterwards.
+    token = ADMISSION_STARTED.set(time.monotonic())
+    try:
+        return await _admitted_spawn(service, payload)
+    finally:
+        ADMISSION_STARTED.reset(token)
+async def _admitted_spawn(service, payload):
     prior_tasks = set(service.tasks)
     async def wait():
         record = await service.spawn(**payload, wait_seconds=0)

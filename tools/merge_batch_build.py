@@ -15,7 +15,7 @@ from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_pa
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, repo_info, save_state, short, state_dir, state_path,
-                              worktrees)
+                              workflow_gate, worktrees)
 
 
 def default_worktree(name):
@@ -274,6 +274,8 @@ def cmd_build(args):
     heads = fetch_heads(name, base, order, infos, repo)
     try:
         forced = rule_problems(args, base, [infos[num] for num in order], heads)
+        for num in order:  # a frozen batch push cannot be fixed by a history rewrite: refuse before the build
+            workflow_gate(None, f"{REMOTE}/{base}", f"refs/merge-batch/{name}/{num}")
     except MergeBatchError:
         drop_refs(name)
         raise

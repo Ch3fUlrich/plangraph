@@ -418,7 +418,7 @@ def test_not_go_refusal_names_the_merged_heads(w, monkeypatch, tmp_path):
 def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_path):
     from plangraph.keeper.evidence_git import GitAdapter
     repo = tmp_path / "other-repo"
-    heads = merged_repo(repo, [(165, "demo:A", "2026-11-01T12:00:00Z")])
+    heads = merged_repo(repo, [(165, None, "2026-11-01T12:00:00Z")])
     empty = tmp_path / "demo-repo"
     merged_repo(empty, [])
     w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
@@ -427,12 +427,75 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
     w.decision_path.write_text(HEADER + f"| D-5504 | demo | GO #165 demo:A; GO-HEAD {heads[165]} | ROUTER | 2026-11-05 |\n")
     with pytest.raises(Refused, match="merged_on_default_missing"):
         w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])
-    w.conn.execute("UPDATE items SET description=? WHERE key='demo:A'",
-                   ("Why: x\nHow: y\nMerge-Repo: other\n",))
+    router = w.p("router")
+    before = w.store._item("demo:A")
+    _git(repo, "checkout", "-qb", "unmerged")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "unmerged")
+    loose = _git(repo, "rev-parse", "HEAD")
+    for project, commit, reason in [
+            ("nowhere", heads[165], "merge_repo_unknown"),
+            ("other", loose, "merge_repo_commit_not_on_default")]:
+        w.store.edit_definition(router, "demo:A", {"note": f"Merge-Repo: {project} {commit}"})
+        assert w.store._item("demo:A")["state"] == "in_review"
+        with pytest.raises(Refused, match=reason):
+            w.store.close_merged(router, "demo:A", "D-5504", ["google"])
+        audit = w.conn.execute("SELECT msg FROM audit_log WHERE action='close_merged' ORDER BY id DESC LIMIT 1").fetchone()
+        assert reason in audit["msg"]
+    landed = _git(repo, "rev-parse", "main")
+    _git(repo, "checkout", "-qb", "later", "main")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "later work")
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "later merge (#166)", "later")
+    w.store.edit_definition(router, "demo:A", {"note": f"Merge-Repo: other {landed}"})
+    edited = w.store._item("demo:A")
+    assert [edited[f] for f in ("state", "epoch", "round")] == [before[f] for f in ("state", "epoch", "round")]
     assert w.store.close_merged(w.p("router"), "demo:A", "D-5504", ["google"])["state"] == "done"
+    audit = w.conn.execute("SELECT msg FROM audit_log WHERE action='close_merged' ORDER BY id DESC LIMIT 1").fetchone()
+    assert "merged_on_default" in audit["msg"]
     w.conn.execute("UPDATE items SET description=? WHERE key='demo:H'", ("Merge-Repo: nowhere",))
     with pytest.raises(Refused, match="merge_repo_unknown"):
         w.store.close_merged(w.p("router"), "demo:H", "D-5504", ["google", "deepseek"])
+
+
+@pytest.mark.parametrize("state", ["MERGED", "OPEN", "CLOSED"])
+def test_merge_repo_note_verifies_a_hosted_pr(w, monkeypatch, tmp_path, state):
+    import json
+    import subprocess
+
+    from plangraph.keeper.evidence_git import GitAdapter
+    repo = tmp_path / "other"
+    heads = merged_repo(repo, [(165, None, "2026-11-01T12:00:00Z")])
+    landed = _git(repo, "rev-parse", "main")
+    _git(repo, "remote", "add", "origin", "https://github.com/example/other")
+    empty = tmp_path / "demo"
+    merged_repo(empty, [])
+    w.store.ctx["git"] = GitAdapter({"demo": {"path": str(empty), "ref": "main"},
+                                     "other": {"path": str(repo), "ref": "main"}})
+    monkeypatch.setattr("plangraph.keeper.context_sources.plan_item_commits", w.real_plan_item_commits)
+    w.decision_path.write_text(
+        HEADER + f"| D-5504 | demo | GO other PR #165 demo:A; GO-HEAD {heads[165]} | ROUTER | 2026-11-05 |\n")
+    calls = []
+    run = subprocess.run
+
+    def hosted(args, **kwargs):
+        if args[0] != "gh":
+            return run(args, **kwargs)
+        calls.append(args)
+        info = {"state": state, "mergeCommit": {"oid": landed}, "headRefOid": heads[165]}
+        return subprocess.CompletedProcess(args, 0, json.dumps(info))
+
+    monkeypatch.setattr(subprocess, "run", hosted)
+    router = w.p("router")
+    w.store.edit_definition(router, "demo:A", {"note": "Merge-Repo: other #165"})
+    if state == "MERGED":
+        result = w.store.close_merged(router, "demo:A", "D-5504", ["google"])
+        assert result["state"] == "done"
+    else:
+        with pytest.raises(Refused, match=r"merge_repo_pr_not_merged: other #165"):
+            w.store.close_merged(router, "demo:A", "D-5504", ["google"])
+        assert w.store._item("demo:A")["state"] == "in_review"
+    assert calls and all(args[1:6] == ["pr", "view", "165", "--repo", "example/other"]
+                         for args in calls)
 
 
 WAIVER = ("| D-6400 | demo | Waiver: merged-without-witnesses (operator order); Date: 2026-11-20T14:55:00Z; "

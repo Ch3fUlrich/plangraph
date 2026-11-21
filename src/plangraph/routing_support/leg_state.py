@@ -237,6 +237,8 @@ class LegStateStore:
         leg = quota_key(leg)
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
+        if reset is not None and leg.startswith(('agy:', 'agy/')) and 'individual quota reached' in line.lower():
+            leg, combo = 'agy:account-wide', None
         if reset is None and down_s is not None:
             # D-3605 (a): no provider reset time; _down_seconds is capped, so
             # the fallback stays inside RESET_CAP_S like every other booking.
@@ -260,6 +262,15 @@ class LegStateStore:
         try:  # Read-only: no database creation or expiry mutation.
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
+                if leg.startswith(('agy:', 'agy/')):
+                    pool = db.execute(
+                        "SELECT * FROM leg_events WHERE leg_key='agy:account-wide' "
+                        "AND (account IS NULL OR account IS ?) AND ts<=? AND reset_at>? "
+                        "ORDER BY reset_at DESC,id DESC LIMIT 1", (account, now, now)).fetchone()
+                    if pool is not None:
+                        return {"state": "limited", "evidence": dict(
+                            {k: pool[k] for k in ('status', 'body_excerpt', 'reset_at', 'ts', 'caller')},
+                            event_id=pool['id'], quota_scope='account')}
                 rows = db.execute(
                     "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
                     (*keys, account, combo, now))

@@ -310,6 +310,13 @@ def _ci_conclusion(runs: Any, commit: str) -> str | None:
     return None
 
 
+def _plan_items(trailers: Any) -> list:
+    """The ``Plan-Item`` values of one trailer mapping (a key may repeat as a list)."""
+    return [value for key, raw in (trailers.items() if isinstance(trailers, dict) else [])
+            if str(key).lower() == "plan-item"
+            for value in (raw if isinstance(raw, list) else [raw])]
+
+
 class CommitCiVerifier:
     """A commit on the target ref merged via PR for this item, descending from ancestry floor, CI green."""
 
@@ -358,9 +365,14 @@ class CommitCiVerifier:
         except Exception:  # noqa: BLE001
             trailers = {}
         wanted = [value for value in (item.get("key"), item.get("id")) if value]
-        values = [value for key, raw in (trailers.items() if isinstance(trailers, dict) else [])
-                  if str(key).lower() == "plan-item"
-                  for value in (raw if isinstance(raw, list) else [raw])]
+        values = _plan_items(trailers)
+        if not any(value in wanted for value in values):
+            # A merge made without trailers (the hosted UI merge) stands for the
+            # commits of its branch range: any of them naming the item binds it.
+            try:
+                values = values + list(ctx.git.merge_plan_items(repo, commit))
+            except Exception:  # noqa: BLE001 - an unreadable range never binds
+                pass
         if not any(value in wanted for value in values):
             label = item.get("key") or item.get("id")
             return _fail(
@@ -773,7 +785,7 @@ def default_context(config: Any, *, now: float | None = None) -> Context:
     if forgejo_url and forgejo_token_file:
         forgejo = ForgejoStatusAdapter(str(forgejo_url), str(forgejo_token_file))
     context = Context(
-        git=GitAdapter(_cfg(config, "repos", {}) or {}),
+        git=GitAdapter(_cfg(config, "repos", {}) or {}, merge_scan=_cfg(config, "merge_scan")),
         ci=CIAdapter(_cfg(config, "ci", {}) or {}, forgejo=forgejo),
         runs=RunRecordAdapter(_cfg(config, "runs_dir")),
         semaphore=SemaphoreAdapter(),

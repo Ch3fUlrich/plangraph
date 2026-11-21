@@ -45,6 +45,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         push_ref: None,
         reviews_started: 0,
         review_cli: vec!["false".into()],
+        python_src: None,
     };
     output(Command::new("git").arg("init").arg(&host.cwd)).unwrap();
     fs::write(
@@ -148,6 +149,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         push_ref: None,
         reviews_started: 0,
         review_cli: vec!["false".into()],
+        python_src: None,
     };
     host.git(&["init"]).unwrap();
     let commit = |message: &str| {
@@ -223,7 +225,8 @@ fn stored_accept_with_changed_path_or_file_line_is_accepted() {
 
 #[test]
 fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
-    struct Weak;
+    /// The writer commits during its first turn: HEAD is the base until `execute` ran.
+    struct Weak(bool);
     impl crate::native_writer::Driver for Weak {
         fn prepare(&mut self) -> Result<String, String> {
             Ok("base".into())
@@ -236,10 +239,11 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
         }
         fn execute(&mut self, session: Option<&str>, _: &str) -> Result<String, String> {
             assert!(session.is_none(), "weak review must not resume the writer");
+            self.0 = true;
             Ok("session".into())
         }
         fn head(&mut self) -> Result<String, String> {
-            Ok("head".into())
+            Ok(if self.0 { "head" } else { "base" }.into())
         }
         fn fast_checks(&mut self, _: &str) -> Result<(), String> {
             Ok(())
@@ -259,7 +263,7 @@ fn native_weak_review_exits_as_missing_verdict_without_running_gates() {
             Ok(())
         }
     }
-    let record = crate::native_writer::run(&mut Weak, json!({}), "brief");
+    let record = crate::native_writer::run(&mut Weak(false), json!({}), "brief");
     assert_eq!(record["exit_code"], 4);
     let reason = record["reason"].as_str().unwrap();
     assert!(reason.starts_with("weak_verdict") && reason.ends_with(": weak_verdict"));
@@ -291,8 +295,10 @@ fn writer_effort_is_medium_unless_a_decision_names_a_higher_one() {
         .unwrap_err()
         .starts_with("effort_invalid"));
     assert_eq!(model_args("high")[3], "model_reasoning_effort=high");
+    assert_eq!(model_args(WRITER_EFFORT)[5], "model_context_window=1000000");
 }
 
+#[cfg(unix)]
 #[test]
 fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     let dir = tempfile::tempdir().unwrap();
@@ -333,10 +339,50 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
         &["update-ref", "refs/plangraph/native/run-host/base", &base],
     );
     fs::create_dir_all(cwd.join("src")).unwrap();
-    fs::write(cwd.join("src/lib.rs"), "// writer\n").unwrap();
+    fs::write(
+        cwd.join("src/lib.rs"),
+        "// fixture_symbol is documented here\nfn caller() {\n    fixture_symbol();\n}\n",
+    )
+    .unwrap();
     git(&cwd, &["add", "src/lib.rs"]);
-    git(&cwd, &["commit", "-q", "-m", "writer"]);
+    git(
+        &cwd,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "writer\n\nWriter: gemini-4-hydrogen-high run-6f00f4b3",
+        ],
+    );
+    fs::write(cwd.join("src/more.rs"), "pub fn fixture_symbol() {}\n").unwrap();
+    git(&cwd, &["add", "src/more.rs"]);
+    git(
+        &cwd,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "claude\n\nWriter: claude-opus-5-5 session_abc",
+        ],
+    );
     let head = git(&cwd, &["rev-parse", "HEAD"]);
+    // The review skill of the checkout (the working-tree copy: this fixture has no origin/main).
+    // (Joined from parts: a fixture file, not a repository input of the CI selector.)
+    let skill_dir = cwd.join("skills").join("review");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "REVIEW-SKILL-FIXTURE-LINE\n").unwrap();
+    // The writer's checkout carries a planted family table: it must never be imported.
+    // (File names are assembled: they are fixtures, not Python inputs of the CI selector.)
+    let py = |stem: &str| format!("{stem}.{}", "py");
+    let planted = cwd.join("src/plangraph");
+    fs::create_dir_all(planted.join("review")).unwrap();
+    fs::write(planted.join(py("__init__")), "").unwrap();
+    fs::write(planted.join("review").join(py("__init__")), "").unwrap();
+    fs::write(
+        planted.join("review").join(py("family")),
+        "def model_family(model):\n    return 'planted'\n",
+    )
+    .unwrap();
     let state = dir.path().join("state");
     let cli = dir.path().join("review-cli.py");
     fs::write(
@@ -346,10 +392,33 @@ argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
 assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
-assert value('--writer-family') == 'openai' and 'cwd' in card
+families = [argv[i + 1] for i, a in enumerate(argv) if a == '--writer-family']
+# The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
+assert sorted(families) == ['anthropic', 'google', 'openai'], families
+assert 'cwd' not in card
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 head = card['diff_ref']['head']
+repo = pathlib.Path(card['diff_ref']['repo'])
+assert repo != pathlib.Path.cwd()
+assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
+assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
+assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
+skill, context = prompt.index('REVIEW-SKILL-FIXTURE-LINE'), prompt.index('=== ITEM CONTEXT')
+assert prompt.index('Rules:') < skill < context, prompt  # the review skill is a rule, ahead of the context
+assert 'Item key: plangraph:HOST-TEST-ITEM' in prompt, prompt
+assert 'Done criteria: By test: first line\nsecond criteria line\n' in prompt, prompt  # multi-line, whole
+assert 'Invariants named by the item: never push\n' in prompt, prompt
+assert 'Exact base SHA: ' + card['diff_ref']['base'] + '\n' in prompt, prompt
+assert 'Exact head SHA: ' + head + '\n' in prompt, prompt
+assert 'Changed public symbols: fixture_symbol\n' in prompt, prompt
+assert 'fixture_symbol: src/lib.rs:3\n' in prompt, prompt  # the code use, not the comment or the definition
+import re
+log = re.search(r'fast checks \(exact head\): ([^;\s]+)', prompt).group(1)
+assert log.endswith('/fast-checks/' + head + '.log') and '== ci_commit_gate.py' in pathlib.Path(log).read_text(), prompt
+excerpt = re.search(r'with their cargo runs: (\S+\.session\.log)', prompt).group(1)
+assert excerpt.endswith('/fast-checks/' + head + '.session.log') and 'cargo test: 3 passed' in pathlib.Path(excerpt).read_text(), prompt
+assert '== ci_commit_gate.py (exit status: 0)' in pathlib.Path(log).read_text(), prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'
@@ -371,10 +440,12 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         tool_path: std::env::var("PATH").unwrap(),
         effort: WRITER_EFFORT.into(),
         state: state.clone(),
-        brief: "the item brief".into(),
+        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n"
+            .into(),
         push_ref: None,
         reviews_started: 0,
         review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
+        python_src: Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")),
     };
     assert!(!host.stamped(&head));
     // A red commit-trailer gate fails the fast checks without a stamp and blocks the final gates.
@@ -386,6 +457,13 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert!(!host.stamped(&head));
     assert!(host.gates().unwrap_err().starts_with("ci_commit_gate.py"));
     fs::remove_file(dir.path().join("gate-red")).unwrap();
+    // The writer session log of the turns that produced this head (cargo runs included).
+    fs::create_dir_all(state.join("runs/run-host")).unwrap();
+    fs::write(
+        state.join("runs/run-host/native.log"),
+        "cargo test: 3 passed\n",
+    )
+    .unwrap();
     host.fast_checks(&head).unwrap();
     assert!(host.stamped(&head));
     assert!(!host.stamped(&base));
@@ -448,4 +526,129 @@ fn card_refusals_exit_five_before_codex_starts() {
         );
         assert!(!dir.path().join("state/runs/run-card/native.log").exists());
     }
+}
+#[cfg(unix)]
+#[test]
+fn a_failing_command_carries_its_stdout_and_stderr() {
+    let error = output(Command::new("sh").args([
+        "-c",
+        "echo 'stdout line: gate output'; echo 'stderr line' >&2; exit 3",
+    ]))
+    .unwrap_err();
+    assert!(error.contains("exit status: 3"), "{error}");
+    assert!(
+        error.contains("stdout: stdout line: gate output"),
+        "{error}"
+    );
+    assert!(error.contains("stderr: stderr line"), "{error}");
+    // A tool that prints nothing still names the exit status.
+    let error = output(&mut Command::new("false")).unwrap_err();
+    assert!(
+        error.starts_with("command failed (exit status: 1)"),
+        "{error}"
+    );
+}
+
+#[test]
+fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let record_dir = dir.path().join("runs/run-x");
+    fs::create_dir_all(&record_dir).unwrap();
+    let host = Host {
+        repo: dir.path().to_path_buf(),
+        run_id: "run-x".into(),
+        cwd: dir.path().to_path_buf(),
+        reviews: dir.path().join("reviews"),
+        record_path: record_dir.join("record.json"),
+        base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.path().to_path_buf(),
+        brief: "brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
+        python_src: None,
+    };
+    let stamp = dir.path().join("fast-checks").join("h1");
+    fs::create_dir_all(stamp.parent().unwrap()).unwrap();
+    // No session log: no excerpt, so the brief names none.
+    host.session_excerpt(&stamp).unwrap();
+    assert!(!stamp.with_extension("session.log").exists());
+    // Each stamped head gets only the turns written since the previous one.
+    fs::write(record_dir.join("native.log"), "turn one\n").unwrap();
+    host.session_excerpt(&stamp).unwrap();
+    fs::write(record_dir.join("native.log"), "turn one\nturn two\n").unwrap();
+    let second = dir.path().join("fast-checks").join("h2");
+    host.session_excerpt(&second).unwrap();
+    assert_eq!(
+        fs::read_to_string(stamp.with_extension("session.log")).unwrap(),
+        "turn one\n"
+    );
+    assert_eq!(
+        fs::read_to_string(second.with_extension("session.log")).unwrap(),
+        "turn two\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("worktree");
+    fs::create_dir_all(cwd.join("tools")).unwrap();
+    let git = |args: &[&str]| {
+        output(
+            Command::new("git")
+                .arg("-C")
+                .arg(&cwd)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "fixture")
+                .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+                .env("GIT_COMMITTER_NAME", "fixture")
+                .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid"),
+        )
+        .unwrap()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    fs::write(
+        cwd.join("tools/ci_commit_gate.py"),
+        "import pathlib, sys\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "one"]);
+    let run = dir.path().join("runs/run-x");
+    fs::create_dir_all(&run).unwrap();
+    let mut host = Host {
+        repo: cwd.clone(),
+        run_id: "run-x".into(),
+        cwd: cwd.clone(),
+        reviews: dir.path().join("reviews"),
+        record_path: run.join("record.json"),
+        base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.path().to_path_buf(),
+        brief: "brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
+        python_src: None,
+    };
+    git(&["update-ref", &host.base_pin(), "HEAD"]);
+    // Head B: cargo output in the session, then a red gate.
+    fs::write(run.join("native.log"), "cargo B failed\n").unwrap();
+    fs::write(dir.path().join("gate-red"), "").unwrap();
+    git(&["commit", "-q", "--allow-empty", "-m", "B"]);
+    let head_b = git(&["rev-parse", "HEAD"]);
+    assert!(host.fast_checks(&head_b).is_err());
+    // Head C fixes it: only its own turns are its excerpt.
+    fs::write(run.join("native.log"), "cargo B failed\ncargo C passed\n").unwrap();
+    fs::remove_file(dir.path().join("gate-red")).unwrap();
+    git(&["commit", "-q", "--allow-empty", "-m", "C"]);
+    let head_c = git(&["rev-parse", "HEAD"]);
+    host.fast_checks(&head_c).unwrap();
+    let excerpt = host.stamp(&head_c).unwrap().with_extension("session.log");
+    assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
 }

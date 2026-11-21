@@ -32,6 +32,8 @@ pub(crate) trait Driver {
 const REVIEW_TRIES: usize = 3;
 /// Fast-check fix turns per head before the run fails.
 const FAST_CHECK_FIXES: usize = 2;
+/// Resumes after turns that left no commit beyond the base before the run fails.
+const NO_COMMIT_RESUMES: usize = 2;
 /// Stop rule after a REQUEST_CHANGES round, given the confirmed HIGH+MED count of every
 /// round so far: the round progress rule of `round_progress`, applied to the round just
 /// finished. The one seam a later stop rule replaces.
@@ -188,14 +190,35 @@ fn writer_attempt(
     record: &mut Value,
     prompt: &str,
 ) -> Result<i32, (i32, String)> {
+    // HEAD before the turn: a relaunch keeps the commits of the earlier attempts.
+    let mut turn_start = driver.head().map_err(|e| (6, e))?;
     let session = driver.execute(None, prompt).map_err(|e| (6, e))?;
     record["session_id"] = json!(session);
     record["resumes"] = json!(0);
     let mut fixes = 0;
+    let mut idle = 0;
     loop {
         let head = driver.head().map_err(|e| (6, e))?;
         record["final_head"] = json!(head);
         driver.save(record).map_err(|e| (6, e))?;
+        // No new commit since the turn began: the gates would rerun on the same head, or only
+        // report an empty range. Send the writer back to its items instead of resuming it on
+        // a failure it did not cause, or spending a review round on the same commit.
+        if head == turn_start {
+            idle += 1;
+            if idle > NO_COMMIT_RESUMES || session.is_empty() {
+                return Err((
+                    7,
+                    format!(
+                        "no_commit: the writer ended its turn without a new commit after {head}"
+                    ),
+                ));
+            }
+            resume(driver, record, &session, &format!("No commit yet (HEAD is still {head}): continue with the items of your brief and the failures or findings above, commit your work and end your turn; keep this session."))?;
+            continue;
+        }
+        idle = 0;
+        turn_start = head.clone();
         if let Err(failure) = driver.fast_checks(&head) {
             record["fast_checks"] = json!({"head":head, "status":"failed", "output":failure});
             fixes += 1;

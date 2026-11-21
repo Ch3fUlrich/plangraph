@@ -13,9 +13,10 @@ def enabled():
 def default_reader():
     from .leg_state import LegAdapter, _default_store
     from .omniroute_state import from_env
-    from .quota_snapshots import QuotaGate
+    from .quota_snapshots import CACHE_S, QuotaGate
     reader = LegAdapter(_default_store(), from_env(), enabled=enabled())
-    original, gate = reader.leg_status, QuotaGate()
+    # A local snapshot can change between routing and launch. Cache only the remote API.
+    original, gate = reader.leg_status, QuotaGate(ttl_s=0 if os.environ.get('QUOTA_SNAPSHOT_DB') else CACHE_S)
     def status(model, **scope):
         result = original(model, **scope)
         if result.get('reason') in ('unknown', 'unreachable', 'stale') or (result.get('reason') or '').startswith('leg_state_snapshot_error:'):
@@ -26,7 +27,8 @@ def default_reader():
 
 
 def initialize(service, reader, boundary):
-    service.leg_reader = reader = default_reader() if reader is None and enabled() else reader
+    service.leg_reader = reader = default_reader() if reader is None and (
+        enabled() or os.environ.get('QUOTA_SNAPSHOT_DB')) else reader
     service.hung = boundary(reader)
     return reader
 

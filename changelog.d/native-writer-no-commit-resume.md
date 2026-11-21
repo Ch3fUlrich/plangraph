@@ -1,0 +1,1 @@
+- Native writer: a turn that leaves HEAD at the base is resumed with the items of its brief and runs no gate; a failing gate carries the tool's full stdout and stderr; `codex-host-readiness` reports a placeholder git identity (`x <x@example.invalid>`) as not ready.

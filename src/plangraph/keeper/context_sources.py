@@ -21,9 +21,11 @@ import re
 import subprocess
 import threading
 import time
+from urllib.parse import urlsplit
 
+from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell
-from .evidence_git import valid_ref
+from .evidence_git import plan_items, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
@@ -44,6 +46,11 @@ def subject_pr(subject):
     """The PR number of a merge subject: the trailing ``(#N)``, else the first ``#N``, else None."""
     match = _PR_TRAILING_RE.search(subject) or _PR_RE.search(subject)
     return int(match.group(1)) if match else None
+
+
+MERGE_REPO_LINE = re.compile(
+    r"[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)"
+    r"(?:[ \t]+([a-fA-F0-9]{40}|#[1-9][0-9]*))?[ \t]*")
 _DID_RE = re.compile(r"(?<![\w-])[Dd]-0*(\d{1,6})(?!\d)")
 # Row 40 "supersedes / corrects / withdraws / replaces D-12" retires D-12.
 _SUPERSEDES_RE = re.compile(
@@ -112,7 +119,7 @@ def _split(key):
     return (project or None), bare
 
 
-def work_index(git, project, *, fresh=False):
+def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
     Read all commit trailers and topology together, including hosted open PR
@@ -124,7 +131,11 @@ def work_index(git, project, *, fresh=False):
     cache = getattr(git, "_context_work_index", {})
     cache_key = (repo, ref)
     hit = cache.get(cache_key)
-    if not fresh and hit and time.monotonic() - hit[0] < _REFS_TTL:
+    if cached_only:  # a caller holding the keeper lock: the warm answer or nothing, never git or the forge
+        if hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
+            return hit[1]
+        raise Refused("evidence_unverified", f"merge_index_not_warm: {project}")
+    if not fresh and hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
         return hit[1]
     problems = []
     verified_at = (hit[1].get("verified_at") if hit else None)
@@ -143,9 +154,7 @@ def work_index(git, project, *, fresh=False):
         else:
             problems.append("origin target ref unavailable")
     origin_stale = bool(problems)
-    from urllib.parse import urlsplit
-    if (origin.startswith("git" + "@" + "github.com:")
-            or urlsplit(origin.strip()).hostname == "github.com"):
+    if _github_repo(origin.strip()):
         try:
             proc = subprocess.run(
                 ["gh", "pr", "list", "--state", "open", "--limit", "10000",
@@ -170,7 +179,7 @@ def work_index(git, project, *, fresh=False):
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
     out = _ok(git, repo, ["log", "--all", "--no-show-signature",
-                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d"])
+                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
     if refs_out is None or target is None or out is None:
         if not origin:
             return None
@@ -182,7 +191,7 @@ def work_index(git, project, *, fresh=False):
         if len(fields) == 5 and valid_commit_ref(fields[0]):
             sha, parents, date, subject, trailers = fields
             records[sha] = (parents.split(), {"sha": sha, "date": date,
-                            "subject": subject}, trailers.split("\x1e"))
+                            "subject": subject}, plan_items(trailers))
 
     def ancestors(head):
         seen, todo = set(), [head]
@@ -287,7 +296,7 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
         "log", "--no-show-signature", "-E", "--grep",
         f"^Plan-Item:[[:space:]]*{prefix}{_ere(bare)}[[:space:]]*$",
         *(["-n", str(_GREP_WINDOW)] if limit is not None else []),
-        "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d",
+        "--format=%H%x1f%cI%x1f%s%x1f%B%x1d",
         "--end-of-options", ref])
     if out is None:
         return None
@@ -298,7 +307,7 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
             continue
         seen += 1
         sha, date, subject, trailers = fields
-        names = {value.strip() for value in trailers.split("\x1e") if value.strip()}
+        names = set(plan_items(trailers))
         if (key in names or bare in names) and valid_commit_ref(sha.strip()):
             commits.append({"sha": sha.strip(), "date": date, "subject": subject})
         if limit is not None and len(commits) >= limit:
@@ -314,6 +323,16 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
 
 def _merge_of(git, repo, ref, sha):
     """The first-parent merge on *ref* that introduced *sha*, or ``None``."""
+    # A merge commit on the ref's first-parent chain (a batch merge that carries
+    # the trailers itself) introduced itself, however many merges came after it.
+    parents = (_ok(git, repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]) or "").split()
+    if len(parents) > 2:
+        chain = _ok(git, repo, ["rev-list", "--first-parent", "--merges", "--end-of-options", f"{sha}^..{ref}"])
+        if chain is not None and sha in chain.split():
+            subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
+                                       "--end-of-options", sha]) or "").strip()
+            match = _PR_RE.search(subject)
+            return {"sha": sha, "subject": subject, "pr": int(match.group(1)) if match else None}
     # Combining --ancestry-path with --first-parent prunes paths through
     # second parents (nested batches and PR branches refreshed from main).
     # Walk ancestry separately, then intersect with the ref's landing merges.
@@ -379,6 +398,60 @@ def pr_merge_of(git, project, head, *, fallback_pr=None):
     return {"pr": fallback_pr, "merge": merge["sha"], "head": head}
 
 
+def named_merge(git, project, revision):
+    """Verify a named merge on the default ref. Refuse a PR known to be unmerged."""
+    repo, ref = _repo_ref(git, project)
+    if repo is None:
+        return None
+    pr = None
+    sha = revision.lower()
+    if revision.startswith("#"):
+        pr = int(revision[1:])
+        origin = _ok(git, repo, ["remote", "get-url", "origin"])
+        hosted = _github_repo((origin or "").strip())
+        if not hosted:
+            return None
+        try:
+            result = subprocess.run(
+                ["gh", "pr", "view", str(pr), "--repo", hosted,
+                 "--json", "state,mergeCommit,headRefOid"], cwd=repo, capture_output=True,
+                text=True, timeout=20, check=True)
+            info = json.loads(result.stdout)
+            if info["state"] in ("OPEN", "CLOSED"):
+                raise Refused("evidence_unverified",
+                              f"merge_repo_pr_not_merged: {project} {revision} ({info['state']})")
+            if info["state"] != "MERGED":
+                return None
+            sha = info["mergeCommit"]["oid"]
+            pr_head = info["headRefOid"]
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+            return None
+        if not valid_commit_ref(pr_head):
+            return None
+    if not valid_commit_ref(sha) or _git(
+            git, repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, ref])[0] != 0:
+        return None
+    if pr is not None:
+        return {"head": pr_head, "pr": pr}
+    introduced = _merge_of(git, repo, ref, sha)
+    landed = sha
+    if introduced:
+        on_first_parent = _git(git, repo, ["merge-base", "--is-ancestor",
+                                          "--end-of-options", sha, f"{introduced['sha']}^1"])[0]
+        if on_first_parent not in (0, 1):
+            return None
+        if on_first_parent == 1:
+            landed = introduced["sha"]
+    shown = _ok(git, repo, ["show", "-s", "--format=%P%x1f%s", "--end-of-options", landed])
+    if shown is None:
+        return None
+    parent_text, _, subject = shown.partition("\x1f")
+    parents = parent_text.split()
+    match = _PR_RE.search(subject)
+    return {"head": parents[1] if len(parents) == 2 else sha,
+            "pr": int(match[1]) if match else None}
+
+
 _REFS_LOCK = threading.Lock()
 _REFS = {}
 _REFS_TTL = 10.0
@@ -396,7 +469,7 @@ def _refs(git, repo, fresh=False):
         if not fresh and hit is not None and now - hit[0] < _REFS_TTL:
             return hit[1]
     out = _ok(git, repo, ["for-each-ref", f"--count={_REF_COUNT}",
-                          "--format=%(refname:short)", "refs/heads", "refs/remotes"])
+                          "--format=%(refname)", "refs/heads", "refs/remotes"])
     remotes = _ok(git, repo, ["remote"])
     if out is None or remotes is None:
         return None
@@ -409,7 +482,53 @@ def _refs(git, repo, fresh=False):
     return snapshot
 
 
-def open_lanes(git, project, key, fresh=False):
+def _github_repo(origin):
+    ssh = "git" + "@" + "github.com:"
+    try:
+        parsed = urlsplit(origin)
+    except ValueError:
+        return None
+    path = origin[len(ssh):] if origin.startswith(ssh) else (
+        parsed.path.strip("/") if parsed.hostname == "github.com" else "")
+    path = path.removesuffix(".git")
+    return path if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", path) else None
+
+
+def _closed_lane_pr(git, repo, hosted, branch, head):
+    """Return the verified closed PR number, zero for open work, None on error."""
+    fields = "number,state,headRefOid,isCrossRepository"
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "list", "--repo", hosted, "--head", branch, "--state", "all",
+             "--limit", "100", "--json", fields], cwd=repo, capture_output=True,
+            text=True, timeout=20, check=False)
+        prs = json.loads(result.stdout) if result.returncode == 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+    if not isinstance(prs, list) or len(prs) >= 100 or any(
+            not isinstance(pr, dict) or type(pr.get("number")) is not int
+            or pr["number"] <= 0 or pr.get("state") not in ("OPEN", "CLOSED", "MERGED")
+            or not valid_commit_ref(pr.get("headRefOid"))
+            or type(pr.get("isCrossRepository")) is not bool for pr in prs):
+        return None
+    own = [pr for pr in prs if not pr["isCrossRepository"]]
+    if any(pr["state"] == "OPEN" for pr in own):
+        return 0
+    for pr in own:
+        if pr["state"] != "CLOSED" or pr["headRefOid"] != head:
+            continue
+        ref = f"refs/pull/{pr['number']}/head"
+        branch_ref = "refs/heads/" + branch
+        live = _ok(git, repo, ["ls-remote", "origin", ref, branch_ref])
+        if live is None:
+            return None
+        refs = dict(reversed(line.split()) for line in live.splitlines() if len(line.split()) == 2)
+        if refs.get(ref) == head and refs.get(branch_ref, head) == head:
+            return pr["number"]
+    return 0
+
+
+def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, frozen=False):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -425,25 +544,50 @@ def open_lanes(git, project, key, fresh=False):
         return None
     names, remotes = snapshot
     slug = bare.lower()
-    lanes, seen = [], set()
-    for name in names:
-        if slug not in name.lower() or name == ref or not valid_ref(name):
+    lanes, closed_prs = {}, set()
+    verified = {} if cache is None else cache  # hosted-PR answers a caller keeps between calls
+    origin = None
+    for full in names:
+        remote_ref = full.startswith("refs/remotes/")
+        name = full.removeprefix("refs/remotes/" if remote_ref else "refs/heads/")
+        if slug not in name.lower() or ref in (name, full) or not valid_ref(full):
             continue
         head, _, rest = name.partition("/")
-        short = rest if head in remotes and rest else name
-        if short in seen:
-            continue
+        short = rest if remote_ref and head in remotes and rest else name
         code, _ = _git(git, repo, ["merge-base", "--is-ancestor",
-                                   "--end-of-options", name, ref])
+                                   "--end-of-options", full, ref])
         if code == 0:            # already on the ref: finished, not open
             continue
         if code != 1:            # git error: the whole answer is unknown
             return None
-        seen.add(short)
-        lanes.append(name)
+        if not remote_ref or head == "origin":
+            if origin is None:
+                origin = _ok(git, repo, ["remote", "get-url", "origin"]) if "origin" in remotes else ""
+                if origin is None:
+                    return None
+            hosted = _github_repo(origin.strip())
+            if hosted:
+                tip = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", full])
+                if tip is None or not valid_commit_ref(tip.strip()):
+                    return None
+                identity = (repo, hosted, short, tip.strip())  # a cache is shared between checkouts and their origins
+                if identity not in verified:
+                    if frozen:        # a warm answer that no longer matches is unknown, never a forge call
+                        return None
+                    verified[identity] = _closed_lane_pr(git, repo, hosted, short, tip.strip())
+                pr = verified[identity]
+                if pr is None:
+                    return None
+                if pr:
+                    closed_prs.add((short, pr))
+                    continue
+        lanes.setdefault(short, name)
         if len(lanes) >= _LANE_LIMIT:
             break
-    return lanes
+    if closed is not None:
+        closed.extend({"branch": branch, "pr": pr} for branch, pr in sorted(closed_prs)
+                      if branch not in lanes)
+    return list(lanes.values())
 
 
 # ------------------------------------------------------------ decisions

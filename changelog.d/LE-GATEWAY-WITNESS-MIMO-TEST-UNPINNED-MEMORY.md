@@ -1,0 +1,1 @@
+Every test in `tests/test_cli_gateway_witness.py` now runs with admission memory pinned by one autouse fixture, and the real-reader guard watches the `/proc/meminfo` open itself, so a test that patches `Path.read_text` for other files can no longer reach the host's real MemAvailable unnoticed.

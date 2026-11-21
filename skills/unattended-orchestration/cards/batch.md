@@ -38,12 +38,13 @@ R-batch-07: Admit runs only with at least 5 GB free on `/` on every host; stop r
   Share one Cargo target per host. (why: duplicated targets filled the disk and killed writers; source: routing DECISIONS 7.1 D-5946, plangraph:LE-WORKTREE-CARGO-TARGET-FILLS-DISK)
 R-batch-08: Place writers through spawner host admission and overflow using free RAM and disk, trying dell first; never use a host-local launcher.
   (why: a local launch left a free host idle; source: routing DECISIONS 7.1, plangraph:LE-PLAN-ORDER-WRITERS-BYPASS-HOST-PLACEMENT)
-R-batch-09: Combine heads with accepted part reviews and green fast gates using `tools/merge_batch.py build` and `push`.
+R-batch-09: Combine heads with accepted keeper-bound spawner reviews and green fast gates using `tools/merge_batch.py build` and `push`.
+  Record every part's run id with `review --run-id` before `go-req` and `land`.
   Run one full CI at the batch head and one review of the merge delta (remerge-diff) before `land`.
   Single-PR exceptions require the exact token in the GO row: `EXCEPTION:main-red-fix` (main red, merger's own fix),
   `EXCEPTION:only-one-ready-pr` (one PR ready and no other), or `EXCEPTION:operator-order` (operator order for that PR).
   (why: one CI and one GO replace per-PR gates; source: routing DECISIONS 3.39 D-5938, tools/merge_batch.py)
-R-batch-10: Send one GO request per batch naming its PR, full head sha, each part's review file and CI result; include the rule 3.17 block.
+R-batch-10: Send one GO request per batch naming its PR, full head sha, each part's keeper-bound review run and CI result. Include the rule 3.17 block.
   Its exact format is `PLAN <keeper key> conforms=yes|no deviations=<text|none>`; `conforms=no` requires stated deviations.
   Gate/workflow edits (GATE_PATHS in tools/ci_commit_gate.py) require a router Gate-Edit D-id. (why: routing compares one patch per GO; source: plangraph:BATCH-PORT-GO-REQ, docs/ci-gate.md)
 R-batch-11: Record every incident or workaround in the same beat: every session, router included, sends plan-order one line `LESSON <what> <evidence>`.
