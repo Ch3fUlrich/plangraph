@@ -78,6 +78,13 @@ directory. It runs the same gates and exact-head review before publishing the
 new result. The record keeps the previous outcome in `resume_from` and the
 ledger appends a row for the fix round's usage.
 
+Queue a scope change with `plangraph_agent_steer` using `run_id` and
+`message`, or pipe the message into
+`python3 -m plangraph.spawner.cli steer RUN_ID`. Both routes can take an
+explicit configured host when the parent lacks a local receipt. The worker
+prepends queued messages to its next Codex resume and records their delivery
+times in `steer_messages`. The receipt reports queue acceptance immediately.
+
 The live Rust supervisor persists a `manifest` in the run record before launching
 Codex: name (run ID), host, worktree, original brief, effort and `try_count`.
 A killed/crashed CLI, failed CLI execution (including exit 127), or exit without a

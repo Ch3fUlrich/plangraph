@@ -1,5 +1,5 @@
 use crate::errors::ToolError;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -22,6 +22,15 @@ impl Adapter<'_> {
         args: &[String],
         timeout: Duration,
     ) -> Result<(i32, Vec<u8>, String), ToolError> {
+        self.run_input(args, timeout, None)
+    }
+
+    pub(crate) fn run_input(
+        &self,
+        args: &[String],
+        timeout: Duration,
+        input: Option<&str>,
+    ) -> Result<(i32, Vec<u8>, String), ToolError> {
         let mut cmd = if let Some(program) = std::env::var_os("PG_SPAWND_ADAPTER") {
             if !Path::new(&program).is_absolute() {
                 return Err(ToolError::Internal("route adapter could not start".into()));
@@ -38,7 +47,11 @@ impl Adapter<'_> {
         cmd.arg("--state")
             .arg(self.0)
             .args(args)
-            .stdin(Stdio::null())
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(unix)]
@@ -48,6 +61,13 @@ impl Adapter<'_> {
         }
         let mut child = pg_worker_core::stall::spawn_retrying(&mut cmd)
             .map_err(|e| ToolError::Internal(format!("route adapter could not start: {e}")))?;
+        if let Some(input) = input {
+            let bytes = input.as_bytes().to_vec();
+            let mut stdin = child.stdin.take().unwrap();
+            std::thread::spawn(move || {
+                let _ = stdin.write_all(&bytes);
+            });
+        }
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
         let (send, receive) = std::sync::mpsc::channel();

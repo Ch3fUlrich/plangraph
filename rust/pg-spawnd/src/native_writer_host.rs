@@ -2,6 +2,8 @@
 use crate::native_writer::{self, Driver};
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
+#[cfg(test)]
+use std::path::Path;
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
@@ -9,8 +11,6 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
-#[cfg(test)]
-use std::path::Path;
 
 /// Lead writer leg cx-gpt-6.2-sol-medium (operator D-6397).
 const WRITER_MODEL: &str = "gpt-6.2-sol";
@@ -386,6 +386,13 @@ impl Driver for Host {
         // No force flag: the remote refuses anything but a fast-forward.
         self.git(&["push", "origin", &format!("{head}:{target}")])?;
         Ok(Some(target))
+    }
+    fn pending_steer(&self, record: &Value) -> Result<Vec<crate::native_steer::Message>, String> {
+        let directory = self
+            .record_path
+            .parent()
+            .ok_or("record directory missing")?;
+        crate::native_steer::pending(directory, record)
     }
     fn save(&mut self, record: &Value) -> Result<(), String> {
         let mut record = record.clone();

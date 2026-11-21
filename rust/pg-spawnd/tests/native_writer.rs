@@ -194,12 +194,19 @@ if 'resume' in sys.argv:
         assert 'sandbox_mode="danger-full-access"' in sys.argv
     else:
         assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
+        expected = not pathlib.Path('fix.txt').exists()
+        assert ('drop the fixture scope' in prompt) == expected, prompt
     # The fix turn commits its fix: a turn that leaves HEAD unchanged is resumed on its items.
     with open('fix.txt', 'a') as fix: fix.write('fixed after review\n')
     subprocess.run(['git','add','fix.txt'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fix'], check=True, stdout=subprocess.DEVNULL)
 else:
     import os
+    if 'reject marker' in prompt:
+        run = pathlib.Path.cwd().parent
+        queued = subprocess.run([os.environ['NATIVE_BINARY'], 'steer-local', run.name,
+            '--state', str(run.parent.parent)], input='drop the fixture scope', text=True, capture_output=True)
+        assert json.loads(queued.stdout)['steered'], (queued.stdout, queued.stderr)
     pathlib.Path('writer-path').write_text(os.environ['PATH'])
     pathlib.Path('writer.txt').write_text('written on selected host\n')
     subprocess.run(['git','add','writer.txt','writer-path'], check=True)
@@ -360,6 +367,12 @@ async def check():
             assert final['exit_code'] == 3 and final['review']['verdict'] == 'REQUEST_CHANGES', final
             assert final['round_stop'] == 'no_progress' and final['review_rounds'] == 3, final
             assert final['resumes'] == 2 and final['session_id'] == 'fixture-session', final
+            messages = final['steer_messages']
+            assert len(messages) == 1 and messages[0]['message'] == 'drop the fixture scope', messages
+            assert messages[0]['delivered_at'], messages
+            denied = subprocess.run([os.environ['NATIVE_BINARY'], 'steer-local', final['run_id'],
+                '--state', str(root/'state')], input='too late', text=True, capture_output=True)
+            assert json.loads(denied.stdout)['error'] == 'native writer is finished', denied.stdout
         elif status == 'failed':
             assert final['result'] == 'BLOCKED' and final['exit_code'] == 9, final
         else:

@@ -152,6 +152,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("resume") {
         return crate::native_writer_host::resume(rest, out);
     }
+    if verb.as_deref() == Some("steer-local") {
+        return crate::native_steer::local_cli(&rest, std::io::stdin(), out);
+    }
     if verb.as_deref() == Some("agents-view") {
         return crate::agent_view::execute(rest, out);
     }

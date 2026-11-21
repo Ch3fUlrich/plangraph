@@ -23,6 +23,9 @@ pub(crate) trait Driver {
         Ok(None)
     }
     fn save(&mut self, record: &Value) -> Result<(), String>;
+    fn pending_steer(&self, _record: &Value) -> Result<Vec<crate::native_steer::Message>, String> {
+        Ok(Vec::new())
+    }
     /// Skill text from origin/main of the run checkout; absent when unreadable.
     fn skill(&mut self, _name: &str) -> Result<String, String> {
         Err("skill unavailable".into())
@@ -193,9 +196,24 @@ fn resume(
     session: &str,
     prompt: &str,
 ) -> Result<(), (i32, String)> {
+    let messages = driver.pending_steer(record).map_err(|e| (7, e))?;
+    let prompt = if messages.is_empty() {
+        prompt.to_owned()
+    } else {
+        let steer = messages
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        format!("Parent steering messages for this run:\n\n{steer}\n\n{prompt}")
+    };
     record["resumes"] = json!(record["resumes"].as_u64().unwrap_or(0) + 1);
     driver.save(record).map_err(|e| (6, e))?;
-    driver.execute(Some(session), prompt).map_err(|e| (6, e))?;
+    driver.execute(Some(session), &prompt).map_err(|e| (6, e))?;
+    if !messages.is_empty() {
+        crate::native_steer::delivered(record, &messages);
+        driver.save(record).map_err(|e| (6, e))?;
+    }
     Ok(())
 }
 /// One review round on `head`: refused without the fast-checks stamp; a run without a
@@ -298,6 +316,15 @@ fn writer_attempt(
         }
         record["reviews"].as_array_mut().unwrap().push(summary);
         if record["review"]["verdict"] == "ACCEPT" {
+            if !driver.pending_steer(record).map_err(|e| (7, e))?.is_empty() {
+                if round_cap(record) || session.is_empty() {
+                    return Err((7, "steer pending after the final review round".into()));
+                }
+                resume(driver, record, &session, "Apply the parent steer to this package, commit any required changes and end your turn.")?;
+                if driver.head().map_err(|e| (7, e))? != head {
+                    continue;
+                }
+            }
             driver.gates().map_err(|e| (7, e))?;
             if driver.head().map_err(|e| (7, e))? != head {
                 return Err((7, "HEAD changed during final gates".into()));
