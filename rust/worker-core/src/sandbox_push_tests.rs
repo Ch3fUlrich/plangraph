@@ -33,9 +33,39 @@ fn environment_restores_on_panic() {
     assert_eq!(std::env::var_os(name), before);
 }
 
+const ISOLATED_CHILD: &str = "PG_PILOT_PARENT_ENV_CHILD";
+
+/// Run `test` in a one-test child of this test binary and report whether the caller is
+/// that child. Git controls and credentials set as the "parent environment" then live
+/// only in the child: parallel Git fixtures in this process never inherit them.
+fn parent_env_child(test: &str) -> bool {
+    if std::env::var_os(ISOLATED_CHILD).is_some() {
+        return true;
+    }
+    let name = format!(
+        "{}::{test}",
+        module_path!().split_once("::").map_or("", |(_, rest)| rest)
+    );
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--nocapture", "--test-threads=1"])
+        .env(ISOLATED_CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
 #[test]
 #[serial_test::serial(env)]
 fn pilot_credentials_absent_with_parent_positive_control() {
+    if !parent_env_child("pilot_credentials_absent_with_parent_positive_control") {
+        return;
+    }
     let root = tempfile::tempdir().unwrap();
     let source = root.path().join("source");
     std::fs::create_dir_all(source.join("sub")).unwrap();

@@ -31,6 +31,10 @@ EXIT_REFUSED = 2
 EXIT_UNREACHABLE = 3
 TIMEOUT = 15.0
 SLOW_TIMEOUT = 120.0  # close_merged reads git and the decisions log before it commits
+#: reads that build the whole plan view on the daemon (ready: 24 s measured on a
+#: 4285-item plan, behind the keeper lock); the 15 s default gave up on a read
+#: the daemon then finished.
+SLOW_READS = frozenset({"ready", "blocked", "waves"})
 NOTICE = "READ-ONLY fallback (keeper unreachable)"
 
 
@@ -148,7 +152,11 @@ class Session:
 
     def snapshot_path(self) -> Path:
         cfg = self.config
-        return Path(cfg.snapshot) if cfg else Path("plan.snapshot.json")
+        # No client config: the daemon's own default file, never the cwd.
+        if cfg:
+            return Path(cfg.snapshot)
+        from . import config as config_mod
+        return config_mod.default_snapshot()
 
     def local_snapshot(self) -> dict:
         try:   # M2B: the signature must verify when a snapshot_pubkey is configured
@@ -184,7 +192,8 @@ def _refuse(exc) -> int:
 def read(session, verb, params, renderer, local=None) -> int:
     """A read verb; falls back to the local snapshot when unreachable."""
     try:
-        return _emit(session, session.call("GET", verb, params), renderer)
+        return _emit(session, session.call(
+            "GET", verb, params, timeout=SLOW_TIMEOUT if verb in SLOW_READS else None), renderer)
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:
@@ -192,7 +201,11 @@ def read(session, verb, params, renderer, local=None) -> int:
             print(f"keeper unreachable: {exc}", file=sys.stderr)
             return EXIT_UNREACHABLE
         print(NOTICE, file=sys.stderr)
-        return local()
+        try:
+            return local()
+        except Unreachable as inner:   # no readable copy either: name it, no traceback
+            print(f"keeper unreachable: {exc}; {inner}", file=sys.stderr)
+            return EXIT_UNREACHABLE
 
 
 def write(session, verb, body, renderer=None) -> int:
@@ -233,7 +246,7 @@ def cmd_ready(args, session):
         try:
             result = session.call("GET", "ready", {"project": args.project, "n": n,
                 "owner": owner, "mine": 1 if mine else None,
-                "agent": 1 if agent else None})
+                "agent": 1 if agent else None}, timeout=SLOW_TIMEOUT)
             return _emit(session, {"needs_reconcile": result["needs_reconcile"]},
                          lambda r: fmt.ready_text([], server_items=True,
                              needs_reconcile=r["needs_reconcile"]))

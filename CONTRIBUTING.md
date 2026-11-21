@@ -240,6 +240,9 @@ or `end_turn` and `TEST_GAMING: no`; the hermetic posting regressions live in
 
 Historical seat discovery uses `python3 tools/seat_verdict.py --snapshot plan.snapshot.json --records-dir RECORDS` (equivalently, `--backfill-dry-run`). It is local and read-only by default; `--format json` emits structured outcomes, and `--pr-cache CACHE` supplies evidenced-commit-to-PR mappings without network access. Keeper writes require `--backfill-apply --url URL --token-dir TOKENS`; only apply may enable network PR lookup with `--pr-lookup-gh`. Backfill retains the existing verdict parser, exact-head binding, independent reviewer family and PASS safety gates. It shares the spawner's locked `verdict.json` / `verdict.delivered` outbox, so completed or ambiguous sends are never blindly replayed, including when the forward path already handled the record. A nonzero verifier result is terminal for automatic backfill replay; reconcile an ambiguous delivery before any operator-authorized retry. See [the historical backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md) for the original observations; Slice A has since supplied the forward completion bridge.
 
+Run the documented `tools/seat_verdict.py --repost-transport` workflow directly
+from a checkout. The tool loads its imports from `src/` when needed.
+
 Batch orchestration and guarded outbox delivery live in `tools/seat_backfill.py`,
 with compatibility re-exports at `seat_record.backfill` and
 `seat_verdict.apply_backfill`. Record parsing/discovery remain in `seat_record`;
@@ -663,3 +666,7 @@ denies:
 lines, a `SKILL.md` lacks frontmatter, or any skill text names a path under the
 retired routing folder. Skills read site values from the router
 config keys they name, never from absolute paths.
+
+`tools/apply_batch.py` also accepts a role-l1 token that holds a router-written apply grant
+(`pg grant-apply NAME PROJECT`); the keeper refuses any key outside the granted projects and posts
+one `granted_apply` report line per applied batch to `routing`.

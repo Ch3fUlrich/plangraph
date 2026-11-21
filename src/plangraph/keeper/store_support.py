@@ -158,7 +158,8 @@ class SupportMixin:
     def _append(self, principal, key, type, payload, now):
         out = events.append_event(
             self.conn, iso(now), getattr(principal, "name", None),
-            getattr(principal, "role", None), None, key, type, payload)
+            getattr(principal, "audit_role", None) or getattr(principal, "role", None),
+            None, key, type, payload)
         self._revoke_for_event(principal, key, type, now, payload)
         return out
 

@@ -27,6 +27,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "add_evidence", "add_evidence_router", "submit", "verdict",
                "cancel", "reap", "waive_second_family", "close_on_decision",
                "set_legacy_state", "apply_ops", "migrate_descriptions",
+               "grant_apply", "revoke_apply",
                "rehome", "record_run", "answer", "mint_run_token", "replay",
                 "withdraw_review", "reopen", "set_kind", "set_metrics", "requeue",
                "close_merged", "close_merged_auto",
@@ -40,7 +41,7 @@ WRITE_VERBS = {"create_items", "import_items", "edit_definition",
                "jev_shadow", "jev_outcome"}
 READ_VERBS |= _inbox.READ_VERBS      # RT-P1-INBOX-CODE: questions
 READ_VERBS.add("messages")
-READ_VERBS |= {"host_samples", "host_samples_range"}
+READ_VERBS |= {"host_samples", "host_samples_range", "apply_grants"}
 WRITE_VERBS |= {"ingest_host_sample", "mint_host_token", "revoke_host_token"}
 WRITE_VERBS.add("post_message")
 WRITE_VERBS |= _inbox.WRITE_VERBS    # ask_question, answer_question, resignal_question
@@ -56,6 +57,7 @@ READ_CALLS = {
     "answers": lambda store, who, project: store.answers(who, project=project),
     "progress": lambda store, who, project: store.progress(who, project=project),
     "jev_report": lambda store, who, project: store.jev_report(who, project=project),
+    "apply_grants": lambda store, who, project: {"grants": store.apply_grants(who)},
 }
 
 #: M2B: the only verbs a run token may even reach (the store narrows per role).
@@ -192,10 +194,19 @@ def _set_kind(store, principal, body, need):
     return store.set_kind(principal, need(body, "key"), body.get("kind"))   # role first (403)
 
 
+def _grant_verb(name):
+    def call(store, principal, body, need):
+        store._require_role(principal, "router")      # a non-router gets 403 first
+        return getattr(store, name)(principal, need(body, "principal"),
+                                    need(body, "project"))
+    return call
+
+
 def _apply_ops(store, principal, body, need):
     return store.apply_ops(principal, need(body, "ops"), body.get("batch_ref"),
                            base_seq=body.get("base_seq"),
-                           dry_run=body.get("dry_run"))
+                           dry_run=body.get("dry_run"),
+                           batch_name=body.get("batch"))
 
 
 def _migrate_descriptions(store, principal, body, need):
@@ -300,7 +311,8 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                     # Omission requests recovery; explicit JSON null is malformed.
                     body.get("families") if body.get("families", ()) is not None else (),
                     from_open=body.get("from_open", False), apply=body.get("apply", False),
-                    waive_seats=body.get("waive_seats"), dry_run=body.get("dry_run", False)),
+                    waive_seats=body.get("waive_seats"), dry_run=body.get("dry_run", False),
+                    require_seats=body.get("require_seats")),
                 "replay": _replay,
                 "withdraw_review": _withdraw_review,
                 "reopen": _reopen,
@@ -312,6 +324,8 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
                 "migrate_descriptions": _migrate_descriptions,
                 "set_legacy_state": _set_legacy_state,
                 "apply_ops": _apply_ops,
+                "grant_apply": _grant_verb("grant_apply"),
+                "revoke_apply": _grant_verb("revoke_apply"),
                 "record_run": _record_run}
 
 
@@ -319,7 +333,7 @@ ROUTER_VERBS = {"mint_run_token": _mint_run_token,
 #: router (set_metrics, close_merged_auto: router, system; governor_override: router, l1, system, spawner), so they are not in ROUTER_VERBS.
 ROLE_CHECKED_VERBS = {"set_metrics": _set_metrics,
                       "close_merged_auto": lambda store, principal, body, need: store.close_merged_auto(
-                          principal, body.get("project"), require_seats=body.get("require_seats", True),
+                          principal, body.get("project"), require_seats=body.get("require_seats"),
                           apply=body.get("apply", True), repos_only=body.get("repos_only", False), frozen=True),
                       "close_on_decision": _close_on_decision,
                       "governor_override": _governor_override,

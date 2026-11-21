@@ -43,3 +43,29 @@ def served_models(rows, tag):
                 model = PROVIDER_ALIASES[head] + '/' + rest
             served.add(model if '/' in model or not provider else f'{provider}/{model}')
     return served
+
+
+def record_served_witness(runner, job_id, model, *, adapter_token, finish_reason=None):
+    """Record transport telemetry authenticated by an in-process adapter.
+
+    Do not expose this capability to the child: even a child that knows its
+    run nonce cannot attest to its own serving identity. Only a real
+    admitted model id is attestable: a combo alias such as "l2-worker"
+    (no "/") or any id outside the canonical families would otherwise
+    publish the label itself as served_family. A refused witness leaves
+    the job unwitnessed.
+    """
+    if adapter_token is None or adapter_token is not runner._adapter_tokens.get(job_id):
+        raise ValueError('invalid adapter token')
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError('missing served model')
+    model = model.strip()
+    from .resolver import MODEL_FAMILIES
+    family = served_family(model)
+    if '/' not in model or family not in MODEL_FAMILIES:
+        raise ValueError('served model is not an admitted model id: ' + model)
+    job = runner.jobs[job_id]
+    job.served_model = model
+    job.served_family = family
+    job.served_witness_reason = 'authenticated gateway adapter telemetry'
+    job.response_finish_reason = finish_reason  # final witness telemetry, never inherited
