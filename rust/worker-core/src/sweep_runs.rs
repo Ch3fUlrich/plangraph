@@ -5,24 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Operator-native statuses plus verified legacy terminal aliases. Unknown protects.
-pub fn terminal(status: &str) -> bool {
-    matches!(
-        status,
-        "completed"
-            | "failed"
-            | "timed_out"
-            | "cancelled"
-            | "refused"
-            | "stalled"
-            | "timeout"
-            | "dry_run"
-            | "killed"
-            | "succeeded"
-            | "skipped"
-            | "terminated_after_answer"
-    )
-}
+pub use crate::run::record::releases_ownership as terminal;
+
 /// Preserve the original global refusal for unrecognized protocol statuses.
 pub fn known(status: &str) -> bool {
     terminal(status)
@@ -123,4 +107,30 @@ pub fn check(state: &Path, path: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn stalled_no_leg_lets_native_and_legacy_worktrees_be_swept() {
+        let state = tempfile::tempdir().unwrap();
+        let run = state.path().join("runs/run-fixture");
+        let native = run.join("checkout");
+        let legacy = state.path().join("worktrees/attempt");
+        fs::create_dir_all(&native).unwrap();
+        fs::create_dir_all(&legacy).unwrap();
+        let mut record = json!({"status":"stalled_no_leg","cwd":legacy});
+        let record_path = run.join("record.json");
+        fs::write(&record_path, record.to_string()).unwrap();
+        check(state.path(), &native).unwrap();
+        check(state.path(), &legacy).unwrap();
+
+        record["survivors"] = json!([123]);
+        fs::write(record_path, record.to_string()).unwrap();
+        assert!(check(state.path(), &native).is_err());
+        assert!(check(state.path(), &legacy).is_err());
+    }
 }

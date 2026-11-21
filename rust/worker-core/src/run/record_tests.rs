@@ -3,13 +3,14 @@ use serde_json::{json, Map, Value};
 use std::{collections::HashSet, fs, io, time::Duration};
 use tempfile::tempdir;
 
-const STATUSES: [Status; 11] = [
+const STATUSES: [Status; 12] = [
     Status::Queued,
     Status::Running,
     Status::Completed,
     Status::Failed,
     Status::Cancelled,
     Status::Stalled,
+    Status::StalledNoLeg,
     Status::Timeout,
     Status::Refused,
     Status::Limited,
@@ -128,7 +129,13 @@ fn transition_table_and_sticky_end() {
                 (Queued, Running | Cancelled | Failed | Refused)
                     | (
                         Running,
-                        Completed | Failed | Cancelled | Stalled | Timeout | Orphaned
+                        Completed
+                            | Failed
+                            | Cancelled
+                            | Stalled
+                            | StalledNoLeg
+                            | Timeout
+                            | Orphaned
                     )
             );
             let result = r.transition(to, 2.0);
@@ -158,7 +165,7 @@ fn transition_table_and_sticky_end() {
             }
         }
     }
-    assert_eq!(allowed, 10);
+    assert_eq!(allowed, 11);
     assert_eq!(Status::parse("dry_run"), Some(DryRun));
     assert_eq!(Status::parse("unknown"), None);
 }

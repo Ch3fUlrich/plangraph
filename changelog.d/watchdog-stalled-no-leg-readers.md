@@ -1,0 +1,1 @@
+- Recognize pre-dispatch stalls in fleet metrics, worktree cleanup, reconciliation, and feeder capacity accounting.

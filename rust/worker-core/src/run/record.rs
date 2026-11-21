@@ -28,6 +28,7 @@ pub enum Status {
     Failed,
     Cancelled,
     Stalled,
+    StalledNoLeg,
     Timeout,
     Refused,
     Limited,
@@ -45,6 +46,7 @@ impl Status {
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
             Self::Stalled => "stalled",
+            Self::StalledNoLeg => "stalled_no_leg",
             Self::Timeout => "timeout",
             Self::Refused => "refused",
             Self::Limited => "limited",
@@ -61,6 +63,7 @@ impl Status {
             Self::Failed,
             Self::Cancelled,
             Self::Stalled,
+            Self::StalledNoLeg,
             Self::Timeout,
             Self::Refused,
             Self::Limited,
@@ -73,6 +76,19 @@ impl Status {
     }
     pub fn is_terminal(self) -> bool {
         !matches!(self, Self::Queued | Self::Running)
+    }
+}
+
+/// Whether a persisted run status releases its item and worktree ownership.
+pub fn releases_ownership(status: &str) -> bool {
+    match Status::parse(status) {
+        // These statuses can end a wait while the worktree stays protected.
+        Some(Status::Limited | Status::NeedsInput | Status::Orphaned) => false,
+        Some(status) => status.is_terminal(),
+        None => matches!(
+            status,
+            "timed_out" | "killed" | "succeeded" | "skipped" | "terminated_after_answer"
+        ),
     }
 }
 
@@ -166,7 +182,14 @@ impl RunRecord {
             (Queued, Running | Cancelled | Failed | Refused | NeedsInput)
                 | (
                     Running,
-                    Completed | Failed | Cancelled | Stalled | Timeout | NeedsInput | Orphaned
+                    Completed
+                        | Failed
+                        | Cancelled
+                        | Stalled
+                        | StalledNoLeg
+                        | Timeout
+                        | NeedsInput
+                        | Orphaned
                 )
         ) {
             return Err(RecordError::BadTransition);

@@ -456,11 +456,10 @@ pub(crate) fn create(
     .map_err(|_| internal("could not save run record"))
 }
 pub(crate) fn terminal(record: &Value) -> bool {
-    record["status"] == "stalled_no_leg"
-        || record["status"]
-            .as_str()
-            .and_then(Status::parse)
-            .is_some_and(Status::is_terminal)
+    record["status"]
+        .as_str()
+        .and_then(Status::parse)
+        .is_some_and(Status::is_terminal)
 }
 pub(crate) fn wait(state: &Path, id: &str, timeout: Duration) -> Result<Value, ToolError> {
     let began = Instant::now();
