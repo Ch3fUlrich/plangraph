@@ -1,6 +1,6 @@
 //! Outcome probe: run before retrying an attempt to see what it left behind.
 
-use crate::check::run_check_scoped;
+use crate::check::{run_check_scoped, END_MARKER};
 use crate::git::{check_rev, git, GitError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -25,28 +25,25 @@ pub enum ProbeError {
     Check(#[from] std::io::Error),
 }
 
-/// Last output line of a jailed check whose launcher and jail started it. The
-/// wrapper prints it after the card's command, whatever that command did to its
-/// own tmp directory or exit code, so the card cannot erase the evidence that it ran.
-const DONE: &str = "PG-CHECK-DONE:";
+/// Written by the wrapped check's own shell before the card's command runs. It
+/// proves a start when the end marker is lost (a killed check prints none).
+const STARTED: &str = ".pg-check-started";
 
-/// Run `cmd` in a nested shell, then report that it ran and keep its exit code.
+/// Run `cmd` in a nested shell, record that it started, and after it print the end
+/// marker ([`END_MARKER`]) as the last line and keep its exit code, whatever the
+/// command did to its own tmp directory.
 fn marked(cmd: &str) -> String {
     let quoted = format!("'{}'", cmd.replace('\'', "'\\''"));
-    format!("sh -c {quoted}; rc=$?; printf '\\n{DONE}%s\\n' \"$rc\"; exit \"$rc\"")
+    format!(
+        ": > \"$TMPDIR/{STARTED}\"; sh -c {quoted}; rc=$?; printf '\\n{END_MARKER}%s\\n' \"$rc\"; exit \"$rc\""
+    )
 }
 
-/// A jailed check never started when no end marker is in its output, unless it was
-/// killed (a timeout or cancel only happens to something that ran). A launcher or
-/// jail-setup failure prints no marker: it is a probe error, not a failed check.
-fn never_started(r: &crate::check::CheckResult) -> bool {
-    let ended = r
-        .tail
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .is_some_and(|l| l.starts_with(DONE));
-    !ended && !r.timed_out && !r.cancelled
+/// Whether the launcher and jail actually started the card's command. A launcher or
+/// jail-setup failure (also a launcher that hangs until the timeout) leaves neither
+/// the end marker nor the start file: a probe error, not a failed check.
+fn started(tmp: &Path, r: &crate::check::CheckResult) -> bool {
+    r.ended.is_some() || tmp.join(STARTED).exists()
 }
 
 /// Number of commits on HEAD of `dir` beyond `base`.
@@ -87,11 +84,16 @@ pub fn probe_scoped(
     } else {
         check_cmd.to_string()
     };
+    if let Some((_, _, tmp)) = jail {
+        let _ = std::fs::remove_file(tmp.join(STARTED));
+    }
     let r = run_check_scoped(&cmd, dir, timeout, tail_n, jail, &|| false)?;
-    if jail.is_some() && never_started(&r) {
-        return Err(ProbeError::Check(std::io::Error::other(
-            "the jailed check never started (launcher or jail setup failed)",
-        )));
+    if let Some((_, _, tmp)) = jail {
+        if !started(tmp, &r) {
+            return Err(ProbeError::Check(std::io::Error::other(
+                "the jailed check never started (launcher or jail setup failed)",
+            )));
+        }
     }
     Ok(if r.passed() {
         ProbeOutcome::AlreadyDone
@@ -107,29 +109,31 @@ mod tests {
 
     const T: Duration = Duration::from_secs(20);
 
-    fn result(code: i32, tail: &str) -> crate::check::CheckResult {
+    fn result(ended: Option<i32>, timed_out: bool) -> crate::check::CheckResult {
         crate::check::CheckResult {
-            exit_code: Some(code),
+            exit_code: Some(1),
             signal: None,
-            timed_out: false,
+            timed_out,
             cancelled: false,
-            tail: tail.into(),
+            tail: String::new(),
             output_hash: String::new(),
+            ended,
         }
     }
 
     #[test]
-    fn only_an_output_without_the_end_marker_never_started() {
-        assert!(!never_started(&result(1, "boom\nPG-CHECK-DONE:1\n")));
-        assert!(!never_started(&result(0, "PG-CHECK-DONE:0")));
-        assert!(never_started(&result(78, "pg-jail: unsupported")));
-        assert!(never_started(&result(1, "Failed to connect to bus")));
-        // The marker must be the last line: a card printing it early proves nothing.
-        assert!(never_started(&result(1, "PG-CHECK-DONE:0\nlater output")));
-        // A killed check ran.
-        let mut killed = result(1, "");
-        killed.timed_out = true;
-        assert!(!never_started(&killed));
+    fn a_check_started_when_it_ended_or_left_its_start_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(started(tmp.path(), &result(Some(1), false)), "end marker");
+        assert!(
+            !started(tmp.path(), &result(None, false)),
+            "launcher failure"
+        );
+        // A launcher that hangs until the timeout started nothing either.
+        assert!(!started(tmp.path(), &result(None, true)));
+        // A killed check that did start left its start file.
+        std::fs::write(tmp.path().join(STARTED), "").unwrap();
+        assert!(started(tmp.path(), &result(None, true)));
     }
 
     #[cfg(unix)]
@@ -150,7 +154,7 @@ mod tests {
             assert_eq!(out.status.code(), Some(code), "{cmd}");
             let text = String::from_utf8_lossy(&out.stdout);
             assert!(
-                text.trim_end().ends_with(&format!("{DONE}{code}")),
+                text.trim_end().ends_with(&format!("{END_MARKER}{code}")),
                 "{cmd}: {text:?}"
             );
         }
