@@ -512,17 +512,7 @@ class WaiverMixin:
             raise Refused("validation", "decision_id must look like D-NNN")
         # The operator waiver row itself as the decision: no GO row is read.
         waiver_only = waive_seats is not None and waive_seats == decision_id
-        git = self._adapter("git")
-        project, revision = self._merge_repository(item)
-        token, changes = None, ()
-        if callable(getattr(git, "ref_commit", None)):
-            if revision or ((from_open or waive_seats) and not self._warm(project)):
-                if not self._refresh_merged_default_ref(git, project):
-                    detail = (f"merge_repo_default_refresh_failed: {project}" if revision
-                              else "merged_default_ref_refresh_failed")
-                    raise Refused("evidence_unverified", detail)
-                item.pop("_close_head", None)
-            item, token, changes = self._read_current_deploy_scan(item)
+        item, token, changes = self._manual_deploy_scan(item, complete_history=from_open or bool(waive_seats))
         with self._decisions_snapshot(item, now):
             if waiver_only:
                 head, prs, waiver, _ = self._merged_waiver_only(item, decision_id, now, all_work=from_open)
