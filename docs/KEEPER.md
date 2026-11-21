@@ -662,9 +662,10 @@ known legacy outcomes. SQLite installs the same receipt store when the keeper op
 
 The spawner registers the item, claim epoch, review round, verified head, and seat run before
 launch. The reviewer binds its boolean verdict and reason once. Direct delivery and replay
-both check the admission and the payload inside the verdict transaction. An exact retry
-can retrieve the committed result after the review moved on. A new round requires a new
-seat binding even when the head SHA is unchanged. The keeper stores these records in
+both check the admission and the payload inside the verdict transaction. The original
+reviewer run token can read its settled verdict through direct delivery or replay after
+revocation. Every entry in such a replay batch must already be settled for that token.
+A new round requires a new seat binding even when the head SHA is unchanged. The keeper stores these records in
 `op_receipts` alongside run-token write receipts.
 
 ## Placement rules migration-gates

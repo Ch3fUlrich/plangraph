@@ -22,7 +22,7 @@ from plangraph.keeper.errors import Refused
 from plangraph.keeper.events import verify_integrity
 
 from test_keeper_run_tokens import claimed_with_token, code, mint, rp, w  # noqa: F401
-from test_keeper_run_tokens_doors import d, native_client  # noqa: F401
+from test_keeper_run_tokens_doors import d, native_client, native_client_binary  # noqa: F401
 
 SYSTEM = Principal("system", "system", [], None)
 

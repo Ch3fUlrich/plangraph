@@ -179,6 +179,11 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 try:
                     principal = auth.authenticate(server.store.conn, self._token())
                 except Refused as exc:
+                    if name == "replay":
+                        settled = server.store.read_revoked_seat_replay(self._token(), body)
+                        if settled is not None:
+                            self._json(200, settled)
+                            return
                     audit = getattr(server.store, "audit_auth_failure", None)
                     with suppress(Exception):  # absent or broken: still a 401
                         audit and audit(exc.msg or exc.code)

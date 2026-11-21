@@ -321,6 +321,25 @@ class OutboxMixin:
             return settled.result
         return None
 
+    def read_revoked_seat_replay(self, bearer, body):
+        """Read a replay batch only if each entry already settled for this bearer."""
+        entries = body.get("entries") if isinstance(body, dict) else None
+        if not isinstance(entries, list) or not 1 <= len(entries) <= MAX_ENTRIES:
+            return None
+        results = []
+        for entry in entries:
+            try:
+                eid, verb, decision, _ = self._receipt_entry(entry)
+            except Refused:
+                return None
+            if verb != "verdict":
+                return None
+            reply = self.read_revoked_seat_verdict(bearer, decision)
+            if reply is None:
+                return None
+            results.append({"id": eid, "result": "ok", "reply": reply})
+        return {"results": results, "recovery": []}
+
     def _seat_result(self, binding, result):
         if binding is not None:
             self._record_seat(binding["seat_run"], "outcome", binding["key"], result)

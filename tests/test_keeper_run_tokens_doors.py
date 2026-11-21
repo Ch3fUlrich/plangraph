@@ -76,21 +76,26 @@ def test_http_mint_authorisation(d):
     assert d.http("l1main", "POST", "/v1/mint_run_token", {"key": "demo:A"})[0] == 400
 
 
-@pytest.fixture
-def native_client(d, monkeypatch):
-    import os
+@pytest.fixture(scope="session")
+def native_client_binary(tmp_path_factory):
     import shutil
     import subprocess
     from pathlib import Path
     from _spawnd import built_rust_binary
 
+    manifest = Path(__file__).resolve().parents[1] / "rust/Cargo.toml"
+    subprocess.run(["cargo", "build", "--manifest-path", str(manifest),
+                    "-p", "plangraph-cli", "--bin", "plangraph"], check=True)
     binary = built_rust_binary("plangraph")
-    if not binary.is_file():
-        manifest = Path(__file__).resolve().parents[1] / "rust/Cargo.toml"
-        subprocess.run(["cargo", "build", "--manifest-path", str(manifest),
-                        "-p", "plangraph-cli", "--bin", "plangraph"], check=True)
-    assert shutil.which(binary.name, path=str(binary.parent))
-    monkeypatch.setenv("PATH", str(binary.parent) + os.pathsep + os.environ["PATH"])
+    # Other lanes can replace the shared executable while these tests run.
+    return shutil.copy2(binary, tmp_path_factory.mktemp("native-client") / binary.name)
+
+
+@pytest.fixture
+def native_client(d, monkeypatch, native_client_binary):
+    import os
+
+    monkeypatch.setenv("PATH", os.path.dirname(native_client_binary) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("PG_OUTBOX", str(d.tmp / "outbox.jsonl"))
     return d
 
@@ -273,3 +278,55 @@ def test_repost_sending_seat_reads_original_receipt(d, monkeypatch):
                               "--token-dir", str(d.tmp), "--url", d.url]) == 0
     assert json.loads((run_dir / "verdict.json").read_text())["status"] == "delivered"
     assert world.conn.execute("SELECT COUNT(*) FROM events WHERE type='changes_requested'").fetchone()[0] == 1
+
+
+def test_reviewer_run_token_cannot_cross_seats_and_replays_exact_receipt(d):
+    from evidence_fakes import FakeGit
+
+    class SeatRuns(FakeRuns):
+        def job(self, run_id):
+            if run_id in ("run-seat", "run-other"):
+                return {"request": {"item_key": "demo:A", "role": "review", "family": "deepseek"}}
+            return super().job(run_id)
+
+    w = d.world
+    epoch = to_claimed(w, "demo:A")
+    head = "c" * 40
+    w.store.ctx = {"runs": SeatRuns(),
+                   "git": FakeGit(trailers_by_sha={head: {"Writer": "openai/gpt-5 run-writer"}})}
+    w.store.add_evidence(w.p("l1main"), "demo:A", epoch, "commit+ci", {"commit": head})
+    w.store.submit(w.p("l1main"), "demo:A", epoch)
+    binding = {"key": "demo:A", "epoch": epoch, "round": 1, "head": head, "seat_run": "run-seat"}
+    assert d.http("router", "POST", "/v1/admit_seat_verdict", binding) == (200, binding)
+    for actor, run in (("seat", "run-seat"), ("other", "run-other")):
+        status, minted = d.http("l1main", "POST", "/v1/mint_run_token", body(role="reviewer", run=run))
+        assert status == 200, minted
+        w.tokens[actor] = minted["token"]
+
+    decision = {"key": "demo:A", "ok": False, "reason": "Please update the tests"}
+    assert d.http("seat", "POST", "/v1/verdict", decision)[0] == 403
+    decision["binding"] = binding
+    for route in ("/v1/bind_seat_verdict", "/v1/verdict"):
+        status, rejected = d.http("other", "POST", route, decision)
+        assert status == 403 and "seat run does not match" in rejected["msg"]
+    assert d.http("seat", "POST", "/v1/bind_seat_verdict", decision)[0] == 200
+    status, committed = d.http("seat", "POST", "/v1/verdict", decision)
+    assert status == 200 and committed["state"] == "claimed", committed
+    assert d.http("seat", "POST", "/v1/verdict", {"key": "demo:A", "ok": False})[0] == 401
+
+    # Receipt SQL stores the item key separately from the optional request hash.
+    rows = w.conn.execute("SELECT verb,key,request_hash FROM op_receipts WHERE key=? ORDER BY verb",
+                          ("demo:A",)).fetchall()
+    assert [(row["verb"], row["key"], row["request_hash"]) for row in rows] == [
+        ("seat_admission", "demo:A", None), ("seat_outcome", "demo:A", None),
+        ("seat_payload", "demo:A", None)]
+    entry = {"id": "03" * 16, "verb": "verdict", "body": decision}
+    receipt = {"id": entry["id"], "result": "ok", "reply": committed}
+    assert d.http("seat", "POST", "/v1/verdict", decision) == (200, committed)
+    assert d.http("seat", "POST", "/v1/write_receipt", entry) == (200, receipt)
+    assert d.http("seat", "POST", "/v1/replay", {"entries": [entry]}) == (
+        200, {"results": [receipt], "recovery": []})
+    assert d.http("other", "POST", "/v1/replay", {"entries": [entry]})[0] == 401
+    changed = dict(entry, body=dict(decision, reason="A different decision"))
+    assert d.http("seat", "POST", "/v1/replay", {"entries": [changed]})[0] == 409
+    assert w.conn.execute("SELECT COUNT(*) FROM events WHERE type='changes_requested'").fetchone()[0] == 1
