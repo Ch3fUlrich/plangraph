@@ -40,8 +40,7 @@ fn marked(cmd: &str, status: &tempfile::NamedTempFile) -> String {
 fn started(status: &tempfile::NamedTempFile) -> io::Result<bool> {
     // Read the original file even if the check deleted its tmp contents.
     let mut byte = [0];
-    status.as_file().read(&mut byte)?;
-    Ok(byte == *b"1")
+    Ok(status.as_file().read(&mut byte)? == byte.len() && byte == *b"1")
 }
 
 /// Number of commits on HEAD of `dir` beyond `base`.
