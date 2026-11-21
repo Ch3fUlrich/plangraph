@@ -1,5 +1,6 @@
 #![cfg(unix)]
 
+use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::{fs, path::Path, process::Command};
 
@@ -35,6 +36,13 @@ fn git_command(repo: &Path) -> Command {
 #[test]
 fn throughput_persists_both_baseline_days_in_landing_database() {
     let root = tempfile::tempdir().unwrap();
+    let bin = root.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let git_path = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|dir| dir.join("git"))
+        .find(|path| path.is_file())
+        .expect("git on PATH");
+    std::os::unix::fs::symlink(git_path.canonicalize().unwrap(), bin.join("git")).unwrap();
     git(root.path(), &["init", "-q", "-b", "main"]);
     for date in [
         "2026-11-19T12:00:00Z",
@@ -60,12 +68,17 @@ fn throughput_persists_both_baseline_days_in_landing_database() {
     let day19 = git(root.path(), &["rev-parse", "HEAD^^"]);
     let day21 = git(root.path(), &["rev-parse", "HEAD"]);
     let db = root.path().join("landing.sqlite3");
-    let schema = format!(
-        "CREATE TABLE landing(repo TEXT,landed_sha TEXT,train TEXT,parts TEXT,build_started_at TEXT,landed_at TEXT,PRIMARY KEY(repo,landed_sha));
-         INSERT INTO landing VALUES('fixture/repo','{}','fixture','[1,2]','2026-11-21T11:00:00Z','2026-11-21T12:00:00Z');",
-        day21.trim()
-    );
-    output(Command::new("sqlite3").arg(&db).arg(schema));
+    let connection = Connection::open(&db).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE landing(repo TEXT,landed_sha TEXT,train TEXT,parts TEXT,
+         build_started_at TEXT,landed_at TEXT,PRIMARY KEY(repo,landed_sha));",
+        )
+        .unwrap();
+    connection.execute(
+        "INSERT INTO landing VALUES('fixture/repo',?1,'fixture','[1,2]','2026-11-21T11:00:00Z','2026-11-21T12:00:00Z')",
+        [day21.trim()],
+    ).unwrap();
     let snapshot = root.path().join("keeper.json");
     fs::write(&snapshot, json!({"items":[
         {"project":"fixture","key":"fixture:A","state":"done","done_at":"2026-11-20T15:00:00Z"},
@@ -107,6 +120,8 @@ fn throughput_persists_both_baseline_days_in_landing_database() {
         command
             .current_dir(root.path())
             .env("HOME", root.path())
+            .env("PATH", &bin)
+            .env_remove("PLANGRAPH_ENV_FILE")
             .env("PLANGRAPH_LANDING_DB", &db)
             .env("PLANGRAPH_THROUGHPUT_RUNS", &runs)
             .env("PLANGRAPH_THROUGHPUT_QUOTA", &quota);
@@ -127,7 +142,12 @@ fn throughput_persists_both_baseline_days_in_landing_database() {
     let mut shorter = collect;
     shorter[7] = "2026-11-21T17:30:00Z";
     output(cli().args(shorter));
-    let report = output(cli().args(["throughput", "report", "fixture/repo"]));
+    let report =
+        output(
+            cli()
+                .env("PATH", root.path())
+                .args(["throughput", "report", "fixture/repo"]),
+        );
     let report: Value = serde_json::from_str(&report).unwrap();
     let days = report["days"].as_array().unwrap();
     assert_eq!(days.len(), 2, "{report}");
@@ -152,12 +172,30 @@ fn throughput_persists_both_baseline_days_in_landing_database() {
     assert_eq!(report["writers"][1]["writer_active_share"], 0.5);
     assert_eq!(report["models"][0]["tokens_per_landed_commit"], 1200.0);
     assert_eq!(report["quota"][0]["quota_headroom_percent"], 70.0);
-    assert_eq!(
-        output(
-            Command::new("sqlite3")
-                .arg(&db)
-                .arg("SELECT COUNT(*) FROM throughput_hourly; SELECT COUNT(*) FROM landing;")
-        ),
-        "48\n1\n"
-    );
+    let rows: (i64, i64) = connection
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM throughput_hourly), (SELECT COUNT(*) FROM landing)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(rows, (48, 1));
+    assert!(days[0]["accept_to_main_seconds"].is_null());
+}
+
+#[test]
+fn throughput_report_does_not_create_a_missing_landing_database() {
+    let root = tempfile::tempdir().unwrap();
+    let db = root.path().join("missing.sqlite3");
+    let result = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+        .env("HOME", root.path())
+        .env("PATH", root.path())
+        .env_remove("PLANGRAPH_ENV_FILE")
+        .env("PLANGRAPH_LANDING_DB", &db)
+        .args(["throughput", "report", "fixture/repo"])
+        .output()
+        .unwrap();
+    assert_eq!(result.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("landing database unavailable"));
+    assert!(!db.exists());
 }

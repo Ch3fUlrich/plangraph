@@ -4,7 +4,7 @@
 `PLANGRAPH_LANDING_DB` to the file used by the lander or use its default
 `${XDG_DATA_HOME:-$HOME/.local/share}/plangraph/landing-telemetry.sqlite3`.
 The collector requires an initialized landing table keyed by repository and
-landed SHA, and uses the `sqlite3` command. It stores UTC hourly and daily rows
+landed SHA. The CLI uses bundled SQLite. It stores UTC hourly and daily rows
 in that file without changing the lander's rows.
 
 Run collection from the repository whose main history is being measured. Use
