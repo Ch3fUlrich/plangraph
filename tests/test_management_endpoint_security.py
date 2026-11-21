@@ -4,7 +4,7 @@ from threading import Thread
 
 import pytest
 
-from plangraph.routing_support import omniroute_state, quota_snapshots
+from plangraph.routing_support import quota_snapshots
 
 
 @pytest.mark.parametrize('status', [401, 403])
@@ -29,10 +29,10 @@ def test_snapshot_auth_refused_gateway(monkeypatch, tmp_path, status):
     gateway = f'http://localhost:{server.server_port}'
     env = {'OMNIROUTE_BASE_URL': gateway + '/v1', 'PLANGRAPH_PRINCIPAL': 'reviewer'}
     try:
-        provider = omniroute_state.from_env(env, key_resolver=lambda _: 'fixture-key')
+        provider = quota_snapshots.from_env(env, key_resolver=lambda _: 'fixture-key')
         with pytest.raises(RuntimeError) as error:
             provider.snapshot()
-        assert not isinstance(error.value, omniroute_state.OmniRouteUnreachable)
+        assert not isinstance(error.value, quota_snapshots.OmniRouteUnreachable)
         assert 'auth_refused' in str(error.value)
         assert gateway in str(error.value) and 'reviewer' in str(error.value)
         assert 'fixture-key' not in str(error.value)
@@ -75,11 +75,11 @@ def test_invalid_endpoint_refused_before_key_read(monkeypatch, reader, endpoint)
         pytest.fail('refused endpoint read key or fetched')
 
     env = {'OMNIROUTE_BASE_URL': endpoint}
-    monkeypatch.setattr(omniroute_state, 'load_token', forbidden)
+    monkeypatch.setattr(quota_snapshots, 'load_token', forbidden)
     monkeypatch.setattr(quota_snapshots, 'load_token', forbidden)
     if reader == 'state':
-        state = omniroute_state.from_env(env, fetch=forbidden)
-        with pytest.raises(omniroute_state.OmniRouteUnreachable, match='^no_endpoint$'):
+        state = quota_snapshots.from_env(env, fetch=forbidden)
+        with pytest.raises(quota_snapshots.OmniRouteUnreachable, match='^no_endpoint$'):
             state.snapshot()
     else:
         with pytest.raises(LookupError, match='^gateway not configured$'):
@@ -113,8 +113,8 @@ def test_management_redirect_never_forwards_key(monkeypatch, reader, status):
     monkeypatch.setattr(quota_snapshots, 'load_token', lambda _: 'fixture-key')
     try:
         if reader == 'state':
-            state = omniroute_state.from_env(env, key_resolver=lambda _: 'fixture-key')
-            with pytest.raises(omniroute_state.OmniRouteUnreachable, match='^transport_error$'):
+            state = quota_snapshots.from_env(env, key_resolver=lambda _: 'fixture-key')
+            with pytest.raises(quota_snapshots.OmniRouteUnreachable, match='^transport_error$'):
                 state.snapshot()
             path = '/api/providers'
         else:

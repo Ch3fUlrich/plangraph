@@ -7,8 +7,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from plangraph.routing_support import host_keys, omniroute_state
-from plangraph.routing_support.omniroute_state import (
+from plangraph.routing_support import host_keys, quota_snapshots
+from plangraph.routing_support.quota_snapshots import (
     OmniRouteAuthRefused, OmniRouteState, OmniRouteUnreachable, from_env,
 )
 from plangraph.spawner import gateway_witness
@@ -100,7 +100,7 @@ def test_ttl_stale_expiration_recovery():
 
 @pytest.mark.parametrize('status', [401, 403])
 def test_auth_refused_never_uses_stale_health(status):
-    from plangraph.routing_support.omniroute_state import OmniRouteAuthRefused
+    from plangraph.routing_support.quota_snapshots import OmniRouteAuthRefused
     h = Harness(payload(row()), (status, 'sensitive-body'), RuntimeError(), payload(row()),
                 principal='reviewer')
     h.reader.snapshot()
@@ -175,7 +175,7 @@ def test_from_env_uses_management_credential_not_client_key(tmp_path, monkeypatc
     key_file.chmod(0o600)
 
     monkeypatch.setattr(host_keys, "_gateway_key", lambda env: "client-secret")
-    monkeypatch.setattr(omniroute_state, "_gateway_key", lambda env: "client-secret", raising=False)
+    monkeypatch.setattr(quota_snapshots, "_gateway_key", lambda env: "client-secret", raising=False)
 
     calls = []
 
@@ -219,7 +219,7 @@ def test_from_env_no_management_credential_never_sends_client_key(tmp_path, monk
     home = tmp_path / "home"
     home.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(host_keys, "_gateway_key", lambda env: "client-secret")
-    monkeypatch.setattr(omniroute_state, "_gateway_key", lambda env: "client-secret", raising=False)
+    monkeypatch.setattr(quota_snapshots, "_gateway_key", lambda env: "client-secret", raising=False)
 
     calls = []
 

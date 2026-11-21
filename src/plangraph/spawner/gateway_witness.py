@@ -160,6 +160,11 @@ def fetch_rows(tag, env, *, timeout=5, opener=None, secrets=None):
     Both URL and token come from the spawner's own env (``secrets``), never
     the child's. ``build_child_env`` drops the token.
     """
+    query = urllib.parse.urlencode({'sessionTag': tag, 'limit': 200})
+    return _fetch_log('?' + query, timeout, opener, secrets)
+
+
+def _fetch_log(suffix, timeout, opener=None, secrets=None):
     secrets = os.environ if secrets is None else secrets
     base = _gateway(secrets)
     if not base:
@@ -168,9 +173,8 @@ def fetch_rows(tag, env, *, timeout=5, opener=None, secrets=None):
         raise LookupError('gateway endpoint must use HTTP(S) with a host and HTTPS outside loopback')
     token = load_token(secrets)
     base = gateway_management_base_url(base)
-    query = urllib.parse.urlencode({'sessionTag': tag, 'limit': 200})
     try:
-        request = urllib.request.Request(f'{base}/api/usage/call-logs?{query}',
+        request = urllib.request.Request(f'{base}/api/usage/call-logs{suffix}',
                                          headers={'Authorization': 'Bearer ' + token})
         if opener is None:
             opener = urllib.request.build_opener(_NoManagementRedirect()).open
@@ -185,10 +189,9 @@ QUOTA_POLL_EVERY_S = 30.0
 QUOTA_POLL_TIMEOUT_S = 3.0
 
 
-def quota_refusal(rows, tag):
-    """Only the newest request of a session can refuse it; unversioned rows use input order."""
-    from .env_redact import early_refusal
+def _latest_row(rows, tag):
     from plangraph.routing_support.quota_snapshots import _ts
+
     def order(pair):
         index, row = pair
         at = _ts(row.get('createdAt') or row.get('created_at') or row.get('timestamp')) or 0
@@ -197,11 +200,45 @@ def quota_refusal(rows, tag):
         except (TypeError, ValueError):
             ident = 0
         return at, ident, index
-    matching = [(i, r) for i, r in enumerate(rows if isinstance(rows, list) else ())
-                if isinstance(r, dict) and r.get('sessionTag') == tag]
-    if not matching:
+
+    matching = ((i, r) for i, r in enumerate(rows if isinstance(rows, list) else ())
+                if isinstance(r, dict) and r.get('sessionTag') == tag)
+    return max(matching, key=order, default=(0, None))[1]
+
+
+def _finish_reason(row):
+    reason = row.get('finishReason') or row.get('finish_reason') or row.get('stop_reason')
+    return reason if isinstance(reason, str) else None
+
+
+def _finish_from_log(row, tag, model, fetch_detail):
+    if not row or served_models([row], tag) != {model}:
         return None
-    row = max(matching, key=order)[1]
+    finish = _finish_reason(row)
+    ident = row.get('id')
+    if finish or not fetch_detail or not isinstance(ident, (int, str)) or str(ident) in ('', '.', '..'):
+        return finish
+    try:
+        detail = fetch_detail('/' + urllib.parse.quote(str(ident), safe=''), 5)
+    except LookupError:
+        return None
+    if not isinstance(detail, dict) or detail.get('id') != ident or served_models([detail], tag) != {model}:
+        return None
+    body = detail.get('responseBody')
+    if not isinstance(body, dict):
+        return None
+    choices = body.get('choices')
+    if isinstance(choices, list) and len(choices) == 1 and isinstance(choices[0], dict):
+        return _finish_reason(choices[0])
+    return _finish_reason(body)
+
+
+def quota_refusal(rows, tag):
+    """Only the newest request of a session can refuse it; unversioned rows use input order."""
+    from .env_redact import early_refusal
+    row = _latest_row(rows, tag)
+    if not row:
+        return None
     try:
         status = int(row.get('status'))
     except (TypeError, ValueError):
@@ -261,8 +298,10 @@ class QuotaWatch:
             return None
 
 
-def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
+def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None, fetch_detail=None):
     """Record the gateway-served model on ``job`` through the runner's adapter check."""
+    if fetch is None and fetch_detail is None:
+        fetch_detail = _fetch_log
     fetch = fetch or fetch_rows
     # Only a leg served through the gateway can have rows: build_child_env adds an
     # omniroute block to every config, so the tag alone does not mean a gateway leg.
@@ -291,7 +330,8 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
         attempts, reason = 0, 'final config carries no session tag'
     for attempt in range(attempts):   # the gateway may write the row after the response
         try:
-            served = served_models(fetch(tag, env), tag)
+            rows = fetch(tag, env)
+            served = served_models(rows, tag)
         except LookupError as exc:
             reason = str(exc)
             break
@@ -301,7 +341,10 @@ def witness(runner, job_id, job, env, *, attempts=3, delay=1.0, fetch=None):
         model = served.pop() if served else None
         if model:
             try:
-                runner.served_witness(job_id, model, adapter_token=runner._adapter_tokens.get(job_id))
+                finish = (_finish_from_log(_latest_row(rows, tag), tag, model, fetch_detail)
+                          if getattr(job, 'role', None) == 'review' else None)
+                runner.served_witness(job_id, model, adapter_token=runner._adapter_tokens.get(job_id),
+                                      finish_reason=finish)
             except ValueError as exc:
                 reason = str(exc)
                 break

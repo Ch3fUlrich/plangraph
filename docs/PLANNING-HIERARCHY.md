@@ -15,7 +15,7 @@ copy it here; change the skill and link from here.
 | Coding rules for implementers | AutoOS skill `coding-principles`: `AutoOS/.agents/skills/coding-principles/SKILL.md` |
 | Launching, watching, relaunching layers (levels L0-L3, rules R-orch-*, R-worker-*) | AutoOS skill `unattended-orchestration`: `AutoOS/.agents/skills/unattended-orchestration/SKILL.md` |
 | Wave caps, review loops, risk thresholds | [`docs/PLANNER-KIT.md`](PLANNER-KIT.md) section "Orchestration caps"; model tiers and review counts: the registry policy block |
-| Cross-family reviewers | AutoOS skill `herdr-orchestration`: `AutoOS/.agents/skills/herdr-orchestration/SKILL.md` |
+| Cross-family reviewers | [`plangraph-spawn`](../skills/plangraph-spawn/SKILL.md) and [`review`](../skills/review/SKILL.md) |
 
 ## Why a checklist contract for task size
 No benchmarked task size exists. Sources agree on principles rather than figures: fit a fresh

@@ -128,12 +128,19 @@ def sync_seat(record, held_families=()):
         plan['review_seats'] = []
         detail = '; '.join(dict.fromkeys(a['skip_reason'] for a in record.get('attempts', [])
                                         if a.get('skip_reason')))
-        reason = 'distinct_family_unavailable: no eligible leg of a family not held by another seat'
-        reason += ': ' + (detail or record.get('error') or 'no leg launched')
-        reason = own[0].get('reason') or reason
+        status = record.get('status')
+        attempts = record.get('attempts') or ()
+        exhausted = bool(attempts) and all(
+            a.get('status') == 'skipped' or a.get('provider_response') for a in attempts)
+        if status == 'cancelled' or (status == 'failed' and not exhausted):
+            reason = record.get('reason') or record.get('error') or detail or status
+        else:
+            reason = 'distinct_family_unavailable: no eligible leg of a family not held by another seat'
+            reason += ': ' + (detail or record.get('error') or 'no leg launched')
+            reason = own[0].get('reason') or reason
+            if status not in ('failed', 'refused'):
+                record['error'] = reason
         own[0].update(family=None, keeper_family=None, reason=reason)
-        if record.get('status') != 'refused':
-            record['error'] = reason
 
 
 def sync_seat_group(records, save):
