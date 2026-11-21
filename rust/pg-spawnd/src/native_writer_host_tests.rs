@@ -449,3 +449,58 @@ fn card_refusals_exit_five_before_codex_starts() {
         assert!(!dir.path().join("state/runs/run-card/native.log").exists());
     }
 }
+
+#[test]
+fn writer_command_is_workspace_write_and_never_danger_full_access() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    fs::create_dir(&repo).unwrap();
+    let host = Host {
+        repo: repo.clone(),
+        run_id: "run-sandbox".into(),
+        cwd: repo.clone(),
+        reviews: dir.path().join("reviews"),
+        record_path: dir.path().join("run/record.json"),
+        base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.path().to_path_buf(),
+        brief: "brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
+    };
+    host.git(&["init"]).unwrap();
+    for session in [None, Some("session-1")] {
+        let command = host
+            .writer_command("codex", session, &dir.path().join("run"))
+            .unwrap();
+        let args: Vec<String> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let line = args.join(" ");
+        assert!(line.contains("sandbox_mode=\"workspace-write\""), "{line}");
+        assert!(
+            line.contains("sandbox_workspace_write.network_access=true"),
+            "{line}"
+        );
+        assert!(!line.contains("danger-full-access"), "{line}");
+        let roots = args
+            .iter()
+            .find(|a| a.starts_with("sandbox_workspace_write.writable_roots="))
+            .unwrap();
+        for named in [
+            dir.path().join("reviews"),
+            dir.path().join("run"),
+            repo.join(".git"),
+        ] {
+            let named = fs::canonicalize(&named).unwrap_or(named);
+            assert!(
+                roots.contains(named.to_str().unwrap()),
+                "{roots} lacks {named:?}"
+            );
+        }
+        assert_eq!(args.contains(&"resume".to_owned()), session.is_some());
+    }
+}

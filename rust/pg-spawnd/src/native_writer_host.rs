@@ -82,6 +82,43 @@ impl Host {
     fn git(&self, args: &[&str]) -> Result<String, String> {
         output(self.command("git").arg("-C").arg(&self.cwd).args(args))
     }
+    /// The Codex command line and environment of one writer turn: `workspace-write` with network
+    /// access and the named writable roots, and only the allowlisted environment.
+    fn writer_command(
+        &self,
+        codex: impl AsRef<std::ffi::OsStr>,
+        session: Option<&str>,
+        directory: &Path,
+    ) -> Result<Command, String> {
+        let cargo_target = pg_worker_core::cargo_cache::shared_cache_roots()
+            .map_err(|e| e.to_string())?
+            .remove(0);
+        let git_dirs = crate::native_writer_sandbox::git_dirs(&self.cwd, &self.tool_path)?;
+        let roots = crate::native_writer_sandbox::writable_roots(
+            &cargo_target,
+            &self.reviews,
+            directory,
+            &git_dirs,
+        );
+        let mut command = Command::new(codex);
+        crate::native_writer_sandbox::apply_env(&mut command, std::env::vars_os(), &self.tool_path);
+        command.arg("exec");
+        if let Some(id) = session {
+            command.args(["resume", id]);
+        }
+        command
+            .env("CARGO_TARGET_DIR", &cargo_target)
+            .env("CARGO_INCREMENTAL", "0")
+            .args(["--json"])
+            .args(model_args(&self.effort))
+            .args(["-c", "approval_policy=never"])
+            .args(crate::native_writer_sandbox::sandbox_args(&roots)?)
+            .arg("-o")
+            .arg(directory.join("native.last"))
+            .arg("-")
+            .current_dir(&self.cwd);
+        Ok(command)
+    }
     fn ledger_row(&self, record: &Value) -> Result<Value, String> {
         let directory = self
             .record_path
@@ -228,31 +265,8 @@ impl Driver for Host {
             .open(&log_path)
             .map_err(|e| e.to_string())?;
         let log_start = log.metadata().map_err(|e| e.to_string())?.len();
-        let mut command = self.command(codex);
-        command.arg("exec");
-        if let Some(id) = session {
-            command.args(["resume", id]);
-        }
+        let mut command = self.writer_command(codex, session, directory)?;
         command
-            .env(
-                "CARGO_TARGET_DIR",
-                pg_worker_core::cargo_cache::shared_cache_roots()
-                    .map_err(|e| e.to_string())?
-                    .remove(0),
-            )
-            .env("CARGO_INCREMENTAL", "0")
-            .args(["--json"])
-            .args(model_args(&self.effort))
-            .args([
-                "-c",
-                "approval_policy=never",
-                "-c",
-                "sandbox_mode=\"danger-full-access\"",
-                "-o",
-            ])
-            .arg(directory.join("native.last"))
-            .arg("-")
-            .current_dir(&self.cwd)
             .stdin(Stdio::piped())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
             .stderr(log);
