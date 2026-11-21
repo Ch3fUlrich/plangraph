@@ -108,6 +108,74 @@ def cargo_lease(exclusive=False, wait=0.0):
             time.sleep(min(0.5, max(deadline - time.monotonic(), 0)))
 
 
+CLI_TESTS_KEEP_ENV = 'PLANGRAPH_CLI_TESTS_KEEP'
+CLI_TESTS_KEEP = 3
+CLI_TESTS_MAX_AGE_S = 24 * 3600
+
+
+def _touched(path):
+    """Newest mtime of a directory, its entries and their entries (cargo touches the inner ones)."""
+    newest = path.stat().st_mtime
+    for child in path.iterdir():
+        newest = max(newest, child.lstat().st_mtime)
+        if child.is_dir() and not child.is_symlink():
+            for inner in child.iterdir():
+                newest = max(newest, inner.lstat().st_mtime)
+    return newest
+
+
+def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
+    """Keep at most ``keep`` per-checkout ``cli-tests/<hash>`` builds, none untouched for ``max_age`` seconds.
+
+    Call it only under the exclusive cargo lease. Returns the removed directory names."""
+    if keep is None:
+        try:
+            keep = int(os.environ.get(CLI_TESTS_KEEP_ENV, CLI_TESTS_KEEP))
+        except ValueError:
+            keep = CLI_TESTS_KEEP
+    now = time.time() if now is None else now
+    root, builds = Path(target) / 'cli-tests', []
+    try:
+        for entry in root.iterdir():
+            if entry.is_dir() and not entry.is_symlink():
+                try:
+                    builds.append((_touched(entry), entry))
+                except OSError:
+                    continue  # a build removed meanwhile
+    except FileNotFoundError:
+        return []
+    builds.sort(key=lambda b: b[0], reverse=True)
+    removed = []
+    for index, (touched, entry) in enumerate(builds):
+        if index >= max(keep, 0) or now - touched > max_age:
+            shutil.rmtree(entry, ignore_errors=True)
+            removed.append(entry.name)
+    return removed
+
+
+def reclaim_cargo_target(target, cap, wait=None):
+    """Trim the shared target before a build: prune old cli-tests builds, then drop all of it if still over ``cap`` GB.
+
+    Holds the exclusive lease (live builds hold shared ones) and raises OSError when it cannot get it."""
+    if wait is None:
+        try:
+            wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
+        except ValueError:
+            wait = 30.0
+        wait = wait if math.isfinite(wait) and wait >= 0 else 30.0
+    with cargo_lease(exclusive=True, wait=wait):
+        prune_cli_tests(target)
+        if target.exists() and cargo_target_size_gb(target) >= cap:
+            shutil.rmtree(target)
+
+
+def cargo_target_cap_gb():
+    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+    if not math.isfinite(cap) or cap < 0:
+        raise ValueError('invalid cache cap')
+    return cap
+
+
 def cargo_run_busy(record):
     """A run keeps the shared cargo target busy only while one of its processes can still build.
 
@@ -146,10 +214,7 @@ def local_disk_refusal(worktree, service):
             if any(cargo_run_busy(r) for r in service.ps()['runs']):
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy'
             try:
-                wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
-                with cargo_lease(exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
-                    if target.exists():
-                        shutil.rmtree(target)
+                reclaim_cargo_target(target, cap)
             except OSError:
                 return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
         if cap == 0:
@@ -229,9 +294,7 @@ def running_disk_refusal(worktree):
         free = min(disk_free_gb(path) for path in paths)
         if free < 2:
             return f'disk_low: free {free:.2f} GB, stop 2 GB'
-        cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
-        if not math.isfinite(cap) or cap < 0:
-            raise ValueError('invalid cache cap')
+        cap = cargo_target_cap_gb()
         size = cargo_target_size_gb(target)
         if size >= cap:
             return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB'

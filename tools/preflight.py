@@ -17,7 +17,8 @@ import time
 import tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
-from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, disk_free_gb,
+from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb,
+                                          disk_free_gb, reclaim_cargo_target,
                                           running_disk_refusal, shared_cargo_target)
 from plangraph.spawner.overflow import available_memory_mb
 
@@ -411,6 +412,20 @@ def stage_policy_binary(target, cleanup):
     return shutil.copy2(built, Path(private) / name)
 
 
+# A live build holds a shared lease on the target; trimming waits this long, then skips.
+TRIM_WAIT_SECONDS = 5.0
+
+
+def trim_shared_target():
+    """Before any build: cap the shared target and prune its old cli-tests builds (LE-PUSH-WARM-TARGET-UNCAPPED)."""
+    target = shared_cargo_target()
+    try:
+        if target.exists() and not target.is_symlink():
+            reclaim_cargo_target(target, cargo_target_cap_gb(), wait=TRIM_WAIT_SECONDS)
+    except (OSError, ValueError) as exc:
+        print(f"cargo target trim skipped: {exc}", flush=True)
+
+
 def main(argv=None, root=None):
     cleanup = []
     try:
@@ -484,6 +499,7 @@ def _main(argv, root, cleanup):
                                    "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt"))]),
                 ("rust", None), ("tests", [] if args.fast else [tests])]
     summary, exit_code, stopped, scrub_bad = [], 0, False, False
+    trim_shared_target()
     for family, commands in families:
         start = time.monotonic()
         status = "SKIP"
