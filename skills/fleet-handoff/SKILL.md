@@ -31,7 +31,7 @@ Site keys (file `router/config` in the router data checkout; source it): `ROUTER
 `## Done` lists everything finished since your previous card: one line each, UTC stamp, id, evidence. Write `-` for the sha only when nothing was committed.
 
 3. Run `$ROUTER_HOME/bin/handoff-check <card> --log`. On exit 1 it prints one reason per line: fix the card and rerun until it exits 0. `--log` adds the new Done lines to `ROUTER_WORKLOG`, each once.
-4. Then run the guard's `ready` step: the command from the HANDOFF-NOW message (`python3 <context_guard.py> ready <handoff-path>`). The watchdog relaunches you only from a fresh handoff plus card.
+4. Then run the guard's `ready` step with the absolute command from the HANDOFF-NOW or HARD-CAP line: `python3 <abs path>/tools/hooks/context_guard.py ready <handoff-path>`. Never run the hook wrapper (`ctx_guard_session.py`): it has no ready step and exits 2. `ready` exits 0 only after it wrote the marker; on any other exit fix what it names and rerun. The watchdog relaunches you only from a fresh handoff plus card and alerts routing when a session at its cap has no marker.
 5. Close out as your brief says (for example CARD-READY or RECYCLE-READY with the paths) and stop. Start no new work.
 
 After a restart, run `resume-digest` first: it prints your card, keeper rows, live runs, git state and inbox on one page; read the full handoff only if that page is not enough.

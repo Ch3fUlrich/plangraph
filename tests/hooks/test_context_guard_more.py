@@ -95,15 +95,15 @@ class Output(MoreCase):
                 self.assertIn("context_guard.py missing or broken", err.getvalue())
 
     def test_line_hides_interpreter_and_script_path(self):
+        """Now: the line names `python3` plus the absolute guard script, and never the interpreter path."""
         self.write(usage_line(read=275000))
         text = self.text(self.hook())
-        self.assertIn("then run ready", text)
-        for path in (sys.executable, str(SCRIPT.resolve())):
-            self.assertNotIn(path, text)
+        self.assertIn("then run `python3 %s ready <handoff-path>`" % SCRIPT.resolve(), text)
+        self.assertNotIn(sys.executable, text)
 
     def test_line_needs_no_interpreter_or_script_path(self):
         guard = load_module("context_guard")
-        self.assertFalse(hasattr(guard, "_cmd"))
+        self.assertFalse(hasattr(guard, "_cmd"))  # no per-interpreter command builder: python3 plus the guard path
         line = guard.emit_line("handoff", 280000, 270000)
         self.assertNotIn("\n", line)
         self.assertEqual(guard.emit_line("hard", 310000, 300000).split(":", 1)[0], "HARD-CAP ctx=310k >= 300k")

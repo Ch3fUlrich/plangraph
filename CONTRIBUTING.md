@@ -462,7 +462,9 @@ unidentified), oversized or unparsable stdin payloads fail closed with the same
 PreToolUse deny output unless the prefix names a non-`PreToolUse` event; known
 non-`PreToolUse` events keep failing open. In `ctx_guard_session.py`, `{"off": true}` (and attended leases) only
 skip `PostToolUse` threshold guidance and do not disable `PreToolUse` denial. Tests
-isolate state and mock the kick.
+isolate state and mock the kick. The HANDOFF-NOW and HARD-CAP lines carry the absolute
+command `python3 <guard path> ready <handoff>` (`ready_command`); `ctx_guard_session.py`
+has no ready step and exits 2 naming that command when called with `ready` or `status`.
 `tools/hooks/install_hooks.sh` only copies `*.py` files and registers nothing in
 Claude Code settings (`setup/manifest.toml` defers hook merging); register the
 guarded missing-file wrapper on both `PreToolUse` (with an all-tools matcher) and
