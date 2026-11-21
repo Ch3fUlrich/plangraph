@@ -106,8 +106,8 @@ REAL_SHAPE = (
     "Keeper refuses a new lane without done criteria\n\n"
     "create_items refuses kind lane with a blank done_criteria for every principal.\n\n"
     "Plan-Item: demo:A\n"
-    "Writer: claude-sonnet-5-5 session_011g7R2JfBWCfYiFimg4hcfN (Claude Code writer child, batch batch8)\n\n"
-    "Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n")
+    "Writer: claude-sonnet-5-5 session_demo (Claude Code writer child, batch batch8)\n\n"
+    "Co-Authored-By: Claude Sonnet 5.5 <claude@example.invalid>\n")
 
 
 def test_plan_item_trailers_are_read_when_a_later_trailer_paragraph_follows():
