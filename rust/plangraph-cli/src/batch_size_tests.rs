@@ -229,7 +229,7 @@ fn the_command_prints_the_brief_with_dash_dash_brief_and_the_plan_json_without()
     assert!(text.contains("## k2\nWhy: w2") && !text.contains("## k3"));
     assert!(text.contains("model cap 3"));
     let mut plan_out = Vec::new();
-    assert_eq!(execute(&[path.clone()], &mut plan_out), 0);
+    assert_eq!(execute(std::slice::from_ref(&path), &mut plan_out), 0);
     let value: serde_json::Value = serde_json::from_slice(&plan_out).unwrap();
     assert_eq!(value["count"], 3);
     assert_eq!(execute(&[path, "--other".into()], &mut Vec::new()), 2);
