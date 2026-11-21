@@ -69,7 +69,9 @@ import sys
 sys.path.insert(0, 'tools')
 import ci_select as ci
 assert ci.select(['src/plangraph/keeper/store.py'])['browser'] is False
-for path in ['src/plangraph/web/app.js', 'tests/browser/test_ui.py', 'requirements-ci.txt', '.github/workflows/tests.yml', 'vendor/htmx.js', 'tests/conftest.py', 'pyproject.toml', 'src/plangraph/render.py']:
+workflow_selection = ci.select(['.github/workflows/tests.yml'])
+assert {job for job, selected in workflow_selection.items() if selected} == {'pytest', 'rust'}
+for path in ['src/plangraph/web/app.js', 'tests/browser/test_ui.py', 'requirements-ci.txt', 'vendor/htmx.js', 'tests/conftest.py', 'pyproject.toml', 'src/plangraph/render.py']:
     assert ci.select([path])['browser'] is True, path
 needs = {'select': {'result': 'success', 'outputs': {s: 'true' for s in ci.SUITES}}}
 needs.update({s: {'result': 'success'} for s in ci.ALWAYS + ci.SUITES})
