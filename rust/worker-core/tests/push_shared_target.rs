@@ -19,7 +19,11 @@ p = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(p)
 seen = []
 def run(command, cwd, env):
-    assert env['CARGO_TARGET_DIR'] == str(shared_cargo_target())
+    if command[:2] == ['cargo', 'build']:
+        # pg-policy builds in a directory of its own inside the shared target.
+        assert Path(env['CARGO_TARGET_DIR']).parent == shared_cargo_target() / 'policy-bin'
+    else:
+        assert env['CARGO_TARGET_DIR'] == str(shared_cargo_target())
     assert env['CARGO_INCREMENTAL'] == '0'
     if command[0] == 'cargo':
         try:
