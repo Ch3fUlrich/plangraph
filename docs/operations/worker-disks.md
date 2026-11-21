@@ -29,18 +29,23 @@ NOTE Workstation host session. Record root usage and inspect dry-run output from
 the merged-worktree sweep and disk hygiene before running either in apply mode.
 Record reclaimed bytes and the resulting WSL root usage.
 
-NOTE Workstation host session. Mount a D: ext4 virtual disk for builds and
-caches and an F: ext4 virtual disk for worktrees. Create a writable
-`plangraph/worktrees` directory on each filesystem offered for worktrees. Set
-`PLANGRAPH_WORKTREE_MOUNTS` in the spawner and feeder environment to the
-colon-separated worktree mount paths. Admission chooses the eligible filesystem
-with the most free bytes. The default floor is 5 GiB and 10% free. Set
-`PLANGRAPH_DISK_MIN_FREE_PERCENT` to adjust the percentage.
+NOTE Workstation host session. D:, F:, G:, and H: are all approved for WSL work
+data. Provision ext4 virtual disks on the drives in use. Start with builds and
+caches on D: and worktrees on F:. Give each virtual disk a fixed WSL mount path,
+such as `/mnt/work-d`, `/mnt/work-f`, `/mnt/work-g`, or `/mnt/work-h`.
+Create a writable `plangraph/worktrees` directory on each mount offered for
+worktrees and put those colon-separated paths in `PLANGRAPH_WORKTREE_MOUNTS`.
+Keep the spawner environment and the feeder's `plangraph.env` (or the file
+named by `PLANGRAPH_ENV_FILE`) in sync. Admission chooses the eligible
+filesystem with the most free bytes. The default floor is 5 GiB and 10% free. Set
+`PLANGRAPH_DISK_MIN_FREE_PERCENT` to adjust the percentage. Size each virtual
+disk to leave headroom on its backing Windows drive and check usage on both
+layers so neither reaches 100%.
 
 NOTE Workstation host session. Point `PLANGRAPH_CARGO_TARGET_DIR` and package
 cache environment variables at dedicated directories on the build mount.
-Configure both mounts in registry `env.PLANGRAPH_WORK_MOUNTS` and point the
-hygiene and sweep units at the configured worktree roots. Include
+Configure every provisioned work mount in registry `env.PLANGRAPH_WORK_MOUNTS`
+and point the hygiene and sweep units at the configured worktree roots. Include
 `PLANGRAPH_WORKTREE_MOUNTS` in their environment so the sweep can match work
 trees to the corresponding run records. Verify
 `pg-spawnd host work-disk`, the recorded paths and disk usage, refusals at the

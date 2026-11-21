@@ -1,5 +1,7 @@
 use super::adapters::{output, python, Env, Keeper, Transport};
 use super::*;
+use pg_worker_core::work_disks;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 pub(super) fn read_json(path: &Path) -> Result<Value, String> {
@@ -196,7 +198,11 @@ pub(super) fn facts(
         serde_json::from_value(read_json(path)?).map_err(|_| "invalid host facts")?;
     f.free_disk_bytes = disk_limit(
         f.free_disk_bytes,
-        pg_worker_core::work_disks::worktree_disk(),
+        work_disks::worktree_disk_with(
+            env.get(work_disks::WORKTREE_MOUNTS).map(OsStr::new),
+            env.get("PLANGRAPH_DISK_MIN_FREE_PERCENT").map(OsStr::new),
+            work_disks::mounted_space,
+        ),
     )?;
     let mut cmd = python(env, repo);
     cmd.args(["-c","import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
@@ -223,6 +229,44 @@ fn disk_limit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feeder_reads_work_disk_settings_from_its_environment_file() {
+        let fixture = tempfile::tempdir().unwrap();
+        let mount = fixture.path().join("offline");
+        let env_file = fixture.path().join("plangraph.env");
+        let snapshot = fixture.path().join("facts.json");
+        fs::write(
+            &snapshot,
+            r#"{"host":"fixture","free_ram_bytes":100,"free_disk_bytes":100,"observed_at":0}"#,
+        )
+        .unwrap();
+        let sample = |percent| {
+            fs::write(
+                &env_file,
+                format!(
+                    "PLANGRAPH_WORKTREE_MOUNTS={}\nPLANGRAPH_DISK_MIN_FREE_PERCENT={percent}\n",
+                    mount.display()
+                ),
+            )
+            .unwrap();
+            let env = crate::env::load(&env_file, std::iter::empty()).unwrap();
+            facts(
+                &env,
+                fixture.path(),
+                &snapshot,
+                &[],
+                fixture.path(),
+                &Policy::default(),
+                None,
+            )
+            .expect_err("configured work disk must constrain the host facts")
+        };
+        assert_eq!(sample("bad"), "disk_low: invalid free percentage");
+        let reason = sample("17");
+        assert!(reason.starts_with("disk_low: no work mount meets 5 GiB and 17% free"));
+        assert!(reason.contains(mount.to_str().unwrap()), "{reason}");
+    }
 
     #[test]
     fn feeder_disk_limit_uses_the_tighter_sample_and_propagates_a_mount_refusal() {
