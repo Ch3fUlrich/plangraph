@@ -56,6 +56,15 @@ The SQLite catalog (`src/plangraph/spawner/catalog_schema.sql`, `catalog_seed.py
 | 21 | `cxa/gpt-6-sol-low` | gpt | subscription | 40.0 | 110.0 | 60.0 | $0.20 | 75.0% | *(Gated: Codex ACP luna-only)* |
 | 22 | `cxa/gpt-6-luna-low` | gpt | subscription | 34.0 | 220.0 | 120.0 | $0.03 | 85.0% | `l3-driver` |
 
+### Benchmark observations by effort and harness
+
+The catalog query returns `benchmark_rows` by model, effort and harness. Each
+cell exposes the preferred observation in this order: own measurements,
+DeepSWE, CursorBench, FrontierSWE, then the Artificial Analysis index prior.
+Missing measurements remain null. The view marks observations older than 45
+days and rows without a measurement date as stale. Utility resolves the same
+view against the leg's effort and harness. Legacy databases remain readable.
+
 ### Offline benchmark data contract (BENCH-DATA-TEST, slice 1)
 
 `tests/test_benchmark_data_contract.py` checks the actual

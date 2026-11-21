@@ -1,0 +1,1 @@
+Store benchmark observations by model, effort, harness and origin. Catalog queries and utility use the preferred per-cell view with provenance, imputation and staleness. Existing Artificial Analysis rows remain readable as priors. Preserve explicit zeros and SQL NULLs in storage and catalog exports.

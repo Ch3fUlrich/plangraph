@@ -81,6 +81,57 @@ CREATE TABLE IF NOT EXISTS catalog_benchmarks (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS catalog_benchmark_measurements (
+    model_id TEXT NOT NULL CHECK (length(trim(model_id)) > 0),
+    effort TEXT NOT NULL DEFAULT '',
+    harness TEXT NOT NULL CHECK (length(trim(harness)) > 0),
+    score REAL CHECK (score BETWEEN 0 AND 100),
+    score_se REAL CHECK (score_se >= 0),
+    n_runs INTEGER CHECK (n_runs >= 0),
+    steps REAL CHECK (steps >= 0),
+    cost_per_task_usd REAL CHECK (cost_per_task_usd >= 0),
+    tokens_per_task REAL CHECK (tokens_per_task >= 0),
+    imputed INTEGER NOT NULL DEFAULT 0 CHECK (imputed IN (0, 1)),
+    effort_channel TEXT,
+    index_version TEXT,
+    source_url TEXT,
+    source_date TEXT CHECK (source_date IS NULL OR julianday(source_date) IS NOT NULL),
+    source_record TEXT,
+    measured_at TEXT CHECK (measured_at IS NULL OR julianday(measured_at) IS NOT NULL),
+    origin TEXT NOT NULL CHECK (origin IN ('own', 'deepswe', 'cursorbench', 'frontierswe', 'aa-index')),
+    PRIMARY KEY (model_id, effort, harness, origin)
+) STRICT;
+
+CREATE VIEW IF NOT EXISTS catalog_benchmark_rows AS
+WITH observations AS (
+    SELECT model_id, effort, harness, score, score_se, n_runs, steps, cost_per_task_usd,
+           tokens_per_task, imputed, effort_channel, index_version, source_url, source_date,
+           source_record, measured_at, origin, 0 AS legacy, NULL AS verified_tok_per_s
+    FROM catalog_benchmark_measurements
+    UNION ALL
+    SELECT b.model_id, COALESCE(m.parameter_effort, ''), COALESCE(m.harness, ''),
+           b.aa_intelligence, NULL, NULL, NULL, b.cost_per_task_usd, NULL, 1,
+           NULL, b.benchmark_source, NULL, NULL, NULL, b.updated_at, 'aa-index', 1, b.verified_tok_per_s
+    FROM catalog_benchmarks b JOIN catalog_models m USING (model_id)
+), ranked AS (
+    SELECT *, row_number() OVER (
+        PARTITION BY model_id, effort, harness
+        ORDER BY score IS NULL,
+                 CASE origin WHEN 'own' THEN 0 WHEN 'deepswe' THEN 1 WHEN 'cursorbench' THEN 2
+                    WHEN 'frontierswe' THEN 3 ELSE 4 END, legacy
+    ) AS preference
+    FROM observations
+)
+SELECT model_id, effort, harness, score, score_se, n_runs, steps, cost_per_task_usd,
+       tokens_per_task, CASE WHEN origin <> 'own' AND (
+           lower(model_id) LIKE '%gpt-6.2-sol%' OR lower(model_id) LIKE '%gpt-6.1-sol%'
+           OR lower(model_id) LIKE '%gpt-6.1-terra%' OR lower(model_id) LIKE '%gpt-6-luna%'
+           OR lower(model_id) LIKE '%mimo-v2.6%') THEN 1 ELSE imputed END AS imputed,
+       effort_channel, index_version, source_url, source_date, source_record,
+       measured_at, origin, legacy, verified_tok_per_s,
+       COALESCE(julianday(measured_at) < julianday('now', '-45 days'), 1) AS stale
+FROM ranked WHERE preference = 1;
+
 CREATE TABLE IF NOT EXISTS catalog_routes (
     route_id TEXT PRIMARY KEY,
     role_name TEXT NOT NULL,

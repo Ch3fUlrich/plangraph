@@ -15,7 +15,7 @@ from plangraph.retired_models import check_route_targets
 from plangraph.model_admission import validate_model  # compatibility re-export
 
 from .benchmarks import (BENCHMARK_COLUMNS, BenchDataError, BenchmarkError,  # noqa: F401
-                         BenchRequired, benchmark_rows_from_db)
+                         BenchRequired, benchmark_for_leg, benchmark_rows_from_db)
 from .legs import CODEX_FALLBACK_WRITERS, DEFAULT_LEGS, READINESS_LEGS, LEAD_WRITER, TIERS, WRITER_ORDER, Leg, leg_active, explicit_only_skips  # noqa: F401  (re-export for SpawnService.route)
 from .provider_stop import next_leg_after_provider_stop
 from .readiness import WINDOW_TOKENS, USABLE_FRACTION
@@ -336,7 +336,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidates = tuple(l for l in legs if role in l.roles and leg_active(l, now=now))
     rows = (benchmark if isinstance(benchmark, Mapping) else {
         row["model_id"]: row for row in benchmark}) if benchmark is not None else {}
-    missing = tuple(leg for leg in candidates if leg.model not in rows and leg.id not in rows)
+    missing = tuple(leg for leg in candidates if benchmark_for_leg(rows, leg) is None)
     gaps = tuple({"leg": leg.id, "model": leg.model,
                   "reason": "explicitly unmeasured" if leg.benchmark_optional else "no benchmark row"}
                  for leg in missing)
@@ -395,7 +395,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     candidate_details = []
     low_risk = _is_low_risk(ranking_risk, card.get('risk_tags'))
     for leg in candidates:
-        row = rows.get(leg.model, rows.get(leg.id))
+        row = benchmark_for_leg(rows, leg)
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
         if native_implement and leg.id in CODEX_FALLBACK_WRITERS and not codex_out and not reason:
             reason = "codex_available"
@@ -430,7 +430,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         detail = {"leg": leg.id, "tier": leg.tier,
                   "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
-                  "p_source": "measured" if row is not None else "prior"}
+                  "p_source": "measured" if row is not None and not row.get('imputed') else "prior"}
         if reason:
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
@@ -453,10 +453,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         from plangraph.routing_support.resolver import rank_candidates
         for tier in TIERS:
             tier_positions = [i for i, l in enumerate(ordered) if l.tier == tier]
-            positions = [i for i in tier_positions
-                         if ordered[i].model in rows or ordered[i].id in rows]
+            positions = [i for i in tier_positions if benchmark_for_leg(rows, ordered[i]) is not None]
             missing = [ordered[i] for i in tier_positions if i not in positions]
-            measured = [dict(rows.get(ordered[i].model, rows.get(ordered[i].id)),
+            measured = [dict(benchmark_for_leg(rows, ordered[i]),
                              model_id=ordered[i].id, tier=tier, available=1, active=True) for i in positions]
             ranked = rank_candidates(measured, role=role, risk=ranking_risk, need_tokens=card["estimate_tokens"])
             by_id = {ordered[i].id: ordered[i] for i in positions}

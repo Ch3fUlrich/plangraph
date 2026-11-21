@@ -76,25 +76,12 @@ class CatalogDB:
         self.conn.executescript(schema_sql)
         registry_columns.migrate(self.conn)
 
-        # 1. Quota pools
         self._insert_records("catalog_quota_pools", SEED_QUOTA_POOLS)
-
-        # 2. Providers
         self._insert_records("catalog_providers", SEED_PROVIDERS)
-
-        # 3. Clients
         self._insert_records("catalog_clients", SEED_CLIENTS)
-
-        # 4. Models
         self._insert_records("catalog_models", SEED_MODELS)
-
-        # 5. Benchmarks
         self._insert_records("catalog_benchmarks", SEED_BENCHMARKS)
-
-        # 6. Routes
         self._insert_records("catalog_routes", SEED_ROUTES)
-
-        # 7. Route legs
         self._insert_records("catalog_route_legs", SEED_ROUTE_LEGS)
 
         registry_columns.derive(self.conn)
@@ -157,6 +144,8 @@ class CatalogDB:
         d['active'] = d.get('status') == 'active'
         d["id"] = d["model_id"]
         d["context_window"] = d["context_tokens"]
+        from plangraph.planner.benchmarks import benchmark_cells
+        d["benchmark_rows"] = (benchmark_cells(self.conn, model_id) or {}).get(model_id, [])
         combos_rows = self.conn.execute(
             "SELECT route_id FROM catalog_route_legs WHERE model_id = ? ORDER BY route_id ASC",
             (model_id,),
@@ -250,12 +239,15 @@ class CatalogDB:
         combos_by_model: dict[str, list[str]] = {}
         for lr in leg_rows:
             combos_by_model.setdefault(lr["model_id"], []).append(lr["route_id"])
+        from plangraph.planner.benchmarks import benchmark_cells
+        by_model = benchmark_cells(self.conn) or {}
 
         for r in rows:
             r['active'] = r.get('status') == 'active'
             r["id"] = r["model_id"]
             r["context_window"] = r["context_tokens"]
             r["combos"] = combos_by_model.get(r["model_id"], [])
+            r["benchmark_rows"] = by_model.get(r["model_id"], [])
 
         # Ensure Python-side sorting is strictly in sync with TIER_RUNG
         rows.sort(
@@ -342,6 +334,7 @@ class CatalogDB:
             ("clients", "SELECT * FROM catalog_clients ORDER BY client_id ASC"),
             ("models", "SELECT * FROM catalog_models ORDER BY model_id ASC"),
             ("benchmarks", "SELECT * FROM catalog_benchmarks ORDER BY model_id ASC"),
+            ("benchmark_measurements", "SELECT * FROM catalog_benchmark_measurements ORDER BY model_id, effort, harness, origin"),
             ("routes", "SELECT * FROM catalog_routes ORDER BY route_id ASC"),
             ("route_legs", "SELECT * FROM catalog_route_legs ORDER BY route_id ASC, position ASC"),
         ]
@@ -412,6 +405,7 @@ class CatalogDB:
             ("clients", "catalog_clients"),
             ("models", "catalog_models"),
             ("benchmarks", "catalog_benchmarks"),
+            ("benchmark_measurements", "catalog_benchmark_measurements"),
             ("routes", "catalog_routes"),
             ("route_legs", "catalog_route_legs"),
         ]
