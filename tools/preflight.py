@@ -299,10 +299,11 @@ def require_protoc(root, commands, env):
             resolved = Path(given) if Path(given).is_absolute() else Path(root) / 'rust' / given
             found = str(resolved) if resolved.is_file() and os.access(resolved, os.X_OK) else None
         else:
-            # Relative and empty PATH entries mean the Cargo working directory, not ours.
+            # Relative and empty PATH entries mean the Cargo working directory, not ours; an
+            # explicitly empty PATH is one such entry.
             cargo_path = os.pathsep.join(
-                entry if os.path.isabs(entry) else str(Path(root) / 'rust' / entry)
-                for entry in env.get('PATH', '').split(os.pathsep) if env.get('PATH'))
+                entry if entry and os.path.isabs(entry) else str(Path(root) / 'rust' / entry)
+                for entry in env['PATH'].split(os.pathsep)) if 'PATH' in env else None
             found = shutil.which(given, path=cargo_path)
         if not found:
             raise FailFamily(f"PROTOC={given} is not an executable file: fix or unset PROTOC")
