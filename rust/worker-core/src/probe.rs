@@ -30,6 +30,13 @@ pub enum ProbeError {
 /// helper refused), which is a probe error, not a failed check.
 const STARTED: &str = ".pg-check-started";
 
+/// A jailed check that failed without leaving its marker never started. A check
+/// that PASSED did run (a launcher failure is never exit 0), so one that cleaned
+/// up its own tmp, marker included, keeps its verdict.
+fn never_started(marker_exists: bool, r: &crate::check::CheckResult) -> bool {
+    !marker_exists && !r.passed()
+}
+
 fn marked(cmd: &str) -> String {
     format!(": > \"$TMPDIR/{STARTED}\"; {cmd}")
 }
@@ -77,7 +84,7 @@ pub fn probe_scoped(
     }
     let r = run_check_scoped(&cmd, dir, timeout, tail_n, jail, &|| false)?;
     if let Some((_, _, tmp)) = jail {
-        if !tmp.join(STARTED).exists() {
+        if never_started(tmp.join(STARTED).exists(), &r) {
             return Err(ProbeError::Check(std::io::Error::other(
                 "the jailed check never started (launcher or jail setup failed)",
             )));
@@ -98,6 +105,29 @@ mod tests {
     const T: Duration = Duration::from_secs(20);
 
     #[test]
+    fn a_passing_check_that_removed_its_marker_keeps_its_verdict() {
+        let r = |code| crate::check::CheckResult {
+            exit_code: Some(code),
+            signal: None,
+            timed_out: false,
+            cancelled: false,
+            tail: String::new(),
+            output_hash: String::new(),
+        };
+        assert!(!never_started(true, &r(1)), "marker present: it started");
+        assert!(
+            !never_started(false, &r(0)),
+            "passed without a marker: still a pass"
+        );
+        assert!(
+            never_started(false, &r(1)),
+            "failed without a marker: never started"
+        );
+        assert!(never_started(false, &r(78)));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn the_start_marker_is_written_before_the_card_command_runs() {
         let tmp = tempfile::tempdir().unwrap();
         let out = std::process::Command::new("sh")
@@ -110,6 +140,7 @@ mod tests {
         assert!(tmp.path().join(STARTED).exists());
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_jailed_check_that_never_starts_is_an_error_not_a_partial() {
         let (d, base) = repo();
