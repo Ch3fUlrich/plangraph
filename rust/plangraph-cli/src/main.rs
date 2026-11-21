@@ -24,6 +24,27 @@ fn run() -> i32 {
     if args == ["host-link-deliver"] {
         return plangraph_cli::host_link_bridge::cli();
     }
+    if args.first().map(String::as_str) == Some("land-timeline") {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        return plangraph_cli::land::timeline::run(&home, &args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("land-train") {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        return plangraph_cli::land::cli::run(&home, &args[1..]);
+    }
+    if args.first().map(String::as_str) == Some("main-state") {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        return plangraph_cli::land::main_gh::run(&home, &args[1..]);
+    }
     if let Some(code) = plangraph_cli::watchers::cli(&args) {
         return code;
     }

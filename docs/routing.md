@@ -244,3 +244,5 @@ the Codex launch maps `omniroute/cx-gpt-6.2-sol-medium` to `--model gpt-6.2-sol`
 `client_missing`). Families
 without an own client (deepseek, glm, mimo, free legs) stay on OpenCode. Pinning a model's
 OpenCode leg with `--leg` while its own client is installed needs `--override-reason`.
+
+Merge paths and main's state: the keeper's phase finish asks `plangraph main-state --admit` after CI is green on the phase head and refuses to merge with `main_red`, `main_pending`, `state_unknown` or `ref_not_forward_only` (docs/ci-parallel.md, "Red main and runner switches").

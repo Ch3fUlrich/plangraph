@@ -1,0 +1,1 @@
+A red landing train drops the failing part (hinted by the failing test paths) or is split at stack boundaries: one stack is cut at a dependency-closed prefix, two halves that pass alone land one after the other with a second full CI, an evicted part returns to its writer with the job log (twice: routing), and the train size follows the red rate between 1 and 8.

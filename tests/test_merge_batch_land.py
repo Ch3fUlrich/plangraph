@@ -129,6 +129,34 @@ def test_land_refuses_an_approval_for_an_older_head(env):
     assert land(env, approval).returncode == 0 and len(env.calls("pr", "merge")) == 1
 
 
+@pytest.mark.parametrize("state, row, word", [
+    ("red", None, "main_red"), ("pending", None, "main_pending"), ("unknown", None, "unknown"),
+    ("ref_not_forward_only", None, "ref_not_forward_only"),
+    ("pending", "EXCEPTION:main-red-fix", "main_pending"), ("unknown", "EXCEPTION:main-red-fix", "unknown")])
+def test_land_refuses_when_main_is_not_green_and_the_exception_passes_nothing_but_red(env, state, row, word):
+    approval = pushed(env)
+    env.state["main_state"] = state
+    env.save()
+    extra = ()
+    if row:
+        go = env.tmp / "go.txt"
+        go.write_text(f"GO D-1 {head_of(env)} {row}\n")
+        extra = ("--go-row", str(go))
+    res = land(env, approval, *extra)
+    assert res.returncode != 0 and word in res.stderr and not env.calls("pr", "merge")
+
+
+def test_land_on_a_red_main_merges_only_with_the_main_red_fix_row(env):
+    approval = pushed(env)
+    env.state["main_state"] = "red"
+    env.save()
+    go = env.tmp / "go.txt"
+    go.write_text(f"GO D-1 {head_of(env)} EXCEPTION:main-red-fix\n")
+    res = land(env, approval, "--go-row", str(go))
+    assert res.returncode == 0, res.stderr
+    assert len(env.calls("pr", "merge")) == 1
+
+
 def test_land_merges_closes_unmerged_and_reports(env):
     approval = pushed(env)
     env.state["no_auto_merge"] = [3]  # GitHub has not marked PR 3 merged
@@ -523,3 +551,11 @@ def test_land_names_the_batch_item_in_the_merge_commit(env):
     merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
     trailers = env.git("log", "-1", "--format=%(trailers:key=Plan-Item,valueonly)", merge, cwd=env.origin)
     assert trailers.split() == ["plangraph:BATCH-1", "plangraph:ITEM-A", "plangraph:ITEM-B", "plangraph:ITEM-C"]
+
+
+def test_land_reads_main_last_right_before_the_merge_call():
+    """The admission read follows the rerun-comment work, so main turning red during it still stops the merge."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "tools" / "merge_batch_land.py").read_text(encoding="utf-8")
+    src = text[text.index("def cmd_land("):]
+    assert src.index("record_reruns(") < src.index("require_main_green(") < src.index('"pr", "merge"')

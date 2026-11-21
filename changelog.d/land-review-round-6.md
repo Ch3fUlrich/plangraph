@@ -1,0 +1,1 @@
+Each batch-failure delivery claim is stamped with the clock read under the lock for that claim, and a `ci-full` status without a time never loses to an older dated one (the API's newest-first order stands when either time is missing).
