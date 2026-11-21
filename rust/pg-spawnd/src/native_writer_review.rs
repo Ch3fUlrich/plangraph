@@ -272,6 +272,12 @@ impl Host {
         verdict["run_id"] = json!(id);
         verdict["path"] = json!(path);
         verdict["leg"] = record["chosen_leg"]["id"].clone();
+        if verdict["verdict"] == "ACCEPT" {
+            verdict["accepted_at"] = record["ended"].as_f64().map_or_else(
+                || json!(chrono::Utc::now().to_rfc3339()),
+                |ended| json!(ended),
+            );
+        }
         Ok(verdict)
     }
 }

@@ -86,6 +86,9 @@ explicit configured host when the parent lacks a local receipt. The worker
 prepends queued messages to its next Codex resume and records their delivery
 times in `steer_messages`. The receipt reports queue acceptance immediately.
 
+Native records include each Codex turn's start and end in `writer_turns` and
+the review's `accepted_at` timestamp for the throughput collector.
+
 The live Rust supervisor persists a `manifest` in the run record before launching
 Codex: name (run ID), host, worktree, original brief, effort and `try_count`.
 A killed/crashed CLI, failed CLI execution (including exit 127), or exit without a

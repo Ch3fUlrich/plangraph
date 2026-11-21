@@ -1,0 +1,10 @@
+[Unit]
+Description=Collect main-branch throughput into the landing telemetry database
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/plangraph
+Environment=PLANGRAPH_THROUGHPUT_START=2026-11-20T00:00:00Z
+EnvironmentFile=%h/.config/plangraph/throughput.env
+ExecStart=%h/.local/bin/plangraph throughput tick ${PLANGRAPH_THROUGHPUT_REPO} ${PLANGRAPH_THROUGHPUT_PROJECT} refs/remotes/origin/main ${PLANGRAPH_THROUGHPUT_SNAPSHOT}
+UMask=0077

@@ -24,6 +24,10 @@ fn stamp(v: &Value) -> Option<i64> {
 /// Latest snapshot per account/window; stale or malformed windows disable that
 /// account, never an independent healthy account. Hourly store default: 3 hours.
 pub(super) fn remaining(rows: &Value, now: i64, max_age: i64) -> Option<f64> {
+    remaining_for(rows, "codex", now, max_age)
+}
+
+pub(crate) fn remaining_for(rows: &Value, target: &str, now: i64, max_age: i64) -> Option<f64> {
     let mut latest: BTreeMap<(String, String), (i64, Option<f64>)> = BTreeMap::new();
     let mut invalid = BTreeSet::new();
     for r in rows.as_array()? {
@@ -31,7 +35,7 @@ pub(super) fn remaining(rows: &Value, now: i64, max_age: i64) -> Option<f64> {
             continue;
         };
         let (provider, suffix) = name.split_once(':').unwrap_or((name, ""));
-        if provider != "codex" {
+        if provider != target {
             continue;
         }
         let account = field(r, &["connection_id", "connectionId"])

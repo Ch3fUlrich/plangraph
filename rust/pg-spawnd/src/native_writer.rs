@@ -1,5 +1,7 @@
 //! Native CLI writer lifecycle, independent of placement and transport.
 use serde_json::{json, Value};
+#[path = "native_writer_timing.rs"]
+mod timing;
 /// Batch writer driver (R-batch-01..04, 06): one writer session, fast checks per head,
 /// an other-family review run on the exact head, fixes in the same session.
 pub(crate) trait Driver {
@@ -208,8 +210,7 @@ fn resume(
         format!("Parent steering messages for this run:\n\n{steer}\n\n{prompt}")
     };
     record["resumes"] = json!(record["resumes"].as_u64().unwrap_or(0) + 1);
-    driver.save(record).map_err(|e| (6, e))?;
-    driver.execute(Some(session), &prompt).map_err(|e| (6, e))?;
+    timing::execute_turn(driver, record, Some(session), &prompt)?;
     if !messages.is_empty() {
         crate::native_steer::delivered(record, &messages);
         driver.save(record).map_err(|e| (6, e))?;
@@ -265,7 +266,7 @@ fn writer_attempt(
         resume(driver, record, session, prompt)?;
         session.to_owned()
     } else {
-        let session = driver.execute(None, prompt).map_err(|e| (6, e))?;
+        let session = timing::execute_turn(driver, record, None, prompt)?;
         record["session_id"] = json!(session);
         record["resumes"] = json!(0);
         session

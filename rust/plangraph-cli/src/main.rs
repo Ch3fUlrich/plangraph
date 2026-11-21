@@ -68,6 +68,9 @@ fn run() -> i32 {
     if args.first().is_some_and(|s| s == "feed") {
         return feeder::run(&home, &effective, &args[1..]);
     }
+    if args.first().is_some_and(|s| s == "throughput") {
+        return plangraph_cli::throughput::run(&home, &effective, &args[1..]);
+    }
     if args.first().is_some_and(|s| s == "merge-close") {
         return plangraph_cli::merge_close::run(&effective, &args[1..]);
     }

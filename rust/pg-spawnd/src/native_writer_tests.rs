@@ -581,6 +581,8 @@ fn batch_driver_reaches_done_on_accept_and_pushes_once() {
     assert_eq!(record["exit_code"], 0);
     assert_eq!(record["status_line"], "DONE");
     assert_eq!(record["review_rounds"], 1);
+    assert!(record["writer_turns"][0]["started"].is_string());
+    assert!(record["writer_turns"][0]["ended"].is_string());
     assert_eq!(record["fast_checks"]["status"], "passed");
     assert_eq!(record["pushed"], "refs/heads/lane/fixture");
     assert_eq!(driver.pushed, vec!["final-head".to_owned()]);

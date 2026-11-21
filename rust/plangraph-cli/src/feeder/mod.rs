@@ -2,7 +2,7 @@
 //! spawn is an effectful activity behind `Launch` (including compensating release).
 mod adapters;
 mod capacity;
-mod quota;
+pub(crate) mod quota;
 mod runtime;
 mod selection;
 mod sources;
