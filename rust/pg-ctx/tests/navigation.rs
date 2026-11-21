@@ -1,4 +1,4 @@
-use scip::types::{Document, Index, Occurrence, PositionEncoding, Relationship, SymbolInformation};
+use scip::types::{Document, Index, Occurrence, Relationship, SymbolInformation};
 use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -49,13 +49,14 @@ fn occurrence(symbol: &str, range: Vec<i32>, symbol_roles: i32) -> Occurrence {
 }
 
 fn write_scip(path: &Path) {
+    const SCIP_UTF16: i32 = 2;
     let widget = "scip-rust cargo demo 0.1.0 widget().";
     let other = "scip-rust cargo demo 0.1.0 other/widget().";
     let client = "scip-rust cargo demo 0.1.0 client().";
     let index = Index {
         documents: vec![Document {
             relative_path: "code.rs".into(),
-            position_encoding: PositionEncoding::UTF16CodeUnitOffsetFromLineStart.into(),
+            position_encoding: protobuf::EnumOrUnknown::from_i32(SCIP_UTF16),
             occurrences: vec![
                 occurrence(widget, vec![1, 3, 9], 1),
                 occurrence(client, vec![2, 3, 9], 1),

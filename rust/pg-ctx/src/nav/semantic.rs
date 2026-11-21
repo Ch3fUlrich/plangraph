@@ -1,10 +1,37 @@
 use super::{syntax::Syntax, Location, NavResult, ScipInput};
 use protobuf::Message;
-use scip::types::{occurrence::Typed_range, Document, Occurrence, PositionEncoding, SymbolRole};
+use scip::types::{occurrence::Typed_range, Document, Occurrence, SymbolRole};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::ops::Range;
+
+#[derive(Clone, Copy)]
+enum PositionEncoding {
+    Utf8,
+    Utf16,
+    Utf32,
+}
+
+impl PositionEncoding {
+    fn from_scip(value: i32, tool: &str) -> Option<Self> {
+        // SCIP stores the encoding in the document. Older producers leave it unset.
+        match (value, tool) {
+            (1, _) | (0, "rust-analyzer") => Some(Self::Utf8),
+            (2, _) | (0, "scip-python") => Some(Self::Utf16),
+            (3, _) => Some(Self::Utf32),
+            _ => None,
+        }
+    }
+
+    fn units(self, ch: char) -> usize {
+        match self {
+            Self::Utf8 => ch.len_utf8(),
+            Self::Utf16 => ch.len_utf16(),
+            Self::Utf32 => 1,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct ScipSymbol {
@@ -107,21 +134,10 @@ impl Inputs {
             if !doc.text.is_empty() && doc.text != source.text {
                 return Err(format!("SCIP text differs from committed source for {path}").into());
             }
-            let encoding = match doc.position_encoding.enum_value() {
-                Ok(PositionEncoding::UnspecifiedPositionEncoding) if tool == "rust-analyzer" => {
-                    PositionEncoding::UTF8CodeUnitOffsetFromLineStart
-                }
-                Ok(PositionEncoding::UnspecifiedPositionEncoding) if tool == "scip-python" => {
-                    PositionEncoding::UTF16CodeUnitOffsetFromLineStart
-                }
-                Ok(PositionEncoding::UnspecifiedPositionEncoding) | Err(_) => {
-                    return Err(format!(
-                        "SCIP position encoding is missing or unsupported for {path}"
-                    )
-                    .into())
-                }
-                Ok(encoding) => encoding,
-            };
+            let encoding = PositionEncoding::from_scip(doc.position_encoding.value(), &tool)
+                .ok_or_else(|| {
+                    format!("SCIP position encoding is missing or unsupported for {path}")
+                })?;
             for occurrence in doc.occurrences {
                 if occurrence.symbol.is_empty() {
                     continue;
@@ -204,11 +220,7 @@ impl SourceMap {
             if units >= column {
                 break;
             }
-            units += match encoding {
-                PositionEncoding::UTF8CodeUnitOffsetFromLineStart => ch.len_utf8(),
-                PositionEncoding::UTF16CodeUnitOffsetFromLineStart => ch.len_utf16(),
-                _ => 1,
-            };
+            units += encoding.units(ch);
             bytes += ch.len_utf8();
         }
         (units == column).then_some((start + bytes, bytes))
