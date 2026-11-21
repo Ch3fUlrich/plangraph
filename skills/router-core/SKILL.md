@@ -51,14 +51,16 @@ reply that lists what was applied and what was refused.
    entry. Run it as the router principal with one D-id for the whole file; reply with the
    applied and refused entries, never "refused" alone. Fix the file and run it again.
    Do not split a batch to get around one entry.
-2. **GO for a batch PR.** Write the input (D-id, PR number, batch head, one part per writer
-   branch: name, head, CI state, review file, writer family, reviewer family) and run
+2. **GO for a batch PR.** Write the input (D-id, project, PR number, batch head, one part per
+   writer branch: name, head, CI state, review file, writer family, reviewer family) and run
    `plangraph router go-row INPUT.json`. It refuses, naming the part, when a head is not 40
-   hex, CI is not green, a review file or family is missing, or the reviewer family is the
-   writer's. It prints the one GO row with the per-part evidence table; add that row to the
-   decisions file in one commit.
-3. **Grants for several lanes.** `plangraph router grant-rows INPUT.json OUT` writes one line per
-   grant (lane, grantee, scope) under one D-id into one row file; the grants land in one
+   hex, CI is not green, a family is missing, the reviewer family is the writer's, or the
+   review file is missing, names another head than the part's, or does not end in
+   `VERDICT: ACCEPT`. It prints the one GO row in the decisions-log columns (`| ID | project |
+   decision | by | why |`, the GO and its `GO-HEAD` in the decision cell, the per-part table in the
+   why cell); add that row to the decisions file in one commit.
+3. **Grants for several lanes.** `plangraph router grant-rows INPUT.json OUT` writes one decisions-log row per
+   grant (lane, grantee, scope; the input names the project) under one D-id into one row file; the grants land in one
    decision PR. A lane listed twice refuses the file.
 4. **Asks to plan-order.** Related asks go as one group: `plangraph router ask-group INPUT.json`
    prints one numbered message (`ASK-GROUP <to> | <topic> | N item(s)`, one line per item).

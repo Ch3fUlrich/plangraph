@@ -26,6 +26,8 @@ pub struct Part {
 #[derive(Debug, Deserialize)]
 pub struct GoInput {
     pub decision: String,
+    /// The keeper project of the batch PR; the decisions-log `project` column.
+    pub project: String,
     pub pr: u64,
     /// Head of the batch PR; the keeper binds the GO to it.
     pub head: String,
@@ -42,6 +44,7 @@ pub struct Grant {
 #[derive(Debug, Deserialize)]
 pub struct GrantInput {
     pub decision: String,
+    pub project: String,
     pub grants: Vec<Grant>,
 }
 
@@ -70,12 +73,42 @@ fn token(value: &str) -> bool {
     !value.is_empty() && !value.contains(|c: char| c.is_whitespace() || c == '|' || c == ';')
 }
 
-/// The one GO row of a batch PR with the per-part evidence table. Refuses, naming the part,
-/// when a head is not 40 hex, CI is not green, the review file is missing or the reviewer
-/// family is the writer's.
-pub fn go_row(input: &GoInput) -> Result<String, String> {
-    if !decision_id(&input.decision) || !sha40(&input.head) || input.parts.is_empty() {
-        return Err("go-row needs a D-id, a 40-hex batch head and at least one part".into());
+/// Why `text` is no accepted review of `head`: every `HEAD:` line names that head, there is at
+/// least one, and the last `VERDICT:` line is `ACCEPT`.
+fn review_refusal(text: &str, head: &str) -> Option<&'static str> {
+    let heads: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("HEAD:"))
+        .map(str::trim)
+        .collect();
+    if heads.is_empty() || heads.iter().any(|h| !h.eq_ignore_ascii_case(head)) {
+        return Some("review file is not for this head");
+    }
+    let verdict = text
+        .lines()
+        .rev()
+        .find_map(|l| l.trim().strip_prefix("VERDICT:"))
+        .map(str::trim);
+    (verdict != Some("ACCEPT")).then_some("review file is not an ACCEPT")
+}
+
+/// The one GO row of a batch PR in the decisions-log schema (`| ID | project | decision | by |
+/// why |`): the decision cell holds the GO and its binding (`GO #PR GO-HEAD head`), the why
+/// cell the per-part evidence table. Refuses, naming the part, when a head is not 40 hex, CI is
+/// not green, the review file is missing, unreadable, not for the part's head or not an ACCEPT,
+/// or the reviewer family is the writer's. `read` returns the text of a review file.
+pub fn go_row(
+    input: &GoInput,
+    read: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<String, String> {
+    if !decision_id(&input.decision)
+        || !token(&input.project)
+        || !sha40(&input.head)
+        || input.parts.is_empty()
+    {
+        return Err(
+            "go-row needs a D-id, a project, a 40-hex batch head and at least one part".into(),
+        );
     }
     let mut table = Vec::new();
     for part in &input.parts {
@@ -97,6 +130,11 @@ pub fn go_row(input: &GoInput) -> Result<String, String> {
         if let Some(why) = why {
             return Err(format!("part {}: {why}", part.name));
         }
+        let review = read(&part.review_file)
+            .map_err(|e| format!("part {}: review file unreadable: {e}", part.name))?;
+        if let Some(why) = review_refusal(&review, &part.head) {
+            return Err(format!("part {}: {why}", part.name));
+        }
         table.push(format!(
             "{} head {} ci {} review {} writer {} reviewer {}",
             part.name,
@@ -108,8 +146,9 @@ pub fn go_row(input: &GoInput) -> Result<String, String> {
         ));
     }
     Ok(format!(
-        "| {} | GO #{} GO-HEAD {} | parts {}: {} |",
+        "| {} | {} | GO #{} GO-HEAD {} | router | parts {}: {} |",
         input.decision,
+        input.project,
         input.pr,
         input.head,
         input.parts.len(),
@@ -119,8 +158,8 @@ pub fn go_row(input: &GoInput) -> Result<String, String> {
 
 /// Rows for several lanes in one row file, one line per grant, in input order.
 pub fn grant_rows(input: &GrantInput) -> Result<String, String> {
-    if !decision_id(&input.decision) || input.grants.is_empty() {
-        return Err("grant-rows needs a D-id and at least one grant".into());
+    if !decision_id(&input.decision) || !token(&input.project) || input.grants.is_empty() {
+        return Err("grant-rows needs a D-id, a project and at least one grant".into());
     }
     let mut seen = Vec::new();
     let mut out = String::new();
@@ -136,8 +175,8 @@ pub fn grant_rows(input: &GrantInput) -> Result<String, String> {
         }
         seen.push(&grant.lane);
         out.push_str(&format!(
-            "| {} | GRANT {} to {} scope {} |\n",
-            input.decision, grant.lane, grant.grantee, grant.scope
+            "| {} | {} | GRANT {} to {} scope {} | router | |\n",
+            input.decision, input.project, grant.lane, grant.grantee, grant.scope
         ));
     }
     Ok(out)
@@ -176,6 +215,14 @@ fn read<T: for<'de> Deserialize<'de>>(path: &str) -> Result<T, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("{path}: {e}"))
 }
 
+fn read_review(path: &str) -> Result<String, String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path}: not a file"));
+    }
+    std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))
+}
+
 /// `plangraph router (go-row|grant-rows|ask-group) INPUT.json [OUT]`.
 pub fn run(args: &[String]) -> i32 {
     let (Some(verb), Some(input)) = (args.first(), args.get(1)) else {
@@ -184,7 +231,7 @@ pub fn run(args: &[String]) -> i32 {
     };
     let text = match verb.as_str() {
         "go-row" => read(input)
-            .and_then(|i: GoInput| go_row(&i))
+            .and_then(|i: GoInput| go_row(&i, &read_review))
             .map(|t| t + "\n"),
         "grant-rows" => read(input).and_then(|i: GrantInput| grant_rows(&i)),
         "ask-group" => read(input).and_then(|i: AskInput| ask_group(&i)),

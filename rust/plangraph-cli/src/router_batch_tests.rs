@@ -13,24 +13,35 @@ fn part(name: &str, head: &str, writer: &str, reviewer: &str) -> Part {
         reviewer_family: reviewer.into(),
     }
 }
+/// Review files by name: every part's file accepts the head the part names.
+fn accepting(path: &str) -> Result<String, String> {
+    let name = path.trim_start_matches("review-").trim_end_matches(".txt");
+    let head = if name == "beta" { G } else { H };
+    Ok(format!("HEAD: {head}\nHARNESS: codex\nVERDICT: ACCEPT\n"))
+}
 fn go(parts: Vec<Part>) -> GoInput {
     GoInput {
         decision: "D-6400".into(),
+        project: "demo".into(),
         pr: 1090,
         head: H.into(),
         parts,
     }
 }
 
+fn go_row_ok(input: &GoInput) -> Result<String, String> {
+    go_row(input, &accepting)
+}
+
 #[test]
 fn a_batch_pr_with_two_parts_yields_one_go_row_naming_both_heads_reviews_and_families() {
-    let row = go_row(&go(vec![
+    let row = go_row_ok(&go(vec![
         part("alpha", H, "claude", "gemini"),
         part("beta", G, "claude", "deepseek"),
     ]))
     .unwrap();
     assert_eq!(row.lines().count(), 1);
-    assert!(row.starts_with("| D-6400 | GO #1090 GO-HEAD 0123456789abcdef"));
+    assert!(row.starts_with("| D-6400 | demo | GO #1090 GO-HEAD 0123456789abcdef"));
     for needle in [
         format!("alpha head {H} ci green review review-alpha.txt writer claude reviewer gemini"),
         format!("beta head {G} ci green review review-beta.txt writer claude reviewer deepseek"),
@@ -45,27 +56,28 @@ fn any_bad_part_refuses_the_whole_row_and_names_the_part() {
     let mut red = part("beta", G, "claude", "gemini");
     red.ci = "failing".into();
     assert_eq!(
-        go_row(&go(vec![part("alpha", H, "claude", "gemini"), red])).unwrap_err(),
+        go_row_ok(&go(vec![part("alpha", H, "claude", "gemini"), red])).unwrap_err(),
         "part beta: CI is not green"
     );
     assert_eq!(
-        go_row(&go(vec![part("alpha", H, "claude", "claude")])).unwrap_err(),
+        go_row_ok(&go(vec![part("alpha", H, "claude", "claude")])).unwrap_err(),
         "part alpha: reviewer family is the writer family"
     );
     assert_eq!(
-        go_row(&go(vec![part("alpha", "abc", "claude", "gemini")])).unwrap_err(),
+        go_row_ok(&go(vec![part("alpha", "abc", "claude", "gemini")])).unwrap_err(),
         "part alpha: head is not 40 hex"
     );
-    assert!(go_row(&go(vec![])).is_err());
+    assert!(go_row_ok(&go(vec![])).is_err());
     let mut bad_head = go(vec![part("a", H, "x", "y")]);
     bad_head.head = "short".into();
-    assert!(go_row(&bad_head).is_err());
+    assert!(go_row_ok(&bad_head).is_err());
 }
 
 #[test]
 fn two_grants_land_in_one_row_file() {
     let input = GrantInput {
         decision: "D-6401".into(),
+        project: "demo".into(),
         grants: vec![
             Grant {
                 lane: "lane-a".into(),
@@ -82,7 +94,7 @@ fn two_grants_land_in_one_row_file() {
     let text = grant_rows(&input).unwrap();
     assert_eq!(
         text,
-        "| D-6401 | GRANT lane-a to build-0001 scope merge |\n| D-6401 | GRANT lane-b to build-0002 scope merge |\n"
+        "| D-6401 | demo | GRANT lane-a to build-0001 scope merge | router | |\n| D-6401 | demo | GRANT lane-b to build-0002 scope merge | router | |\n"
     );
     let mut twice = input;
     twice.grants[1].lane = "lane-a".into();
@@ -131,4 +143,80 @@ fn the_router_skill_holds_the_batch_section_for_every_successor() {
     ] {
         assert!(skill.contains(needle), "skill lacks {needle}");
     }
+}
+
+#[test]
+fn a_review_file_that_is_missing_for_another_head_or_not_an_accept_refuses_the_part() {
+    let one = go(vec![part("alpha", H, "claude", "gemini")]);
+    let missing = go_row(&one, &|p| Err(format!("{p}: No such file or directory")));
+    assert!(missing
+        .unwrap_err()
+        .starts_with("part alpha: review file unreadable"));
+    let other = go_row(&one, &|_| Ok(format!("HEAD: {G}\nVERDICT: ACCEPT\n")));
+    assert_eq!(
+        other.unwrap_err(),
+        "part alpha: review file is not for this head"
+    );
+    for text in [
+        format!("HEAD: {H}\nVERDICT: REQUEST_CHANGES\n"),
+        format!("HEAD: {H}\nVERDICT: ACCEPT\nVERDICT: REQUEST_CHANGES\n"),
+        format!("HEAD: {H}\n"),
+    ] {
+        let refused = go_row(&one, &|_| Ok(text.clone()));
+        assert_eq!(
+            refused.unwrap_err(),
+            "part alpha: review file is not an ACCEPT",
+            "{text}"
+        );
+    }
+    let no_head = go_row(&one, &|_| Ok("VERDICT: ACCEPT\n".into()));
+    assert!(no_head.unwrap_err().contains("not for this head"));
+    // The same path through the real file reader: a missing path is refused.
+    let nowhere = part("alpha", H, "claude", "gemini");
+    let mut input = go(vec![nowhere]);
+    input.parts[0].review_file = "/nonexistent/review-alpha.txt".into();
+    assert!(go_row(&input, &read_review)
+        .unwrap_err()
+        .contains("review file unreadable"));
+}
+
+/// The keeper's own reader takes the generated row as one GO bound to the PR and the head.
+#[test]
+fn the_generated_go_row_is_read_by_the_keepers_parser_as_a_go_bound_to_pr_and_head() {
+    let row = go_row_ok(&go(vec![
+        part("alpha", H, "claude", "gemini"),
+        part("beta", G, "claude", "deepseek"),
+    ]))
+    .unwrap();
+    let dir = std::env::temp_dir().join(format!("pg-go-row-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("DECISIONS.md");
+    std::fs::write(
+        &log,
+        format!("| ID | project | decision | by | why |\n|---|---|---|---|---|\n{row}\n"),
+    )
+    .unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let script = "import sys; sys.path.insert(0, sys.argv[2]); from pathlib import Path\n\
+        from plangraph.keeper.evidence_decisions import DecisionsAdapter\n\
+        from plangraph.keeper.store_waiver import _go_binding, _go_statement\n\
+        text = DecisionsAdapter(Path(sys.argv[1])).text('D-6400')\n\
+        print(*_go_binding(_go_statement(text), 'demo'))";
+    let python = std::env::var("PG_TEST_PYTHON").unwrap_or_else(|_| "python3".into());
+    let out = std::process::Command::new(python)
+        .args(["-I", "-c", script])
+        .arg(&log)
+        .arg(root.join("src"))
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout).trim(),
+        format!("1090 {H}")
+    );
 }
