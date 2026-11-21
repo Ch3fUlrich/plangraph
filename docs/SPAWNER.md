@@ -13,10 +13,9 @@ Session `launch` and `relaunch` refuse with `quota pause` before invoking the
 action or stopping an existing session, without a model filter. Dry runs do not
 bypass the quota check or write audit records.
 
-For an operator pause, place a regular UTF-8 file named `fleet-launch.pause` in
-the spawner state directory. Session launch, launch preview and relaunch refuse
-with the trimmed file contents as the reason. An empty file reports
-`operator pause`. Remove the file to resume accepting session launches.
+For an operator pause, place a regular UTF-8 file named `fleet-launch.pause` in the spawner state
+directory. Session launch, launch preview and relaunch refuse with the trimmed file contents as the
+reason; an empty file reports `operator pause`. Remove the file to resume accepting session launches.
 Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
 pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
 metadata. Known other providers are unaffected; missing provider metadata is
