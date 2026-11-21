@@ -532,7 +532,7 @@ def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, froze
                 tip = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", full])
                 if tip is None or not valid_commit_ref(tip.strip()):
                     return None
-                identity = (repo, short, tip.strip())  # a cache is shared between repositories
+                identity = (repo, hosted, short, tip.strip())  # a cache is shared between checkouts and their origins
                 if identity not in verified:
                     if frozen:        # a warm answer that no longer matches is unknown, never a forge call
                         return None

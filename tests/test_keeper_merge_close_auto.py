@@ -421,3 +421,27 @@ def test_the_lane_cache_is_per_repository_and_a_frozen_cache_never_asks_the_forg
     assert len(asked) == 2
     assert context_sources.open_lanes(adapter, "x", "demo:C", cache={}, frozen=True) is None
     assert len(asked) == 2 and context_sources.open_lanes(adapter, "x", "demo:C", cache=cache, frozen=True) == []
+
+
+def test_a_lane_answer_is_per_origin_and_an_expired_warm_snapshot_asks_the_forge_nothing(env, tmp_path, monkeypatch):
+    from plangraph.keeper import context_sources
+
+    set_states(env)
+    env.repo.land("c", "Plan-Item: demo:C", 87)
+    env.repo.land("c-lane", "side work", 0, merge=False)
+    slug = ["o/closed"]
+    asked = []
+    monkeypatch.setattr(context_sources, "_github_repo", lambda origin: slug[0])
+    monkeypatch.setattr(context_sources, "_closed_lane_pr", lambda g, repo, hosted, branch, tip:
+                        asked.append(hosted) or (77 if hosted == "o/closed" else 0))
+    adapter = env.store.ctx["git"]
+    cache = {}
+    assert context_sources.open_lanes(adapter, "demo", "demo:C", cache=cache) == []
+    slug[0] = "o/open"    # the checkout's origin changed: the old forge's answer says nothing about the new one
+    assert context_sources.open_lanes(adapter, "demo", "demo:C", cache=cache) == ["c-lane"]
+    assert asked == ["o/closed", "o/open"]
+    # an unwarmed (expired) run is frozen with an empty cache: the lane is unknown, the forge is not asked
+    asked.clear()
+    result = auto(env, require_seats=False)
+    assert asked == [] and result["closed"] == []
+    assert "unmerged_work_or_lanes_unknown" in result["listed"][0]["reason"]

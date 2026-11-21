@@ -319,7 +319,10 @@ class WaiverMixin:
         git, project = self._adapter("git"), self._merge_project(item)
         if not self._warm(project) and not self._refresh_merged_default_ref(git, project):
             raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
-        kw = {"cache": self.__dict__.setdefault("_lanes", {}), "frozen": True} if self._warm(project) else {}
+        warm = self._warm(project)
+        # The automatic run never asks the forge under the lock: an expired snapshot answers nothing (unknown).
+        kw = ({"cache": self.__dict__.setdefault("_lanes", {}) if warm else {}, "frozen": True}
+              if warm or self.__dict__.get("_frozen_lanes") else {})
         if context_sources.open_lanes(git, project, item["key"], **kw) != []:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
@@ -651,6 +654,13 @@ class WaiverMixin:
                          success_message=None)
 
     def _close_merged_auto(self, principal, project, require_seats, apply, now, repos_only=False):
+        self.__dict__["_frozen_lanes"] = True
+        try:
+            return self._close_merged_auto_run(principal, project, require_seats, apply, now, repos_only)
+        finally:
+            self.__dict__["_frozen_lanes"] = False
+
+    def _close_merged_auto_run(self, principal, project, require_seats, apply, now, repos_only=False):
         self._require_role(principal, "system", "router")
         if any(type(value) is not bool for value in (require_seats, apply, repos_only)):
             raise Refused("validation", "require_seats, apply and repos_only must be booleans")
