@@ -2,7 +2,7 @@
 use crate::{
     fleet_series::{self, Sample},
     host_readiness::{Record, WRITER_SANDBOX},
-    hosts::{HostRegistry, Os},
+    hosts::{HostRegistry, Os, Role},
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -29,6 +29,11 @@ pub struct Policy {
     pub host_limits: BTreeMap<String, (u64, u64)>,
     pub excluded_hosts: BTreeSet<String>,
     pub fallback_hosts: BTreeSet<String>,
+    pub preferred_host: Option<String>,
+    pub allow_fallback: bool,
+    /// Free space and floor in MB, keyed by host. Fleet placement requires both.
+    pub disk_space: BTreeMap<String, (u64, u64)>,
+    pub require_disk_capacity: bool,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -40,10 +45,33 @@ impl Default for Policy {
             host_limits: BTreeMap::new(),
             excluded_hosts: BTreeSet::new(),
             fallback_hosts: BTreeSet::new(),
+            preferred_host: None,
+            allow_fallback: true,
+            disk_space: BTreeMap::new(),
+            require_disk_capacity: false,
         }
     }
 }
 impl Policy {
+    /// Configure fleet ranking over supplied host facts without probing any host.
+    pub fn with_fleet_placement(
+        mut self,
+        role: Role,
+        primary: &str,
+        fallback_hosts: BTreeSet<String>,
+        crucial_roles: &[Role],
+        disk_space: BTreeMap<String, (u64, u64)>,
+    ) -> Self {
+        self.preferred_host =
+            matches!(role, Role::Implement | Role::Review).then(|| primary.into());
+        self.allow_workstation = true;
+        self.fallback_hosts = fallback_hosts;
+        self.allow_fallback = crucial_roles.contains(&role);
+        self.require_disk_capacity = true;
+        self.disk_space = disk_space;
+        self
+    }
+
     pub fn apply_registry(&mut self, registry: &HostRegistry, role: crate::hosts::Role) {
         let key = serde_json::to_value(role)
             .unwrap()
@@ -87,6 +115,8 @@ pub fn refusal(candidate: &Candidate, policy: &Policy, now: u64) -> Option<Strin
         "host excluded by readiness preflight"
     } else if candidate.workstation && !policy.allow_workstation {
         "workstation not allowed"
+    } else if !policy.allow_fallback && policy.fallback_hosts.contains(&candidate.id) {
+        "role not permitted on fallback host"
     } else if !fleet_series::valid_host(&candidate.id) {
         "invalid host id"
     } else if let Some(reason) = candidate
@@ -116,7 +146,11 @@ pub fn refusal(candidate: &Candidate, policy: &Policy, now: u64) -> Option<Strin
         } else if row.cpu_load.unwrap() / row.cores as f64 >= policy.max_load_per_core {
             "load gate"
         } else {
-            return None;
+            return match policy.disk_space.get(&candidate.id) {
+                Some((free, floor)) if free < floor => Some("disk below floor".into()),
+                None if policy.require_disk_capacity => Some("unknown disk capacity".into()),
+                _ => None,
+            };
         }
     } else {
         "missing sample"
@@ -144,6 +178,7 @@ pub fn ranked<'a>(
     admitted.sort_by_key(|host| {
         (
             policy.fallback_hosts.contains(&host.id),
+            policy.preferred_host.as_deref() != Some(&host.id),
             std::cmp::Reverse(headroom(host, policy)),
         )
     });
