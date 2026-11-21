@@ -85,6 +85,13 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         fs::read_to_string(dir.path().join("ledger.jsonl")).unwrap(),
         text
     );
+    let journal = dir.path().join("run-lifecycle");
+    fs::write(journal.join("published"), b"1").unwrap();
+    fs::write(&host.record_path, serde_json::to_vec(&running).unwrap()).unwrap();
+    let page = lifecycle::page(dir.path(), 1).unwrap();
+    assert_eq!(page["rows"][0]["status"], "failed");
+    let recovered: Value = serde_json::from_slice(&fs::read(&host.record_path).unwrap()).unwrap();
+    assert_eq!(recovered["ended"], 120);
 }
 
 #[test]

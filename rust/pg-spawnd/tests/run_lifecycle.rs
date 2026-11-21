@@ -69,6 +69,9 @@ fn lifecycle_replays_terminal_publication_after_interruption() {
 
 #[test]
 fn legacy_spawner_publishes_and_replays_backlog_after_host_recovers() {
+    if !cfg!(unix) {
+        return;
+    }
     let state = tempfile::tempdir().unwrap();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let bin = Path::new(env!("CARGO_BIN_EXE_pg-spawnd"));
@@ -108,6 +111,14 @@ with patch('plangraph.fleet_snapshot._projection_binary', return_value=binary):
         assert second['local']['rows'] == []
         assert second['hosts']['fixture']['rows'][0]['status'] == 'failed'
         assert second['next_cursor']['hosts']['fixture'] == 1
+        from plangraph.spawner.stall_probe import probe_run
+        orphan = {'run_id':'run-orphan','status':'running','started':1,'role':'review','pid':123}
+        service._save(orphan)
+        with patch('plangraph.spawner.stall_probe.os.kill', side_effect=ProcessLookupError()):
+            assert probe_run(state, orphan, 3)['rule'] == 'run-orphan'
+        third = changed_runs(state, second['next_cursor'], transport=lambda *_: '{"rows":[],"next_cursor":1,"more":false}')
+        assert [r['status'] for r in third['local']['rows']] == ['running','failed']
+
 "#,
         )
         .arg(state.path())
