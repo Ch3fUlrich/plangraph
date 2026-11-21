@@ -52,7 +52,7 @@ provider-state and quota-utilization readers in `quota_snapshots`) is read by `o
 `PLANGRAPH_GATEWAY_LOG_TOKEN`, then the file named by
 `PLANGRAPH_GATEWAY_LOG_TOKEN_FILE`, then `plangraph/omniroute-mgmt.key` under
 HOME/.config; the file must be a regular owner-only (0600) file. The gateway
-client key is never sent to a management endpoint.
+client key is never sent to a management endpoint, and neither the token nor its file path reaches a child process (harness children, `opencode models` discovery: `opencode_render.drop_parent_only_env`).
 
 Shipped MiMo model cards in `configuration/opencode/providers.json` and the
 fallback `_mimo_template()` in `opencode_render` carry a `body.reasoning.max_tokens`

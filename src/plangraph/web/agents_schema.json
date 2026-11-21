@@ -1,1 +1,1 @@
-{"fields":["host","name","runtime","model","state","item","age_s"],"runtimes":["claude","opencode","spawner-run"]}
+{"fields":["host","name","runtime","model","state","item","age_s"],"runtimes":["claude","opencode","spawner-run"],"reasons":["not_collected","scrub_words_unavailable"]}

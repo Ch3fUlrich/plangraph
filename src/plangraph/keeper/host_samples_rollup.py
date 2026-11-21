@@ -4,6 +4,8 @@ import json
 
 from .store_host_samples import METRICS, GPU_METRICS
 
+BIGINT_MAX = 2 ** 63 - 1  # a bucket's summed gaps saturate here, never overflow the column
+
 DDL = """
 CREATE TABLE host_sample_tokens (
     id BIGINT PRIMARY KEY,
@@ -59,6 +61,20 @@ END;
 $$;
 """
 
+# Migration 14. PostgreSQL gives every new function EXECUTE to PUBLIC, and this one runs with
+# its owner's rights: only the keeper runtime role (``keeper_rt``) may call it.  A role created
+# after the migration gets its grant from the deployment that creates it.
+ACL_DDL = """
+REVOKE ALL ON FUNCTION host_samples_partitions(double precision) FROM PUBLIC;
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'keeper_rt') THEN
+    GRANT EXECUTE ON FUNCTION host_samples_partitions(double precision) TO keeper_rt;
+  END IF;
+END;
+$$;
+"""
+
 
 def combine(entries):
     body = copy.deepcopy(entries[-1][0])
@@ -104,7 +120,7 @@ def rollup(conn, source, target, width, now):
                      'restarted=excluded.restarted,sample_count=excluded.sample_count '
                      f'WHERE excluded.sample_count>=host_samples_{target}.sample_count',
                      (host, bucket, body['seq'], json.dumps(body),
-                      sum(r['seq_gap'] for r in rows),
+                      min(sum(r['seq_gap'] for r in rows), BIGINT_MAX),
                       int(any(r['restarted'] for r in rows)), count))
 
 

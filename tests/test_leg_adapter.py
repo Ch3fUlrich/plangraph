@@ -125,6 +125,57 @@ def test_bounded_discovery(monkeypatch):
     assert leg_state.LegAdapter.standalone_models() == ['opencode-go/sample']
 
 
+def test_discovery_child_never_inherits_parent_only_management_token(monkeypatch):
+    from plangraph.routing_support.opencode_render import TOKEN_ENV, TOKEN_FILE_ENV
+    monkeypatch.setenv(TOKEN_ENV, 'synthetic-management-value')
+    monkeypatch.setenv(TOKEN_FILE_ENV, '/synthetic/token/file')
+    monkeypatch.setenv('PATH_PROBE_KEEP', 'kept')
+    seen = {}
+
+    def run(argv, **kwargs):
+        seen.update(kwargs)
+        return SimpleNamespace(stdout='opencode-go/sample\n')
+    monkeypatch.setattr(subprocess, 'run', run)
+    assert leg_state.LegAdapter.standalone_models() == ['opencode-go/sample']
+    assert TOKEN_ENV not in seen['env'] and TOKEN_FILE_ENV not in seen['env']
+    assert seen['env']['PATH_PROBE_KEEP'] == 'kept'
+
+
+@pytest.mark.parametrize('error', [subprocess.TimeoutExpired('opencode', 8), OSError(),
+                                  subprocess.CalledProcessError(1, 'opencode')])
+def test_failed_discovery_is_a_snapshot_error_not_a_missing_model(tmp_path, monkeypatch, error):
+    def run(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(subprocess, 'run', run)
+    reader, _ = adapter(tmp_path)
+    reader = leg_state.LegAdapter(reader.store, reader.provider, enabled=True)
+    status = reader('opencode-go/sample')
+    assert status['reason'].startswith('leg_state_snapshot_error: ')
+    assert status['reason'] != 'not_listed'
+
+
+def test_failed_discovery_keeps_the_probe_recovery_path(tmp_path, monkeypatch):
+    import asyncio
+    from plangraph.spawner import leg_probe
+
+    def run(*args, **kwargs):
+        raise subprocess.TimeoutExpired('opencode', 8)
+    monkeypatch.setattr(subprocess, 'run', run)
+    reader, _ = adapter(tmp_path)
+    reader = leg_state.LegAdapter(reader.store, reader.provider, enabled=True)
+    leg = SimpleNamespace(model='opencode-go/sample', harness='opencode')
+    calls = []
+
+    async def probe(*args, **kwargs):
+        calls.append(args)
+        return dict(ok=True, reason='')
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    assert asyncio.run(leg_probe.before_launch(
+        SimpleNamespace(leg_reader=reader), leg, 'implement', False)) is None
+    assert len(calls) == 1
+
+
 def test_default_discovery_consumed(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, 'run', lambda *a, **kw:
                         SimpleNamespace(stdout='opencode-go/sample\n'))
@@ -292,6 +343,25 @@ def test_snapshot_error_retries_then_probes(snapshot_failure, monkeypatch, role,
     monkeypatch.setattr(leg_probe, 'probe', healthy_probe)
     assert asyncio.run(leg_probe.before_launch(case.runner, case.leg, role, False)) is None
     assert ordinary == (['probe'] if role in ('implement', 'fix') and ttl != '0' and not fresh else [])
+
+
+@pytest.mark.parametrize('role', ['implement', 'fix'])
+def test_not_listed_leg_never_reaches_model_run_probe(tmp_path, monkeypatch, role):
+    import asyncio
+    from plangraph.spawner import leg_probe
+    reader, _ = adapter(tmp_path, served=())
+    leg = SimpleNamespace(model='opencode-go/sample', harness='opencode')
+    runner = SimpleNamespace(leg_reader=reader)
+    calls = []
+
+    async def probe(*args, **kwargs):
+        calls.append(args)
+        return dict(ok=True, reason='')
+
+    monkeypatch.setenv('PLANGRAPH_LEG_PROBE_TTL_S', '1800')
+    monkeypatch.setattr(leg_probe, 'probe', probe)
+    assert asyncio.run(leg_probe.before_launch(runner, leg, role, False)) == 'not_listed'
+    assert not calls
 
 
 def test_snapshot_retry_recovers_without_probe(snapshot_failure, monkeypatch):

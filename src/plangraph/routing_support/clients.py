@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from .opencode_render import valid_gateway_endpoint
+from .opencode_render import drop_parent_only_env, valid_gateway_endpoint
 
 from plangraph.retired_models import check_retired
 from plangraph.routing_support.claude_seat import claude_access_args
@@ -304,7 +304,7 @@ def build_child_env(
                 env.pop(key, None)   # None removes the inherited variable (D-3465)
             else:
                 env[key] = value
-    for name in ("PLANGRAPH_GATEWAY_LOG_TOKEN", "PLANGRAPH_GATEWAY_LOG_TOKEN_FILE"): env.pop(name, None)  # spawner-only, after extra_env
+    drop_parent_only_env(env)  # spawner-only, after extra_env
     return without_prompt_env(env)  # Case-insensitive legacy task carriers, after extra_env.
 
 

@@ -257,6 +257,27 @@ fn overflow_config_missing_empty_and_unreadable() {
     cleanup(&home);
 }
 #[test]
+fn local_run_keeps_configured_remote_hosts_visible_as_unknown() {
+    let home = fixture();
+    let config = home.join("overflow.json");
+    assert!(local_run_hosts(&config).is_empty());
+    put(
+        &home,
+        "overflow.json",
+        json!({"hosts":{"far":{"ssh":"far.invalid","spawner_src":"/x"}}}),
+    );
+    let hosts = local_run_hosts(&config);
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0]["host"], "far");
+    assert_eq!(hosts[0]["readable"], false);
+    assert_eq!(hosts[0]["reason"], "not_collected");
+    assert_eq!(hosts[0]["agents"], json!([]));
+    fs::remove_file(&config).unwrap();
+    fs::create_dir(&config).unwrap();
+    assert_eq!(local_run_hosts(&config)[0]["reason"], "source_unreadable");
+    cleanup(&home);
+}
+#[test]
 fn collector_units_are_local_and_ordered() {
     let service = include_str!("../../../deploy/systemd/plangraph-agents-view.service");
     for line in [
@@ -390,5 +411,65 @@ fn private_atomic_projection() {
             0o600
         );
     }
+    cleanup(&home);
+}
+#[test]
+fn publish_enforces_the_current_policy_on_a_stale_inventory() {
+    let home = fixture();
+    let stale = ["pre", "existing", "label"].concat();
+    let longer = format!("{stale}-display");
+    let secret = ["synthetic", "Credential", "0123456789"].concat();
+    put(
+        &home,
+        ".local/state/plangraph/agents-view.json",
+        json!({"generated_at":stale,"hosts":[
+            {"host":stale,"readable":true,"reason":null,"agents":[
+              {"name":longer,"model":format!("password={secret}"),"state":"idle",
+               "item":null,"age_s":1,"runtime":"opencode","host":stale}]},
+            {"host":"far","readable":false,"reason":"not_collected","agents":[]}]}),
+    );
+    let words = home.join("words.txt");
+    fs::write(&words, format!("{stale}\n{longer}\n")).unwrap();
+    let mut out = Vec::new();
+    publish(&home, &words, &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    assert!(
+        !text.contains(&stale) && !text.contains(&secret) && !text.contains("-display"),
+        "{text}"
+    );
+    let view: Value = serde_json::from_str(&text).unwrap();
+    assert!(view["generated_at"].is_null());
+    assert_eq!(view["hosts"][1]["reason"], "not_collected");
+    fs::remove_file(&words).unwrap();
+    let mut out = Vec::new();
+    publish(&home, &words, &mut out).unwrap();
+    let view: Value = serde_json::from_slice(&out).unwrap();
+    assert_eq!(view["hosts"][0]["reason"], "scrub_words_unavailable");
+    assert_eq!(view["hosts"][0]["agents"], json!([]));
+    cleanup(&home);
+}
+#[test]
+fn local_run_hosts_survive_the_stored_projection() {
+    let home = fixture();
+    put(&home, "overflow.json", json!({"hosts":{"far":{"ssh":"x"}}}));
+    let hosts = local_run_hosts(&home.join("overflow.json"));
+    let stored = project_view(&json!({"hosts":hosts}));
+    assert_eq!(stored["hosts"][0]["host"], "far");
+    assert_eq!(stored["hosts"][0]["reason"], "not_collected");
+    cleanup(&home);
+}
+#[test]
+fn publish_refuses_a_stored_inventory_without_a_hosts_array() {
+    let home = fixture();
+    put(
+        &home,
+        ".local/state/plangraph/agents-view.json",
+        json!({"generated_at":"2026-11-21T06:30:00Z","hosts":null}),
+    );
+    let words = home.join("words.txt");
+    fs::write(&words, "# none\n").unwrap();
+    let mut out = Vec::new();
+    assert!(publish(&home, &words, &mut out).is_err());
+    assert!(out.is_empty());
     cleanup(&home);
 }
