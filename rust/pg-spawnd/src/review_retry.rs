@@ -39,6 +39,7 @@ pub(crate) fn hook_with_group(
         }
         runs::finish_with_allowlist(record, status, &leg, attempt, &allow_shas);
         if quota.is_none()
+            || crate::cli_review::binding_completed(record)
             || status == Status::Cancelled
             || record.path().with_file_name("cancelled").exists()
             || record.get("survivors").is_some()
@@ -113,7 +114,11 @@ fn next(
     }
     Ok(None)
 }
-type Prepared = (String, crate::launch::LaunchSpec, Option<String>);
+type Prepared = (
+    String,
+    crate::launch::LaunchSpec,
+    Option<crate::cli_review::Dispatch>,
+);
 fn prepare(
     record: &RunRecord,
     args: &Args,
@@ -144,17 +149,20 @@ fn prepare(
         }),
         Duration::from_secs(30),
     )?;
-    let head = crate::prompt::prepare_launch_group(args, leg, &mut launch, false, group)?;
-    if head.is_some()
-        && value["head_sha"]
+    let review = crate::prompt::prepare_launch_group(args, leg, &mut launch, false, group)?;
+    if let Some(dispatch) = &review {
+        if value["head_sha"]
             .as_str()
-            .is_some_and(|old| head.as_deref() != Some(old))
-    {
-        return Err(crate::placement::parameter(
-            "CLI review head changed between attempts",
-        ));
+            .is_some_and(|old| dispatch.head != old)
+            || (!value["review_binding"].is_null()
+                && dispatch.binding.as_ref() != Some(&value["review_binding"]))
+        {
+            return Err(crate::placement::parameter(
+                "CLI review diff changed between attempts",
+            ));
+        }
     }
-    Ok((job_id, launch, head))
+    Ok((job_id, launch, review))
 }
 
 fn advance(
@@ -174,10 +182,10 @@ fn advance(
         .and_then(Path::parent)
         .unwrap();
     let run_id = value["run_id"].as_str().unwrap();
-    let (job_id, mut launch, head) = prepared;
+    let (job_id, mut launch, review) = prepared;
     let mut metadata = json!({"cwd":launch.cwd});
-    if let Some(head) = head {
-        metadata["head_sha"] = json!(head);
+    if let Some(review) = review {
+        review.apply(&mut metadata);
     }
     let pre_isolate_cwd = launch.cwd.clone();
     let checkout = crate::cli_review::isolate(&mut launch, &leg, metadata["head_sha"].as_str())?;
@@ -227,6 +235,7 @@ fn advance(
         "test_gaming",
         "finish_reason",
         "completion",
+        "review_binding_error",
     ] {
         record.set(key, Value::Null);
     }

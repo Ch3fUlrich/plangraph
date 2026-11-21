@@ -249,7 +249,7 @@ pub(crate) fn spawn_rust_split_groups(
                 "prompt":args["prompt"],"card":args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
             }),
         )?;
-        let review_head = crate::prompt::prepare_launch_group(
+        let review = crate::prompt::prepare_launch_group(
             args,
             leg,
             &mut spec,
@@ -266,7 +266,7 @@ pub(crate) fn spawn_rust_split_groups(
             &run_id,
             &job_id,
             spec,
-            review_head.as_deref(),
+            review.as_ref(),
             &json!({}),
             dry,
             Some((&seat_group_id, index, total, group_paths)),
@@ -369,7 +369,7 @@ pub(crate) fn spawn_adapter_split_groups(
                 "prompt":child_args["prompt"],"card":child_args["card"],"cwd":cwd.to_string_lossy(),"state":state.to_string_lossy()
             }),
         )?;
-        let review_head = crate::prompt::prepare_launch(&child_args, leg, &mut spec, dry)?;
+        let review = crate::prompt::prepare_launch(&child_args, leg, &mut spec, dry)?;
         runs.start_prepared(
             state,
             &child_args,
@@ -380,7 +380,7 @@ pub(crate) fn spawn_adapter_split_groups(
             &run_id,
             &job_id,
             spec,
-            review_head.as_deref(),
+            review.as_ref(),
             &json!({}),
             dry,
             Some((&seat_group_id, index, total, group_paths)),
