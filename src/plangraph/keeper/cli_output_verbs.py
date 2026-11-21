@@ -21,6 +21,8 @@ def cmd_close_merged(args, session):
     try:
         result = session.call("POST", "close_merged", body=body, timeout=SLOW_TIMEOUT)
         classification = "WOULD-CLOSE" if result.get("would_close") else "CLOSED"
+        if result.get("flags"):
+            classification = "FLAGGED"
         prs = ",".join(f"#{p['pr']}@{p['head']}" for p in result.get("prs", []))
         print(f"{args.key}\t{classification}\tmerged PRs with GO and seats {prs}")
         return 0

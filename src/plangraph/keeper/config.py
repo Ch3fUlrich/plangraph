@@ -119,6 +119,11 @@ class Config:
         self.snapshot_debounce_s = self._seconds(data, "snapshot_debounce_s", 0.25)
         self.snapshot_max_delay_s = self._seconds(data, "snapshot_max_delay_s", 2.0)
         self.backup_prune = self._backup_prune(data.get("backup_prune"))
+        # Merged closes (close_merged, close_merged_auto): off = a missing or unwitnessed review
+        # seat is stored as the flag ``seats_missing`` and the close proceeds on the merge evidence.
+        self.require_seats = data.get("require_seats", False)
+        if not isinstance(self.require_seats, bool):
+            raise ConfigError("require_seats must be true or false")
 
     # ------------------------------------------------------------- helpers
     @staticmethod

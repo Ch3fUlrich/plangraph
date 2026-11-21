@@ -7,7 +7,7 @@ Type=oneshot
 WorkingDirectory=%h/code/plangraph
 EnvironmentFile=-%h/.config/plangraph/plangraph.env
 # PG_URL and PG_TOKEN_FILE name a keeper token of role `system`; the closed and the flagged keys go to the journal.
-# PG_MERGE_CLOSE_REQUIRE_SEATS=0 turns the seat check off; it ships on.
+# PG_MERGE_CLOSE_REQUIRE_SEATS unset follows the keeper setting require_seats (off: a missing seat is flagged); 1 demands seats, 0 flags.
 ExecStart=%h/.local/bin/plangraph merge-close
 TimeoutStartSec=420
 UMask=0077
