@@ -67,6 +67,26 @@ fn midstream_drain_through_a_secret_leaves_no_fragment() {
 }
 
 #[test]
+fn a_secret_near_eof_survives_no_capture_cut() {
+    let token = secret();
+    let max = 40;
+    for prefix_len in [30, 1100] {
+        let data = format!("{}{token}{}", " ".repeat(prefix_len), " ".repeat(10)).into_bytes();
+        for chunk_size in [1, 16, 4096] {
+            let raw = tail(data.clone(), chunk_size, max, false);
+            assert!(raw.contains(fragment(&token)));
+            let out = tail(data.clone(), chunk_size, max, true);
+            assert!(
+                !out.contains(fragment(&token)),
+                "chunk {chunk_size}: {out:?}"
+            );
+            assert!(out.contains(crate::redact::REDACTED), "{out:?}");
+            assert!(out.len() <= max, "{out:?}");
+        }
+    }
+}
+
+#[test]
 fn redacting_capture_keeps_plain_text_and_a_split_utf8_tail() {
     let data = ["plain output ", "é"].concat().into_bytes();
     // Chunk size 1 splits the two-byte character; the tail must stay intact text.
@@ -205,12 +225,12 @@ fn diagnostic_marker_respects_the_capture_bound() {
 #[test]
 fn split_diagnostic_markers_are_preserved_only_outside_the_pem_block() {
     let (block, _) = pem(40);
-    let start = block.find("Zk020").unwrap();
+    let start = block.find("Zk030").unwrap();
     let max = 200;
     let mut capture = stall_capture::Capture::new(max, true);
     // The next chunk finishes the visible marker and starts a PEM large enough to swallow.
     capture.push(b"before\nPG-CHECK-");
-    assert!(start > 2 * max);
+    assert!(start > 1024);
     capture.push(format!("DONE:99\n{}", &block[..start]).as_bytes());
     capture.push(b"\nPG-CHECK-");
     capture.push(b"DONE:1\n");

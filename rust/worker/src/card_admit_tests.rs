@@ -127,6 +127,10 @@ fn attempt_failure_message_carries_no_git_stderr_secret() {
     };
     let message = failure.source_error().to_string();
     assert!(!message.contains(&token), "{message}");
+    assert!(
+        message.contains("https://user:[REDACTED]@host/repo.git"),
+        "{message}"
+    );
     assert!(message.contains("exit Some(128)"), "{message}");
     assert!(!failure.is_non_retryable());
 }

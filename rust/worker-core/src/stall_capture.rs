@@ -101,7 +101,13 @@ impl Capture {
             }
         }
         self.buf.extend_from_slice(data);
-        if self.buf.len() > self.max.saturating_mul(2) {
+        // Tiny output limits still need space for the unfinished redaction window.
+        let threshold = if self.redact {
+            self.max.saturating_mul(2).max(2 * MARGIN)
+        } else {
+            self.max.saturating_mul(2)
+        };
+        if self.buf.len() > threshold {
             self.make_room(false);
         }
     }
@@ -131,9 +137,10 @@ impl Capture {
         None
     }
 
-    /// Shrink the buffer to the capture limit, scrubbing first when redacting.
+    /// Drain excess output while retaining unfinished redaction until EOF.
     fn make_room(&mut self, closing: bool) {
         let max = self.max;
+        let mut drain_limit = usize::MAX;
         if self.redact {
             let open = open_key_start(&self.buf);
             let split = match (closing, open) {
@@ -151,6 +158,11 @@ impl Capture {
             };
             let mut out =
                 crate::redact::redact(&String::from_utf8_lossy(&self.buf[..valid])).into_bytes();
+            // Keep the raw suffix intact until the next read or EOF. A drain
+            // through it could remove the prefix that identifies a secret.
+            if !closing {
+                drain_limit = out.len();
+            }
             let open_at = open.filter(|_| !closing).map(|_| out.len());
             out.extend_from_slice(&self.buf[valid..]);
             self.buf = out;
@@ -163,7 +175,7 @@ impl Capture {
                 self.carry.clear();
             }
         }
-        let cut = self.buf.len().saturating_sub(max);
+        let cut = self.buf.len().saturating_sub(max).min(drain_limit);
         self.buf.drain(..cut);
     }
 }
