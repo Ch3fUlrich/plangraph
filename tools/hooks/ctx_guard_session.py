@@ -244,11 +244,12 @@ def set_thresholds(args) -> int:
 
 
 def main() -> int:
+    strict = os.environ.get("PLANGRAPH_GUARD_FAIL_CLOSED") == "1"
     if sys.argv[1:2] == ["--set"]:
         return set_thresholds(sys.argv[1:])
     if state_home is None:
         print("ctx_guard_session: hook_common.py missing next to this hook; context guard is off", file=sys.stderr)
-        return 0
+        return 1 if strict else 0
     too_large = False
     try:
         text = read_stdin_text()
@@ -295,7 +296,7 @@ def main() -> int:
     except Exception:
         print("ctx_guard_session: context_guard.py missing or broken next to "
               "this hook; context guard is off", file=sys.stderr)
-        return 0
+        return 1 if strict else 0
     if too_large or not is_dict:
         return guard.deny_on_unusable_stdin(text)
     sys.stdin = io.StringIO(text)
@@ -315,4 +316,4 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
-        sys.exit(0)
+        sys.exit(1 if os.environ.get("PLANGRAPH_GUARD_FAIL_CLOSED") == "1" else 0)
