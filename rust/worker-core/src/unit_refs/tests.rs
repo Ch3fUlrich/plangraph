@@ -18,19 +18,19 @@ fn exact(refs: &[UnitRef], path: &str) -> bool {
 #[test]
 fn protection_reads_every_piece_of_every_word() {
     let cases = [
-        ("ExecStart=/bin/sh -c 'cat <\"/wt/app-worktrees/p1/config\"'", "p1"),
-        ("ExecStart=/usr/bin/nice -n5 sh -c 'ROOT=/wt/app-worktrees/p2;true'", "p2"),
-        ("ExecStart=/bin/sh -c \"/bin/true;/wt/app-worktrees/p3/run\"", "p3"),
-        ("ExecStart=/usr/bin/env -- FOO=1 sh -c 'exec /wt/app-worktrees/p4/run'", "p4"),
-        ("ExecStart=/usr/bin/env -S 'sh -c \"exec /wt/app-worktrees/p5/run\"'", "p5"),
-        ("ExecStart=/bin/bash -O extglob -c 'exec /wt/app-worktrees/p6/run'", "p6"),
-        ("ExecStart=/bin/sh -c '/wt/app-worktrees/p7/run # comment'", "p7"),
-        ("ExecStart=/bin/sh -c '(/wt/app-worktrees/p8/run)&&/wt/app-worktrees/p9/run|cat'", "p9"),
-        ("ExecStart=:/bin/sh -c 'exec /wt/app-worktrees/p10/run'", "p10"),
-        ("ExecStart = /bin/sh -ce 'exec /wt/app-worktrees/p11/run'", "p11"),
-        ("Environment=\"PATH=/a/bin:/wt/app-worktrees/p12/bin\"", "p12"),
-        ("ExecStart=\"/wt/app-worktrees/my p13/bin/run\" --x", "my p13"),
-        ("ExecStart=/bin/sh -c 'exec /wt/app-worktrees/p14/run' sh -ce \"/wt/app-worktrees/p15/c\"", "p15"),
+        ("ExecStart=/bin/sh -c 'cat <\"/wt/app-worktrees/pone/config\"'", "pone"),
+        ("ExecStart=/usr/bin/nice -n5 sh -c 'ROOT=/wt/app-worktrees/ptwo;true'", "ptwo"),
+        ("ExecStart=/bin/sh -c \"/bin/true;/wt/app-worktrees/pthree/run\"", "pthree"),
+        ("ExecStart=/usr/bin/env -- FOO=1 sh -c 'exec /wt/app-worktrees/pfour/run'", "pfour"),
+        ("ExecStart=/usr/bin/env -S 'sh -c \"exec /wt/app-worktrees/pfive/run\"'", "pfive"),
+        ("ExecStart=/bin/bash -O extglob -c 'exec /wt/app-worktrees/psix/run'", "psix"),
+        ("ExecStart=/bin/sh -c '/wt/app-worktrees/pseven/run # comment'", "pseven"),
+        ("ExecStart=/bin/sh -c '(/wt/app-worktrees/peight/run)&&/wt/app-worktrees/pnine/run|cat'", "pnine"),
+        ("ExecStart=:/bin/sh -c 'exec /wt/app-worktrees/pten/run'", "pten"),
+        ("ExecStart = /bin/sh -ce 'exec /wt/app-worktrees/peleven/run'", "peleven"),
+        ("Environment=\"PATH=/a/bin:/wt/app-worktrees/ptwelve/bin\"", "ptwelve"),
+        ("ExecStart=\"/wt/app-worktrees/my pthirteen/bin/run\" --x", "my pthirteen"),
+        ("ExecStart=/bin/sh -c 'exec /wt/app-worktrees/pfourteen/run' sh -ce \"/wt/app-worktrees/pfifteen/c\"", "pfifteen"),
     ];
     for (line, name) in cases {
         let refs = refs_of(&format!("[Service]\n{line}\n"));
@@ -46,33 +46,33 @@ fn protection_reads_every_piece_of_every_word() {
 #[test]
 fn the_report_names_only_whole_words_and_path_valued_fields() {
     let refs = refs_of(
-        "[Service]\nExecStart=/wt/app-worktrees/w1/bin/run --opt /wt/app-worktrees/w2/x\n\
-         WorkingDirectory=\"/wt/app-worktrees/w3;blue dir\"\n\
-         ExecStart=/bin/sh -c 'exec /wt/app-worktrees/s1/run'\n\
-         ExecStart=\"/wt/app-worktrees/w4;blue/run\"\n\
-         ExecStart=\"/wt/app-worktrees/w5; blue/run\"\n\
-         ExecStart=\"/wt/app-worktrees/my w6/run\"\n\
-         Environment=A=/wt/app-worktrees/w7/x\n",
+        "[Service]\nExecStart=/wt/app-worktrees/dubone/bin/run --opt /wt/app-worktrees/dubtwo/x\n\
+         WorkingDirectory=\"/wt/app-worktrees/dubthree;blue dir\"\n\
+         ExecStart=/bin/sh -c 'exec /wt/app-worktrees/essone/run'\n\
+         ExecStart=\"/wt/app-worktrees/dubfour;blue/run\"\n\
+         ExecStart=\"/wt/app-worktrees/dubfive; blue/run\"\n\
+         ExecStart=\"/wt/app-worktrees/my dubsix/run\"\n\
+         Environment=A=/wt/app-worktrees/dubseven/x\n",
     );
     for path in [
-        "/wt/app-worktrees/w1/bin/run",
-        "/wt/app-worktrees/w2/x",
-        "/wt/app-worktrees/w3;blue dir",
+        "/wt/app-worktrees/dubone/bin/run",
+        "/wt/app-worktrees/dubtwo/x",
+        "/wt/app-worktrees/dubthree;blue dir",
     ] {
         assert!(exact(&refs, path), "{path}: {refs:?}");
     }
     // Shell text, separators, spaces outside a path field and assignments only protect.
     for path in [
-        "/wt/app-worktrees/s1/run",
-        "/wt/app-worktrees/w4;blue/run",
-        "/wt/app-worktrees/w5; blue/run",
-        "/wt/app-worktrees/my w6/run",
-        "/wt/app-worktrees/w7/x",
+        "/wt/app-worktrees/essone/run",
+        "/wt/app-worktrees/dubfour;blue/run",
+        "/wt/app-worktrees/dubfive; blue/run",
+        "/wt/app-worktrees/my dubsix/run",
+        "/wt/app-worktrees/dubseven/x",
     ] {
         assert!(!exact(&refs, path), "{path}: {refs:?}");
     }
-    assert!(protected(&refs, "/wt/app-worktrees/s1/run"));
-    assert!(protected(&refs, "/wt/app-worktrees/w7/x"));
+    assert!(protected(&refs, "/wt/app-worktrees/essone/run"));
+    assert!(protected(&refs, "/wt/app-worktrees/dubseven/x"));
 }
 
 #[test]
@@ -114,7 +114,7 @@ fn the_native_run_layout_is_a_worktree_root() {
 fn drop_ins_name_their_owner_and_a_missing_directory_names_nothing() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("systemd/user");
-    let drop_in = dir.join("liveness@router.service.d");
+    let drop_in = dir.join("liveness-router.service.d");
     fs::create_dir_all(&drop_in).unwrap();
     fs::write(
         drop_in.join("o.conf"),
@@ -129,7 +129,7 @@ fn drop_ins_name_their_owner_and_a_missing_directory_names_nothing() {
     let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
     assert!(refs
         .iter()
-        .any(|r| r.unit == "liveness@router.service" && r.path == Path::new("/wt/live-liveness")));
+        .any(|r| r.unit == "liveness-router.service" && r.path == Path::new("/wt/live-liveness")));
     assert!(refs
         .iter()
         .any(|r| r.unit == "md-sync.service" && r.path == Path::new("/h/code/main/run")));
@@ -149,9 +149,10 @@ fn a_single_valued_path_field_keeps_its_whole_value_with_spaces() {
     let refs = refs_of("[Service]\nEnvironmentFile=-\"/wt/app-worktrees/env blue/e\"\n");
     assert!(exact(&refs, "/wt/app-worktrees/env blue/e"), "{refs:?}");
     // A list field names one path per word.
-    let refs = refs_of("[Service]\nReadWritePaths=/wt/app-worktrees/l1 /wt/app-worktrees/l2\n");
+    let refs =
+        refs_of("[Service]\nReadWritePaths=/wt/app-worktrees/ellone /wt/app-worktrees/elltwo\n");
     assert!(
-        exact(&refs, "/wt/app-worktrees/l1") && exact(&refs, "/wt/app-worktrees/l2"),
+        exact(&refs, "/wt/app-worktrees/ellone") && exact(&refs, "/wt/app-worktrees/elltwo"),
         "{refs:?}"
     );
 }

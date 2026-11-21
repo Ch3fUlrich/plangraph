@@ -19,14 +19,14 @@ fn symlinked_drop_in_directories_and_relative_link_targets_are_followed() {
     fs::create_dir_all(&real).unwrap();
     fs::write(
         real.join("o.conf"),
-        "[Service]\nExecStart=/wt/app-worktrees/d1/run\n",
+        "[Service]\nExecStart=/wt/app-worktrees/deeone/run\n",
     )
     .unwrap();
     symlink(&real, dir.join("app.service.d")).unwrap();
     // A relative link target resolves against the link's directory.
-    fs::create_dir_all(tmp.path().join("systemd/app-worktrees/d2")).unwrap();
+    fs::create_dir_all(tmp.path().join("systemd/app-worktrees/deetwo")).unwrap();
     symlink(
-        "../app-worktrees/d2/unit.service",
+        "../app-worktrees/deetwo/unit.service",
         dir.join("linked.service"),
     )
     .unwrap();
@@ -35,14 +35,14 @@ fn symlinked_drop_in_directories_and_relative_link_targets_are_followed() {
     let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
     assert!(
         refs.iter()
-            .any(|r| r.unit == "app.service" && r.path == Path::new("/wt/app-worktrees/d1/run")),
+            .any(|r| r.unit == "app.service" && r.path == Path::new("/wt/app-worktrees/deeone/run")),
         "{refs:?}"
     );
     let linked = tmp
         .path()
-        .join("systemd/app-worktrees/d2/unit.service")
+        .join("systemd/app-worktrees/deetwo/unit.service")
         .canonicalize()
-        .unwrap_or_else(|_| tmp.path().join("systemd/app-worktrees/d2/unit.service"));
+        .unwrap_or_else(|_| tmp.path().join("systemd/app-worktrees/deetwo/unit.service"));
     assert!(
         refs.iter()
             .any(|r| r.unit == "linked.service" && r.path == linked),
@@ -122,10 +122,14 @@ fn a_relative_link_in_a_linked_drop_in_directory_resolves_from_its_physical_pare
     let real = tmp.path().join("shared/real.d");
     fs::create_dir_all(&dir).unwrap();
     fs::create_dir_all(&real).unwrap();
-    symlink("../app-worktrees/d3/u.service", real.join("link.service")).unwrap();
+    symlink(
+        "../app-worktrees/deethree/u.service",
+        real.join("link.service"),
+    )
+    .unwrap();
     symlink(&real, dir.join("app.service.d")).unwrap();
     let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
-    let expected = tmp.path().join("shared/app-worktrees/d3/u.service");
+    let expected = tmp.path().join("shared/app-worktrees/deethree/u.service");
     assert!(
         refs.iter().any(|r| r.exact && r.path == expected),
         "{refs:?}"
@@ -133,7 +137,7 @@ fn a_relative_link_in_a_linked_drop_in_directory_resolves_from_its_physical_pare
     assert!(
         !refs
             .iter()
-            .any(|r| r.path == tmp.path().join("systemd/app-worktrees/d3/u.service")),
+            .any(|r| r.path == tmp.path().join("systemd/app-worktrees/deethree/u.service")),
         "{refs:?}"
     );
 }
@@ -149,13 +153,13 @@ fn two_units_sharing_a_linked_drop_in_directory_are_both_attributed() {
     fs::create_dir_all(&common).unwrap();
     fs::write(
         common.join("o.conf"),
-        "[Service]\nExecStart=/wt/app-worktrees/shared1/run\n",
+        "[Service]\nExecStart=/wt/app-worktrees/sharedone/run\n",
     )
     .unwrap();
     symlink(&common, dir.join("a.service.d")).unwrap();
     symlink(&common, dir.join("b.service.d")).unwrap();
     let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
-    let tree = Path::new("/wt/app-worktrees/shared1");
+    let tree = Path::new("/wt/app-worktrees/sharedone");
     assert_eq!(
         unit_names(&refs, tree, tree),
         ["a.service", "b.service"],
