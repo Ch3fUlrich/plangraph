@@ -129,6 +129,8 @@ def test_powershell_same_order_and_failure(host, monkeypatch):
 
 @pytest.fixture(scope='session')
 def sweep_binary(tmp_path_factory):
+    from _split_ci_environment import cargo_fixture_deadline
+
     cargo = shutil.which('cargo')
     if cargo is None:
         fallback = Path.home() / '.cargo/bin/cargo'
@@ -143,7 +145,7 @@ def sweep_binary(tmp_path_factory):
     shared = tmp_path_factory.getbasetemp()
     if shared.name.startswith('popen-gw'):
         shared = shared.parent
-    with (shared / 'worktree-sweep-build.lock').open('w') as lock:
+    with cargo_fixture_deadline(600), (shared / 'worktree-sweep-build.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         binary = built_rust_binary('pg-worktree-sweep', cargo_cwd=ROOT / 'rust')
         inputs = [

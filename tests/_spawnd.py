@@ -126,11 +126,14 @@ def build_spawnd():
     """
     release = bool(os.environ.get('CI'))
     if release not in _BUILT:
+        from _split_ci_environment import cargo_fixture_deadline
+
         try:
-            done = subprocess.run(
-                spawnd_build_command(release), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL, text=True, timeout=1500,
-                env=spawnd_build_env(os.environ))
+            with cargo_fixture_deadline(1500):
+                done = subprocess.run(
+                    spawnd_build_command(release), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                    stdin=subprocess.DEVNULL, text=True, timeout=1500,
+                    env=spawnd_build_env(os.environ))
         except FileNotFoundError:
             if os.environ.get('CI'):
                 pytest.fail('cargo is missing', pytrace=False)
