@@ -91,10 +91,15 @@ def agent_key(harness: str | None, leg_id: str | None = None) -> str:
     return harness or 'opencode'
 
 
-def header(harness: str | None, role: str, leg_id: str | None = None) -> str | None:
+INLINE_TOOL_MODE = 'inline-only'
+
+
+def header(harness: str | None, role: str, leg_id: str | None = None, tool_mode: str | None = None) -> str | None:
     key = _ROLE_KEY.get(role)
     if key is None:
         return None
+    if key == 'review' and tool_mode == INLINE_TOOL_MODE:
+        key = 'review_inline'  # a toolless seat is never told to run tests or open files
     table = _table()
     name = agent_key(harness, leg_id)
     return table['roles'][key].format(agent=table['agents'].get(name, 'the ' + name + ' agent'))
@@ -136,9 +141,10 @@ def read_skill(name: str, cwd: str | None) -> str | None:
     return None
 
 
-def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id: str | None = None) -> str:
-    """header, role skill byte-identical, then the brief; neither is added twice."""
-    head = header(harness, role, leg_id)
+def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id: str | None = None,
+            tool_mode: str | None = None) -> str:
+    """header (naming the leg's tool mode), role skill byte-identical, then the brief; neither is added twice."""
+    head = header(harness, role, leg_id, tool_mode)
     if head is None:
         return prompt
     body = prompt[len(head):].lstrip('\n') if prompt.startswith(head) else prompt

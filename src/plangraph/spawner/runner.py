@@ -257,7 +257,8 @@ class SpawnerRunner:
             raise ValueError('launch preparation requires dry run')
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
         from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
-        prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None)
+        prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
+                         getattr(leg, 'tool_mode', None))
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record

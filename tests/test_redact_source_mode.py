@@ -42,9 +42,11 @@ def diff_prompt(monkeypatch, tmp_path, caller='review', pack=None, inline=False,
 
 
 def capture(monkeypatch, tmp_path, prompt, role='review'):
-    sent = []
+    sent, modes = [], []
     def dispatch(**kwargs):
+        from plangraph.spawner.target import resolve_target
         sent.append(kwargs['prompt'])
+        modes.append(getattr(resolve_target(kwargs['model_or_combo'])[1], 'tool_mode', None))
         raise RuntimeError('captured')
     monkeypatch.setattr(runner, 'build_command', dispatch)
     path = tmp_path / 'prompt.txt'
@@ -53,7 +55,7 @@ def capture(monkeypatch, tmp_path, prompt, role='review'):
             prompt_record=(path, {}, lambda record: None)))
     assert path.read_text() == sent[0]
     from plangraph.spawner.prompt_input import compose
-    prefix = compose('', role, None, None)  # role header and skill precede the caller text
+    prefix = compose('', role, None, None, tool_mode=modes[0])  # role header and skill precede the caller text
     assert sent[0].startswith(prefix)
     return sent[0][len(prefix):]
 

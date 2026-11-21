@@ -50,3 +50,10 @@ then the role skill (`batch-writer` for a batch brief, `implement`, or `review`)
 byte-identical from the run checkout's `origin/main` (the working-tree copy of the same file when no
 `origin/main` exists; if neither is readable the prompt carries the header only), then the caller's brief. A brief
 that already starts with the skill text gets it once.
+
+A review leg whose catalog `tool_mode` is `inline-only` gets the `review_inline` header
+instead: it names the tool mode (no tools, the change is quoted in the prompt) and points
+to the section "Inline seats" of the review skill, where a validated finding is a quoted
+diff line with `file:line`, CI evidence is named instead of run, and the verdict is always
+given. An inline diff over the leg's request limit is refused with
+`prompt_too_large: inline_diff_oversized`, never elided.
