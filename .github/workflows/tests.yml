@@ -39,21 +39,37 @@ jobs:
       rust-spike: ${{ steps.sel.outputs.rust-spike }}
       browser: ${{ steps.sel.outputs.browser }}
       full: ${{ steps.sel.outputs.full }}
+      tested: ${{ steps.sel.outputs.tested }}
+    permissions:
+      contents: read
+      statuses: read
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
+      # A push to main of a commit the land App authorized after its full run passed (landing mode tested-ff)
+      # runs only the fast jobs; the record is the commit's statuses (tools/ci_select.py landing_evidence).
+      # Without the repository variable LAND_CREATOR_ID nothing is trusted and the full suite runs.
       - id: sel
         name: Select test suites
         env:
+          GH_TOKEN: ${{ github.token }}
+          LAND_CREATOR_ID: ${{ vars.LAND_CREATOR_ID }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
         run: |
+          extra=()
+          if [ "${{ github.event_name }}" = push ] && [ -n "$LAND_CREATOR_ID" ]; then
+            if gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/statuses?per_page=100" > "$RUNNER_TEMP/statuses.json"; then
+              extra=(--statuses "$RUNNER_TEMP/statuses.json" --tree "$(git rev-parse '${{ github.sha }}^{tree}')" \
+                --land-creator-id "$LAND_CREATOR_ID")
+            fi
+          fi
           python3 tools/ci_select.py select --event "${{ github.event_name }}" \
             --base-ref "$PR_BASE_REF" --head-ref "$PR_HEAD_REF" --labels "$PR_LABELS" \
-            --base "$BASE_SHA" --head "$HEAD_SHA"
+            --base "$BASE_SHA" --head "$HEAD_SHA" "${extra[@]}"
 
   # D-1751: public-pattern scrub over the whole tree. No --words and no private rules:
   # the private word list never enters CI; output is path:line:rule only. Runs on every change.
@@ -634,6 +650,9 @@ jobs:
     runs-on: ubuntu-24.04
     needs: [select, scrub, file-size, new-code-lang, changelog-docs, pytest, pytest-postgres, rust, rust-worker, rust-spike, rust-windows, browser]
     if: ${{ always() }}
+    permissions:
+      contents: read
+      statuses: write
     steps:
       - uses: actions/checkout@v4
         with: {fetch-depth: 0}
@@ -671,3 +690,17 @@ jobs:
           fi
           git show "$BASE:tools/ci_commit_gate.py" > "$RUNNER_TEMP/ci_commit_gate_base.py"
           python3 "$RUNNER_TEMP/ci_commit_gate_base.py" check --base "$BASE" --head "$HEAD" --exempt tools/ci_commit_exempt.txt
+      # Evidence for the landing mode tested-ff: the full run of a train pull request says which tree it
+      # tested. `ci-full` is posted only when that tree is the head commit's tree (tools/ci_select.py ci-full);
+      # it is evidence for the lander, never a required check: the step runs after the required checks and
+      # cannot fail the gate (a read-only token on a fork pull request just posts nothing).
+      - name: Post ci-full evidence
+        if: ${{ success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          text=$(python3 tools/ci_select.py ci-full --run-id "${{ github.run_id }}" --attempt "${{ github.run_attempt }}" \
+            --tested-tree "$(git rev-parse 'HEAD^{tree}')" --head-tree "$(git rev-parse "$PR_HEAD^{tree}")") || exit 0
+          gh api "repos/${{ github.repository }}/statuses/$PR_HEAD" -f state=success -f context=ci-full -f description="$text"

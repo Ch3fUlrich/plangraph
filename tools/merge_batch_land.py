@@ -9,9 +9,9 @@ import tempfile
 import time
 from pathlib import Path
 
-from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
+from merge_batch_util import (NEEDS_UPDATE, TESTED_FF, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
-                              batch_workflow_gate, part_review, run)
+                              batch_workflow_gate, part_review, run, write_landing)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -355,9 +355,148 @@ def included_pr(repo, number, rec, view, merge):
     return "ok", ""
 
 
+#: git's own words for a server that answered no (a rejected ref, a stale lease, a protection or hook refusal):
+#: anything else that fails a push is an unknown delivery, not a refusal.
+PUSH_REFUSED = re.compile(r"\[(?:remote )?rejected\]|remote rejected|stale info|protected branch|GH\d{3}|"
+                          r"declined|denied", re.IGNORECASE)
+PUSH_TRIES = 3
+
+
+def landing_mode_of(st):
+    """The landing mode of the batch's repository from the ``landing.mode`` setting (plangraph.settings); an
+    unknown mode or a broken settings file refuses the land before anything is asked of GitHub."""
+    from plangraph.settings import SettingsError, landing_mode
+
+    try:
+        return landing_mode(st["repo"])
+    except SettingsError as exc:
+        raise MergeBatchError(f"landing mode refused: {exc}") from None
+
+
+def main_tip(st):
+    """origin's tip of the base branch, fetched into the batch worktree."""
+    wt, base = st["worktree"], st["base"]
+    git("fetch", "--quiet", REMOTE, f"+refs/heads/{base}:refs/remotes/{REMOTE}/{base}", cwd=wt)
+    return git("rev-parse", f"refs/remotes/{REMOTE}/{base}", cwd=wt).stdout.strip()
+
+
+def in_history(st, sha, tip):
+    return git("merge-base", "--is-ancestor", sha, tip, cwd=st["worktree"], ok=(0, 1)).returncode == 0
+
+
+def push_tested(st):
+    """Land mode ``tested-ff``: the base branch moves to the batch head, the commit that passed full CI, by one
+    ``git push --force-with-lease=refs/heads/<base>:<B> origin <head>:refs/heads/<base>``, B the tested base the
+    batch was built on. The server applies it only while the branch is exactly B; the lease is only the
+    compare-and-set of a fast-forward (the head descends from B, nothing is rewritten) and there is no second
+    merge commit. The outcome is read from the branch, never from the push alone:
+
+    * the head is in the branch's history (after an answer, a lost answer or an earlier land): landed, no push;
+    * the branch is at another commit than B, head not in it: ``base_moved`` (final, also when it moved into a
+      commit the batch contains: the lease names B);
+    * the server refused while the branch is B (git says rejected/protected/declined): final, not retried;
+    * no answer (anything else that fails): the same push again while the branch is B, at most PUSH_TRIES."""
+    head, base, wt = st["head"], st["base"], st["worktree"]
+    for attempt in range(1, PUSH_TRIES + 1):
+        tip = main_tip(st)
+        if in_history(st, head, tip):
+            return
+        if tip != st["base_head"]:
+            raise MergeBatchError(f"base_moved: {base} is at {short(tip)}, the tested base was {short(st['base_head'])}: "
+                                  f"the batch head cannot be pushed as a fast-forward; build the batch again")
+        proc = run(["git", "push", REMOTE, f"--force-with-lease=refs/heads/{base}:{st['base_head']}",
+                    f"{head}:refs/heads/{base}"], cwd=wt, ok=None, timeout=None)
+        sys.stderr.write(proc.stderr or "")
+        if proc.returncode and PUSH_REFUSED.search((proc.stderr or "") + (proc.stdout or "")):
+            tip = main_tip(st)  # a late landing of this very head counts
+            if in_history(st, head, tip):
+                return
+            if tip != st["base_head"]:  # the lease did its work: main moved after the read
+                raise MergeBatchError(f"base_moved: {base} moved to {short(tip)} while the push was sent, the tested "
+                                      f"base was {short(st['base_head'])}; build the batch again")
+            raise MergeBatchError(f"refused: origin rejected the push of {short(head)} to {base} while it was "
+                                  f"at {short(st['base_head'])}: {first_line((proc.stderr or '') + (proc.stdout or ''))}"
+                                  " (the batch stays, land again after the cause is fixed)")
+    tip = main_tip(st)
+    if not in_history(st, head, tip):
+        raise MergeBatchError(f"no answer from origin after {PUSH_TRIES} pushes of {short(head)}: delivery unknown, "
+                              f"{base} is at {short(tip)}; land again")
+
+
+def require_tested_ff_evidence(st):
+    """What the keeper reads after a landing that has no merge commit: the batch plan key must be a ``Plan-Item``
+    trailer of a commit of the batch (``build --plan`` writes it into every merge commit it makes), and the
+    seat policy must be acknowledged as off (seats_acknowledged), because the ``Review-Run`` citations of a merge body
+    cannot be added to a tested commit without changing the tested sha (merge-close then flags the seat as missing).
+    The batch head must carry exactly one ``Land-Base`` trailer, the recorded base."""
+    from plangraph.keeper.evidence_git import plan_items
+
+    plan = st.get("plan")
+    bodies = git("log", "--format=%B%x1d", f"{st['base_head']}..{st['head']}", cwd=st["worktree"]).stdout.split("\x1d")
+    if isinstance(plan, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", plan):
+        if not any(plan in plan_items(body) for body in bodies):
+            raise MergeBatchError(f"tested-ff: the batch plan key {plan} is no Plan-Item trailer of a batch commit "
+                                  "(it was built without it): build the batch again, or land in train-pr-merge")
+    # git's own parse, entries joined by a unit separator and counted before anything is dropped: a blank or a second
+    # Land-Base trailer is a mismatch, a body line is no trailer
+    trailers = git("log", "-1", "--format=%(trailers:key=Land-Base,valueonly,separator=%x1f)", st["head"],
+                   cwd=st["worktree"]).stdout.rstrip("\n")
+    if trailers != st["base_head"]:
+        raise MergeBatchError(f"tested-ff: the batch head must carry exactly one Land-Base trailer, the recorded base "
+                              f"{short(st['base_head'])} (it was built without it, by hand, or with another): "
+                              "build the batch again")
+    if not seats_acknowledged():
+        raise MergeBatchError("tested-ff: set PG_MERGE_CLOSE_REQUIRE_SEATS=off (or false, 0): a tested commit has no merge "
+                              "body to cite the part reviews (Review-Run), so merge-close flags the seat as missing "
+                              "instead of demanding it; the keeper daemon's own policy cannot be read from here, so "
+                              "the choice is explicit (or land in train-pr-merge)")
+
+
+def seats_acknowledged():
+    """True when PG_MERGE_CLOSE_REQUIRE_SEATS is explicitly 0, false or off: the value the lander's own merge-close
+    sends to the keeper (Rust ``plangraph merge-close`` reads the same variable), so the close flags a missing seat
+    instead of demanding it. Anything else, unset included, is not an acknowledgement: the keeper daemon's own
+    ``require_seats`` is not readable from here, and a guess from local files could differ from it."""
+    return os.environ.get("PG_MERGE_CLOSE_REQUIRE_SEATS", "").strip().lower() in ("0", "false", "off")
+
+
+def keeper_config_path():
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph" / "keeper.json"
+
+
+def wait_marked_merged(repo, number, wait):
+    """After a push of the head GitHub marks the pull requests merged by itself; wait for it up to ``wait``
+    seconds, never failing (the branch holds the truth)."""
+    deadline = time.monotonic() + wait
+    while True:
+        if gh_json("pr", "view", str(number), "--repo", repo, "--json", "state")["state"] != "OPEN":
+            return
+        if time.monotonic() >= deadline:
+            print(f"batch PR #{number} is not marked merged by GitHub yet (its head is in the branch)", file=sys.stderr)
+            return
+        time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
+
+
 def cmd_land(args):
+    """Land the pushed batch in the mode of the ``landing.mode`` setting of its repository.
+
+    ``tested-ff``: after the gates (approval, part seats, full CI on the exact head, current base, required
+    checks, green main) main is pushed to the batch head under a lease on the tested base (push_tested); no
+    merge commit, no ``gh pr merge``; GitHub marks the pull requests merged because their heads are in main.
+    ``train-pr-merge``: the batch pull request is merged with a merge commit (rule 3.39), as before.
+    A ``MERGED`` batch pull request is no landing in ``tested-ff`` unless its head is in main's history.
+    The batch has no merge commit there: require_tested_ff_evidence refuses a batch whose plan key is no
+    ``Plan-Item`` trailer of a batch commit and refuses unless the seat policy is acknowledged off (no
+    ``Review-Run`` citations can be added to a tested commit); the receipt keeps the citations and the key.
+    ``single-pr``: as train-pr-merge, for a batch of exactly one part (one pull request on its own GO);
+    several parts are refused. Every landing then reports each part (MERGED lines), writes the landing
+    receipt and the telemetry row naming the mode (write_landing), cleans up and runs merge-close."""
     st = load_state(args.name)
     repo, number = st["repo"], args.batch_pr
+    mode = landing_mode_of(st)
+    if mode == "single-pr" and len(st["merged"]) != 1:
+        raise MergeBatchError(f"single-pr mode lands one pull request on its own GO: batch {st['name']!r} has "
+                              f"{len(st['merged'])} parts (set landing.mode to tested-ff or train-pr-merge)")
     if st["status"] != "pushed" or st.get("pr") != number:
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
@@ -368,7 +507,9 @@ def cmd_land(args):
     if pr["headRefOid"] != st["head"]:
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
                               f"{short(st['head'])} saved at push; review and push again")
-    if pr["state"] == "OPEN":
+    reruns = []
+    already = mode == TESTED_FF and in_history(st, st["head"], main_tip(st))
+    if pr["state"] == "OPEN" and not already:
         if pr["isDraft"]:
             raise MergeBatchError(f"batch PR #{number} is a draft")
         if pr.get("baseRefName") != "main":
@@ -378,18 +519,29 @@ def cmd_land(args):
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
-        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
-           "--body", merge_trailers(st))
-    elif pr["state"] != "MERGED":
+        if mode == TESTED_FF:
+            require_tested_ff_evidence(st)
+            push_tested(st)
+        else:
+            gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
+               "--body", merge_trailers(st))
+    elif pr["state"] not in ("MERGED", "OPEN"):
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
-    for _ in range(10):  # the merge commit can lag the merge by a moment
-        pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
-        if pr["state"] == "MERGED" and (pr.get("mergeCommit") or {}).get("oid"):
-            break
-        time.sleep(min(2.0, args.wait / 5))
-    merge = (pr.get("mergeCommit") or {}).get("oid")
-    if pr["state"] != "MERGED" or not merge:
-        raise MergeBatchError(f"batch PR #{number} is {pr['state']} with no merge commit yet: run land again")
+    if mode == TESTED_FF:
+        if not in_history(st, st["head"], main_tip(st)):  # a MERGED pull request proves nothing: read the branch
+            raise MergeBatchError(f"batch PR #{number} is {pr['state']} but its head {short(st['head'])} is not in "
+                                  f"{st['base']}: it was merged another way, so this is no tested-ff landing")
+        merge = st["head"]  # the tested commit itself is on main
+        wait_marked_merged(repo, number, args.wait)
+    else:
+        for _ in range(10):  # the merge commit can lag the merge by a moment
+            pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
+            if pr["state"] == "MERGED" and (pr.get("mergeCommit") or {}).get("oid"):
+                break
+            time.sleep(min(2.0, args.wait / 5))
+        merge = (pr.get("mergeCommit") or {}).get("oid")
+        if pr["state"] != "MERGED" or not merge:
+            raise MergeBatchError(f"batch PR #{number} is {pr['state']} with no merge commit yet: run land again")
     git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
     views = settle(repo, st["merged"], args.wait)
     problems, moved, landed = [], [], []
@@ -408,6 +560,7 @@ def cmd_land(args):
               + f" (head moved after the build; labelled {NEEDS_UPDATE}): they need a new batch", file=sys.stderr)
     for skip in st["skipped"]:
         print(f"not merged: #{skip['pr']} ({skip['reason']})", file=sys.stderr)
+    write_landing(st, mode, merge, reruns, args.go_row)
     drop_state(st)
     try:
         cleanup_landed(st, landed)
@@ -510,9 +663,8 @@ def part_seat(run_id, key, head):
 
     if not isinstance(run_id, str) or not run_id.startswith("run-") or not RunRecordAdapter(None).valid_run_id(run_id):
         raise MergeBatchError("a keeper-bound review requires a spawner run id")
-    config_dir = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph"
     try:
-        config = load_config(config_dir / "keeper.json")
+        config = load_config(keeper_config_path())
         adapter = SpawnerRecordAdapter(config.spawner_records_dir)
         seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
                                      allow_cli_reported=True, require_diff_head=True,
