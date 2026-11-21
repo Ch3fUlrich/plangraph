@@ -27,6 +27,7 @@ def env(tmp_path, monkeypatch):
     for built in env_fixture(tmp_path):
         built.env["PLANGRAPH_LANDING_DB"] = str(tmp_path / "landing.sqlite3")
         built.env["PLANGRAPH_SETTINGS"] = "plangraph.json"
+        built.env["PG_MERGE_CLOSE_REQUIRE_SEATS"] = "off"  # tested-ff needs the explicit acknowledgement
         built.env["PYTHONPATH"] = str(__import__("pathlib").Path(__file__).resolve().parents[1] / "src")
         yield built
 
@@ -296,16 +297,16 @@ def test_tested_ff_refuses_a_batch_whose_plan_key_is_not_in_git(env):
     assert main_tip(env) != state["head"] and rows(env) == []
 
 
-def test_tested_ff_refuses_while_the_keeper_requires_seats(env):
+def test_a_local_keeper_json_that_says_false_does_not_stand_in_for_the_acknowledgement(env):
     approval = pushed(env, plan="plangraph:BATCH-X")
     mode(env, "tested-ff")
+    del env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"]
     config = env.home / ".config" / "plangraph" / "keeper.json"
-    data = json.loads(config.read_text())
-    config.write_text(json.dumps({**data, "require_seats": True}))
+    config.write_text(json.dumps({**json.loads(config.read_text()), "require_seats": False}))
     config.chmod(0o600)
     res = land(env, approval)
-    assert res.returncode == 1 and "require_seats" in res.stderr, res.stderr
-    assert env.calls("pr", "merge") == [] and rows(env) == []
+    assert res.returncode == 1 and "PG_MERGE_CLOSE_REQUIRE_SEATS" in res.stderr and rows(env) == []
+
 
 
 def test_tested_ff_refuses_a_head_whose_land_base_trailer_is_not_the_recorded_base(env):
@@ -319,13 +320,42 @@ def test_tested_ff_refuses_a_head_whose_land_base_trailer_is_not_the_recorded_ba
     assert rows(env) == [] and main_tip(env) != state["head"]
 
 
-@pytest.mark.parametrize("value,refused", [("true", True), ("on", True), ("1", True), ("false", False), ("off", False),
-                                           ("0", False), ("maybe", True)])
-def test_tested_ff_honors_the_merge_close_seat_override(env, value, refused):
-    """merge-close demands seats when PG_MERGE_CLOSE_REQUIRE_SEATS is 1/true/on, whatever keeper.json says."""
+@pytest.mark.parametrize("value,refused", [("true", True), ("on", True), ("1", True), ("maybe", True), ("", True),
+                                           ("false", False), ("off", False), ("0", False)])
+def test_tested_ff_needs_the_explicit_seat_acknowledgement(env, value, refused):
+    """The daemon's require_seats cannot be read from here, so tested-ff lands only when the operator says
+    PG_MERGE_CLOSE_REQUIRE_SEATS=off|false|0, the value the lander's own merge-close then sends."""
     approval = pushed(env, plan="plangraph:BATCH-X")
     mode(env, "tested-ff")
-    env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"] = value
+    if value:
+        env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"] = value
+    else:
+        del env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"]
     res = land(env, approval)
-    assert (res.returncode == 1 and "require_seats" in res.stderr) == refused, res.stderr
+    assert (res.returncode == 1 and "PG_MERGE_CLOSE_REQUIRE_SEATS" in res.stderr) == refused, res.stderr
     assert (rows(env) == []) == refused
+
+
+@pytest.mark.parametrize("message,refused", [
+    ("train\n\nLand-Base: {base}", False),
+    ("train\n\nLand-Base: {base}\nLand-Base: {head}", True),     # conflicting trailers
+    ("train\n\nLand-Base: {head}\n\nsigned off\n\nLand-Base: {base}", False),  # an earlier body line is no trailer
+    ("train\nLand-Base: {base}\n\nno trailer block here", True),  # a body line only, no trailer paragraph
+])
+def test_tested_ff_reads_exactly_one_land_base_trailer(env, tools_importable, monkeypatch, message, refused):
+    pushed(env)
+    state = json.loads(env.state_file("l1").read_text())
+    env.git("checkout", "-q", "-B", "trailers", state["head"], cwd=env.repo)
+    env.git("commit", "-q", "--allow-empty", "-m", message.format(base=state["base_head"], head=state["head"]),
+            cwd=env.repo)
+    state["head"] = env.git("rev-parse", "HEAD", cwd=env.repo)
+    env.git("checkout", "-q", "main", cwd=env.repo)
+    import merge_batch_land
+    monkeypatch.setenv("PG_MERGE_CLOSE_REQUIRE_SEATS", "off")
+    monkeypatch.setenv("HOME", str(env.home))
+    state["plan"] = None
+    if refused:
+        with pytest.raises(merge_batch_land.MergeBatchError, match="Land-Base"):
+            merge_batch_land.require_tested_ff_evidence(state)
+    else:
+        merge_batch_land.require_tested_ff_evidence(state)
