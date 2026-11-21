@@ -508,7 +508,7 @@ fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
             .ok_or("tool PATH missing")?
             .into(),
         effort: WRITER_EFFORT.into(),
-        state: record_path_state(&request)?,
+        state: record_path_state(request)?,
         brief: request["prompt"].as_str().unwrap_or("").into(),
         push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
         reviews_started: 0,
