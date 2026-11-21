@@ -11,6 +11,8 @@ type Error = Box<dyn std::error::Error>;
 type Result<T> = std::result::Result<T, Error>;
 
 const SCHEMA: &str = include_str!("../../../src/plangraph/routing_support/catalog_schema.sql");
+const SEED: &str =
+    include_str!("../../../src/plangraph/routing_support/catalog_benchmark_seed.sql");
 const EPOCH: &str = "https://epoch.ai/data/benchmark_data.zip";
 const OPENROUTER: &str = "https://openrouter.ai/api/v1/models";
 const EPOCH_ATTRIBUTION: &str = "Epoch AI, Capabilities & benchmarking, https://epoch.ai/benchmarks/use-this-data (CC BY 4.0). External benchmark results retain their publishers’ licenses.";
@@ -197,6 +199,7 @@ fn refresh(path: &Path, epoch_url: &str, openrouter_url: &str) -> Result<usize> 
             );
         }
     }
+    tx.execute_batch(SEED)?;
     let date = chrono::Utc::now().date_naive().to_string();
     let mut written = 0;
     if let Some(observations) = epoch_observations {

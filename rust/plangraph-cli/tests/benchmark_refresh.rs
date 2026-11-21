@@ -97,6 +97,10 @@ sys.stdout.buffer.write(data.getvalue())
     };
     assert_eq!(refresh()["rows_written"], 6);
     let catalog = rusqlite::Connection::open(&db).unwrap();
+    let seeded: bool = catalog.query_row(
+        "SELECT EXISTS(SELECT 1 FROM catalog_benchmark_price_inputs WHERE openrouter_id='xiaomi/mimo-v2.6-pro')",
+        [], |r| r.get(0)).unwrap();
+    assert!(seeded);
     let (rows, null_costs): (u32, u32) = catalog.query_row(
         "SELECT count(*), count(*)-count(cost_per_task_usd) FROM catalog_benchmark_rows
          WHERE model_id='claude-fable-5-2' AND measured_at='2026-11-20' AND effort_channel='publisher'",

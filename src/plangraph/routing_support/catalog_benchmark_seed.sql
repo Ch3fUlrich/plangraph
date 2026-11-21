@@ -55,3 +55,11 @@ SELECT model_id, effort, harness, score, cost, 1,
        CASE WHEN effort = '' THEN NULL ELSE 'publisher' END,
        url, '2026-11-21', record, origin, version
 FROM priors JOIN sources USING (source);
+
+-- Xiaomi's reference rates per token, as listed on the MiMo rows above.
+-- Published index results lack a per-task split of billable token classes.
+INSERT OR IGNORE INTO catalog_benchmark_price_inputs (
+    model_id, effort, harness, openrouter_id, reference_prompt_price, reference_completion_price
+) VALUES
+    ('xiaomi/mimo-v2.6-pro', '', 'openrouter', 'xiaomi/mimo-v2.6-pro', 0.00000043, 0.00000087),
+    ('xiaomi/mimo-v2.6-flash', '', 'openrouter', 'xiaomi/mimo-v2.6-flash', 0.00000014, 0.00000028);

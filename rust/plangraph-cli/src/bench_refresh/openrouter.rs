@@ -220,6 +220,31 @@ mod tests {
     }
 
     #[test]
+    fn seeded_catalog_detects_price_drift_and_reprices_a_measured_task() {
+        let db = fixture();
+        db.execute_batch(super::super::SEED).unwrap();
+        let id = "xiaomi/mimo-v2.6-pro";
+        let mut listing = model(id, 0.000_000_43, "5.0");
+        listing.completion_price = Some(0.000_000_87);
+        apply(&db, listing);
+        let mut listing = model(id, 0.000_000_60, "5.0");
+        listing.completion_price = Some(0.000_000_87);
+        apply(&db, listing);
+        assert_eq!(flag(&db, id), (true, "price_changed".into(), None, true));
+        db.execute(
+            "UPDATE catalog_benchmark_price_inputs SET prompt_tokens=1000, completion_tokens=100
+             WHERE model_id=?1 AND effort='' AND harness='openrouter'",
+            [id],
+        )
+        .unwrap();
+        let mut listing = model(id, 0.000_000_60, "5.0");
+        listing.completion_price = Some(0.000_000_87);
+        apply(&db, listing);
+        let (_, _, cost, _) = flag(&db, id);
+        assert!((cost.unwrap() - 0.000_687).abs() < 1e-12);
+    }
+
+    #[test]
     fn a_new_openrouter_identity_is_marked_stale() {
         let db = fixture();
         apply(&db, model("provider/model", 0.001, "5.0"));
