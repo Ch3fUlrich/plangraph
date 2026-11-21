@@ -637,9 +637,11 @@ class SeatSpawnMixin:
         plan = self._route(card, role, writer_families, review_of,
                            benchmark=options.pop('benchmark'), require_bench=options.pop('require_bench'))
         if plan.error:
-            raise SpawnRefused(plan.error)
-        from plangraph.planner.seats import seat_family
-        writers = list(writer_families)
+            refused = SpawnRefused(plan.error)
+            refused.reason, refused.skipped = plan.error, [dict(row) for row in plan.skipped]
+            raise refused
+        from plangraph.planner.seats import seat_family, with_head_writers
+        writers = with_head_writers(card, role, writer_families)
         if review_of:
             source = self.result(review_of)
             writers.extend(source.get('given_writer_families') or [source.get('writer_family')])

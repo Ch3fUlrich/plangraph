@@ -6,6 +6,7 @@ from .exit_outcome import failure_reason, fallthrough_reason, refusal_record, re
 from .git_guard import annotate_tree, prepare_worktree, selected_checkout, writer_launch, run_tree
 from .stderr_capture import clean_attempts, write_stderr_log
 from plangraph.routing_errors import ParameterRefused
+from plangraph.planner.seats import with_head_writers
 from dataclasses import asdict, replace
 from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
@@ -278,7 +279,7 @@ class SpawnService(SeatSpawnMixin):
         elif model is not None or leg is not None or not card:
             # Overrides change the selected model, not the card safety contract.
             from plangraph.planner.routing import plan_spawn
-            from plangraph.planner.seats import seat_family, writer_parts
+            from plangraph.planner.seats import head_writer_families, seat_family, writer_parts
             reviewed = ((source.get('given_writer_families') or [f for f in [source.get('writer_family')] if f]) if (source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)) else []) if review_of else []
             if role == 'review':
                 from plangraph.planner.seats import head_writer_families
@@ -322,6 +323,8 @@ class SpawnService(SeatSpawnMixin):
                              detect_model_family(target), windows, context,
                              bool(row.get('trains_on_prompts', True)), roles=(role,),
                              tool_mode=row.get('tool_mode', 'tools'))
+            if role == 'review' and {seat_family(chosen.family)} & writer_parts(head_writer_families(card)):
+                raise SpawnRefused('excluded writer family')   # the head's own writer never reviews it
             if reviewed and writer_parts(reviewed) <= {seat_family(chosen.family)}:
                 raise SpawnRefused('excluded writer family')
             # D-3084 per-part: a seat is excluded only when it covers no writer part.
@@ -355,7 +358,7 @@ class SpawnService(SeatSpawnMixin):
         record = dict(run_id='run-' + uuid.uuid4().hex, card_hash=hashlib.sha256(
             json.dumps(card, sort_keys=True).encode()).hexdigest(), role=role,
             plan=plan.to_dict(), chosen_leg=asdict(plan.first_leg) if dry_run or (role == 'review' and (model is not None or leg is not None)) else None, served_model=None,
-            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
+            served_family=None, writer_family=plan.first_leg.family, status='running', given_writer_families=with_head_writers(card, role, list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else [])),
              started=time.time(), ended=None, attempts=[], stdout_tail='', exit_code=None, override_reason=override_reason,
             cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
         if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(record['run_id'])

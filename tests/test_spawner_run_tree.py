@@ -558,7 +558,10 @@ print(json.dumps(asyncio.run(server.call_tool('plangraph_agent_spawn', dict(card
     pid = int(Path(str(log) + '.pid').read_text())
     if sys.platform.startswith('linux'): assert record['supervisor_pid_start'] == proc_kill._stat(pid)[4]
     assert record['supervisor_pid'] == pid   # the record names its owner process
-    if sys.platform.startswith('linux') and cli.scope_argv(['x'])[0] == 'systemd-run':
+    # Probe systemd on its own, so a helper that never wraps cannot make this check vanish.
+    systemd = sys.platform.startswith('linux') and subprocess.run(
+        ['systemd-run', '--user', '--scope', '--quiet', '--collect', 'true'], capture_output=True).returncode == 0
+    if systemd:
         # The supervisor runs in a scope of its own, so stopping the caller's session cannot take the run along.
         assert Path(f'/proc/{pid}/cgroup').read_text() != Path('/proc/self/cgroup').read_text()
         assert Path(f'/proc/{pid}/cgroup').read_text().strip().endswith('.scope')

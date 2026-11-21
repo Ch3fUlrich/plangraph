@@ -108,12 +108,16 @@ def head_writer_families(card):
     _check_diff_ref(ref)
     import subprocess
     try:
-        out = subprocess.run(
+        proc = subprocess.run(
             ["git", "-C", ref["repo"], "log", "-1", "--no-color", "--format=%(trailers:key=Writer,valueonly,unfold)", ref["head"]],
             stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=30, check=False).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        return []
+            timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: {type(exc).__name__}") from None
+    if proc.returncode != 0:
+        # An unreadable head is not an absent trailer: the head's writer could not be excluded.
+        raise SpawnRefused(f"cannot read the Writer trailer of {ref['head'][:12]}: git exit {proc.returncode}")
+    out = proc.stdout
     # "Writer: <model> <session> (<note>)": the model is the first word.
     models = [line.split()[0] for line in out.splitlines() if line.strip()]
     from plangraph.review.family import FamilyError, writer_key
@@ -124,4 +128,13 @@ def head_writer_families(card):
         except FamilyError:
             raise SpawnRefused(f"unknown writer in Writer trailer of {ref['head'][:12]}: {model[:64]}") from None
         families.append(model)
+    return families
+
+
+def with_head_writers(card, role, families):
+    """``families`` plus the head ``Writer`` trailer families of a review card (each once): the one
+    set used for planning, launch headers and the run record."""
+    families = list(families)
+    if role == "review":
+        families += [f for f in head_writer_families(card) if f not in families]
     return families
