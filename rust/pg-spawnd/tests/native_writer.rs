@@ -186,9 +186,14 @@ if 'hold marker' in prompt:
     time.sleep(30)
     sys.exit(0)
 if 'resume' in sys.argv:
-    # Fix turns only follow a driver-run review that requested changes.
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
-    assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
+    if 'external fix' in prompt:
+        import os
+        record = json.loads((pathlib.Path.cwd().parent/'record.json').read_text())
+        assert os.environ['PATH'] == record['tool_path']
+        assert 'sandbox_mode="danger-full-access"' in sys.argv
+    else:
+        assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
     # The fix turn commits its fix: a turn that leaves HEAD unchanged is resumed on its items.
     with open('fix.txt', 'a') as fix: fix.write('fixed after review\n')
     subprocess.run(['git','add','fix.txt'], check=True)
@@ -316,6 +321,20 @@ async def check():
     assert pathlib.Path(record['cwd']).is_dir(), record
     # A remote ref that is absent must never resolve the local-only branch.
     subprocess = __import__('subprocess')
+    prompt_file = root/'external-fix.md'
+    prompt_file.write_text('brief marker external fix')
+    resumed = subprocess.run([os.environ['NATIVE_BINARY'], 'resume', run['run_id'],
+        '--state', str(root/'state'), '--prompt-file', str(prompt_file)], capture_output=True, text=True)
+    assert resumed.returncode == 0, resumed.stderr
+    fixed = service.result(run['run_id'])
+    assert fixed['status'] == 'completed' and fixed['final_head'] != record['final_head'], fixed
+    for field in ('run_id', 'session_id', 'cwd', 'tool_path', 'review_dir'):
+        assert fixed[field] == record[field], (field, fixed)
+    assert fixed['review']['head'] == fixed['final_head'], fixed
+    assert fixed['review']['run_id'] != record['review']['run_id'], fixed
+    ledger = pathlib.Path(fixed['cwd']).parent/'ledger.jsonl'
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert len(rows) == 2 and rows[0]['tokens'] == rows[1]['tokens'] == 1234, rows
     assert not pathlib.Path(record['cwd']).is_relative_to(pathlib.Path(card['repo'])), record
     assert subprocess.check_output(['git','-C',card['repo'],'status','--porcelain'], text=True) == ''
     subprocess.run(['git','-C',card['repo'],'branch','local-only'], check=True)
@@ -385,8 +404,8 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         if !path.exists() {
             continue;
         }
-        let row: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let ledger = fs::read_to_string(path).unwrap();
+        let row: serde_json::Value = serde_json::from_str(ledger.lines().next().unwrap()).unwrap();
         if row["exit_code"] == 0 {
             // One counted CLI execution per completed run logs 1,234.
             assert_eq!(row["tokens"], 1234);

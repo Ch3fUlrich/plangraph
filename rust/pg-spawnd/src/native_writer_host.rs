@@ -4,11 +4,13 @@ use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
     fs,
-    io::{BufRead, BufReader, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
+    path::PathBuf,
     process::{Command, Stdio},
     time::Duration,
 };
+#[cfg(test)]
+use std::path::Path;
 
 /// Lead writer leg cx-gpt-6.2-sol-medium (operator D-6397).
 const WRITER_MODEL: &str = "gpt-6.2-sol";
@@ -96,17 +98,26 @@ impl Host {
             .record_path
             .parent()
             .ok_or("record directory missing")?;
-        let log = match fs::read_to_string(directory.join("native.log")) {
-            Ok(log) => log,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        let mut log = String::new();
+        match fs::File::open(directory.join("native.log")) {
+            Ok(mut file) => {
+                let offset = record["resume_from"]["log_offset"].as_u64().unwrap_or(0);
+                file.seek(SeekFrom::Start(offset))
+                    .map_err(|e| e.to_string())?;
+                file.read_to_string(&mut log).map_err(|e| e.to_string())?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.to_string()),
-        };
+        }
         let item = record["item_key"].as_str();
         let mut lines = Value::Null;
         let mut done = item.map(|_| 0);
-        if let (Some(base), Some(head)) =
-            (record["base_sha"].as_str(), record["final_head"].as_str())
-        {
+        if let (Some(base), Some(head)) = (
+            record["resume_from"]["head"]
+                .as_str()
+                .or_else(|| record["base_sha"].as_str()),
+            record["final_head"].as_str(),
+        ) {
             let stat = self.git(&["diff", "--numstat", base, head, "--"])?;
             let mut total = 0u64;
             for line in stat.lines() {
@@ -135,15 +146,17 @@ impl Host {
             .filter(|(end, start)| end >= start)
             .map(|(end, start)| (end - start) / 60.0);
         let accepted = record["review"]["verdict"] == "ACCEPT";
-        Ok(
-            json!({"schema_version":1,"kind":"writer","run_id":record["run_id"],
+        let mut row = json!({"schema_version":1,"kind":"writer","run_id":record["run_id"],
             "host":record["host"],"model":WRITER_MODEL,"effort":self.effort,
             "started":record["started"],"ended":record["ended"],"exit_code":record["exit_code"],
             "item_key":record["item_key"],"items_given":item.map(|_| 1),"items_done":done,
             "changed_lines":lines,"wall_minutes":wall,"tokens":crate::writer_ledger::tokens(&log)?,
             "review_rounds":record["review_rounds"],
-            "high_held":accepted.then_some(0),"med_held":accepted.then_some(0)}),
-        )
+            "high_held":accepted.then_some(0),"med_held":accepted.then_some(0)});
+        if let Some(number) = record["resume_number"].as_u64() {
+            row["resume_number"] = json!(number);
+        }
+        Ok(row)
     }
     fn base_pin(&self) -> String {
         format!("refs/plangraph/native/{}/base", self.run_id)
@@ -398,111 +411,15 @@ impl Driver for Host {
         ledger
     }
 }
-/// State root of a run whose record lives at `<state>/runs/<run-id>/record.json`.
-fn record_path_state(request: &Value) -> Result<PathBuf, String> {
-    Path::new(
-        request["record_path"]
-            .as_str()
-            .ok_or("record_path missing")?,
-    )
-    .ancestors()
-    .nth(3)
-    .map(Path::to_path_buf)
-    .ok_or_else(|| "record_path has no state root".into())
-}
-pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
-    if cfg!(windows) {
-        return Err("native writer requires the POSIX overflow transport in slice 1".into());
-    }
-    if args.len() != 1 {
-        return Err("native-writer requires a private request file".into());
-    }
-    let request: Value = serde_json::from_slice(&fs::read(&args[0]).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    let mut record = request["record"].clone();
-    record["pid"] = json!(std::process::id());
-    #[cfg(target_os = "linux")]
-    if let Ok(stat) = fs::read_to_string("/proc/self/stat") {
-        if let Some(ticks) = stat
-            .rsplit_once(')')
-            .and_then(|(_, tail)| tail.split_whitespace().nth(19))
-            .and_then(|s| s.parse::<u64>().ok())
-        {
-            record["pid_start"] = json!(ticks);
-        }
-    }
-    let repo = PathBuf::from(record["repo"].as_str().ok_or("repo missing")?);
-    let id = record["run_id"]
-        .as_str()
-        .filter(|s| s.starts_with("run-") && s[4..].bytes().all(|b| b.is_ascii_alphanumeric()))
-        .ok_or("invalid run id")?;
-    let record_path = PathBuf::from(
-        request["record_path"]
-            .as_str()
-            .ok_or("record_path missing")?,
-    );
-    let cwd = record_path
-        .parent()
-        .ok_or("record directory missing")?
-        .join("worktree");
-    let reviews = request["card"]["review_dir"]
-        .as_str()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| cwd.join("reviews"));
-    let mut host = Host {
-        repo,
-        run_id: id.into(),
-        cwd,
-        reviews,
-        record_path,
-        base_ref: record["base_ref"].as_str().unwrap_or("").into(),
-        tool_path: record["tool_path"]
-            .as_str()
-            .ok_or("tool PATH missing")?
-            .into(),
-        effort: WRITER_EFFORT.into(),
-        state: record_path_state(&request)?,
-        brief: request["prompt"].as_str().unwrap_or("").into(),
-        push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
-        reviews_started: 0,
-        review_cli: review_cli()?,
-        python_src: None,
-    };
-    if let Some(target) = &host.push_ref {
-        if !target.starts_with("refs/heads/") {
-            record["status"] = json!("failed");
-            record["exit_code"] = json!(5);
-            record["reason"] = json!("push_ref must name refs/heads/...");
-            return host.save(&record);
-        }
-    }
-    match writer_effort(&request["card"]) {
-        Ok(effort) => host.effort = effort,
-        Err(reason) => {
-            // Refused before Codex starts: the record names the reason.
-            record["status"] = json!("failed");
-            record["exit_code"] = json!(5);
-            record["reason"] = json!(reason);
-            return host.save(&record);
-        }
-    }
-    record["effort"] = json!(host.effort);
-    record["cwd"] = json!(host.cwd);
-    host.save(&record)?;
-    native_writer::run(
-        &mut host,
-        record,
-        request["prompt"].as_str().ok_or("prompt missing")?,
-    );
-    Ok(())
-}
+#[path = "native_writer_commands.rs"]
+mod commands;
+pub(crate) use commands::{execute, resume};
 #[path = "native_writer_base.rs"]
 mod base;
 #[path = "native_writer_context.rs"]
 mod context;
 #[path = "native_writer_review.rs"]
 mod review;
-use review::review_cli;
 #[cfg(test)]
 use review::{review_run_text, review_verdict};
 #[cfg(test)]

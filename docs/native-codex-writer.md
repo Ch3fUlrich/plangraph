@@ -70,6 +70,14 @@ changes at the round stop, 4 no verdict, 5 base or card refusal (stale or unpush
 Exit 9 reports `result: BLOCKED` when writer relaunches are exhausted or their
 disk/base preparation fails.
 
+Run `pg-spawnd resume RUN_ID --prompt-file PATH` on the writer's host for an
+external fix round. Use `--state PATH` when the run has a custom state root.
+The run must have ended and its worktree must still match its recorded head.
+The command reuses the recorded Codex session, tool PATH, worktree and review
+directory. It runs the same gates and exact-head review before publishing the
+new result. The record keeps the previous outcome in `resume_from` and the
+ledger appends a row for the fix round's usage.
+
 The live Rust supervisor persists a `manifest` in the run record before launching
 Codex: name (run ID), host, worktree, original brief, effort and `try_count`.
 A killed/crashed CLI, failed CLI execution (including exit 127), or exit without a
@@ -124,7 +132,7 @@ covers the native writer path.
 ## Health check
 
 After a spawner move, each target must answer `pg-spawnd health --json` with exit 0;
-`pg-spawnd` has no `--version` verb (advertised verbs: `probe`, `serve`, `shim`, `health`, `agents-view`, `ledger-report`).
+`pg-spawnd` has no `--version` verb (advertised verbs include `probe`, `serve`, `shim`, `health`, `agents-view`, `ledger-report`, and `resume`).
 Route listings never show `native-codex`: it is a card `run_kind` that spawn sends past routing
 (`src/plangraph/spawner/cli.py`); native dry runs are refused (`src/plangraph/spawner/overflow.py`).
 Check routing with a review dry run from a fresh `python3 -m plangraph.spawner.cli` process.
@@ -132,7 +140,9 @@ Make the first native-codex run after a move a small canary; check its run recor
 
 ## Writer statistics ledger
 
-Each terminal native run writes one immutable row in `runs/<run-id>/ledger.jsonl`.
+Each terminal native writer attempt writes an immutable row in
+`runs/<run-id>/ledger.jsonl`. The first row describes the initial run.
+Explicit fix rounds append rows tagged with their `resume_number`.
 Repeated saves of the same row are idempotent; differing rows are refused. Atomic
 private writes and the existing nonblocking lock prevent partial or duplicate rows.
 A failure is printed and retained as `ledger_error` in `record.json`.

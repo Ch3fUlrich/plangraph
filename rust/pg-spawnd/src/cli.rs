@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|health|agents-view|ledger-report|check-manage-key> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|health|agents-view|ledger-report|check-manage-key|resume> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -149,6 +149,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);
     }
+    if verb.as_deref() == Some("resume") {
+        return crate::native_writer_host::resume(rest, out);
+    }
     if verb.as_deref() == Some("agents-view") {
         return crate::agent_view::execute(rest, out);
     }
@@ -216,6 +219,21 @@ mod tests {
             fixture_probe,
         );
         (result, String::from_utf8(out).expect("utf-8"))
+    }
+
+    #[test]
+    fn native_resume_refuses_unknown_run() {
+        let temp = tempfile::tempdir().unwrap();
+        let (result, output) = call(&[
+            "resume",
+            "run-fixture",
+            "--state",
+            temp.path().to_str().unwrap(),
+            "--prompt-file",
+            "unused",
+        ]);
+        assert_eq!(result, Err("unknown run id".into()));
+        assert!(output.is_empty());
     }
 
     #[test]

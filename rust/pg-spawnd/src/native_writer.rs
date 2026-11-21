@@ -58,6 +58,24 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
     });
     record["review_rounds"] = json!(0);
     let result = lifecycle(driver, &mut record, brief);
+    finish(driver, record, result)
+}
+
+pub(crate) fn run_resume(
+    driver: &mut impl Driver,
+    mut record: Value,
+    session: &str,
+    prompt: &str,
+) -> Value {
+    let result = writer_attempt(driver, &mut record, prompt, Some(session));
+    finish(driver, record, result)
+}
+
+fn finish(
+    driver: &mut impl Driver,
+    mut record: Value,
+    result: Result<i32, (i32, String)>,
+) -> Value {
     let (mut exit, mut reason) = match result {
         Ok(code) => (code, None),
         Err((code, why)) => (code, Some(why)),
@@ -123,7 +141,7 @@ fn lifecycle(
                 None => prompt.clone(),
             },
         };
-        match writer_attempt(driver, record, &launch) {
+        match writer_attempt(driver, record, &launch, None) {
             Err((6, error)) => {
                 record["last_writer_failure"] = json!(error);
                 driver.save(record).map_err(|e| (9, e))?;
@@ -221,12 +239,19 @@ fn writer_attempt(
     driver: &mut impl Driver,
     record: &mut Value,
     prompt: &str,
+    existing_session: Option<&str>,
 ) -> Result<i32, (i32, String)> {
     // HEAD before the turn: a relaunch keeps the commits of the earlier attempts.
     let mut turn_start = driver.head().map_err(|e| (6, e))?;
-    let session = driver.execute(None, prompt).map_err(|e| (6, e))?;
-    record["session_id"] = json!(session);
-    record["resumes"] = json!(0);
+    let session = if let Some(session) = existing_session {
+        resume(driver, record, session, prompt)?;
+        session.to_owned()
+    } else {
+        let session = driver.execute(None, prompt).map_err(|e| (6, e))?;
+        record["session_id"] = json!(session);
+        record["resumes"] = json!(0);
+        session
+    };
     let mut fixes = 0;
     let mut idle = 0;
     loop {
