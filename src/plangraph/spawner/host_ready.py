@@ -124,17 +124,12 @@ def _touched(path):
     return newest
 
 
-def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
-    """Keep at most ``keep`` per-checkout ``cli-tests/<hash>`` builds, none untouched for ``max_age`` seconds.
+def prune_builds(target, subdir, keep, max_age=CLI_TESTS_MAX_AGE_S, now=None):
+    """Keep at most ``keep`` ``<target>/<subdir>/<hash>`` builds, none untouched for ``max_age`` seconds.
 
     Call it only under the exclusive cargo lease. Returns the removed directory names."""
-    if keep is None:
-        try:
-            keep = int(os.environ.get(CLI_TESTS_KEEP_ENV, CLI_TESTS_KEEP))
-        except ValueError:
-            keep = CLI_TESTS_KEEP
     now = time.time() if now is None else now
-    root, builds = Path(target) / 'cli-tests', []
+    root, builds = Path(target) / subdir, []
     try:
         for entry in root.iterdir():
             if entry.is_dir() and not entry.is_symlink():
@@ -153,7 +148,18 @@ def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
     return removed
 
 
-CARGO_TARGET_MARKERS = ('CACHEDIR.TAG', '.rustc_info.json', 'debug', 'release', 'cli-tests')
+def prune_cli_tests(target, keep=None, max_age=CLI_TESTS_MAX_AGE_S, now=None):
+    """Per-checkout ``cli-tests/<hash>`` builds: the newest ``keep`` (PLANGRAPH_CLI_TESTS_KEEP, default 3)."""
+    if keep is None:
+        try:
+            keep = int(os.environ.get(CLI_TESTS_KEEP_ENV, CLI_TESTS_KEEP))
+        except ValueError:
+            keep = CLI_TESTS_KEEP
+    return prune_builds(target, 'cli-tests', keep, max_age, now)
+
+
+# Files Cargo writes itself, and the build roots this module creates; a bare debug/ proves nothing.
+CARGO_TARGET_MARKERS = ('CACHEDIR.TAG', '.rustc_info.json', 'cli-tests', 'policy-bin')
 
 
 def unsafe_cache_dir(target, checkout):
@@ -167,7 +173,7 @@ def unsafe_cache_dir(target, checkout):
 def identified_cargo_target(target):
     """Only an empty directory or one holding Cargo's own markers may be removed whole."""
     names = {entry.name for entry in Path(target).iterdir()}
-    return not names or bool(names & set(CARGO_TARGET_MARKERS))
+    return not names or ('.git' not in names and bool(names & set(CARGO_TARGET_MARKERS)))
 
 
 def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
@@ -176,6 +182,8 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
     Holds the exclusive lease (live builds hold shared ones) and raises OSError when it cannot get it,
     ValueError for a target that is unsafe next to ``checkout`` or, with ``identified``, holds no cargo markers."""
     unsafe_cache_dir(target, checkout)
+    if identified and Path(target).exists() and not identified_cargo_target(target):
+        raise ValueError(f'{target} is not an identified cargo target; not touched')
     if wait is None:
         try:
             wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
@@ -184,9 +192,8 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
         wait = wait if math.isfinite(wait) and wait >= 0 else 30.0
     with cargo_lease(exclusive=True, wait=wait):
         prune_cli_tests(target)
+        prune_builds(target, 'policy-bin', CLI_TESTS_KEEP)
         if target.exists() and cargo_target_size_gb(target) >= cap:
-            if identified and not identified_cargo_target(target):
-                raise ValueError(f'{target} is not an identified cargo target; not removed')
             shutil.rmtree(target)
 
 

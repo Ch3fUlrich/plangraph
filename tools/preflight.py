@@ -421,6 +421,22 @@ def policy_artifact(output):
     return executable, ''.join(line + '\n' for line in text if line)
 
 
+def policy_target(root):
+    """A Cargo target of its own for pg-policy, inside the shared target and keyed by what the binary is built from.
+
+    target/debug/pg-policy of the shared target is one file that any checkout's build may replace, so a
+    checkout's own artifact cannot be told from another's there. Equal sources share one directory
+    (a warm build for every later clone); different sources never do."""
+    import hashlib
+    rust, digest = Path(root) / 'rust', hashlib.sha256()
+    names = sorted(p for p in (rust / 'pg-policy').rglob('*') if p.is_file() and 'target' not in p.parts)
+    names += [p for p in (rust / 'Cargo.toml', rust / 'Cargo.lock', Path(root) / 'rust-toolchain.toml',
+                          rust / 'rust-toolchain.toml') if p.is_file()]
+    for path in names:
+        digest.update(path.relative_to(root).as_posix().encode() + b'\0' + path.read_bytes() + b'\0')
+    return shared_cargo_target() / 'policy-bin' / digest.hexdigest()[:16]
+
+
 def stage_policy_binary(executable, cleanup):
     """Private copy of the built pg-policy, taken under the build lease."""
     private = tempfile.mkdtemp(prefix='preflight-policy-')
@@ -431,14 +447,15 @@ def stage_policy_binary(executable, cleanup):
 def build_policy(root, env, cleanup):
     """Build pg-policy and stage this checkout's own artifact while the shared lease is held.
 
-    Another checkout can replace target/debug/pg-policy and cleanup needs the exclusive
-    lease, so the artifact path comes from Cargo's JSON output and is copied before release.
+    The build target is keyed by the sources (policy_target), so no other checkout's build can
+    replace this artifact, and cleanup needs the exclusive lease, so the copy happens before release.
     Returns (code, text, staged binary or None)."""
     with cargo_lease():
         refusal = running_disk_refusal(root)
         if refusal:
             return 1, refusal + '\n', None
-        code, output = run(policy_build_command(root), root, env)
+        keydir = policy_target(root)
+        code, output = run(policy_build_command(root), root, dict(env, CARGO_TARGET_DIR=str(keydir)))
         executable, text = policy_artifact(output)
         binary = None
         if not code:
@@ -446,6 +463,10 @@ def build_policy(root, env, cleanup):
                 binary = stage_policy_binary(executable, cleanup) if executable else None
             except OSError:
                 binary = None
+            try:
+                os.utime(keydir)  # a reused key stays newer than the prune window
+            except OSError:
+                pass
             if binary is None:
                 code, text = 1, text + 'pg-policy build reported no usable executable\n'
         refusal = running_disk_refusal(root)

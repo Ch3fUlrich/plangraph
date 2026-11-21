@@ -52,7 +52,9 @@ if sys.argv[1] == 'build':
     print(json.dumps(dict(reason='compiler-message', message=dict(rendered='warning: noise'))))
     print(json.dumps(dict(reason='compiler-artifact', target=dict(name='other', kind=['bin']), executable='/nope')))
     print(json.dumps(dict(reason='compiler-artifact', target=dict(name='pg-policy', kind=['bin']), executable=str(out))))
-    out.write_text({PY!r} + "open({str(seen)!r}, 'a').write(' '.join(__import__('sys').argv[1:]) + chr(10))\\n")
+    source = Path(sys.argv[sys.argv.index('--manifest-path') + 1]).parent / 'pg-policy/src/main.rs'
+    marker = source.read_text().replace(chr(10), ' ') if source.exists() else ''
+    out.write_text({PY!r} + "open({str(seen)!r}, 'a').write(' '.join(__import__('sys').argv[1:]) + chr(10))\\n# " + marker + chr(10))
     out.chmod(0o755)
 elif sys.argv[1] == 'run':
     time.sleep(float(os.environ.get('STUB_BUILD_SECONDS', '0')))
@@ -163,4 +165,42 @@ def test_no_rust_workspace_means_no_prebuild(repo, monkeypatch):
 def test_the_prebuild_uses_the_shared_target_and_rust_step_target(rig, monkeypatch, capsys):
     repo, log, seen = rig
     preflight.main(["--base", "HEAD", "--fast"], repo)
-    assert (shared_target(repo) / "debug/pg-policy").is_file()
+    (built,) = (shared_target(repo) / "policy-bin").glob("*/debug/pg-policy")
+    assert built.is_file()
+
+
+def checkout_with_policy(tmp_path, name, source):
+    root = tmp_path / name
+    (root / "rust/pg-policy/src").mkdir(parents=True)
+    (root / "rust/Cargo.toml").write_text("[workspace]\nmembers = []\n")
+    (root / "rust/pg-policy/src/main.rs").write_text(source)
+    return root
+
+
+def test_the_policy_target_is_keyed_by_the_sources_not_the_checkout_path(rig, tmp_path):
+    a = checkout_with_policy(tmp_path, "a", "fn main() {}")
+    b = checkout_with_policy(tmp_path, "b", "fn main() {}")
+    c = checkout_with_policy(tmp_path, "c", "fn main() { changed(); }")
+    assert preflight.policy_target(a) == preflight.policy_target(b) != preflight.policy_target(c)
+    assert preflight.policy_target(a).parent == shared_target(rig[0]) / "policy-bin"
+    (a / "rust/Cargo.lock").write_text("lock")
+    assert preflight.policy_target(a) != preflight.policy_target(b)
+
+
+def test_an_interleaved_build_of_another_checkout_cannot_replace_the_staged_artifact(rig, tmp_path, monkeypatch):
+    """B builds different sources between A's build and A's copy: A still stages A's binary."""
+    repo, log, seen = rig
+    a = checkout_with_policy(tmp_path, "a", "A-SOURCES")
+    b = checkout_with_policy(tmp_path, "b", "B-SOURCES")
+    env = dict(os.environ, CARGO_TARGET_DIR=str(shared_target(repo)))
+    real_stage, cleanup_b = preflight.stage_policy_binary, []
+
+    def interleave(executable, cleanup):
+        monkeypatch.setattr(preflight, "stage_policy_binary", real_stage)   # once
+        assert preflight.build_policy(b, env, cleanup_b)[0] == 0
+        return real_stage(executable, cleanup)
+
+    monkeypatch.setattr(preflight, "stage_policy_binary", interleave)
+    code, text, staged_a = preflight.build_policy(a, env, [])
+    assert code == 0
+    assert "A-SOURCES" in Path(staged_a).read_text() and "B-SOURCES" not in Path(staged_a).read_text()

@@ -75,12 +75,13 @@ def test_preflight_trims_an_over_cap_target_before_the_first_build(rig, monkeypa
     target = shared_target(repo)
     (target / "debug").mkdir(parents=True)
     (target / "debug/old-artifact").write_text("x" * 100_000)
+    (target / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
     build(target, "old", 40 * 3600, now=__import__("time").time())
     monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_CAP_GB", "0.00005")   # about 50 KB
     # The stub cargo records what it finds in the target when the build starts.
     cargo = repo / "bin/cargo"
     cargo.write_text(cargo.read_text().replace(
-        "open(", "open(os.environ['CARGO_TARGET_DIR'] + '.seen', 'w').write(str(sorted(p.name for p in Path(os.environ['CARGO_TARGET_DIR']).rglob('*'))))\nopen(", 1))
+        "open(", "open(os.environ['PLANGRAPH_CARGO_TARGET_DIR'] + '.seen', 'w').write(str(sorted(p.name for p in Path(os.environ['PLANGRAPH_CARGO_TARGET_DIR']).rglob('*'))))\nopen(", 1))
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
     seen_in_target = Path(str(target) + ".seen").read_text()
     assert "old-artifact" not in seen_in_target
@@ -151,3 +152,37 @@ def test_preflight_never_deletes_a_checkout_configured_as_the_target(repo, monke
     preflight.trim_shared_target(repo)
     assert (repo / "src.py").exists() and (repo / ".git").exists()
     assert "cargo target trim skipped" in capsys.readouterr().out
+
+
+def test_a_git_checkout_with_a_debug_directory_is_not_a_cargo_target(tmp_path, monkeypatch):
+    sibling = tmp_path / "other-checkout"
+    (sibling / "debug").mkdir(parents=True)
+    (sibling / ".git").mkdir()
+    (sibling / "debug/notes").write_text("x" * 50_000)
+    (sibling / "cli-tests/h0").mkdir(parents=True)   # even a look-alike build root
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(sibling))
+    for cap in (1e-9, 100):
+        with pytest.raises(ValueError, match="not an identified cargo target"):
+            h.reclaim_cargo_target(sibling, cap=cap, checkout=tmp_path / "checkout", wait=0, identified=True)
+    assert (sibling / "debug/notes").exists() and (sibling / "cli-tests/h0").exists()
+
+
+def test_a_bare_debug_directory_is_not_enough(tmp_path):
+    (tmp_path / "debug").mkdir()
+    assert not h.identified_cargo_target(tmp_path)
+    (tmp_path / ".rustc_info.json").write_text("{}")
+    assert h.identified_cargo_target(tmp_path)
+
+
+def test_policy_bin_builds_are_pruned_with_cli_tests(tmp_path, monkeypatch):
+    target = tmp_path / "t"
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(target))
+    now = __import__("time").time()
+    for index in range(5):
+        path = target / "policy-bin" / f"k{index}"
+        (path / "debug").mkdir(parents=True)
+        os.utime(path / "debug", (now - index * 60, now - index * 60))
+        os.utime(path, (now - index * 60, now - index * 60))
+    (target / "CACHEDIR.TAG").write_text("Signature: 8a477f597d28d172789f06886806bc55")
+    h.reclaim_cargo_target(target, cap=100, checkout=tmp_path / "checkout", wait=0, identified=True)
+    assert sorted(p.name for p in (target / "policy-bin").iterdir()) == ["k0", "k1", "k2"]
