@@ -97,7 +97,8 @@ are counted; only Bash pre-tool events are candidates for polling refusals.
   a missing/invalid timestamp uses the injected current time. Future timestamps
   are excluded from the hour. An hour with no events is recomputed by the reader.
 - A wake begins at `UserPromptSubmit` or `Notification`. First ingest any unseen
-  previous-wake responses, then reset `wake_calls` to zero; preserve hour history.
+  previous-wake responses, then reset `wake_calls` and read history. Preserve
+  hour history.
   `Stop`, pre/post-tool events, and different read commands do not reset the wake.
 - `ROLE_BUDGETS` starts build/review L1/L2, planner and routing at 6 calls per wake
   and 60 per hour. Unknown roles use the same fallback. Remove only the final
@@ -154,10 +155,10 @@ ignore-environment, nice adjustment and command `-p`; unknown wrapper options
 remain outside this narrow recogniser. Tests pin each of these boundaries.
 
 The first recognised read-only check passes and records a SHA-256 fingerprint of
-its parsed words plus `cwd` per session. Literal path operands are normalised
-before hashing (`./status.json` and `status.json` share history); search patterns
-and option values retain their spelling. Repeating a local check is refused, even
-after other read commands or notifications. A successful non-read Bash command
+its parsed words plus `cwd` for the session's current wake. Literal path operands
+are normalised before hashing (`./status.json` and `status.json` share history).
+Search patterns and option values retain their spelling. Repeating a local check
+within a wake is refused even after other read commands. A successful non-read Bash command
 grants exactly one retry of each local read, including after builds, scripts,
 in-place editors and no-op commands; the next unchanged read is refused again.
 The local refusal tells the caller to run the work that can change the result,
