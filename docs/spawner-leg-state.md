@@ -5,7 +5,7 @@ Snapshot HTTP 401/403 responses are `auth_refused`, distinct from
 URL, HTTP status, and caller's `PLANGRAPH_PRINCIPAL` (or `unknown` when unset),
 never the key or response body. The adapter retains its `limited` availability
 contract, with `auth_refused` evidence and a detailed reason. Auth refusal clears
-cached successful health and bypasses transport retries and recovery probes.
+cached successful health and bypasses transport retries and recovery probes. A model absent from `opencode models --standalone` (run without the management token variables) is `not_listed` and is returned before any model-run probe.
 Routing candidates and saved run plans expose `auth_refused` and its evidence;
 an already planned leg records the detailed refusal in its attempt skip reason.
 
