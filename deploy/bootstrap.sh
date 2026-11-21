@@ -11,10 +11,12 @@ CATALOG_DB_PATH=""
 PROBE_HOST=""
 PROBE_CONFIG=""
 CI_TOOLS_ONLY=0
+LANGUAGE_SERVERS_ONLY=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ci-tools-only) CI_TOOLS_ONLY=1; shift ;;
+    --language-servers-only) LANGUAGE_SERVERS_ONLY=1; shift ;;
     --skip-ctx-watchdog) SKIP_CTX_WATCHDOG=1; shift ;;
     --probe-host|--probe-config)
       [[ $# -ge 2 && -n "$2" ]] || { echo "Missing probe argument" >&2; exit 1; }
@@ -70,6 +72,30 @@ if [[ "$CI_TOOLS_ONLY" -eq 1 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$LANGUAGE_SERVERS_ONLY" -eq 1 ]]; then
+  toolchain=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' "$SCRIPT_DIR/../rust-toolchain.toml")
+  [[ -n "$toolchain" ]] || { echo "language servers: missing Rust toolchain pin" >&2; exit 1; }
+  pyright_version=1.1.414
+  prefix="$HOME/.local"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "[DRY-RUN] rustup component add rust-analyzer --toolchain $toolchain"
+    echo "[DRY-RUN] npm install --global --prefix $prefix --ignore-scripts pyright@$pyright_version"
+    exit 0
+  fi
+  if ! rustup which --toolchain "$toolchain" rust-analyzer >/dev/null 2>&1; then
+    rustup toolchain install "$toolchain" --profile minimal
+    rustup component add rust-analyzer --toolchain "$toolchain"
+  fi
+  if [[ "$("$prefix/bin/pyright" --version 2>/dev/null || true)" != "pyright $pyright_version" ||
+        ! -x "$prefix/bin/pyright-langserver" ]]; then
+    npm install --global --prefix "$prefix" --ignore-scripts "pyright@$pyright_version"
+  fi
+  rustup run "$toolchain" rust-analyzer --version
+  [[ -x "$prefix/bin/pyright-langserver" ]]
+  [[ "$("$prefix/bin/pyright" --version)" == "pyright $pyright_version" ]]
+  echo "Language servers ready for Rust $toolchain and Pyright $pyright_version"
+  exit 0
+fi
 REQ_FILE="$SCRIPT_DIR/requirements-host.json"
 
 if [[ ! -f "$REQ_FILE" ]]; then

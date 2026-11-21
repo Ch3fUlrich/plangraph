@@ -69,6 +69,17 @@ def test_bootstrap_dry_run_writes_nothing(host):
     assert set(root.rglob('*')) - before == {root / 'commands'}
 
 
+def test_language_servers_only_dry_run_uses_pins():
+    result = subprocess.run(
+        ['bash', str(ROOT / 'deploy/bootstrap.sh'), '--language-servers-only', '--dry-run'],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert 'rustup component add rust-analyzer --toolchain 1.100.0' in result.stdout
+    assert 'pyright@1.1.414' in result.stdout
+    assert 'Initializing Plangraph' not in result.stdout
+
+
 def test_count_precedes_install(host):
     result, commands = host[0]('--skip-ctx-watchdog')
     assert result.returncode == 0, result.stderr
