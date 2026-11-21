@@ -1,0 +1,7 @@
+[
+  {"name":"routing","role":"routing","session_role":"routing","flags":[],"window":400000,"caps":"250000-300000","deny_question":false},
+  {"name":"default","role":"plan-context","session_role":"plan-context","flags":[],"window":850000,"caps":"700000-800000","deny_question":true},
+  {"name":"numbered writer","role":"writer-0042","session_role":"writer","flags":[],"window":1000000,"caps":"900000-950000","deny_question":true},
+  {"name":"role cap","role":"plangraph-integrate","session_role":"plangraph-integrate","flags":[],"window":810000,"caps":"700000-760000","deny_question":true},
+  {"name":"operator cap","role":"review","session_role":"review","flags":["--ctx-guard","110000,170000","--oom-protect","--parent","routing-0042"],"window":400000,"caps":"110000-170000","deny_question":true}
+]

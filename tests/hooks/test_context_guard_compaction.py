@@ -1,6 +1,7 @@
 """Carried AutoOS compaction contracts and deliberate plangraph differences."""
 import json
 import os
+import shlex
 import shutil
 import sys
 from unittest.mock import patch
@@ -19,7 +20,8 @@ class Compaction(GuardCase):
         self.fleet(BOUNDARY, usage_line(inp=1000))
         text = self.ctx_text(self.hook(FLEET_SESSION_NAME=""))
         self.assertIn("HANDOFF-NOW ctx=1k (compaction; handoff required)", text)
-        self.assertIn("then run ready", text)
+        self.assertIn("then run `python3 ", text)
+        self.assertIn(" ready <handoff-path>`", text)
         state = json.loads(self.state_file().read_text())
         self.assertEqual((state["level"], state["compaction"] > 0), ("handoff", True))
 
@@ -158,7 +160,11 @@ class Compaction(GuardCase):
         self.assertEqual(proc.returncode, 0)
         self.assertIn("HARD-CAP ctx=301k >= 300k", proc.stdout)
         with patch.dict(os.environ, self.env(), clear=True):
-            self.assertEqual(self.ctx_text(proc), load_module("context_guard").emit_line("hard", 301000, 300000))
+            expected = load_module("context_guard").emit_line("hard", 301000, 300000)
+        # the copied guard names its own path in the ready command
+        expected = expected.replace(shlex.quote(os.path.realpath(HOOKS / "context_guard.py")),
+                                    shlex.quote(os.path.realpath(self.tmp / "context_guard.py")))
+        self.assertEqual(self.ctx_text(proc), expected)
         scan_path = self.state_file().parent.with_name("ctx-guard-scan") / (SID + ".scan")
         self.assertFalse(scan_path.exists())
         return proc
@@ -193,8 +199,10 @@ class Compaction(GuardCase):
         self.assertIn("HARD-CAP", out.getvalue())
 
     def test_deliberate_difference_keeps_calm_private_path_free_guidance(self):
+        """Calm wording, private handoff destination; the ready command names the absolute guard path."""
         guard = load_module("context_guard")
         self.assertEqual(guard.emit_line("hard", 300000, 300000),
                          "HARD-CAP ctx=300k >= 300k: at the next natural stop, write your handoff to "
-                         "your private handoff path, then run ready (and SendMessage RECYCLE-READY <path> "
-                         "to your parent if your brief says so)." + guard.SUBAGENT_BACKSTOP)
+                         "your private handoff path, then run `%s` (and SendMessage RECYCLE-READY <path> "
+                         "to your parent if your brief says so)." % guard.ready_command()
+                         + guard.SUBAGENT_BACKSTOP)

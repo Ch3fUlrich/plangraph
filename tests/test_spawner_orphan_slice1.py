@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from fake_pid import FAKE_PID
 
 from plangraph.spawner import leg_probe, proc_kill
 from plangraph.spawner.runner import SpawnerRunner
@@ -231,7 +232,7 @@ def test_native_cancel_waits_for_the_drivers_record(tmp_path, monkeypatch):
 
     async def run():
         service = SpawnService(SpawnerRunner(), tmp_path)
-        record = dict(run_id='run-native', run_kind='native-codex', status='running', pid=123)
+        record = dict(run_id='run-native', run_kind='native-codex', status='running', pid=FAKE_PID)
         service._save(record)
         marker = service._path(record['run_id']).with_name('cancelled')
         kill = AsyncMock(return_value=[])
@@ -256,7 +257,7 @@ def test_native_cancel_waits_for_the_drivers_record(tmp_path, monkeypatch):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize('survivors', [[], [124]])
+@pytest.mark.parametrize('survivors', [[], [FAKE_PID + 1]])
 def test_native_supervisor_gives_driver_grace_before_escalating(tmp_path, monkeypatch, survivors):
     from plangraph import fleet_snapshot
     from plangraph.spawner import host_ready, overflow
@@ -281,7 +282,7 @@ def test_native_supervisor_gives_driver_grace_before_escalating(tmp_path, monkey
             if action == 'native-tools':
                 return SimpleNamespace(communicate=AsyncMock(return_value=(b'{}', b'')), returncode=0)
             assert action == 'native-writer'
-            return SimpleNamespace(pid=123, communicate=communicate)
+            return SimpleNamespace(pid=FAKE_PID, communicate=communicate)
 
         monkeypatch.setattr(asyncio, 'create_subprocess_exec', launch)
         record = await overflow.native_spawn(service, {'repo': str(tmp_path)}, {'wait_seconds': 0})
@@ -305,7 +306,7 @@ def test_native_supervisor_gives_driver_grace_before_escalating(tmp_path, monkey
         final = service.result(record['run_id'])
         assert final['exit_code'] == 130
         if survivors:
-            kill.assert_awaited_once_with(123, 10)
+            kill.assert_awaited_once_with(FAKE_PID, 10)
             assert (final['status'], final['reason'], final['survivors']) == (
                 'failed', 'kill_incomplete', survivors)
         else:
