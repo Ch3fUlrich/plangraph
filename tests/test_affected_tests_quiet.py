@@ -240,3 +240,32 @@ def test_collect_only_keeps_maxfail(fx):
     args = fx.invocations()[0]
     assert "--collect-only" in args and args[args.index("--maxfail") + 1] == "3"
     assert "-q" not in args
+
+
+def test_a_serial_fail_pass_fail_sequence_is_not_failed_in_parallel(fx):
+    """--workers 0 runs everything serially: no label claims a parallel failure."""
+    fx.write("""
+        import os
+        from pathlib import Path
+        def test_sequence():
+            counter = Path(os.environ["FIXTURE_MARKER"] + ".count")
+            runs = int(counter.read_text()) + 1 if counter.exists() else 1
+            counter.write_text(str(runs))
+            assert runs == 2, f"run {runs}: fails on the first and third run"
+    """)
+    fx.commit()
+    result = fx.run(workers="0")
+    assert result.returncode == 1
+    assert len(fx.invocations()) == 3
+    assert "FAILED-IN-PARALLEL" not in result.stdout and "FLAKY" not in result.stdout
+
+
+def test_flake_labels_name_a_parallel_failure_only_when_workers_ran():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("affected_tests_labels", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    ids, same = ["t::a"], ["h"] * 4
+    passed, failed = {"t::a": "passed"}, {"t::a": "failed"}
+    assert module.flake_labels(ids, passed, failed, same) == ["FAILED-IN-PARALLEL: t::a"]
+    assert module.flake_labels(ids, passed, failed, same, parallel=False) == []
