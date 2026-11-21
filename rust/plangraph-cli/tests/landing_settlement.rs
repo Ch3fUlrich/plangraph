@@ -3,9 +3,57 @@
 use std::{path::Path, process::Command};
 
 #[test]
+fn keeper_reprepares_an_open_train_but_preserves_terminal_manifests() {
+    keeper_fixture(
+        r#"
+from plangraph.keeper.auth import Principal, add_principal
+from plangraph.keeper.db import open_db
+from plangraph.keeper.errors import Refused
+from plangraph.keeper.store import Store
+
+db = open_db(':memory:', create=True, backend='sqlite')
+add_principal(db, 'lander', 'router', [])
+store = Store(db)
+principal = Principal('lander', 'router', [])
+repo = 'example/repo'
+lease = store.land(principal, dict(repo=repo, action='acquire', owner='test'))
+
+def land(action, pr, **fields):
+    return store.land(principal, dict(lease, repo=repo, pr=pr, action=action, **fields))
+
+original = dict(base='a'*40, head='b'*40, parts=[dict(pr=5, head='c'*40)], batch_key='first')
+pushed_again = dict(base='d'*40, head='e'*40, parts=[dict(pr=6, head='f'*40)], batch_key='second')
+
+def assert_unchanged(pr, before, attempted):
+    try:
+        land('prepare', pr, **attempted)
+    except Refused as exc:
+        assert exc.code == 'conflict', exc.code
+    else:
+        raise AssertionError('terminal train accepted a changed manifest')
+    assert land('show', pr)['train'] == before
+
+land('prepare', 17, **original)
+reprepared = land('prepare', 17, **pushed_again)
+assert reprepared['base'] == pushed_again['base']
+assert reprepared['head'] == pushed_again['head']
+assert reprepared['parts'] == [dict(pr=6, head='f'*40, items=[], ref='')]
+assert reprepared['batch_key'] == 'second'
+assert reprepared['merge'] is None
+landed = land('landed', 17, merge='1'*40)
+assert_unchanged(17, landed, original)
+assert land('prepare', 17, **pushed_again) == landed
+land('prepare', 18, **original)
+abandoned = land('abandon', 18)
+assert_unchanged(18, abandoned, pushed_again)
+"#,
+    );
+}
+
+#[test]
 fn keeper_reopens_the_exact_landed_train_and_advances_each_step_once() {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let fixture = r#"
+    keeper_fixture(
+        r#"
 from pathlib import Path
 import json
 from tempfile import TemporaryDirectory
@@ -61,7 +109,12 @@ with TemporaryDirectory() as tmp:
         raise AssertionError('conflicting landing accepted')
     except Refused as exc:
         assert exc.code == 'conflict'
-"#;
+"#,
+    );
+}
+
+fn keeper_fixture(fixture: &str) {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let output = Command::new("python3")
         .env("PYTHONPATH", repo.join("src"))
         .current_dir(repo.join("tools"))

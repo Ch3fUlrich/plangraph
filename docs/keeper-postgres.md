@@ -68,6 +68,7 @@ Migration 15 installs the keeper landing journal. A configured lander writes the
 train's frozen manifest before it requests a merge. `merge_batch.py settle`
 discovers unfinished trains and verifies the merged commit against main before
 resuming the keeper cursor. Recovery uses the keeper merge lease for that repo.
+A new push can replace the prepared manifest while the train is open.
 Set `PG_LANDING_HOSTS` to the host registry for the three repository checkouts.
 Each host entry supplies `PG_LANDING_BUILD_STAMP` and, for repair,
 `PG_LANDING_SYNC_EXECUTABLE` as absolute paths. The executable receives the

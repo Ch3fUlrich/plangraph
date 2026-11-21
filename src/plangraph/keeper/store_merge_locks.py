@@ -133,7 +133,10 @@ class MergeLocksMixin:
                 manifest = json.dumps({"parts": parts, "batch_key": batch}, separators=(",", ":"))
                 frozen = (_land_sha(body.get("base")), _land_sha(body.get("head")), manifest)
                 self.conn.execute("INSERT INTO landing_trains(repo,pr,base,head,manifest) VALUES(?,?,?,?,?)"
-                                  " ON CONFLICT (repo,pr) DO NOTHING", (*identity, *frozen))
+                                  " ON CONFLICT (repo,pr) DO UPDATE SET"
+                                  " base=excluded.base, head=excluded.head, manifest=excluded.manifest"
+                                  " WHERE landing_trains.merged IS NULL AND landing_trains.abandoned=0",
+                                  (*identity, *frozen))
                 row = self.conn.execute(select, identity).fetchone()
                 data = _landing_data(row)
                 if ((row["base"], row["head"], data["parts"], data["batch_key"]) !=
