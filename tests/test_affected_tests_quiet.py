@@ -272,3 +272,20 @@ def test_flake_labels_name_a_parallel_failure_only_when_workers_ran():
     passed, failed = {"t::a": "passed"}, {"t::a": "failed"}
     assert module.flake_labels(ids, passed, failed, same) == ["FAILED-IN-PARALLEL: t::a"]
     assert module.flake_labels(ids, passed, failed, same, parallel=False) == []
+
+
+@pytest.mark.parametrize("text", [
+    '{"outcomes": {"t::a": "failed"}, "workers": "false"}',
+    '{"outcomes": {"t::a": "failed"}, "workers": 1}',
+    '{"outcomes": {"t::a": "failed"}, "workers": null}',
+    '{"outcomes": null, "workers": true}',
+    '{"outcomes": ["t::a"], "workers": true}',
+    '{"outcomes": {"t::a": 1}, "workers": true}',
+    '{"outcomes": {"t::a": "failed"}}', '{"workers": true}', "[]", "null", "not json", ""])
+def test_a_malformed_recorder_file_means_no_outcomes_and_no_workers(text):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("affected_tests_record", TOOL)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.read_record(text) == ({}, False)
+    assert module.read_record('{"outcomes": {"t::a": "failed"}, "workers": true}') == ({"t::a": "failed"}, True)

@@ -56,6 +56,19 @@ def pytest_sessionfinish(session):
 """
 
 
+def read_record(text):
+    """(outcomes, workers started) from a recorder file; anything malformed is ({}, False)."""
+    try:
+        record = json.loads(text)
+        outcomes, workers = record["outcomes"], record["workers"]
+    except (ValueError, KeyError, TypeError):
+        return {}, False
+    if (not isinstance(outcomes, dict) or not isinstance(workers, bool)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in outcomes.items())):
+        return {}, False
+    return outcomes, workers
+
+
 def tree_hash(root):
     """Hash of tracked changes plus untracked, non-ignored files; None when git cannot say."""
     import hashlib
@@ -604,9 +617,8 @@ def main(root=None):
                     cwd=root, env=run_env,
                     **({"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT} if capture else {}))
                 try:
-                    recorded = json.loads(outcomes.read_text())
-                    return result.returncode, recorded["outcomes"], bool(recorded["workers"])
-                except (OSError, ValueError, KeyError, TypeError):
+                    return (result.returncode, *read_record(outcomes.read_text()))
+                except OSError:
                     return result.returncode, {}, False
 
             hashes = [tree_hash(root)]
