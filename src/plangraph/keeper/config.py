@@ -8,6 +8,7 @@ The config maps the store and its verifiers onto real paths:
                       namespace (``db`` then only anchors the derived schema name)
 * ``snapshot``      — where ``plan.snapshot.json`` is rewritten after every write
 * ``repos``         — project paths or maps with ``path``, ``ref`` and optional ``non_pr``
+* ``merge_scan``    — optional list of ``repos`` projects the merged-on-default scan reads (default: every repo)
 * ``runs_dir``      — where ``run-record`` jobs live
 * ``decisions_file``— the DECISIONS.md the ``decision`` verifier reads
 * ``ci``            — ``{project: "owner/repo" | "forgejo:owner/repo" | "none"}``
@@ -74,6 +75,11 @@ class Config:
             else:
                 raise ConfigError(f"repo {proj!r} entry must be a path string or dict")
         self.db_options = self._db_options(data)
+        scan = data.get("merge_scan")
+        if scan is not None and (not isinstance(scan, list) or any(
+                not isinstance(name, str) or name not in self.repos for name in scan)):
+            raise ConfigError("merge_scan must list projects named in repos")
+        self.merge_scan = scan
         self.runs_dir = data.get("runs_dir")
         self.claude_projects_dir = data.get("claude_projects_dir")
         self.spawner_records_dir = data.get("spawner_records_dir")

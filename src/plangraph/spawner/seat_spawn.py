@@ -35,7 +35,7 @@ async def fresh_spawn(service, options, *, admission_passed=False):
     import signal, subprocess, sys
     from contextlib import ExitStack
     from . import cli
-    from .cli import _drain_chunks, _prune_supervisor_logs
+    from .cli import _drain_chunks, _prune_supervisor_logs, _rotation_source
     from plangraph.routing_support import background_process_options
     state = service.state.resolve()
     context = ExitStack()
@@ -57,9 +57,8 @@ async def fresh_spawn(service, options, *, admission_passed=False):
         _prune_supervisor_logs(state)
         log = state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
         bootstrap = '''import io, json, logging, os, pathlib, sys, threading, traceback
-from logging.handlers import RotatingFileHandler
 from plangraph.spawner import cli as supervisor
-payload = json.loads(sys.stdin.readline())
+''' + _rotation_source() + '''payload = json.loads(sys.stdin.readline())
 tree, admitted, cwd = payload.pop('_tree'), payload.pop('_admitted', False), payload.pop('_cwd')
 sys.stdin = io.StringIO(json.dumps(payload) + '\\n')
 path = sys.argv[1]
@@ -71,12 +70,7 @@ tree['supervisor_stderr_path'] = path
 read_fd, write_fd = os.pipe()
 os.dup2(write_fd, 2)
 os.close(write_fd)
-class PrivateLog(RotatingFileHandler):
-    def _open(self): return os.fdopen(os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'a', encoding='utf-8', newline='')
-    def shouldRollover(self, record): return self.stream.tell() + len(self.format(record).encode('utf-8')) + 1 > self.maxBytes
-logging.raiseExceptions = False
-handler = PrivateLog(path, maxBytes=1024 * 1024, backupCount=1)
-handler.terminator = ''
+handler = _private_rotating_log(path)
 def drain():
     try:
         supervisor._drain_chunks(iter(lambda: os.read(read_fd, 8192), b''), lambda data:
@@ -198,8 +192,7 @@ def _no_hosts_hint(config):
     """Why a refusal had nowhere to overflow to, when the overflow config names no host."""
     if config.get('hosts'):
         return {}
-    return {'hint': 'overflow-hosts.json is absent or lists no host: run `python3 -m plangraph.fleet_sync genconfig write` '
-                    'so a review without local room can be placed on another host'}
+    return {'hint': 'hosts.json has no eligible remote host. Check the registry, then run fleet_sync genconfig write and host_ready.'}
 
 def _open_queue(service, role, decision, window, host=None, card=None):
     """The queued record of a spawn waiting for room; its owner is this process.
@@ -245,19 +238,19 @@ def admit(service, options, *, card=None, preview=False):
     if options.get('dry_run'):
         return None
     from . import overflow
-    path = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS',
-                              '~/.config/plangraph/overflow-hosts.json')).expanduser()
-    try:
-        config = json.loads(path.read_text())
-        if not isinstance(config, dict):
-            config = {}
-    except (OSError, ValueError):
-        config = {}
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
+    config = overflow.placement_config(registry, role)
     local, remote_first = overflow.placement_policy(registry, config)
     native = (card or {}).get('run_kind') == 'native-codex'
-    if preview and not remote_first and not native:
+    placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
+    explicit_cwd = options.get('cwd') is not None or 'cwd' in (card or {})
+    compare_local = (config.get('registry') and not (placed or explicit_cwd)
+                     and (native or role == 'review' and (card or {}).get('diff_ref') is not None))
+    if placed:
+        config['hosts'] = {}
+        remote_first = False
+    if preview and not (remote_first or compare_local):
         return None
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
@@ -266,12 +259,24 @@ def admit(service, options, *, card=None, preview=False):
                 (card or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     from .host_ready import local_disk_refusal
-    disk = local_disk_refusal(repo, service)
-    if not remote_first and not disk and not overflow.memory_refusal(memory, role_mb, floor):
-        if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
+    disk = local_disk_refusal(repo, service, role)
+    if not (remote_first or compare_local) and not disk and not overflow.memory_refusal(memory, role_mb, floor):
+        if native or placed:
+            options['_placement'] = dict(host=local, reason=os.environ.get(
+                'PLANGRAPH_PLACEMENT_REASON', 'local room'), free_mb=memory)
         return None
     public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
-    benchmark_local = remote_first and options.get('benchmark') is not None
+    benchmark_local = (remote_first or compare_local) and options.get('benchmark') is not None
+    def local_readiness_refusal():
+        if not (compare_local and public and local):
+            return None
+        try:
+            row = overflow.read_readiness(local)
+        except (OSError, ValueError, TypeError, KeyError):
+            return 'local readiness missing or malformed'
+        if row['ok'] is not True:
+            return 'local readiness failed'
+        return None if row['fresh'] else 'local readiness stale'
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
     def load_rows():
@@ -280,13 +285,11 @@ def admit(service, options, *, card=None, preview=False):
             for row in rows.values():
                 if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
                     row.setdefault('refusal', 'disk_low: need 5 GB free to start')
-        if remote_first:
-            rows = {name: row for name, row in rows.items()
-                    if name != local and overflow.host_config(registry, name).get('id') != local}
+        rows.pop(local, None)
         return rows
     rows = load_rows()
-    health = disk or (overflow.local_health_refusal(config, memory) if remote_first else None)
-    queued, window = None, 0 if remote_first or preview else admission_window()
+    health = disk or local_readiness_refusal() or (overflow.local_health_refusal(config, memory) if remote_first else None)
+    queued, window = None, 0 if remote_first or preview or placed or compare_local else admission_window()
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -302,7 +305,8 @@ def admit(service, options, *, card=None, preview=False):
                 return service.result(queued['run_id'])
             decision = overflow.decide(memory, role_mb, floor, rows, public,
                                        remote_first=remote_first, local_refusal=health,
-                                       host_order=tuple(config.get('hosts', {})))
+                                       host_order=tuple(config.get('hosts', {})), compare_local=compare_local,
+                                       local_fallback=overflow.host_config(registry, local).get('placement_fallback', False))
             if benchmark_local and decision.reason == 'local_fallback_no_remote':
                 decision = overflow.Decision(None, 'local_benchmark_database')
             if options.get('benchmark') is not None and decision.host is not None:
@@ -311,6 +315,9 @@ def admit(service, options, *, card=None, preview=False):
                              free_mb=rows[decision.host]['mem_available_mb'] if decision.host else memory)
             if preview:
                 return placement
+            if compare_local and decision.host is None and not health and not overflow.memory_refusal(memory, role_mb, floor):
+                options['_placement'] = placement
+                return None
             if remote_first:
                 options['_placement'] = placement
                 if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
@@ -322,8 +329,8 @@ def admit(service, options, *, card=None, preview=False):
                     if time.time() < queued['queued_until']:
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
                         _, memory = resources(service)
-                        disk = local_disk_refusal(repo, service)
-                        health = disk
+                        disk = local_disk_refusal(repo, service, role)
+                        health = disk or local_readiness_refusal()
                         rows = load_rows()
                         if not disk and not overflow.memory_refusal(memory, role_mb, floor):
                             taken = _close_queue(service, queued)
@@ -344,7 +351,9 @@ def admit(service, options, *, card=None, preview=False):
             try:
                 if options.get('cwd') is not None or 'cwd' in (card or {}):
                     raise overflow.RemoteRefusal('explicit cwd cannot overflow to another checkout')
-                result = overflow.remote_spawn(name, config['hosts'][name], card or {},
+                target = dict(config['hosts'][name], placement_reason=decision.reason,
+                              public_repo_ids=config.get('public_repo_ids', {}))
+                result = overflow.remote_spawn(name, target, card or {},
                                                options.get('prompt', ''), flags)
                 refusal = 'remote spawn failed'
             except overflow.RemoteRefusal as exc:
@@ -365,7 +374,7 @@ def admit(service, options, *, card=None, preview=False):
             _close_queue(service, queued, status='failed', exit_code=1, reason='admission_failed',
                          error=f'admission failed: {type(exc).__name__}')
         raise
-    if remote_first:
+    if remote_first or compare_local:
         record.update(host=placement['host'], placement=placement)
     record.setdefault('role', role or 'implement')
     record.setdefault('started', time.time())
@@ -496,6 +505,8 @@ class SeatSpawnMixin:
 
     async def _launch_leg(self, record, chosen, *, routed=False, **options):
         """One normal launch, at most one capped review retry; never recurse or reroute."""
+        from .exit_outcome import stamp_harness
+        stamp_harness(record, chosen)
         if record.get('role') == 'review':
             from plangraph.review.family import FamilyError, writer_headers
             try:

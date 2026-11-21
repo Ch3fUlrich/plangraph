@@ -257,6 +257,7 @@ def test_non_pr_preserves_verifier_guards(topology, monkeypatch, case, detail):
     ctx = make_ctx(git=git, ci=ci)
     if case == "trailer":
         monkeypatch.setattr(git, "trailers", lambda *args: {})
+        monkeypatch.setattr(git, "merge_plan_items", lambda *args: [])  # no trailer in the merge's range either
     elif case == "floor":
         ctx.bind_floor_required = True
         ctx.bind_floor_sha = lane

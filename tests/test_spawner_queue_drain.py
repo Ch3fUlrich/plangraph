@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+from registry_route_util import use_projected_overflow_config
+
 from plangraph.spawner import overflow, seat_spawn
 from plangraph.spawner.service import SpawnService
 from plangraph.spawner.stall_watchdog import sweep_runs
@@ -16,7 +18,7 @@ from plangraph.spawner.stall_watchdog import sweep_runs
 @pytest.fixture
 def room(tmp_path, monkeypatch):
     """A service on a private state dir whose local memory the test scripts."""
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(tmp_path / 'absent.json'))
+    use_projected_overflow_config(monkeypatch, tmp_path / 'absent.json')
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(overflow, 'local_limits', lambda registry, role: (2048, 3000))
     service = SpawnService(state=tmp_path / 'state')
@@ -150,7 +152,7 @@ def test_queue_closes_when_wait_leaves_local_admission(room, monkeypatch, tmp_pa
     readings[:] = [4000]
     config = tmp_path / 'overflow.json'
     config.write_text(json.dumps({'hosts': {'fixture': {}}}))
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     monkeypatch.setenv(seat_spawn.ADMISSION_WAIT_ENV, '30')
     monkeypatch.setattr(overflow, 'repos_public', lambda *a: True)
     ready = {}

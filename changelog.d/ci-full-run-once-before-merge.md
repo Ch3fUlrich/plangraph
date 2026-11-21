@@ -1,0 +1,1 @@
+- CI runs the full suite once, on the merge candidate (a batch/* head, a merge queue event or a head a GO row labels ci-full); every other pull request, draft or ready, runs the affected selection, and ci-gate refuses a candidate that ran only the selection.

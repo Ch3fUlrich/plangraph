@@ -57,6 +57,7 @@ esac
     cfg.write_text(json.dumps({'hosts': hosts}))
     ps = tmp_path / 'plangraph'
     ps.mkdir()
+    (ps / 'hosts.json').write_text(json.dumps({'self': 'fixture', 'hosts': []}))
     ps_hosts = [dict(name=name, target=name, src='/source') for name in hosts]
     if mode == 'missing':
         ps_hosts[0]['src'] = '/deleted'
@@ -77,9 +78,14 @@ esac
             [] if mode == 'ps_shape' else {'hosts': ps_hosts}))
     env = dict(os.environ, HOME=str(tmp_path), XDG_CONFIG_HOME=str(tmp_path),
                PATH=str(binary) + os.pathsep + os.environ['PATH'], MODE=mode,
-               PLANGRAPH_OVERFLOW_HOSTS=str(cfg),
                PYTHONPATH=str(Path(__file__).resolve().parents[1] / 'src'))
-    result = subprocess.run([sys.executable, '-m', 'plangraph.spawner.host_ready', '--json'],
+    fixture_cli = (
+        'import json, sys; from pathlib import Path; '
+        'from plangraph.spawner import host_ready, overflow; '
+        'overflow.placement_config = lambda registry: json.loads(Path(sys.argv[1]).read_text()); '
+        'raise SystemExit(host_ready.main(["--json"]))'
+    )
+    result = subprocess.run([sys.executable, '-c', fixture_cli, str(cfg)],
                             env=env, capture_output=True, text=True, timeout=15)
     rows = json.loads(result.stdout)
     assert result.returncode == (mode != 'green')

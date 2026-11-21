@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|health|agents-view|ledger-report|check-manage-key> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|health|agents-view|ledger-report|check-manage-key> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -131,6 +131,18 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
+    if verb.as_deref() == Some("steps") {
+        // The plan arrives on stdin; the exit code is the plan's, not a usage error's.
+        if !rest.is_empty() {
+            return Err("steps takes its JSON plan on stdin".into());
+        }
+        let code = pg_worker_core::remote_steps::execute(std::io::stdin(), &mut std::io::stdout())?;
+        if code != 0 {
+            let _ = out.flush();
+            std::process::exit(code);
+        }
+        return Ok(());
+    }
     if verb.as_deref() == Some("ledger-report") {
         return crate::writer_ledger::report(rest, out);
     }
@@ -142,6 +154,9 @@ pub(crate) fn execute(
     }
     if verb.as_deref() == Some("health") {
         return crate::health_cli::execute(rest, out);
+    }
+    if verb.as_deref() == Some("land-go") {
+        return crate::land_go_shell::execute(rest, out);
     }
     if verb.as_deref() == Some("check-manage-key") {
         return crate::manage_key_alert::execute(rest, out);

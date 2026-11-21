@@ -16,14 +16,15 @@ def test_task_marker_never_books(tmp_path, stream, marker):
     setattr(job, stream, "reason = '" + marker + ": ' + model")
     assert fallthrough_reason(service, leg, job, {}) is None
     assert calls == []
+    # not_served_on_host is a host fact: reported, never booked as a provider 429 down window.
+    booked = 0 if marker == 'not_served_on_host' else 1
     if stream == 'stderr' and marker == 'not_served_on_host':
         job.stderr = 'not_served_on_host: provider/model'
         assert fallthrough_reason(service, leg, job, {}) is not None
-        assert len(calls) == 1
-        calls.clear()
+        assert calls == []
     setattr(job, stream, 'Error: ' + marker + ': provider/model')
     assert fallthrough_reason(service, leg, job, {}) is not None
-    assert len(calls) == 1
+    assert len(calls) == booked
 
 
 @pytest.mark.parametrize('stopped,status', [(False, 'failed'), (True, 'failed'), (True, 'completed')])

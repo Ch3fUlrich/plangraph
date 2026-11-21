@@ -189,7 +189,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
                 or projects != list(getattr(principal, "projects", None) or []):
             raise Refused("forbidden", "principal changed since authentication")
 
-    def _run(self, principal, action, key, fn):
+    def _run(self, principal, action, key, fn, *, success_message=""):
         """Authorise/execute *fn*; audit success and every refusal."""
         now = self.now()
         # M2: ``_apply_ops_audited`` records a batch refusal (with its op
@@ -252,7 +252,8 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             refused = Refused("conflict", "keeper database is busy")
             deny(refused)
             raise refused from exc
-        self._audit(principal, action, key, True, "", "", now)
+        if success_message is not None:
+            self._audit(principal, action, key, True, "", success_message, now)
         return result
 
     # ---------------------------------------------------- authorisation

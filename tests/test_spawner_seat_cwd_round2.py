@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from registry_route_util import use_projected_overflow_config
+
 from plangraph.spawner import overflow, seat_spawn
 from test_spawner_seat_cwd import checkouts  # noqa: F401 shared local Git fixture
 
@@ -34,7 +36,7 @@ def test_overflow_checks_selected_and_diff_repositories(checkouts, tmp_path, mon
             **({'cwd': str(reviewed)} if source == 'card' else {})}
     card_path.write_text(json.dumps(card))
     prompt.write_text('Review')
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(overflow, 'local_limits', lambda *a: (2048, 3000))
     monkeypatch.setattr(overflow, 'local_resources', lambda: (0, 0))
@@ -69,7 +71,7 @@ def test_explicit_checkout_never_uses_healthy_remote(checkouts, tmp_path, monkey
                                   'hosts': {'remote': {'ssh': 'invented'}}}))
     card.write_text(json.dumps({'cwd': str(reviewed)}))
     prompt.write_text('Review')
-    monkeypatch.setenv('PLANGRAPH_OVERFLOW_HOSTS', str(config))
+    use_projected_overflow_config(monkeypatch, config)
     monkeypatch.setattr(overflow, 'registry_caps', lambda: {})
     monkeypatch.setattr(overflow, 'placement_policy', lambda *a: ('local', remote_first))
     monkeypatch.setattr(overflow, 'local_limits', lambda *a: (2048, 3000))

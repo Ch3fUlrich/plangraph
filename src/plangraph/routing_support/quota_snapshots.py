@@ -133,6 +133,15 @@ def _min_pct():
         return 1.0
 
 
+def skip_reason(status):
+    """The same reset-bearing reason in route and launch read-back."""
+    evidence = status.get('evidence') or {}
+    reset = evidence.get('reset_at')
+    if status['state'] == 'limited' and evidence.get('caller') == 'quota-snapshot' and reset:
+        return 'quota_until ' + time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(reset))
+    return None
+
+
 class QuotaGate:
     """Turns a leg-status read into ``limited`` while the leg's omniroute pool is exhausted."""
 

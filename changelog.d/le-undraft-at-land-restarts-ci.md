@@ -1,0 +1,1 @@
+- Marking a draft pull request ready starts no new CI run (the head keeps the ci-gate its last push earned), and merge_batch land names a pending required check and exits without retrying.
