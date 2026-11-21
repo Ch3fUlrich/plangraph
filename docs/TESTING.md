@@ -13,6 +13,12 @@ including staged, unstaged and untracked files. JSON output explains the plan;
 without `--run` it only prints the plan. Invalid refs fail rather than selecting nothing.
 `--workers 4` overrides the default `-n auto`; `PYTEST_XDIST_AUTO_NUM_WORKERS=4`
 also caps auto on resource-constrained hosts. Exit status propagates pytest failures.
+`--run` is quiet (`-q --tb=short --no-header`, only durations over 1 s); `--loud` restores
+pytest's default report. After a failed run (exit 1, at most 50 failed ids) the failed ids rerun
+with `-n0` and at the first worker count, with a tree hash around every run. `FLAKY (...)` needs
+an explicit pass on both reruns and equal hashes; `FAILED-IN-PARALLEL` is a pass at `-n0` and a
+failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. The exit
+status stays that of the first run, so a flake is named, never hidden.
 
 Selection follows transitive AST imports in src/ and tests/ (including relative
 imports and package initializers), plus test references to filenames for subprocess

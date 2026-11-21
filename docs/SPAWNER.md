@@ -1,4 +1,4 @@
-# Plangraph Spawner & Model Routing Architecture — [disk admission](operations/spawner-disk-admission.md) · [writer feeder](writer-feeder.md)
+# Plangraph Spawner & Model Routing Architecture — [disk admission and target trim](operations/spawner-disk-admission.md) · [writer feeder](writer-feeder.md)
 
 | Config key | Values | Default / details |
 | --- | --- | --- |
@@ -12,6 +12,10 @@ An empty/unset state falls back to `PLANGRAPH_SPAWN_STATE`, then `$XDG_STATE_HOM
 Session `launch` and `relaunch` refuse with `quota pause` before invoking the
 action or stopping an existing session, without a model filter. Dry runs do not
 bypass the quota check or write audit records.
+
+For an operator pause, place a regular UTF-8 file named `fleet-launch.pause` in the spawner state
+directory. Session launch, launch preview and relaunch refuse with the trimmed file contents as the
+reason; an empty file reports `operator pause`. Remove the file to resume accepting session launches.
 Leg-aware checks in launch-spec, pre-launch probing and seat prompt assembly
 pause legs whose `id` or `model` starts with `claude-`, accepting object or mapping
 metadata. Known other providers are unaffected; missing provider metadata is
@@ -301,6 +305,9 @@ MCP `route`, `spawn`, `ps`, `result`, `status`, `cancel` (with `plangraph_agent_
 `card` and `prompt` in its schema; model_or_combo requires override_reason.
 Result/status/cancel accept `run_id`; legacy job-id operations remain available.
 MCP `ps` is compact (all running/queued runs, the newest 20 ended, `total`, `omitted`); use `result` or CLI `ps` for full records.
+After the Python MCP source changes on disk, reconnect before running a probe
+or starting a run or session. Status, result, steer and cancel remain available
+in the existing process.
 No JSON-RPC notification is answered or dispatched. A reply over 8 MiB becomes a `ReplyTooLarge` error (code -32000, same request id); stdio keeps serving.
 Only actual probe results write liveness state. Gateway adapters call
 `runner.provider_response` with actual captured responses.
