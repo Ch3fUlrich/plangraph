@@ -363,6 +363,28 @@ def landing_journal(repo, action, **fields):
     return json.loads(response.stdout)
 
 
+def keeper_landing_configured():
+    default_env = Path.home() / ".config" / "plangraph" / "plangraph.env"
+    return bool(os.environ.get("PG_URL") or os.environ.get("PLANGRAPH_ENV_FILE") or default_env.is_file())
+
+
+def exclude_consumed(repo, parts):
+    consumed = set()
+    for start in range(0, len(parts), 100):
+        batch = [{"pr": p.get("pr", p.get("number")), "head": p["head"]} for p in parts[start:start + 100]]
+        result = landing_journal(repo, "consumed", parts=batch)
+        consumed.update((p["pr"], p["head"]) for p in result["consumed"])
+    return [p for p in parts if (p.get("pr", p.get("number")), p["head"]) not in consumed]
+
+
+def cmd_consumed(args):
+    from merge_batch_util import repo_info
+
+    repo, _ = repo_info(args.repo)
+    print(json.dumps(landing_journal(repo, "consumed", parts=[{"pr": args.pr, "head": args.head}])))
+    return 0
+
+
 @contextmanager
 def landing_lease(repo):
     owner = uuid.uuid4().hex
@@ -460,9 +482,7 @@ def cmd_settle(args):
 
 
 def cmd_land(args):
-    default_env = Path.home() / ".config" / "plangraph" / "plangraph.env"
-    journal = bool(os.environ.get("PG_URL") or os.environ.get("PLANGRAPH_ENV_FILE") or default_env.is_file())
-    if journal:
+    if keeper_landing_configured():
         with landing_lease(load_state(args.name)["repo"]) as lease:
             return land_with_lease(args, lease)
     return land_with_lease(args, None)

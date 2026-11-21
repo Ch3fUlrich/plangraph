@@ -75,6 +75,14 @@ class MergeLocksMixin:
                 "SELECT * FROM landing_trains WHERE repo=? AND abandoned=0 AND cursor<? ORDER BY pr",
                 (repo, len(_LAND_STEPS)))
             return {"trains": [_landing_data(row) for row in rows]}
+        if action == "consumed":
+            parts = json.loads(_land_manifest({"parts": body.get("parts")}))
+            requested = {(part["pr"], part["head"]) for part in parts}
+            landed = self.conn.execute(
+                "SELECT manifest FROM landing_trains WHERE repo=? AND merged IS NOT NULL", (repo,))
+            matched = {(part["pr"], part["head"]) for row in landed
+                       for part in json.loads(row["manifest"])} & requested
+            return {"consumed": [{"pr": pr, "head": head} for pr, head in sorted(matched)]}
         identity = (repo, _land_number(body.get("pr")))
         select = "SELECT * FROM landing_trains WHERE repo=? AND pr=?"
         if action == "show":

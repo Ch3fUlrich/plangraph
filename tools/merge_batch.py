@@ -65,6 +65,8 @@ def cmd_plan(args):
         raw = gh_json("pr", "list", "--repo", repo, "--state", "open", "--label", args.label,
                       "--limit", "200", "--json", PR_FIELDS)
         prs = [norm_pr(item) for item in raw]
+    if land.keeper_landing_configured():
+        prs = land.exclude_consumed(repo, prs)
     refresh_diff(base, prs)  # Git owns sizes and paths, including both ends of renames
     plan = plan_batches(prs, base, args.max_prs, args.max_lines, patterns)
     plan.update(repo=repo, label=None if args.prs else args.label)
@@ -142,6 +144,9 @@ def parser():
     cmd.add_argument("--checks", metavar="NAME,..", help="check names to require instead of the required checks")
     cmd.add_argument("--wait", type=float, default=20.0, help="seconds to wait for GitHub to mark PRs merged")
     add("settle", land.cmd_settle, "resume pending keeper landing settlement in this repository")
+    cmd = add("consumed", land.cmd_consumed, "check whether this exact PR head landed with a train", repo=True)
+    cmd.add_argument("--pr", required=True, type=positive)
+    cmd.add_argument("--head", required=True)
     add("status", land.cmd_status, "batches in progress").add_argument("--json", action="store_true")
     add("abort", build.cmd_abort, "drop a batch: worktree, branch and state").add_argument("--name", required=True)
     return top
