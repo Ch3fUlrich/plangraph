@@ -124,6 +124,13 @@ class Config:
         )
 
 
+def _overlaps(a: str, b: str) -> bool:
+    """Whether two paths are the same or one contains the other (symlinks resolved)."""
+    ra, rb = os.path.realpath(a), os.path.realpath(b)
+    common = os.path.commonpath([ra, rb])
+    return common in (ra, rb)
+
+
 def _state_path(env: Mapping[str, str], out: str) -> str:
     """The gate state file: PLANGRAPH_STATE, else a private per-user default.
 
@@ -145,6 +152,8 @@ def _state_path(env: Mapping[str, str], out: str) -> str:
     entry = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(state))), os.path.basename(state))
     if any(os.path.commonpath([p, real_out]) == real_out for p in (os.path.realpath(state), entry)):
         raise ConfigError("PLANGRAPH_STATE must be outside PLANGRAPH_OUT (the web-served directory)")
+    if _overlaps(os.path.join(os.path.dirname(os.path.abspath(state)), "render-tree"), out):
+        raise ConfigError("PLANGRAPH_OUT must not overlap the render-tree directory beside PLANGRAPH_STATE")
     return state
 
 
@@ -497,6 +506,10 @@ def export_tree(cfg: Config, runner) -> dict:
     sha = gate["sha"]
     base = Path(cfg.state).parent
     final = base / "render-tree"
+    # The swap below replaces `final`: it must never be, hold or sit in the served
+    # page directory or the live checkout.
+    if _overlaps(str(final), cfg.out) or _overlaps(str(final), cfg.tree):
+        return {"status": "unverified", "sha": sha}
     staging = None
     try:
         base.mkdir(parents=True, exist_ok=True)
@@ -588,7 +601,7 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
     Returns 0 for every follow/check outcome — a page render must never be
     blocked by this step; only a unusable config exits 2. ``verified`` is the
     render gate: 0 when the checkout is the recorded green head, else 3;
-    ``export`` also copies that commit to a private tree and prints its path.
+    ``export`` also copies that commit to ``<state dir>/render-tree`` and prints its short sha.
     """
     words = list(sys.argv[1:] if argv is None else argv)
     command = words[0] if words else ""
@@ -609,8 +622,8 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
         if result["status"] != "verified":
             print(json.dumps(result), file=sys.stderr if command == "export" else sys.stdout)
             return 3
-        # export: "<tree> <short sha>" for the render unit to read; verified: JSON.
-        print(f"{result['tree']} {result['sha'][:10]}" if command == "export" else json.dumps(result))
+        # export: only the short sha (the tree is always <state dir>/render-tree); verified: JSON.
+        print(result["sha"][:10] if command == "export" else json.dumps(result))
         return 0
     try:
         result = (

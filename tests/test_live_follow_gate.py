@@ -224,8 +224,40 @@ def test_export_refuses_and_keeps_the_previous_tree(tmp_path, case):
 def test_main_export_prints_tree_and_short_sha_or_nothing(tmp_path, capsys):
     cfg, fake = _exporting(tmp_path, {"a.txt": b"x"})
     assert main(["export"], env=base_env(tmp_path), runner=fake, now=T0) == 0
-    tree, short = capsys.readouterr().out.split()
-    assert Path(tree) == Path(cfg.state).parent / "render-tree" and short == CUR[:10]
+    # Only the short sha: the tree is always <state dir>/render-tree, never a printed path.
+    assert capsys.readouterr().out == CUR[:10] + "\n"
+    assert (Path(cfg.state).parent / "render-tree" / "a.txt").exists()
     cfg2, fake2 = _exporting(tmp_path, {"a.txt": b"x"}, head=HEAD)
     assert main(["export"], env=base_env(tmp_path), runner=fake2, now=T0) == 3
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize("where", ["out_is_render_tree", "out_inside_render_tree", "out_contains_render_tree"])
+def test_output_dir_overlapping_the_render_tree_is_rejected_by_config(tmp_path, where):
+    state_dir = tmp_path / "st"
+    out = {"out_is_render_tree": state_dir / "render-tree",
+           "out_inside_render_tree": state_dir / "render-tree" / "page",
+           "out_contains_render_tree": tmp_path}[where]
+    env = base_env(tmp_path, PLANGRAPH_STATE=str(state_dir / "s.json"), PLANGRAPH_OUT=str(out))
+    with pytest.raises(ConfigError):
+        Config.from_env(env)
+
+
+def test_export_never_replaces_the_page_directory(tmp_path):
+    """A Config built directly (not through from_env) with out == render-tree: nothing is renamed."""
+    cfg, fake = _exporting(tmp_path, {"a.txt": b"x"})
+    page_dir = Path(cfg.state).parent / "render-tree"
+    page_dir.mkdir(parents=True)
+    (page_dir / "plan-cdn.html").write_text("published")
+    from dataclasses import replace
+    res = export_tree(replace(cfg, out=str(page_dir)), fake)
+    assert res["status"] != "verified"
+    assert (page_dir / "plan-cdn.html").read_text() == "published"
+    assert not (page_dir / "a.txt").exists()
+
+
+def test_export_refuses_a_render_tree_that_overlaps_the_live_checkout(tmp_path):
+    cfg, fake = _exporting(tmp_path, {"a.txt": b"x"})
+    from dataclasses import replace
+    res = export_tree(replace(cfg, tree=str(Path(cfg.state).parent / "render-tree")), fake)
+    assert res["status"] != "verified"
