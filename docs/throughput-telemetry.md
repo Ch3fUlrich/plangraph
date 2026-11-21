@@ -42,7 +42,8 @@ observations remain unknown.
 
 The hourly collector reprocesses the previous two completed UTC hours and
 catches up from its last bucket after downtime. The shipped unit starts a
-new collection on November 20, 2026. Each tick advances by at most 31 days.
+new collection on November 20, 2026. Set `PLANGRAPH_THROUGHPUT_START` to
+override that date for a new repository. Each tick advances by at most 31 days.
 Before enabling `pg-throughput.timer`, configure the lander's database,
 forge repository, keeper project and keeper snapshot in
 `~/.config/plangraph/throughput.env`. The service reads these last three

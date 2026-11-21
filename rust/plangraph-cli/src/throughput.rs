@@ -12,6 +12,7 @@ use std::{
 };
 
 const HOUR: i64 = 3600;
+const BASELINE_START: &str = "2026-11-20T00:00:00Z";
 type Env = BTreeMap<String, String>;
 
 #[derive(Default)]
@@ -205,11 +206,11 @@ fn execute(home: &Path, env: &Env, args: &[String]) -> Result<Value, String> {
         [verb, repo, project, reference, keeper] if verb == "tick" => {
             let end = Utc::now().timestamp().div_euclid(HOUR) * HOUR;
             db.check_landing()?;
-            let configured = env.get("PLANGRAPH_THROUGHPUT_START")
-                .map(|text| timestamp(text)).transpose()?;
+            let configured = timestamp(env.get("PLANGRAPH_THROUGHPUT_START")
+                .map_or(BASELINE_START, String::as_str))?;
             let start = db.through(repo)?.map(|through| {
                 (through.div_euclid(HOUR) * HOUR).min(end - 2 * HOUR)
-            }).or(configured).unwrap_or(end - 2 * HOUR);
+            }).unwrap_or(configured);
             let end = end.min(start.saturating_add(31 * 24 * HOUR));
             collect(&db, env, repo, project, reference, Path::new(keeper), start..end)
         }
