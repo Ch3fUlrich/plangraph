@@ -52,7 +52,7 @@ import merge_batch_build as build
 import merge_batch_land as land
 from merge_batch_plan import high_patterns, plan_batches, render_table
 from merge_batch_util import (BATCH_READY, EXIT_REFUSED, PR_FIELDS, MergeBatchError, refresh_diff, fetch_pr,
-                              gh_json, landing_report, norm_pr, parse_prs, record_landing, render_landing_report,
+                              ci_window, first_ready, gh_json, landing_report, norm_pr, parse_prs, record_landing, render_landing_report,
                               repo_info, require_landing_row, set_fix_tasks, settle_landings)
 
 
@@ -123,11 +123,11 @@ def cmd_landing_backfill(args):
     table = [line for line in (pr.get("body") or "").splitlines() if line.startswith("|")]
     rows = [[c.strip() for c in line.strip("|").split("|")] for line in table[2:]]
     parts = [int(m.group(1)) if (m := re.search(r"#(\d+)", " ".join(r))) else r[0] for r in rows if r and r[0]]
-    window = land.ci_window(repo, pr["headRefOid"])
+    window = ci_window(repo, pr["headRefOid"])
     row = {"repo": repo, "mode": args.mode, "train": f"pr{args.pr}", "pr": args.pr, "parts": parts,
            "landed_sha": pr["mergeCommit"]["oid"], "first_ready_at": args.ready_at, "build_started_at": pr["createdAt"],
            "go_at": args.go_at, "landed_at": pr["mergedAt"], "fit_commits": None, "left_out": None, **window}
-    record_landing(row)
+    record_landing(row, fill_only=True)
     print(f"recorded {args.mode} train #{args.pr}: {len(parts)} part(s), landed {pr['mergedAt']}")
     return 0
 
@@ -138,10 +138,10 @@ def cmd_landing_record(args):
     back; a row that cannot be written exits 1, so the caller can fail the landing."""
     from datetime import datetime, timezone
 
-    window = land.ci_window(args.repo, args.head) if args.head else {}
+    window = ci_window(args.repo, args.head) if args.head else {}
     parts = [int(n) for n in args.parts.split(",") if n]
     row = {"repo": args.repo, "mode": args.mode, "train": args.train, "pr": args.pr, "parts": parts,
-           "landed_sha": args.sha, "first_ready_at": land.first_ready(args.repo, [{"pr": n} for n in parts]),
+           "landed_sha": args.sha, "first_ready_at": first_ready(args.repo, [{"pr": n} for n in parts]),
            "landed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), **window}
     if args.mode == "tested-ff":
         row["green_at"] = window.get("ci_ended_at")

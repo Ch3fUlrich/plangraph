@@ -5,16 +5,13 @@ import json
 import os
 import re
 import sys
-import sqlite3
 import tempfile
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
-from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
+from merge_batch_util import (NEEDS_UPDATE, TESTED_FF, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
-                              batch_workflow_gate, part_review, run, record_landing, require_landing_row,
-                              state_dir)
+                              batch_workflow_gate, part_review, run, write_landing)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -358,7 +355,6 @@ def included_pr(repo, number, rec, view, merge):
     return "ok", ""
 
 
-TESTED_FF = "tested-ff"
 #: git's own words for a server that answered no (a rejected ref, a stale lease, a protection or hook refusal):
 #: anything else that fails a push is an unknown delivery, not a refusal.
 PUSH_REFUSED = re.compile(r"\[(?:remote )?rejected\]|remote rejected|stale info|protected branch|GH\d{3}|"
@@ -427,63 +423,31 @@ def push_tested(st):
                               f"{base} is at {short(tip)}; land again")
 
 
-def iso_now():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+def require_tested_ff_evidence(st):
+    """What the keeper reads after a landing that has no merge commit: the batch plan key must be a ``Plan-Item``
+    trailer of a commit of the batch (``build --plan`` writes it into every merge commit it makes), and the
+    keeper setting ``require_seats`` must be off, because the ``Review-Run`` citations of a merge body cannot be
+    added to a tested commit without changing the tested sha (merge-close then flags the seat as missing)."""
+    from plangraph.keeper.config import ConfigError, load_config
+    from plangraph.keeper.evidence_git import plan_items
 
-
-def ci_window(repo, head):
-    """Run id and times of the full tests run on ``head`` (empty when GitHub does not say)."""
+    plan = st.get("plan")
+    if isinstance(plan, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", plan):
+        bodies = git("log", "--format=%B%x1d", f"{st['base_head']}..{st['head']}", cwd=st["worktree"]).stdout.split("\x1d")
+        if not any(plan in plan_items(body) for body in bodies):
+            raise MergeBatchError(f"tested-ff: the batch plan key {plan} is no Plan-Item trailer of a batch commit "
+                                  "(it was built without it): build the batch again, or land in train-pr-merge")
     try:
-        runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}"
-                              "&event=pull_request&per_page=100")["workflow_runs"]
-        run_ = max(runs, key=lambda r: r["id"])
-        return {"ci_run_id": run_["id"], "ci_started_at": run_.get("run_started_at") or run_.get("created_at"),
-                "ci_ended_at": run_.get("updated_at"), "ci_reruns": len(runs) - 1 + run_.get("run_attempt", 1) - 1}
-    except (MergeBatchError, KeyError, ValueError, TypeError):
-        return {}
+        seats = load_config(keeper_config_path()).require_seats
+    except (ConfigError, OSError):
+        seats = False  # require_part_seats already read this file; a missing one flags seats as missing
+    if seats:
+        raise MergeBatchError("tested-ff: the keeper setting require_seats is on, and a tested commit has no merge "
+                              "body to cite the part reviews (Review-Run); turn require_seats off or land in train-pr-merge")
 
 
-def first_ready(repo, recs):
-    """The earliest time a part got the batch-ready label (None when GitHub does not say)."""
-    times = []
-    for rec in recs:
-        try:
-            events = gh_json("api", f"repos/{repo}/issues/{rec['pr']}/events?per_page=100")
-            times += [e["created_at"] for e in events
-                      if e.get("event") == "labeled" and (e.get("label") or {}).get("name") == "batch-ready"]
-        except (MergeBatchError, KeyError, ValueError, TypeError):
-            continue
-    return min(times) if times else None
-
-
-def write_landing(st, mode, merge, reruns, go_row):
-    """The landing receipt and the telemetry row of one landing, both naming the mode, then the check that the
-    row exists: a landing without its row fails the lander (the state stays, land again writes it)."""
-    repo = st["repo"]
-    st.setdefault("landed_at", iso_now())
-    row = {"repo": repo, "mode": mode, "train": st["name"], "pr": st["pr"], "parts": [r["pr"] for r in st["merged"]],
-           "landed_sha": merge, "first_ready_at": first_ready(repo, st["merged"]), "build_started_at": st.get("created"),
-           "go_at": (datetime.fromtimestamp(Path(go_row).stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
-                     if go_row and Path(go_row).is_file() else st.get("go_at") or st["landed_at"]),
-           "landed_at": st["landed_at"], "ci_reruns": len(reruns),
-           "fit_commits": sum(1 for r in st["merged"] if r["resolved"]), "left_out": len(st["skipped"])}
-    window = ci_window(repo, st["head"])
-    window.pop("ci_reruns", None)  # the lander counts the reruns it recorded on the pull request
-    row.update(window)
-    receipt = {"plan_item": st.get("plan"), "review_runs": {str(r["pr"]): r.get("review_runs") or {} for r in st["merged"]}}
-    if mode == TESTED_FF:
-        row["green_at"] = row.get("ci_ended_at")  # the green run is the run on the landed commit itself
-    try:
-        record_landing(row)
-        require_landing_row(repo, st["name"], merge, mode)
-        receipts = state_dir() / "receipts"
-        receipts.mkdir(parents=True, exist_ok=True)
-        (receipts / f"{st['name']}-{merge}.json").write_text(json.dumps({**row, **receipt}, indent=2, sort_keys=True) + "\n",
-                                                             encoding="utf-8")
-    except (sqlite3.Error, OSError) as exc:
-        raise MergeBatchError(f"landing telemetry row not written: {exc}") from None
-    save_state(st)
-    print(f"landing receipt: mode={mode} train={st['name']} sha={merge}", file=sys.stderr)
+def keeper_config_path():
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph" / "keeper.json"
 
 
 def wait_marked_merged(repo, number, wait):
@@ -507,9 +471,9 @@ def cmd_land(args):
     merge commit, no ``gh pr merge``; GitHub marks the pull requests merged because their heads are in main.
     ``train-pr-merge``: the batch pull request is merged with a merge commit (rule 3.39), as before.
     A ``MERGED`` batch pull request is no landing in ``tested-ff`` unless its head is in main's history.
-    The batch has no merge commit there, so the ``Review-Run`` citations of the merge body do not exist: the
-    receipt keeps them, the part commits keep their ``Plan-Item`` trailers, and merge-close closes on that merge
-    evidence with the seat flag of the keeper setting ``require_seats``.
+    The batch has no merge commit there: require_tested_ff_evidence refuses a batch whose plan key is no
+    ``Plan-Item`` trailer of a batch commit and refuses while the keeper's ``require_seats`` is on (no
+    ``Review-Run`` citations can be added to a tested commit); the receipt keeps the citations and the key.
     ``single-pr``: as train-pr-merge, for a batch of exactly one part (one pull request on its own GO);
     several parts are refused. Every landing then reports each part (MERGED lines), writes the landing
     receipt and the telemetry row naming the mode (write_landing), cleans up and runs merge-close."""
@@ -542,6 +506,7 @@ def cmd_land(args):
         require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
         if mode == TESTED_FF:
+            require_tested_ff_evidence(st)
             push_tested(st)
         else:
             gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
@@ -684,9 +649,8 @@ def part_seat(run_id, key, head):
 
     if not isinstance(run_id, str) or not run_id.startswith("run-") or not RunRecordAdapter(None).valid_run_id(run_id):
         raise MergeBatchError("a keeper-bound review requires a spawner run id")
-    config_dir = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph"
     try:
-        config = load_config(config_dir / "keeper.json")
+        config = load_config(keeper_config_path())
         adapter = SpawnerRecordAdapter(config.spawner_records_dir)
         seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
                                      allow_cli_reported=True, require_diff_head=True,

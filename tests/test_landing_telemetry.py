@@ -115,3 +115,26 @@ def test_a_settle_reads_green_and_red_from_the_runs_on_the_landed_sha(util):
     assert (by_train["a"]["green_at"], by_train["a"]["red_main"]) == ("2026-11-21T10:23:00Z", 0)
     assert (by_train["b"]["green_at"], by_train["b"]["red_main"]) == (None, 1)
     assert (by_train["c"]["green_at"], by_train["c"]["red_main"]) == (None, None)
+
+
+def test_a_backfill_fills_unknown_columns_and_never_changes_a_live_row(util):
+    util.record_landing(row(train="l1", mode="tested-ff", ci_reruns=None, fit_commits=1))
+    util.record_landing(row(train="pr100", mode="train-pr-merge", parts=["B1"], ci_reruns=3, fit_commits=9,
+                            landed_at="2030-01-01T00:00:00Z"), fill_only=True)
+    (only,) = util.landing_rows()
+    assert (only["train"], only["mode"], only["parts"], only["ci_reruns"], only["fit_commits"], only["landed_at"]) == (
+        "l1", "tested-ff", [1, 2, 3], 3, 1, "2026-11-21T10:03:00Z")
+
+
+def test_a_database_keyed_by_the_train_is_migrated_to_one_row_per_landing(util):
+    import sqlite3
+    path = util.landing_db_path()
+    old = util.LANDING_SCHEMA.replace("PRIMARY KEY (repo, landed_sha)", "PRIMARY KEY (repo, train, landed_sha)")
+    with sqlite3.connect(path) as db:
+        db.execute(old)
+        for train in ("l1", "pr100"):
+            db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts) VALUES ('owner/proj', ?, ?, 'tested-ff', '[1]')",
+                       (train, "a" * 40))
+    assert [r["train"] for r in util.landing_rows()] == ["pr100"]
+    util.record_landing(row(train="l3"))  # the same sha under a third train name no longer raises
+    assert len(util.landing_rows()) == 1

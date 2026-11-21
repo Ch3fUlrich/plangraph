@@ -262,3 +262,44 @@ def test_landing_record_writes_the_row_for_a_landing_made_by_another_tool(env):
     res = env.run("landing-record", "--repo", "owner/proj", "--mode", "tested-ff", "--train", "pr9", "--pr", "9",
                   "--sha", "a" * 40, "--parts", "9")
     assert res.returncode == 1 and "telemetry row not written" in res.stderr
+
+
+def test_build_writes_the_batch_plan_key_into_every_merge_commit_it_makes(env):
+    pushed(env, plan="plangraph:BATCH-X")
+    state = json.loads(env.state_file("l1").read_text())
+    trailers = env.git("log", "--merges", "--format=%(trailers:key=Plan-Item,valueonly)", f"{state['base_head']}..{state['head']}",
+                       cwd=env.repo)
+    assert trailers.split() == ["plangraph:BATCH-X"] * 3
+
+
+def test_tested_ff_lands_a_batch_whose_key_is_in_git_and_the_receipt_keeps_the_citations(env):
+    approval = pushed(env, plan="plangraph:BATCH-X")
+    mode(env, "tested-ff")
+    head = head_of(env)
+    assert land(env, approval).returncode == 0 and main_tip(env) == head
+    (receipt,) = (env.repo / ".git" / "merge-batch" / "receipts").glob("l1-*.json")
+    data = json.loads(receipt.read_text())
+    assert data["plan_item"] == "plangraph:BATCH-X" and data["review_runs"]["1"] == {"plangraph:ITEM-A": "run-part-1-0"}
+
+
+def test_tested_ff_refuses_a_batch_whose_plan_key_is_not_in_git(env):
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    state = json.loads(env.state_file("l1").read_text())
+    state["plan"] = "plangraph:BATCH-X"  # built before the key was written into the merge commits
+    env.state_file("l1").write_text(json.dumps(state))
+    res = land(env, approval)
+    assert res.returncode == 1 and "no Plan-Item trailer of a batch commit" in res.stderr, res.stderr
+    assert main_tip(env) != state["head"] and rows(env) == []
+
+
+def test_tested_ff_refuses_while_the_keeper_requires_seats(env):
+    approval = pushed(env, plan="plangraph:BATCH-X")
+    mode(env, "tested-ff")
+    config = env.home / ".config" / "plangraph" / "keeper.json"
+    data = json.loads(config.read_text())
+    config.write_text(json.dumps({**data, "require_seats": True}))
+    config.chmod(0o600)
+    res = land(env, approval)
+    assert res.returncode == 1 and "require_seats" in res.stderr, res.stderr
+    assert env.calls("pr", "merge") == [] and rows(env) == []

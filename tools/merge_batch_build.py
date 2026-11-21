@@ -193,8 +193,8 @@ def run_pending(st, skip_conflicts):
             continue
         st["merging"] = {"pr": num, "head": pr["head"]}
         save_state(st)  # before the merge: a crash right after it leaves this marker and continue finds the commit
-        proc = git(*attrs_args(st), "merge", "--no-ff", "-m", f"Merge PR #{num}: {pr['title']}", pr["head"],
-                   cwd=wt, ok=None)
+        proc = git(*attrs_args(st), "merge", "--no-ff", "-m", f"Merge PR #{num}: {pr['title']}",
+                   *(["-m", f"Plan-Item: {st['plan']}"] if st.get("plan") else []), pr["head"], cwd=wt, ok=None)
         stop = settle_merge(st, num, proc, skip_conflicts)
     if stop is not None:
         return stop

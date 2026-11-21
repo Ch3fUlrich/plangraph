@@ -28,10 +28,15 @@ mode or table refuses the land before any call to GitHub. No landing path was de
   heads are in main. A pull request that GitHub shows merged but whose head is not in main (merged another way) is no
   landing in this mode. The batch has no merge commit, so the `Review-Run` citations of the merge body do not exist:
   the receipt keeps them with the batch plan key, the part commits keep their `Plan-Item` trailers, and merge-close
-  closes on that merge evidence with the seat flag of the keeper setting `require_seats`. The router's `merge-part`
-  does the same push from the clone `PG_LAND_CHECKOUT` with the lease on the tested base (`PG_LAND_BASE`, else the base
-  GitHub records for the pull request): it needs the pull request to target main, a `ci-full` success status on the
-  exact head, and main exactly at that base (main at any other commit, a commit the head contains included, is
+  closes on that merge evidence with the seat flag of the keeper setting `require_seats`. `build --plan KEY` writes the
+  batch plan key as a `Plan-Item` trailer into every merge commit it makes, and `tested-ff` refuses a batch whose key
+  is not a trailer of a batch commit, and refuses while `require_seats` is on (a tested commit cannot carry the
+  `Review-Run` citations of a merge body without changing the tested sha; land in `train-pr-merge` then). The router's
+  `merge-part` does the same push from the clone `PG_LAND_CHECKOUT` with the lease on the tested base, which the lander
+  records as `base_head` and the router passes in `PG_LAND_BASE` (required; never read from GitHub): it needs the pull
+  request to target main, a `ci-full` status by Actions that names a green `pull_request` run of the exact head at its
+  latest attempt and the head's tree, green required checks, and main exactly at that base (main at any other
+  commit, a commit the head contains included, is
   `base_moved`). Main's protection must accept the push of a commit whose required checks passed (the operator's
   change; the land App design is in the settlement note), so until then the server refuses and the batch stays.
 - `train-pr-merge`: the batch pull request is merged with a merge commit (rule 3.39), as before.
