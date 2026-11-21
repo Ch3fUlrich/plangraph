@@ -15,11 +15,13 @@ fn benchmark_rows_keep_effort_harness_provenance_and_missing_values() {
 import asyncio
 from dataclasses import replace
 import os
+from pathlib import Path
 import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.benchmarks import benchmark_for_leg
+from plangraph.planner.legs import DEFAULT_LEGS, spawnable_legs
 from plangraph.planner.routing import plan_spawn
 from plangraph.routing_support.catalog_db import CatalogDB
 from plangraph.spawner.bench_entry import benchmark_options
@@ -75,7 +77,10 @@ with CatalogDB(os.environ['PLANGRAPH_CATALOG_DB']) as db:
     assert rows['low', 'opencode']['score'] == 20
     data = benchmark_options()['benchmark']
     assert {(r['effort'], r['harness']): r for r in data[model]['benchmark_rows']} == rows
+    codex = next(leg for leg in spawnable_legs() if leg.id == 'gpt-6.2-sol-medium')
+    assert benchmark_for_leg(data, codex)['score'] == 53
     base = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
+    assert benchmark_for_leg(data, replace(base, effort='high')) is None
     leg = replace(base, effort='low')
     def leg_status(*args, **kwargs):
         return {'state': 'ok', 'evidence': None}
@@ -98,6 +103,9 @@ with CatalogDB() as restored:
     restored.init_and_seed()
     restored.import_json(export)
     assert any(row['origin'] == 'own' for row in restored.get_model(model)['benchmark_rows'])
+with CatalogDB() as legacy:
+    legacy.conn.executescript(Path('src/plangraph/spawner/catalog_schema.sql').read_text(encoding='utf-8'))
+    assert legacy.export_json()['benchmarks'] == []
 "#,
         ])
         .output()

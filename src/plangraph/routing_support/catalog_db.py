@@ -335,10 +335,11 @@ class CatalogDB:
             ("clients", "SELECT * FROM catalog_clients ORDER BY client_id ASC"),
             ("models", "SELECT * FROM catalog_models ORDER BY model_id ASC"),
             ("benchmarks", "SELECT * FROM catalog_benchmarks ORDER BY model_id ASC"),
-            ("benchmark_measurements", "SELECT * FROM catalog_benchmark_measurements ORDER BY model_id, effort, harness, origin"),
             ("routes", "SELECT * FROM catalog_routes ORDER BY route_id ASC"),
             ("route_legs", "SELECT * FROM catalog_route_legs ORDER BY route_id ASC, position ASC"),
         ]
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='catalog_benchmark_measurements'").fetchone():
+            tables.append(("benchmark_measurements", "SELECT * FROM catalog_benchmark_measurements ORDER BY model_id, effort, harness, origin"))
 
         payload: dict[str, Any] = {}
         for key, query in tables:
