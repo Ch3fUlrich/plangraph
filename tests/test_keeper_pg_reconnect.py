@@ -757,15 +757,14 @@ def test_s2_shutdown_bounded(tmp_path, monkeypatch, bounded_shutdown_cleanup):
     def trigger_fatal(srv):
         srv.fail("fatal before shutdown")
 
-    timer = threading.Timer(3.5, lambda: (unblock.set(), os.kill(os.getpid(), signal.SIGTERM)))
-    timer.start()
     try:
         rc = daemon.run(cfg, ready=trigger_fatal)
     finally:
         unblock.set()
-        timer.cancel()
 
-    assert 75 in exited or rc == 75
+    assert exited == [75]
+    assert rc == 75
+
 
 
 @needs_pg

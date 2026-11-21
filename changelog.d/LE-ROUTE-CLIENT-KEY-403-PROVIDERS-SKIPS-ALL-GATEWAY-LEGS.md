@@ -1,1 +1,1 @@
-The OmniRoute management readers (provider state in `omniroute_state` and quota utilization in `quota_snapshots`) authenticate with the management token loaded by `opencode_render.load_token`, never with the client key; without a management token they report unreachable / unreadable.
+The OmniRoute management readers (provider state and quota utilization in `quota_snapshots`) authenticate with the management token loaded by `opencode_render.load_token`, never with the client key; without a management token they report unreachable / unreadable.

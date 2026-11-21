@@ -77,6 +77,7 @@ class Leg:
     disabled: str | None = None
     expires: float | None = None
     effort: str | None = None
+    benchmark_optional: bool = False  # Missing data skips this leg in strict routes.
     #: Why the model's own harness was not used (``client_missing``); None when it was.
     harness_fallback: str | None = None
 
@@ -143,7 +144,7 @@ DEFAULT_LEGS = (
     Leg("opencode-big-pickle", "free", "opencode", "opencode/big-pickle",
         "glm", ("128k",), 100000, True, roles=("implement", "review")),
     Leg("agy-gpt-oss-120b", "subscription", "agy", "gpt-oss-120b-medium",
-        "openai", ("128k",), 100000, False, roles=("review",)),
+        "openai", ("128k",), 100000, False, roles=("review",), benchmark_optional=True),
     _replace(_legacy["mimo-v2.6-flash"], roles=("implement", "review"), tool_mode="inline-only"),
     Leg("mimo-v2.6-pro", "subscription", "opencode", "mimo/mimo-v2.6-pro",
         "mimo", ("128k", "256k", "1m"), 200000, False,
@@ -392,7 +393,7 @@ def _build_leg(index: int, raw, problems: list[str]) -> Leg | None:
         mrt = raw["max_request_tokens"]
         if not _is_int(mrt) or mrt <= 0:
             problems.append(f"{where}.max_request_tokens: must be a positive int")
-    for key in ("trains_on_data", "claude_family"):
+    for key in ("trains_on_data", "claude_family", "benchmark_optional"):
         if key in raw and not isinstance(raw[key], bool):
             problems.append(f"{where}.{key}: must be a bool")
     if len(problems) > start:

@@ -28,21 +28,26 @@ def test_diagnosis_documented_transport_repost_command_posts(run):
     assert len(calls) == 1 and json.loads((seat / "verdict.json").read_text())["status"] == "delivered"
     assert (seat / "verdict.delivered").exists() and sv.main(argv) == 1 and len(calls) == 1
 
-def test_transport_repost_preserves_subprocess_import_order(run):
+@pytest.mark.parametrize('preload', ['preloaded', 'uninstalled'])
+def test_transport_repost_preserves_subprocess_import_order(run, preload):
     argv, _, _ = run
     code = """import sys
-sys.path.insert(0, sys.argv[1] + '/src')
-import plangraph.spawner.notify
+if sys.argv[2] == 'preloaded':
+    sys.path.insert(0, sys.argv[1] + '/src')
+    import plangraph.spawner.notify
+    sys.path.remove(sys.argv[1] + '/src')
+else:
+    import importlib.util
+    assert importlib.util.find_spec('plangraph') is None
 sys.path.insert(0, sys.argv[1] + '/tools')
 import seat_verdict as sv
-sys.path.remove(sys.argv[1] + '/src')
 sv.send = lambda *a: (200, 'recorded')
 before = sys.path[:]
 assert sys.argv[1] + '/src' not in before
-assert sv.main(sys.argv[2:]) == 0
+assert sv.main(sys.argv[3:]) == 0
 assert sys.path == before
 """
-    result = subprocess.run([sys.executable, "-I", "-c", code, str(Path(__file__).resolve().parents[1]), *argv], capture_output=True, text=True, timeout=30)
+    result = subprocess.run([sys.executable, "-I", "-S", "-c", code, str(Path(__file__).resolve().parents[1]), preload, *argv], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
 
 def test_transport_repost_token_read_refusal_preserves_retry(run, capsys):

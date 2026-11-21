@@ -22,7 +22,7 @@ fn prints_closed_and_every_listed_key_with_its_reason_and_the_count() {
                "merged_not_done":1}),
         RefCell::default(),
     );
-    let out = run_with(&keeper, true, true, Some("demo")).unwrap();
+    let out = run_with(&keeper, Some(true), true, Some("demo")).unwrap();
     assert_eq!(
         out.text,
         "closed\tdemo:A\ta1\nlisted\tdemo:S\tin_review\tforbidden: sensitive card\nmerged-not-done\t1\n"
@@ -42,7 +42,7 @@ fn count_mode_asks_for_a_dry_run() {
         json!({"closed":[],"would_close":[{"key":"demo:B","prs":[]}],"listed":[],"merged_not_done":1}),
         RefCell::default(),
     );
-    let out = run_with(&keeper, false, false, None).unwrap();
+    let out = run_with(&keeper, Some(false), false, None).unwrap();
     assert!(out.text.starts_with("would-close\tdemo:B\t\n"));
     assert_eq!(
         keeper.1.borrow()[0].1,
@@ -53,19 +53,20 @@ fn count_mode_asks_for_a_dry_run() {
 #[test]
 fn a_reply_without_the_count_is_a_failure_not_a_zero() {
     let keeper = Fake(json!({"closed":[]}), RefCell::default());
-    assert!(run_with(&keeper, true, true, None).is_err());
+    assert!(run_with(&keeper, None, true, None).is_err());
 }
 
 #[test]
-fn require_seats_ships_on_and_only_a_clear_off_value_turns_it_off() {
+fn require_seats_is_unset_unless_the_environment_names_it() {
     let mut env = Env::new();
-    assert_eq!(require_seats(&env), Ok(true));
+    assert_eq!(require_seats(&env), Ok(None));
     for (value, want) in [
-        ("1", true),
-        ("on", true),
-        ("0", false),
-        ("OFF", false),
-        ("false", false),
+        ("1", Some(true)),
+        ("on", Some(true)),
+        ("0", Some(false)),
+        ("OFF", Some(false)),
+        ("false", Some(false)),
+        ("", None),
     ] {
         env.insert("PG_MERGE_CLOSE_REQUIRE_SEATS".into(), value.into());
         assert_eq!(require_seats(&env), Ok(want), "{value}");
@@ -80,4 +81,33 @@ fn the_scanned_repositories_come_from_the_keeper_config() {
     assert_eq!(repos_with(&keeper).unwrap(), ["data", "plangraph"]);
     assert_eq!(keeper.1.borrow()[0].1, json!({"repos_only":true}));
     assert!(repos_with(&Fake(json!({}), RefCell::default())).is_err());
+}
+
+#[test]
+fn an_unset_switch_sends_no_require_seats_so_the_keeper_setting_decides() {
+    let keeper = Fake(
+        json!({"closed":[],"would_close":[],"listed":[],"merged_not_done":0}),
+        RefCell::default(),
+    );
+    run_with(&keeper, None, true, None).unwrap();
+    assert_eq!(keeper.1.borrow()[0].1, json!({"apply":true}));
+}
+
+#[test]
+fn a_flagged_close_prints_the_flag_with_its_run_ids() {
+    let keeper = Fake(
+        json!({"closed":[{"key":"demo:A","prs":[{"head":"a1"}],
+                          "flags":{"seats_missing":{"run_ids":["run-1","run-2"],"reason":"x"}}},
+                         {"key":"demo:B","prs":[{"head":"b1"}]}],
+               "would_close":[{"key":"demo:C","prs":[{"head":"c1"}],
+                               "flags":{"seats_missing":{"run_ids":[],"reason":"x"}}}],
+               "listed":[],"merged_not_done":3}),
+        RefCell::default(),
+    );
+    let out = run_with(&keeper, None, true, None).unwrap();
+    assert_eq!(
+        out.text,
+        "closed\tdemo:A\ta1\tFLAGGED seats_missing: run-1,run-2\nclosed\tdemo:B\tb1\n\
+         would-close\tdemo:C\tc1\tFLAGGED seats_missing\nmerged-not-done\t3\n"
+    );
 }

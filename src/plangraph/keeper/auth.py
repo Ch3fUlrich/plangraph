@@ -18,7 +18,7 @@ from datetime import datetime
 from .errors import Refused
 from .schema import ROLES
 
-__all__ = ["Principal", "RunPrincipal", "OversightPrincipal", "RUN_PREFIX",
+__all__ = ["Principal", "ScopedPrincipal", "RunPrincipal", "OversightPrincipal", "RUN_PREFIX",
            "OVERSIGHT_PREFIX", "add_principal", "add_oversight_principal",
            "authenticate", "revoke", "get_principal", "list_principals",
            "hash_token", "norm_family", "validate_family"]
@@ -30,6 +30,20 @@ class Principal:
     role: str
     projects: list = field(default_factory=list)
     family: str | None = None
+
+
+@dataclass(frozen=True)
+class ScopedPrincipal(Principal):
+    """A granted l1 principal acting inside ``apply_ops`` (KEEPER-PROJECT-SCOPED-L1-APPLY).
+
+    ``role`` is ``router`` so the single verbs' router checks pass for the ops the
+    grant gate admitted; ``audit_role`` keeps the authenticated role for the
+    events, and ``granted`` bounds every write a verb makes beyond its named key
+    (a cancel's dependents).
+    """
+
+    audit_role: str = "l1"
+    granted: frozenset = frozenset()
 
 
 @dataclass(frozen=True)

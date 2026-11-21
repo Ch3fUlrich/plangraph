@@ -300,73 +300,81 @@ def admit(service, options, *, card=None, preview=False):
     for key in ('seats', 'no_fallthrough', 'require_bench', 'run_worktree'):
         if options.get(key):
             flags.append('--' + key.replace('_', '-'))
-    while True:
-        decision = overflow.decide(memory, role_mb, floor, rows, public,
-                                   remote_first=remote_first, local_refusal=health,
-                                   host_order=tuple(config.get('hosts', {})), compare_local=compare_local,
-                                   local_fallback=overflow.host_config(registry, local).get('placement_fallback', False))
-        if benchmark_local and decision.reason == 'local_fallback_no_remote':
-            decision = overflow.Decision(None, 'local_benchmark_database')
-        if options.get('benchmark') is not None and decision.host is not None:
-            decision = overflow.Decision(None, 'local benchmark database cannot be forwarded')
-        placement = dict(host=decision.host or local, reason=decision.reason,
-                         free_mb=rows[decision.host]['mem_available_mb'] if decision.host else memory)
-        if preview:
-            return placement
-        if compare_local and decision.host is None and not health and not overflow.memory_refusal(memory, role_mb, floor):
-            options['_placement'] = placement
-            return None
-        if remote_first:
-            options['_placement'] = placement
-            if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
+    try:
+        while True:
+            if queued is not None and _queue_status(service, queued) != 'queued':
+                return service.result(queued['run_id'])
+            decision = overflow.decide(memory, role_mb, floor, rows, public,
+                                       remote_first=remote_first, local_refusal=health,
+                                       host_order=tuple(config.get('hosts', {})), compare_local=compare_local,
+                                       local_fallback=overflow.host_config(registry, local).get('placement_fallback', False))
+            if benchmark_local and decision.reason == 'local_fallback_no_remote':
+                decision = overflow.Decision(None, 'local_benchmark_database')
+            if options.get('benchmark') is not None and decision.host is not None:
+                decision = overflow.Decision(None, 'local benchmark database cannot be forwarded')
+            placement = dict(host=decision.host or local, reason=decision.reason,
+                             free_mb=rows[decision.host]['mem_available_mb'] if decision.host else memory)
+            if preview:
+                return placement
+            if compare_local and decision.host is None and not health and not overflow.memory_refusal(memory, role_mb, floor):
+                options['_placement'] = placement
                 return None
-        if decision.host is None:
-            if window > 0 and queued is None:
-                queued = _open_queue(service, role, decision, window, local, card)
-            if queued is not None:
-                outcome = _queue_status(service, queued)
-                if outcome != 'queued':   # cancelled (or ended) by someone else while it waited
-                    return service.result(queued['run_id'])
-                if time.time() < queued['queued_until']:
-                    _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
-                    _, memory = resources(service)
-                    disk = local_disk_refusal(repo, service, role)
-                    health = disk or local_readiness_refusal()
-                    rows = load_rows()
-                    if not disk and not overflow.memory_refusal(memory, role_mb, floor):
-                        taken = _close_queue(service, queued)
-                        if taken is not None:
-                            return taken
-                        if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
-                        return None
-                    continue
-                return _close_queue(service, queued, status='refused', reason=decision.reason,
-                                    overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
-                                    error=f'{decision.reason} (admission window {window:g}s elapsed)')
-            record = {'run_id': 'run-' + uuid.uuid4().hex,
-                      'status': 'refused',
-                      'reason': decision.reason, 'overflow_reason': decision.reason,
-                      'exit_code': 2, **_no_hosts_hint(config)}
-            break
-        name = decision.host
-        try:
-            if options.get('cwd') is not None or 'cwd' in (card or {}):
-                raise overflow.RemoteRefusal('explicit cwd cannot overflow to another checkout')
-            target = dict(config['hosts'][name], placement_reason=decision.reason,
-                          public_repo_ids=config.get('public_repo_ids', {}))
-            result = overflow.remote_spawn(name, target, card or {},
-                                           options.get('prompt', ''), flags)
-            refusal = 'remote spawn failed'
-        except overflow.RemoteRefusal as exc:
-            result, refusal = None, str(exc)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            result, refusal = None, overflow.failure_reason(exc)
-        if result is not None:
-            from .remote_ps import native_receipt
-            record = native_receipt(dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True))
-            record.setdefault('status', 'unknown')
-            break
-        rows[name]['refusal'] = refusal
+            if remote_first:
+                options['_placement'] = placement
+                if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
+                    return None
+            if decision.host is None:
+                if window > 0 and queued is None:
+                    queued = _open_queue(service, role, decision, window, local, card)
+                if queued is not None:
+                    if time.time() < queued['queued_until']:
+                        _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
+                        _, memory = resources(service)
+                        disk = local_disk_refusal(repo, service, role)
+                        health = disk or local_readiness_refusal()
+                        rows = load_rows()
+                        if not disk and not overflow.memory_refusal(memory, role_mb, floor):
+                            taken = _close_queue(service, queued)
+                            if taken is not None:
+                                return taken
+                            if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
+                            return None
+                        continue
+                    return _close_queue(service, queued, status='refused', reason=decision.reason,
+                                        overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
+                                        error=f'{decision.reason} (admission window {window:g}s elapsed)')
+                record = {'run_id': 'run-' + uuid.uuid4().hex,
+                          'status': 'refused',
+                          'reason': decision.reason, 'overflow_reason': decision.reason,
+                          'exit_code': 2, **_no_hosts_hint(config)}
+                break
+            name = decision.host
+            try:
+                if options.get('cwd') is not None or 'cwd' in (card or {}):
+                    raise overflow.RemoteRefusal('explicit cwd cannot overflow to another checkout')
+                target = dict(config['hosts'][name], placement_reason=decision.reason,
+                              public_repo_ids=config.get('public_repo_ids', {}))
+                result = overflow.remote_spawn(name, target, card or {},
+                                               options.get('prompt', ''), flags)
+                refusal = 'remote spawn failed'
+            except overflow.RemoteRefusal as exc:
+                result, refusal = None, str(exc)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                result, refusal = None, overflow.failure_reason(exc)
+            if result is not None:
+                if queued is not None:
+                    _close_queue(service, queued)
+                    queued = None
+                from .remote_ps import native_receipt
+                record = native_receipt(dict(result, host=name, overflow_reason=decision.reason, overflow_remote=True))
+                record.setdefault('status', 'unknown')
+                break
+            rows[name]['refusal'] = refusal
+    except Exception as exc:
+        if queued is not None:
+            _close_queue(service, queued, status='failed', exit_code=1, reason='admission_failed',
+                         error=f'admission failed: {type(exc).__name__}')
+        raise
     if remote_first or compare_local:
         record.update(host=placement['host'], placement=placement)
     record.setdefault('role', role or 'implement')

@@ -1,0 +1,1 @@
+Planning and router skills point to current configuration and spawner workflows. Review prompt SHA lookup drains both Git pipes, and a queue entry closes when remote placement succeeds or admission fails.

@@ -2,7 +2,7 @@
 import asyncio
 from types import SimpleNamespace
 
-from plangraph.routing_support import leg_state, omniroute_state
+from plangraph.routing_support import leg_state, quota_snapshots
 from plangraph.routing_support.leg_state_flag import default_reader as production_reader
 from plangraph.routing_support.liveness import require_available
 from plangraph.spawner import leg_probe
@@ -17,7 +17,7 @@ def test_default_reader_snapshot_error_fallback_still_probes(tmp_path, monkeypat
 
     store = leg_state.LegStateStore(tmp_path / 'legs.sqlite')
     monkeypatch.setattr(leg_state, '_default_store', lambda: store)
-    monkeypatch.setattr(omniroute_state, 'from_env', lambda: SimpleNamespace(snapshot=snapshot))
+    monkeypatch.setattr(quota_snapshots, 'from_env', lambda: SimpleNamespace(snapshot=snapshot))
     monkeypatch.setattr(leg_state.LegAdapter, 'standalone_models', staticmethod(lambda: []))
     monkeypatch.delenv('PLANGRAPH_OMNIROUTE_LEG_STATE', raising=False)
     production_reader.cache_clear()
@@ -63,3 +63,19 @@ def test_snapshot_recovery_log_redacts_error_values(tmp_path, monkeypatch, caplo
     assert 'leg_state_snapshot_error: OSError: snapshot unavailable' in caplog.text
     assert secret not in caplog.text and 'sk-example' not in caplog.text
     assert '[autoos:redacted]' in caplog.text and '[REDACTED]' in caplog.text
+
+
+def test_service_route_records_snapshot_error_and_uses_declared_state(monkeypatch):
+    from plangraph.routing_support.leg_state_flag import service_plan
+    from plangraph.planner.legs import DEFAULT_LEGS
+
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'cx-gpt-6.2-sol-medium')
+    reason = 'leg_state_snapshot_error: OSError: snapshot unavailable'
+    store = SimpleNamespace(leg_status=lambda *a, **kw: dict(state='ok', evidence=None))
+    reader = SimpleNamespace(enabled=True, store=store,
+        leg_status=lambda *a, **kw: dict(state='unknown', reason=reason, evidence=None))
+    service = SimpleNamespace(leg_reader=reader, hung=SimpleNamespace(rank=lambda ids: ids))
+    monkeypatch.delenv('PLANGRAPH_OMNIROUTE_LEG_STATE', raising=False)
+    plan = service_plan(service, card={'estimate_tokens': 100}, role='implement', legs=(leg,))
+    assert plan.legs == (leg,)
+    assert plan.candidates[0]['leg_state_reason'] == reason

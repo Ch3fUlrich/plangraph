@@ -91,3 +91,14 @@ def test_configured_heartbeat_still_never_shortens(w, configured_store):
     assert second["lease_until"] == store._iso(w.clock() + 600)
     assert second["lease_until"] > first["lease_until"]
     assert store.verify_integrity() == []
+
+
+def test_require_seats_is_off_by_default_and_the_daemon_store_follows_the_config(configured_store):
+    assert configured_store({}).require_seats is False
+    assert configured_store({"require_seats": True}).require_seats is True
+
+
+@pytest.mark.parametrize("value", ["yes", 1, None, []])
+def test_require_seats_must_be_a_boolean(tmp_path, value):
+    with pytest.raises(config.ConfigError, match="require_seats must be true or false"):
+        config.load_config(write_config(tmp_path, {"require_seats": value}))
