@@ -1,8 +1,13 @@
 #![cfg(unix)]
 
-use pg_worker_core::host_link::observe;
-use serde_json::Value;
-use std::{fs, path::Path, process::Command};
+use pg_worker_core::host_link::{observe, observe_ssh};
+use serde_json::{json, Value};
+use std::{
+    fs,
+    io::Write,
+    path::Path,
+    process::{Command, Stdio},
+};
 
 #[test]
 fn blocked_peer_alert_reaches_keeper_through_the_watchdog_bridge() {
@@ -18,6 +23,31 @@ fn blocked_peer_alert_reaches_keeper_through_the_watchdog_bridge() {
         .unwrap()
         .path();
     let payload: Value = serde_json::from_slice(&fs::read(&event).unwrap()).unwrap();
+
+    for (now, reachable) in [(500, false), (560, false), (620, true)] {
+        if observe_ssh(state, "worker-a", now, reachable, || {
+            json!({
+                "host": "worker-a", "peer": "peer-a", "peer_state": {"Online": false},
+                "last_ip_change": "fixture IP change"
+            })
+        })
+        .unwrap()
+        .is_some()
+        {
+            let (rule, name) = if reachable {
+                ("host-ssh-recovered", "ssh-up.json")
+            } else {
+                ("host-ssh-down", "ssh-down.json")
+            };
+            let path = fs::read_dir(&outbox)
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| path.file_name().unwrap().to_string_lossy().contains(rule))
+                .unwrap();
+            fs::rename(path, state.join(name)).unwrap();
+        }
+    }
 
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let result = Command::new("python3")
@@ -55,6 +85,11 @@ try:
     event.write_bytes(data)
     assert flush_outbox(state, bridge)["failures"] == 0
     assert not event.exists()
+    for name in ("ssh-down.json", "ssh-up.json"):
+        path = state / name
+        path.rename(event.parent / name)
+    assert flush_outbox(state, bridge)["failures"] == 0
+    assert not list(event.parent.glob("*.json"))
     rows = store.messages(auth.authenticate(connection, system_token))
     print(json.dumps(rows))
 finally:
@@ -73,7 +108,7 @@ finally:
     assert!(result.status.success(), "{result:?}");
     let rows: Value = serde_json::from_slice(&result.stdout).unwrap();
     let rows = rows.as_array().unwrap();
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 3);
     assert_eq!(rows[0]["to"], "routing");
     assert_eq!(rows[0]["from"], "system");
     assert_eq!(rows[0]["key"], payload["item_key"]);
@@ -82,4 +117,32 @@ finally:
         .as_str()
         .unwrap()
         .contains("build-a"));
+    assert_eq!(rows[1]["body"]["text"], "worker-a unreachable since 500, peer peer-a state {\"Online\":false}, last local IP change \"fixture IP change\"");
+    assert_eq!(
+        rows[2]["body"]["text"],
+        "worker-a recovered from the SSH outage since 500"
+    );
+}
+
+#[test]
+fn unrelated_watchdog_event_is_forwarded_unchanged_and_propagates_failure() {
+    let event = b"{\"kind\": \"completion\", \"extra\": [1, 2]}\n";
+    for (fallback, success) in [("/bin/cat", true), ("/bin/false", false)] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_plangraph"))
+            .arg("host-link-deliver")
+            .env("PLANGRAPH_WATCHDOG_FALLBACK", json!([fallback]).to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(event).unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert_eq!(result.status.success(), success, "{result:?}");
+        if success {
+            assert_eq!(result.stdout, event);
+        } else {
+            assert!(String::from_utf8_lossy(&result.stderr).contains("watchdog fallback failed"));
+        }
+    }
 }
