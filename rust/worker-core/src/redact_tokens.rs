@@ -110,6 +110,35 @@ pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
         .into_owned()
 }
 
+/// True for None/True/False/null or an already masked value, or a call, subscript or bracketed expression
+/// with no string literal: spawner-read source keeps these assignments readable
+/// (src/plangraph/spawner/redact_tokens.py is_computed).
+pub(crate) fn is_computed(value: &str) -> bool {
+    let value = value.trim();
+    if matches!(
+        value,
+        "None" | "True" | "False" | "null" | "[REDACTED]" | "\"[REDACTED]\"" | "'[REDACTED]'"
+    ) {
+        return true;
+    }
+    if value.contains('"') || value.contains('\'') {
+        return false;
+    }
+    let Some(first) = value.chars().next() else {
+        return false;
+    };
+    if matches!(first, '(' | '[' | '{') {
+        return true;
+    }
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    let rest =
+        value.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+    rest.trim_start_matches(|c: char| c.is_whitespace() && c != '\r' && c != '\n')
+        .starts_with(['(', '['])
+}
+
 pub(crate) fn redact_blob(
     token: &str,
     blob_re: &regex::Regex,

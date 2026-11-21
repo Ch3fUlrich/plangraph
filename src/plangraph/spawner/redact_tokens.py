@@ -205,8 +205,26 @@ def _name_headers(text):
         yield header_start, index
 
 
-def redact_wide_assignments(text, assignment):
-    """OLD wins; NEW consumes physical lines without exposing old wrapped masks."""
+_COMPUTED = re.compile(r'(?:[(\[{]|[A-Za-z_][\w.]*[^\S\r\n]*[(\[])')
+
+
+def is_computed(value):
+    """True for None/True/False/null or an already masked value, or a call, subscript or bracketed expression with no string literal.
+
+    Spawner-read source keeps these readable; a quoted or bare literal after a
+    credential name is a credential (rust/worker-core redact.rs is_computed).
+    """
+    value = value.strip()
+    if re.fullmatch(r'None|True|False|null|["\']?\[REDACTED\]["\']?', value):
+        return True
+    return bool(_COMPUTED.match(value)) and '"' not in value and "'" not in value
+
+
+def redact_wide_assignments(text, assignment, keep=None):
+    """OLD wins; NEW consumes physical lines without exposing old wrapped masks.
+
+    ``keep`` is given a value and returns True to leave that assignment readable.
+    """
     old_matches = iter(assignment.finditer(text))
     old = next(old_matches, None)
     wrapped = iter(_wrapped_spans(text))
@@ -220,6 +238,8 @@ def redact_wide_assignments(text, assignment):
         if old is not None and old.start() < end:
             continue  # OLD value containment or intersecting half-open headers.
         value_end = _LINE_REMAINDER.match(text, end).end()
+        if keep and keep(text[end:value_end]):
+            continue
         if value_end > end:
             # Keep every continuation the pre-A1 wrapped scanner would mask.
             while span is not None and span[0] < value_end:

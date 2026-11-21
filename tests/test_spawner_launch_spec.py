@@ -192,8 +192,11 @@ def test_explicit_document_review(request_data, tmp_path, monkeypatch, with_diff
         from plangraph.spawner import inline_diff
         from types import SimpleNamespace
         real_run = inline_diff.subprocess.run
+        # The private-key check reads each side's blob: answer it for this synthetic repo.
         monkeypatch.setattr(inline_diff.subprocess, 'run', lambda args, **kw:
-            SimpleNamespace(stdout=diff, stderr='', returncode=0) if 'diff' in args else real_run(args, **kw))
+            SimpleNamespace(stdout=diff, stderr='', returncode=0) if 'diff' in args else
+            SimpleNamespace(stdout='plain\n', stderr='', returncode=0) if 'cat-file' in args or 'merge-base' in args
+            else real_run(args, **kw))
         request_data['card']['diff_ref'] = dict(repo=str(tmp_path), base='HEAD~1', head='HEAD')
     result = spec.build(request_data)
     service = spec.SpawnService(state=request_data['state'])

@@ -70,7 +70,7 @@ fn patterns() -> &'static [regex::Regex] {
 
 /// Replace secret-shaped text, including credential-name assignments.
 pub fn redact(text: &str) -> String {
-    redact_inner(text, true, &BTreeSet::new())
+    redact_inner(text, Mode::Full, &BTreeSet::new())
 }
 
 /// Replace secret-shaped text while preserving exact word-boundary 40-hex shas in `allow_shas`.
@@ -81,27 +81,43 @@ pub fn redact_with_allowlist(text: &str, allow_shas: &BTreeSet<String>) -> Strin
         .filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .map(|s| s.to_ascii_lowercase())
         .collect();
-    redact_inner(text, true, &exact)
+    redact_inner(text, Mode::Full, &exact)
 }
 
-/// Spawner-read source only: omit credential-name assignments, not token rules.
+/// Spawner-read source only: leave computed credential-name assignments
+/// readable; literal values are masked like everywhere else.
 pub fn redact_source(text: &str) -> String {
-    redact_inner(text, false, &BTreeSet::new())
+    redact_inner(text, Mode::Source, &BTreeSet::new())
 }
 
-fn redact_inner(text: &str, assignments: bool, allow_shas: &BTreeSet<String>) -> String {
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Full,
+    Source,
+}
+
+fn redact_inner(text: &str, mode: Mode, allow_shas: &BTreeSet<String>) -> String {
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
     let out = super::redact_wrapped::redact_bearer_wrapped(&out);
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
-    let out = if assignments {
-        let out = super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5]);
-        let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
-        rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned()
+    let source = mode == Mode::Source;
+    let out = if source {
+        // Source masks wrapped tokens first, so no name survives them.
+        super::redact_wrapped::redact_wrapped(&out)
     } else {
-        out
+        super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5])
     };
+    let assign = |m: &regex::Captures| {
+        if source && super::redact_tokens::is_computed(&m[4]) {
+            m[0].to_string()
+        } else {
+            format!("{}{}{}{REDACTED}", &m[1], &m[2], &m[3])
+        }
+    };
+    let out = rs[3].replace_all(&out, assign).into_owned();
+    let out = rs[4].replace_all(&out, assign).into_owned();
     let out = super::redact_wrapped::redact_wrapped(&out);
     let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();

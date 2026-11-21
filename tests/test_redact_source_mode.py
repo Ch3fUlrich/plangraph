@@ -158,11 +158,21 @@ def test_source_mode_keeps_dict_key_and_env_value_scrubbing():
 
 
 @pytest.mark.parametrize('value', ['tuple(sorted((left, right)))', '(scope, name)',
-                                  'None', 'False', '123', '[]', '{}', 'arbitrary-value'])
+                                  'None', 'False', '[]', '{}'])
 def test_assignment_rule_stays_fail_closed_for_every_value_shape(value):
     text = 'pair_' + 'key = ' + value
     assert env_redact.redact(text) == 'pair_key = [REDACTED]'
     assert env_redact.redact_source(text) == text
+
+
+@pytest.mark.parametrize('value', ['123', 'arbitrary-value', 'hunter2', '"hunter2"', "'hunter2'",
+                                  'os.environ["SERVICE"]', 'get_secret("x") or "hunter2"'])
+@pytest.mark.parametrize('name', ['PASSWORD', 'API_' + 'KEY', 'pair_' + 'key', 'MY_' + 'SECRET', 'TOKEN'])
+@pytest.mark.parametrize('separator', ['=', ' = ', ': '])
+def test_source_masks_literal_credential_assignments(name, separator, value):
+    text = name + separator + value
+    assert env_redact.redact_source(text) == env_redact.redact(text)
+    assert 'hunter2' not in env_redact.redact_source(text) and 'arbitrary' not in env_redact.redact_source(text)
 
 
 def test_direct_caller_prompt_keeps_full_strength(monkeypatch, tmp_path):
@@ -220,3 +230,48 @@ def test_wrapped_token_in_real_git_diff_is_masked_in_final_prompt(monkeypatch, t
     out = capture(monkeypatch, tmp_path, prompt)
     assert first not in out and second not in out
     assert '+[REDACTED]' in out and '+next retained' in out
+
+
+@pytest.mark.parametrize('line', ['PASSWORD = "hunter2value"', 'API_' + 'KEY=hunter2value', 'MY_' + 'SECRET: hunter2value'])
+def test_literal_credential_masked_at_the_dispatch_boundary(monkeypatch, tmp_path, line):
+    out = capture(monkeypatch, tmp_path, diff_prompt(monkeypatch, tmp_path, extra=line))
+    assert 'hunter2value' not in out and '[REDACTED]' in out
+    for code_line in CODE.splitlines():   # computed assignments stay readable beside it
+        assert '+' + code_line in out
+    (tmp_path / 'sample.py').write_text(line + '\n')
+    monkeypatch.setattr(context_pack, 'tracked', lambda root: frozenset({'sample.py'}))
+    card = {'context': ['sample.py:1-1']}
+    pack = context_pack.build('', card, tmp_path)
+    packed = capture(monkeypatch, tmp_path, context_pack.pack_prompt('', card, tmp_path, pack))
+    assert 'hunter2value' not in pack.text + packed
+
+
+@pytest.mark.parametrize('complete', [True, False])
+def test_git_hunk_inside_a_private_key_block_is_withheld(monkeypatch, tmp_path, complete):
+    header = '-----BEGIN ' + 'TEST PRIVATE KEY-----'
+    footer = '-----END ' + 'TEST PRIVATE KEY-----'
+    body = ['synthetic-pem-%02d' % i for i in range(30)]
+    old = [header, *body] + ([footer] if complete else [])
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    (tmp_path / 'k.txt').write_text('\n'.join(['keep'] * 3 + old + ['tail']) + '\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'one')
+    _git(tmp_path, 'checkout', '-q', '-b', 'topic')
+    new = list(old)
+    new[20] = 'synthetic-pem-changed'   # a hunk far below the BEGIN marker
+    (tmp_path / 'k.txt').write_text('\n'.join(['keep'] * 3 + new + ['tail']) + '\n')
+    (tmp_path / 'plain.txt').write_text('plain-change\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'two')
+    ref = {'repo': str(tmp_path), 'base': 'main', 'head': 'topic'}
+    out = capture(monkeypatch, tmp_path, inline_diff.inline_diff_prompt('review', ref, max_chars=100000))
+    assert 'synthetic-pem' not in out and 'PRIVATE KEY' not in out
+    assert '+plain-change' in out and 'diff --git a/k.txt b/k.txt' in out
+
+
+def test_hunk_is_withheld_when_a_side_cannot_be_read(monkeypatch, tmp_path):
+    diff = 'diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@ section\n-old\n+new\n'
+    monkeypatch.setattr(inline_diff, '_git_text', lambda *args, **kw: None)
+    shown = inline_diff._withhold_key_hunks(diff, str(tmp_path), 'a', 'b', 5)
+    assert '-old' not in shown and '+new' not in shown and inline_diff.WITHHELD in shown
+    assert '@@ -1 +1 @@' in shown and 'section' not in shown

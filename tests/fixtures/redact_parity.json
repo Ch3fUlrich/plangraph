@@ -154,5 +154,10 @@
   {"id": "quoted-wrapped-past-floor-crlf-dq", "input_parts": ["see \"", "gh", "p_", "Ab9_Ab9_Ab9_Ab9_Ab9_", "\r\n", "Ab9_Ab", "\"", " next"], "expected": "see \"[REDACTED]\" next", "source": "see \"[REDACTED]\" next"},
   {"id": "quoted-wrapped-past-floor-crlf-sq", "input_parts": ["see '", "gh", "p_", "Ab9_Ab9_Ab9_Ab9_Ab9_", "\r\n", "Ab9_Ab", "'", " next"], "expected": "see '[REDACTED]' next", "source": "see '[REDACTED]' next"},
   {"id": "bearer-wrapped-lf", "input_parts": ["Bearer gh", "p_", "A9A9A9A9A9A9A9A9A9A9", "\n", "B8B8B8B8", "\nnext retained"], "expected": "Bearer [REDACTED]\nnext retained", "source": "Bearer [REDACTED]\nnext retained"},
-  {"id": "bearer-wrapped-crlf", "input_parts": ["authorization: Bearer gh", "p_", "A9A9A9A9A9A9A9A9A9A9", "\r\n", "B8B8B8B8", "\r\nnext retained"], "expected": "authorization: Bearer [REDACTED]\r\nnext retained", "source": "authorization: Bearer [REDACTED]\r\nnext retained"}
+  {"id": "bearer-wrapped-crlf", "input_parts": ["authorization: Bearer gh", "p_", "A9A9A9A9A9A9A9A9A9A9", "\r\n", "B8B8B8B8", "\r\nnext retained"], "expected": "authorization: Bearer [REDACTED]\r\nnext retained", "source": "authorization: Bearer [REDACTED]\r\nnext retained"},
+  {"id": "source-literal-password", "input_parts": ["PASSWORD=", "hunter", "2value"], "expected": "PASSWORD=[REDACTED]", "source": "PASSWORD=[REDACTED]"},
+  {"id": "source-literal-colon", "input_parts": ["API_", "KEY: hunter2value", "\nnext retained"], "expected": "API_KEY: [REDACTED]\nnext retained", "source": "API_KEY: [REDACTED]\nnext retained"},
+  {"id": "source-computed-stays-readable", "input_parts": ["TOKEN = ", "build_token(user)"], "expected": "TOKEN = [REDACTED]", "rust_expected": "TOKEN = [REDACTED])", "source": "TOKEN = build_token(user)"},
+  {"id": "source-subscript-stays-readable", "input_parts": ["SECRET = ", "vault[name]"], "expected": "SECRET = [REDACTED]", "rust_expected": "SECRET = [REDACTED]]", "source": "SECRET = vault[name]"},
+  {"id": "source-quoted-literal-after-call-name", "input_parts": ["PASSWORD = ", "get(\"hunter2value\")"], "expected": "PASSWORD = [REDACTED]", "rust_expected": "PASSWORD = [REDACTED])"}
 ]

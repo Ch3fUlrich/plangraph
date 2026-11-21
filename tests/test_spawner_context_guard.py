@@ -123,10 +123,11 @@ def test_every_slice_passes_through_redact_before_packing(tree):
     track(tree, "cfg.py", f'a = 1\nSERVICE_KEY=hunter2\nheader = "Bearer abc.def.ghi"\nb = "{leaked}"\nlast = 2\n')
     pack = pack_for(tree, "cfg.py:1-5")
     assert "a = 1" in pack.text and "last = 2" in pack.text
-    assert "SERVICE_KEY=hunter2" in pack.text   # source mode skips credential-name assignments only
+    assert "hunter2" not in pack.text   # source mode keeps only computed assignments readable
+    assert "SERVICE_KEY=[REDACTED]" in pack.text
     assert "abc.def.ghi" not in pack.text and leaked not in pack.text
     assert 'header = "Bearer [REDACTED]"' in pack.text and 'b = "[REDACTED]"' in pack.text
-    assert pack.text.count("[REDACTED]") == 2
+    assert pack.text.count("[REDACTED]") == 3
 
 
 def test_redact_runs_on_the_text_that_is_packed(tree, monkeypatch):
@@ -375,3 +376,24 @@ def test_oversize_slice_is_dropped_without_holding_the_file(tree, monkeypatch):
     assert texts[0] is None and texts[1] == "w" * 100 + "\n" + "w" * 100 and total is None
     pack = pack_for(tree, "wide.py:1-300", "wide.py:2-3")
     assert "omitted: wide.py:1-300" in pack.text and "--- wide.py:2-3 ---" in pack.text and len(pack.text) <= 1000
+
+
+@pytest.mark.parametrize("complete", [True, False])
+@pytest.mark.parametrize("sliced", ["3-4", "2-2", "5-5"])
+def test_slice_inside_a_private_key_block_is_withheld_when_the_marker_is_outside_it(tree, complete, sliced):
+    header = "-----BEGIN " + "RSA PRIVATE KEY" + "-----"
+    footer = "-----END " + "RSA PRIVATE KEY" + "-----"
+    lines = ["x = 1", header, "synthetic-body-one", "synthetic-body-two", "synthetic-body-three"]
+    track(tree, "notes.py", "\n".join(lines + ([footer, "tail = 2"] if complete else [])) + "\n")
+    track(tree, "fine.py", "y = 2\n")
+    pack = pack_for(tree, f"notes.py:{sliced}", "fine.py:1-1")
+    assert "synthetic-body" not in pack.text and "y = 2" in pack.text
+    assert any("notes.py" in w and "secret-looking content" in w for w in pack.warnings)
+
+
+def test_slice_after_a_closed_private_key_block_is_still_packed(tree):
+    header = "-----BEGIN " + "RSA PRIVATE KEY" + "-----"
+    footer = "-----END " + "RSA PRIVATE KEY" + "-----"
+    track(tree, "notes.py", "\n".join(["x = 1", header, "body", footer, "tail = 2", "last = 3"]) + "\n")
+    pack = pack_for(tree, "notes.py:5-6", "notes.py:1-1")
+    assert "tail = 2" in pack.text and "x = 1" in pack.text and "body" not in pack.text

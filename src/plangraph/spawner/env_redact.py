@@ -6,7 +6,7 @@ import subprocess
 from decimal import Decimal
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
 from .redact_tokens import redact_wide_assignments, redact_bearer_wrapped, open_wrapped_line_start
-from .redact_tokens import redact_diff_wrapped
+from .redact_tokens import redact_diff_wrapped, is_computed
 
 
 def _redact_pem(text):
@@ -24,15 +24,37 @@ def _redact_pem(text):
     return ''.join((*out, text[copied:]))
 
 
+_PEM_MARKER = re.compile(r'-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY')
+
+
+class PrivateKeyScan:
+    """Feed lines in file order; True for a line inside or touching a private-key block.
+
+    An unterminated BEGIN runs to the end of the file, so a line far below its
+    marker is still reported. Excerpts must be judged on the whole file, never
+    on the cut text alone.
+    """
+    def __init__(self):
+        self.inside = False
+
+    def feed(self, line):
+        touched = self.inside
+        for marker in _PEM_MARKER.finditer(line):
+            touched, self.inside = True, marker[1] == 'BEGIN'
+        return touched
+
+
 _ASSIGNMENT = re.compile(
     r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
     r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
     r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
 
 
-def _redact_assignments(text):
+def _redact_assignments(text, source=False):
     def replace(m):
         value = m[0][len(m[1]):]
+        if source and is_computed(value):
+            return m[0]
         return m[1] + (value[0] + '[REDACTED]' + value[-1]
                        if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
     return _ASSIGNMENT.sub(replace, text)
@@ -44,7 +66,7 @@ def redact(value):
 
 
 def redact_source(value):
-    """Spawner-read source only: skip credential-name assignments, nothing else."""
+    """Spawner-read source only: leave computed credential-name assignments readable."""
     return _redact(value, source=True)
 
 
@@ -156,11 +178,15 @@ def _redact(value, *, source):
         if isinstance(value, str):
             value = _redact_pem(value)
             value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', redact_bearer_wrapped(value))
+            if source:
+                # Source masks wrapped tokens first, as before, so no name survives them.
+                value = redact_wrapped(value)
+            # Source keeps only computed expressions readable; literals are masked.
+            value = redact_wide_assignments(value, _ASSIGNMENT, is_computed if source else None)
             if not source:
-                value = redact_wide_assignments(value, _ASSIGNMENT)
                 # P joins values behind shielded names, then main's order runs.
                 value = join_shielded_assignments(value, _ASSIGNMENT)
-                value = _redact_assignments(value)
+            value = _redact_assignments(value, source)
             value = redact_wrapped(value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',

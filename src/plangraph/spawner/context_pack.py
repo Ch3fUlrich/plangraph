@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
-from .env_redact import redact_source, _source_block, _join_prompt
+from .env_redact import redact_source, _source_block, _join_prompt, PrivateKeyScan
 from .inline_diff import InlineDiffError
 
 LANGUAGE_RULE = ('new code is Rust with Rust tests; no new Python or shell file; '
@@ -204,14 +204,17 @@ def _refusal(rel: str, files: frozenset[str]) -> str | None:
     return None if rel in files else 'not tracked by git'
 
 
-def _extract(path: Path, wanted, cap: int):
+def _extract(path: Path, wanted, cap: int, withheld=None):
     """One streaming pass over ``path`` for the ``(start, end)`` ranges in ``wanted``: each range's text (None once
     it passes ``cap`` chars: it can only be dropped) and the file's line count (None when the pass stopped at the
-    last wanted line, i.e. the file has at least that many)."""
+    last wanted line, i.e. the file has at least that many).  When ``withheld`` is a set, it receives the index of
+    every range that overlaps a private-key block, judged from line 1 so a marker above the range still counts."""
     last = max(end for _, end in wanted)
-    chunks, sizes, n = [[] for _ in wanted], [0] * len(wanted), 0
+    chunks, sizes, n, scan = [[] for _ in wanted], [0] * len(wanted), 0, PrivateKeyScan()
     for line in _lines(path, max(cap, 0)):
         n += 1
+        if scan.feed(line) and withheld is not None:
+            withheld.update(i for i, (start, end) in enumerate(wanted) if start <= n <= end)
         for i, (start, end) in enumerate(wanted):
             if start <= n <= end and chunks[i] is not None:
                 sizes[i] += len(line) + 1
@@ -238,13 +241,17 @@ def _slices(root: Path, ents, files: frozenset[str], cap: int):
             plan.setdefault(path, []).append((i, raw, start, end))
     found = {}
     for path, wanted in plan.items():
+        withheld = set()
         try:
-            texts, total = _extract(path, [(start, end) for _, _, start, end in wanted], cap)
+            texts, total = _extract(path, [(start, end) for _, _, start, end in wanted], cap, withheld)
         except OSError:
             for i, raw, _, _ in wanted:
                 notes[i].append(f'context_path_refused: {raw} (unreadable)')
             continue
-        for (i, raw, start, end), text in zip(wanted, texts):
+        for slot, ((i, raw, start, end), text) in enumerate(zip(wanted, texts)):
+            if slot in withheld:
+                notes[i].append(f'context_path_refused: {raw} (secret-looking content)')
+                continue
             if total is not None and start > total:
                 notes[i].append(f'context_range_past_eof: {raw}:{start}-{end} (file has {total} lines; not packed)')
                 continue
