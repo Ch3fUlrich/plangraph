@@ -173,10 +173,22 @@ impl Queue {
                 return Ok(results);
             };
             if entry.verb == "submit" && entry.resolved_by.is_none() {
+                let same_claim = |earlier: &Entry| {
+                    earlier.verb == "add_evidence"
+                        && earlier.body["key"] == entry.body["key"]
+                        && earlier.body["epoch"] == entry.body["epoch"]
+                };
                 if let Some((_, blocking)) = settled.iter().find(|(earlier_path, earlier)| {
                     earlier_path.file_name() < path.file_name()
-                        && earlier.verb == "add_evidence"
+                        && same_claim(earlier)
                         && !evidence_complete(earlier)
+                        && !settled.iter().any(|(retry_path, retry)| {
+                            earlier_path.file_name() < retry_path.file_name()
+                                && retry_path.file_name() < path.file_name()
+                                && same_claim(retry)
+                                && retry.body["kind"] == earlier.body["kind"]
+                                && evidence_verified(retry)
+                        })
                 }) {
                     return Err(io::Error::other(format!(
                         "submit {} waits for evidence {}",
@@ -282,11 +294,14 @@ impl Queue {
 }
 
 fn evidence_complete(entry: &Entry) -> bool {
-    entry.resolved_by.is_some()
-        || entry
-            .outcome
-            .as_ref()
-            .is_some_and(|outcome| outcome["reply"]["verified"] == true)
+    entry.resolved_by.is_some() || evidence_verified(entry)
+}
+
+fn evidence_verified(entry: &Entry) -> bool {
+    entry
+        .outcome
+        .as_ref()
+        .is_some_and(|outcome| outcome["reply"]["verified"] == true)
 }
 
 fn files(root: &Path) -> io::Result<Vec<(u64, PathBuf)>> {

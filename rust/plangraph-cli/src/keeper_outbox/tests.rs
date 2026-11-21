@@ -40,7 +40,16 @@ fn live_submit_cannot_pass_unverified_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let queue = Queue::open(&dir.path().join("outbox.jsonl")).unwrap();
     queue
-        .enqueue("add_evidence", json!({"key":"d:A","epoch":1}))
+        .enqueue(
+            "add_evidence",
+            json!({"key":"d:A","epoch":1,"kind":"decision"}),
+        )
+        .unwrap();
+    queue
+        .enqueue(
+            "add_evidence",
+            json!({"key":"d:A","epoch":1,"kind":"commit+ci"}),
+        )
         .unwrap();
     let submit = queue
         .enqueue("submit", json!({"key":"d:A","epoch":1,"source_round":0}))
@@ -50,10 +59,50 @@ fn live_submit_cannot_pass_unverified_evidence() {
         |_| Ok(None),
         |entry| {
             assert_eq!(entry.verb, "add_evidence");
-            Ok(json!({"id":entry.id,"result":"ok","reply":{"verified":false}}))
+            Ok(json!({"id":entry.id,"result":"ok",
+                      "reply":{"verified":entry.body["kind"] == "commit+ci"}}))
         },
     );
     assert!(result.unwrap_err().to_string().contains("evidence"));
+}
+
+#[test]
+fn verified_retry_unblocks_submit_for_its_claim() {
+    let dir = tempfile::tempdir().unwrap();
+    let queue = Queue::open(&dir.path().join("outbox.jsonl")).unwrap();
+    for (key, epoch) in [("d:B", 2), ("d:A", 1), ("d:A", 2), ("d:A", 2)] {
+        queue
+            .enqueue(
+                "add_evidence",
+                json!({"key":key,"epoch":epoch,"kind":"decision"}),
+            )
+            .unwrap();
+    }
+    let submit = queue
+        .enqueue("submit", json!({"key":"d:A","epoch":2,"source_round":0}))
+        .unwrap();
+    let mut sent = Vec::new();
+    let outcomes = queue
+        .drain(
+            Some(&submit),
+            |_| Ok(None),
+            |entry| {
+                sent.push(entry.verb.as_str().to_owned());
+                Ok(json!({"id":entry.id,"result":"ok","reply":{"verified":sent.len() == 4}}))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        sent,
+        [
+            "add_evidence",
+            "add_evidence",
+            "add_evidence",
+            "add_evidence",
+            "submit"
+        ]
+    );
+    assert_eq!(outcomes.last().unwrap()["id"], submit);
 }
 
 #[test]

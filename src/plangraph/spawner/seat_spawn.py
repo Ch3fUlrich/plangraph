@@ -508,19 +508,23 @@ class SeatSpawnMixin:
         from .exit_outcome import stamp_harness
         stamp_harness(record, chosen)
         if record.get('role') == 'review':
-            if record.get('item_key') and not options.get('dry_run'):
-                from .notify import KeeperSink
-                sink = KeeperSink()
-                if sink.url and sink.token_file and not record.get('request', {}).get('verdict_binding'):
-                    await asyncio.to_thread(sink.admit_seat_verdict, record,
-                                            options.get('cwd') or record['cwd'])
-                    self._save(record)
             from plangraph.review.family import FamilyError, writer_headers
             try:
                 options['headers'] = dict(options.get('headers') or {},
                     **writer_headers(record.get('given_writer_families') or []))
             except FamilyError as exc:
                 raise SpawnRefused(str(exc)) from None
+            if record.get('item_key') and not options.get('dry_run'):
+                from subprocess import SubprocessError
+                from .notify import KeeperSink
+                sink = KeeperSink()
+                if sink.url and sink.token_file and not record.get('request', {}).get('verdict_binding'):
+                    cwd = options.get('cwd') or record.get('cwd') or getattr(self.runner, 'default_cwd', None)
+                    try:
+                        await asyncio.to_thread(sink.admit_seat_verdict, record, cwd)
+                    except (OSError, ValueError, SubprocessError) as exc:
+                        raise SpawnRefused(f'seat admission failed: {type(exc).__name__}') from exc
+                    self._save(record)
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
         if 'allow_shas' in options:

@@ -230,12 +230,17 @@ def test_seat_payload_immutable_and_unbound_ingresses_refused(d):
     binding = {"key": "demo:A", "epoch": epoch, "round": 1, "head": head, "seat_run": "run-payload"}
     assert d.http("router", "POST", "/v1/admit_seat_verdict", binding)[0] == 200
     bound = dict(seat, binding=binding)
+    invalid = dict(entry, body=dict(bound, ok="false"))
+    assert d.http("reviewer", "POST", "/v1/replay", {"entries": [invalid]})[1]["results"][0]["result"] == "validation"
+    assert w.store.show(w.p("reader"), "demo:A")["state"] == "in_review"
     assert d.http("reviewer", "POST", "/v1/bind_seat_verdict", bound)[0] == 200
     changed = dict(bound, reason="seat other changes")
     assert d.http("reviewer", "POST", "/v1/bind_seat_verdict", changed)[0] == 409
     assert d.http("reviewer", "POST", "/v1/verdict", changed)[0] == 409
-    status, verdict = d.http("reviewer", "POST", "/v1/verdict", bound)
-    assert status == 200 and verdict["state"] == "claimed", verdict
+    status, replay = d.http("reviewer", "POST", "/v1/replay", {"entries": [dict(entry, body=bound)]})
+    assert status == 200 and replay["results"][0]["result"] == "ok", replay
+    verdict = replay["results"][0]["reply"]
+    assert verdict["state"] == "claimed"
     assert d.http("reviewer", "POST", "/v1/verdict", bound) == (200, verdict)
 
 

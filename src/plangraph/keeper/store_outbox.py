@@ -51,11 +51,11 @@ class OutboxMixin:
             try:
                 eid, verb, body, digest = self._receipt_entry(entry)
                 if verb == "verdict":
-                    if not body.get("binding"):
-                        raise Refused("forbidden", "seat verdict requires an admission binding")
                     result = self.write_receipt(principal, entry)
                 else:
                     result = self._find_receipt(eid, principal.token_id, verb, digest)
+                    if result is None and verb not in RECEIPT_VERBS:
+                        raise Refused("forbidden", f"{verb!r} cannot use write receipts")
                 if result is not None:
                     results.append(result)
                 else:
@@ -124,6 +124,8 @@ class OutboxMixin:
     def write_receipt(self, principal, entry):
         eid, verb, body, digest = self._receipt_entry(entry)
         if verb == "verdict":
+            if type(body.get("ok")) is not bool:
+                raise Refused("validation", "seat verdict requires a JSON boolean")
             if not body.get("binding"):
                 raise Refused("forbidden", "seat verdict requires an admission binding")
             if entry.get("legacy") is True:

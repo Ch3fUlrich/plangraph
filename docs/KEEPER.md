@@ -652,7 +652,8 @@ before reading request bodies. A verified revoked run credential only permits ex
 readback on the receipt routes. The keeper commits the mutation and its result together, so the
 same invocation can recover the result after a lost reply
 even if a submit revoked its token. A submit carries its source review round and waits for
-earlier evidence to be verified or explicitly resolved. An imported entry with no historical
+earlier evidence in the same claim to be verified, superseded by later verified evidence of
+the same kind, or explicitly resolved. An imported entry with no historical
 outcome stays queued for routing recovery. A router can record a disposition with
 `pg replay --resolve-entry INVOCATION --decision D-ID` using the run's `PG_OUTBOX`.
 
