@@ -31,22 +31,22 @@ pub trait Pg {
 /// Scan the `pg_restore --data-only --table events` script without executing it.
 pub(crate) fn read_archive_seq(mut script: impl BufRead, schema: &str) -> io::Result<u64> {
     let invalid = |message| io::Error::new(io::ErrorKind::InvalidData, message);
-    let target = format!("COPY {schema}.events (");
-    let quoted = format!("COPY \"{schema}\".events (");
+    let schema_prefix = format!("COPY {schema}.");
+    let quoted_schema_prefix = format!("COPY \"{schema}\".");
     let mut line = Vec::new();
     let mut highest = 0;
-    let mut copying = false;
+    let mut seq_column = None;
     let mut complete = false;
     while script.read_until(b'\n', &mut line)? != 0 {
         let bytes = line.strip_suffix(b"\n").unwrap_or(&line);
-        if copying {
+        if let Some(column) = seq_column {
             if bytes == b"\\." {
-                copying = false;
+                seq_column = None;
                 complete = true;
             } else {
                 let seq = bytes
                     .split(|&byte| byte == b'\t')
-                    .next()
+                    .nth(column)
                     .unwrap_or_default();
                 let number = std::str::from_utf8(seq)
                     .ok()
@@ -55,17 +55,36 @@ pub(crate) fn read_archive_seq(mut script: impl BufRead, schema: &str) -> io::Re
                 highest = highest.max(number);
             }
         } else if let Some(columns) = bytes
-            .strip_prefix(target.as_bytes())
-            .or_else(|| bytes.strip_prefix(quoted.as_bytes()))
+            .strip_prefix(schema_prefix.as_bytes())
+            .or_else(|| bytes.strip_prefix(quoted_schema_prefix.as_bytes()))
+            .and_then(|table| {
+                table
+                    .strip_prefix(b"events (")
+                    .or_else(|| table.strip_prefix(b"\"events\" ("))
+            })
         {
-            if complete || !columns.starts_with(b"seq,") || !columns.ends_with(b") FROM stdin;") {
+            if complete {
                 return Err(invalid("unexpected event COPY header in archive"));
             }
-            copying = true;
+            let columns = columns
+                .strip_suffix(b") FROM stdin;")
+                .and_then(|columns| std::str::from_utf8(columns).ok())
+                .ok_or_else(|| invalid("unexpected event COPY header in archive"))?;
+            let mut quoted = false;
+            let column = columns
+                .split(|ch| {
+                    if ch == '"' {
+                        quoted = !quoted;
+                    }
+                    ch == ',' && !quoted
+                })
+                .position(|column| matches!(column.trim(), "seq" | "\"seq\""))
+                .ok_or_else(|| invalid("event COPY header has no seq column"))?;
+            seq_column = Some(column);
         }
         line.clear();
     }
-    if !complete || copying {
+    if !complete || seq_column.is_some() {
         return Err(invalid("incomplete event COPY in archive"));
     }
     Ok(highest)
@@ -105,4 +124,33 @@ pub fn redact(text: &str, secrets: &[String]) -> String {
         .iter()
         .filter(|s| !s.is_empty())
         .fold(text.to_owned(), |t, s| t.replace(s.as_str(), "***"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_archive_seq;
+    use std::io::ErrorKind;
+
+    #[test]
+    fn archive_sequence_follows_copy_column_order() {
+        let script = b"COPY keeper.events (payload, seq, hash) FROM stdin;\nrow\t19200\ta\nother\t19100\tb\n\\.\n";
+        assert_eq!(read_archive_seq(&script[..], "keeper").unwrap(), 19200);
+
+        let quoted =
+            b"COPY \"keeper\".\"events\" (\"long,name\", \"seq\") FROM stdin;\nrow\t19300\n\\.\n";
+        assert_eq!(read_archive_seq(&quoted[..], "keeper").unwrap(), 19300);
+    }
+
+    #[test]
+    fn archive_sequence_refuses_malformed_copy() {
+        for script in [
+            "COPY keeper.events (payload, hash) FROM stdin;\nrow\t19200\n\\.\n",
+            "COPY keeper.events (payload, seq) FROM stdin;\n19200\n\\.\n",
+            "COPY keeper.events (payload, seq) FROM stdin;\nrow\tinvalid\n\\.\n",
+            "COPY keeper.events (payload, seq) FROM stdin;\nrow\t19200\n",
+        ] {
+            let error = read_archive_seq(script.as_bytes(), "keeper").unwrap_err();
+            assert_eq!(error.kind(), ErrorKind::InvalidData, "{script}");
+        }
+    }
 }

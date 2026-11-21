@@ -54,7 +54,7 @@ fn main() {
             let seq = text.split("seq=").nth(1).unwrap_or("0").trim().to_owned();
             if tool.iter().any(|arg| arg == "--data-only") {
                 print!(
-                    "COPY keeper.events (seq, payload) FROM stdin;\n{seq}\trow\n1\tother\n\\.\n"
+                    "COPY keeper.events (payload, seq) FROM stdin;\nrow\t{seq}\nother\t1\n\\.\n"
                 );
             } else {
                 std::fs::write(scratch_state_path(), format!("43|{seq}\n")).unwrap();
