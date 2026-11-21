@@ -132,27 +132,55 @@ fn collect(
     Ok(())
 }
 
-/// `path` with every directory component resolved physically (symlinks followed, so `..` after a
-/// link is the link target's parent) and the last component left as named; components below a
-/// missing directory stay literal.
+/// `path` with every directory component resolved physically: each intermediate symlink is
+/// followed through `read_link` (so one that points at a missing directory still leads to its
+/// existing prefix and keeps the missing suffix), `..` is the parent of what has been resolved,
+/// and the last component stays as named.
 fn resolve_directories(path: &Path) -> PathBuf {
-    let parts: Vec<_> = path.components().collect();
-    let mut out = PathBuf::new();
-    for (index, part) in parts.iter().enumerate() {
+    use std::{collections::VecDeque, ffi::OsString, path::Component};
+    enum Part {
+        Root,
+        Parent,
+        Name(OsString),
+    }
+    fn parts(path: &Path) -> impl Iterator<Item = Part> + '_ {
+        path.components().filter_map(|c| match c {
+            Component::RootDir | Component::Prefix(_) => Some(Part::Root),
+            Component::ParentDir => Some(Part::Parent),
+            Component::Normal(name) => Some(Part::Name(name.to_os_string())),
+            Component::CurDir => None,
+        })
+    }
+    let mut pending: VecDeque<Part> = parts(path).collect();
+    let (mut out, mut follows) = (PathBuf::new(), 0);
+    while let Some(part) = pending.pop_front() {
         match part {
-            std::path::Component::ParentDir => {
+            Part::Root => out = PathBuf::from("/"),
+            Part::Parent => {
                 out.pop();
             }
-            std::path::Component::CurDir => {}
-            std::path::Component::Normal(name) => {
-                out.push(name);
-                if index + 1 < parts.len() {
-                    if let Ok(canonical) = out.canonicalize() {
-                        out = canonical;
+            Part::Name(name) => {
+                let candidate = out.join(&name);
+                let link = if pending.is_empty() || follows >= 40 {
+                    None
+                } else {
+                    fs::symlink_metadata(&candidate)
+                        .ok()
+                        .filter(|m| m.file_type().is_symlink())
+                        .and_then(|_| fs::read_link(&candidate).ok())
+                };
+                match link {
+                    Some(target) => {
+                        follows += 1;
+                        // The target replaces this component: absolute from the root, relative
+                        // from the directory that held the link (`out`).
+                        for part in parts(&target).collect::<Vec<_>>().into_iter().rev() {
+                            pending.push_front(part);
+                        }
                     }
+                    None => out = candidate,
                 }
             }
-            other => out.push(other),
         }
     }
     out

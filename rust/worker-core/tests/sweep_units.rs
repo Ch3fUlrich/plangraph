@@ -165,3 +165,57 @@ fn sweep_refuses_a_worktree_a_user_unit_names_and_removes_an_unreferenced_one() 
     );
     assert!(!f.root.join("spare").exists(), "{out}");
 }
+
+#[test]
+fn sweep_keeps_a_worktree_named_through_a_dangling_intermediate_link() {
+    use std::os::unix::fs::symlink;
+    let f = Fixture::new();
+    let topic = f.root.join("topic").canonicalize().unwrap();
+    let units = f.state.join("systemd/user");
+    fs::create_dir_all(&units).unwrap();
+    // example.service -> alias/unit.service, alias -> <topic>/bin, and bin does not exist.
+    fs::create_dir_all(f.state.join("links")).unwrap();
+    symlink(topic.join("bin"), f.state.join("links/alias")).unwrap();
+    symlink(
+        f.state.join("links/alias/unit.service"),
+        units.join("example.service"),
+    )
+    .unwrap();
+    let unit_refs = pg_worker_core::unit_refs::unit_file_refs(&units, Path::new("/h")).unwrap();
+    let out = run_with_authority(
+        &Options {
+            repo: &f.repo,
+            roots: std::slice::from_ref(&f.root),
+            targets: &[],
+            remote_targets: &[],
+            idle_minutes: 60,
+            state: &f.state,
+            pins: &f.state.join("pins.json"),
+            claims_reader: None,
+            apply: true,
+            delete_remote: false,
+        },
+        |_, _| {
+            Ok((
+                Protection {
+                    guards: Guards::default(),
+                    claims: Claims {
+                        paths: vec![],
+                        branches: vec![],
+                    },
+                    units: vec![],
+                    unit_refs: unit_refs.clone(),
+                    cwds: vec![],
+                },
+                vec![Pull {
+                    number: 7,
+                    state: "MERGED".into(),
+                    sha: f.sha.clone(),
+                }],
+            ))
+        },
+    )
+    .unwrap();
+    assert!(topic.exists(), "{out}");
+    assert!(out.contains("example.service"), "{out}");
+}

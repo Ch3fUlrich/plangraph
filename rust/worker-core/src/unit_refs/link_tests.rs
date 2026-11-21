@@ -227,3 +227,33 @@ fn a_link_target_ending_in_dot_dot_or_crossing_several_links_resolves_physically
     );
     assert!(refs.iter().any(|r| r.exact && r.path == live_c), "{refs:?}");
 }
+
+#[test]
+fn an_intermediate_link_to_a_missing_directory_keeps_its_existing_prefix_and_suffix() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let live = tmp.path().join("trees/app-worktrees/live");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&live).unwrap();
+    // `alias` (outside the unit directory) points into the worktree at a `bin` directory that
+    // does not exist; the unit links through it.
+    fs::create_dir_all(tmp.path().join("links")).unwrap();
+    symlink(live.join("bin"), tmp.path().join("links/alias")).unwrap();
+    symlink(
+        tmp.path().join("links/alias/unit.service"),
+        dir.join("example.service"),
+    )
+    .unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    let canonical = live.canonicalize().unwrap();
+    assert!(
+        unit_names(&refs, &live, &canonical).contains(&"example.service".to_string()),
+        "{refs:?}"
+    );
+    assert!(
+        refs.iter()
+            .any(|r| r.exact && r.path == canonical.join("bin/unit.service")),
+        "{refs:?}"
+    );
+}
