@@ -244,7 +244,7 @@ class SpawnerRunner:
     ) -> JobInfo:
         """Spawn a new agent job and track its state."""
         from plangraph.planner.routing import validate_model
-        from .target import resolve_target   # leg ids and admitted combos resolve before providers render
+        from .target import launch_model, resolve_target   # leg ids and admitted combos resolve before providers render
         model_or_combo, leg = resolve_target(model_or_combo, **({'chosen': chosen} if chosen is not None else {}))
         if leg is not None:
             if client is not None and client != leg.harness:
@@ -252,6 +252,8 @@ class SpawnerRunner:
                 raise SpawnRefused('client disagrees with leg harness: ' + leg.id)
             client = leg.harness
         validate_model(model_or_combo)
+        if leg is not None and role in ('implement', 'review'):
+            model_or_combo = launch_model(leg)
         # REMOVE-AT-R10: capture the final prompt before command construction.
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')

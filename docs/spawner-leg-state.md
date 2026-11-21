@@ -135,3 +135,9 @@ harness-aware quota key as dispatch. The helper lives in routing support;
 `leg_probe.key` remains its compatibility alias.
 
 Scheduled review probes (`--all-reviewers`, `caller='review-probe'`, source `review-liveness-probe`) probe every active leg the review route can offer (`planner.legs.routed_review_legs`, in `REVIEW_ORDER`) with a tiny `OK` prompt under `role='review'`; one failed review probe immediately books the leg `down` for `PLANGRAPH_LEG_DOWN_S` in the shared SQLite store, and `LegAdapter.leg_status` lets a stored booking beat a healthy gateway snapshot only when it is a `down` booking whose `evidence.caller` is `review-probe`, so failed review legs are not offered by the route until a passing probe restores them; `limited`/`expired` bookings and `down` bookings by other callers do not override the snapshot. While the leg is serving, `record_probe_fail` books `probe_failed_leg_serving` with no down window, so a failed probe then books nothing down. `pg-spawnd check-manage-key` checks key presence (`len > 0` without reading key bytes) and records one `missing_manage_key` alert under `state/alerts/manage-key.json` at probe time.
+
+## AGY quota scope
+
+An `Individual quota reached` harness refusal with a future reset applies to all AGY models on the account. A model-specific refusal applies only to that model and its effort variants. Native Claude subscription legs do not share AGY quota state.
+
+Launch admission rereads quota evidence rather than trusting an earlier plan. `QuotaGate` reads the configured local `QUOTA_SNAPSHOT_DB` read-only on every check, even when gateway liveness discovery is disabled; only management API reads are cached for 60 seconds. A provider pool is skipped while every account is at or below `PLANGRAPH_QUOTA_MIN_REMAINING_PCT` (default 1), until the earliest account reset. A reset-less row holds for 30 minutes from its timestamp or first observation.

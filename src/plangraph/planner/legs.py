@@ -44,6 +44,16 @@ REVIEW_UNFIT_SEATS = frozenset({"mimo/mimo-v2.6-flash"})
 CX_EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
+def _codex_context(model):
+    from plangraph.routing_support.opencode_overlay import load_root_providers
+    shipped = Path(__file__).resolve().parents[3] / 'configuration/opencode/providers.json'
+    models = (load_root_providers(shipped) or {}).get('omniroute', {}).get('models', {})
+    return models.get(model, {}).get('limit', {}).get('context', 1_000_000)
+
+
+_SOL_CONTEXT = _codex_context('cx-gpt-6.2-sol')
+
+
 @dataclass(frozen=True)
 class Leg:
     """One routing leg (see module docstring)."""
@@ -100,10 +110,10 @@ DEFAULT_LEGS = (
     Leg("openrouter-free", "free", "opencode", "openrouter/free", "openrouter",
         ("128k",), 100000, True, roles=("implement",)),
     Leg("cx-gpt-6.2-sol", "subscription", "opencode", "omniroute/cx-gpt-6.2-sol",
-        "gpt", ("128k", "256k"), 500000, False, roles=("implement",),
+        "gpt", WINDOW_CLASSES, _SOL_CONTEXT, False, roles=("implement",),
         note="D-6310: operator implement leg (ChatGPT subscription via OmniRoute cx)"),
     Leg("cx-gpt-6.2-astra", "subscription", "opencode", "omniroute/cx-gpt-6.2-astra",
-        "gpt", ("128k", "256k"), 272000, False, roles=("implement",),
+        "gpt", WINDOW_CLASSES, _codex_context('cx-gpt-6.2-astra'), False, roles=("implement",),
         note="D-6310: operator implement leg (GPT-6.2 Astra via OmniRoute cx)"),
     Leg("cx-gpt-6-luna", "subscription", "opencode", "omniroute/cx-gpt-6-luna",
         "gpt", ("128k", "256k"), 475000, False, roles=("review",),
@@ -231,7 +241,7 @@ EXPLICIT_LEGS: tuple[Leg, ...] = (
           roles=("review", "implement"), effort=e, note="operator 2026-11-09: Antigravity quota")
       for m in ("sonnet", "opus") for e in ("low", "medium", "high")),
     *(Leg(f"cx-gpt-6.2-sol-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6.2-sol-{e}",
-          "gpt", ("128k", "256k"), 500000, False, roles=("implement",), effort=e)
+          "gpt", WINDOW_CLASSES, _SOL_CONTEXT, False, roles=("implement",), effort=e)
       for e in CX_EFFORTS),
     *(Leg(f"cx-gpt-6-luna-{e}", "subscription", "opencode", f"omniroute/cx-gpt-6-luna-{e}",
           "gpt", ("128k", "256k"), 475000, False, roles=("review",),

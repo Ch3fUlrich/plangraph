@@ -24,17 +24,17 @@ def route():
                       leg_reader=store, catalog_rows=[]).to_dict()
 initial = route()
 store.record_harness_limit('agy/gemini-4-hydrogen-high',
-    'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 10h40m26s.', 'fixture')
+    'RESOURCE_EXHAUSTED (code 429): Per-model quota reached. Resets in 10h40m26s.', 'fixture')
 hydrogen = route()
 store.record_harness_limit('agy/gemini-4-argon-medium',
-    'Individual quota reached. Resets in 2h.', 'fixture')
+    'Per-model quota reached. Resets in 2h.', 'fixture')
 argon = route()
 store.record_harness_limit('agy/gemini-4-hydrogen-medium',
-    'RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 10h40m26s.', 'fixture')
+    'RESOURCE_EXHAUSTED (code 429): Per-model quota reached. Resets in 10h40m26s.', 'fixture')
 store.record_harness_limit('claude-sonnet-5-5-high',
     'Individual quota reached. Resets in 1h.', 'fixture')
 store.record_harness_limit('agy/claude-sonnet-5-5-high',
-    'Individual quota reached. Resets in 1h.', 'fixture')
+    'Per-model quota reached. Resets in 1h.', 'fixture')
 legacy = LegStateStore(store.path.with_name('legacy.sqlite'))
 with legacy._connect() as db:
     db.execute("INSERT INTO leg_events VALUES (NULL,?,?,?,?,?,?,?,?,?,?)",
