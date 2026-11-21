@@ -35,7 +35,7 @@ async def fresh_spawn(service, options, *, admission_passed=False):
     import signal, subprocess, sys
     from contextlib import ExitStack
     from . import cli
-    from .cli import _drain_chunks, _prune_supervisor_logs
+    from .cli import _drain_chunks, _prune_supervisor_logs, _rotation_source
     from plangraph.routing_support import background_process_options
     state = service.state.resolve()
     context = ExitStack()
@@ -58,7 +58,7 @@ async def fresh_spawn(service, options, *, admission_passed=False):
         log = state / ('supervisor-' + uuid.uuid4().hex + '.stderr.log')
         bootstrap = '''import io, json, logging, os, pathlib, sys, threading, traceback
 from plangraph.spawner import cli as supervisor
-payload = json.loads(sys.stdin.readline())
+''' + _rotation_source() + '''payload = json.loads(sys.stdin.readline())
 tree, admitted, cwd = payload.pop('_tree'), payload.pop('_admitted', False), payload.pop('_cwd')
 sys.stdin = io.StringIO(json.dumps(payload) + '\\n')
 path = sys.argv[1]
@@ -70,7 +70,7 @@ tree['supervisor_stderr_path'] = path
 read_fd, write_fd = os.pipe()
 os.dup2(write_fd, 2)
 os.close(write_fd)
-handler = supervisor._private_rotating_log(path)
+handler = _private_rotating_log(path)
 def drain():
     try:
         supervisor._drain_chunks(iter(lambda: os.read(read_fd, 8192), b''), lambda data:

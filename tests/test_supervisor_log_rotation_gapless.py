@@ -52,3 +52,14 @@ def test_mcp_launch_handler_rotates_without_a_gap(monkeypatch, tmp_path):
     assert seen and all(present for _, present in seen)
     assert Path(str(log) + '.1').stat().st_size <= 64
     assert log.exists() and log.stat().st_size <= 64
+
+
+def test_rotation_source_is_self_contained_for_an_older_run_tree(tmp_path):
+    """The bootstrap runs against the run tree's own cli, which may lack the helpers: they travel as source."""
+    namespace = {'os': os}
+    exec(cli._rotation_source(), namespace)
+    log = tmp_path / 'supervisor-w.stderr.log'
+    log.write_bytes(b'x\n')
+    namespace['_rotate_log'](str(log))
+    assert Path(str(log) + '.1').read_bytes() == b'x\n' and log.read_bytes() == b''
+    assert callable(namespace['_private_rotating_log'])
