@@ -587,7 +587,8 @@ class WaiverMixin:
                            seat_rule_waived_by=waive_seats)
             if from_open:
                 ref["prs"] = prs
-            part = self._merged_go_scope(decision_id, fresh, now, require_key=False)[1] if not waiver_only else None
+            # the ordinary close is head-bound (the row's authority is its GO-HEAD); only the part is recorded here
+            part = None if waiver_only else self._merged_go_scope(decision_id, fresh, now, require_key=False)[1]
             if part:
                 ref["go_part"] = part   # the row's key list omits the key: this named part head covers it
             return self._land_merged(principal, fresh, head, seats, witnessed, decision_id, from_open,

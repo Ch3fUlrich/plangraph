@@ -248,8 +248,8 @@ def _train_repo(path):
         lines.extend(f"{'from' if n == 0 else 'merge'} :{p}" for n, p in enumerate(parents))
         lines.append("")
     commit("refs/heads/main", 1, "base", [])
-    commit("refs/heads/partP", 2, "work p\n\nPlan-Item: demo:H", [1])
-    commit("refs/heads/partQ", 3, "work q\n\nPlan-Item: demo:A", [1])
+    commit("refs/heads/partP", 2, "work p\n\nPlan-Item: demo:H\nPlan-Item: demo:SPLIT", [1])
+    commit("refs/heads/partQ", 3, "work q\n\nPlan-Item: demo:A\nPlan-Item: demo:SPLIT", [1])
     commit("refs/heads/train", 4, "train", [1, 2, 3])
     commit("refs/heads/main", 5, "Landing train (#9)", [1, 4])
     commit("refs/heads/partR", 6, "late\n\nPlan-Item: demo:LATE", [2])
@@ -305,10 +305,29 @@ def test_key_in_no_part_still_refuses(unseated_w, monkeypatch, tmp_path):
 
 def test_the_go_head_itself_is_not_a_part(unseated_w, monkeypatch, tmp_path):
     """A table that names the train head as a part would vouch for every key of the train."""
-    _part_table_world(unseated_w, monkeypatch, tmp_path, "train head {train}, keys demo:X")
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 1, train head {train}, keys demo:X")
     assert not _scope(unseated_w, "demo:H")
 
 
 def test_a_part_outside_the_go_head_does_not_vouch(unseated_w, monkeypatch, tmp_path):
     _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 24, part head {partR}, keys demo:X")
     assert not _scope(unseated_w, "demo:LATE")
+
+
+def test_a_head_outside_a_part_entry_does_not_vouch(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "rejected head {partP}, keys demo:X")
+    assert not _scope(unseated_w, "demo:H")
+
+
+def test_a_key_split_across_a_named_and_an_unnamed_part_refuses(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "Batch 23, part head {partP}, keys demo:X")
+    assert not _scope(unseated_w, "demo:SPLIT")
+    both = "Batch 23, part head {partP}, keys demo:X; Batch 24, heads {partQ}, keys demo:Y"
+    _part_table_world(unseated_w, monkeypatch, tmp_path / "again", both)
+    assert _scope(unseated_w, "demo:SPLIT")
+
+
+def test_part_heads_in_code_spans_and_lists_are_read(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path,
+                      "Batch 22 (folded PR #1088, closed unmerged), heads `{partQ}` and fix `{partP}`, keys demo:X")
+    assert _scope(unseated_w, "demo:H") and _scope(unseated_w, "demo:A")
