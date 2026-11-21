@@ -189,6 +189,10 @@ if 'resume' in sys.argv:
     # Fix turns only follow a driver-run review that requested changes.
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
     assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
+    # The fix turn commits its fix: a turn that leaves HEAD unchanged is resumed on its items.
+    with open('fix.txt', 'a') as fix: fix.write('fixed after review\n')
+    subprocess.run(['git','add','fix.txt'], check=True)
+    subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fix'], check=True, stdout=subprocess.DEVNULL)
 else:
     import os
     pathlib.Path('writer-path').write_text(os.environ['PATH'])
@@ -315,11 +319,14 @@ async def check():
     assert not pathlib.Path(record['cwd']).is_relative_to(pathlib.Path(card['repo'])), record
     assert subprocess.check_output(['git','-C',card['repo'],'status','--porcelain'], text=True) == ''
     subprocess.run(['git','-C',card['repo'],'branch','local-only'], check=True)
-    card['base_ref'] = 'refs/heads/local-only'
-    with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
-        bad = await admitted_spawn(service, dict(card=card, prompt='brief marker'))
-        await service.tasks[bad['run_id']]
-    assert service.result(bad['run_id'])['exit_code'] == 5
+    for ref, exit_code in [('refs/heads/local-only', 0), ('refs/heads/absent', 5)]:
+        card['base_ref'] = ref
+        with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
+            other = await admitted_spawn(service, dict(card=card, prompt='brief marker'))
+            await service.tasks[other['run_id']]
+        record = service.result(other['run_id'])
+        assert record['exit_code'] == exit_code, record
+        assert exit_code == 0 or ref in record['reason'], record
     card['base_ref'] = 'refs/heads/main'
     for marker, tries, status in [('kill marker', 2, 'completed'), ('fail marker', 3, 'failed'), ('missing marker', 2, 'completed'), ('reject marker', 1, 'failed')]:
         with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
@@ -388,9 +395,10 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
             completed.push(row["changed_lines"].as_u64().unwrap());
         }
     }
-    // The plain and missing-marker runs commit writer.txt and writer-path, one line
-    // each; the kill-marker relaunch also keeps the killed attempt's partial.txt.
+    // The plain, local-only-base and missing-marker runs commit writer.txt and
+    // writer-path, one line each; the kill-marker relaunch also keeps the killed
+    // attempt's partial.txt.
     completed.sort_unstable();
-    assert_eq!(completed, [2, 2, 3]);
+    assert_eq!(completed, [2, 2, 2, 3]);
     fs::remove_dir_all(dir).unwrap();
 }

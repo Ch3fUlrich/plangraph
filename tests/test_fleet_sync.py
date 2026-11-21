@@ -159,13 +159,13 @@ def test_fleet_sync_configs(tmp_path, monkeypatch):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
     monkeypatch.setenv('HOME', str(tmp_path))
     registry = {'hosts': [{'id': 'host-a', 'transport': 'ssh', 'os': 'linux',
-                          'repos': {'plangraph': {'live_dir': '/srv/live'}},
+                          'repos': {'plangraph': {'root': '/srv/repo', 'live_dir': '/srv/live'}},
                           'caps': {'max_runs': 4, 'mem_floor_mb': 3000},
                           'warmup': {'ramp_mb': {'implement': 2048}}}]}
     assert genconfig.sync(registry, True) == 0
     (genconfig.config_dir() / 'hosts.json').write_text(json.dumps(registry))
     hosts = remote_ps.configured_hosts()
-    assert hosts == [{'name': 'host-a', 'target': 'host-a', 'src': '/srv/live/src'}]
+    assert hosts == [{'name': 'host-a', 'target': 'host-a', 'src': '/srv/repo/src'}]
     config = json.loads((genconfig.config_dir() / 'overflow-hosts.json').read_text())
     ready = tmp_path / '.local/state/plangraph/host-ready/host-a.json'
     ready.parent.mkdir(parents=True)
@@ -218,7 +218,7 @@ def test_fleet_sync_bad_registry_fails(tmp_path, capsys, contents, json_output):
 def test_fleet_sync_windows_config(tmp_path, monkeypatch, live):
     monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
     registry = {'hosts': [{'id': 'win-host', 'transport': 'ssh', 'os': 'windows',
-                          'repos': {'plangraph': {'live_dir': live}}}]}
+                          'repos': {'plangraph': {'root': live}}}]}
     assert genconfig.sync(registry, True) == 0
     assert remote_ps.configured_hosts() == [
         {'name': 'win-host', 'target': 'win-host', 'win_src': live + '/src'}]
@@ -232,8 +232,8 @@ def test_fleet_sync_windows_config(tmp_path, monkeypatch, live):
 @pytest.mark.parametrize('consumer', ['drift', 'ps', 'overflow'])
 def test_fleet_sync_ssh_target_every_consumer(monkeypatch, system, target, consumer):
     host = dict(id='host-a', os=system, transport='ssh', caps={'mem_floor_mb': 1},
-                repos={'plangraph': {'live_dir': 'C:/live/current' if system == 'windows'
-                                    else '/srv/live/current'}})
+                repos={'plangraph': {'root': 'C:/fleet/checkout' if system == 'windows' else '/srv/checkout',
+                                    'live_dir': 'C:/live/current' if system == 'windows' else '/srv/live/current'}})
     if target:
         host['ssh_target'] = target
     if consumer == 'drift':
@@ -248,14 +248,14 @@ def test_fleet_sync_ssh_target_every_consumer(monkeypatch, system, target, consu
         assert len(calls) == 1
         return
     generated = genconfig.generate({'hosts': [host]})
-    live = host['repos']['plangraph']['live_dir']
+    checkout = host['repos']['plangraph']['root']
     if consumer == 'ps':
         assert generated['ps-hosts.json'] == {'hosts': [dict(
             name=host['id'], target=target or host['id'], **{
-                'win_src' if system == 'windows' else 'src': live + '/src'})]}
+                'win_src' if system == 'windows' else 'src': checkout + '/src'})]}
     elif system == 'linux':
         assert generated['overflow-hosts.json'] == {'hosts': {'host-a': {
-            'ssh': target or host['id'], 'repo': live, 'spawner_src': live + '/src',
+            'ssh': target or host['id'], 'repo': checkout, 'spawner_src': checkout + '/src',
             'floor_mb': host['caps']['mem_floor_mb']}}, 'public_repos': []}
     else:
         assert generated['overflow-hosts.json'] == {'hosts': {}, 'public_repos': []}

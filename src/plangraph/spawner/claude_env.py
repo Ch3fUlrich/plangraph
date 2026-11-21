@@ -22,8 +22,8 @@ CLAUDE_ENV_ALLOW = frozenset({
     'LANG', 'LANGUAGE', 'TZ',
     # scratch space
     'TMPDIR', 'TEMP', 'TMP',
-    # where the subscription login lives
-    'CLAUDE_CONFIG_DIR',
+    # where the subscription login lives, and the pinned shell of the Bash tool
+    'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_SHELL',
     # network egress and the CA bundle paths it may need
     'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
     # Windows process basics (the same set build_child_env keeps)
@@ -46,3 +46,18 @@ def claude_env_allowed(name: str) -> bool:
 def claude_child_env(env: Mapping[str, str]) -> dict[str, str]:
     """A new dict holding only the allowlisted names of ``env`` (values unchanged)."""
     return {name: value for name, value in env.items() if claude_env_allowed(name)}
+
+
+#: Claude Code runs its Bash tool through the login shell; zsh word-splitting, NOMATCH and `=`
+#: expansion broke agent commands, so every Claude session and run the spawner starts is pinned
+#: to bash on POSIX hosts.
+AGENT_SHELL = ('CLAUDE_CODE_SHELL', '/bin/bash')
+
+
+def with_agent_shell(env: Mapping[str, str], platform: str | None = None) -> dict[str, str]:
+    """A copy of ``env`` that pins the agent's Bash tool to bash (POSIX hosts only)."""
+    out = dict(env)
+    import sys
+    if (platform or sys.platform) != 'win32':
+        out[AGENT_SHELL[0]] = AGENT_SHELL[1]
+    return out

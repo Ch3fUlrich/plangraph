@@ -142,7 +142,7 @@ def test_router_closes_merged_review_with_evidence_and_one_audit(w, key, familie
     row = w.conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()
     assert (row["actor"], row["role"], row["action"], row["key"], row["ok"]) == (
         "router", "router", "close_merged", key, 1)
-    assert row["code"] is None and row["msg"] is None
+    assert row["code"] is None and row["msg"] == "merged_on_default"
     assert events.verify_chain(w.conn) == [] and w.store.verify_integrity() == []
     _refused(w, "bad_state", "done", key=key, families=families)
 
@@ -247,7 +247,7 @@ def test_real_keeper_merged_on_default_source_is_used(w, monkeypatch):
             if args[:3] == ["show", "-s", "--format=%P"]:
                 return super()._run(repo, args)
             if args[0] == "log":
-                out = f"{HEAD}\x1f2026-01-01\x1fwork\x1f{KEY}\x1d"
+                out = f"{HEAD}\x1f2026-01-01\x1fwork\x1fwork\n\nPlan-Item: {KEY}\x1d"
             elif args[0] == "rev-list":
                 out = "1" * 40
             else:
@@ -309,6 +309,20 @@ def test_http_close_merged_door(w, doors):
                                   {"key": KEY, "decision_id": "D-5504", "families": ["google"]})
     assert status == 200 and response["state"] == "done"
     assert _counts(w) == (before[0] + 2, before[1] + 1, before[2] + 1)
+
+
+def test_http_close_merged_dry_run_is_read_only(w, doors):
+    def counts():
+        return (*_counts(w), w.conn.execute("SELECT COUNT(*) FROM items").fetchone()[0])
+
+    body = {"key": KEY, "decision_id": "D-5504", "families": ["google"], "dry_run": True}
+    before, item = counts(), w.store._item(KEY)
+    status, response = doors.http("router", "POST", "/v1/close_merged", body)
+    assert status == 200 and response == {"dry_run": True, "route": "close_merged"}
+    assert counts() == before
+    assert w.store._item(KEY) == item
+    status, response = doors.http("workerA", "POST", "/v1/close_merged", body)
+    assert status == 403 and response["error"] == "forbidden"
 
 
 def test_cli_close_merged_door(w, doors):

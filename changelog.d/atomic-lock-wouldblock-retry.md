@@ -1,0 +1,1 @@
+- `atomic::lock` retries a `WouldBlock` in 50 ms steps for up to 2 s before it refuses: a thread that forks while the lock fd is open keeps the flock alive until its child execs, which flaked `ci_watch` tests under parallel load.

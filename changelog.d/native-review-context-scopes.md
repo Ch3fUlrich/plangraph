@@ -1,0 +1,1 @@
+- Native review brief context: a changed line at a definition's own indent (module-level assignment, `impl` header after a one-line function) belongs to no public symbol, a lowercase `name::` module path is not a caller of the function `name`, and each head's `.session.log` is cut before its gates run so a failed head keeps its own cargo output.

@@ -180,12 +180,21 @@ explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 While every Codex leg is unavailable (quota_until, down), `agy-claude-sonnet-5-5-high`
 is served directly behind the Codex legs; with any Codex leg available it is skipped as
 `codex_available` (rule 3.58, D-6366).
-Review routes follow rule 3.58 (D-6366, overriding the D-6310 and D-6357 review lists):
-`agy-gemini-4-argon-low` first (agy plan mode; `agy-gemini-4-argon-medium` follows as
-same-family fallback; review only, never an implement leg), then `mimo/mimo-v2.6-pro`,
-`opencode-go/deepseek-v4.1-flash`, `opencode/deepseek-v4.1-flash-free` and
-`opencode-go/glm-5.3-flash`, with `agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high`
-and `mimo/mimo-v2.6-flash` as fallbacks. The reviewer's family differs from the writer's (a gemini writer skips argon).
+GPT implement and review legs default to medium effort (D-6397); elevated
+effort requires matching `card.effort` and an operator `card.effort_decision`
+of the form `D-<number>`. Native Codex package sessions pass
+`model_reasoning_effort=medium` by default. Other families keep their own effort.
+Spawn admission budgets 55% of the selected leg's configured context rather
+than the coarse window label. Sol and Astra have a 1,000,000-token configured
+context, including Sol effort variants and native package sessions.
+Review routes follow rule 3.61 (D-6481, amending rule 3.58 / D-6366):
+`gpt-6.2-sol-medium` first, as a native Codex run (harness `codex`) with repository
+access, then `mimo/mimo-v2.6-pro`, `opencode/deepseek-v4.1-flash-free`,
+`opencode-go/deepseek-v4.1-flash` and `opencode-go/glm-5.3-flash`, with
+`agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high` and `mimo/mimo-v2.6-flash` as fallbacks and
+the agy argon legs (`agy-gemini-4-argon-low`, `agy-gemini-4-argon-medium`; plan mode, review only,
+never an implement leg) last of the whole route, behind the non-order extras. A review run that ends without a VERDICT line is
+recorded `failed` with reason `no_verdict`. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.
@@ -221,3 +230,16 @@ over the same `base` and `head`, passing each group in `diff_ref.paths` and
 failing the review if any group returns `REQUEST_CHANGES` or a single file exceeds
 the leg cap.
 
+## Own harness first (rule 3.53, D-6310)
+
+A model runs in the harness it is trained on: gpt in Codex (`codex`), gemini in agy, claude in
+Claude Code or agy (`agy-claude-*` legs count as own). `planner/legs.py` (`resolve_harness`, `own_harness_legs`) resolves each routed leg
+inside `plan_spawn` (before policy, seats and ordering, so a paused harness applies to the
+resolved leg): with the family's client installed on the host (`shutil.which`) the leg's
+`harness` is the own client (a gpt OpenCode leg becomes `codex`, keeping its registered model;
+the Codex launch maps `omniroute/cx-gpt-6.2-sol-medium` to `--model gpt-6.2-sol` with
+`model_reasoning_effort=medium`); without it the OpenCode leg of the same model runs and carries
+`harness_fallback=client_missing` (a native leg with no OpenCode counterpart is skipped as
+`client_missing`). Families
+without an own client (deepseek, glm, mimo, free legs) stay on OpenCode. Pinning a model's
+OpenCode leg with `--leg` while its own client is installed needs `--override-reason`.

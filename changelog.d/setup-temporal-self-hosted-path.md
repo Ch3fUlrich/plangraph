@@ -1,0 +1,1 @@
+- `setup-temporal` resolves one absolute binary path from the step shell's `$HOME` and uses it for the cache restore, the install and `TEMPORAL_CLI`, so self-hosted runner layouts find the cached CLI; the export step fails with a named message when the binary is missing.

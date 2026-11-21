@@ -89,6 +89,31 @@ def test_workstation_pytest_shard_matrix_matches_count_and_preserves_postgres():
     assert jobs['pytest-postgres']['env']['PYTEST_SHARD'] == '${{ matrix.shard }}/3'
 
 
+def workflow_env(tmp_path, **extra):
+    """Environment whose `python` is the preflight interpreter, as in the hook.
+
+    A host's bare `python` may lack pytest; the workflow steps must run with the
+    interpreter the pre-push hook chose (PREFLIGHT_PYTHON), put first on PATH.
+    """
+    shim = tmp_path / 'preflight-bin'
+    shim.mkdir(exist_ok=True)
+    interpreter = os.environ.get('PREFLIGHT_PYTHON') or sys.executable
+    (shim / 'python').write_text(f'#!/bin/sh\nexec {json.dumps(interpreter)} "$@"\n')
+    (shim / 'python').chmod(0o755)
+    return dict(os.environ, PATH=str(shim) + os.pathsep + os.environ['PATH'], **extra)
+
+
+def test_workflow_env_python_ignores_a_bare_python_without_pytest(tmp_path, monkeypatch):
+    bare = tmp_path / 'bare-bin'
+    bare.mkdir()
+    (bare / 'python').write_text('#!/bin/sh\necho "No module named pytest" >&2\nexit 1\n')
+    (bare / 'python').chmod(0o755)
+    monkeypatch.setenv('PATH', str(bare) + os.pathsep + os.environ['PATH'])
+    result = subprocess.run(['bash', '-e', '-c', 'python -c "import pytest"'],
+                            env=workflow_env(tmp_path), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize('job', ['pytest', 'pytest-postgres'])
 def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
     workflow = yaml.safe_load((ROOT / '.github/workflows/tests.yml').read_text())
@@ -114,7 +139,7 @@ def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
                 'import sys\nassert sys.argv[1:] == ["--base", "base-sha"]\n'
                 f'print({json.dumps(plan)!r})\n')
             command = step['run'].replace('${{ github.event_name }}', event).replace('${{ needs.select.outputs.full }}', 'false')
-            env = dict(os.environ, RUNNER_TEMP=str(tmp_path), BASE_SHA='base-sha')
+            env = workflow_env(tmp_path, RUNNER_TEMP=str(tmp_path), BASE_SHA='base-sha')
             result = subprocess.run(['bash', '-e', '-c', command], cwd=tmp_path,
                                     env=env, capture_output=True, text=True)
             assert result.returncode == expected, result.stdout + result.stderr
@@ -142,7 +167,7 @@ def test_unsharded_collection_check_rejects_empty_suite(tmp_path, job):
         assert '--collect-only ' + within in step['run']
         assert step['run'].split('if [', 1)[0].strip() in run
     command = step['run'].replace('${{ github.event_name }}', 'push').replace('${{ needs.select.outputs.full }}', 'true')
-    env = dict(os.environ, PYTEST_SHARD='0/3', RUNNER_TEMP=str(tmp_path))
+    env = workflow_env(tmp_path, PYTEST_SHARD='0/3', RUNNER_TEMP=str(tmp_path))
     result = subprocess.run(['bash', '-e', '-c', command], cwd=tmp_path, env=env,
                             capture_output=True, text=True)
     assert result.returncode == 5, result.stdout + result.stderr

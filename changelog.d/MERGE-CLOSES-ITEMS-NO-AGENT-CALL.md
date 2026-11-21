@@ -1,0 +1,3 @@
+A merge into main now closes the keeper items its `Plan-Item` trailers name by code: new keeper verb `close_merged_auto` (role system or router, extends the `close_merged` proofs, no GO row or decision id), Rust job `plangraph merge-close [--count]`, timer `pg-merge-close` every 10 minutes and a `require_seats` switch shipped on; every refused or flagged merged key is printed with its reason.
+The automatic close fetches and indexes the scanned repositories before its request takes the keeper lock, and the writer families it checks include the `Writer` trailers of the landed commits and of the landing merge.
+The warm step also looks up the hosted lanes of the candidate items (kept for the run), so the run asks the forge nothing under the lock.

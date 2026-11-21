@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily keeper schema dump with retention and restore test
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

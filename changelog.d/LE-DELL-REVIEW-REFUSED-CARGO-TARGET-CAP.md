@@ -1,0 +1,1 @@
+Review runs are exempt from the shared cargo target cap at admission and in the one-second runtime sample, since a review builds nothing; the free-space floor still binds them. Implement and fix runs are still refused above the cap, and the `cargo_target_cap` refusal now names the measured cache path.

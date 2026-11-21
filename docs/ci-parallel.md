@@ -37,6 +37,11 @@ The only exception is a recorded GO row naming the exact batch SHA, `GO`, and
 `EXCEPTION:main-red-fix` as separate tokens; pass its file with `land --go-row`.
 It does not waive the batch's own full CI or review requirements.
 
+`land` also refuses a head whose green run was tested on an older main: the head must be
+0 commits behind main's current tip (`stale_base`, from the compare of `main...HEAD`), so the
+tested tree is the tree that merges and two pull requests that are green alone but red together
+are caught at the second. The merge itself stays a pull request merge bound to the tested head.
+
 Trial runner changes on a non-main branch. Before changing `CI_SELF_HOSTED*`
 or `*_RUNNER_LABELS`, dispatch the full tests workflow on that branch using the
 proposed runners, require every job green, and record the run URL, head SHA and

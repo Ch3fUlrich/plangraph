@@ -258,6 +258,10 @@ def fold(events, unknown=None):
         elif kind == "review_passed":
             item["state"] = "done"
             item["reviewer"] = event.get("actor")
+            if payload.get("released"):   # the automatic merge close ends the claim with the item
+                item["claimed_by"] = None
+                item["delegate"] = None
+                item["lease_until"] = None
         elif kind in ("closed_on_decision", "answered"):
             # X7b (and MK-ANSWER's ``answered``): the router's decision close is the tier-`none` equivalent of
             # a passed review -- same final state, same lock, same attribution.

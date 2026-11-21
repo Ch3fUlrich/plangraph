@@ -123,8 +123,15 @@ def cargo_run_busy(record):
     return not run_pids_dead(record)
 
 
-def local_disk_refusal(worktree, service):
-    """Check the worktree filesystem and bound the host's shared build cache."""
+#: Roles that build nothing, so the shared build cache's size cap does not bind them.
+NO_BUILD_ROLES = ('review',)
+
+
+def local_disk_refusal(worktree, service, role='implement'):
+    """Check the worktree filesystem and bound the host's shared build cache.
+
+    A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap.
+    """
     # SettingsError derives from ValueError: validate before measurement's catch.
     from plangraph.settings import _policy_data, SettingsError, as_spawn_refused
     try:
@@ -141,19 +148,20 @@ def local_disk_refusal(worktree, service):
         if (target.is_symlink() or checkout.is_relative_to(cache) or
                 cache.is_relative_to(checkout) or cache == Path.home().resolve()):
             raise ValueError('unsafe cache directory')
-        size = cargo_target_size_gb(target)
-        if size >= cap:
+        building = role not in NO_BUILD_ROLES
+        size = cargo_target_size_gb(target) if building else 0
+        if building and size >= cap:
             if any(cargo_run_busy(r) for r in service.ps()['runs']):
-                return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy'
+                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
             try:
                 wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
                 with cargo_lease(exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
                     if target.exists():
                         shutil.rmtree(target)
             except OSError:
-                return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB; busy or cleanup unavailable'
-        if cap == 0:
-            return 'cargo_target_cap: cap 0 GB; no build capacity'
+                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
+        if cap == 0 and building:
+            return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
         paths = [worktree, target]
         if getattr(service, 'state', None) is not None:
             paths.append(policy.get('worktree_root') or service.state / 'worktrees')
@@ -181,7 +189,7 @@ async def collect_with_disk_guard(runner, job_id, proc):
         try:
             while True:
                 await asyncio.sleep(1)
-                reason = await asyncio.to_thread(running_disk_refusal, job.cwd or runner.default_cwd)
+                reason = await asyncio.to_thread(running_disk_refusal, job.cwd or runner.default_cwd, job.role)
                 if reason and job.status not in ('cancelled', 'timeout', 'stalled'):
                     job.refusal = reason
                     job.status, job.exit_code = 'failed', 7
@@ -217,8 +225,8 @@ async def collect_with_disk_guard(runner, job_id, proc):
             raise result
 
 
-def running_disk_refusal(worktree):
-    """Rule 7.1: stop below 2 GiB; cap the shared cache throughout a run."""
+def running_disk_refusal(worktree, role='implement'):
+    """Rule 7.1: stop below 2 GiB; cap the shared cache throughout a run of a building role."""
     try:
         from plangraph.settings import _policy_data
         policy = _policy_data(worktree) or {}
@@ -232,9 +240,10 @@ def running_disk_refusal(worktree):
         cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
         if not math.isfinite(cap) or cap < 0:
             raise ValueError('invalid cache cap')
-        size = cargo_target_size_gb(target)
-        if size >= cap:
-            return f'cargo_target_cap: measured {size:.2f} GB, cap {cap:g} GB'
+        building = role not in NO_BUILD_ROLES
+        size = cargo_target_size_gb(target) if building else 0
+        if building and size >= cap:
+            return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB'
     except (OSError, ValueError, TypeError, KeyError):
         return 'disk_low: runtime measurement or configuration unavailable'
     return None
@@ -250,27 +259,105 @@ def fresh(record, now=None):
         return False
 
 
+VENV_PYTHONS = ('.venv/bin/python', '.venv/Scripts/python.exe')
+
+
+def pre_push_report(repo, unit=None, environ=None):
+    """What a pre-push run needs from this host, for `host_ready --test-tools` on the target.
+
+    The interpreter is the hook's choice (tools/hooks/pre-push): the checkout venv, else
+    PREFLIGHT_PYTHON (home-expanded, relative to the checkout), else python3. Files created
+    under a umask that leaves group or other write set fail the record-permission checks,
+    so this process's umask and the user service's UMask must keep both bits.
+    """
+    environ = os.environ if environ is None else environ
+    root = Path(repo).absolute()
+    venv = next((root / rel for rel in VENV_PYTHONS if (root / rel).is_file()), None)
+    configured = environ.get('PREFLIGHT_PYTHON')
+    if venv is not None:
+        interpreter = str(venv.absolute())
+    elif configured:
+        path = Path(configured).expanduser()
+        interpreter = str(path if path.is_absolute() else root / path)
+    else:
+        # The hook runs in the checkout: a relative or empty PATH entry means a directory there.
+        entries = [entry if os.path.isabs(entry) else str(root / (entry or '.'))
+                   for entry in environ.get('PATH', os.defpath).split(os.pathsep)]
+        interpreter = shutil.which('python3', path=os.pathsep.join(entries)) or 'python3'
+    missing = []
+    for module in ('pytest', 'xdist'):
+        try:
+            found = subprocess.run([interpreter, '-c', 'import ' + module], capture_output=True,
+                                   timeout=30, cwd=root).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            found = False
+        if not found:
+            missing.append(module)
+    mask = os.umask(0)
+    os.umask(mask)
+    report = dict(missing=missing, umask=format(mask, '04o'), unit_umask=None)
+    if unit:
+        try:
+            reply = subprocess.run(['systemctl', '--user', 'show', '--property=UMask', '--value', unit],
+                                   capture_output=True, text=True, encoding='utf-8',
+                                   errors='replace', timeout=10)
+            shown = reply.stdout.strip()
+            report['unit_umask'] = shown if reply.returncode == 0 and re.fullmatch(r'[0-7]+', shown) else None
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return report
+
+
+def python_test_tools(measure, fail, prefix, repo, unit=None, spawner=None):
+    """Run pre_push_report on the host and report missing pytest/xdist or a writable umask."""
+    command = prefix + 'host_ready --test-tools ' + shlex.quote(repo)
+    if unit:
+        command += ' --unit ' + shlex.quote(unit)
+    plan = spawner(command[len(prefix):]) if spawner else {}
+    report = measure('python', command, json.loads, **plan)
+    if report is None:
+        return False
+    missing = [m for m in report['missing'] if m in ('pytest', 'xdist')]
+    if missing:
+        fail('python', 'missing ' + ' '.join(missing))
+    if unit and report['unit_umask'] is None:
+        fail('umask', f'unit umask of {unit} unavailable')
+    for label, value in (('umask', report['umask']), ('unit umask', report['unit_umask'])):
+        if value is not None and int(value, 8) & 0o022 != 0o022:
+            fail('umask', f'{label} {value} leaves new files group- or other-writable')
+    return not missing
+
+
 def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT):
     record = dict(host=name, ok=False, checked_at=None, failures=[], reachable=False,
                   mem_available_mb=None, disk_free_gb=None, checkout_sha=None,
                   main_sha=None, doctor_ok=None, keeper_ok=None,
                   spawner_session=None, live_runs=None, behind_main=None,
-                  src_ok=None)
+                  src_ok=None, trust_ok=None, tools_ok=None, python_ok=None, tokens_ok=None)
     deadline = time.monotonic() + timeout
     reachability_failed = False
 
     def fail(check, reason):
         record['failures'].append(clean(f'{check}: {reason}'))
 
-    def command(check, script):
+    def command(check, script, steps=None, outputs=None, **plan):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             fail(check, 'timeout')
             return None
         try:
-            reply = runner(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
-                            '--', config['ssh'], script], capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=remaining)
+            from .remote_ps import invocation, plan_body
+            if config.get('local'):
+                argv, body = ['pg-spawnd', 'steps'], plan_body(script, steps, **plan)
+            else:
+                remote, body = invocation(config, script, steps, **plan)
+                argv = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                        '--', config['ssh'], remote]
+            extra = {} if body is None else {'input': body.decode('utf-8')}
+            reply = runner(argv, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=remaining, **extra)
+            if body is not None and outputs and reply.returncode in outputs:
+                return outputs[reply.returncode] + '\n'  # A plan reports its branch as an exit code.
             if reply.returncode and not (check == 'doctor' and reply.returncode == 1):
                 fail(check, 'command_failed')
                 return None
@@ -281,8 +368,15 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
             fail(check, 'command_failed')
         return None
 
-    def measure(check, script, parse):
-        output = command(check, script)
+    def command_argv(check, *words):
+        """Run one argv: arguments with shell-special characters stay literal on every transport."""
+        return command(check, shlex.join(words), [{'argv': list(words)}])
+
+    def measure_argv(check, words, parse):
+        return measure(check, shlex.join(words), parse, steps=[{'argv': list(words)}])
+
+    def measure(check, script, parse, **plan):
+        output = command(check, script, **plan)
         if output is not None:
             try:
                 return parse(output)
@@ -291,36 +385,61 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
         return None
 
     try:
-        if not config['ssh']:
+        if not config.get('local') and not config['ssh']:
             fail('reachable', 'no_route')
             reachability_failed = True
         elif command('reachable', 'true') is not None:
             record['reachable'] = True
             record['src_ok'] = check_sources(name, config, command, fail)
+            if config.get('registry'):
+                record['tools_ok'] = command(
+                    'tools', 'command -v git && command -v python3 && command -v codex',
+                    [{'argv': [tool, '--version']} for tool in ('git', 'python3', 'codex')]) is not None
+                record['tokens_ok'] = command('tokens', 'codex login status') is not None
+                record['trust_ok'] = command_argv(
+                    'trust', 'pg-host-readiness', '--project', config['repo']) is not None
             repo = shlex.quote(config['repo'])
             prefix = 'cd ' + shlex.quote(config['spawner_src']) + ' && '
             if config.get('env_file'):
                 prefix += 'set -a && . ' + shlex.quote(config['env_file']) + ' >/dev/null 2>&1 && '
+            if config.get('state_dir'):
+                prefix += 'PLANGRAPH_SPAWN_STATE=' + shlex.quote(config['state_dir']) + ' '
             prefix += 'PYTHONPATH=src python3 -m plangraph.spawner.'
+            def spawner(rest):
+                """The step plan of `python3 -m plangraph.spawner.<rest>` run from the source dir."""
+                name, *args = shlex.split(rest)
+                env = {'PYTHONPATH': 'src'}
+                if config.get('state_dir'):
+                    env['PLANGRAPH_SPAWN_STATE'] = config['state_dir']
+                plan = dict(cwd=config['spawner_src'], steps=[
+                    {'argv': ['python3', '-m', 'plangraph.spawner.' + name, *args], 'env': env}])
+                if config.get('env_file'):
+                    plan['env_file'] = config['env_file']
+                return plan
+            if config.get('registry'):
+                session = config.get('session_unit') or ''
+                record['python_ok'] = python_test_tools(
+                    measure, fail, prefix, config['repo'],
+                    session if session.endswith('.service') else None, spawner)
             record['mem_available_mb'] = measure('memory', 'cat /proc/meminfo',
                 lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
-            record['disk_free_gb'] = measure('disk', 'df -Pk -- ' + repo,
+            record['disk_free_gb'] = measure_argv('disk', ['df', '-Pk', '--', config['repo']],
                 lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
             def sha(s):
                 value = s.strip()
                 if not re.fullmatch(r'[0-9a-f]{40,64}', value):
                     raise ValueError()
                 return value
-            record['checkout_sha'] = measure('checkout', 'git -C ' + repo + ' rev-parse HEAD', sha)
-            fetched = command('fetch', 'git -C ' + repo + ' fetch origin main')
+            record['checkout_sha'] = measure_argv('checkout', ['git', '-C', config['repo'], 'rev-parse', 'HEAD'], sha)
+            fetched = command_argv('fetch', 'git', '-C', config['repo'], 'fetch', 'origin', 'main')
             if fetched is not None:
-                record['main_sha'] = measure('main', 'git -C ' + repo + ' rev-parse origin/main', sha)
+                record['main_sha'] = measure_argv('main', ['git', '-C', config['repo'], 'rev-parse', 'origin/main'], sha)
                 def count(s):
                     if not re.fullmatch(r'\d+', s.strip()):
                         raise ValueError()
                     return int(s.strip())
-                record['behind_main'] = measure('behind_main', 'git -C ' + repo +
-                    ' rev-list --count HEAD..origin/main', count)
+                record['behind_main'] = measure_argv('behind_main', ['git', '-C', config['repo'], 'rev-list', '--count', 'HEAD..origin/main'],
+                    count)
                 if record['behind_main']:
                     fail('behind_main', str(record['behind_main']) + ' behind')
             if record['checkout_sha'] and record['main_sha'] and record['checkout_sha'] != record['main_sha']:
@@ -334,7 +453,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     if not isinstance(row['name'], str) or row['status'] not in ('pass', 'warn', 'fail'):
                         raise ValueError()
                 return ok, rows
-            doctor = measure('doctor', prefix + 'doctor --json', parse_doctor)
+            doctor = measure('doctor', prefix + 'doctor --json', parse_doctor, **spawner('doctor --json'))
             if doctor is not None:
                 ok, rows = doctor
                 record['doctor_ok'] = ok and not any(r['status'] == 'fail' for r in rows)
@@ -353,15 +472,17 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
                     '.service', '.scope', '.socket', '.target', '.timer', '.path', '.mount',
                     '.automount', '.swap', '.slice', '.device')) else
                     'plangraph wait-pid --check --pid-file ' if session.endswith('.pid') else 'pgrep -x -- ')
-                record['spawner_session'] = command('session', probe + shlex.quote(session)) is not None
-            else:
+                record['spawner_session'] = command_argv('session', *shlex.split(probe), session) is not None
+            elif not config.get('registry'):
                 fail('session', 'not_configured')
+            run_probe = 'remote_ps' if config.get('registry') else 'cli ps'
             def count_live_runs(output):
                 runs = json.loads(output)['runs']
                 if not isinstance(runs, list) or any(not isinstance(row['status'], str) for row in runs):
                     raise ValueError()
                 return sum(row['status'] == 'running' for row in runs)
-            record['live_runs'] = measure('runs', prefix + 'cli ps', count_live_runs)
+            record['live_runs'] = measure('runs', prefix + run_probe, count_live_runs,
+                                          **spawner(run_probe))
             if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
                 fail('memory', 'below_floor')
             if record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):
@@ -392,17 +513,34 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--host')
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--test-tools', metavar='REPO')
+    parser.add_argument('--unit')
     args = parser.parse_args(argv)
-    config = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS',
-                                Path.home() / '.config/plangraph/overflow-hosts.json'))
-    hosts = json.loads(config.read_text())['hosts']
+    if args.test_tools:
+        print(json.dumps(pre_push_report(args.test_tools, args.unit)))
+        return 0
+    from .overflow import host_config, placement_config, readiness_dir, registry_caps
+    registry = registry_caps()
+    hosts = placement_config(registry).get('hosts', {})
+    local = host_config(registry, os.environ.get('PLANGRAPH_HOST_NAME') or registry['self'])
+    if local:
+        if local['id'] in hosts:
+            hosts[local['id']]['local'] = True
+        elif local.get('os') == 'linux' and 'plangraph' in local.get('repos', {}):
+            repo = local['repos']['plangraph']['root']
+            hosts[local['id']] = dict(local=True, registry=True, repo=repo,
+                spawner_src=repo + '/src', floor_mb=local['caps']['mem_floor_mb'],
+                state_dir=local.get('state_dir'),
+                session_unit=local.get('env', {}).get('PG_SESSION_UNIT'))
+    if not hosts and not args.host:
+        parser.error('hosts.json has no readiness candidates')
     if args.host:
         if args.host not in hosts:
             parser.error('unknown host')
         hosts = {args.host: hosts[args.host]}
     if any(not re.fullmatch(r'[A-Za-z0-9_-]+', name) for name in hosts):
         parser.error('invalid host name')
-    state = Path.home() / '.local/state/plangraph/host-ready'
+    state = readiness_dir()
     try:
         state.mkdir(parents=True, exist_ok=True)
     except OSError:
