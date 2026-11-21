@@ -610,7 +610,9 @@ fn wait_returns_a_never_launched_terminal_record() {
     let record = json!({"run_id": "run-test", "status": "stalled_no_leg", "ended": 600});
     std::fs::write(path, record.to_string()).unwrap();
 
-    let result = wait(&dir.0, "run-test", Duration::from_secs(1)).unwrap();
+    let Ok(result) = wait(&dir.0, "run-test", Duration::from_secs(1)) else {
+        panic!("wait could not read the watchdog record");
+    };
     assert_eq!(result, record);
     assert!(terminal(&result));
 }

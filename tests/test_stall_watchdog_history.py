@@ -391,8 +391,10 @@ def test_never_launched_run_transitions_and_alerts_parent_once(tmp_path, monkeyp
     clock.now += 3600
     service.retry_completions()
     assert 'completion' not in service.result('run-0')
-    stale = dict(dry[0], status='running', ended=None, dispatch_started=True)
-    service._save(stale)
+    stale = dict(dry[0], status='running', ended=None)
+    from plangraph.spawner.service import claim_first_dispatch
+    with pytest.raises(RuntimeError, match='first dispatch expired'):
+        claim_first_dispatch((None, stale, service._save))
     assert stale['status'] == 'stalled_no_leg'
     w.sweep_runs(tmp_path)
     assert w.read_runs(tmp_path)[0]['status'] == 'stalled_no_leg'

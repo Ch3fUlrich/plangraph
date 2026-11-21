@@ -492,13 +492,8 @@ class SpawnerRunner:
             self._cargo_leases = getattr(self, '_cargo_leases', {})
             self._cargo_leases[job_id] = await asyncio.to_thread(cargo_lease)
             try:
-                if prompt_record is not None:
-                    _, spawn_record, save = prompt_record
-                    if isinstance(spawn_record.get('plan'), dict) and not spawn_record.get('dispatch_started'):
-                        spawn_record['dispatch_started'] = True
-                        save(spawn_record)
-                    if spawn_record.get('status') == 'stalled_no_leg':
-                        raise RuntimeError('first dispatch expired before launch')
+                from .service import claim_first_dispatch
+                claim_first_dispatch(prompt_record)
                 proc = await self.process_factory(
                     resolved_exe,
                     *cmd[1:],
@@ -924,14 +919,12 @@ def spawn_service(*args, **kwargs):
         def retry_completions(self):
             """Re-drive durable terminal records after a supervisor/bridge outage."""
             for record in self.ps()['runs']:
-                if record.get('status') == 'stalled_no_leg':
-                    continue  # The watchdog outbox owns delivery for this terminal state.
                 recipients = ['parent', 'keeper', 'verdict'] if record.get('role') == 'review' else ['parent', 'keeper']
                 markers = [r + '.delivered' for r in recipients]
                 if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
                     markers += [r + '.hook.delivered' for r in ('parent', 'keeper')]
                 pending = any(not (self._path(record['run_id']).parent / m).exists() for m in markers)
-                if record.get('ended') is not None and record.get('status') != 'running' and pending:
+                if pending and record.get('ended') is not None and record.get('status') not in ('running', 'stalled_no_leg'):
                     try:
                         self._save(record, retry=True)
                     except Exception:

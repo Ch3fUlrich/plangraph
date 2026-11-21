@@ -24,6 +24,18 @@ def remote_native_running(record):
             and record.get('status') == 'running')
 
 
+def claim_first_dispatch(prompt_record):
+    """Commit the handoff before process creation so the watchdog can fence it."""
+    if prompt_record is None:
+        return
+    _, record, save = prompt_record
+    if isinstance(record.get('plan'), dict) and not record.get('dispatch_started'):
+        record['dispatch_started'] = True
+        save(record)
+    if record.get('status') == 'stalled_no_leg':
+        raise RuntimeError('first dispatch expired before launch')
+
+
 class SpawnService(SeatSpawnMixin):
     code_tree = staticmethod(run_tree)
     client_probe = None   # name -> is the harness client installed on the placed host; None = the host's PATH
