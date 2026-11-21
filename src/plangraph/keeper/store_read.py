@@ -377,6 +377,17 @@ class ReadMixin:
             bucket[item["state"]] = bucket.get(item["state"], 0) + 1
         for name in counts:
             counts[name]["stalled"] = self._alerts(self.now(), name)["stalled"]
+        levels = {str(n): 0 for n in range(10, -1, -1)}
+        for item in items:
+            if item["state"] == "open":
+                levels[str(int(item.get("priority") or 0))] += 1
+        week_ago = self._iso(self.now() - 7 * 86400)
+        closed = self.conn.execute(
+            "SELECT COUNT(DISTINCT e.key) FROM events e JOIN items i ON i.key=e.key"
+            " WHERE e.type IN ('review_passed','closed_on_decision') AND e.ts >= ?"
+            " AND i.kind='lane'", (week_ago,)).fetchone()[0]
+        warning = ({"open": levels["10"], "lanes_closed_7d": int(closed)}
+                   if levels["10"] > closed else None)
         done = sorted((it for it in items if it["state"] == _DONE),
                       key=lambda it: (it["updated_at"] or "", it["key"]))
         done = [{"key": it["key"], "title": it["title"],
@@ -394,4 +405,5 @@ class ReadMixin:
                                 "decision_id": it["review_waiver"],
                                 "state": it["state"]})
         waivers = sorted(waivers, key=lambda entry: entry["key"])
-        return {"projects": counts, "done": done, "waivers": waivers}
+        return {"projects": counts, "done": done, "waivers": waivers,
+                "priority_levels": levels, "level10_warning": warning}

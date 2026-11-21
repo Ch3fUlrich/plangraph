@@ -42,6 +42,15 @@ _EDITABLE = ("title", "description", "host", "wait", "layer", "role", "agent_id"
              "done_criteria", "evidence_kinds",
              "depends_on", "track", "owner", "note", "review_tier")
 _MAX_BATCH = 500
+#: KEEPER-PRIORITY-LEVELS-AND-AGING: a lesson that happened once starts here;
+#: each repeat INCIDENT LOG line raises it one level (10 at most).
+LE_DEFAULT_PRIORITY = 8
+_INCIDENT_LINE = re.compile(r"(?m)^\s*INCIDENT LOG\b")
+
+
+def incident_lines(*texts) -> int:
+    """How many INCIDENT LOG lines the item texts carry."""
+    return sum(len(_INCIDENT_LINE.findall(t)) for t in texts if isinstance(t, str))
 
 
 def _blank(value):
@@ -313,6 +322,9 @@ class CreateMixin:
     def _normalise_create(self, raw, principal, *, stored=False):
         self._checked_priority(raw.get("priority", 0))
         definition = self._normalise(raw)
+        if not stored and raw.get("priority") is None \
+                and definition["id"].startswith("LE-"):
+            definition["priority"] = LE_DEFAULT_PRIORITY
         definition["review_tier"] = (creation_tier(raw, definition, principal, stored=True)
                                      if stored else self._tier_for(raw, definition, principal))
         return definition
@@ -653,6 +665,8 @@ class CreateMixin:
             self._append(principal, key, "item_defined", payload, now)
             if has_priority:
                 self._apply_priority(principal, key, prio, now)
+            else:
+                self._raise_for_incidents(principal, item, edit_fields, now)
         result = {"key": key}
         if bump_epoch:
             result["epoch"] = new_epoch
@@ -725,7 +739,22 @@ class CreateMixin:
             raise Refused("validation", "priority must be between 0 and 10")
         return int(n)
 
-    def _apply_priority(self, principal, key, n, now):
+    def _raise_for_incidents(self, principal, item, fields, now):
+        """A new INCIDENT LOG line on an LE item raises it one level (max 10)."""
+        if not item["id"].startswith("LE-"):
+            return
+        old = incident_lines(item.get("description"), item.get("note"))
+        new = incident_lines(fields.get("description", item.get("description")),
+                             fields.get("note", item.get("note")))
+        current = int(self._item(item["key"])["priority"] or 0)
+        target = min(10, current + max(0, new - old))
+        if target > current:
+            self._apply_priority(
+                principal, item["key"], target, now,
+                reason=f"incident: {new - old} new INCIDENT LOG line(s), "
+                       f"{current} -> {target}")
+
+    def _apply_priority(self, principal, key, n, now, reason=None):
         # Read and assert inside the transaction: the item may have been
         # cancelled or marked DONE before we take the write lock, and must then
         # get no priority change and no event.  The guarded UPDATE proves the
@@ -737,7 +766,10 @@ class CreateMixin:
             " WHERE key=? AND state=? AND epoch=?",
             (int(n), self._iso(now), key, item["state"], item["epoch"]))
         self._row_guard(cursor, key, item["state"], item["epoch"])
-        self._append(principal, key, "priority_set", {"priority": int(n)}, now)
+        payload = {"priority": int(n)}
+        if reason:
+            payload.update({"was": int(item["priority"] or 0), "reason": reason})
+        self._append(principal, key, "priority_set", payload, now)
 
 
 def oversight_definition(raw):

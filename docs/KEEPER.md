@@ -711,3 +711,14 @@ are not witnesses. Missing, changed or mismatched evidence gets a named refusal.
 transaction, and counts it with spawner seats. Existing writer-family, high-tier,
 sensitive-card and lane-specific witness requirements continue to apply.
 Lanes citing D-4504 retain their witness rule; a GO row must explicitly say `Witness: claude-seat` to use this kind.
+
+**Priority levels and aging (KEEPER-PRIORITY-LEVELS-AND-AGING).** 10 = in flight or stops all
+work; 9 = operator order of the last 2 days, a lesson that happened twice, or unblocks 2+ lanes;
+8 = a lesson that happened once or unblocks one lane; 7 = planned work. An `LE-` item created
+without a `priority` starts at 8; a new `INCIDENT LOG` line added to an `LE-` item's description
+or note raises it one level (10 at most). The reaper drops an open, unclaimed item one level when
+it stood at 10 for 3 days or at 9 for 7 days since its last `priority_set`/`item_created` event
+and was not claimed since; `priority KEY <same value>` re-confirms and restarts the clock. Each
+change is a `priority_set` event with `was` and `reason`. `digest` carries `priority_levels` (open
+items per level) and `level10_warning` when level 10 holds more open items than lanes closed in
+the last 7 days.

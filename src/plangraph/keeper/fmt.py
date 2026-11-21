@@ -315,6 +315,14 @@ def digest_text(digest: dict) -> str:
         state = f" ({waiver['state']})" if waiver.get("state") else ""
         lines.append(
             f"waiver {waiver['key']} {waiver.get('decision_id')}{state}")
+    levels = {int(n): c for n, c in (digest.get("priority_levels") or {}).items() if c}
+    if levels:
+        lines.append("priority " + " ".join(
+            f"{n}={levels[n]}" for n in sorted(levels, reverse=True)))
+    warn = digest.get("level10_warning")
+    if warn:
+        lines.append(f"WARN level 10 holds {warn['open']} open items, more than the "
+                     f"{warn['lanes_closed_7d']} lanes closed in the last 7 days")
     return "\n".join(lines) if lines else "empty"
 
 
