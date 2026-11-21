@@ -216,37 +216,24 @@ fn findings_come_from_the_latest_validated_round_of_the_pr() {
         .is_empty());
 }
 
-/// The generated definition is accepted by the real keeper store (sqlite) under its goal.
+/// The generated slice definitions are the golden file `tests/fixtures/replan_slice_definition.json`;
+/// `tests/test_replan_slice_definition.py` feeds the same file to the real keeper store.
 #[test]
-fn the_generated_slice_definition_is_accepted_by_the_real_keeper() {
+fn the_generated_slice_definitions_match_the_golden_file_the_keeper_test_uses() {
     let dir = tempfile::tempdir().unwrap();
     replan::tests::refused_run(dir.path());
     let exec = Recorder::default();
     assert_eq!(pass(dir.path(), &exec)[0].1, "done");
+    let golden = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/replan_slice_definition.json");
     let items = json!({"items":exec.defined.borrow().clone()});
-    let file = dir.path().join("items.json");
-    std::fs::write(&file, items.to_string()).unwrap();
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let script = "import sys, json, tempfile\n\
-        sys.path[:0] = [sys.argv[2], sys.argv[3]]\n\
-        from pathlib import Path\n\
-        from keeper_util import World, defn\n\
-        w = World(Path(tempfile.mkdtemp()), backend='sqlite')\n\
-        w.store.create_items(w.p('router'), [defn('G', project='p', kind='goal', deps=['I']), defn('I', project='p')])\n\
-        out = w.store.create_items(w.p('router'), json.load(open(sys.argv[1]))['items'])\n\
-        print(','.join(out['created']))";
-    let python = std::env::var("PG_TEST_PYTHON").unwrap_or_else(|_| "python3".into());
-    let out = std::process::Command::new(python)
-        .args(["-I", "-c", script])
-        .arg(&file)
-        .arg(root.join("src"))
-        .arg(root.join("tests"))
-        .output()
+    if std::env::var_os("PG_WRITE_GOLDEN").is_some() {
+        std::fs::write(
+            &golden,
+            serde_json::to_string_pretty(&items).unwrap() + "\n",
+        )
         .unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "p:I-S1,p:I-S2");
+    }
+    let want: Value = serde_json::from_slice(&std::fs::read(&golden).unwrap()).unwrap();
+    assert_eq!(items, want);
 }
