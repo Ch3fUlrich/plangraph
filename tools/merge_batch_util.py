@@ -332,16 +332,21 @@ def part_review(path, head):
 
 
 def workflow_gate(wt, base, head):
-    """Reuse the gate trailer parser for every workflow and every touching commit, merges included."""
-    from gate_wiring_check import GateError, commits_missing_gate_edit
+    """Every workflow path any commit of base..head edits, merges included, needs Gate-Edit on its commits."""
+    import gate_wiring_check as gate
 
-    # Log rather than endpoint diff: reverted edits and deleted/renamed workflows count too.
-    paths = git("log", "--full-history", "--cc", "--format=", "--name-only", "--no-renames", "-z", f"{base}..{head}",
-                "--", ".github/workflows/", cwd=wt).stdout
-    for path in sorted({p.strip("\n") for p in paths.split("\0") if p.strip("\n")}):
+    try:
+        shas = gate._commit_shas(base, head, wt, True)
+        # The shared detector, not a path scan of the log: a conflict resolved by keeping one side
+        # (or a rename conflict) shows nothing in the combined diff.
+        paths = sorted({p for sha in shas for p in gate._commit_paths(sha, wt, True)
+                        if p.startswith(".github/workflows/")})
+    except gate.GateError as exc:
+        raise MergeBatchError(f"workflow Gate-Edit check failed: {exc}") from None
+    for path in paths:
         try:
-            missing = commits_missing_gate_edit(base, head, path, cwd=wt, include_merges=True)
-        except GateError as exc:
+            missing = gate.commits_missing_gate_edit(base, head, path, cwd=wt, include_merges=True)
+        except gate.GateError as exc:
             raise MergeBatchError(f"workflow Gate-Edit check failed: {exc}") from None
         if missing:
             raise MergeBatchError(f"workflow {path} needs Gate-Edit: D-id on touching commit(s): " + " ".join(missing))

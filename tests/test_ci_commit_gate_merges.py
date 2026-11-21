@@ -78,3 +78,71 @@ def test_clean_main_merge_of_a_workflow_edit_needs_no_trailer(repo: Path):
     _commit(repo, OK_LANE_MSG, files={"lane.txt": "lane\n"})
     _git(repo, "merge", "-q", "--no-ff", "-m", "Merge side", "side")
     assert check(base, _head(repo), cwd=repo) == []
+
+
+SEVEN = "".join(f"line{n}\n" for n in range(1, 8))
+
+
+def _disjoint_edit_merge(repo: Path, message: str = "Merge side", extra: str | None = None) -> tuple[str, str]:
+    """Both sides edit different hunks of one workflow (each edit authorized): git merges it cleanly."""
+    _commit(repo, GATE_MSG, files={".github/workflows/x.yml": SEVEN})
+    base = _head(repo)
+    _git(repo, "checkout", "-q", "-b", "side")
+    _commit(repo, GATE_MSG, files={".github/workflows/x.yml": SEVEN.replace("line1", "side1")})
+    _git(repo, "checkout", "-q", "-")
+    _commit(repo, GATE_MSG, files={".github/workflows/x.yml": SEVEN.replace("line7", "lane7")})
+    subprocess.run(["git", "merge", "--no-ff", "--no-commit", "side"], cwd=repo, env=_git_env(), capture_output=True)
+    if extra is not None:
+        (repo / ".github/workflows/x.yml").write_text(extra, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message)
+    return base, _head(repo)
+
+
+def test_clean_merge_of_disjoint_authorized_workflow_edits_needs_no_trailer(repo: Path):
+    base, merge = _disjoint_edit_merge(repo)
+    # The combined diff lists the file (it differs from both parents) although git merged it alone.
+    assert ".github/workflows/x.yml" in _git(repo, "diff-tree", "--cc", "--name-only", "-r", merge)
+    assert check(base, merge, cwd=repo) == []
+
+
+def test_manual_edit_on_top_of_a_clean_merge_needs_a_trailer(repo: Path):
+    merged = SEVEN.replace("line1", "side1").replace("line7", "lane7")
+    base, merge = _disjoint_edit_merge(repo, extra=merged + "sneaked: in\n")
+    assert check(base, merge, cwd=repo) == [f"{merge}: gate edit without Gate-Edit trailer"]
+
+
+def test_workflow_gate_reads_the_shared_detector_for_a_rename_conflict(tmp_path: Path, tools_importable):
+    from merge_batch_util import MergeBatchError, workflow_gate
+
+    repo = tmp_path / "rename"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _commit(repo, BASE_MSG)
+    _commit(repo, GATE_MSG, files={".github/workflows/x.yml": SEVEN})
+    base = _head(repo)
+    _git(repo, "checkout", "-q", "-b", "side")
+    _git(repo, "mv", ".github/workflows/x.yml", ".github/workflows/y.yml")
+    _git(repo, "commit", "-q", "-m", GATE_MSG)
+    _git(repo, "checkout", "-q", "-")
+    _git(repo, "mv", ".github/workflows/x.yml", ".github/workflows/z.yml")
+    _git(repo, "commit", "-q", "-m", GATE_MSG)
+    subprocess.run(["git", "merge", "--no-ff", "--no-commit", "side"], cwd=repo, env=_git_env(), capture_output=True)
+    # Keep main's side whole: y.yml present, z.yml gone. The combined diff then lists nothing.
+    _git(repo, "checkout", "--theirs", ".github/workflows/y.yml")
+    _git(repo, "rm", "-q", "-f", ".github/workflows/z.yml")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "Merge side")
+    head = _head(repo)
+    assert ".github/workflows" not in _git(repo, "diff-tree", "--cc", "--name-only", "-r", head)
+    # A base that already holds both parents leaves the merge as the only commit in range, so only
+    # the shared conflict detector can name the workflow paths it touched.
+    p1, p2 = (_git(repo, "rev-parse", f"{head}^{n}").strip() for n in (1, 2))
+    tree = _git(repo, "rev-parse", f"{p1}^{{tree}}").strip()
+    base = _git(repo, "commit-tree", tree, "-p", p1, "-p", p2, "-m", "base holding both parents").strip()
+    try:
+        workflow_gate(repo, base, head)
+    except MergeBatchError as exc:
+        assert "Gate-Edit" in str(exc) and head in str(exc)
+    else:
+        raise AssertionError("a rename conflict resolved by keeping one side passed the gate")

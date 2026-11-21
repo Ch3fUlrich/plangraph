@@ -199,43 +199,43 @@ def _iter_merges(base: str, head: str, cwd: str | Path | None = None) -> list[tu
     return merges
 
 
-def _merge_conflict_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
-    '''Paths the two parents of a merge conflict on, even when the resolution equals one parent.'''
-    parents = _git_text(['rev-list', '--parents', '-n', '1', sha], cwd=cwd).split()[1:]
-    if len(parents) != 2:
-        return []
+def _auto_merge(parents: list[str], cwd: str | Path | None) -> tuple[str, list[str]] | None:
+    '''(tree git merges the two parents to on its own, the paths it conflicts on), or None.'''
     proc = subprocess.run(
         ['git', 'merge-tree', '--write-tree', '--name-only', '--no-messages', '-z', *parents],
         cwd=cwd, capture_output=True,
     )
-    if proc.returncode == 0:
-        return []
-    if proc.returncode == 1:
-        names = proc.stdout.decode('utf-8', errors='replace').split('\0')[1:]
-        return [name for name in names[: names.index('')] if name] if '' in names else names
-    # A git without merge-tree --write-tree: a path both sides changed may be a conflict.
-    base = _git_text(['merge-base', *parents], cwd=cwd).strip()
-    sides = [
-        set(_git_text(['diff', '--name-only', '-z', base, parent], cwd=cwd).split('\0')) - {''}
-        for parent in parents
-    ]
-    return sorted(sides[0] & sides[1])
+    if proc.returncode not in (0, 1):
+        return None  # a git without merge-tree --write-tree
+    fields = proc.stdout.decode('utf-8', errors='replace').split('\0')
+    tree, names = fields[0], fields[1:]
+    conflicts = [name for name in (names[: names.index('')] if '' in names else names) if name]
+    return tree, (conflicts if proc.returncode == 1 else [])
 
 
 def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
-    '''Paths a merge edits itself: its combined diff plus every path its parents conflict on.
+    '''Paths a merge edits itself, beyond what git's own merge of its parents gives.
 
-    The combined diff omits a clean integration of an authorized parent, so a plain
-    main-into-lane merge stays free of trailers; it also omits a conflict resolved by
-    keeping one parent's version, which the conflict list restores. The batch land and
-    the pre-push/CI gate both read this one function.
+    For a two-parent merge that is every conflicted path plus every path where the committed
+    tree differs from git's automatic merge tree: a clean integration of authorized edits
+    (even to one workflow on both sides) lists nothing, a conflict resolved by keeping one
+    side whole lists the conflict, and a hand edit on top of a clean merge lists its path.
+    Other commits and gits without merge-tree --write-tree fall back to the combined diff.
+    The batch land and the pre-push/CI gate both read this one function.
     '''
+    parents = _git_text(['rev-list', '--parents', '-n', '1', sha], cwd=cwd).split()[1:]
+    merged = _auto_merge(parents, cwd) if len(parents) == 2 else None
+    if merged is None:
+        out = _git_text(
+            ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', '--cc', '--no-renames', sha],
+            cwd=cwd,
+        )
+        return sorted({path for path in out.split('\0') if path})
+    tree, conflicts = merged
     out = _git_text(
-        ['diff-tree', '--no-commit-id', '--name-only', '-r', '-z', '--root', '--cc', '--no-renames', sha],
-        cwd=cwd,
+        ['diff-tree', '--name-only', '-r', '-z', '--no-renames', tree, f'{sha}^{{tree}}'], cwd=cwd
     )
-    combined = [path for path in out.split('\0') if path]
-    return sorted(set(combined) | set(_merge_conflict_paths(sha, cwd=cwd)))
+    return sorted({path for path in out.split('\0') if path} | set(conflicts))
 
 
 def _trailer_block_lines(message: str) -> list[str]:
