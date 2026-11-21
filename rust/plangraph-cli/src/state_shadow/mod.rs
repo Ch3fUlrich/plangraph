@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 const SOURCES: &[&str] = &[
@@ -89,47 +90,55 @@ type Env = BTreeMap<String, String>;
 type Observation = (Value, Vec<Event>, bool);
 type Result<T> = std::result::Result<T, String>;
 
+type SourceReads = BTreeMap<&'static str, mpsc::Receiver<Result<Observation>>>;
+
 fn scan(
-    config: &Config,
-    keeper: &crate::keeper_events::Client,
+    config: &Arc<Config>,
+    keeper: &Arc<crate::keeper_events::Client>,
     state: &mut Checkpoint,
     directory: &std::path::Path,
+    pending: &mut SourceReads,
 ) -> Result<()> {
-    let readings = std::thread::scope(|scope| {
-        let pending: Vec<_> = SOURCES
-            .iter()
-            .map(|&source| {
-                let cursor = state
-                    .bookmarks
-                    .get(source)
-                    .cloned()
-                    .unwrap_or_default()
-                    .cursor;
-                (
-                    source,
-                    scope.spawn(move || sources::read(source, config, keeper, cursor)),
-                )
-            })
-            .collect();
-        pending
-            .into_iter()
-            .map(|(source, worker)| {
-                (
-                    source,
-                    worker
-                        .join()
-                        .unwrap_or_else(|_| Err("source failed".into())),
-                )
-            })
-            .collect::<Vec<_>>()
-    });
+    let deadline = Instant::now() + Duration::from_secs(20);
+    for &source in SOURCES {
+        if let std::collections::btree_map::Entry::Vacant(entry) = pending.entry(source) {
+            let cursor = state
+                .bookmarks
+                .get(source)
+                .cloned()
+                .unwrap_or_default()
+                .cursor;
+            let (sender, receiver) = mpsc::channel();
+            let config = Arc::clone(config);
+            let keeper = Arc::clone(keeper);
+            entry.insert(receiver);
+            std::thread::spawn(move || {
+                let _ = sender.send(sources::read(source, &config, &keeper, cursor));
+            });
+        }
+    }
     let mut next = Checkpoint {
         scan: state.scan.checked_add(1).ok_or("scan number exhausted")?,
         bytes: state.bytes,
         bookmarks: state.bookmarks.clone(),
     };
     let mut events = Vec::new();
-    for (source, reading) in readings {
+    for &source in SOURCES {
+        let reading =
+            pending[source].recv_timeout(deadline.saturating_duration_since(Instant::now()));
+        let reading = match reading {
+            Ok(result) => {
+                pending.remove(source);
+                result
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                pending.remove(source);
+                Err("source stopped".into())
+            }
+            // Keep at most one outstanding read per source. A late result
+            // still belongs to the same bookmark, which has not advanced.
+            Err(mpsc::RecvTimeoutError::Timeout) => Err("source timeout".into()),
+        };
         let bookmark = next.bookmarks.entry(source.into()).or_default();
         let failed = match reading {
             Ok((cursor, rows, failed)) => {
@@ -190,7 +199,7 @@ pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
     {
         return Err("shadow role or source configuration invalid".into());
     }
-    let keeper = crate::keeper_events::Client::new(env)?;
+    let keeper = Arc::new(crate::keeper_events::Client::new(env)?);
     sources::authorize(&config, &keeper)?;
     let directory = config.directory.join(role);
     pg_worker_core::run::record_io::ensure_private_dir(&directory)
@@ -199,9 +208,11 @@ pub fn run(home: &std::path::Path, env: &Env, args: &[String]) -> Result<()> {
         .map_err(|_| "shadow collector already active or directory unavailable")?;
     let mut state =
         journal::load(&directory).map_err(|error| format!("shadow journal: {error}"))?;
+    let config = Arc::new(config);
+    let mut pending = SourceReads::new();
     loop {
         let started = Instant::now();
-        scan(&config, &keeper, &mut state, &directory)?;
+        scan(&config, &keeper, &mut state, &directory, &mut pending)?;
         if rest == ["--once"] {
             return Ok(());
         }
