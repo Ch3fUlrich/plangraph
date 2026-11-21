@@ -102,3 +102,10 @@ def test_a_relative_protoc_path_is_taken_from_the_cargo_working_directory(tree):
     env = {"PATH": "", "PROTOC": "tools/protoc"}
     preflight.require_protoc(tree, [worker_test(tree)], env)
     assert env["PROTOC"] == str(found)
+
+
+def test_a_relative_path_entry_is_taken_from_the_cargo_working_directory(tree):
+    found = fake_protoc(tree / "rust/bin")
+    env = {"PATH": "bin", "PROTOC": "protoc"}
+    preflight.require_protoc(tree, [worker_test(tree)], env)
+    assert env["PROTOC"] == str(found)
