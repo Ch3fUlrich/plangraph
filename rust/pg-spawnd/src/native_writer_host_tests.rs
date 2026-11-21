@@ -515,14 +515,15 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         review_verdict(&text, &head, &[])["verdict"],
         "REQUEST_CHANGES"
     );
-    host.reviews_started = 0;
     fs::write(state.join("no-review-seat"), "").unwrap();
-    let deferred = host.review(&head, None).unwrap();
+    let previous = json!({"head":head, "text":"VERDICT: REQUEST_CHANGES"});
+    let deferred = host.review(&head, Some(&previous)).unwrap();
     assert_eq!(deferred["status"], "deferred_to_batch_seat");
     assert_eq!(deferred["causes"][0]["reason"], "limited");
     assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
     // A spawner that prints no run record is an error, never a verdict.
     host.review_cli = vec!["true".into()];
+    host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
     assert!(host
         .review(&head, None)
         .unwrap_err()

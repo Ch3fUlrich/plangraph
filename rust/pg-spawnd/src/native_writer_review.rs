@@ -233,7 +233,7 @@ impl Host {
         let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
             "repository_review_required":true,
             "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
-        if self.reviews_started == 1 && self.review_override.is_none() {
+        if self.review_override.is_none() {
             if let Some(deferred) = self.review_preflight(clone, &card, &families, head)? {
                 return Ok(deferred);
             }

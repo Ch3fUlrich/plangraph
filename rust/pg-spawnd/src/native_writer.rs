@@ -163,14 +163,9 @@ fn review_round(
         ));
     }
     let mut last = String::from("no review run");
-    for attempt in 0..REVIEW_TRIES {
+    for _ in 0..REVIEW_TRIES {
         match driver.review(head, previous) {
-            Ok(review)
-                if attempt == 0
-                    && previous.is_none()
-                    && review["head"] == head
-                    && review["status"] == REVIEW_DEFERRED =>
-            {
+            Ok(review) if review["head"] == head && review["status"] == REVIEW_DEFERRED => {
                 return Ok(review)
             }
             Ok(review)
