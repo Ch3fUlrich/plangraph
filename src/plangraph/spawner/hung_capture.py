@@ -30,11 +30,17 @@ class HungBoundary:
         return ident is not None and alive(pid, ident)
 
     @staticmethod
+    def _root_identity(record):
+        """The recorded root start token: the persisted ``pid_start``, else ``root_identity``."""
+        return record.get('pid_start', record.get('root_identity'))
+
+    @staticmethod
     def _sample(record):
         from .proc_kill import snapshot, _stat
-        tree = snapshot(record['pid'], record['root_identity'])
-        if HungBoundary._identity(record['pid'], record['root_identity']):
-            tree[record['pid']] = record['root_identity']
+        ident = HungBoundary._root_identity(record)
+        tree = snapshot(record['pid'], ident)
+        if HungBoundary._identity(record['pid'], ident):
+            tree[record['pid']] = ident
         return dict(tokens=record.get('tokens'), output_bytes=record.get('output_bytes'),
                     gateway_socket=record.get('gateway_socket'), queue_limit=record.get('queue_limit'),
                     tree=[dict(pid=p, parent=_stat(p)[1], start=t) for p, t in tree.items()])
@@ -42,9 +48,10 @@ class HungBoundary:
     def _cancel(self, record):
         import os
         import signal
-        if self._identity(record['pid'], record['root_identity']):
+        ident = self._root_identity(record)
+        if self._identity(record['pid'], ident):
             os.kill(record['pid'], signal.SIGTERM)
-        return not self._identity(record['pid'], record['root_identity'])
+        return not self._identity(record['pid'], ident)
 
     def _fallthrough(self, record):
         self.waiting.discard(record.get('leg'))
@@ -66,7 +73,7 @@ class HungBoundary:
                     or now - started < self.seconds):
                 return event
             pid = record.get('pid')
-            ident = record.get('pid_start', record.get('root_identity'))
+            ident = self._root_identity(record)
             def owned():
                 return type(pid) is int and pid > 1 and ident is not None and self.identity(pid, ident)
             if not owned():
