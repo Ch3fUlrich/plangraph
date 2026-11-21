@@ -18,6 +18,14 @@ and `worker_idle` describe placement; `host_drift` compares expected host code r
 The fields above are required; budget must be positive. Missing data queues a durable invalid-snapshot alert.
 The seven condition groups produce 8 rule names: placement and host drift are separate.
 
+Collectors with review-route and served-leg telemetry can supply `review_leg_activity`.
+Use the route's first ruled leg for `first_leg`, put the actual served review counts
+in `served` keyed by leg, and set `window_seconds` to the length of the complete
+observation window. A window of at least 3600 seconds with at least one served
+review and no reviews served by the first leg queues one `review-leg-unserved`
+alert. The active identity is the leg, so refreshes with new counts in the same
+outage do not repeat the alert.
+
 Collectors may also supply `hosts` (an omitted list defaults to empty for compatibility).
 Each entry requires `host`, `tmp_used_percent`, `root_used_percent`, `checkout_head`,
 `origin_main_head`, `behind_commits`, and `age_hours`. `host-disk` alerts strictly

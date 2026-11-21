@@ -1,0 +1,1 @@
+- Alert when the flow snapshot shows an hour of reviews served outside the route's first ruled leg.

@@ -68,3 +68,33 @@ fn thresholds_and_deduplicated_delivery() {
     assert!(run(&bad, dir.path()).status.success());
     assert!(dir.path().join("pending.json").exists());
 }
+
+#[test]
+fn ruled_review_leg_alerts_once_after_an_hour_of_reviews_elsewhere() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut snapshot = serde_json::json!({"pace":66.0,"budget":66.0,
+        "ci_failed":1,"ci_total":10,"infra_failed":0,
+        "review_age_hours":24.0,"review_rounds":3,"critical_idle_hours":12.0,
+        "coding_vm_runs":0,"worker_idle":false,"host_drift":false,
+        "closes_recent":4,"closes_previous":4,
+        "review_leg_activity":{"window_seconds":3599,
+            "first_leg":"agy-gemini-4-hydrogen-high","served":{"neon":5}}});
+    assert!(run(&snapshot, dir.path()).status.success());
+    let pending = dir.path().join("pending.json");
+    assert!(!pending.exists());
+
+    snapshot["review_leg_activity"]["window_seconds"] = 3600.into();
+    assert!(run(&snapshot, dir.path()).status.success());
+    let first = fs::read_to_string(&pending).unwrap();
+    let event: serde_json::Value = serde_json::from_str(&first).unwrap();
+    let message = event["message"].as_str().unwrap();
+    assert_eq!(message.lines().count(), 1);
+    assert!(message.contains("review-leg-unserved leg=\"agy-gemini-4-hydrogen-high\""));
+
+    snapshot["review_leg_activity"]["served"]["neon"] = 6.into();
+    assert!(run(&snapshot, dir.path()).status.success());
+    assert_eq!(fs::read_to_string(&pending).unwrap(), first);
+    snapshot["review_leg_activity"]["served"]["agy-gemini-4-hydrogen-high"] = 1.into();
+    assert!(run(&snapshot, dir.path()).status.success());
+    assert_eq!(fs::read_to_string(dir.path().join("active")).unwrap(), "");
+}
