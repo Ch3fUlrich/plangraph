@@ -1,8 +1,7 @@
 """Process-tree CPU accounting for the run watchdog.
 
-Live-descendant detection is Linux-only. ``_watchdog_child_active`` is reset to
-False on every sample and stays False on other platforms, including Windows
-Job Object CPU accounting; there it means unobserved, not proof of no child.
+Linux also samples live descendant identities. Windows Job Object CPU time
+covers the tree, with child membership unobserved.
 """
 import asyncio
 import os
@@ -18,7 +17,8 @@ def proc_scan():
         try:
             fields = (path / 'stat').read_text().rsplit(')', 1)[1].split()
             result[int(path.name)] = (int(fields[1]), int(fields[3]),
-                                      sum(int(fields[i]) for i in (11, 12, 13, 14)), fields[0])
+                                      sum(int(fields[i]) for i in (11, 12, 13, 14)),
+                                      fields[0], int(fields[19]))
         except (OSError, ValueError, IndexError):
             continue
     return result
@@ -26,7 +26,8 @@ def proc_scan():
 
 async def cpu_seconds(runner, job_id, pid, tick):
     job = getattr(runner, 'jobs', {}).get(job_id)
-    if job is not None: job._watchdog_child_active = False
+    if job is not None:
+        job._watchdog_children = None
     try:
         handle = getattr(runner, '_win_jobs', {}).get(job_id)
         if handle is not None:
@@ -48,8 +49,8 @@ async def cpu_seconds(runner, job_id, pid, tick):
             return False
         members = [(child, row) for child, row in rows.items() if belongs(child)]
         if job is not None:
-            job._watchdog_child_active = any(child != pid and len(row) > 3 and row[3] not in ('Z', 'X')
-                                              for child, row in members)
+            job._watchdog_children = frozenset((child, row[4]) for child, row in members
+                                               if child != pid and row[3] not in ('Z', 'X'))
         return sum(row[2] for _, row in members) / os.sysconf('SC_CLK_TCK')
     except Exception:
         return None
