@@ -88,12 +88,10 @@ pub fn probe_scoped(
         check_cmd.to_string()
     };
     let r = run_check_scoped(&cmd, dir, timeout, tail_n, jail, &|| false)?;
-    if jail.is_some() {
-        if never_started(&r) {
-            return Err(ProbeError::Check(std::io::Error::other(
-                "the jailed check never started (launcher or jail setup failed)",
-            )));
-        }
+    if jail.is_some() && never_started(&r) {
+        return Err(ProbeError::Check(std::io::Error::other(
+            "the jailed check never started (launcher or jail setup failed)",
+        )));
     }
     Ok(if r.passed() {
         ProbeOutcome::AlreadyDone
