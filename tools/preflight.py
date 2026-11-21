@@ -29,8 +29,7 @@ RUST_TIMEOUT = 600
 # The affected-test step is bounded well under the 5 minute push target; the
 # measured normal run is about 50 s.
 TEST_TIMEOUT = 240
-# A large selection (spawner core selects hundreds of test paths) scales the bound:
-# paths x PER_PATH seconds, never below TEST_TIMEOUT and capped at MAX_TEST_TIMEOUT.
+# Callers without file-only selection can scale the bound for larger test sets.
 TEST_PER_PATH_TIMEOUT = 2
 MAX_TEST_TIMEOUT = 1200
 # pytest-xdist workers of the affected-test step: half the cores, at most one per
@@ -82,6 +81,8 @@ def check_timeout(command, cwd=None, env=None):
     if command[:2] in (["cargo", "clippy"], ["cargo", "test"], ["cargo", "build"]):
         return RUST_TIMEOUT
     if is_affected_step(command):
+        if "--files-only" in command:
+            return TEST_TIMEOUT
         return scaled_test_timeout(planned_paths(command, cwd, env))
     return CHECK_TIMEOUT
 

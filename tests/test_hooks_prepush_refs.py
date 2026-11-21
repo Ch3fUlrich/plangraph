@@ -484,3 +484,58 @@ def test_preflight_skip_multi_ref_and_other_gates(repo, tmp_path):
     assert dirty.returncode == 1, dirty.stdout + dirty.stderr
     assert "app/leak.py:1: ipv4" in dirty.stdout + dirty.stderr
     assert not marker.exists()
+
+
+def test_phase_hook_runs_only_affected_tests_with_a_fixed_deadline(repo):
+    import sys
+    import time
+
+    r, _ = repo
+    preflight = HOOK.parents[1] / "preflight.py"
+    # Keep the hook, preflight argument construction, timeout and selector real.
+    # The unrelated scrub, policy and Rust subprocesses are covered separately.
+    launcher = f"""
+from pathlib import Path
+import os
+import runpy
+
+assert "PREFLIGHT_TOOLS_DIR" not in os.environ
+main = runpy.run_path({str(preflight)!r})["main"]
+settings = main.__globals__
+run = settings["run"]
+run_test_process = settings["run_test_process"]
+
+def affected_only(command, cwd, env):
+    if settings["is_affected_step"](command):
+        return run(command, cwd, env)
+    return 0, ""
+
+def run_with_deadline(command, **kwargs):
+    assert {{"--files-only", "--local", "--run"}} <= set(command)
+    assert kwargs["timeout"] == 240
+    return run_test_process(command, **kwargs)
+
+def unexpected_plan(*args):
+    raise AssertionError("File-only runs must share one deadline with selection")
+
+settings.update(run=affected_only, run_test_process=run_with_deadline,
+                planned_paths=unexpected_plan, trim_shared_target=lambda root: None)
+raise SystemExit(main(root=Path.cwd()))
+"""
+    commit_file(r, "tools/preflight.py", launcher)
+    base = commit_file(r, "tests/test_unaffected.py",
+                       'raise AssertionError("the full suite was collected")\n')
+    git(r, "update-ref", "refs/remotes/origin/main", base)
+    head = commit_file(r, "tests/test_selected.py", "def test_selected():\n    assert True\n")
+    started = time.monotonic()
+    result = run_hook(r, [push_line("phase/affected", head, base)],
+                      {"PREFLIGHT_PYTHON": sys.executable, "PREFLIGHT_TEST_WORKERS": "1",
+                       "PREFLIGHT_SKIP": "1", "PREFLIGHT_FAST": "1",
+                       "PREFLIGHT_TOOLS_DIR": str(r / "ambient-tools")})
+    elapsed = time.monotonic() - started
+    print(f"phase pre-push replay wall seconds: {elapsed:.3f}")
+    output = result.stdout + result.stderr
+    assert result.returncode == 0, output
+    assert '"tests": ["tests/test_selected.py"]' in output
+    assert "1 passed" in output
+    assert elapsed < 300
