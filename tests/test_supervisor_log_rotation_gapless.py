@@ -70,16 +70,30 @@ def test_rotation_only_source_leaves_the_handler_out():
     assert 'def _rotate_log' in cli._rotation_source(handler=False)
 
 
-def test_a_failed_backup_still_empties_the_log_and_logging_resumes(tmp_path):
+def test_a_failed_backup_still_empties_the_log(tmp_path):
     log = tmp_path / 'supervisor-v.stderr.log'
     (tmp_path / 'supervisor-v.stderr.log.1.tmp').mkdir()  # blocks the backup copy
     handler = cli._private_rotating_log(str(log), max_bytes=64)
     for index in range(4):
         handler.emit(logging.makeLogRecord(dict(msg=f'line {index} ' + 'x' * 30 + '\n', args=())))
     handler.close()
-    (tmp_path / 'supervisor-v.stderr.log.1.tmp').rmdir()
+    assert 'line 3' in log.read_text() and log.stat().st_size <= 64
+
+
+def test_logging_resumes_on_the_same_handler_after_a_failed_rotation(monkeypatch, tmp_path):
+    log = tmp_path / 'supervisor-u.stderr.log'
     handler = cli._private_rotating_log(str(log), max_bytes=64)
-    handler.emit(logging.makeLogRecord(dict(msg='after\n', args=())))
+    real = cli._rotate_log
+    failures = []
+
+    def failing_once(path):
+        if not failures:
+            failures.append(path)
+            raise OSError('disk full')
+        return real(path)
+
+    monkeypatch.setattr(cli, '_rotate_log', failing_once)
+    for index in range(6):
+        handler.emit(logging.makeLogRecord(dict(msg=f'line {index} ' + 'x' * 30 + '\n', args=())))
     handler.close()
-    text = log.read_text()
-    assert 'line 3' in text and 'after' in text and log.stat().st_size <= 64
+    assert failures and 'line 5' in log.read_text()
