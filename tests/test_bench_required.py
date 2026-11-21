@@ -201,3 +201,34 @@ def test_duplicate_rows_counted(tmp_path):
     path = database(tmp_path / "duplicates.db", [model, model], "model_benchmarks")
     data, errors = routing.benchmark_rows_from_db(path)
     assert not errors and data[model]["benchmark_row_count"] == 2
+
+
+@pytest.mark.parametrize("strict,measured", [(True, False), (False, False), (True, True)])
+def test_review_route_declares_unmeasured_agy_leg_without_blocking_strict_review(
+        tmp_path, strict, measured):
+    from plangraph.spawner.bench_entry import benchmark_options
+
+    pending = next(leg for leg in DEFAULT_LEGS if leg.id == "agy-gpt-oss-120b")
+    control = next(leg for leg in DEFAULT_LEGS if leg.id == "agy-gemini-4-neon-medium")
+    model_ids = [f"{control.harness}/{control.model}"]
+    if measured:
+        model_ids.append(f"{pending.harness}/{pending.model}")
+    db = database(tmp_path / "coverage.db", model_ids)
+    options = benchmark_options(strict, str(db))
+    plan = routing.plan_spawn(
+        {"estimate_tokens": 1000}, role="review", writer_families=("mimo",),
+        legs=(pending, control), benchmark=options["benchmark"], strict=options["require_bench"],
+        catalog_rows=(), leg_reader=lambda *a, **k: {"state": "available", "evidence": None},
+    )
+
+    assert control in plan.legs
+    candidate = next(candidate for candidate in plan.candidates if candidate["leg"] == pending.id)
+    if measured:
+        assert pending in plan.legs and candidate["p_source"] == "measured"
+        assert plan.gaps == ()
+    else:
+        assert (pending in plan.legs) is (not strict)
+        assert candidate["p_source"] == "prior"
+        assert candidate.get("reason") == ("benchmark_unmeasured" if strict else None)
+        assert plan.gaps == ({"leg": pending.id, "model": pending.model,
+                              "reason": "explicitly unmeasured"},)

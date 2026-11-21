@@ -70,7 +70,7 @@ def test_synthetic_system_without_row_may_reap(tmp_path):
     try:
         store = Store(conn, clock=Clock())
         synthetic = Principal("system", "system", [], None)
-        assert store.reap(synthetic) == {"expired": [], "overdue": []}
+        assert store.reap(synthetic) == {"expired": [], "overdue": [], "priority_aged": []}
         assert last_audit_row(conn)["code"] is None
     finally:
         conn.close()

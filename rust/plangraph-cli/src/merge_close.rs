@@ -6,7 +6,7 @@
 //! flagged, with the reason, so routing sees every merged key that stayed open.
 //! A timer runs it every ten minutes, and the batch land step calls [`run_once`].
 use crate::feeder::{Env, SlowKeeper, Transport};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::fmt::Write as _;
 
 /// The keeper reads git for every candidate, so the call gets far more than a read verb.
@@ -20,15 +20,18 @@ pub struct Outcome {
     pub merged_not_done: u64,
 }
 
-/// The `require_seats` switch: on unless the environment says `0`, `false` or `off`.
-pub fn require_seats(env: &Env) -> Result<bool, String> {
+/// The `require_seats` switch: unset leaves the keeper's own `require_seats` setting in force
+/// (the request omits the field); `1`, `true` or `on` demands seats, `0`, `false` or `off` flags a
+/// missing seat instead.
+pub fn require_seats(env: &Env) -> Result<Option<bool>, String> {
     match env
         .get(SWITCH)
         .map(|v| v.trim().to_ascii_lowercase())
         .as_deref()
     {
-        None | Some("" | "1" | "true" | "on") => Ok(true),
-        Some("0" | "false" | "off") => Ok(false),
+        None | Some("") => Ok(None),
+        Some("1" | "true" | "on") => Ok(Some(true)),
+        Some("0" | "false" | "off") => Ok(Some(false)),
         Some(_) => Err(format!("{SWITCH} must be 1/true/on or 0/false/off")),
     }
 }
@@ -36,11 +39,14 @@ pub fn require_seats(env: &Env) -> Result<bool, String> {
 /// Close what is merged (`apply`) or only count it, through any keeper transport.
 pub fn run_with(
     keeper: &dyn Transport,
-    require_seats: bool,
+    require_seats: Option<bool>,
     apply: bool,
     project: Option<&str>,
 ) -> Result<Outcome, String> {
-    let mut body = json!({"require_seats": require_seats, "apply": apply});
+    let mut body = json!({"apply": apply});
+    if let Some(require_seats) = require_seats {
+        body["require_seats"] = json!(require_seats);
+    }
     if let Some(project) = project {
         body["project"] = json!(project);
     }
@@ -60,9 +66,10 @@ pub fn run_with(
                 .collect();
             let _ = writeln!(
                 text,
-                "{label}\t{}\t{}",
+                "{label}\t{}\t{}{}",
                 row["key"].as_str().unwrap_or("?"),
-                heads.join(",")
+                heads.join(","),
+                flagged(&row["flags"])
             );
         }
     }
@@ -83,6 +90,30 @@ pub fn run_with(
         text,
         merged_not_done,
     })
+}
+
+/// `\tFLAGGED name: run ids; ...` for the flags a close stored (`seats_missing`), else nothing.
+fn flagged(flags: &Value) -> String {
+    let Some(flags) = flags.as_object().filter(|f| !f.is_empty()) else {
+        return String::new();
+    };
+    let parts: Vec<String> = flags
+        .iter()
+        .map(|(name, flag)| {
+            let runs: Vec<&str> = flag["run_ids"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            if runs.is_empty() {
+                name.clone()
+            } else {
+                format!("{name}: {}", runs.join(","))
+            }
+        })
+        .collect();
+    format!("\tFLAGGED {}", parts.join("; "))
 }
 
 /// The repositories the keeper's merged-on-default scan reads (`repos`, or `merge_scan` of its config).

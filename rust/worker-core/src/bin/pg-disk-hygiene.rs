@@ -1,8 +1,12 @@
 use pg_worker_core::{
     disk_hygiene::{self, Guards, Report, Thresholds},
-    disk_runtime,
+    disk_runtime, sweep_facts,
 };
-use std::{env, io, path::PathBuf, time::SystemTime};
+use std::{
+    env, io,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     let (mut repo, mut root, mut pins) = (None, None, None);
@@ -50,6 +54,13 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
     let thresholds = thresholds.validate()?;
     let free = disk_runtime::disk_usage(&root)?;
     let mut guards = Guards::load(&pins, state)?;
+    // A worktree a user unit runs from keeps its caches: the build the unit starts needs them.
+    let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
+    guards.pinned.extend(
+        sweep_facts::unit_file_refs(&sweep_facts::systemd_user_dir()?, Path::new(&home))?
+            .into_iter()
+            .map(|r| r.path),
+    );
     let (cwds, building) = disk_runtime::processes()?;
     let canonical_root = root.canonicalize()?;
     guards
@@ -112,14 +123,18 @@ fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
                 report.error = Some(error.to_string());
             }
         }
-        if !building {
-            if let Some(primary) = pg_worker_core::cargo_cache::shared_cache_roots()?.first() {
-                if let Err(error) =
-                    pg_worker_core::cargo_pool::enforce_pool(primary, cap, apply, &mut report)
-                {
-                    report.alarm = true;
-                    report.error = Some(error.to_string());
-                }
+        // Pool slots are guarded by their own leases, so idle ones are trimmed even while
+        // another build runs; the primary target also waits for the process scan.
+        if let Some(primary) = pg_worker_core::cargo_cache::shared_cache_roots()?.first() {
+            let mut slots = pg_worker_core::cargo_pool::existing_pool_slots(primary);
+            if building {
+                slots.remove(0);
+            }
+            if let Err(error) =
+                pg_worker_core::cargo_pool::enforce_pool_cap(&slots, cap, apply, &mut report)
+            {
+                report.alarm = true;
+                report.error = Some(error.to_string());
             }
         }
     }

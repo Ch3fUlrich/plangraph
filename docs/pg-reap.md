@@ -15,6 +15,19 @@ Test: `cargo test -p pg-reap` (hermetic boundary/protection/parser tests and sta
 
 ## Live merged-worktree sweep
 
+User units protect the worktrees they run from. The sweep reads every file and drop-in under
+`$XDG_CONFIG_HOME/systemd/user` (or `~/.config/systemd/user`) and every link target, splits each
+word of each value on whitespace, quotes and `; & | ( ) < > = , :` and refuses a worktree that is,
+or contains, any absolute path those pieces (or a whole word with spaces) name, printing
+`named by user unit <unit>`. Protection over-approximates: shell scripts, comments and redirections
+are not parsed, so their paths protect too. `pg-disk-hygiene` keeps those worktrees' caches.
+`pg-worktree-sweep --check-units` lists each unit whose worktree is missing
+(`unit-worktree-missing <unit>: <path>`, exit 1), but only for whole words that start with `/` and
+hold no whitespace or `; & | ( ) < >`, and for the literal value of a path-valued field
+(`WorkingDirectory`, `*Path`, `*Directory`, ...); a worktree root is `*worktrees/<name>` or
+`runs/<run>/worktree`. Shell text never reaches the report. An unreadable unit directory protects
+every worktree.
+
 `pg-worktree-sweep --repo REPO --root WORKTREES --pins PINS.json` defaults to dry
 run. Repeat `--root` for each worktree root, including the state `runs` directory.
 `--apply` removes only clean merged candidates using the shared pg-reap protection

@@ -263,6 +263,7 @@ def pytest_configure(config):
     config.addinivalue_line('markers', 'real_probe: exercise the real served-model probe, not the host stub')
     config.addinivalue_line('markers', 'writer_change_check: keep the D-3236 writer no-change check live')
     config.addinivalue_line('markers', 'real_base_fresh: use real admission against a local origin')
+    config.addinivalue_line('markers', 'pinned_base: stub admission even inside a real_base_fresh module')
 
 @pytest.fixture
 def real_served_models():
@@ -346,7 +347,8 @@ def hermetic_spawner_host(monkeypatch, tmp_path_factory, request):
 
 @pytest.fixture(autouse=True)
 def fake_base_fresh(monkeypatch, request):
-    if request.node.get_closest_marker('real_base_fresh') is None:
+    if (request.node.get_closest_marker('real_base_fresh') is None
+            or request.node.get_closest_marker('pinned_base') is not None):
         from plangraph.spawner import base_fresh
         fresh = lambda *a, **k: dict(ok=True, reason=None, origin_sha='0' * 40, base_sha='0' * 40, behind=0)
         monkeypatch.setattr(base_fresh, 'base_fresh', fresh)
