@@ -394,6 +394,14 @@ def model_admitted(model, *, enabled=False):
                      and not mid.lower().startswith('cxa/gpt-6-luna')))
 
 
+class DiscoveryFailed(list):
+    """The empty result of a model discovery that failed (timeout, missing binary, error)."""
+
+    def __init__(self, reason):
+        super().__init__()
+        self.reason = reason
+
+
 class LegAdapter:
     """Explicit opt-in reader; one cached boundary shared by routing and probes.
 
@@ -404,29 +412,23 @@ class LegAdapter:
     def __init__(self, store, provider, models=None, *, enabled=False,
                  clock=time.monotonic, ttl_s=60):
         self.store, self.provider = store, provider
-        # A failed discovery raises into the snapshot-error path (retry, then probe); it is
-        # never an empty list, which would read as every model being unlisted.
-        self.models = self.discover_standalone if models is None else models
+        self.models = self.standalone_models if models is None else models
         self.enabled, self.clock, self.ttl_s = enabled, clock, ttl_s
         self._at, self._states, self._served = None, {}, set()
     def __getattr__(self, name):
         return getattr(self.store, name)
     @staticmethod
-    def discover_standalone():
-        """Standalone model ids from ``opencode models``; raises when discovery itself fails."""
+    def standalone_models():
+        """Standalone model ids; a failed discovery is an empty :class:`DiscoveryFailed`."""
         import subprocess
         from .opencode_render import drop_parent_only_env
-        result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
-                                text=True, timeout=8, shell=False, check=True,
-                                env=drop_parent_only_env(dict(os.environ)))
-        return result.stdout.splitlines()
-    @staticmethod
-    def standalone_models():
-        import subprocess
         try:
-            return LegAdapter.discover_standalone()
-        except (OSError, subprocess.SubprocessError):
-            return []
+            result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
+                                    text=True, timeout=8, shell=False, check=True,
+                                    env=drop_parent_only_env(dict(os.environ)))
+        except (OSError, subprocess.SubprocessError) as exc:
+            return DiscoveryFailed(type(exc).__name__)
+        return result.stdout.splitlines()
     @staticmethod
     def identity(model):
         return re.sub(r'(claude-sonnet-5-5)-(?:medium|high|xhigh|max)$', r'\1', model)
@@ -450,7 +452,11 @@ class LegAdapter:
             self._auth_error = None
             try:
                 states = self.provider.snapshot()
-                served = {self.identity(mid) for mid in (self.models() if callable(self.models) else self.models)}
+                listed = self.models() if callable(self.models) else self.models
+                if isinstance(listed, DiscoveryFailed):
+                    # Not "every model is unlisted": keep the snapshot-error retry and probe.
+                    raise RuntimeError(f'model discovery failed: {listed.reason}')
+                served = {self.identity(mid) for mid in listed}
                 self._states, self._served = states, served
                 self._error = None if states else 'unreachable'
             except OmniRouteAuthRefused as exc:
