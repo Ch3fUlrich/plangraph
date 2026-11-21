@@ -7,7 +7,7 @@ import urllib.request
 
 import pytest
 
-from keeper_util import World, seed
+from keeper_util import World, defn, seed, to_done
 from plangraph.keeper import api, config, snapshot_io
 from plangraph.keeper.cli_verbs import RefusedCli, Session, Unreachable
 
@@ -171,16 +171,39 @@ def test_slow_snapshot_publication_does_not_block_reads(srv, w, monkeypatch):
 
 @pytest.mark.parametrize("brief", [None, 1])
 def test_show_loads_only_the_item_neighborhood(srv, w, monkeypatch, brief):
-    expected = Session(url=srv.base_url)
-    monkeypatch.setattr(expected, "token", lambda: w.tok("reader"))
-    params = {"key": "demo:A", "brief": brief}
-    before = expected.call("GET", "show", params)
+    router = w.p("router")
+    description = "Why: Verify the dependency.\nHow: Run the fixture."
+    w.store.edit_definition(router, "demo:B", {"description": f"Full context.\n{description}"})
+    to_done(w, "demo:A")
+    to_done(w, "demo:B")
+    w.store.create_items(router, [
+        defn("FIX-A", corrects="demo:A"),
+        defn("FIX-B", corrects="demo:B"),
+        defn("REPAIRS", ["FIX-A", "FIX-B"], kind="goal"),
+    ])
+    session = Session(url=srv.base_url)
+    monkeypatch.setattr(session, "token", lambda: w.tok("reader"))
 
     def full_plan():
         raise AssertionError("show loaded the full plan")
 
     monkeypatch.setattr(w.store, "_all_items", full_plan)
-    assert expected.call("GET", "show", params) == before
+    result = session.call("GET", "show", {"key": "demo:B", "brief": brief})
+    assert result["depends_on"] == [{"key": "demo:A", "state": "done"}]
+    assert result["key"] == "demo:B"
+    assert result["title"] == "title B"
+    assert result["state"] == "done"
+    assert result["done_criteria"] == "criteria"
+    if brief:
+        assert result["description"] == description
+        assert "unblocks" not in result and "evidence" not in result
+    else:
+        assert result["description"] == f"Full context.\n{description}"
+        assert result["unblocks"] == ["demo:GOAL"]
+        assert result["corrected_by"] == ["demo:FIX-B"]
+        assert result["dep_states"] == [
+            {"key": "demo:A", "state": "done", "reason": "corrected by demo:FIX-A"},
+        ]
 
 
 def test_oversize_body_is_413(srv, w):
