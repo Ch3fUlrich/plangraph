@@ -93,3 +93,6 @@ Mirror test fixtures use worker-core’s shared Git test helper, including integ
 
 `pg-ctx`'s `brief_templates` Rust integration tests exercise the production brief
 renderers with fixture item context and repository evidence paths.
+
+For the crate's commit-stamped symbol and documentation index, see
+[pg-ctx navigation](../rust/pg-ctx/README.md).

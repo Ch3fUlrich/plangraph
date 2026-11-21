@@ -15,6 +15,9 @@ block names the item key, done criteria, item invariants, exact base/head SHAs, 
 public symbols and their callers, and affected test output paths. Request missing
 evidence before acceptance. You may read the repository, including callers and tests.
 
+Use LSP for symbol navigation or `pg-ctx nav <symbol|path|key>` in Codex and agy.
+Use grep for text that is not a symbol.
+
 ## Independence
 
 - You are never the author of the change. If you wrote it, stop and say so.
