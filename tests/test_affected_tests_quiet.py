@@ -209,3 +209,34 @@ def test_rerun_output_is_not_echoed(fx):
     fx.commit()
     result = fx.run()
     assert result.stdout.count("1 failed") <= 1
+
+
+def test_a_change_committed_by_the_run_is_not_a_flake(fx):
+    """Clean tree before and after (the run commits its edit): the trees differ, so no FLAKY."""
+    (fx.tree / "flag.txt").write_text("a")
+    fx.write("""
+        import subprocess
+        from pathlib import Path
+        def test_commit():
+            root = Path(__file__).parents[1]
+            flag = root / "flag.txt"
+            if flag.read_text() == "a":
+                flag.write_text("b")
+                subprocess.run(["git", "commit", "-qam", "edit"], cwd=root, check=True)
+                assert False, "commits a tracked-file change, then fails"
+    """)
+    fx.commit()
+    result = fx.run()
+    assert result.returncode == 1
+    assert "FAILED-THEN-PASSED: tests/test_x.py::test_commit" in result.stdout
+    assert "FLAKY" not in result.stdout
+
+
+def test_collect_only_keeps_maxfail(fx):
+    fx.write("def test_ok(): pass\n")
+    fx.commit()
+    result = fx.run("--collect-only", "--maxfail", "3")
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = fx.invocations()[0]
+    assert "--collect-only" in args and args[args.index("--maxfail") + 1] == "3"
+    assert "-q" not in args

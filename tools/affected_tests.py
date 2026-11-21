@@ -58,7 +58,10 @@ def tree_hash(root):
     """Hash of tracked changes plus untracked, non-ignored files; None when git cannot say."""
     import hashlib
     try:
+        # The HEAD commit is part of the identity: a run that commits a change moves it.
         digest = hashlib.sha256(subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, stderr=subprocess.DEVNULL))
+        digest.update(subprocess.check_output(
             ["git", "diff", "--binary", "HEAD"], cwd=root, stderr=subprocess.DEVNULL))
         listed = subprocess.check_output(
             ["git", "ls-files", "-z", "-o", "--exclude-standard"], cwd=root,
@@ -576,7 +579,9 @@ def main(root=None):
                     if not args.collect_only and importlib.util.find_spec("xdist") is not None else [])
         if args.collect_only:
             result = subprocess.run([sys.executable, "-m", "pytest", *parallel, "--durations=30",
-                                     "--collect-only", *plan["tests"]], cwd=root, env=env)
+                                     "--collect-only",
+                                     *(["--maxfail", str(args.maxfail)] if args.maxfail else []),
+                                     *plan["tests"]], cwd=root, env=env)
             print(f"affected wall seconds: {time.monotonic() - start:.3f}")
             return result.returncode
         quiet = [] if args.loud else QUIET_FLAGS
