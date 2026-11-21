@@ -16,12 +16,9 @@ import tempfile
 import time
 import tomllib
 
-try:
-    from pgtest import test_environment
-    from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
-except ModuleNotFoundError:
-    from tools.pgtest import test_environment
-    from tools.ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ci_select import MAX_RUST_TIMEOUT, RUST_TIMEOUT, host_load, planned_test_binaries, running_test_binary, rust_bound
+from pgtest import test_environment
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from plangraph.spawner.host_ready import (cargo_child_env, cargo_lease, cargo_target_cap_gb,

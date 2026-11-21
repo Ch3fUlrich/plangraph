@@ -16,10 +16,8 @@ import tempfile
 import time
 import tarfile
 
-try:
-    from pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
-except ModuleNotFoundError:
-    from tools.pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pgtest import keeper_postgres_files, postgres_bin, run_keeper_postgres, test_environment
 
 
 # Quiet loop: a pass prints little; --loud restores pytest's default report.

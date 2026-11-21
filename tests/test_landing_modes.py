@@ -49,8 +49,11 @@ def rows(env):
             return []
 
 
-def test_tested_ff_moves_main_to_the_train_head_without_a_merge_commit(env):
+@pytest.mark.parametrize("keeper_configured", [False, True])
+def test_tested_ff_moves_main_to_the_train_head_without_a_merge_commit(env, keeper_configured):
     approval = pushed(env)
+    if keeper_configured:
+        env.env["PLANGRAPH_ENV_FILE"] = str(env.tmp / "keeper.env")
     mode(env, "tested-ff")
     head = head_of(env)
     res = land(env, approval)

@@ -78,6 +78,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "docs/rust-hooks.md",
     "docs/spawner-reliability.md",
     "docs/workspace-resolver.md",
+    "skills/review/SKILL.md",  # Native writer review composition fixture.
     "skills/router-core/SKILL.md",
     "changelog.d/FLEET-WINDOW-CATALOG.md",
     "changelog.d/PLACEMENT-RULES-AUDIT.md",

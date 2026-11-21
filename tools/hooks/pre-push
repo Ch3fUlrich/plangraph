@@ -168,8 +168,9 @@ def is_train_ref(remote_ref):
 
 
 def lane_or_train_ref(remote_ref):
-    """Lane and train pushes run no test; a direct push to main or a tag keeps the full preflight."""
-    return remote_ref.startswith("refs/heads/") and remote_ref != "refs/heads/main"
+    """Phase pushes retain affected preflight; lanes and trains use the fast push path."""
+    return (remote_ref.startswith("refs/heads/") and remote_ref != "refs/heads/main"
+            and not remote_ref.startswith("refs/heads/phase/"))
 
 
 def read_train_manifest(path):
