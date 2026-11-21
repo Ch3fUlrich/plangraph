@@ -15,7 +15,7 @@ def multipart(scenario, monkeypatch):
     world, path, _ = scenario
     monkeypatch.setattr(context_sources, "plan_item_commits", lambda *a, **kw: [
         {"sha": "abcdef123456", "date": "2026-11-06", "merge": {"pr": 42}}])
-    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **k: [])
+    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **_: [])
     # Claim now consumes the shared index; retain the same injected facts and
     # every refusal/override assertion while show keeps its per-item adapter.
     monkeypatch.setattr(context_sources, "indexed_work", lambda index, key: {
@@ -26,7 +26,7 @@ def multipart(scenario, monkeypatch):
 
 def test_open_part_allows_claim(multipart, monkeypatch):
     world, _ = multipart
-    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **k: ["lane/a-part2"])
+    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **_: ["lane/a-part2"])
     item = world.store._item("demo:A")
     before = world.store._task_context(item, {"demo:A": item})
     assert "already merged abcdef12" in before["stale"]
@@ -37,7 +37,7 @@ def test_open_part_allows_claim(multipart, monkeypatch):
 @pytest.mark.parametrize("lanes", [[], None], ids=["no-open-part", "unknown-lanes"])
 def test_merged_without_known_open_part_refuses(multipart, monkeypatch, lanes):
     world, _ = multipart
-    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **k: lanes)
+    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **_: lanes)
     with pytest.raises(Refused) as exc:
         world.store.claim(world.p("l1main"), "demo:A")
     assert exc.value.code == "bad_state"
@@ -48,7 +48,7 @@ def test_merged_without_known_open_part_refuses(multipart, monkeypatch, lanes):
 
 def test_open_part_still_refuses_newer_decision(multipart, monkeypatch):
     world, path = multipart
-    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **k: ["lane/a-part2"])
+    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **_: ["lane/a-part2"])
     path.write_text(path.read_text().replace("demo:B", "demo:A"))
     with pytest.raises(Refused) as exc:
         world.store.claim(world.p("l1main"), "demo:A")

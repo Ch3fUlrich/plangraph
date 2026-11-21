@@ -146,8 +146,14 @@ def test_report_lead_in_and_retry_pointers():
 
 
 def test_spawner_size_and_prompt_rules_pointer():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('check_file_size', ROOT / 'tools/check_file_size.py')
+    sizes = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sizes)
+    # The cap and its headroom live in tools/check_file_size.py only.
+    assert sizes.DOC_CAPS['docs/SPAWNER.md'] == 728 and sizes.DOC_HEADROOM >= 60
     text = (ROOT / 'docs/SPAWNER.md').read_text()
-    assert len(text.splitlines()) <= 728
+    assert len(text.splitlines()) <= sizes.DOC_CAPS['docs/SPAWNER.md'] - sizes.DOC_HEADROOM
     assert text.count('(operations/spawner-prompt-rules.md)') == 1
     rules = (ROOT / 'docs/operations/spawner-prompt-rules.md').read_text()
     assert len(rules.splitlines()) <= 400

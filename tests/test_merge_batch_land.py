@@ -133,7 +133,8 @@ def test_land_merges_closes_unmerged_and_reports(env):
     approval = pushed(env)
     env.state["no_auto_merge"] = [3]  # GitHub has not marked PR 3 merged
     env.save()
-    head = json.loads(env.state_file("l1").read_text())["head"]
+    state = json.loads(env.state_file("l1").read_text())
+    head, heads = state["head"], {rec["pr"]: rec["head"] for rec in state["merged"]}
     res = land(env, approval)
     assert res.returncode == 0, res.stderr
     merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
@@ -142,8 +143,13 @@ def test_land_merges_closes_unmerged_and_reports(env):
     prs = env.load()["prs"]
     assert (prs["1"]["state"], prs["3"]["state"], prs["3"]["closed_with"]) == ("MERGED", "CLOSED",
                                                                                "merged via batch PR #100")
+    runs = [f"Review-Run: plangraph:ITEM-{k} run-part-{n}-0 {heads[n]}" for n, k in ((1, "A"), (2, "B"), (3, "C"))]
     assert env.calls("pr", "merge") == [["pr", "merge", "100", "--repo", "owner/proj", "--merge",
-                                         "--match-head-commit", head]]
+                                         "--match-head-commit", head,
+                                         "--body", "\n".join(["Plan-Item: plangraph:ITEM-A", "Plan-Item: plangraph:ITEM-B",
+                                                              "Plan-Item: plangraph:ITEM-C", *runs])]]
+    trailers = env.git("log", "-1", "--format=%(trailers:key=Plan-Item,valueonly)", merge, cwd=env.origin)
+    assert trailers.split() == ["plangraph:ITEM-A", "plangraph:ITEM-B", "plangraph:ITEM-C"]
     assert env.calls("pr", "checks") == [["pr", "checks", "100", "--repo", "owner/proj", "--required"]]
     assert not env.state_file("l1").exists() and env.git("for-each-ref", "refs/merge-batch") == ""
 
@@ -455,3 +461,61 @@ def test_land_cleanup_metadata_failure_is_nonfatal(env):
     result = land(env, approval)
     assert result.returncode == 0 and "cleanup failed:" in result.stderr
     assert result.stdout.count("MERGED") == 2
+
+
+def test_land_names_the_pending_check_and_does_not_retry(env):
+    approval = pushed(env, prs=(1, 2))
+    env.state["checks"]["100"] = [{"name": "ci-gate", "bucket": "pending"}]
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and "pending: ci-gate" in res.stderr and "does not wait or retry" in res.stderr
+    assert not env.calls("pr", "merge")
+
+
+def test_land_refuses_a_head_green_on_an_older_main(env):
+    """LE-MAIN-RED-AFTER-GREEN-MERGES: a green run of a head that lacks main's tip does not merge."""
+    approval = pushed(env, prs=(1, 2))
+    env.state["behind_by"] = 2
+    env.save()
+    res = land(env, approval)
+    assert res.returncode == 1 and res.stdout == "", res.stderr
+    assert "stale_base" in res.stderr and "2 commit(s) behind" in res.stderr
+    assert not env.calls("pr", "merge") and env.state_file("l1").exists()
+    env.state["behind_by"] = 0
+    env.save()
+    assert land(env, approval).returncode == 0
+
+
+def _merge_close_stub(env, exit_code):
+    """A `plangraph` on the hermetic PATH that records its argv and prints a report."""
+    stub = env.stubs / "plangraph"
+    stub.write_text(f'#!/bin/sh\necho "$@" >> "{env.tmp}/merge-close.args"\n'
+                    f'echo "listed demo:X in_review forbidden"\nexit {exit_code}\n')
+    stub.chmod(0o755)
+    return env.tmp / "merge-close.args"
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_land_runs_the_merge_close_job_once_and_never_fails_on_it(env, exit_code):
+    args = _merge_close_stub(env, exit_code)
+    res = land(env, pushed(env))
+    assert res.returncode == 0, res.stderr
+    assert args.read_text() == "merge-close\n"
+    assert "listed demo:X in_review forbidden" in res.stderr
+    assert "listed" not in res.stdout
+
+
+def test_land_without_the_job_binary_still_lands(env):
+    res = land(env, pushed(env))
+    assert res.returncode == 0 and "merge-close not run" in res.stderr
+
+
+def test_land_names_the_batch_item_in_the_merge_commit(env):
+    approval = pushed(env)
+    state = json.loads(env.state_file("l1").read_text())
+    state["plan"] = "plangraph:BATCH-1"
+    env.state_file("l1").write_text(json.dumps(state))
+    assert land(env, approval).returncode == 0
+    merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
+    trailers = env.git("log", "-1", "--format=%(trailers:key=Plan-Item,valueonly)", merge, cwd=env.origin)
+    assert trailers.split() == ["plangraph:BATCH-1", "plangraph:ITEM-A", "plangraph:ITEM-B", "plangraph:ITEM-C"]

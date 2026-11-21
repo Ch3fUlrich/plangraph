@@ -133,3 +133,64 @@ fn workspace_write_commit_passes_in_the_real_sandbox_when_it_can_start() {
     host.commit().unwrap();
     assert_eq!(std::fs::read_dir(parent.path()).unwrap().count(), 1);
 }
+
+#[test]
+fn placeholder_git_identities_are_not_ready() {
+    for (name, email) in [
+        ("x", "x@example.invalid"),
+        ("Test", "test@example.com"),
+        ("Dev", "dev@localhost"),
+        ("", "dev@team.example.org.test"),
+        ("Dev", ""),
+    ] {
+        assert!(identity_problem(name, email).is_some(), "{name} <{email}>");
+    }
+    assert_eq!(identity_problem("Dev Eloper", &usable()), None);
+}
+#[test]
+fn identity_point_reads_the_hosts_git_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        assert!(git()
+            .current_dir(dir.path())
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    };
+    run(&["init", "--quiet"]);
+    let mut host = Host {
+        repo: dir.path().to_path_buf(),
+        mode: "workspace-write".into(),
+    };
+    run(&["config", "user.name", "x"]);
+    run(&["config", "user.email", "x@example.invalid"]);
+    assert!(host.check("identity").unwrap_err().contains("placeholder"));
+    run(&["config", "user.email", &usable()]);
+    assert_eq!(host.check("identity"), Ok(()));
+    // The effective identity counts: a placeholder author override beats a usable user.email.
+    run(&["config", "user.email", &usable()]);
+    run(&["config", "author.email", "x@example.invalid"]);
+    assert!(host
+        .check("identity")
+        .unwrap_err()
+        .contains("GIT_AUTHOR_IDENT"));
+    run(&["config", "--unset", "author.email"]);
+    run(&["config", "committer.email", "x@example.invalid"]);
+    assert!(host
+        .check("identity")
+        .unwrap_err()
+        .contains("GIT_COMMITTER_IDENT"));
+    run(&["config", "--unset", "committer.email"]);
+    assert_eq!(host.check("identity"), Ok(()));
+    run(&["config", "user.email", "x@example.invalid"]);
+    // A read-only sandbox never commits, so its identity is not probed.
+    run(&["config", "user.email", "x@example.invalid"]);
+    host.mode = "read-only".into();
+    assert_eq!(host.check("identity"), Ok(()));
+}
+
+/// An address on a real-looking domain, assembled so the file holds no address literal.
+fn usable() -> String {
+    ["dev", "@", "team.example.org"].concat()
+}

@@ -10,6 +10,15 @@ from plangraph.routing_errors import SpawnRefused
 QUOTA_EXEMPT_ROLES = frozenset({'basic-analysis'})
 
 
+def launch_model(leg):
+    """Keep the route identity stable while sending the selected GPT variant."""
+    from plangraph.planner.legs import CX_EFFORTS
+    if not leg.model.startswith('omniroute/cx-gpt-') or leg.effort not in CX_EFFORTS:
+        return leg.model
+    base, _, suffix = leg.model.rpartition('-')
+    return f'{base if suffix in CX_EFFORTS else leg.model}-{leg.effort}'
+
+
 def quota_paused(state=None, role=None, leg=None):
     """The usage owner creates quota-pause at USAGE >=95%, unlinks at reset.
 

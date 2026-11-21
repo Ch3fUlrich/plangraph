@@ -247,7 +247,7 @@ def test_real_keeper_merged_on_default_source_is_used(w, monkeypatch):
             if args[:3] == ["show", "-s", "--format=%P"]:
                 return super()._run(repo, args)
             if args[0] == "log":
-                out = f"{HEAD}\x1f2026-01-01\x1fwork\x1f{KEY}\x1d"
+                out = f"{HEAD}\x1f2026-01-01\x1fwork\x1fwork\n\nPlan-Item: {KEY}\x1d"
             elif args[0] == "rev-list":
                 out = "1" * 40
             else:

@@ -1,1 +1,2 @@
 Route and spawn skip every leg of a provider pool whose latest omniroute quota snapshot is exhausted with reason `quota_until <next_reset_at>`, so the first leg is the next pool and a snapshot past its reset no longer skips (plangraph:LE-ROUTE-SERVES-EXHAUSTED-CODEX-POOL).
+Read configured local snapshots fresh even with gateway liveness discovery disabled, and recheck the pool at launch-spec admission even when a previous route selected the leg.

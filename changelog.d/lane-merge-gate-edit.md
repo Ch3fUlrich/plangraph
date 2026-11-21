@@ -1,0 +1,1 @@
+- A main-into-lane merge that edits a gate file itself (a conflict resolved in `.github/workflows/*`) now needs its own `Gate-Edit` trailer: `ci_commit_gate.py check` (pre-push hook and CI) checks merge commits on their combined diff, and `merge_batch build` runs the workflow Gate-Edit check on every PR head before it builds. The batch-writer skill says so.

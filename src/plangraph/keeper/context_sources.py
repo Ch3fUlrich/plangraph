@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell
-from .evidence_git import valid_ref
+from .evidence_git import plan_items, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
@@ -108,7 +108,7 @@ def _split(key):
     return (project or None), bare
 
 
-def work_index(git, project, *, fresh=False):
+def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
     Read all commit trailers and topology together, including hosted open PR
@@ -120,7 +120,11 @@ def work_index(git, project, *, fresh=False):
     cache = getattr(git, "_context_work_index", {})
     cache_key = (repo, ref)
     hit = cache.get(cache_key)
-    if not fresh and hit and time.monotonic() - hit[0] < _REFS_TTL:
+    if cached_only:  # a caller holding the keeper lock: the warm answer or nothing, never git or the forge
+        if hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
+            return hit[1]
+        raise Refused("evidence_unverified", f"merge_index_not_warm: {project}")
+    if not fresh and hit and time.monotonic() - hit[0] < (_REFS_TTL if max_age is None else max_age):
         return hit[1]
     problems = []
     verified_at = (hit[1].get("verified_at") if hit else None)
@@ -164,7 +168,7 @@ def work_index(git, project, *, fresh=False):
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
     out = _ok(git, repo, ["log", "--all", "--no-show-signature",
-                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d"])
+                         "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
     if refs_out is None or target is None or out is None:
         if not origin:
             return None
@@ -176,7 +180,7 @@ def work_index(git, project, *, fresh=False):
         if len(fields) == 5 and valid_commit_ref(fields[0]):
             sha, parents, date, subject, trailers = fields
             records[sha] = (parents.split(), {"sha": sha, "date": date,
-                            "subject": subject}, trailers.split("\x1e"))
+                            "subject": subject}, plan_items(trailers))
 
     def ancestors(head):
         seen, todo = set(), [head]
@@ -282,7 +286,7 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
         "log", "--no-show-signature", "-E", "--grep",
         f"^Plan-Item:[[:space:]]*{prefix}{_ere(bare)}[[:space:]]*$",
         *(["-n", str(_GREP_WINDOW)] if limit is not None else []),
-        "--format=%H%x1f%cI%x1f%s%x1f%(trailers:key=Plan-Item,valueonly,separator=%x1e)%x1d",
+        "--format=%H%x1f%cI%x1f%s%x1f%B%x1d",
         "--end-of-options", ref])
     if out is None:
         return None
@@ -293,7 +297,7 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
             continue
         seen += 1
         sha, date, subject, trailers = fields
-        names = {value.strip() for value in trailers.split("\x1e") if value.strip()}
+        names = set(plan_items(trailers))
         if (key in names or bare in names) and valid_commit_ref(sha.strip()):
             commits.append({"sha": sha.strip(), "date": date, "subject": subject})
         if limit is not None and len(commits) >= limit:
@@ -309,6 +313,16 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
 
 def _merge_of(git, repo, ref, sha):
     """The first-parent merge on *ref* that introduced *sha*, or ``None``."""
+    # A merge commit on the ref's first-parent chain (a batch merge that carries
+    # the trailers itself) introduced itself, however many merges came after it.
+    parents = (_ok(git, repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]) or "").split()
+    if len(parents) > 2:
+        chain = _ok(git, repo, ["rev-list", "--first-parent", "--merges", "--end-of-options", f"{sha}^..{ref}"])
+        if chain is not None and sha in chain.split():
+            subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
+                                       "--end-of-options", sha]) or "").strip()
+            match = _PR_RE.search(subject)
+            return {"sha": sha, "subject": subject, "pr": int(match.group(1)) if match else None}
     # Combining --ancestry-path with --first-parent prunes paths through
     # second parents (nested batches and PR branches refreshed from main).
     # Walk ancestry separately, then intersect with the ref's landing merges.
@@ -480,7 +494,7 @@ def _closed_lane_pr(git, repo, hosted, branch, head):
     return 0
 
 
-def open_lanes(git, project, key, fresh=False, *, closed=None):
+def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, frozen=False):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -496,7 +510,8 @@ def open_lanes(git, project, key, fresh=False, *, closed=None):
         return None
     names, remotes = snapshot
     slug = bare.lower()
-    lanes, closed_prs, verified = {}, set(), {}
+    lanes, closed_prs = {}, set()
+    verified = {} if cache is None else cache  # hosted-PR answers a caller keeps between calls
     origin = None
     for full in names:
         remote_ref = full.startswith("refs/remotes/")
@@ -521,9 +536,11 @@ def open_lanes(git, project, key, fresh=False, *, closed=None):
                 tip = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", full])
                 if tip is None or not valid_commit_ref(tip.strip()):
                     return None
-                identity = (short, tip.strip())
+                identity = (repo, hosted, short, tip.strip())  # a cache is shared between checkouts and their origins
                 if identity not in verified:
-                    verified[identity] = _closed_lane_pr(git, repo, hosted, *identity)
+                    if frozen:        # a warm answer that no longer matches is unknown, never a forge call
+                        return None
+                    verified[identity] = _closed_lane_pr(git, repo, hosted, short, tip.strip())
                 pr = verified[identity]
                 if pr is None:
                     return None

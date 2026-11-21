@@ -1,0 +1,1 @@
+- Claude sessions and runs started by the spawner set `CLAUDE_CODE_SHELL=/bin/bash` on POSIX hosts (the allowlist carries the name), and the spawner doctor adds a `claude_shell` check that fails on a host whose sessions still run zsh. The operator's own `~/.claude/settings.json` env block is not changed by the repository.

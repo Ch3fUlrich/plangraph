@@ -302,6 +302,7 @@ def isolated(host, monkeypatch):
         return 'pass', '1 tools'
     monkeypatch.setattr(d, 'mcp', mcp)
     monkeypatch.setattr(d, 'whoami', lambda: ('pass', 'principal=doctor role=spawner'))
+    monkeypatch.setenv('CLAUDE_CODE_SHELL', '/bin/bash')  # the claude_shell check reads this
     return host
 
 
@@ -357,7 +358,7 @@ def test_opt_in_probe(isolated, monkeypatch, capsys, answer):
 def test_text_output(isolated, capsys):
     assert d.main([]) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert len(lines) == 10
+    assert len(lines) == 11
     assert all(': pass ' in line or ': skip ' in line for line in lines)
 
 

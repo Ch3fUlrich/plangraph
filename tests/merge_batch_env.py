@@ -173,7 +173,7 @@ class Env:
         self.git("commit", "-q", "-m", "seed more")
         self.git("push", "-q", "origin", "main")
 
-    def branch_pr(self, number, files, *, base="main", ref=None, item=None, moves=None, **kw):
+    def branch_pr(self, number, files, *, base="main", ref=None, item=None, moves=None, trailer="", **kw):
         """A real PR branch in the origin (plus refs/pull/N/head) and its canned gh record. ``moves`` renames
         files (old -> new); gh lists only the new path of a rename."""
         ref = ref or f"lane/p{number}"
@@ -185,7 +185,7 @@ class Env:
             (self.repo / rel).parent.mkdir(parents=True, exist_ok=True)
             (self.repo / rel).write_text(text)
         self.git("add", "-A")
-        self.git("commit", "-q", "-m", f"change {number}" + (f"\n\nPlan-Item: plangraph:{item}" if item else ""))
+        self.git("commit", "-q", "-m", f"change {number}" + (f"\n\nPlan-Item: plangraph:{item}" if item else "") + trailer)
         sha = self.git("rev-parse", "HEAD")
         self.git("push", "-q", "origin", ref, f"{sha}:refs/pull/{number}/head")
         self.git("checkout", "-q", "main")

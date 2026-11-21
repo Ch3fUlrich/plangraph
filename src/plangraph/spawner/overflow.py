@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -17,7 +16,7 @@ import uuid
 from typing import NamedTuple
 
 from plangraph.keeper.credential_guard import mask
-from plangraph.fleet_sync.genconfig import config_dir
+from plangraph.fleet_sync.genconfig import config_dir, generate
 from plangraph.routing_errors import ParameterRefused
 
 from .private_io import atomic_write_private
@@ -61,6 +60,20 @@ def registry_caps():
     except (OSError, ValueError, KeyError, TypeError):
         logging.warning('hosts registry missing or malformed; overflow disabled, local RAM defaults 3000/2048 MB')
         return {'hosts': [], 'self': None}
+
+
+def placement_config(registry, role=None):
+    """Derive placement routes from the authoritative registry."""
+    try:
+        config = generate(registry)['overflow-hosts.json']
+        config['registry'] = True
+        if role is not None:
+            config['hosts'] = {name: host for name, host in config['hosts'].items()
+                               if role in host.get('roles', [role])}
+        return config
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        logging.warning('invalid hosts registry routes; overflow disabled')
+        return {'hosts': {}, 'public_repos': []}
 
 
 def host_config(registry, name):
@@ -126,13 +139,14 @@ def memory_floor_record(memory, role_mb, floor, detail, role='implement'):
 
 
 def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
-            remote_first=False, local_refusal=None, host_order=()):
+            remote_first=False, local_refusal=None, host_order=(),
+            compare_local=False, local_fallback=False):
     """Select from config-enriched readiness records; age is computed on read."""
     local_reason = local_refusal or memory_refusal(local_mem_mb, role_mb, floor_mb)
-    if not local_reason and not remote_first:
+    if not local_reason and not remote_first and not compare_local:
         return Decision(None, 'local room')
     if not public:
-        if remote_first:
+        if not local_reason or remote_first:
             return Decision(None, local_reason or 'local_fallback_no_remote')
         return Decision(None, local_reason + '; queue: repo is not public (absent or unknown allowlist)')
     candidates, refused = [], []
@@ -165,12 +179,32 @@ def decide(local_mem_mb, role_mb, floor_mb, ready_records, public, *,
         else:
             if remote_first:
                 index = host_order.index(name) if name in host_order else len(host_order)
-            candidates.append((-(row['mem_available_mb'] - row['floor_mb']), index, name))
+            candidates.append((row.get('placement_fallback') is True,
+                               -(row['mem_available_mb'] - row['floor_mb']), index, name))
+    if compare_local and not local_reason:
+        candidates.append((local_fallback, -(local_mem_mb - floor_mb), -1, None))
     if candidates:
-        return Decision(min(candidates)[2], 'remote_most_free_ram' if remote_first else local_reason)
+        fallback, neg_headroom, _, name = min(candidates)
+        if compare_local:
+            return Decision(name, f"{'fallback: ' if fallback else ''}{-neg_headroom} MB above memory floor")
+        return Decision(name, 'remote_most_free_ram' if remote_first else local_reason)
     if remote_first:
         return Decision(None, local_reason or 'local_fallback_no_remote')
     return Decision(None, local_reason + '; queue: ' + ('; '.join(refused) or 'no overflow hosts configured'))
+
+
+def readiness_dir():
+    return Path.home() / '.local/state/plangraph/host-ready'
+
+
+def read_readiness(name):
+    from .host_ready import fresh
+    if Path(name).name != name or name in ('.', '..'):
+        raise ValueError('invalid host name')
+    data = json.loads((readiness_dir() / (name + '.json')).read_text())
+    if data['host'] != name:
+        raise ValueError('host mismatch')
+    return {**data, 'fresh': fresh(dict(data, ok=True))}
 
 
 def ready_records(config, role='implement'):
@@ -180,16 +214,8 @@ def ready_records(config, role='implement'):
         row = {}
         try:
             row = dict(host)
-            if Path(name).name != name or name in ('.', '..'):
-                raise ValueError('invalid host name')
-            path = Path.home() / '.local/state/plangraph/host-ready' / (name + '.json')
-            data = json.loads(path.read_text())
-            stamp = datetime.fromisoformat(data['checked_at'].replace('Z', '+00:00'))
-            age = (datetime.now(timezone.utc) - stamp).total_seconds()
-            if data['host'] != name:
-                raise ValueError('host mismatch')
-            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb')})
-            row['fresh'] = 0 <= age <= 600
+            data = read_readiness(name)
+            row.update({key: data.get(key) for key in ('ok', 'live_runs', 'mem_available_mb', 'disk_free_gb', 'fresh')})
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             row['refusal'] = 'missing or malformed readiness'
         caps = host_caps(registry, name, role)
@@ -269,55 +295,150 @@ def repos_public(config, repo, diff=None):
                for p in [repo, *([diff.get('repo')] if diff is not None else [])])
 
 
+def target_checkout(host, card):
+    """Map only registered public repository identities to the target checkout."""
+    source = (card.get('diff_ref') or {}).get('repo') or card.get('repo')
+    other = card.get('repo')
+    if source is not None and other is not None and Path(source).resolve() != Path(other).resolve():
+        raise RemoteRefusal('checkout and diff name different repositories')
+    if source is None or not host.get('registry'):
+        return host['repo']
+    path = Path(source).expanduser().resolve()
+    for name, root in host['public_repo_ids'].items():
+        if path == Path(root).expanduser().resolve() and name in host['repos']:
+            return host['repos'][name]
+    raise RemoteRefusal('public repository checkout unavailable on target')
+
+
+def stage_review_diff(diff, directory):
+    """Pin the exact commits in a disposable clone for review without a push."""
+    from .prompt_input import checkout_env
+    def git(repo, *args):
+        return subprocess.run(['git', '-C', repo, *args], capture_output=True, check=True,
+                              text=True, encoding='utf-8', errors='replace',
+                              env=checkout_env(), timeout=30).stdout.strip()
+    source = diff['repo']
+    clone = str(directory / 'review.git')
+    git(source, 'clone', '-q', '--shared', '--bare', '--', source, clone)
+    for key in ('base', 'head'):
+        diff[key] = git(source, 'rev-parse', '--verify', '--end-of-options', diff[key] + '^{commit}')
+        git(clone, 'update-ref', 'refs/review/' + key, diff[key])
+    boundary = git(source, 'merge-base', diff['head'], 'refs/remotes/origin/main')
+    if boundary == diff['head']:
+        return []
+    bundle = directory / 'review.bundle'
+    git(clone, 'bundle', 'create', str(bundle), 'refs/review/base', 'refs/review/head', '^' + boundary)
+    if bundle.stat().st_size > 64 * 1024 * 1024:
+        raise RemoteRefusal('review bundle exceeds transfer limit')
+    return [bundle]
+
+
 def remote_spawn(name, host, card, prompt, options):
     """Use private staging, quote every remote argument, never echo SSH stderr."""
     options = list(options)
     if 'cwd' in card or any(v == '--cwd' or v.startswith('--cwd=') for v in options):
         raise RemoteRefusal('explicit cwd cannot overflow to another checkout')
+    from .remote_ps import invocation
     alias = host['ssh']
-    def ssh(command):
-        return subprocess.run(['ssh', '--', alias, command], capture_output=True, text=True,
-                              encoding='utf-8', errors='replace')
-    staging = ssh('mktemp -d')
+    checkout = target_checkout(host, card)
+    def ssh(command, *, binary=False, steps=None, plan=None, **kwargs):
+        """Run a script on the host's login shell, or a step plan where no shell exists (WSL)."""
+        encoding = {} if binary else {'text': True, 'encoding': 'utf-8', 'errors': 'replace'}
+        remote, body = invocation(host, command, steps, **(plan or {}))
+        if body is not None:
+            kwargs['input'] = body if binary else body.decode('utf-8')
+        return subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5',
+                               '--', alias, remote], capture_output=True,
+                              timeout=165, **encoding, **kwargs)
+    try:
+        staging = ssh('mktemp -d')
+    except (OSError, subprocess.SubprocessError):
+        raise RemoteRefusal('remote staging failed') from None
     if staging.returncode:
         raise RemoteRefusal('remote staging failed')
     directory = staging.stdout.strip()
     if not directory.startswith('/') or '\n' in directory:
         raise RemoteRefusal('remote staging path invalid')
     q = shlex.quote
+    bundle_files = []
     try:
         with tempfile.TemporaryDirectory() as local:
             rewritten = json.loads(json.dumps(card))
             if rewritten.get('run_kind') == 'native-codex':
-                rewritten['repo'] = host['repo']
+                rewritten['repo'] = checkout
             diff = rewritten.get('diff_ref')
             if diff:
-                diff['repo'] = host['repo']
+                from plangraph.planner.seats import _check_diff_ref
+                _check_diff_ref(diff)
+                if host.get('registry'):
+                    try:
+                        bundle_files = stage_review_diff(diff, Path(local))
+                    except (OSError, subprocess.SubprocessError):
+                        raise RemoteRefusal('could not prepare exact review commits') from None
+                diff['repo'] = checkout
             atomic_write_private(Path(local) / 'card.json', json.dumps(rewritten))
             atomic_write_private(Path(local) / 'prompt.txt', prompt)
-            copied = subprocess.run(['scp', '--', str(Path(local) / 'card.json'),
-                                     str(Path(local) / 'prompt.txt'), alias + ':' + q(directory + '/')],
-                                    capture_output=True, text=True, encoding='utf-8', errors='replace')
-            if copied.returncode:
-                raise RemoteRefusal('remote copy failed')
+            files = [Path(local) / 'card.json', Path(local) / 'prompt.txt', *bundle_files]
+            if host.get('wsl_distro'):
+                for path in files:
+                    target = directory + '/' + path.name
+                    copied = ssh('', binary=True, steps=[{
+                        'write_file': {'path': target, 'mode': 0o600},
+                        'stdin_hex': path.read_bytes().hex()}])
+                    if copied.returncode:
+                        raise RemoteRefusal('remote copy failed')
+            else:
+                copied = subprocess.run(['scp', '--', *map(str, files), alias + ':' + q(directory + '/')],
+                                        capture_output=True, text=True, encoding='utf-8', errors='replace',
+                                        timeout=60)
+                if copied.returncode:
+                    raise RemoteRefusal('remote copy failed')
         commands = []
         if host.get('env_file'):
             commands.append('set -a && . ' + q(host['env_file']) + ' && set +a')
-        commands.append('cd ' + q(host['repo']))
+        commands.append('cd ' + q(checkout))
         if diff:
-            for ref in ('base', 'head'):
-                commands.append(shlex.join(['git', 'fetch', 'origin', '--', diff[ref]]))
-        command = ['python3', '-m', 'plangraph.spawner.cli', 'spawn', '--card',
-                   '@' + directory + '/card.json', '--prompt-file', directory + '/prompt.txt']
+            prepare = [f'cd {q(checkout)}']
+            prepare_steps = []
+            if bundle_files:
+                fetch_main = ['git', 'fetch', '--no-write-fetch-head', '-q', 'origin', 'main']
+                fetch_bundle = ['git', 'fetch', '--no-write-fetch-head', '--no-tags',
+                                '--', directory + '/review.bundle', 'refs/review/head']
+                prepare.extend(shlex.join(argv) for argv in (fetch_main, fetch_bundle))
+                prepare_steps.extend({'argv': argv} for argv in (fetch_main, fetch_bundle))
+            for rev in ('base', 'head'):
+                object_ref = diff[rev] + '^{commit}'
+                present = shlex.join(['git', 'cat-file', '-e', object_ref])
+                fetch_argv = ['git', 'fetch', '--no-write-fetch-head', '-q', 'origin', '--', diff[rev]]
+                fetch = shlex.join(fetch_argv)
+                prepare.append(f'({present} || ({fetch} && {present}))')
+                prepare_steps.append({'ensure_commit': {'sha': diff[rev], 'fetch_argv': fetch_argv}})
+            if ssh(' && '.join(prepare), steps=prepare_steps, plan={'cwd': checkout}).returncode:
+                raise RemoteRefusal('remote checkout cannot resolve the reviewed commits')
+        command = ['python3', '-m', 'plangraph.spawner.cli']
+        if host.get('state_dir'):
+            command.extend(['--state', host['state_dir']])
+        command.extend(['spawn', '--card',
+                   '@' + directory + '/card.json', '--prompt-file', directory + '/prompt.txt'])
         spawn = shlex.join(command + options)
         nonce = secrets.token_hex(16)
         begin, end = (f'PLANGRAPH_RECEIPT_{nonce}_{suffix}' for suffix in ('BEGIN', 'END'))
         commands.append("printf '%s\\n' " + q(begin))
-        commands.append('PLANGRAPH_HOST_NAME=' + q(name) + ' PYTHONPATH=' + q(host['spawner_src']) + ' ' + spawn)
-        commands.append("printf '\\n%s\\n' " + q(end))
-        result = ssh(' && '.join(commands))
-        if result.returncode:
-            raise RemoteRefusal('remote command failed')
+        env = dict(PLANGRAPH_HOST_NAME=name, PLANGRAPH_HOST=name,
+                   PLANGRAPH_PLACED_HOST=name, PYTHONPATH=host['spawner_src'],
+                   PLANGRAPH_PLACEMENT_REASON=host.get('placement_reason') or 'registry placement')
+        assignments = ' '.join(f'{key}={q(value)}' for key, value in env.items())
+        commands.append('{ ' + assignments + ' ' + spawn
+                        + "; rc=$?; printf '\n%s\n' " + q(end) + ' ; exit "$rc"; }')
+        spawn_plan = dict(cwd=checkout)
+        if host.get('env_file'):
+            spawn_plan['env_file'] = host['env_file']
+        spawn_steps = [{'argv': command + options, 'env': env, 'receipt': {'begin': begin, 'end': end}}]
+        try:
+            result = ssh(' && '.join(commands), steps=spawn_steps, plan=spawn_plan)
+        except (OSError, subprocess.SubprocessError):
+            return {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'unknown',
+                    'host': name, 'acknowledged_unknown': True, 'reason': 'remote_launch_uncertain'}
         # Mask before parsing/exposing any remote output, including JSON keys.
         # Never retry an acknowledged spawn merely because its receipt is unreadable.
         output, _ = mask(result.stdout)
@@ -330,14 +451,23 @@ def remote_spawn(name, host, card, prompt, options):
             receipt = json.loads('\n'.join(lines[lines.index(begin) + 1:lines.index(end)]))
         except ValueError:
             receipt = None
+        if isinstance(receipt, dict) and receipt.get('status') == 'refused':
+            raise RemoteRefusal('target rejected admission')
         if (isinstance(receipt, dict) and isinstance(receipt.get('run_id'), str)
                 and receipt['run_id'].strip()):
             return receipt
         return {'run_id': 'run-' + uuid.uuid4().hex, 'status': 'unknown',
                 'host': name, 'acknowledged_unknown': True}
+    except subprocess.SubprocessError:
+        raise RemoteRefusal('remote preparation failed before launch') from None
     finally:
-        ssh('rm -f -- ' + q(directory + '/card.json') + ' ' + q(directory + '/prompt.txt') +
-            '; rmdir -- ' + q(directory))
+        try:
+            staged = [directory + '/' + name for name in ('card.json', 'prompt.txt', 'review.bundle')]
+            ssh('rm -f -- ' + ' '.join(q(path) for path in staged) + '; rmdir -- ' + q(directory),
+                steps=[{'argv': ['rm', '-f', '--', *staged]}, {'argv': ['rmdir', '--', directory]}],
+                plan={'keep_going': True})
+        except (OSError, subprocess.SubprocessError):
+            logging.warning('remote staging cleanup could not be confirmed')
 
 
 def native_repo(card):
@@ -372,6 +502,10 @@ async def native_spawn(self, card, options):
         status='running', started=time.time(), role='implement', writer_family='openai',
         base_ref=card.get('base_ref'), repo=str(repo))
     record.update(tool_environment)
+    from .exit_outcome import native_harness_fields
+    record.update(native_harness_fields(record['host']))
+    if options.get('_placement'):
+        record['placement'] = options['_placement']
     from .item_key import annotate_item
     annotate_item(record, card)
     directory = self._path(record['run_id']).parent
@@ -440,23 +574,22 @@ def main(argv=None):
     if args.role != 'implement':
         options.extend(['--role', args.role])
     try:
-        path = Path(os.environ.get('PLANGRAPH_OVERFLOW_HOSTS', '~/.config/plangraph/overflow-hosts.json')).expanduser()
-        try:
-            config = json.loads(path.read_text())
-        except (OSError, ValueError):
-            config = {}
-        if placement_policy(registry_caps(), config)[1]:
+        registry = registry_caps()
+        config = placement_config(registry, args.role)
+        if placement_policy(registry, config)[1] or (config.get('registry') and args.role == 'review'):
             return cli.main([*local, Path(args.prompt).read_text(), *options])
-        role_mb, floor_mb = local_limits(registry_caps(), args.role)
+        role_mb, floor_mb = local_limits(registry, args.role)
         _, memory = local_resources(args.state) if args.state is not None else local_resources()
         from .host_ready import local_disk_refusal
         try:
             card = json.loads(Path(args.card).read_text())
         except (OSError, ValueError):
             card = None  # Local CLI owns malformed input diagnostics.
+        if (card or {}).get('run_kind') == 'native-codex':
+            return cli.main([*local, Path(args.prompt).read_text(), *options])
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
-        disk = local_disk_refusal(cwd or args.repo, cli.SpawnService(state=args.state))
+        disk = local_disk_refusal(cwd or args.repo, cli.SpawnService(state=args.state), args.role)
         if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
             return cli.main([*local, Path(args.prompt).read_text(), *options])
         if card is None:

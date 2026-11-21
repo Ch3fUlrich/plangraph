@@ -205,7 +205,9 @@ def require_green(repo, number, names):
                               f"({first_line(proc.stderr)}): wait for CI or name the checks with --checks")
     bad = [f"{name}={bucket}" for name, bucket in rows if bucket not in GREEN]
     if bad:
-        raise MergeBatchError("required check(s) not green on the batch head: " + ", ".join(bad))
+        pending = [name for name, bucket in rows if bucket == "pending"]
+        tail = f" (pending: {', '.join(pending)}; land does not wait or retry, run it again when it ends)" if pending else ""
+        raise MergeBatchError("required check(s) not green on the batch head: " + ", ".join(bad) + tail)
     if not names and proc.returncode != 0:
         raise MergeBatchError(f"gh pr checks --required exits {proc.returncode} although every line reads green: "
                               "not trusting the output")
@@ -252,6 +254,21 @@ def require_full_run(repo, head, branch):
         names = ", ".join(sorted(j["name"] for j in jobs_for(number)))
         reruns.append(f"tests run {run['id']} attempt {number} at {head}: {names}")
     return reruns
+
+
+def require_current_base(repo, head, base="main"):
+    """The green run of ``head`` was tested on a tree that contains main's current tip.
+
+    A head green on an older base can still turn main red when other pull requests landed in between
+    (two pull requests that grow the same file, each under the limit alone); GitHub's --match-head-commit
+    binds the head, not the base. ``behind_by`` of ``base...head`` must be 0."""
+    cmp = gh_json("api", f"repos/{repo}/compare/{base}...{head}")
+    behind = cmp.get("behind_by")
+    if not isinstance(behind, int) or isinstance(behind, bool):
+        raise MergeBatchError(f"stale_base: cannot read how far {short(head)} is behind {base}")
+    if behind:
+        raise MergeBatchError(f"stale_base: green run of {short(head)} was tested on an older {base} "
+                              f"(head is {behind} commit(s) behind it); update the head and let CI run again")
 
 
 def record_reruns(repo, number, reruns):
@@ -357,10 +374,12 @@ def cmd_land(args):
         if pr.get("baseRefName") != "main":
             raise MergeBatchError("full_ci: batch PR must target main")
         reruns = require_full_run(repo, st["head"], st["branch"])
+        require_current_base(repo, st["head"])
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
         require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
-        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"])
+        gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
+           "--body", merge_trailers(st))
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
     for _ in range(10):  # the merge commit can lag the merge by a moment
@@ -394,7 +413,30 @@ def cmd_land(args):
         cleanup_landed(st, landed)
     except Exception as exc:  # Cleanup is strictly best effort after GitHub has landed.
         print(f"cleanup failed: {exc}", file=sys.stderr)
+    close_merged_items()
     return 0
+
+
+def merge_trailers(st):
+    """The body of the batch merge commit: one Plan-Item trailer per item of every included part and
+    the batch item, then one Review-Run line per keeper-bound part review (key, run id, part head)."""
+    keys = {key for rec in st["merged"] for key in part_items(st, rec)}
+    batch = st.get("plan")
+    if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
+        keys.add(batch)
+    runs = [f"Review-Run: {key} {run} {rec['head']}" for rec in st["merged"]
+            for key, run in sorted((rec.get("review_runs") or {}).items())]
+    return "\n".join([f"Plan-Item: {key}" for key in sorted(keys)] + runs)
+
+
+def close_merged_items():
+    """Run the keeper merge-close job once for the landed batch; its report goes to stderr, never fails the land."""
+    try:
+        proc = run(["plangraph", "merge-close"], ok=None, timeout=330)
+    except MergeBatchError as exc:
+        print(f"merge-close not run: {exc}", file=sys.stderr)
+        return
+    sys.stderr.write(proc.stdout + proc.stderr)
 
 
 def cleanup_landed(st, landed):
@@ -452,9 +494,10 @@ def part_items(st, rec):
     wt, merge, head = st["worktree"], rec["merge"], rec["head"]
     if git("rev-parse", f"{merge}^2", cwd=wt).stdout.strip() != head:
         raise MergeBatchError(f"part #{rec['pr']} merge does not bind its head")
-    trailers = git("log", "--format=%(trailers:key=Plan-Item,valueonly)", f"{merge}^1..{head}",
-                   cwd=wt).stdout.splitlines()
-    keys = {line.strip() for line in trailers if line.strip()}
+    from plangraph.keeper.evidence_git import plan_items  # the keeper's reading of a commit's trailers
+
+    messages = git("log", "--format=%B%x1d", f"{merge}^1..{head}", cwd=wt).stdout.split("\x1d")
+    keys = {key for message in messages for key in plan_items(message)}
     if not keys or any(not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", key) for key in keys):
         raise MergeBatchError(f"part #{rec['pr']} needs a Plan-Item for its keeper-bound review")
     return keys

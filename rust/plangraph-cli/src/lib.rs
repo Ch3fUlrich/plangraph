@@ -8,6 +8,7 @@ mod fast_check_packages;
 pub mod fast_checks;
 pub mod feeder;
 pub mod host_sync;
+pub mod merge_close;
 pub mod paths;
 pub mod review;
 mod review_git;

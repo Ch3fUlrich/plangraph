@@ -96,17 +96,34 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
+    from plangraph.planner.route_policy import codex_leg_effort
     from .target import admit_leg, quota_paused
     if quota_paused(request['state'], request['role'], leg):
         raise LaunchRefused('quota_pause', 'quota pause')
     from plangraph.routing_errors import SpawnRefused
     try:
         admit_leg(leg)
+        if request['role'] in ('implement', 'review'):
+            leg = codex_leg_effort(leg, request['card'])
     except SpawnRefused as exc:
-        raise LaunchRefused('leg_inactive', str(exc)) from None
+        reason = str(exc)
+        raise LaunchRefused(reason.split(':', 1)[0] if reason.startswith('effort_') else 'leg_inactive', reason) from None
     if request['role'] not in leg.roles:
         raise LaunchRefused('leg_role', f"role {request['role']} not in leg roles")
     service = SpawnService(state=request['state'])
+    reader = getattr(service, 'leg_reader', None)
+    if leg.harness == 'agy':
+        from plangraph.routing_support.liveness import require_available
+        try:
+            require_available(leg, reader, request['card'])
+        except SpawnRefused as exc:
+            raise LaunchRefused('leg_unavailable', str(exc)) from None
+    from plangraph.routing_support.quota_snapshots import pool_of, skip_reason
+    if reader is not None and pool_of(leg.model):
+        card = request['card']
+        status = reader.leg_status(leg.model, account=card.get('account'), combo=card.get('combo'))
+        if reason := skip_reason(status):
+            raise LaunchRefused('quota_snapshot', reason)
     headers = None
     if request['role'] == 'review':
         from plangraph.planner.seats import seat_family

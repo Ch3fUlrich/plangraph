@@ -1,0 +1,1 @@
+- merge_batch land refuses a head whose green full run was not tested on main's current tip (stale_base), so a merge is tested against the main it lands on.
