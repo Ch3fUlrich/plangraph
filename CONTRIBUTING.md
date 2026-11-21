@@ -23,6 +23,9 @@ without a `[workspace]` table. Worker tests use `--lib --bins` to stay offline.
 Small checks have a 60-second timeout; cargo clippy/test have 600 seconds each and
 affected pytest has 240 seconds (`TEST_TIMEOUT`; a push targets under 5 minutes, the normal affected run takes about 50 s), scaled up to 2 seconds per selected test path and capped at 1200 seconds for a large selection; it runs with pytest-xdist workers sized from the host (half the cores, at most one per 2 GiB of available memory, cores only when memory cannot be read, 2 to 16; `PREFLIGHT_TEST_WORKERS` overrides); when it is exceeded the output names the step, the bound and the selected test count. A scrub FAIL skips the test step (summary line `SKIP tests`). The hook has no additional overall preflight bound.
 
+When the local affected selection includes the fleet projection tests, the selector
+builds `pg-spawnd` from the selected checkout before pytest starts.
+
 With sccache on PATH and the effective `RUSTC_WRAPPER` being sccache, the Rust step builds in a private per-run `CARGO_TARGET_DIR` that is deleted at the end (also on failure) when free disk is at least `PLANGRAPH_PREFLIGHT_MIN_FREE_GB` (default 20); without sccache, or with less disk, it prints one line and uses the shared target. Orphaned `preflight-cargo-*` dirs older than 12 hours are pruned before a private target is created. `RUSTC_WRAPPER=sccache` is set only when unset; `SCCACHE_CACHE_SIZE` comes from `PLANGRAPH_SCCACHE_CACHE_SIZE` (default 20G). Before any build preflight trims the shared target (over `PLANGRAPH_CARGO_TARGET_CAP_GB` it is removed; `cli-tests/<hash>` builds are kept to the newest `PLANGRAPH_CLI_TESTS_KEEP`, default 3, and 24 h), then builds pg-policy once into `policy-bin/<source hash>` of that target (equal sources share a warm build, different sources never share an artifact; the newest 3 are kept) and hands a private copy to the policy step as `PG_POLICY_BIN`, outside the 60-second check bound. See docs/TESTING.md.
 `tools/merge_batch.py land` merges the batch PR with one `Plan-Item` trailer per item of every included part and for the batch `--plan` key, plus one `Review-Run: KEY RUN_ID PART_HEAD` line per recorded part review, in the merge commit body, and runs `plangraph merge-close` once after the batch landed, so the keeper closes the items its merge names; the job's report goes to stderr and a failure or a missing binary never fails the land.
 `tools/merge_batch.py land` lands in the mode of the `landing.mode` setting of the batch's repository (`tested-ff`, `train-pr-merge`, `single-pr`; D-6540, details in `docs/operations/spawner-land-go.md`). `tested-ff` pushes the batch head with `--force-with-lease` on the tested base after the same gates and reads the outcome from main (no merge commit); `train-pr-merge` merges the batch pull request as above; `single-pr` lands one part only. An unknown mode refuses the land before any GitHub call. Every landing writes a receipt and a telemetry row naming the mode (`landing-report`, `landing-settle`, `landing-backfill`); a landing without its row fails. `tools/ci_select.py select --event push --statuses FILE --tree T --land-creator-id ID` runs only the fast jobs for a commit with the land App's `land-auth` and a matching `ci-full` status, and the full suite otherwise.
@@ -31,7 +34,14 @@ git and hook output to stderr while the hook enforces its per-step bounds.
 The Rust step resolves `protoc` (`PROTOC`, then `~/.local/bin/protoc`, then `PATH`) before cargo when a target pulls a protobuf build script, and refuses within a second with a named message when it is missing. The shared subprocess runner kills the process group on a caller-supplied
 timeout or interruption, including nested worker sessions on Linux, then reaps
 git before reporting the failure.
-Within the policy family every check runs and all failures are printed, followed by a `policy: N check(s) failed:` block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
+When a Rust compile check fails in the shared target, preflight logs the clean target
+and reruns the check there once. It uses that result and keeps the clean target for
+the remaining Rust checks in the run.
+
+The commit policy reads its exemptions from the base commit and checks the entire
+stack against `origin/main`, as the pre-push hook does. Within the policy family
+every check runs and all failures are printed, followed by a `policy: N check(s) failed:`
+block with each failed check's first error line. Use `--keep-going` to collect all failures or `--fast`
 to skip affected tests. The existing pre-push hook runs preflight too; set
 `PREFLIGHT_FAST=1` for its fast mode or, on `refs/heads/phase/*` pushes only
 (D-5843), `PREFLIGHT_SKIP=1` to bypass only that hook invocation (not the existing

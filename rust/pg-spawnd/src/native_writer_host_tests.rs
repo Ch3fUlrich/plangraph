@@ -627,6 +627,23 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
 #[cfg(unix)]
 #[test]
 fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_failed() {
+    const CHILD: &str = "PG_NATIVE_GATE_UMASK_FIXTURE";
+    if std::env::var_os(CHILD).is_none() {
+        // The mask is process-wide. Set it in a disposable test process so
+        // parallel tests retain their own inherited mask.
+        let test = std::thread::current();
+        let result = output(
+            Command::new("sh")
+                .args(["-c", "umask 002; exec \"$@\"", "native-gate-umask"])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", test.name().unwrap(), "--nocapture"])
+                .env(CHILD, "1"),
+        )
+        .unwrap();
+        assert!(result.contains("1 passed"), "{result}");
+        return;
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().join("worktree");
     fs::create_dir_all(cwd.join("tools")).unwrap();
@@ -646,7 +663,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     git(&["init", "-q", "-b", "main"]);
     fs::write(
         cwd.join("tools/ci_commit_gate.py"),
-        "import pathlib, sys\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
+        "import os, pathlib, sys\nprint('gate umask:', oct(os.umask(0o022)))\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
     )
     .unwrap();
     git(&["add", "."]);
@@ -683,6 +700,10 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     git(&["commit", "-q", "--allow-empty", "-m", "C"]);
     let head_c = git(&["rev-parse", "HEAD"]);
     host.fast_checks(&head_c).unwrap();
+    let gate_log = host.stamp(&head_c).unwrap().with_extension("log");
+    assert!(fs::read_to_string(gate_log)
+        .unwrap()
+        .contains("gate umask: 0o22\n"));
     let excerpt = host.stamp(&head_c).unwrap().with_extension("session.log");
     assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
 }

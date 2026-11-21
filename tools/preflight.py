@@ -391,6 +391,22 @@ def find_sccache(env):
     return found
 
 
+def private_rust_target(parent, cleanup):
+    parent.mkdir(parents=True, exist_ok=True)
+    private = tempfile.mkdtemp(prefix=PRIVATE_TARGET_PREFIX, dir=parent)
+    cleanup.append(private)
+    return private
+
+
+def rust_compile_failure(command, output):
+    if command[0] != "cargo":
+        return False
+    if command[1] == "test":
+        return bool(re.search(r"^error: could not compile\b", output, re.M))
+    return command[1] in {"build", "check", "clippy"} and bool(
+        re.search(r"^error(?:\[E\d+\])?: ", output, re.M))
+
+
 def rust_target_env(env, cleanup):
     """Return env for the Rust family: private target when sccache is present and disk allows.
 
@@ -429,11 +445,8 @@ def rust_target_env(env, cleanup):
         elif free < need:
             print(f"rust: shared CARGO_TARGET_DIR (free {free:.1f} GB < {need:g} GB)", flush=True)
         else:
-            parent.mkdir(parents=True, exist_ok=True)
             prune_stale_targets(parent)
-            private = tempfile.mkdtemp(prefix=PRIVATE_TARGET_PREFIX, dir=parent)
-            cleanup.append(private)
-            out["CARGO_TARGET_DIR"] = private
+            out["CARGO_TARGET_DIR"] = private_rust_target(parent, cleanup)
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         print(f"rust: shared CARGO_TARGET_DIR ({exc})", flush=True)
     return out
@@ -614,8 +627,8 @@ def _main(argv, root, cleanup):
     families = [("scrub", scrubs),
                 ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),
-                            python("ci_commit_gate.py", "check", "--base", args.base,
-                                   "--head", args.head, "--exempt", str(tools / "ci_commit_exempt.txt"))]),
+                            python("ci_commit_gate.py", "check", "--base", policy_base,
+                                   "--head", args.head)]),
                 ("rust", None), ("tests", [] if args.fast else [tests])]
     summary, exit_code, stopped, scrub_bad = [], 0, False, False
     trim_shared_target(root)
@@ -661,6 +674,19 @@ def _main(argv, root, cleanup):
                         command_env.setdefault("PG_JAIL", "off")
                         command_env.setdefault("PG_TEST_ALLOW_UNJAILED", "1")
                     code, output = invoke(command, cwd, command_env)
+                    if (code and family == "rust"
+                            and command_env["CARGO_TARGET_DIR"] == env["CARGO_TARGET_DIR"]
+                            and rust_compile_failure(command, output)):
+                        try:
+                            private = private_rust_target(Path(env["CARGO_TARGET_DIR"]).parent, cleanup)
+                        except OSError as exc:
+                            print(f"rust: could not allocate a verification target: {exc}", flush=True)
+                        else:
+                            print(f"rust: {command[1]} failed in the shared target; "
+                                  f"verifying in CARGO_TARGET_DIR={private}", flush=True)
+                            family_env = dict(family_env, CARGO_TARGET_DIR=private)
+                            command_env = dict(command_env, CARGO_TARGET_DIR=private)
+                            code, output = invoke(command, cwd, command_env)
                     print(output, end="", flush=True)
                     infra = bool(code and re.search(r"\bHTTP(?:/\d(?:\.\d)?)?\s+5\d\d\b", output, re.I))
                     if infra:

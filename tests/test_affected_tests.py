@@ -13,6 +13,35 @@ def selector():
     return module
 
 
+@pytest.mark.parametrize('build_code', [0, 1])
+def test_local_fleet_selection_builds_pg_spawnd_before_pytest(tmp_path, monkeypatch, build_code):
+    import sys
+    from types import SimpleNamespace
+
+    module = selector()
+    fleet = 'tests/test_fleet_snapshot.py'
+    (tmp_path / 'tests').mkdir()
+    (tmp_path / fleet).write_text('def test_build(): pass\n')
+    monkeypatch.setattr(sys, 'argv', ['affected_tests', '--base', 'HEAD', '--changed', fleet,
+                                    '--run', '--local', '--files-only', '--workers', '0'])
+    monkeypatch.setattr(module, 'test_environment', lambda root, env: dict(env))
+    monkeypatch.setattr(module, 'tree_hash', lambda root: 'fixture')
+    calls = []
+
+    def run(command, *, cwd, env, **kwargs):
+        assert cwd == tmp_path
+        calls.append(command)
+        return SimpleNamespace(returncode=build_code if command[0] == 'cargo' else 0)
+
+    monkeypatch.setattr(module.subprocess, 'run', run)
+    assert module.main(root=tmp_path) == build_code
+    assert calls[0] == ['cargo', 'build', '--locked', '--manifest-path', 'rust/Cargo.toml',
+                        '-p', 'pg-spawnd']
+    assert len(calls) == (1 if build_code else 2)
+    if not build_code:
+        assert calls[1][:3] == [sys.executable, '-m', 'pytest']
+
+
 @pytest.mark.parametrize("changed,expected", [
     (["src/pkg/core.py"], ["tests/test_api.py"]),
     (["tests/test_api.py"], ["tests/test_api.py"]),

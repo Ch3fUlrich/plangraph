@@ -30,8 +30,10 @@ _clear_inherited_git_environment()
 from pgtest_shm import _sweep_dead_pgtest_dirs
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
+# PYTHONPATH can already contain this path after another checkout.
+if str(_SRC) in sys.path:
+    sys.path.remove(str(_SRC))
+sys.path.insert(0, str(_SRC))
 
 _TOOLS = Path(__file__).resolve().parents[1] / "tools"
 

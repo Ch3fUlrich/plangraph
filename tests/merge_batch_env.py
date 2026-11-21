@@ -99,7 +99,9 @@ class Env:
         for index, key in enumerate(rec["items"]):
             run_id = f"run-part-{rec['pr']}-{index}"
             path = mirror / "fixture" / run_id / "record.json"
-            path.parent.mkdir(parents=True, exist_ok=True)
+            for directory in (mirror, mirror / "fixture", path.parent):
+                directory.mkdir(exist_ok=True)
+                directory.chmod(0o700)
             path.write_text(json.dumps({
                 "run_id": run_id, "host": "fixture", "item_key": key,
                 "role": "review", "status": "completed", "exit_code": 0,
@@ -107,6 +109,7 @@ class Env:
                 "head_sha": rec["head"], "completion": {"head_sha": rec["head"]},
                 "stdout_tail": "TEST_GAMING: no\nVERDICT: PASS\n",
             }))
+            path.chmod(0o600)
             result = self.run("review", "--name", batch, "--pr", str(rec["pr"]), "--run-id", run_id)
             assert result.returncode == 0, result.stderr
 

@@ -20,6 +20,10 @@ an explicit pass on both reruns and equal hashes; `FAILED-IN-PARALLEL` is a pass
 failure at the worker count; `FAILED-THEN-PASSED` is a pass after the tree changed. The exit
 status stays that of the first run, so a flake is named, never hidden.
 
+`SKIPPED plangraph:FLAKE-RETRY-QUARANTINE` — the part-entry runner is outside
+this batch's scope, and a nonblocking CI quarantine job requires an operator
+`Gate-Edit` decision ID.
+
 Selection follows transitive AST imports in src/ and tests/ (including relative
 imports and package initializers), plus test references to filenames for subprocess
 consumers. Changed tests select themselves. Conftest/shared test helpers, config,

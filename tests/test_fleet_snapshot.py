@@ -1,10 +1,11 @@
 """Hermetic fleet projection and persisted snapshot failure isolation."""
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
 
-from _spawnd import built_rust_binary, require_spawnd
+from _spawnd import built_rust_binary, fleet_spawnd, require_spawnd
 from plangraph import fleet_snapshot as fleet
 from plangraph.keeper.snapshot_io import write_snapshot
 from keeper_util import World
@@ -14,12 +15,41 @@ REGISTRY = [{"id": "a", "aliases": ["alias"], "class": "worker",
              "caps": {"max_runs": 4}}, {"id": "b"}]
 
 
+@pytest.mark.parametrize('release', ['old', 'other-tree', 'current'])
+def test_fleet_binary_must_match_current_sources(tmp_path, monkeypatch, release):
+    import _spawnd
+
+    target = tmp_path / 'cargo-target'
+    source = tmp_path / 'checkout/rust/pg-spawnd/src/main.rs'
+    source.parent.mkdir(parents=True)
+    source.touch()
+    os.utime(source, (200, 200))
+    monkeypatch.setattr(_spawnd, '__file__', str(tmp_path / 'checkout/tests/_spawnd.py'))
+    monkeypatch.setenv('CARGO_TARGET_DIR', str(target))
+
+    def artifact(profile, built_from, timestamp):
+        path = built_rust_binary('pg-spawnd', profile)
+        path.parent.mkdir(parents=True)
+        path.touch()
+        os.utime(path, (timestamp, timestamp))
+        path.with_name('pg-spawnd.d').write_text(f'{path}: {built_from}\n')
+        return path
+
+    release_binary = artifact('release', source if release != 'other-tree'
+                              else tmp_path / 'other/rust/pg-spawnd/src/main.rs',
+                              100 if release == 'old' else 300)
+    if release == 'current':
+        assert fleet_spawnd() == release_binary
+    else:
+        with pytest.raises(RuntimeError, match='stale pg-spawnd'):
+            fleet_spawnd()
+        debug_binary = artifact('debug', source, 300)
+        assert fleet_spawnd() == debug_binary
+
+
 @pytest.fixture
 def spawnd(monkeypatch):
-    binary = built_rust_binary('pg-spawnd', 'release')
-    if not binary.is_file():
-        binary = built_rust_binary('pg-spawnd')
-    assert binary.is_file(), f'build pg-spawnd before running fleet tests: {binary}'
+    binary = fleet_spawnd()
     monkeypatch.setattr(fleet, '_projection_binary', lambda: str(binary))
     return binary
 

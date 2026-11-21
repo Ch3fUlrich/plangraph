@@ -1,1 +1,1 @@
-Treat procfs ESRCH during detached audit exit observation as an exited child. Cover a child reaped before reading its open status file; retain the startup and runtime deadline assertions.
+Treat procfs ESRCH during detached audit exit observation as an exited child. Cover a child that exits normally and is reaped before its open status file is read; retain the startup and runtime deadline assertions.
