@@ -155,7 +155,8 @@ class _FrozenSpawnImports:
 
 
 sys.meta_path.insert(0, _FrozenSpawnImports())
-GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_session_launch', 'plangraph_session_relaunch')
+GUARDED_TOOLS = ('plangraph_agent_spawn', 'plangraph_agent_probe',
+                 'plangraph_session_launch', 'plangraph_session_relaunch')
 
 
 class SourceChanged(SpawnRefused):
@@ -174,8 +175,7 @@ class SourceGuard:
         return None
 
     def check(self, name, arguments):
-        """Refuse tools that start a real run or session; dry runs, route, ps, status,
-        cancel, probe, session stop/list/mark_ready stay available."""
+        """Require a current source tree for tools that start a run, session or probe."""
         dry = (name in ('plangraph_agent_spawn', 'plangraph_session_launch')
                and isinstance(arguments, Mapping) and arguments.get('dry_run') is True)
         if name in GUARDED_TOOLS and not dry:

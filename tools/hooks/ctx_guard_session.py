@@ -20,6 +20,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import tempfile
@@ -247,6 +248,12 @@ def main() -> int:
     strict = os.environ.get("PLANGRAPH_GUARD_FAIL_CLOSED") == "1"
     if sys.argv[1:2] == ["--set"]:
         return set_thresholds(sys.argv[1:])
+    if sys.argv[1:2] in (["ready"], ["status"]):
+        # The wrapper has no ready step: exiting 0 here once left a session without a marker.
+        print("ctx_guard_session: this hook has no %s command; run the guard itself: python3 %s %s"
+              % (sys.argv[1], shlex.quote(GUARD), " ".join(shlex.quote(a) for a in sys.argv[1:])),
+              file=sys.stderr)
+        return 2
     if state_home is None:
         print("ctx_guard_session: hook_common.py missing next to this hook; context guard is off", file=sys.stderr)
         return 1 if strict else 0
