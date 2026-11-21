@@ -203,18 +203,20 @@ fn diagnostic_marker_respects_the_capture_bound() {
 }
 
 #[test]
-fn split_diagnostic_marker_cannot_resume_capture_before_the_footer() {
+fn split_diagnostic_markers_are_preserved_only_outside_the_pem_block() {
     let (block, _) = pem(40);
     let start = block.find("Zk020").unwrap();
-    let mut capture = stall_capture::Capture::new(200, true);
-    // Enter the swallow before feeding either half of the diagnostic marker.
-    assert!(start > 2 * 200);
-    capture.push(&block.as_bytes()[..start]);
+    let max = 200;
+    let mut capture = stall_capture::Capture::new(max, true);
+    // The next chunk finishes the visible marker and starts a PEM large enough to swallow.
+    capture.push(b"before\nPG-CHECK-");
+    assert!(start > 2 * max);
+    capture.push(format!("DONE:99\n{}", &block[..start]).as_bytes());
     capture.push(b"\nPG-CHECK-");
     capture.push(b"DONE:1\n");
     capture.push(b"withheld-body\n");
     capture.push(b"-----END PRIVATE KEY-----\nafter\n");
-    assert_eq!(capture.finish(), b"\nafter\n");
+    assert_eq!(capture.finish(), b"before\nPG-CHECK-DONE:99\n\nafter\n");
 }
 
 #[test]
