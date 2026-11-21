@@ -271,7 +271,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     """
     native_review = role == "review" and legs is DEFAULT_LEGS
     native_implement = role == "implement" and legs is DEFAULT_LEGS
-    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET
+    from .legs import REVIEW_ORDER, LOW_RISK_ONLY_LEGS, review_route_pool, REVIEW_HYDROGEN, REVIEW_ARGON_LOW, REVIEW_ARGON, REVIEW_SONNET, REVIEW_GPT
     if native_review:
         legs = review_route_pool(legs)
     harness_skipped = []
@@ -309,8 +309,12 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     role = 'orchestrate' if role == 'research' else role
     if role not in ("implement", "review", "orchestrate"):
         raise ValueError("role must be implement|review|orchestrate")
-    from plangraph.routing_support.risk import evaluate_risk
-    assessment = evaluate_risk(paths=card.get('paths', card.get('write_set', ())),
+    from plangraph.routing_support.risk import evaluate_risk, propose_risk_tags
+    paths = card.get('paths', card.get('write_set', ()))
+    risk_tags = card.get('risk_tags', ())
+    sensitive_review = native_review and bool({"auth", "secrets"}.intersection(
+        (*risk_tags, *propose_risk_tags((*paths, *(card.get('diff_ref') or {}).get('paths', ()))))))
+    assessment = evaluate_risk(paths=paths,
                                bucket=card.get('bucket', 'S1'),
                                has_tests=card.get('has_tests', True),
                                risk_tags=card.get('risk_tags', ()),
@@ -345,7 +349,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         if required_gaps:
             raise BenchRequired("benchmark rows missing: " + ", ".join(g["leg"] for g in required_gaps),
                                 required_gaps)
-    if native_implement:   # Claude writers join the route behind Codex (rule 3.58); see codex_out.
+    if native_implement:   # Claude writers join the route behind Codex (rule 3.58); subject to the dual quota guard.
         from .legs import EXPLICIT_LEGS   # Added after the strict gap check: explicit legs carry no benchmark row.
         fallbacks = tuple(l for l in EXPLICIT_LEGS if l.id in CODEX_FALLBACK_WRITERS
                           and role in l.roles and leg_active(l, now=now))
@@ -383,8 +387,14 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                              ("gemini-4-argon", REVIEW_ARGON_LOW),
                              ("claude-sonnet-5-5", REVIEW_SONNET))}
     limited = {key for key, state in states.items() if unavailable(state)}
-    codex = [l.id for l in candidates if l.id.startswith("cx-gpt-")]
-    codex_out = bool(codex) and all(leg_id in limited for leg_id in codex)
+    def quota_limited(state):
+        return state["state"] == "limited" and (state.get("evidence") or {}).get("kind") != "auth_refused"
+
+    claude_quota_fallback = (native_implement or native_review) and all(
+        quota_limited(states[leg_id] if leg_id in states else
+                      reader(model, now=now, account=card.get("account"), combo=card.get("combo")))
+        for leg_id, model in ((REVIEW_GPT, REVIEW_GPT), (REVIEW_HYDROGEN, "gemini-4-hydrogen-high")))
+
     disabled_skips = [{"leg": l.id, "reason": "disabled: " + l.disabled,
                        "evidence": {"kind": "leg_disabled", "reason": l.disabled}}
                for l in legs if role in l.roles and not leg_active(l, now=now)]
@@ -397,8 +407,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     for leg in candidates:
         row = rows.get(leg.model, rows.get(leg.id))
         reason = policy.skip_reason(leg, role) or (states[leg.id]["state"] if leg.id in limited else None)
-        if native_implement and leg.id in CODEX_FALLBACK_WRITERS and not codex_out and not reason:
-            reason = "codex_available"
+        if (not reason and (native_implement or native_review) and leg.claude_family
+                and not claude_quota_fallback and not (sensitive_review and leg.id == REVIEW_SONNET)):
+            reason = "claude_requires_gpt_and_hydrogen_limits"
         if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
             reason = 'auth_refused'
         if reason == 'limited':
@@ -437,7 +448,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     skipped.extend(disabled_skips)
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
-        "review_route_excluded", "low_risk_only", "codex_available", "benchmark_unmeasured")}
+        "review_route_excluded", "low_risk_only", "claude_requires_gpt_and_hydrogen_limits", "benchmark_unmeasured")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
@@ -491,6 +502,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         ordered.sort(key=lambda leg: len(REVIEW_ORDER) + 2 + REVIEW_ORDER.index(leg.id) if leg.id in (REVIEW_ARGON_LOW, REVIEW_ARGON)
                      else REVIEW_ORDER.index(leg.id) if leg.id in REVIEW_ORDER
                      else len(REVIEW_ORDER) + (leg.id in LOW_RISK_ONLY_LEGS))
+        if sensitive_review:
+            ordered.sort(key=lambda leg: leg.id != REVIEW_SONNET)
         source = "operator-order"
     ordered.sort(key=lambda leg: role == "orchestrate" and leg.claude_family)  # D-4812/D-297: Claude last
     if role in ('implement', 'review'):

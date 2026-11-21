@@ -55,7 +55,8 @@ def test_leg_data():
     for leg_id, model in SOL.items():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.disabled) == (
-            'opencode', model, 'gpt', ('implement',), None), leg_id
+            'codex' if leg_id == 'cx-gpt-6.2-sol-medium' else 'opencode',
+            model, 'gpt', ('implement',), None), leg_id
     for leg_id, model in LUNA.items():
         leg = BY_ID[leg_id]
         assert (leg.harness, leg.model, leg.family, leg.roles, leg.tool_mode) == (
@@ -104,7 +105,7 @@ def test_route_lists_them_as_explicit_only(store, tmp_path, role, listed):
         assert [leg.id for leg in routed.legs] == WRITERS
         # Rule 3.58: the Claude fallback writer has one skip row, never explicit_only.
         rows = [s for s in routed.skipped if s['leg'] == 'agy-claude-sonnet-5-5-high']
-        assert [r['reason'] for r in rows] == ['codex_available']
+        assert [r['reason'] for r in rows] == ['claude_requires_gpt_and_hydrogen_limits']
 
 
 @pytest.mark.parametrize('role', ['review', 'implement'])

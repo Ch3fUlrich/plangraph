@@ -58,7 +58,7 @@ def test_families_without_own_client_stay_on_opencode():
 
 
 def test_foreign_pin_needs_an_override_reason_while_the_own_client_is_installed():
-    gpt = CATALOG["cx-gpt-6.2-sol-medium"]
+    gpt = CATALOG["cx-gpt-6.2-astra"]
     with pytest.raises(SpawnRefused, match="override"):
         refuse_foreign_pin(gpt, None, ALL)
     with pytest.raises(SpawnRefused, match="override"):
@@ -98,7 +98,8 @@ def test_service_route_review_for_claude_diff_runs_gpt_in_codex(tmp_path):
                            state=tmp_path / "state")
     service.client_probe = ALL
     plan = service.route(service_card, "review", ("claude",))
-    assert (plan.legs[0].id, plan.legs[0].harness) == ("gpt-6.2-sol-medium", "codex")
+    assert [(leg.id, leg.harness) for leg in plan.legs[:2]] == [
+        ("agy-gemini-4-hydrogen-high", "agy"), ("gpt-6.2-sol-medium", "codex")]
 
 
 def test_service_spawn_refuses_a_foreign_pin_without_a_reason(tmp_path):
@@ -130,7 +131,7 @@ def test_switch_off_keeps_registered_harness(tmp_path, monkeypatch):
     monkeypatch.delenv("PLANGRAPH_OWN_HARNESS")
     from plangraph.planner.legs import client_installed, service_probe
     assert service_probe(service) is client_installed
-    assert resolve_harness(CATALOG["cx-gpt-6.2-sol-medium"], None).harness == "opencode"
+    assert resolve_harness(CATALOG["cx-gpt-6.2-sol-medium"], None).harness == "codex"
 
 
 def test_native_legs_with_a_missing_client_fall_back_or_leave_the_route():
@@ -185,7 +186,8 @@ def test_paused_codex_harness_removes_the_converted_leg(tmp_path, monkeypatch):
 
 
 def codex_limited(model, **kwargs):
-    limited = model.startswith("omniroute/cx-gpt-")
+    limited = model.startswith("omniroute/cx-gpt-") or model in {
+        "gpt-6.2-sol-medium", "gemini-4-hydrogen-high"}
     return {"state": "limited" if limited else "available", "evidence": {"status": 429} if limited else None}
 
 

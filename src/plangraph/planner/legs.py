@@ -190,21 +190,16 @@ DEFAULT_LEGS = (
         note="D-3605/D-3619: review fallback via Claude subscription; never seats a claude/anthropic writer"),
 )
 
-# Rule 3.61 (OPERATOR D-6481, 2026-11-20; amends rule 3.58 / D-6366): reviews run first on
-# gpt-6.2-sol-medium in Codex, then mimo-v2.6-pro, the OpenCode DeepSeek legs and glm-5.3-flash;
-# neon, Sonnet high and mimo flash follow, agy argon low and medium come last.  The reviewer's
-# family always differs from the writer's.
+# D-6550 (rule 3.66): Hydrogen reviews in its own harness; writer-family exclusion still applies.
 REVIEW_MIMO_PRO, REVIEW_MIMO_FLASH = "mimo-v2.6-pro", "mimo-v2.6-flash"
 REVIEW_HYDROGEN, REVIEW_NEON = "agy-gemini-4-hydrogen-high", "agy-gemini-4-neon-medium"
 REVIEW_ARGON_LOW, REVIEW_ARGON = "agy-gemini-4-argon-low", "agy-gemini-4-argon-medium"
 REVIEW_DEEPSEEK, REVIEW_BEAM = "opencode-deepseek-v4.1-flash-free", "opencode-go-beam-free"
 REVIEW_SONNET = "claude-sonnet-5-5-high"
-#: Rule 3.61 (D-6481, 2026-11-20): gpt-6.2-sol-medium reviews first, as a native Codex run
-#: with repository access; the OpenCode review child has no repository tools (D-4681).
 REVIEW_GPT = "gpt-6.2-sol-medium"
-REVIEW_ORDER = (REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK, "opencode-go-deepseek-v4-flash",
-                "opencode-go-glm-5.3-flash", REVIEW_NEON, REVIEW_SONNET, REVIEW_MIMO_FLASH,
-                REVIEW_ARGON_LOW, REVIEW_ARGON)
+REVIEW_ORDER = (REVIEW_HYDROGEN, REVIEW_GPT, REVIEW_MIMO_PRO, REVIEW_DEEPSEEK,
+                "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash", REVIEW_NEON,
+                REVIEW_SONNET, REVIEW_MIMO_FLASH, REVIEW_ARGON_LOW, REVIEW_ARGON)
 LOW_RISK_ONLY_LEGS = frozenset({"opencode-flint-40b-free", "opencode-big-pickle", "opencode-go-beam-free"})
 REVIEW_FALLBACK_LEGS = (
     Leg(REVIEW_GPT, "subscription", "codex", "gpt-6.2-sol-medium", "gpt",
@@ -266,7 +261,7 @@ EXPLICIT_LEGS += REVIEW_FALLBACK_LEGS
 
 # Promote the existing effort leg; retain plain Sol as an active explicit-only pick.
 _plain_sol = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.2-sol")
-_sol_default = next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER)
+_sol_default = _replace(next(leg for leg in EXPLICIT_LEGS if leg.id == LEAD_WRITER), harness="codex")
 DEFAULT_LEGS = tuple(_sol_default if leg.id == _plain_sol.id else leg for leg in DEFAULT_LEGS)
 EXPLICIT_LEGS = (_plain_sol, *(leg for leg in EXPLICIT_LEGS if leg.id != LEAD_WRITER))
 # Keeper readiness keeps its existing admission, but uses the current routed id.

@@ -1,0 +1,1 @@
+- Apply D-6550 to spawner routing. Prefer native Codex for implementation and AGY Hydrogen for review. Use Sonnet high for credential reviews when eligible and require both primary providers to be rate-limited before admitting other Claude fallbacks.

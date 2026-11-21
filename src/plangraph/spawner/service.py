@@ -190,6 +190,11 @@ class SpawnService(SeatSpawnMixin):
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
+        if role == 'review' and isinstance(card, dict) and 'diff_ref' in card:
+            from .inline_diff import changed_paths
+            paths = card.get('paths', card.get('write_set', ()))
+            if isinstance(paths, (tuple, list)):
+                card = dict(card, paths=(*paths, *changed_paths(card['diff_ref'])))
         from plangraph.planner.measured_down import measured_down
         from plangraph.planner.legs import leg_active, service_probe
         down = measured_down(self.state)
