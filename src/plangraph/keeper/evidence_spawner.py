@@ -56,16 +56,18 @@ def _one_serving_attempt(attempts, model):
     """D-5924: quota-refused legs do not consume another review on the head."""
     if not isinstance(attempts, list) or not attempts:
         return False
-    if len(attempts) == 1:
-        return True  # preserve the legacy single-attempt record contract
+    if len(attempts) == 1 and attempts[0] == {}:
+        return True  # legacy placeholder with no attempt telemetry
     real = [a for a in attempts if isinstance(a, dict) and a.get('status') != 'skipped']
-    if (len(real) < 2 or any(not isinstance(a, dict) for a in attempts)
+    if (not real or any(not isinstance(a, dict) for a in attempts)
             or real[-1].get('status') != 'completed'
             or real[-1].get('served_model') != model):
         return False
     for attempt in real[:-1]:
         stdout, stderr = (attempt.get(k) or '' for k in ('stdout_tail', 'stderr_tail'))
-        if attempt.get('status') not in ('failed', 'limited') or not _quota_refusal(stderr + '\n' + stdout):
+        if (attempt.get('status') not in ('failed', 'limited')
+                or not all(isinstance(tail, str) for tail in (stderr, stdout))
+                or not _quota_refusal(stderr + '\n' + stdout)):
             return False
     return True
 

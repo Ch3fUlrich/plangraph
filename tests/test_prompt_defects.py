@@ -162,3 +162,10 @@ def test_spawner_size_and_prompt_rules_pointer():
                      'python3 tools/affected_tests.py --base origin/main --run',
                      'COMMIT before finishing'):
         assert contract in rules
+
+
+def test_review_seat_brief_requires_test_gaming_line():
+    from plangraph.review.prompt import render_brief
+
+    brief = render_brief("review", {"item_key": "demo:SEAT"})
+    assert "TEST-GAMING:" in brief.split("=== ITEM CONTEXT", 1)[0]
