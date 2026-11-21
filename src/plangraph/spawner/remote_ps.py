@@ -285,10 +285,24 @@ def list_runs(local, *, transport=query_host):
                                   reason='host query failed') for h in hosts]
 
 
+_LIFECYCLE_PUBLISHER = 'PLANGRAPH_LIFECYCLE_PUBLISHER'
+
+
 def lifecycle_command(state, *args, **kwargs):
     from plangraph.fleet_snapshot import _projection_binary
-    return subprocess.run([_projection_binary(), *args], check=True, timeout=10,
+    binary = os.environ.get(_LIFECYCLE_PUBLISHER) or _projection_binary()
+    return subprocess.run([binary, *args], check=True, timeout=10,
                           env=dict(os.environ, PLANGRAPH_SPAWN_STATE=str(state)), **kwargs)
+
+
+def publish_run_record(state, path, body):
+    if os.environ.get(_LIFECYCLE_PUBLISHER):
+        # A configured publisher owns publication. A failure leaves its
+        # journal obligation recoverable instead of replacing the projection.
+        lifecycle_command(state, 'record-publish', input=body, text=True)
+    else:
+        from .private_io import atomic_write_private
+        atomic_write_private(path, body)
 
 
 def changed_runs(state, bookmark, *, transport=query_host):

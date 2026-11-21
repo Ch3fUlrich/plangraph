@@ -26,9 +26,12 @@ from plangraph.keeper.schema import EVENT_TYPES
 
 UNKNOWN = "zz_future_event"      # a type only a newer keeper knows
 
-#: in ``EVENT_TYPES`` but with no branch in ``fold``: replayed by
-#: ``token_fold``/the store instead, so a known no-op, never "unknown".
-BRANCHLESS = {"review_verdict", "token_minted", "outage_recorded"}
+#: Known events whose effects belong to token replay or separate store tables.
+#: Grant and card-question events are keyless observations for scoped replay.
+BRANCHLESS = {
+    "review_verdict", "token_minted", "outage_recorded",
+    "apply_granted", "apply_revoked", "question_asked", "question_resolved",
+}
 
 #: every field any branch may read, so a known type replays without a KeyError.
 RICH = {"epoch": 1, "claimed_by": "l1main", "lease_until": "2030-01-01T00:00:00Z",

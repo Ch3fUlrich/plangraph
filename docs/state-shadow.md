@@ -27,7 +27,9 @@ the collector owner.
 | `lease_margin_seconds` | Optional lead time for lease warnings, default 600 |
 
 The service reads GitHub via `gh` and spawner host history via
-`plangraph-spawn`. Keep both on its PATH. The initial decision and GitHub
+`plangraph-spawn`. Keep both on its PATH. Enable the Rust lifecycle publisher in
+legacy spawner and watchdog environments before starting shadow observation.
+Set `PLANGRAPH_LIFECYCLE_PUBLISHER` to the installed `pg-spawnd` binary. The initial decision and GitHub
 positions should cover the shadow observation window. The source checkout
 synchronizer refreshes `origin/main`. Configure the next transcript path on
 session replacement. Decision rows are included when they address the role or

@@ -592,7 +592,7 @@ Cross-host ps: see [site configuration and transport](spawner-ps.md); [host read
 # Remote ps protocol
 
 The SSH ps endpoint serializes running and queued records within its 1 MiB transport budget.
-For durable transitions including terminal results, use `plangraph-spawn runs --changed-since CURSOR_JSON` with a separate cursor per host.
+For durable transitions including terminal results, use `plangraph-spawn runs --changed-since CURSOR_JSON` with a separate cursor per host. On each legacy producer host, set `PLANGRAPH_LIFECYCLE_PUBLISHER` to the installed Rust `pg-spawnd` binary when activating the journal.
 Malformed terminal fields do not hide live runs; malformed live or oversized replies name the queried host as unknown rather than silently omitting it.
 Rust source-filter tests and pytest's real `configured_hosts` checks consume
 `tests/fixtures/doctor_sources.json`, binding both validators and probe limits

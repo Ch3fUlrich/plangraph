@@ -85,17 +85,38 @@ fn legacy_spawner_publishes_and_replays_backlog_after_host_recovers() {
         .arg("-c")
         .arg(
             r#"
-import json, sys
+import json, os, sys
+from pathlib import Path
+from subprocess import CalledProcessError
 from unittest.mock import patch
 from plangraph.spawner.remote_ps import changed_runs
 from plangraph.spawner.service import SpawnService
 
 state, binary = sys.argv[1:]
-with patch('plangraph.fleet_snapshot._projection_binary', return_value=binary):
+publisher = 'PLANGRAPH_LIFECYCLE_PUBLISHER'
+with patch.dict(os.environ):
+    os.environ.pop(publisher, None)
+    with patch('plangraph.fleet_snapshot._projection_binary', side_effect=AssertionError('unexpected publisher lookup')):
+        compat = str(Path(state) / 'compat')
+        service = SpawnService(state=compat)
+        record = {'run_id':'run-compat','status':'running','started':1,'role':'review'}
+        service._save(record)
+        assert service.result('run-compat')['status'] == 'running'
+        assert not (Path(compat) / 'run-lifecycle').exists()
+    os.environ[publisher] = binary
     service = SpawnService(state=state)
     run = {'run_id':'run-legacy','status':'running','started':1,'role':'review'}
     service._save(run)
     service._save(dict(run, status='failed', ended=2, exit_code=7))
+    with patch('plangraph.spawner.remote_ps.lifecycle_command', side_effect=CalledProcessError(2, 'record-publish')):
+        try:
+            service._save(dict(run, status='completed', ended=3, exit_code=0))
+        except CalledProcessError:
+            pass
+        else:
+            raise AssertionError('publisher failure was swallowed')
+        assert service.result('run-legacy')['status'] == 'failed'
+
     def offline(host, timeout):
         assert host['lifecycle_cursor'] == 0
         raise TimeoutError()

@@ -66,8 +66,8 @@ def probe_run(state, record, now, *, dry_run=False, hung=None):
                 record = dict(record, status='failed', reason='orphaned', ended=now, exit_code=1)
                 if not dry_run:
                     try:
-                        from .remote_ps import lifecycle_command
-                        lifecycle_command(state, 'record-publish', input=json.dumps(record), text=True)
+                        from .remote_ps import publish_run_record
+                        publish_run_record(state, directory / 'record.json', json.dumps(record))
                     except (OSError, RuntimeError, SubprocessError):
                         event['record_error'] = 'could not publish orphaned run'
                 return event

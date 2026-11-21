@@ -131,5 +131,6 @@ paths by feeding the real hook Git's ref records from isolated repositories.
 The `guard-hook` binary wraps effective Claude Code PreToolUse guards with
 a deadline and one incident record per outage. Build and wire it after a
 scoped deployment GO. Its regression test reads the versioned effective
-settings and exercises the Bash and context outage alerts.
+settings and exercises the Bash and context outage alerts. The fixture execution
+runs in the Unix hook test suite.
 [Fail-closed registration](guard-hooks.md)
