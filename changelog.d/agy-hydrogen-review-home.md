@@ -1,0 +1,1 @@
+- Start AGY Hydrogen reviews in a private home with the current account state so globally configured MCP servers cannot stall the review startup.

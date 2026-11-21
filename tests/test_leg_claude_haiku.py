@@ -35,9 +35,16 @@ def test_leg_present_review_only_and_last():
 def test_review_route_ends_with_haiku_for_mimo_writer():
     plan = plan_spawn(CARD, role="review", writer_families=("mimo",), leg_reader=_clear)
     ids = [l.id for l in plan.legs]
-    assert ids[0] == "gpt-6.2-sol-medium"
-    assert "claude-sonnet-5-5-high" in ids
+    assert ids[:2] == ["agy-gemini-4-hydrogen-high", "gpt-6.2-sol-medium"]
+    assert "claude-sonnet-5-5-high" not in ids
     assert "claude-haiku-5.5" not in ids
+
+    def limited(model, **kwargs):
+        state = "limited" if model in {"gpt-6.2-sol-medium", "gemini-4-hydrogen-high"} else "available"
+        return {"state": state, "evidence": None}
+
+    fallback = plan_spawn(CARD, role="review", writer_families=("mimo",), leg_reader=limited)
+    assert [leg.id for leg in fallback.legs if leg.claude_family] == ["claude-sonnet-5-5-high"]
 
 
 def test_claude_or_anthropic_writer_never_gets_haiku():

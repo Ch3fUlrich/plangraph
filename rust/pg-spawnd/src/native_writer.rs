@@ -30,6 +30,7 @@ pub(crate) trait Driver {
 }
 /// Review attempts per round before the run ends BLOCKED for want of a verdict.
 const REVIEW_TRIES: usize = 3;
+const REVIEW_DEFERRED: &str = "deferred_to_batch_seat";
 /// Fast-check fix turns per head before the run fails.
 const FAST_CHECK_FIXES: usize = 2;
 /// Resumes after turns that left no commit beyond the base before the run fails.
@@ -71,7 +72,7 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
     record["exit_code"] = json!(exit);
     record["status"] = json!(if exit == 0 { "completed" } else { "failed" });
     record["reason"] = json!(reason);
-    if exit == 9 {
+    if matches!(exit, 4 | 9) {
         record["result"] = json!("BLOCKED");
     }
     record["ended"] = json!(std::time::SystemTime::now()
@@ -162,8 +163,16 @@ fn review_round(
         ));
     }
     let mut last = String::from("no review run");
-    for _ in 0..REVIEW_TRIES {
+    for attempt in 0..REVIEW_TRIES {
         match driver.review(head, previous) {
+            Ok(review)
+                if attempt == 0
+                    && previous.is_none()
+                    && review["head"] == head
+                    && review["status"] == REVIEW_DEFERRED =>
+            {
+                return Ok(review)
+            }
             Ok(review)
                 if review["head"] == head
                     && ["ACCEPT", "REQUEST_CHANGES"]
@@ -184,6 +193,13 @@ fn review_round(
         4,
         format!("weak_verdict: no review run returned a verdict on {head}: {last}"),
     ))
+}
+fn final_gates(driver: &mut impl Driver, head: &str) -> Result<(), (i32, String)> {
+    driver.gates().map_err(|e| (7, e))?;
+    if driver.head().map_err(|e| (7, e))? != head {
+        return Err((7, "HEAD changed during final gates".into()));
+    }
+    Ok(())
 }
 fn writer_attempt(
     driver: &mut impl Driver,
@@ -233,18 +249,23 @@ fn writer_attempt(
         let previous =
             (record["review"]["verdict"] == "REQUEST_CHANGES").then(|| record["review"].clone());
         let review = review_round(driver, &head, previous.as_ref())?;
+        if review["status"] == REVIEW_DEFERRED {
+            final_gates(driver, &head)?;
+            record["review_status"] = json!(REVIEW_DEFERRED);
+            record["review_causes"] = review["causes"].clone();
+            record["status_line"] = json!("DEFERRED");
+            return Ok(0);
+        }
         record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
-        let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"]});
+        let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"],
+            "leg":review["leg"], "harness":review["harness"]});
         record["review"] = review;
         if record["reviews"].as_array().is_none() {
             record["reviews"] = json!([]);
         }
         record["reviews"].as_array_mut().unwrap().push(summary);
         if record["review"]["verdict"] == "ACCEPT" {
-            driver.gates().map_err(|e| (7, e))?;
-            if driver.head().map_err(|e| (7, e))? != head {
-                return Err((7, "HEAD changed during final gates".into()));
-            }
+            final_gates(driver, &head)?;
             // One push per package: only the accepted, gated head leaves the host.
             record["pushed"] = json!(driver.push(&head).map_err(|e| (7, e))?);
             record["status_line"] = json!("DONE");

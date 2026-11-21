@@ -42,6 +42,7 @@ fn local_base_fixture(dir: &Path) -> Host {
         brief: "brief".into(),
         push_ref: Some("refs/heads/phase/local-result".into()),
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     }

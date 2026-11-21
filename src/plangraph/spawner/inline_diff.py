@@ -26,6 +26,21 @@ class InlineDiffError(Exception):
         self.chars, self.max_chars = chars, max_chars
 
 
+def changed_paths(diff_ref) -> tuple[str, ...]:
+    """Read the reviewed paths from the same merge-base range as the inline diff."""
+    _check_diff_ref(diff_ref)
+    try:
+        proc = subprocess.run(
+            ["git", "--literal-pathspecs", "-C", diff_ref["repo"], "diff",
+             "--no-ext-diff", "--no-textconv", "--name-only", "--no-renames", "-z",
+             f"{diff_ref['base']}...{diff_ref['head']}", "--", *diff_ref.get("paths", ())],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=10, check=False, **background_process_options())
+    except (OSError, subprocess.TimeoutExpired):
+        return ()
+    return tuple(filter(None, (proc.stdout or "").split("\0"))) if proc.returncode == 0 else ()
+
+
 def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
                        allow_document: bool = False) -> str:
     """The prompt with the diff inlined. ``diff_ref is None`` returns the prompt

@@ -163,7 +163,7 @@ impl Host {
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),
         }
-        prompt.push_str(&format!("Name each finding as file:line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
+        prompt.push_str(&format!("Name each finding as file:line. List the repository files you opened in a FILES READ: line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
         prompt
     }
     /// One review run through the spawner, role review with every writer family of the range excluded,
@@ -230,6 +230,14 @@ impl Host {
             &[super::WRITER_MODEL],
             &trusted_python,
         )?;
+        let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
+            "repository_review_required":true,
+            "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
+        if self.reviews_started == 1 && self.review_override.is_none() {
+            if let Some(deferred) = self.review_preflight(clone, &card, &families, head)? {
+                return Ok(deferred);
+            }
+        }
         // Fixed prefix, the review skill as rules and the item context of the versioned
         // review brief, from the one renderer; the context carries the actual evidence.
         let context = self.brief_context(base, head);
@@ -241,15 +249,26 @@ impl Host {
         let prompt = self.review_prompt(base, head, prev, &families, &versioned);
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
-        let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
-            "diff_ref":{"repo":self.repo, "base":prev.map_or(base, |p| p.0), "head":head}});
-        let printed = self
-            .command(&self.review_cli[0])
+        let serialized_card = card.to_string();
+        let mut command = self.command(&self.review_cli[0]);
+        command
             .args(&self.review_cli[1..])
             .arg("--state")
             .arg(&self.state)
-            .args(["spawn", "--card", &card.to_string(), "--role", "review"])
-            .args(families.iter().flat_map(|f| ["--writer-family", f]))
+            .args(["spawn", "--card", &serialized_card, "--role", "review"])
+            .args(families.iter().flat_map(|f| ["--writer-family", f]));
+        if let Some((leg, reason)) = &self.review_override {
+            command.args([
+                "--leg",
+                leg,
+                "--override-reason",
+                reason,
+                "--no-fallthrough",
+            ]);
+        }
+        let printed = command
+            .arg("--cwd")
+            .arg(clone)
             .arg("--prompt-file")
             .arg(&prompt_path)
             .args(["--wait", "3300", "--json"])
@@ -263,6 +282,15 @@ impl Host {
                     String::from_utf8_lossy(&printed.stderr).trim()
                 )
             })?;
+        let chosen = &record["chosen_leg"];
+        if let Some((leg, _)) = &self.review_override {
+            if chosen["id"] != *leg {
+                return Err(format!("review leg differs from requested leg {leg}"));
+            }
+        }
+        if record["status"] != "completed" {
+            return Err(format!("review run incomplete: {}", record["reason"]));
+        }
         let text = review_run_text(&self.state, &record)?;
         let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
         let mut verdict = review_verdict(&text, head, &paths);
@@ -271,7 +299,8 @@ impl Host {
         atomic_write_private(&path, text.as_bytes()).map_err(|e| e.to_string())?;
         verdict["run_id"] = json!(id);
         verdict["path"] = json!(path);
-        verdict["leg"] = record["chosen_leg"]["id"].clone();
+        verdict["leg"] = chosen["id"].clone();
+        verdict["harness"] = chosen["harness"].clone();
         Ok(verdict)
     }
 }
@@ -300,7 +329,7 @@ pub(crate) fn review_verdict(text: &str, head: &str, paths: &[String]) -> Value 
         "VERDICT: REQUEST_CHANGES" | "VERDICT: REJECT" => "REQUEST_CHANGES",
         _ => return weak("non-canonical verdict line"),
     };
-    if verdict == "ACCEPT" && !crate::review_citation::names_file(text, paths) {
+    if verdict == "ACCEPT" && !crate::review_artifacts::has_repository_evidence(text, paths) {
         return weak("weak_verdict");
     }
     json!({"verdict":verdict,"head":head,"text":text})
