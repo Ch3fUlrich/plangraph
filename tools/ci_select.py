@@ -40,6 +40,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/catalog_data.py",
     "src/plangraph/routing_errors.py",
     "deploy/feeder/**",
+    "deploy/ci-watch/**",  # rust/plangraph-cli embeds the job matrix (land::main_gh).
     "deploy/systemd/pg-feeder.service",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
