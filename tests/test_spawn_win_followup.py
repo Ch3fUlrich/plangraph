@@ -217,6 +217,8 @@ def test_hydrogen_review_uses_private_home_without_global_mcp(tmp_path, monkeypa
         homes = []
 
         async def launch(*args, env, **kwargs):
+            mode_index = args.index("--mode")
+            assert args[mode_index:mode_index + 2] == ("--mode", "plan")
             home = Path(env["HOME"])
             homes.append(home)
             assert home != original
@@ -229,6 +231,9 @@ def test_hydrogen_review_uses_private_home_without_global_mcp(tmp_path, monkeypa
         job = await runner.spawn("Reply OK", "gemini-4-hydrogen-high", client="agy",
                                  role="review", wait_seconds=2)
         assert (job.status, job.stdout) == ("completed", "OK")
+        payload = proc.communicate.call_args.kwargs["input"]
+        assert "Answer in plain text in this reply only; do not create a plan file" in (
+            json.loads(payload)["message"]["content"])
         assert len(homes) == 1 and not homes[0].exists()
 
     asyncio.run(run())
