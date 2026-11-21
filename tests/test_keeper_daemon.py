@@ -49,14 +49,19 @@ def spawn(cfg_path):
 DAEMON_WAIT_S = 90.0
 
 
-def daemon_failure(proc, what):
-    """Kill *proc* if still alive and build an error that carries its stderr."""
+def daemon_failure(proc, what, partial=None, grace=10):
+    """Kill *proc* if still alive and build an error that carries its stderr.
+
+    A descendant that keeps the pipe open can stop ``communicate`` from reaching EOF; the
+    stderr read so far (*partial*, then the retry's own) is still reported.
+    """
     if proc.poll() is None:
         proc.kill()
+    err = partial or b""
     try:
-        _, err = proc.communicate(timeout=10)
-    except subprocess.TimeoutExpired:
-        err = b""
+        _, err = proc.communicate(timeout=grace)
+    except subprocess.TimeoutExpired as exc:
+        err = exc.stderr or err
     return AssertionError(f"{what}; daemon stderr:\n{err.decode(errors='replace')}")
 
 
@@ -82,8 +87,9 @@ def stop_daemon(proc, timeout=DAEMON_WAIT_S):
     proc.send_signal(signal.SIGTERM)
     try:
         _, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        raise daemon_failure(proc, f"daemon did not exit within {timeout}s of SIGTERM") from None
+    except subprocess.TimeoutExpired as exc:
+        raise daemon_failure(
+            proc, f"daemon did not exit within {timeout}s of SIGTERM", exc.stderr) from None
     return proc.returncode, err
 
 
@@ -116,6 +122,28 @@ def test_stop_daemon_reports_a_daemon_that_ignores_sigterm():
             proc.wait(timeout=5)
 
 
+def test_timeout_report_keeps_stderr_when_a_descendant_holds_the_pipe():
+    code = ("import signal,subprocess,sys\n"
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "d = subprocess.Popen(['/bin/sleep', '30'])\n"
+            "sys.stderr.write('held-pipe-marker\\n'); sys.stderr.flush()\n"
+            "print(d.pid, flush=True)\n"
+            "d.wait()")
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+    descendant = int(proc.stdout.readline())
+    try:
+        with pytest.raises(AssertionError, match="held-pipe-marker"):
+            proc.send_signal(signal.SIGTERM)
+            try:
+                proc.communicate(timeout=1.0)
+            except subprocess.TimeoutExpired as exc:
+                raise daemon_failure(proc, "did not exit", exc.stderr, grace=1) from None
+    finally:
+        os.kill(descendant, signal.SIGKILL)
+        proc.communicate(timeout=10)
+
+
 def test_wait_health_fails_early_with_stderr_when_the_daemon_exits():
     code = "import sys\nsys.stderr.write('boom-marker')\nsys.exit(3)"
     proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
@@ -134,8 +162,8 @@ def test_daemon_refuses_when_lock_is_held(tmp_path):
         proc = spawn(cfg_path)
         try:
             _, err = proc.communicate(timeout=DAEMON_WAIT_S)
-        except subprocess.TimeoutExpired:
-            raise daemon_failure(proc, "daemon did not refuse the held lock") from None
+        except subprocess.TimeoutExpired as exc:
+            raise daemon_failure(proc, "daemon did not refuse the held lock", exc.stderr) from None
         assert proc.returncode != 0
         assert b"locked" in err.lower()
     finally:

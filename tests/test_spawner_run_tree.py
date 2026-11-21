@@ -452,19 +452,16 @@ def test_empty_seats_cli_envelope_keeps_main_json_and_exit_code(tmp_path, monkey
     assert json.loads(capsys.readouterr().out) == {'seats': []}
 
 
+# The supervise entry runs admission on the process cwd; pinned_base keeps the cwd's branch out.
+@pytest.mark.pinned_base
 @pytest.mark.parametrize('entry', ['spawn', 'seats', 'mcp', 'supervise'])
 @pytest.mark.parametrize('identity', [True, False])
 def test_all_python_entry_records_have_tree_sha_or_reason(tmp_path, monkeypatch, entry, identity):
     from registry_route_util import _service
-    from plangraph.spawner import base_fresh, cli, mcp
+    from plangraph.spawner import cli, mcp
     from plangraph.planner import routing, legs
     code = dict(tree_sha='a' * 40 if identity else None, tree_branch='detached' if identity else None)
     monkeypatch.setattr(git_guard, 'CODE_IDENTITY', code)
-    # This file runs real admission; the supervise entry would compare the process cwd's
-    # branch with origin/main. Pin the base check so the cwd's checkout never decides.
-    fresh = lambda *a, **k: dict(ok=True, reason=None, origin_sha='0' * 40, base_sha='0' * 40, behind=0)
-    monkeypatch.setattr(base_fresh, 'base_fresh', fresh)
-    monkeypatch.setattr(base_fresh, '_check', fresh)
     service = _service(tmp_path, monkeypatch)
     chosen = next(l for l in legs.DEFAULT_LEGS if l.id == 'cx-gpt-6.2-sol-medium')
     service._route = lambda *a, **k: routing.SpawnPlan((chosen,), (), 'test', (chosen,), ())
