@@ -153,7 +153,9 @@ def test_the_part_cost_is_recorded_per_part_from_its_own_run_and_for_the_candida
         endpoint = args[1]
         if "workflows/tests.yml/runs" in endpoint:
             sha = endpoint.split("head_sha=")[1].split("&")[0]
-            return {"workflow_runs": [{"id": {part1: 11, part2: 22}[sha], "head_sha": sha, "status": "completed"}]}
+            number = {part1: 11, part2: 22}[sha]
+            return {"workflow_runs": [{"id": number, "head_sha": sha, "status": "completed",
+                                       "pull_requests": [{"number": number}]}]}
         return {"jobs": [JOB]}
 
     monkeypatch.setattr(land, "gh_json", api)
@@ -230,3 +232,27 @@ def test_push_adopts_an_existing_part_before_selecting_windows(tmp_path, monkeyp
 
     assert land.cmd_push(SimpleNamespace(name="t", ci_run=None)) == 0
     assert not transport.calls
+
+
+def test_a_blank_line_in_a_folded_step_preserves_the_command_break():
+    workflow = ("jobs:\n  rust-windows:\n    steps:\n      - run: >-\n          cargo test -p pg-spawnd\n"
+                "          --lib\n\n          cargo test -p pg-worker-core\n")
+    assert land.windows_commands(workflow) == [["cargo", "test", "-p", "pg-spawnd", "--lib"],
+                                               ["cargo", "test", "-p", "pg-worker-core"]]
+
+
+def test_part_cost_distinguishes_two_prs_with_the_same_head(tmp_path, monkeypatch):
+    def api(*args):
+        endpoint = args[1]
+        if "/workflows/" in endpoint:
+            return {"workflow_runs": [
+                {"id": pr, "head_sha": HEAD, "status": "completed", "pull_requests": [{"number": pr}]}
+                for pr in (11, 12)]}
+        run_id = endpoint.split("/runs/")[1].split("/")[0]
+        return {"jobs": [dict(JOB, name=f"run-{run_id}")]}
+
+    monkeypatch.setattr(land, "gh_json", api)
+    st = {"repo": "o/p", "pr": 90, "merged": [{"pr": pr, "head": HEAD} for pr in (11, 12)]}
+    rows = land.record_part_cost(st, 99, HEAD, telemetry_dir=tmp_path)
+    assert [(row["pr"], row["jobs"][0]["name"]) for row in rows] == [
+        (11, "run-11"), (12, "run-12"), (90, "run-99")]

@@ -92,3 +92,14 @@ def test_a_moved_origin_main_does_not_hide_the_union(tmp_path):
     git(root, "checkout", "-q", "train")
     tests, err = select(root, moved, head, "--parts-union", hook_range=False)
     assert "tests/test_users.py" in tests and "mode=pushed-parts parts=2" in err
+
+
+def test_independently_landed_side_parent_does_not_hide_the_union(tmp_path):
+    root, base, head = train(tmp_path)
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "--no-ff", "-q", "left", "-m", "land left separately")
+    git(root, "push", "-q", "origin", "main")
+    assert git(root, "merge-base", "origin/main", head) == git(root, "rev-parse", "left")
+    git(root, "checkout", "-q", "train")
+    tests, err = select(root, "origin/main", head, "--parts-union", hook_range=False)
+    assert "tests/test_users.py" in tests and "mode=pushed-parts parts=2" in err

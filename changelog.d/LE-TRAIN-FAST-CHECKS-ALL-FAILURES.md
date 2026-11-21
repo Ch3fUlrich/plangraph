@@ -2,3 +2,4 @@ The push gate now runs `cargo test --no-fail-fast`, keeps running the remaining 
 Python tests after a Rust failure and lists every failing Rust test in one pass; `affected_tests.py
 --parts-union` (used by preflight) selects the tests of every part's changed files, so a break
 between combined parts surfaces in one run.
+Standalone selection follows the train and base first-parent histories even if main has already merged a part.

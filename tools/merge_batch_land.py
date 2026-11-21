@@ -11,6 +11,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from merge_batch_build import tests_runs
 from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, part_review, run)
@@ -107,28 +108,26 @@ WINDOWS_TIMEOUT = 3600
 
 
 def windows_commands(workflow_text):
-    """The cargo test commands of the CI Windows job, read from the workflow: one selection, not a copy.
+    """Read cargo test commands from the CI Windows steps using YAML scalar semantics."""
+    try:
+        import yaml
+    except ImportError as exc:
+        raise MergeBatchError("reading the Windows job requires PyYAML from requirements-ci.txt") from exc
+    try:
+        steps = yaml.safe_load(workflow_text)["jobs"]["rust-windows"]["steps"]
+    except yaml.YAMLError as exc:
+        raise MergeBatchError(f"cannot parse tests.yml: {exc}") from exc
+    except (KeyError, TypeError) as exc:
+        raise MergeBatchError("tests.yml has no Windows job steps (rust-windows)") from exc
 
-    Inline `run: cargo test ...` and block-scalar (`run: |`) steps are read; an empty selection is an error,
-    never a green run of zero tests."""
-    block = re.search(r"^  rust-windows:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", workflow_text, re.S | re.M)
-    if not block:
-        raise MergeBatchError("tests.yml has no Windows job (rust-windows): cannot select the Windows tests")
-    commands, lines, index = [], block.group(1).splitlines(), 0
-    while index < len(lines):
-        step = re.match(r"^(\s+)(?:- )?run:\s*(.*?)\s*$", lines[index])
-        index += 1
-        if not step:
-            continue
-        indent, value = len(step.group(1)), step.group(2)
-        if re.fullmatch(r"[|>][-+]?", value):
-            folded, parts = value.startswith(">"), []
-            while index < len(lines) and (not lines[index].strip() or len(lines[index]) - len(lines[index].lstrip()) > indent):
-                parts.append(lines[index].strip())
-                index += 1
-            # a literal block keeps its lines; a folded one joins them into one command line
-            value = " ".join(p for p in parts if p) if folded else "\n".join(parts)
-        commands += [shlex.split(line) for line in value.splitlines() if line.strip().startswith("cargo test ")]
+    commands = []
+    try:
+        for step in steps:
+            value = step.get("run", "")
+            commands.extend(shlex.split(line) for line in value.splitlines()
+                            if line.lstrip().startswith("cargo test "))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise MergeBatchError(f"invalid run step in the Windows job of tests.yml: {exc}") from exc
     if not commands:
         raise MergeBatchError("the Windows job of tests.yml selects no cargo test command: refusing to run zero tests")
     return commands
@@ -214,10 +213,9 @@ def windows_gate(st, workflow_text, transport=_transport):
     return line
 
 
-def _jobs_of_head(repo, head):
-    """The completed jobs of the latest tests run on this head (empty when none)."""
-    runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")
-    runs = [r for r in runs.get("workflow_runs", []) if r.get("head_sha") == head and r.get("status") == "completed"]
+def _jobs_of_part(repo, pr, head):
+    """Jobs of the latest completed Tests run for this part PR and head."""
+    runs = [r for r in tests_runs(repo, pr, head, gh_json) if r.get("status") == "completed"]
     if not runs:
         return []
     run = max(runs, key=lambda r: r["id"])
@@ -233,7 +231,7 @@ def record_part_cost(st, run_id, head, telemetry_dir=None):
                   or Path.home() / ".local/share/plangraph/telemetry")
     rows = []
     for rec in st.get("merged") or []:
-        rows.append(("part", rec["pr"], rec["head"], lambda h=rec["head"]: _jobs_of_head(st["repo"], h)))
+        rows.append(("part", rec["pr"], rec["head"], lambda p=rec["pr"], h=rec["head"]: _jobs_of_part(st["repo"], p, h)))
     rows.append(("candidate", st.get("pr") or 0, head, lambda: gh_json(
         "api", f"repos/{st['repo']}/actions/runs/{run_id}/jobs?per_page=100")["jobs"]))
     written = []

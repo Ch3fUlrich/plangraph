@@ -466,7 +466,7 @@ def changed_files(root, base, head=None):
     return sorted(set(p.decode() for p in (tracked + untracked).split(b"\0") if p))
 
 
-def pushed_parts_files(root, base, head, union=False):
+def pushed_parts_files(root, base, head, union=False, standalone=False):
     """Return interaction paths only for a verifiable batch; otherwise use normal diff.
 
     union=True returns every file any part changed, so a train selects the tests a part
@@ -484,13 +484,23 @@ def pushed_parts_files(root, base, head, union=False):
         # (notably the origin/main refresh base chosen by the hook).
         if git("rev-parse", "--is-shallow-repository").strip() != b"false":
             return None
-        previous = git("rev-parse", "--verify", base + "^{commit}").strip().decode()
+        if standalone:
+            # Only the two first-parent histories define the range. A part independently
+            # merged into main is a side parent and cannot replace the train's base.
+            commits = git("rev-list", "--first-parent", "--exclude-first-parent-only",
+                          "--reverse", "--parents", head, "^" + base).decode().splitlines()
+            first = commits[0].split() if commits else []
+            if len(first) < 2:
+                return None
+            previous = first[1]
+        else:
+            previous = git("rev-parse", "--verify", base + "^{commit}").strip().decode()
+            commits = git("rev-list", "--first-parent", "--reverse", "--parents",
+                          f"{base}..{head}").decode().splitlines()
         # A previously pushed feature/batch tip can already contain interacting
         # changes outside this range. Keep its normal selection, including #957's
         # divergent-main fallback; optimize only a base in known main history.
         git("merge-base", "--is-ancestor", previous, "refs/remotes/origin/main")
-        commits = git("rev-list", "--first-parent", "--reverse", "--parents",
-                      f"{base}..{head}").decode().splitlines()
         selected, touched, parts = set(), set(), 0
         for row in commits:
             commit, *parents = row.split()
@@ -629,10 +639,8 @@ def main(root=None):
     pushed_range = os.environ.get("PLANGRAPH_PUSH_RANGE", "").split(":")
     hook_selection = args.files_only and args.local and args.head and args.changed is None
     if hook_selection and args.parts_union and "PLANGRAPH_PUSH_RANGE" not in os.environ:
-        # standalone preflight: the batch starts where the train left the base, not at a base that moved on
-        start = subprocess.run(["git", "merge-base", args.base, args.head], cwd=root, capture_output=True, text=True)
-        pushed_range = [start.stdout.strip() or args.base, args.head]
-    if hook_selection and len(pushed_range) == 2 and pushed_range[1] == args.head:
+        batch = pushed_parts_files(root, args.base, args.head, union=True, standalone=True)
+    elif hook_selection and len(pushed_range) == 2 and pushed_range[1] == args.head:
         batch = pushed_parts_files(root, pushed_range[0], args.head, union=args.parts_union)
     if changed is None:
         changed = batch[0] if batch else changed_files(root, args.base, args.head)
