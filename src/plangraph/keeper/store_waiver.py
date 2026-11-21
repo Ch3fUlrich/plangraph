@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 
 from . import auth, context_sources
 from .coverage import writer_families
@@ -97,11 +96,11 @@ class WaiverMixin:
     """Router decision verbs for reviews: waive a family or close merged work."""
 
     def close_merged(self, principal, key, decision_id, families=None, *, from_open=False, apply=False,
-                     waive_seats=None, dry_run=False):
+                     waive_seats=None, dry_run=False, require_seats=None):
         audit_key = key if isinstance(key, str) else None
         return self._run(principal, "close_merged", audit_key,
                          lambda now: self._close_merged(principal, key, decision_id,
-                                                       families, now, from_open, apply, waive_seats, dry_run),
+                                                       families, now, from_open, apply, waive_seats, dry_run, require_seats),
                          success_message=None if dry_run is True else "merged_on_default")
 
     @staticmethod
@@ -512,10 +511,11 @@ class WaiverMixin:
         return bool({"auth", "secrets"}.intersection(tags))
 
     def _close_merged(self, principal, key, decision_id, families, now, from_open=False, apply=False,
-                      waive_seats=None, dry_run=False):
+                      waive_seats=None, dry_run=False, require_seats=None):
         self._require_role(principal, "router")
         if any(type(value) is not bool for value in (from_open, apply, dry_run)):
             raise Refused("validation", "from_open, apply and dry_run must be booleans")
+        required = self._seats_required(require_seats)
         if dry_run:
             return {"dry_run": True, "route": "close_merged"}
         if not isinstance(key, str) or not key.strip():
@@ -540,11 +540,10 @@ class WaiverMixin:
                 prs = self._merged_open_prs(item, decision_id, head, now) if from_open or waive_seats is not None else []
                 waiver = self._merged_seat_waiver(item, decision_id, waive_seats, prs, now) if waive_seats is not None else None
             backfill = families is None and waiver is None
-            witnessed = self._merged_backfill(item, decision_id, head, now, prs) if backfill else []
-            families = list(dict.fromkeys(model_family(s["model"]) for s in witnessed)) if backfill else families
-            seats = self._merged_seats(item, families, now, witnessed) if waiver is None else []
+            witnessed, seats, flags = ([], [], None) if waiver is not None else self._seats_or_flag(
+                item, decision_id, head, now, prs, families, backfill, required)
             if (from_open or waiver_only) and not apply:
-                return {"key": key, "state": item["state"], "would_close": True, "prs": prs}
+                return {"key": key, "state": item["state"], "would_close": True, "prs": prs, **self._flags_of(flags)}
         with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock
             fresh = self._get_or_refuse(key)
             self._merged_review_state(fresh, from_open)
@@ -573,13 +572,13 @@ class WaiverMixin:
                     raise Refused("conflict", "merged_pr_proofs_changed")
                 if waiver and self._merged_seat_waiver(fresh, decision_id, waive_seats, prs, now) != waiver:
                     raise Refused("conflict", "merged_seat_waiver_changed")
-            if backfill:
-                current = self._merged_backfill(fresh, decision_id, head, now, prs)
-                if current != witnessed:
+            if waiver is None:
+                current, seats, current_flags = self._seats_or_flag(
+                    fresh, decision_id, head, now, prs, families, backfill, required)
+                if (backfill and current != witnessed) or current_flags != flags:
                     raise Refused("conflict", "review_witness_changed")
-            seats = self._merged_seats(fresh, seats, now, witnessed) if waiver is None else []
             ref = {"id": decision_id, "families": seats,
-                   "merged_head": head, "caller": principal.name}
+                   "merged_head": head, "caller": principal.name, **self._flags_of(flags)}
             if waiver:
                 self._card_requires_non_anthropic_seats(fresh)  # validate the recorded risk tags
                 card = self.conn.execute("SELECT risk_tags FROM cards WHERE key=?", (key,)).fetchone()
@@ -589,10 +588,11 @@ class WaiverMixin:
             if from_open:
                 ref["prs"] = prs
             return self._land_merged(principal, fresh, head, seats, witnessed, decision_id, from_open,
-                                     ("decision", ref, result), f"router GO {decision_id} merged {head}", now)
+                                     ("decision", ref, result), f"router GO {decision_id} merged {head}", now,
+                                     flags=flags)
 
     def _land_merged(self, principal, fresh, head, seats, witnessed, label, from_open, evidence, reason, now,
-                     release=False):
+                     release=False, flags=None):
         """Write the merged close under the held write lock: seats, evidence, ``done``.
 
         ``from_open`` first moves an open or claimed item through ``submitted``;
@@ -614,7 +614,8 @@ class WaiverMixin:
             self._append(principal, key, "submitted", {"round": fresh["round"]}, now)
         kind, ref, result = evidence
         self._record_evidence(principal, fresh, kind, ref, now, Result(True, result.detail, ref))
-        return self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats), release=release)
+        return self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats), release=release,
+                          flags=flags)
 
     # --- the automatic merge close (MERGE-CLOSES-ITEMS-NO-AGENT-CALL) ---
     # Reads the default ref once per repository, takes every unfinished item a
@@ -624,7 +625,7 @@ class WaiverMixin:
     # every refusal are returned in ``listed`` with their reason, never skipped.
     AUTO_STATES = ("open", "claimed", "in_review")
 
-    def close_merged_auto(self, principal, project=None, require_seats=True, apply=True, repos_only=False,
+    def close_merged_auto(self, principal, project=None, require_seats=None, apply=True, repos_only=False,
                           frozen=False):
         return self._run(principal, "close_merged_auto", None,
                          lambda now: self._close_merged_auto(principal, project, require_seats, apply, now, repos_only, frozen),
@@ -640,8 +641,9 @@ class WaiverMixin:
 
     def _close_merged_auto_run(self, principal, project, require_seats, apply, now, repos_only=False):
         self._require_role(principal, "system", "router")
-        if any(type(value) is not bool for value in (require_seats, apply, repos_only)):
-            raise Refused("validation", "require_seats, apply and repos_only must be booleans")
+        if any(type(value) is not bool for value in (apply, repos_only)):
+            raise Refused("validation", "apply and repos_only must be booleans")
+        require_seats = self._seats_required(require_seats)
         if project is not None and not isinstance(project, str):
             raise Refused("validation", "project must be a string")
         git = self._adapter("git")
@@ -703,11 +705,11 @@ class WaiverMixin:
         if self._card_requires_non_anthropic_seats(item):
             raise Refused("forbidden", "sensitive_card_needs_router_close: auth/secrets risk tag")
         self._assert_unlocked(item)
-        seated = require_seats and tier != "none"
+        seated = tier != "none"
         proofs = self._merged_auto_proofs(item)
-        witnessed = self._merged_backfill(item, None, proofs[0]["head"], now, proofs) if seated else []
+        witnessed, flags = self._auto_seats(item, proofs, now, require_seats) if seated else ([], None)
         if not apply:
-            return {"key": key, "state": item["state"], "prs": proofs}
+            return {"key": key, "state": item["state"], "prs": proofs, **self._flags_of(flags)}
         with self._write():
             fresh = self._get_or_refuse(key)
             self._assert_unlocked(fresh)
@@ -719,16 +721,17 @@ class WaiverMixin:
             fresh = dict(fresh, **({"_merge_project": item["_merge_project"]} if "_merge_project" in item else {}))
             if self._merged_auto_proofs(fresh) != proofs:
                 raise Refused("conflict", "merged_on_default_changed")
-            if seated and self._merged_backfill(fresh, None, proofs[0]["head"], now, proofs) != witnessed:
+            if seated and self._auto_seats(fresh, proofs, now, require_seats) != (witnessed, flags):
                 raise Refused("conflict", "review_witness_changed")
             seats = list(dict.fromkeys(model_family(s["model"]) for s in witnessed))
             head = proofs[0]["head"]
             ref = {"sha": head, "merged_head": head, "prs": proofs, "families": seats,
-                   "caller": principal.name, "source": "merge-close", "require_seats": require_seats}
+                   "caller": principal.name, "source": "merge-close", "require_seats": require_seats,
+                   **self._flags_of(flags)}
             done = self._land_merged(principal, fresh, head, seats, witnessed, f"auto-{head[:12]}",
                                      fresh["state"] != "in_review", ("commit", ref, Result(True, "merged on default")),
-                                     f"merge close: merged {head}", now, release=True)
-            return {"key": key, "state": done["state"], "prs": proofs, "seats": seats}
+                                     f"merge close: merged {head}", now, release=True, flags=flags)
+            return {"key": key, "state": done["state"], "prs": proofs, "seats": seats, **self._flags_of(flags)}
 
     def _merged_auto_proofs(self, item):
         """``[{pr, head, decision_id: None}]`` of the item's merged work; refuses while a lane is open."""
