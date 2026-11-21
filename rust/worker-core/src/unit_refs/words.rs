@@ -152,7 +152,7 @@ pub(super) fn text_paths(text: &str, home: &Path) -> Vec<(PathBuf, bool)> {
         if line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        let line = expand_home(&line, home);
+        let line = expand_home(line, home);
         // `Key = value`: the key ends at the first `=`; an Exec value may start with `-@+!:`.
         let (key, value) = match line.split_once('=') {
             Some((key, value))
