@@ -149,6 +149,15 @@ def test_unavailable_status(status):
     assert not state.available and state.reason == "inactive" and not state.stale
 
 
+@pytest.mark.parametrize("status", ["expired", "refreshing", "pending", None])
+def test_provider_check_in_progress_does_not_invalidate_healthy_connection(status):
+    unrelated = dict(provider="unrelated", isActive=True, testStatus=status)
+    snapshot = Harness(payload(unrelated, row(testStatus="success"))).reader.snapshot()
+    assert snapshot["p"].available
+    assert not snapshot["unrelated"].available
+    assert snapshot["unrelated"].reason == "inactive"
+
+
 def test_from_env_injected_resolution():
     calls = []
     def resolve(env):

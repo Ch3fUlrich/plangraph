@@ -102,6 +102,12 @@ errors. The service plan exposes the detailed error on the matching candidate
 as `leg_state_reason`. The launch boundary still retries the snapshot and probes
 the leg when the retry fails.
 
+`src/plangraph/routing_support/quota_snapshots.py:_build` interprets a connection's
+`testStatus` independently. Strings such as `refreshing` or `expired`, and an
+explicit null, leave that connection unavailable while preserving other
+connections in the snapshot. Invalid field types still report `bad_snapshot`
+and take the retry and probe path above.
+
 A `running` record on the same model/harness wins over a failed probe when its
 nonempty `live.log` grew within `LIVE_RUN_WRITE_WINDOW_S` (120 seconds).
 Probes inspect only the owning service's `runner.state` (the resolved CLI/MCP

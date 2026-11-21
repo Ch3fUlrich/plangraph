@@ -1,0 +1,1 @@
+Interpret provider connection health independently. An OmniRoute connection pending, refreshing, expired or with a null test status no longer makes healthy neighboring connections unreadable. Malformed snapshots still use the existing retry and probe path.
