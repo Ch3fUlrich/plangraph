@@ -233,6 +233,14 @@ entries and non-list event collections do not raise. PASS still requires `stop`
 or `end_turn` and `TEST_GAMING: no`; the hermetic posting regressions live in
 `tests/test_seat_record_finish.py` (D-5624).
 
+For full-diff CLI seats, dispatch records `review_binding` with `base_sha`,
+`head_sha`, and `diff_sha256`. The digest hashes the sorted raw Git diff
+records, including paths, file modes, and object IDs. `seat_record.py` checks
+that the completion repeats the dispatch binding and names the same head.
+Discovery callers can supply an expected `review_binding` to require an exact
+match. Records created before this field was added still support head-based
+lookups.
+
 Historical seat discovery uses `python3 tools/seat_verdict.py --snapshot plan.snapshot.json --records-dir RECORDS` (equivalently, `--backfill-dry-run`). It is local and read-only by default; `--format json` emits structured outcomes, and `--pr-cache CACHE` supplies evidenced-commit-to-PR mappings without network access. Keeper writes require `--backfill-apply --url URL --token-dir TOKENS`; only apply may enable network PR lookup with `--pr-lookup-gh`. Backfill retains the existing verdict parser, exact-head binding, independent reviewer family and PASS safety gates. It shares the spawner's locked `verdict.json` / `verdict.delivered` outbox, so completed or ambiguous sends are never blindly replayed, including when the forward path already handled the record. A nonzero verifier result is terminal for automatic backfill replay; reconcile an ambiguous delivery before any operator-authorized retry. See [the historical backfill diagnosis](docs/seat-verdict-backfill-diagnosis.md) for the original observations; Slice A has since supplied the forward completion bridge.
 
 Run the documented `tools/seat_verdict.py --repost-transport` workflow directly

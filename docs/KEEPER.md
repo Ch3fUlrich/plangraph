@@ -653,6 +653,11 @@ Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure
 Rule 3.26: merged-close backfill may count a passing spawner cli_reported review
 record bound to the merged head, with consistent attempt provenance. Auth/secrets
 cards cannot use these low-trust seats; their existing two-seat gate remains.
+When reading a diff-bound seat, the keeper requires the dispatch and completion
+bindings to agree on `base_sha`, `head_sha`, and `diff_sha256`. The bound head
+must also match the completion and the requested head. A caller that supplies
+an expected `review_binding` requires an exact match, so a legacy head-only
+record can count only when the caller has requested head-based evidence.
 
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
 
