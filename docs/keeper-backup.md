@@ -27,16 +27,22 @@ The connection comes from `PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE PGSSLMODE`
 
 ## Install (keeper host, after the merge)
 
+Step 1, install the files (nothing runs yet):
+
 ```sh
 (cd rust && cargo build --release -p pg-keeper-backup) && install rust/target/release/pg-keeper-backup ~/.local/bin/
 install -m 0600 deploy/systemd/keeper-backup.env.example ~/.config/plangraph/keeper-backup.env   # then fill in the values
 cp deploy/systemd/pg-keeper-backup.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
-# Run the "First real run" check below now; continue only when it passed.
+```
+
+Step 2, the first real run. It is the only test against a real server (hermetic tests cannot run SQL) and it comes BEFORE the timer is enabled or the service started. Load the env file and run `pg-keeper-backup dump --verify --dir "$(mktemp -d)"`. Expect exit status 0 and a ledger line with `verified=yes` (`pg-keeper-backup restore-test --file DUMP` alone prints `restore ok: seq <n> tables 43`). It reads the live schema and creates and drops one scratch database, nothing else. Do not go on to step 3 unless it passed.
+
+Step 3, only after step 2 passed:
+
+```sh
 systemctl --user enable --now pg-keeper-backup.timer
 systemctl --user start pg-keeper-backup.service && journalctl --user -u pg-keeper-backup.service -n 5
 ```
-
-First real run, done after copying the binary and the env file and BEFORE the timer is enabled or the service started (the only test against a real server; hermetic tests cannot run SQL): `pg-keeper-backup dump --verify --dir "$(mktemp -d)"` on the keeper host with the env file loaded, expecting exit status 0 and a ledger line with `verified=yes` (`pg-keeper-backup restore-test --file DUMP` alone prints `restore ok: seq <n> tables 43`); it reads the live schema and creates and drops one scratch database, nothing else. Enable the timer only after it exits 0 with `verified=yes`.
 
 Test: `cargo test -p pg-keeper-backup`. Rules run against a fake `Pg`; `tests/cli.rs` runs the real command line against a fake `docker` executable that checks the commands, the `0600` modes and that a sentinel password never reaches output or logs; `tests/units.rs` runs `systemd-analyze verify` when it is installed. No test needs a Postgres server.
