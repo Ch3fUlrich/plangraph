@@ -347,3 +347,47 @@ fn a_decoded_control_byte_is_not_confused_with_a_percent_escape() {
     assert!(exact(&refs, "/wt/app-worktrees/a\u{1}b/run"), "{refs:?}");
     assert!(!protected(&refs, "/wt/app-worktrees/a%b/run"), "{refs:?}");
 }
+
+#[test]
+fn percent_percent_before_h_is_a_literal_percent_not_the_home_specifier() {
+    let refs = refs_of("[Service]\nExecStart=/wt/app-worktrees/release%%home/run\n");
+    assert!(
+        exact(&refs, "/wt/app-worktrees/release%home/run"),
+        "{refs:?}"
+    );
+    // %h is still the home directory, also right after a literal percent.
+    let refs = refs_of("[Service]\nExecStart=%h/code/run %%%h/x\n");
+    assert!(exact(&refs, "/h/code/run"), "{refs:?}");
+}
+
+#[cfg(unix)]
+#[test]
+fn dot_dot_after_a_linked_directory_resolves_physically() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("systemd/user");
+    let deep = tmp.path().join("other/deep");
+    let live = tmp.path().join("other/wt-worktrees/live");
+    fs::create_dir_all(&dir).unwrap();
+    fs::create_dir_all(&deep).unwrap();
+    fs::create_dir_all(&live).unwrap();
+    symlink(&deep, dir.join("alias")).unwrap();
+    // `alias/..` is `other` (the link's target parent), not `systemd/user`'s parent.
+    symlink(
+        "alias/../wt-worktrees/live/unit.service",
+        dir.join("x.service"),
+    )
+    .unwrap();
+    let refs = unit_file_refs(&dir, Path::new("/h")).unwrap();
+    let canonical = live.canonicalize().unwrap();
+    assert_eq!(
+        unit_names(&refs, &live, &canonical),
+        ["x.service"],
+        "{refs:?}"
+    );
+    assert!(
+        refs.iter()
+            .any(|r| r.exact && r.path == canonical.join("unit.service")),
+        "{refs:?}"
+    );
+}

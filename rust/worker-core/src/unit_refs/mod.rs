@@ -68,25 +68,32 @@ fn collect(
             // A linked unit: the link target is itself a path the unit runs from. A relative
             // target resolves against the link's directory.
             if let Ok(target) = fs::read_link(&path) {
-                // A relative target resolves against the link's physical directory (the
-                // canonical `dir`: `dir` itself may be reached through a linked directory).
+                // A relative target resolves against the link's physical directory (the canonical
+                // `dir`: `dir` itself may be reached through a linked directory).
                 let base = physical.clone().unwrap_or_else(|| dir.to_path_buf());
-                let named = lexical(&if target.is_absolute() {
+                let joined = if target.is_absolute() {
                     target
                 } else {
                     base.join(target)
-                });
+                };
+                // Symlinks in the directory part resolve physically (`alias/..` is the alias
+                // target's parent); the final name stays as named. A dangling directory part
+                // falls back to lexical `..` handling.
+                let lexical_path = lexical(&joined);
+                let named = match (joined.parent().map(Path::canonicalize), joined.file_name()) {
+                    (Some(Ok(parent)), Some(file)) => parent.join(file),
+                    _ => lexical_path.clone(),
+                };
                 let exact = words::is_whole_word_path(&named.to_string_lossy());
-                // The named path protects; where it finally leads (a link into another tree)
-                // protects too, as a guess.
-                if let Ok(canonical) = named.canonicalize() {
-                    if canonical != named {
-                        refs.insert(UnitRef {
-                            unit: unit.clone(),
-                            path: canonical,
-                            exact: false,
-                        });
-                    }
+                // Guesses that protect too: the lexical reading, and where a final link leads.
+                let mut guesses = vec![lexical_path];
+                guesses.extend(named.canonicalize().ok());
+                for guess in guesses.into_iter().filter(|g| *g != named) {
+                    refs.insert(UnitRef {
+                        unit: unit.clone(),
+                        path: guess,
+                        exact: false,
+                    });
                 }
                 refs.insert(UnitRef {
                     unit: unit.clone(),

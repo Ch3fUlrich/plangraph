@@ -99,6 +99,27 @@ fn is_path_list_key(key: &str) -> bool {
     key.ends_with("Paths")
 }
 
+/// `%h` is the home directory; `%%` stays as it is (path_of reads it as a literal percent) and is
+/// skipped as a pair, so `release%%home` never loses its second percent to `%h`.
+fn expand_home(line: &str, home: &Path) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match (c, chars.peek()) {
+            ('%', Some('%')) => {
+                chars.next();
+                out.push_str("%%");
+            }
+            ('%', Some('h')) => {
+                chars.next();
+                out.push_str(&home.to_string_lossy());
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// A piece as a path: `%%` is a literal percent, any other `%` is an unresolved specifier
 /// (`%n`, `%i`, ...) that names nothing.
 fn path_of(piece: &str) -> Option<PathBuf> {
@@ -131,7 +152,7 @@ pub(super) fn text_paths(text: &str, home: &Path) -> Vec<(PathBuf, bool)> {
         if line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        let line = line.replace("%h", &home.to_string_lossy());
+        let line = expand_home(&line, home);
         // `Key = value`: the key ends at the first `=`; an Exec value may start with `-@+!:`.
         let (key, value) = match line.split_once('=') {
             Some((key, value))
