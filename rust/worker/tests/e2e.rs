@@ -21,7 +21,7 @@ mod archive;
 
 use pg_worker::activities::CardOutput;
 use pg_worker::attempt::LegSpec;
-use pg_worker::keeper::KeeperError;
+use pg_worker::keeper::{KeeperError, WORKER_LIVE_STATES};
 use pg_worker::phase::PhaseOutput;
 use pg_worker::phase_workflow::Phase;
 use pg_worker::workflow::Card;
@@ -2219,9 +2219,7 @@ async fn fresh_run_records_observe_patch_and_parks_with_observation() {
     .await;
 }
 
-/// R2-2 / I3: a transient observe failure (500/timeout/None) makes the first park
-/// send the live-set fallback, which the keeper refuses with 409 exec_stale_state
-/// on a `waiting` card. The workflow must re-observe and land the cap-park.
+/// One failed read is retried by the observe activity before parking.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cap_park_on_waiting_card_lands_after_one_failed_observe() {
     in_local(async {
@@ -2230,28 +2228,54 @@ async fn cap_park_on_waiting_card_lands_after_one_failed_observe() {
             return;
         };
         let card = "e2e-failed-observe-park";
-        // Card is waiting; simulate one transient read failure (returns None).
         env.keeper.set_card_state(Some("waiting"));
         env.keeper.set_card_state_fail_times(1);
 
         let claim = env.claim(card, &["out.txt"], "true");
         let id = format!("e2e-failed-observe-park-{}", unique());
         let handle = env.start(&id, claim).await;
-
         let out = finish("failed_observe_park", &id, &handle).await;
         assert_eq!(out.outcome, "parked", "{out:?}");
+        assert_eq!(scheduled_activities(&handle, "observe").await, 1);
+        assert_eq!(env.keeper.card_state_calls(), vec![card; 2]);
+        assert_eq!(env.keeper.parked().len(), 1);
 
-        // Invariant I3: the workflow re-observed after fallback refusal and landed the park.
-        assert_eq!(
-            env.keeper.card_state_calls().len(),
-            2,
-            "observe activity must have been re-run after fallback refusal"
-        );
-        assert_eq!(
-            env.keeper.parked().len(),
-            1,
-            "park must land within bounded retries"
-        );
+        env.stop();
+    })
+    .await;
+}
+
+/// Exhausting the observe activity retries makes the first park send the
+/// live-set fallback. A waiting card refuses that park, so the workflow
+/// schedules a fresh observation and parks using the observed state.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cap_park_on_waiting_card_recovers_after_observe_retries_are_exhausted() {
+    in_local(async {
+        let Some(env) = env_or_skip("exhausted-observe-park", "echo ran > out.txt").await else {
+            println!("skipped: PG_TEMPORAL_ADDR unset");
+            return;
+        };
+        let card = "e2e-exhausted-observe-park";
+        env.keeper.set_card_state(Some("waiting"));
+        env.keeper.set_card_state_fail_times(5);
+
+        let claim = env.claim(card, &["out.txt"], "true");
+        let id = format!("e2e-exhausted-observe-park-{}", unique());
+        let handle = env.start(&id, claim).await;
+
+        let out = finish("exhausted_observe_park", &id, &handle).await;
+        assert_eq!(out.outcome, "parked", "{out:?}");
+
+        assert_eq!(scheduled_activities(&handle, "observe").await, 2);
+        assert_eq!(env.keeper.card_state_calls(), vec![card; 6]);
+        let expectations: Vec<_> = env
+            .keeper
+            .park_execs()
+            .into_iter()
+            .map(|exec| exec.expected_state.unwrap())
+            .collect();
+        assert_eq!(expectations, [WORKER_LIVE_STATES, &["waiting"]]);
+        assert_eq!(env.keeper.parked().len(), 1);
 
         env.stop();
     })

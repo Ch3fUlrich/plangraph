@@ -587,7 +587,7 @@ Continue with [review protocol, interfaces, and operations](spawner-operations.m
 The served-model probe cache has a five-minute freshness bound,
 not a five-minute completion or delivery SLA; see the operations guide for details.
 
-Cross-host ps: see [site configuration and transport](spawner-ps.md); [host readiness](placement-rules.md#host-readiness-consumer-contract) requires a matching ps entry and string source paths. Its ps `target` and overflow `ssh` must be the same string, even for aliases of one machine; mismatch lines name both values. Ordinary malformed host/probe and state-write errors emit per-host failure lines rather than aborting the fan-out; resource exhaustion (`MemoryError`, `RecursionError`) and process-control exceptions propagate instead.
+Cross-host ps: see [site configuration and transport](spawner-ps.md); [host readiness](placement-rules.md#host-readiness-consumer-contract) requires a matching ps entry and string source paths. Its ps `target` and overflow `ssh` must be the same string, even for aliases of one machine; mismatch lines name both values. A malformed run inventory reports `runs: invalid_response` and leaves the live-run count unknown. Ordinary malformed host/probe and state-write errors emit per-host failure lines rather than aborting the fan-out; resource exhaustion (`MemoryError`, `RecursionError`) and process-control exceptions propagate instead.
 # Remote ps protocol
 
 The SSH ps endpoint serializes only running and queued records. Terminal history
