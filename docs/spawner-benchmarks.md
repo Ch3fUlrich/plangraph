@@ -71,6 +71,17 @@ Publisher results for named model efforts are priors for the serving harness.
 The legacy contract and its pending list still track the original seed rows and
 their provenance. No publisher result was established for the Muse Amber name.
 
+`python tools/bench_gate.py --refresh --db PATH` runs the Rust `plangraph`
+refresh command. It imports DeepSWE, CursorBench and FrontierSWE observations
+from Epoch AI and reads OpenRouter model listings and prices. It saves HTTP
+validators in the catalog with the observations. If both sources return 304,
+the command reports zero writes. OpenRouter AA index results without a published
+benchmark effort remain unspecified. Repricing uses explicit per-cell entries
+in `catalog_benchmark_price_inputs` and requires both input and output token
+counts. The view reports model identity, index version and price changes through
+`stale_reason`, and marks token rates that differ from a supplied comparison
+price by more than five percent.
+
 ### Offline benchmark data contract (BENCH-DATA-TEST, slice 1)
 
 `tests/test_benchmark_data_contract.py` checks the actual

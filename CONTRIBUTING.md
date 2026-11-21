@@ -130,6 +130,9 @@ python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR 
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
+`cargo test --manifest-path rust/Cargo.toml -p plangraph-cli --test benchmark_refresh`
+checks the benchmark refresh and conditional requests against a loopback server.
+
 The selector follows static Python module launches (`-m`) and calls through
 `tools/*.sh`, including imports in shell Python heredocs. Deleted Python modules
 use the base revision’s importer graph; unresolved importers select the full suite,

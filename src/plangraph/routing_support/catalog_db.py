@@ -30,6 +30,12 @@ def default_db_path() -> Path:
 DEFAULT_DB_PATH: Path = default_db_path()
 
 SCHEMA_PATH: Path = Path(__file__).parent / "catalog_schema.sql"
+BENCHMARK_BACKUPS = (
+    ('benchmark_measurements', 'model_id, effort, harness, origin'),
+    ('benchmark_refresh_sources', 'source'), ('benchmark_openrouter_models', 'id'),
+    ('benchmark_price_inputs', 'model_id, effort, harness'),
+    ('benchmark_refresh_flags', 'model_id, effort, harness'),
+)
 
 
 class CatalogDB:
@@ -338,8 +344,9 @@ class CatalogDB:
             ("routes", "SELECT * FROM catalog_routes ORDER BY route_id ASC"),
             ("route_legs", "SELECT * FROM catalog_route_legs ORDER BY route_id ASC, position ASC"),
         ]
-        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE name='catalog_benchmark_measurements'").fetchone():
-            tables.append(("benchmark_measurements", "SELECT * FROM catalog_benchmark_measurements ORDER BY model_id, effort, harness, origin"))
+        present = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables.extend((key, f'SELECT * FROM catalog_{key} ORDER BY {order}')
+                      for key, order in BENCHMARK_BACKUPS if f'catalog_{key}' in present)
 
         payload: dict[str, Any] = {}
         for key, query in tables:
@@ -407,10 +414,10 @@ class CatalogDB:
             ("clients", "catalog_clients"),
             ("models", "catalog_models"),
             ("benchmarks", "catalog_benchmarks"),
-            ("benchmark_measurements", "catalog_benchmark_measurements"),
             ("routes", "catalog_routes"),
             ("route_legs", "catalog_route_legs"),
         ]
+        table_order.extend((key, f'catalog_{key}') for key, _ in BENCHMARK_BACKUPS)
 
         for payload_key, table_name in table_order:
             records = payload.get(payload_key, [])

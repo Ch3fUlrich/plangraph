@@ -1,0 +1,1 @@
+Add a conditional benchmark refresh to `tools/bench_gate.py --refresh --db PATH`. The Rust command imports Epoch AI coding benchmark exports and OpenRouter model metadata, persists HTTP validators and attribution, and records stale reasons and price disagreements in the catalog view.

@@ -102,6 +102,32 @@ CREATE TABLE IF NOT EXISTS catalog_benchmark_measurements (
     PRIMARY KEY (model_id, effort, harness, origin)
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS catalog_benchmark_refresh_sources (
+    source TEXT PRIMARY KEY, url TEXT NOT NULL, etag TEXT, last_modified TEXT,
+    attribution TEXT, revision INTEGER NOT NULL DEFAULT 1
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS catalog_benchmark_openrouter_models (
+    id TEXT PRIMARY KEY, canonical_slug TEXT, index_version TEXT,
+    prompt_price REAL, completion_price REAL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS catalog_benchmark_price_inputs (
+    model_id TEXT NOT NULL, effort TEXT NOT NULL, harness TEXT NOT NULL,
+    openrouter_id TEXT NOT NULL,
+    prompt_tokens REAL CHECK (prompt_tokens >= 0),
+    completion_tokens REAL CHECK (completion_tokens >= 0),
+    reference_prompt_price REAL CHECK (reference_prompt_price >= 0),
+    reference_completion_price REAL CHECK (reference_completion_price >= 0),
+    PRIMARY KEY (model_id, effort, harness)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS catalog_benchmark_refresh_flags (
+    model_id TEXT NOT NULL, effort TEXT NOT NULL, harness TEXT NOT NULL,
+    stale_reason TEXT, repriced_cost REAL, price_disagreement INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (model_id, effort, harness)
+) STRICT;
+
 CREATE VIEW IF NOT EXISTS catalog_benchmark_rows AS
 WITH observations AS (
     SELECT model_id, effort, harness, score, score_se, n_runs, steps, cost_per_task_usd,
@@ -122,15 +148,19 @@ WITH observations AS (
     ) AS preference
     FROM observations
 )
-SELECT model_id, effort, harness, score, score_se, n_runs, steps, cost_per_task_usd,
+SELECT model_id, effort, harness, score, score_se, n_runs, steps,
+       COALESCE(repriced_cost, cost_per_task_usd) AS cost_per_task_usd,
        tokens_per_task, CASE WHEN origin <> 'own' AND (
            lower(model_id) LIKE '%gpt-6.2-sol%' OR lower(model_id) LIKE '%gpt-6.1-sol%'
            OR lower(model_id) LIKE '%gpt-6.1-terra%' OR lower(model_id) LIKE '%gpt-6-luna%'
            OR lower(model_id) LIKE '%mimo-v2.6%') THEN 1 ELSE imputed END AS imputed,
        effort_channel, index_version, source_url, source_date, source_record,
        measured_at, origin, legacy, verified_tok_per_s,
-       COALESCE(julianday(measured_at) < julianday('now', '-45 days'), 1) AS stale
-FROM ranked WHERE preference = 1;
+       COALESCE(julianday(measured_at) < julianday('now', '-45 days'), 1)
+           OR stale_reason IS NOT NULL AS stale,
+       stale_reason, COALESCE(price_disagreement, 0) AS price_disagreement
+FROM ranked LEFT JOIN catalog_benchmark_refresh_flags USING (model_id, effort, harness)
+WHERE preference = 1;
 
 CREATE TABLE IF NOT EXISTS catalog_routes (
     route_id TEXT PRIMARY KEY,

@@ -1,7 +1,9 @@
-"""Read-only benchmark coverage gate for each image release/swap database."""
+"""Check benchmark coverage or refresh one catalog from public sources."""
 import argparse
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 
 # Support direct execution from an uninstalled checkout.
@@ -16,7 +18,25 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", action="append", required=True)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--refresh", action="store_true")
+    parser.add_argument("--epoch-url")
+    parser.add_argument("--openrouter-url")
     args = parser.parse_args(argv)
+    if args.refresh:
+        if len(args.db) != 1:
+            parser.error('--refresh requires one --db')
+        command = [os.environ.get('PLANGRAPH_BENCH_REFRESH_BIN', 'plangraph'),
+                   'bench-refresh', '--db', args.db[0]]
+        for flag, value in (('--epoch-url', args.epoch_url), ('--openrouter-url', args.openrouter_url)):
+            if value:
+                command.extend((flag, value))
+        try:
+            return subprocess.run(command, check=False).returncode
+        except OSError:
+            print('benchmark refresh requires the plangraph CLI', file=sys.stderr)
+            return 2
+    if args.epoch_url or args.openrouter_url:
+        parser.error('source URL overrides require --refresh')
     models = list(dict.fromkeys(l.model for l in DEFAULT_LEGS
                                if set(l.roles) & {"implement", "review"}))
     reports = []

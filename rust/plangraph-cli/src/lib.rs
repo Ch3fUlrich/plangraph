@@ -1,6 +1,7 @@
 pub mod atomic;
 pub mod base_fresh;
 pub mod batch_merge;
+pub mod bench_refresh;
 pub mod ci_watch;
 pub mod codex_readiness;
 pub mod env;
