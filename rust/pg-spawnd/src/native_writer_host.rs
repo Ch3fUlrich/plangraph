@@ -345,13 +345,15 @@ impl Driver for Host {
         if self.git(&["rev-parse", "HEAD"])? != head {
             return Err(format!("worktree is not at {head}"));
         }
-        let log = self.checks()?;
         let stamp = self.stamp(head)?;
         fs::create_dir_all(stamp.parent().ok_or("stamp directory missing")?)
             .map_err(|e| e.to_string())?;
+        // The turns up to this head are bound to it before the gates run, so a head whose gate
+        // fails keeps its own output and the next head starts after it.
+        self.session_excerpt(&stamp)?;
+        let log = self.checks()?;
         // The exact-head gate output, named in the review brief next to the stamp.
         fs::write(stamp.with_extension("log"), log).map_err(|e| e.to_string())?;
-        self.session_excerpt(&stamp)?;
         fs::write(&stamp, format!("{}\n", chrono::Utc::now().to_rfc3339()))
             .map_err(|e| e.to_string())
     }

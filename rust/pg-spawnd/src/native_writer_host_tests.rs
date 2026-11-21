@@ -586,3 +586,65 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
         "turn two\n"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().join("worktree");
+    fs::create_dir_all(cwd.join("tools")).unwrap();
+    let git = |args: &[&str]| {
+        output(
+            Command::new("git")
+                .arg("-C")
+                .arg(&cwd)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "fixture")
+                .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
+                .env("GIT_COMMITTER_NAME", "fixture")
+                .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid"),
+        )
+        .unwrap()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    fs::write(
+        cwd.join("tools/ci_commit_gate.py"),
+        "import pathlib, sys\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
+    )
+    .unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "one"]);
+    let run = dir.path().join("runs/run-x");
+    fs::create_dir_all(&run).unwrap();
+    let mut host = Host {
+        repo: cwd.clone(),
+        run_id: "run-x".into(),
+        cwd: cwd.clone(),
+        reviews: dir.path().join("reviews"),
+        record_path: run.join("record.json"),
+        base_ref: "refs/heads/main".into(),
+        tool_path: std::env::var("PATH").unwrap(),
+        effort: WRITER_EFFORT.into(),
+        state: dir.path().to_path_buf(),
+        brief: "brief".into(),
+        push_ref: None,
+        reviews_started: 0,
+        review_cli: vec!["false".into()],
+        python_src: None,
+    };
+    git(&["update-ref", &host.base_pin(), "HEAD"]);
+    // Head B: cargo output in the session, then a red gate.
+    fs::write(run.join("native.log"), "cargo B failed\n").unwrap();
+    fs::write(dir.path().join("gate-red"), "").unwrap();
+    git(&["commit", "-q", "--allow-empty", "-m", "B"]);
+    let head_b = git(&["rev-parse", "HEAD"]);
+    assert!(host.fast_checks(&head_b).is_err());
+    // Head C fixes it: only its own turns are its excerpt.
+    fs::write(run.join("native.log"), "cargo B failed\ncargo C passed\n").unwrap();
+    fs::remove_file(dir.path().join("gate-red")).unwrap();
+    git(&["commit", "-q", "--allow-empty", "-m", "C"]);
+    let head_c = git(&["rev-parse", "HEAD"]);
+    host.fast_checks(&head_c).unwrap();
+    let excerpt = host.stamp(&head_c).unwrap().with_extension("session.log");
+    assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
+}

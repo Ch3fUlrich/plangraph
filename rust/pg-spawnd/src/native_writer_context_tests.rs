@@ -76,3 +76,31 @@ fn callers_are_code_uses_not_definitions_comments_strings_or_declarations() {
         None
     );
 }
+#[test]
+fn the_first_line_after_a_closed_definition_belongs_to_none_of_it() {
+    // A module-level assignment right after a function body.
+    let python = "def early():\n    return 1\nVALUE = 2\n\ndef later():\n    return 3\n";
+    assert_eq!(enclosing_public(python, 2, true).as_deref(), Some("early"));
+    assert_eq!(enclosing_public(python, 3, true), None);
+    // An `impl` header and a blank line after a one-line function.
+    let rust = "pub fn one() {}\nimpl S {\n    fn m() {\n        let a = 1;\n    }\n}\n\npub fn two() {\n    let b = 2;\n\n    let c = 3;\n}\n";
+    assert_eq!(enclosing_public(rust, 2, false), None);
+    assert_eq!(enclosing_public(rust, 7, false), None);
+    // The closing brace and an inner blank line stay with the function they belong to.
+    assert_eq!(enclosing_public(rust, 12, false).as_deref(), Some("two"));
+    assert_eq!(enclosing_public(rust, 10, false).as_deref(), Some("two"));
+}
+#[test]
+fn module_path_uses_do_not_displace_real_calls_under_the_limit() {
+    let grep = "a.rs:1:    let a = pg::writer_families::python_command(s);\na.rs:2:    pg::writer_families::render_review_brief(c);\nb.rs:3:    pg::writer_families::writer_families(x)?;\nc.rs:4:    writer_families(y);\nd.rs:5:    writer_families(z);\ne.rs:6:    writer_families::<u8>(z);\n";
+    assert_eq!(
+        callers_line("writer_families", grep).unwrap(),
+        "writer_families: b.rs:3, c.rs:4, d.rs:5"
+    );
+    // A type name followed by a path is a use of the type; a lowercase module path is not.
+    assert_eq!(
+        callers_line("Budget", "a.rs:1:let b = Budget::new();\n").unwrap(),
+        "Budget: a.rs:1"
+    );
+    assert_eq!(callers_line("only_mod", "a.rs:1:only_mod::f();\n"), None);
+}
