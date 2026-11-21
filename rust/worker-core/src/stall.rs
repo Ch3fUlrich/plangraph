@@ -15,6 +15,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod deadline;
+pub(crate) use deadline::status_until;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]

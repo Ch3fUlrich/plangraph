@@ -292,6 +292,59 @@ fn an_unreadable_registered_head_refuses_instead_of_assuming_no_writer() {
 }
 
 #[test]
+fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
+    let (dir, mut repos, mut request) = repo_with_writer_trailer(None);
+    let repo = repos.get_mut("demo").unwrap();
+    repo.remote = "fixture:repo".into();
+    let ssh = dir.join("stall-ssh");
+    std::fs::write(
+        &ssh,
+        "#!/bin/sh\nprintf '%s %s\\n' \"$PPID\" \"$$\" > fetch-pids\nexec sleep 8\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o700)).unwrap();
+    for args in [
+        ["remote", "add", "origin", repo.remote.as_str()].as_slice(),
+        &["config", "core.sshCommand", "./stall-ssh"],
+        &["config", "ssh.variant", "simple"],
+    ] {
+        assert!(pg_worker_core::git_test_support::command(&dir)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    request["card"]["diff_ref"]["head_sha"] = json!("0".repeat(40));
+    let diff = serde_json::from_value(request["card"]["diff_ref"].clone()).unwrap();
+    let timeout = Duration::from_secs(1);
+    let start = Instant::now();
+    let result = crate::prompt_git::head_writers_with_timeout(repo, &diff, timeout);
+    let elapsed = start.elapsed();
+    let pids = std::fs::read_to_string(dir.join("fetch-pids")).expect("fetch reached the stub");
+    let (git_pid, stub_pid) = pids.trim().split_once(' ').unwrap();
+    let git_pid: libc::pid_t = git_pid.parse().unwrap();
+    let stub_pid: libc::pid_t = stub_pid.parse().unwrap();
+    let git_status = unsafe { libc::kill(git_pid, 0) };
+    let git_error = std::io::Error::last_os_error();
+    let lock = pg_worker_core::lockfile::try_lock(&dir.join(".git/spawner-fetch.lock")).unwrap();
+    if git_status == 0 {
+        // Clean up the fixture even when testing the old, detached timeout path.
+        unsafe { libc::kill(stub_pid, libc::SIGKILL) };
+    }
+    assert_eq!(result, Err(crate::prompt::InlineDiffError::Git));
+    assert!(
+        (timeout..Duration::from_secs(3)).contains(&elapsed),
+        "fetch took {elapsed:?}"
+    );
+    assert!(lock.is_some(), "fetch lock survived the refusal");
+    assert_eq!(
+        (git_status, git_error.raw_os_error()),
+        (-1, Some(libc::ESRCH)),
+        "Git was not reaped before the refusal"
+    );
+}
+
+#[test]
 fn a_non_ascii_registered_head_refuses_without_echoing_the_head() {
     let (_dir, repos, mut request) = repo_with_writer_trailer(None);
     let head = format!("{}é{}", "a".repeat(11), "a".repeat(27));

@@ -232,21 +232,23 @@ pub(crate) fn head_writers(
     repo: &RepoEntry,
     diff: &DiffRef,
 ) -> Result<Vec<String>, InlineDiffError> {
+    head_writers_with_timeout(repo, diff, Duration::from_secs(30))
+}
+
+pub(crate) fn head_writers_with_timeout(
+    repo: &RepoEntry,
+    diff: &DiffRef,
+    timeout: Duration,
+) -> Result<Vec<String>, InlineDiffError> {
     validate(diff)?;
-    // The fetch a missing head may need runs under a deadline too; the lookup gives up (and refuses) after it.
-    let (sender, receiver) = mpsc::channel();
-    let (owned, sha) = (repo.clone(), diff.head_sha.clone());
-    std::thread::spawn(move || {
-        let _ = sender.send(workspace_resolver::ensure_commit(
-            &owned,
-            &sha,
-            Duration::from_secs(10),
-        ));
-    });
-    match receiver.recv_timeout(Duration::from_secs(30)) {
-        Ok(Ok(())) => {}
-        _ => return Err(InlineDiffError::Git),
-    }
+    let deadline = Instant::now() + timeout;
+    workspace_resolver::ensure_commit_until(
+        repo,
+        &diff.head_sha,
+        Duration::from_secs(10),
+        deadline,
+    )
+    .map_err(|_| InlineDiffError::Git)?;
     let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
     cmd.args([
         "-c",
@@ -257,22 +259,13 @@ pub(crate) fn head_writers(
         "--format=%(trailers:key=Writer,valueonly,unfold)",
         &diff.head_sha,
         "--",
-    ])
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
+    ]);
+    let log_deadline = deadline.min(Instant::now() + Duration::from_secs(10));
+    let (status, stdout) = workspace_resolver::git_output_until(&mut cmd, log_deadline, 64 * 1024)
+        .map_err(|_| InlineDiffError::Git)?;
+    if !status.success() {
+        return Err(InlineDiffError::Git);
     }
-    // Bounded like the diff reads: the child is reaped and killed at the deadline.
-    let stdout = collect_diff(
-        cmd.spawn().map_err(|_| InlineDiffError::Git)?,
-        64 * 1024,
-        Duration::from_secs(10),
-    )
-    .map_err(|_| InlineDiffError::Git)?;
     Ok(String::from_utf8_lossy(&stdout)
         .lines()
         .filter_map(|line| line.split_whitespace().next())

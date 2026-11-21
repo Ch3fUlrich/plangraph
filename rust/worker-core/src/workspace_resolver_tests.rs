@@ -2,6 +2,13 @@ use super::*;
 use std::collections::BTreeMap;
 use tempfile::TempDir;
 
+fn resolver_git(root: &Path) -> Git<'_> {
+    Git {
+        root,
+        deadline: None,
+    }
+}
+
 fn git(root: &Path, args: &[&str]) -> String {
     let out = crate::git_test_support::command(root)
         .args(args)
@@ -56,7 +63,8 @@ impl Fixture {
         git(&source, &["rev-parse", "HEAD"])
     }
     fn lock(&self) -> PathBuf {
-        common_dir(Path::new(&self.repo.root))
+        resolver_git(Path::new(&self.repo.root))
+            .common_dir()
             .unwrap()
             .join("spawner-fetch.lock")
     }
@@ -108,8 +116,27 @@ fn missing_commit_fetches_local_origin() {
     let sha = f.advance();
     let refs = f.refs();
     ensure_commit(&f.repo, &sha, Duration::ZERO).unwrap();
-    assert!(has_commit(Path::new(&f.repo.root), &sha).unwrap());
+    assert!(resolver_git(Path::new(&f.repo.root))
+        .has_commit(&sha)
+        .unwrap());
     assert_eq!(refs, f.refs());
+}
+
+#[test]
+fn bounded_resolution_fetches_missing_commit_from_local_origin() {
+    let f = Fixture::new();
+    let sha = f.advance();
+    ensure_commit_until(
+        &f.repo,
+        &sha,
+        Duration::ZERO,
+        Instant::now() + Duration::from_secs(5),
+    )
+    .unwrap();
+    assert!(resolver_git(Path::new(&f.repo.root))
+        .has_commit(&sha)
+        .unwrap());
+    assert!(lockfile::try_lock(&f.lock()).unwrap().is_some());
 }
 
 #[test]
@@ -162,7 +189,9 @@ fn remote_mismatch_refuses_before_fetch() {
         ensure_commit(&f.repo, &sha, Duration::ZERO),
         Err(ResolveError::Verify("remote"))
     ));
-    assert!(!has_commit(Path::new(&f.repo.root), &sha).unwrap());
+    assert!(!resolver_git(Path::new(&f.repo.root))
+        .has_commit(&sha)
+        .unwrap());
     assert!(lockfile::try_lock(&f.lock()).unwrap().is_some());
     assert_eq!(refs, f.refs());
 }
@@ -238,8 +267,8 @@ fn concurrent_missing_commit_rechecks_under_common_dir_lock() {
         &["worktree", "add", "--detach", linked.to_str().unwrap()],
     );
     assert_eq!(
-        common_dir(&linked).unwrap(),
-        common_dir(Path::new(&f.repo.root)).unwrap()
+        resolver_git(&linked).common_dir().unwrap(),
+        resolver_git(Path::new(&f.repo.root)).common_dir().unwrap()
     );
     let sha = f.advance();
     let refs = f.refs();
