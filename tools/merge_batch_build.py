@@ -18,6 +18,13 @@ from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, 
                               workflow_gate, worktrees)
 
 
+def merge_trailers(st):
+    """The trailer paragraph of every merge commit the build makes: the batch plan key as ``Plan-Item`` (the
+    keeper finds the batch item in git without a merge body) and ``Land-Base``, the base the batch is built and
+    tested on (the landing mode tested-ff leases main on it, and it is part of the tested commit)."""
+    return "\n".join([*([f"Plan-Item: {st['plan']}"] if st.get("plan") else []), f"Land-Base: {st['base_head']}"])
+
+
 def default_worktree(name):
     """<main checkout>-worktrees/batch-NAME, next to the main checkout (not nested in a lane)."""
     common = state_dir().parent  # the git common dir
@@ -194,7 +201,7 @@ def run_pending(st, skip_conflicts):
         st["merging"] = {"pr": num, "head": pr["head"]}
         save_state(st)  # before the merge: a crash right after it leaves this marker and continue finds the commit
         proc = git(*attrs_args(st), "merge", "--no-ff", "-m", f"Merge PR #{num}: {pr['title']}",
-                   *(["-m", f"Plan-Item: {st['plan']}"] if st.get("plan") else []), pr["head"], cwd=wt, ok=None)
+                   "-m", merge_trailers(st), pr["head"], cwd=wt, ok=None)
         stop = settle_merge(st, num, proc, skip_conflicts)
     if stop is not None:
         return stop

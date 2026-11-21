@@ -426,24 +426,38 @@ def push_tested(st):
 def require_tested_ff_evidence(st):
     """What the keeper reads after a landing that has no merge commit: the batch plan key must be a ``Plan-Item``
     trailer of a commit of the batch (``build --plan`` writes it into every merge commit it makes), and the
-    keeper setting ``require_seats`` must be off, because the ``Review-Run`` citations of a merge body cannot be
+    keeper's effective ``require_seats`` must be off (seats_required), because the ``Review-Run`` citations of a merge body cannot be
     added to a tested commit without changing the tested sha (merge-close then flags the seat as missing)."""
-    from plangraph.keeper.config import ConfigError, load_config
     from plangraph.keeper.evidence_git import plan_items
 
     plan = st.get("plan")
+    bodies = git("log", "--format=%B%x1d", f"{st['base_head']}..{st['head']}", cwd=st["worktree"]).stdout.split("\x1d")
     if isinstance(plan, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", plan):
-        bodies = git("log", "--format=%B%x1d", f"{st['base_head']}..{st['head']}", cwd=st["worktree"]).stdout.split("\x1d")
         if not any(plan in plan_items(body) for body in bodies):
             raise MergeBatchError(f"tested-ff: the batch plan key {plan} is no Plan-Item trailer of a batch commit "
                                   "(it was built without it): build the batch again, or land in train-pr-merge")
+    tip = git("log", "-1", "--format=%B", st["head"], cwd=st["worktree"]).stdout
+    if f"Land-Base: {st['base_head']}" not in tip.splitlines():
+        raise MergeBatchError(f"tested-ff: the batch head carries no Land-Base trailer for the recorded base "
+                              f"{short(st['base_head'])}: it was built without it or by hand; build the batch again")
+    if seats_required():
+        raise MergeBatchError("tested-ff: require_seats is on (PG_MERGE_CLOSE_REQUIRE_SEATS or the keeper setting), and a "
+                              "tested commit has no merge body to cite the part reviews (Review-Run); turn it off or "
+                              "land in train-pr-merge")
+
+
+def seats_required():
+    """The policy merge-close will apply: PG_MERGE_CLOSE_REQUIRE_SEATS (1/true/on demands seats, 0/false/off does
+    not, anything else is read as demanding them) overrides the keeper setting ``require_seats`` of keeper.json."""
+    from plangraph.keeper.config import ConfigError, load_config
+
+    override = os.environ.get("PG_MERGE_CLOSE_REQUIRE_SEATS", "").strip().lower()
+    if override:
+        return override not in ("0", "false", "off")
     try:
-        seats = load_config(keeper_config_path()).require_seats
+        return load_config(keeper_config_path()).require_seats
     except (ConfigError, OSError):
-        seats = False  # require_part_seats already read this file; a missing one flags seats as missing
-    if seats:
-        raise MergeBatchError("tested-ff: the keeper setting require_seats is on, and a tested commit has no merge "
-                              "body to cite the part reviews (Review-Run); turn require_seats off or land in train-pr-merge")
+        return False  # require_part_seats already read this file; a missing one flags seats as missing
 
 
 def keeper_config_path():

@@ -270,6 +270,9 @@ def test_build_writes_the_batch_plan_key_into_every_merge_commit_it_makes(env):
     trailers = env.git("log", "--merges", "--format=%(trailers:key=Plan-Item,valueonly)", f"{state['base_head']}..{state['head']}",
                        cwd=env.repo)
     assert trailers.split() == ["plangraph:BATCH-X"] * 3
+    bases = env.git("log", "--merges", "--format=%(trailers:key=Land-Base,valueonly)", f"{state['base_head']}..{state['head']}",
+                    cwd=env.repo)
+    assert bases.split() == [state["base_head"]] * 3  # the tested base is part of the tested commit
 
 
 def test_tested_ff_lands_a_batch_whose_key_is_in_git_and_the_receipt_keeps_the_citations(env):
@@ -303,3 +306,26 @@ def test_tested_ff_refuses_while_the_keeper_requires_seats(env):
     res = land(env, approval)
     assert res.returncode == 1 and "require_seats" in res.stderr, res.stderr
     assert env.calls("pr", "merge") == [] and rows(env) == []
+
+
+def test_tested_ff_refuses_a_head_whose_land_base_trailer_is_not_the_recorded_base(env):
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    state = json.loads(env.state_file("l1").read_text())
+    state["base_head"] = state["head"]  # a state that names another base than the head's own trailer
+    env.state_file("l1").write_text(json.dumps(state))
+    res = land(env, approval)
+    assert res.returncode == 1 and "Land-Base" in res.stderr, res.stderr
+    assert rows(env) == [] and main_tip(env) != state["head"]
+
+
+@pytest.mark.parametrize("value,refused", [("true", True), ("on", True), ("1", True), ("false", False), ("off", False),
+                                           ("0", False), ("maybe", True)])
+def test_tested_ff_honors_the_merge_close_seat_override(env, value, refused):
+    """merge-close demands seats when PG_MERGE_CLOSE_REQUIRE_SEATS is 1/true/on, whatever keeper.json says."""
+    approval = pushed(env, plan="plangraph:BATCH-X")
+    mode(env, "tested-ff")
+    env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"] = value
+    res = land(env, approval)
+    assert (res.returncode == 1 and "require_seats" in res.stderr) == refused, res.stderr
+    assert (rows(env) == []) == refused

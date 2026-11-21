@@ -389,20 +389,43 @@ def landing_db_path():
     return Path(data) / "plangraph" / "landing-telemetry.sqlite3"
 
 
+def _legacy_rows(rows):
+    """One row per (repo, landed sha) from rows of a file keyed by train: the live lander's row (a train key that
+    is not ``pr<N>``, which a backfill writes) is authoritative for every column it knows; the others only fill
+    what it left unknown, the last written first."""
+    merged = {}
+    for row in rows:
+        merged.setdefault((row["repo"], row["landed_sha"]), []).append(row)
+    out = []
+    for group in merged.values():
+        live = [r for r in group if not re.fullmatch(r"pr\d+", r["train"])]
+        order = (live[-1:] or group[-1:]) + [r for r in reversed(group) if r not in live[-1:]]
+        out.append({k: next((r[k] for r in order if r[k] is not None), None) for k in group[0]})
+    return out
+
+
 def landing_db():
-    """The open telemetry database (the table is created on first use)."""
+    """The open telemetry database. The table is created on first use; a file whose table is keyed by train is
+    migrated to the key (repo, landed sha) inside one write transaction taken before the schema is read, so an
+    interrupted migration leaves the old table and its rows untouched and two openers never both migrate."""
     path = landing_db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    db = sqlite3.connect(path, timeout=30)
+    db = sqlite3.connect(path, timeout=30, isolation_level=None)
     db.row_factory = sqlite3.Row
-    db.execute(LANDING_SCHEMA)
-    if "train" in [c["name"] for c in db.execute("PRAGMA table_info(landing)") if c["pk"]]:
-        # an older file keyed by (repo, train, landed_sha): keep one row per landing, the one written last
-        with db:
-            db.execute("ALTER TABLE landing RENAME TO landing_old")
+    db.execute("BEGIN IMMEDIATE")
+    try:
+        db.execute(LANDING_SCHEMA)
+        if "train" in [c["name"] for c in db.execute("PRAGMA table_info(landing)") if c["pk"]]:
+            legacy = [dict(r) for r in db.execute("SELECT * FROM landing ORDER BY rowid")]
+            db.execute("DROP TABLE landing")
             db.execute(LANDING_SCHEMA)
-            db.execute("INSERT OR REPLACE INTO landing SELECT * FROM landing_old ORDER BY rowid")
-            db.execute("DROP TABLE landing_old")
+            for row in _legacy_rows(legacy):
+                db.execute(f"INSERT INTO landing ({','.join(row)}) VALUES ({','.join('?' * len(row))})", list(row.values()))
+        db.execute("COMMIT")
+    except BaseException:
+        db.execute("ROLLBACK")
+        raise
+    db.isolation_level = ""  # the callers use ``with db`` transactions
     return db
 
 

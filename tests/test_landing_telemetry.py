@@ -135,6 +135,36 @@ def test_a_database_keyed_by_the_train_is_migrated_to_one_row_per_landing(util):
         for train in ("l1", "pr100"):
             db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts) VALUES ('owner/proj', ?, ?, 'tested-ff', '[1]')",
                        (train, "a" * 40))
-    assert [r["train"] for r in util.landing_rows()] == ["pr100"]
+    assert [r["train"] for r in util.landing_rows()] == ["l1"]  # the live lander's key wins over a backfill's pr<N>
     util.record_landing(row(train="l3"))  # the same sha under a third train name no longer raises
     assert len(util.landing_rows()) == 1
+
+
+def test_migration_keeps_the_live_values_and_fills_the_rest_from_the_backfill(util):
+    import sqlite3
+    old = util.LANDING_SCHEMA.replace("PRIMARY KEY (repo, landed_sha)", "PRIMARY KEY (repo, train, landed_sha)")
+    with sqlite3.connect(util.landing_db_path()) as db:
+        db.execute(old)
+        db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts, fix_tasks) VALUES "
+                   "('owner/proj', 'l1', ?, 'tested-ff', '[1, 2]', 3)", ("a" * 40,))
+        db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts, ci_reruns) VALUES "
+                   "('owner/proj', 'pr100', ?, 'train-pr-merge', '[\"B1\"]', 4)", ("a" * 40,))
+    (only,) = util.landing_rows()
+    assert (only["train"], only["mode"], only["parts"], only["fix_tasks"], only["ci_reruns"]) == ("l1", "tested-ff", [1, 2], 3, 4)
+
+
+def test_an_interrupted_migration_leaves_the_old_table_and_its_rows(util):
+    import sqlite3
+    old = util.LANDING_SCHEMA.replace("PRIMARY KEY (repo, landed_sha)", "PRIMARY KEY (repo, train, landed_sha)").replace(
+        "parts TEXT NOT NULL", "parts TEXT")
+    with sqlite3.connect(util.landing_db_path()) as db:
+        db.execute(old)
+        db.execute("INSERT INTO landing (repo, train, landed_sha, mode, parts) VALUES ('owner/proj', 'l1', ?, 'tested-ff', NULL)",
+                   ("a" * 40,))
+    with pytest.raises(sqlite3.IntegrityError):  # the copy into the new table fails half way
+        util.landing_db()
+    with sqlite3.connect(util.landing_db_path()) as db:
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        assert tables == {"landing"}
+        assert db.execute("SELECT train FROM landing").fetchall() == [("l1",)]
+        assert [c[1] for c in db.execute("PRAGMA table_info(landing)") if c[5]] == ["repo", "train", "landed_sha"]
