@@ -213,6 +213,50 @@ def test_backfill_builds_the_table_from_history_and_is_idempotent(w):
     assert [f["code"] for f in w.store.alerts(w.p("reader"))["findings"]] == ["old_code"]
 
 
+def test_a_refusal_older_than_the_window_stops_counting_while_newer_ones_continue(w):
+    window = w.store.alert_window_s
+    for _ in range(3):
+        with pytest.raises(Refused):
+            w.store.claim(w.p("reader"), "demo:A")
+        w.clock.advance(window * 0.75)
+    # Refusals at 0, 0.75 and 1.5 windows: when the third landed only two were current.
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 2)]
+    # Raised at the second refusal, expired by the third, raised again by it.
+    assert len(_telemetry(w, "alert_raised")) == 2
+    counts = {r["key"]: r["count"] for r in w.store.alerts(w.p("reader"))["refusals"]}
+    assert counts == {"demo:A": 2}
+    # A refusal after a long quiet spell restarts the count.
+    w.clock.advance(window * 2)
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    assert _alert_rows(w) == [("refusal", "demo:A", "refused", "open", 1)]
+
+
+def test_first_backfill_merges_into_the_live_rows_of_the_same_identity(w):
+    _refuse_twice(w)
+    w.store._finding("demo:A", "late", "x", w.store.now())
+    live = _alert_rows(w)
+    assert w.store.backfill_alerts()["skipped"] is False
+    # One row per alert identity: the live rows were merged, not joined by a second one.
+    assert _alert_rows(w) == live
+    with pytest.raises(Refused):
+        w.store.claim(w.p("reader"), "demo:A")
+    assert _alert_rows(w)[0][4] == 3
+    assert w.store.backfill_alerts()["skipped"] is True
+    assert len(_alert_rows(w)) == 2
+
+
+def test_backfill_checks_its_marker_inside_the_write_transaction(w):
+    _refuse_twice(w)
+    statements = []
+    w.conn.set_trace_callback(statements.append)
+    w.store.backfill_alerts()
+    w.conn.set_trace_callback(None)
+    marker = next(i for i, sql in enumerate(statements) if "action='alerts_backfill'" in sql)
+    begin = next(i for i, sql in enumerate(statements) if sql.startswith("BEGIN"))
+    assert begin < marker
+
+
 # ------------------------------------------------------------------ digest
 
 def test_digest_router_only(w):
