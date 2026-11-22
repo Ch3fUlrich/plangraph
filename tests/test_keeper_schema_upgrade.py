@@ -632,6 +632,24 @@ def test_split_statements_refuses_pragma_and_vacuum_in_transaction(tmp_path, mon
         kdb.open_db(path, create=False)
 
 
+def _incident_migration_window(steps):
+    position = next(index for index, step in enumerate(steps)
+                    if step.name == "item incident log index")
+    return steps[:position], [step.version for step in steps[position:]]
+
+
+@pytest.mark.parametrize("incident_version,last_version", [(15, 15), (21, 23)])
+def test_incident_migration_window_uses_the_index_step(incident_version, last_version):
+    from plangraph.keeper.schema_pg import Migration
+
+    steps = tuple(Migration(
+        number, "item incident log index" if number == incident_version else "other step", "")
+        for number in range(1, last_version + 1))
+    previous, pending = _incident_migration_window(steps)
+    assert [step.version for step in previous] == list(range(1, incident_version))
+    assert pending == list(range(incident_version, last_version + 1))
+
+
 @needs_pg
 def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypatch):
     import uuid
@@ -642,10 +660,11 @@ def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypat
 
     name = "t_schemaup_" + uuid.uuid4().hex[:12]
     path = tmp_path / "pg-incidents.db"
+    previous, pending = _incident_migration_window(schema_pg.MIGRATIONS)
     with psycopg.connect(PG_DSN, autocommit=True) as raw:
         try:
             with monkeypatch.context() as old:
-                old.setattr(schema_pg, "MIGRATIONS", schema_pg.MIGRATIONS[:14])
+                old.setattr(schema_pg, "MIGRATIONS", previous)
                 conn = kdb.open_db(path, create=True, backend="postgres",
                                    dsn=PG_DSN, schema=name)
             try:
@@ -657,7 +676,7 @@ def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypat
                 assert conn.execute("SELECT to_regclass('idx_events_incidents')").fetchone()[0] is None
             finally:
                 conn.close()
-            assert db_pg.migrate(raw, name) == [15]
+            assert db_pg.migrate(raw, name) == pending
             assert db_pg.migrate(raw, name) == []
             conn = kdb.open_db(path, backend="postgres", dsn=PG_DSN, schema=name)
             try:
