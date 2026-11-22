@@ -565,6 +565,7 @@ class SeatSpawnMixin:
 
         def record_attempt(job):
             record['attempts'].append(dict(leg=asdict(chosen), job_id=job.job_id,
+                started=getattr(job, 'start_time', None), ended=getattr(job, 'end_time', None),
                 status='failed', skip_reason='reasoning_output_limit',
                 served_model=job.served_model, served_family=job.served_family,
                 served_witness_reason=job.served_witness_reason,

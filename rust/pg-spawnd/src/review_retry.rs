@@ -213,7 +213,7 @@ fn advance(
         record.set(key, val.clone());
     }
     let mut attempts = value["attempts"].as_array().unwrap().clone();
-    attempts.push(json!({"leg":leg,"status":"running"}));
+    attempts.push(runs::booked_attempt(&leg));
     let next_attempt = attempts.len() as u32;
     record.set("attempts", json!(attempts));
     for key in [

@@ -149,6 +149,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("effort-level") {
         return crate::effort_level::execute(rest, out);
     }
+    if verb.as_deref() == Some("attempts") {
+        return crate::attempt_rows::execute(rest, out);
+    }
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);
     }

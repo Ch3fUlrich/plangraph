@@ -501,9 +501,14 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
         base["attempts"] = json!([]);
     }
     let attempts = base["attempts"].as_array_mut().unwrap();
-    attempts.push(json!({"leg":leg,"status":"running"}));
+    attempts.push(booked_attempt(leg));
     u32::try_from(attempts.len()).expect("attempt count fits u32")
 }
+
+pub(crate) fn booked_attempt(leg: &Value) -> Value {
+    json!({"leg":leg,"status":"running","started":pg_worker_core::run::finalize::now()})
+}
+
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
     finish_with_allowlist(record, status, leg, attempt_id, &BTreeSet::new());
 }
@@ -537,6 +542,7 @@ pub(crate) fn finish_with_allowlist(
     crate::cli_review::finish(record, status, leg);
     let (dry, unwitnessed) = (status == Status::DryRun, json!("unwitnessed"));
     let completion = json!({"leg":leg,"status":status.as_str(),
+        "ended":pg_worker_core::run::finalize::now(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },
         "served_family":if dry { &leg["family"] } else { &unwitnessed },
         "served_witness_reason":if leg["model"].as_str().is_some_and(|m| m.split('/').next() == Some("omniroute")) {

@@ -1,6 +1,7 @@
 mod adapter;
 mod agent_view;
 mod agent_view_projection;
+mod attempt_rows;
 mod cli;
 mod cli_review;
 mod doctor_sources;

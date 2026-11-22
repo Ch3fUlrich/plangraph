@@ -9,6 +9,20 @@ from .brief import creation_error
 from .credential_guard import mask_all
 
 
+def cmd_attempts(args):
+    import subprocess
+    command = ["pg-spawnd", "attempts", "--since", args.since]
+    if args.json:
+        command.append("--json")
+    if args.state:
+        command.extend(["--state", args.state])
+    try:
+        return subprocess.run(command, check=False).returncode
+    except OSError as exc:
+        print(f"attempts: {exc}", file=sys.stderr)
+        return 3
+
+
 def cmd_close_merged(args, session):
     from .cli_verbs import SLOW_TIMEOUT, RefusedCli, Unreachable, _refuse
     body = {"key": args.key, "decision_id": args.decision_id, "families": args.families,

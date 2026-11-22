@@ -1,6 +1,63 @@
 use super::*;
 
 #[test]
+fn writer_and_seat_launches_each_project_one_attempt() {
+    use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
+    let state = tempfile::tempdir().unwrap();
+    let supervisor = Supervisor::new(SupervisorCfg::new(Config {
+        state_dir: state.path().to_path_buf(),
+        host: "fixture-host".into(),
+        confinement: Confinement::Plain,
+        ..Config::default()
+    }))
+    .unwrap();
+    let runs = Runs::new(Arc::new(supervisor));
+    for (role, item, expected) in [
+        ("implement", Some("demo:CHANGE"), "demo:CHANGE"),
+        ("review", Some("demo:CHANGE"), "demo:CHANGE"),
+        ("review", None, "adhoc"),
+    ] {
+        let leg =
+            json!({"id":"fixture","harness":"fixture","model":"requested","family":"fixture"});
+        let args = json!({"role":role,"prompt":"fixture","card":{"item_key":item}});
+        let result = runs
+            .spawn_using(
+                state.path(),
+                args.as_object().unwrap(),
+                "fixture-host",
+                json!(role),
+                json!({"first_leg":leg,"legs":[leg]}),
+                |_, _| {
+                    Ok(crate::launch::LaunchSpec {
+                        argv: vec!["/bin/cat".into()],
+                        cwd: state.path().to_path_buf(),
+                        env: BTreeMap::new(),
+                        stdin: Some("fixture".into()),
+                        prompt: Some("fixture".into()),
+                        warnings: None,
+                        events: None,
+                    })
+                },
+            )
+            .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+        assert_ne!(result["status"], "refused", "{}", result["reason"]);
+        let run_id = result["run_id"].as_str().unwrap();
+        assert!(runs
+            .supervisor
+            .wait_finished(run_id, Duration::from_secs(5)));
+        let record = crate::records::read_record(state.path(), &result["run_id"])
+            .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+        let rows = crate::attempt_rows::rows(&[record], 0.0);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["role"], role);
+        assert_eq!(rows[0]["host"], "fixture-host");
+        assert_eq!(rows[0]["card_key"], expected);
+        assert_eq!(rows[0]["served_model"], "unwitnessed");
+        assert!(rows[0]["wall_seconds"].as_f64().unwrap() >= 0.0);
+    }
+}
+
+#[test]
 fn queue_refusal_preserves_missing_seat_events() {
     for role in ["review", "judge"] {
         for dry in [false, true] {
