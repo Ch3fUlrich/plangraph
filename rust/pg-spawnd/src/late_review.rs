@@ -71,17 +71,14 @@ pub(crate) fn recover(state: &Path, pending: &Path, head: &str) -> Result<Option
     let record = match read_run(state, &request) {
         Ok(record) => record,
         Err(_) => {
-            remove(pending)?;
-            clean_checkout(pending, &request);
+            discard(pending, &request)?;
             return Ok(None);
         }
     };
-    if let Some(result) = publish(state, pending, &request, &record)? {
-        remove(pending)?;
-        Ok(Some(result))
-    } else {
-        Ok(Some(pending_result(&request)))
+    if live(&record) {
+        return Ok(Some(pending_result(&request)));
     }
+    finish_pending(state, pending, &request, &record, None)
 }
 
 fn read_run(state: &Path, request: &Value) -> Result<Value, String> {
@@ -111,7 +108,7 @@ fn publish(
     if request["run_id"] != record["run_id"] {
         return Err("late review run id mismatch".into());
     }
-    if live(record) {
+    if record["status"] != "completed" {
         return Ok(None);
     }
     let head = request["head"].as_str().ok_or("late review head missing")?;
@@ -120,13 +117,38 @@ fn publish(
     let text = crate::native_writer_host::review_run_text(state, record)?;
     let mut result = crate::native_writer_host::review_verdict(&text, head, &paths);
     let file = pending.with_extension("txt");
-    let artifact = format!("HEAD: {head}\n{text}");
+    let artifact = if result["verdict"] == "no_verdict" {
+        format!("{}\n\nVERDICT: NO_VERDICT\n", text.trim_end())
+    } else {
+        format!("HEAD: {head}\n{text}")
+    };
     atomic_write_private(&file, artifact.as_bytes()).map_err(|e| e.to_string())?;
     result["path"] = json!(file);
     result["run_id"] = record["run_id"].clone();
     result["leg"] = record["chosen_leg"]["id"].clone();
-    clean_checkout(pending, request);
     Ok(Some(result))
+}
+
+fn finish_pending(
+    state: &Path,
+    pending: &Path,
+    request: &Value,
+    record: &Value,
+    ready: Option<&Path>,
+) -> Result<Option<Value>, String> {
+    // Unusable evidence must not prevent a fresh run for this head.
+    let result = publish(state, pending, request, record).unwrap_or(None);
+    if let (Some(result), Some(ready)) = (&result, ready) {
+        save_pending(ready, result)?;
+    }
+    discard(pending, request)?;
+    Ok(result)
+}
+
+fn discard(pending: &Path, request: &Value) -> Result<(), String> {
+    remove(pending)?;
+    clean_checkout(pending, request);
+    Ok(())
 }
 
 fn clean_checkout(pending: &Path, request: &Value) {
@@ -174,14 +196,13 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             let record = match read_run(state, &request) {
                 Ok(record) => record,
                 Err(error) => {
-                    remove(pending)?;
-                    clean_checkout(pending, &request);
+                    discard(pending, &request)?;
                     return Err(error);
                 }
             };
-            if let Some(result) = publish(state, pending, &request, &record)? {
-                save_pending(&pending.with_extension("ready.json"), &result)?;
-                return remove(pending);
+            if !live(&record) {
+                let ready = pending.with_extension("ready.json");
+                return finish_pending(state, pending, &request, &record, Some(&ready)).map(|_| ());
             }
             // Allow the run record to settle after the card deadline.
             if now() >= expected_end + GRACE_SECONDS {
@@ -247,5 +268,65 @@ mod tests {
         assert_eq!(result["run_id"], "run-fixture");
         assert_eq!(result["verdict"], "ACCEPT");
         assert!(recover(dir.path(), &pending, "abc").unwrap().is_none());
+    }
+    #[test]
+    fn failed_run_with_accept_text_retires_without_a_verdict() {
+        check_retired("failed", json!(["src/lib.rs"]));
+    }
+
+    #[test]
+    fn unreadable_review_retires_and_allows_retry() {
+        check_retired("completed", json!("not a path list"));
+    }
+
+    fn check_retired(status: &str, paths: Value) {
+        for background in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let pending = dir.path().join("review-receipt.json");
+            let checkout = dir.path().join("checkout-fixture");
+            fs::create_dir(&checkout).unwrap();
+            save_pending(
+                &pending,
+                &json!({"head":"abc","run_id":"run-fixture",
+                "expected_end":now()+10.0,"changed_paths":paths,"checkout":checkout}),
+            )
+            .unwrap();
+            save_pending(
+                &dir.path().join("runs/run-fixture/record.json"),
+                &json!({"run_id":"run-fixture","status":status,
+                    "stdout_tail":"src/lib.rs checked\nVERDICT: ACCEPT"}),
+            )
+            .unwrap();
+            if background {
+                execute(vec![
+                    dir.path().display().to_string(),
+                    pending.display().to_string(),
+                ])
+                .unwrap();
+            } else {
+                assert!(recover(dir.path(), &pending, "abc").unwrap().is_none());
+            }
+            assert!(!pending.exists());
+            assert!(!checkout.exists());
+            assert!(!pending.with_extension("txt").exists());
+            assert!(!pending.with_extension("ready.json").exists());
+            assert!(recover(dir.path(), &pending, "abc").unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn weak_late_review_artifact_ends_with_the_validated_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("review-receipt.json");
+        let request = json!({"head":"abc","run_id":"run-fixture","changed_paths":["src/lib.rs"]});
+        let record =
+            json!({"run_id":"run-fixture","status":"completed","stdout_tail":"VERDICT: ACCEPT"});
+        let result = publish(dir.path(), &pending, &request, &record)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["verdict"], "no_verdict");
+        let text = fs::read_to_string(pending.with_extension("txt")).unwrap();
+        assert!(text.ends_with("VERDICT: NO_VERDICT\n"), "{text}");
+        assert!(!text.starts_with("HEAD: abc\n"), "{text}");
     }
 }
