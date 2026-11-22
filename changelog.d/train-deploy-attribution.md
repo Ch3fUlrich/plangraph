@@ -1,0 +1,1 @@
+- Attribute merged landing-train deploy targets to the parts carrying each item. Report declined closes with the reason and a refusal exit status.

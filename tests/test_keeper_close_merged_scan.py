@@ -565,3 +565,16 @@ def test_operator_waiver_refuses_an_item_with_an_open_lane(w, monkeypatch, tmp_p
     _git(tmp_path / "repo", "checkout", "-q", "main")
     with pytest.raises(Refused, match="unmerged_work_or_lanes_unknown"):
         waiver_close(w, apply=True)
+
+
+@pytest.mark.parametrize("from_open", [True, False])
+def test_close_merged_reports_declined_close(capsys, from_open):
+    from plangraph.keeper.cli_output_verbs import cmd_close_merged
+
+    args = close_args()
+    args.from_open = from_open
+    session = SimpleNamespace(json_mode=False, call=lambda *a, **k: {
+        "key": args.key, "closed": False, "reason": "deploy_pending", "missing": ["(hosts unnamed)"],
+    })
+    assert cmd_close_merged(args, session) == 2
+    assert "REFUSED" in capsys.readouterr().out

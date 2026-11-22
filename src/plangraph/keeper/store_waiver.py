@@ -605,8 +605,8 @@ class WaiverMixin:
             self._append(principal, key, "submitted", {"round": fresh["round"]}, now)
         kind, ref, result = evidence
         self._record_evidence(principal, fresh, kind, ref, now, Result(True, result.detail, ref))
-        return self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats), release=release,
-                          flags=flags)
+        return dict(self._pass(principal, key, reason, fresh, now, reviews_passed=len(seats),
+                               release=release, flags=flags), closed=True)
 
     # --- the automatic merge close (MERGE-CLOSES-ITEMS-NO-AGENT-CALL) ---
     # Reads the default ref once per repository, takes every unfinished item a

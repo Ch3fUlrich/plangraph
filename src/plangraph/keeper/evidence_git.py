@@ -523,7 +523,31 @@ class GitAdapter:
         tokens = parents.stdout.split()
         return len(tokens) > 1 and tokens[1] == sha
 
-    def deploy_changes(self, repo: str, sha: str, ref: str) -> list[tuple[str, str]]:
+    def _train_deploy_changes(self, repo, first, tip, names):
+        """Read a train's part merge diffs, descending into folded trains."""
+        proc = self._run(repo, ["log", "--first-parent", "--merges", "--format=%P %H %s",
+                                "--end-of-options", f"{first}..{tip}"])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read train parts")
+        changes = []
+        found = False
+        for line in proc.stdout.splitlines():
+            match = re.fullmatch(r"([0-9a-f]{40}) ([0-9a-f]{40}) ([0-9a-f]{40}) (.*)", line)
+            if not match:
+                continue
+            parent, part, merge, subject = match.groups()
+            if re.match(r"Train [0-9]+: merge (?:train|origin/main)\b", subject, re.I):
+                if not re.match(r"Train [0-9]+: merge origin/main\b", subject, re.I):
+                    nested, attributed = self._train_deploy_changes(repo, parent, part, names)
+                    changes.extend(nested)
+                    found |= attributed
+                continue
+            if names.intersection(self.merge_plan_items(repo, merge)):
+                changes.extend(self._name_status(repo, ["--end-of-options", parent, merge]))
+                found = True
+        return changes, found
+
+    def deploy_changes(self, repo: str, sha: str, ref: str, item_key=None) -> list[tuple[str, str]]:
         """``(status, path)`` pairs the work of *sha* landed on *ref*.
 
         The commit's own diff plus, when a merge on *ref* brought it in, the diff of
@@ -539,23 +563,32 @@ class GitAdapter:
         tokens = parents.stdout.split() if parents.returncode == 0 else []
         if not tokens or not all(valid_commit_ref(t) for t in tokens):
             raise RuntimeError("cannot read commit parents")
+        merge = self.merge_commit_of(repo, sha, ref)
+        if merge is None and not self._on_first_parent_chain(repo, sha, ref):
+            # Only a direct or squash commit can lack an introducing merge.
+            raise RuntimeError("cannot read the merge that brought the commit in")
+        landed = []
+        if merge and valid_commit_ref(merge[0]):
+            proc = self._run(repo, ["show", "-s", "--format=%P%n%s",
+                                   "--end-of-options", merge[0]])
+            if proc.returncode != 0:
+                raise RuntimeError("cannot read merge parents")
+            parents, _, subject = proc.stdout.partition("\n")
+            landed = parents.split()
+            if len(landed) == 2 and all(valid_commit_ref(p) for p in landed):
+                if item_key and re.match(r"Landing train [0-9]+\b", subject, re.I):
+                    changes, found = self._train_deploy_changes(
+                        repo, *landed, {item_key, item_key.rsplit(":", 1)[-1]})
+                    if not found:
+                        raise RuntimeError("cannot attribute train work to a part")
+                    return changes
+            else:
+                landed = []
         changes = self._name_status(
             repo, ["--end-of-options", tokens[1], sha] if len(tokens) > 1
             else ["--root", "--end-of-options", sha])
-        merge = self.merge_commit_of(repo, sha, ref)
-        if merge is None and not self._on_first_parent_chain(repo, sha, ref):
-            # ``None`` also answers a failed history read: only a commit that is itself on the
-            # first-parent chain (a direct or squash commit) has no merge to look for.
-            raise RuntimeError("cannot read the merge that brought the commit in")
-        if merge and valid_commit_ref(merge[0]):
-            proc = self._run(repo, ["rev-list", "--parents", "-n", "1",
-                                    "--end-of-options", merge[0]])
-            if proc.returncode != 0:
-                raise RuntimeError("cannot read merge parents")
-            tokens = proc.stdout.split()
-            if len(tokens) == 3 and all(valid_commit_ref(t) for t in tokens):
-                changes += self._name_status(
-                    repo, ["--end-of-options", tokens[1], tokens[0]])
+        if landed and merge[0] != sha:
+            changes += self._name_status(repo, ["--end-of-options", landed[0], merge[0]])
         return changes
 
     def changelog_only_edit(self, repo: str, sha: str) -> bool:
