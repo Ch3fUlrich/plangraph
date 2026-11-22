@@ -9,6 +9,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import urllib.error
@@ -161,6 +162,22 @@ class RestGitHub:
             {"title": title, "head": branch, "base": base, "body": body},
         )
         return _pr_view(item, state="open")
+
+    def main_refusal(self) -> str | None:
+        """Ask ``plangraph main-state --admit`` for main's state: None when green, else the refusal word."""
+        binary = os.environ.get("PLANGRAPH_BIN") or shutil.which("plangraph")
+        if not binary:
+            return "state_unknown"
+        try:
+            proc = subprocess.run([binary, "main-state", "--repo", self.repo, "--admit"],
+                                  capture_output=True, text=True, timeout=600, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            return "state_unknown"
+        if proc.returncode == 0:
+            return None
+        word = (proc.stderr.strip().splitlines() or [""])[-1]
+        known = ("main_red", "main_pending", "state_unknown", "ref_not_forward_only")
+        return word if proc.returncode == 3 and word in known else "state_unknown"
 
     def ci_green(self, head: str) -> bool:
         sha = urllib.parse.quote(head, safe="")

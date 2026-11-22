@@ -215,7 +215,7 @@ class LiveLog:
 async def collect(runner, job_id, proc):
     from .runner import redact
     from .reap import cancel_and_close
-    from .env_redact import early_refusal, harness_limit_line, redact_env_values, OutputLines
+    from .env_redact import early_refusal, harness_limit_line, redact_env_values, OutputLines, redact_output
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
@@ -226,7 +226,10 @@ async def collect(runner, job_id, proc):
     seen = {'n': 0, 'r': 0}   # activity lines run-wide (stdout + stderr): the first REFUSAL_MAX_LINES lines and REFUSAL_MAX_FRAMES frames may speak a refusal
     def scrub(text):
         return redact(redact_env_values(text, env))
-    gate = RefusalGate(refused, job, scrub)
+    def scrub_diagnostic(text):
+        # A refusal diagnostic is child output: it gets the tail's output rules.
+        return redact_output(scrub(text), allow_shas=getattr(job, 'allow_shas', ()))
+    gate = RefusalGate(refused, job, scrub_diagnostic)
     from .stall_probe import ToolLoop
     tools, loop_found = ToolLoop(), asyncio.Event()
     stdout_at = job.start_time
@@ -404,7 +407,7 @@ async def collect(runner, job_id, proc):
                 break
             line = await quota.refusal(job_id, job, env, refused)
             if line:   # a refusal the harness never printed, read from the gateway call log
-                job.refusal = scrub(line); refused.set(); continue
+                job.refusal = scrub_diagnostic(line); refused.set(); continue
             if loop_found.is_set() and job.status in ('cancelled', 'stalled', 'timeout'):
                 waiters = [task] if refused.is_set() else [task, refusal_wait]
             if loop_found.is_set() and job.status not in ('cancelled', 'stalled', 'timeout'):

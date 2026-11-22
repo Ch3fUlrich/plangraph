@@ -23,6 +23,12 @@ def annotate_item(record, card, *, inherit=False):
             item = item[len(project) + 1:]
         value = project + ':' + item
     record['item_key'] = value
+    if value and record.get('role') == 'review' and not inherit:
+        request = record.setdefault('request', {})
+        request.update(item_key=value, role='review')
+        target = card.get('diff_ref') if isinstance(card, dict) else None
+        if isinstance(target, dict) and isinstance(target.get('head'), str):
+            request.setdefault('review_head', target['head'])
     if value is None and record.get('role') in ('review', 'judge'):
         event = dict(event='seat_item_missing', level='warning')
         if event not in record.setdefault('events', []):

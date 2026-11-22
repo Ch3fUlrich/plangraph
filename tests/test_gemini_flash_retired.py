@@ -100,8 +100,8 @@ def test_spawner_review_routes_hydrogen_in_retired_flash_position(tmp_path, monk
     card = dict(estimate_tokens=1000, diff_ref=dict(repo=str(tmp_path), base='HEAD~1', head='HEAD'))
     plan = service.route(card, role='review', writer_families=(writer,))
     ids = [leg.id for leg in plan.legs]
-    # Rule 3.61: gpt in Codex leads review (a gpt writer skips it), then mimo-pro and the opencode deepseek legs; argon is last.
-    ordered = ['gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
+    # D-6550 puts Hydrogen first and retains Codex for writers of another family.
+    ordered = ['agy-gemini-4-hydrogen-high', 'gpt-6.2-sol-medium', 'mimo-v2.6-pro', 'opencode-deepseek-v4.1-flash-free',
                'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash', 'agy-gemini-4-neon-medium']
     expected = [id for id in ordered if writer != 'gpt' or id != 'gpt-6.2-sol-medium'][:5]
     assert ids[:5] == expected

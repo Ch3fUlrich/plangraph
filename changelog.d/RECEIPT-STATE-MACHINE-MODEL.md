@@ -1,0 +1,1 @@
+Add a pure Rust model for external action receipts, with bounded interleaving checks and keeper adoption vectors. The model distinguishes expiry before keeper admission from an uncertain foreign delivery and retains target conflicts until earlier effects are settled or fenced.

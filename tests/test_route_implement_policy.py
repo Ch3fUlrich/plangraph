@@ -166,7 +166,8 @@ def test_registered_model_proves_family_without_lifting_claude_aliases(family):
 
 @pytest.mark.parametrize("refusal", ['{"type":"error","error":{"status":402}}',
     '{"type":"error","error":{"status":429}}', 'not_served_on_host: refused'])
-def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):
+@pytest.mark.parametrize("harness", ["opencode", "codex"])
+def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal, harness):
     from types import SimpleNamespace as NS
     from plangraph.spawner.service import SpawnService
     runner = NS(_processes={}, _tasks={}, provider_responses={}, jobs={})
@@ -182,9 +183,10 @@ def test_default_writer_refusal_falls_through_to_agy(tmp_path, refusal):
     runner.spawn = spawn
     service = SpawnService(runner, state=tmp_path)
     table = tuple(l for l in DEFAULT_LEGS if l.id in ("cx-gpt-6.2-sol-medium", "agy-gemini-4-hydrogen-high"))
-    plan = plan_spawn(CARD, role="implement", legs=table, catalog_rows=())
+    installed = (lambda _: True) if harness == "codex" else None
+    plan = plan_spawn(CARD, role="implement", legs=table, catalog_rows=(), installed=installed)
     record = asyncio.run(service.spawn(card=CARD, prompt="Implement public code", wait_seconds=None, _plan=plan))
-    assert calls == [("omniroute/cx-gpt-6.2-sol-medium", "opencode"), ("gemini-4-hydrogen-high", "agy")]
+    assert calls == [("omniroute/cx-gpt-6.2-sol-medium", harness), ("gemini-4-hydrogen-high", "agy")]
     assert record["status"] == "completed"
     assert record["chosen_leg"]["id"] == "agy-gemini-4-hydrogen-high"
     assert record["chosen_leg"]["effort"] == "high"

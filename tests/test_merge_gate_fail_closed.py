@@ -83,7 +83,7 @@ def test_real_door_table_shape_and_matching(facts, table_name, monkeypatch, core
     for pattern in table:
         assert isinstance(pattern, str) and pattern.strip() == pattern and pattern
         # These two intentional root globs are part of the existing authority.
-        assert "/" in pattern or pattern in ("roles*", "scopes*")
+        assert "/" in pattern or pattern in ("roles*", "scopes*", ".gitattributes")
     # GATE_PATHS is a subset of AUTH_DOOR_PATHS: isolate the table under test,
     # using a path unmatched by any of the extra substring/category rules.
     peer = "GATE_PATHS" if table_name == "AUTH_DOOR_PATHS" else "AUTH_DOOR_PATHS"

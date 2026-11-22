@@ -1,0 +1,1 @@
+- `plangraph router go-row` and `grant-rows` print rows in the decisions-log columns (`| ID | project | decision | by | why |`, so the keeper reads the GO and its `GO-HEAD` from the decision cell; the inputs name the project), and `go-row` refuses a part whose review file is missing, names another head or does not end in `VERDICT: ACCEPT`.

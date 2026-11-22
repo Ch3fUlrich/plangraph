@@ -18,7 +18,7 @@ from datetime import datetime
 from .errors import Refused
 from .schema import ROLES
 
-__all__ = ["Principal", "ScopedPrincipal", "RunPrincipal", "OversightPrincipal", "RUN_PREFIX",
+__all__ = ["Principal", "ScopedPrincipal", "RunPrincipal", "RevokedRunToken", "OversightPrincipal", "RUN_PREFIX",
            "OVERSIGHT_PREFIX", "add_principal", "add_oversight_principal",
            "authenticate", "revoke", "get_principal", "list_principals",
            "hash_token", "norm_family", "validate_family"]
@@ -76,6 +76,14 @@ class RunPrincipal(Principal):
     epoch: int = 0
     token_role: str = ""
     run_id: str = ""
+
+
+class RevokedRunToken(Refused):
+    """An exact credential match that can only authorize receipt readback."""
+
+    def __init__(self, principal: RunPrincipal):
+        super().__init__("forbidden", "unknown or revoked token")
+        self.principal = principal
 
 
 @dataclass(frozen=True)
@@ -312,14 +320,17 @@ def _authenticate_run(conn, token) -> RunPrincipal:
     row = conn.execute(
         "SELECT id,key,project,epoch,role,run_id,family,revoked_at FROM run_tokens"
         " WHERE token_sha256=?", (hash_token(token),)).fetchone()
-    if row is None or row["revoked_at"] is not None:
+    if row is None:
         raise Refused("forbidden", "unknown or revoked token")
     writer = row["role"] == "writer"
-    return RunPrincipal(f"{RUN_PREFIX}{row['run_id']}",
-                        "worker" if writer else "reviewer", [row["project"]],
-                        None if writer else norm_family(row["family"]),
-                        row["id"], row["key"], row["epoch"], row["role"],
-                        row["run_id"])
+    principal = RunPrincipal(f"{RUN_PREFIX}{row['run_id']}",
+                             "worker" if writer else "reviewer", [row["project"]],
+                             None if writer else norm_family(row["family"]),
+                             row["id"], row["key"], row["epoch"], row["role"],
+                             row["run_id"])
+    if row["revoked_at"] is not None:
+        raise RevokedRunToken(principal)
+    return principal
 
 
 def get_principal(conn, name) -> Principal | None:

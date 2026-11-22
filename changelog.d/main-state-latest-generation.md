@@ -1,0 +1,1 @@
+Main's state on a tip that landed by a tested fast-forward is read from the latest concluded full attempt (any ref) together with the latest fast run, and the CI watcher closes the rule 3.46 fix task when main reads green again, tracking main's full runs by run id independent of the train pull request.

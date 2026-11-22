@@ -1,0 +1,1 @@
+The landing train builder merges a conflicting part by its adopted resolution (manifest entry `resolution {part, submission, commit}`) and the resolve-request rules of the conflict note (one open submission per request, correction by supersession, scoped idempotency keys, replay of a recorded log) are a tested state machine.

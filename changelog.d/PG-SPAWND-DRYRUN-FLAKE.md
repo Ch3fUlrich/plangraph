@@ -1,0 +1,1 @@
+- pg-spawnd preserves timestamp precision when it reads JSON run records, so a dry-run reply and its saved record agree byte for byte.

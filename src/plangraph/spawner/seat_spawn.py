@@ -244,11 +244,14 @@ def admit(service, options, *, card=None, preview=False):
     local, remote_first = overflow.placement_policy(registry, config)
     native = (card or {}).get('run_kind') == 'native-codex'
     placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
+    repository_review = role == 'review' and (card or {}).get('repository_review_required') is True
     explicit_cwd = options.get('cwd') is not None or 'cwd' in (card or {})
-    compare_local = (config.get('registry') and not (placed or explicit_cwd)
+    compare_local = (config.get('registry') and not (placed or explicit_cwd or repository_review)
                      and (native or role == 'review' and (card or {}).get('diff_ref') is not None))
-    if placed:
+    if placed or repository_review:
         config['hosts'] = {}
+    # A repository review stays local but still needs orchestration fallback health.
+    if placed and not repository_review:
         remote_first = False
     if preview and not (remote_first or compare_local):
         return None
@@ -443,6 +446,9 @@ class SeatSpawnMixin:
                 options['cwd'] = bound.arguments['cwd'] = cwd
             from .prompt_guard import admit_prompt
             from plangraph.planner.routing import SpawnRefused
+            if options.get('_plan') is None:
+                from .inline_diff import refuse_empty_diff  # one card error before admission, routing or any leg
+                await asyncio.to_thread(refuse_empty_diff, card, options.get('role'), dry_run=options.get('dry_run'))
             if options.get('role', 'implement') == 'implement':
                 admit_prompt(options.get('prompt'), SpawnRefused)
             parent_admitted = getattr(self, '_parent_admitted', False)
@@ -514,6 +520,17 @@ class SeatSpawnMixin:
                     **writer_headers(record.get('given_writer_families') or []))
             except FamilyError as exc:
                 raise SpawnRefused(str(exc)) from None
+            if record.get('item_key') and not options.get('dry_run'):
+                from subprocess import SubprocessError
+                from .notify import KeeperSink
+                sink = KeeperSink()
+                if sink.url and sink.token_file and not record.get('request', {}).get('verdict_binding'):
+                    cwd = options.get('cwd') or record.get('cwd') or getattr(self.runner, 'default_cwd', None)
+                    try:
+                        await asyncio.to_thread(sink.admit_seat_verdict, record, cwd)
+                    except (OSError, ValueError, SubprocessError) as exc:
+                        raise SpawnRefused(f'seat admission failed: {type(exc).__name__}') from exc
+                    self._save(record)
         if record.get('cwd') is not None:
             options.setdefault('cwd', record['cwd'])
         if 'allow_shas' in options:

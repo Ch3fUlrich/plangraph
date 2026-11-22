@@ -265,3 +265,14 @@ At the start of any implementation, refactor, or bugfix:
 - [ ] Verified through the branch production actually takes, not a convenient fallback (Principle 9).
 - [ ] Iterated on synthetic data and a small, varied real batch; ran the full data at most once, at the end (Principle 10).
 - [ ] Every new path writes its run record, a wait says since when and why, and stored state is not rebuilt per read (Principle 11).
+
+## Learn as you go
+
+- When something fails, stalls or surprises you (a wrong assumption, a tool that lied, a gate
+  that blocked valid work, a check that passed wrong work), report one line to your
+  orchestrator in the same turn: `LESSON <what happened> <evidence: run id, file:line, command output>`.
+- The orchestrator defines an `LE-*` keeper item the same beat: what happened with evidence,
+  the cause, the change in code that prevents it, a done check. A prompt line or a memory note
+  is never the fix.
+- Before you start work in an area, read the open and done `LE-*` items that name its files.
+- A lesson that happens twice raises the priority of its item.

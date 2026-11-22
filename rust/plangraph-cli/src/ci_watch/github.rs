@@ -9,6 +9,14 @@ pub trait Github {
     fn page(&mut self, endpoint: &str, field: Option<&str>) -> Result<Vec<Value>, String>;
     fn log(&mut self, job: u64) -> Result<String, String>;
     fn rerun(&mut self, run: u64) -> Result<(), String>;
+    /// `gh run <verb> <run>`: verb is `rerun-failed`, `rerun` or `cancel`.
+    fn run_verb(&mut self, _run: u64, _verb: &str) -> Result<(), String> {
+        Err("run verbs are not supported here".into())
+    }
+    /// One JSON object (not a row list), one REST call.
+    fn value(&mut self, _endpoint: &str) -> Result<Value, String> {
+        Err("single-object reads are not supported here".into())
+    }
 }
 pub struct Gh {
     pub repo: String,
@@ -104,6 +112,33 @@ impl Github for Gh {
             log.push_str("\n[log truncated at 1 MiB]");
         }
         Ok(log)
+    }
+    fn run_verb(&mut self, run: u64, verb: &str) -> Result<(), String> {
+        let run = run.to_string();
+        let args: Vec<&str> = match verb {
+            "rerun-failed" => vec!["run", "rerun", &run, "--failed", "--repo", &self.repo],
+            "rerun" => vec!["run", "rerun", &run, "--repo", &self.repo],
+            "cancel" => vec!["run", "cancel", &run, "--repo", &self.repo],
+            _ => return Err("refused: unknown run verb".into()),
+        };
+        let out = Command::new("gh")
+            .args(&args)
+            .output()
+            .map_err(|_| "unknown outcome: cannot execute gh".to_owned())?;
+        if out.status.success() {
+            return Ok(());
+        }
+        // An HTTP 4xx answer is GitHub's refusal; anything else (transport, a lost reply) is unknown.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        Err(if stderr.contains("HTTP 4") {
+            "refused: GitHub answered with a client error".into()
+        } else {
+            "unknown outcome: gh failed without a definitive answer".into()
+        })
+    }
+    fn value(&mut self, endpoint: &str) -> Result<Value, String> {
+        let raw = command("gh", &["api", &format!("repos/{}/{endpoint}", self.repo)])?;
+        serde_json::from_str(&raw).map_err(|_| "invalid gh JSON".into())
     }
     fn rerun(&mut self, run: u64) -> Result<(), String> {
         command(

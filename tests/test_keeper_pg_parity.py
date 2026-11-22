@@ -6,8 +6,10 @@ cached item rows must be identical.  The workload includes the design-3 verbs (`
 attempts, decisions, questions, answers and budget rows).  Needs a Postgres server: set
 ``PG_DSN`` (CI provides one); skipped otherwise.  The chain-only part also runs on SQLite alone.
 """
+from contextlib import closing
 import json
 import os
+import uuid
 
 import pytest
 
@@ -17,6 +19,82 @@ from plangraph.keeper.errors import Refused
 
 DSN = os.environ.get("PG_DSN")
 needs_pg = pytest.mark.skipif(not DSN, reason="PG_DSN not set (Postgres service container)")
+
+
+def assert_plain_event_type(conn, backend):
+    """Read the persisted schema independently of the application's event vocabulary."""
+    if backend == "sqlite":
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='events'"
+        ).fetchone()[0]
+        column_types = {row[1]: row[2] for row in conn.execute("PRAGMA table_info(events)")}
+        assert column_types["type"] == "TEXT"
+        assert "CHECK" not in sql.upper(), sql
+    else:
+        column_type = conn.execute(
+            "SELECT format_type(atttypid, atttypmod) FROM pg_catalog.pg_attribute"
+            " WHERE attrelid='events'::regclass AND attname='type'"
+        ).fetchone()[0]
+        checks = conn.execute(
+            "SELECT pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint"
+            " WHERE conrelid='events'::regclass AND contype='c'"
+        ).fetchall()
+        assert column_type == "text"
+        assert checks == [], checks
+
+
+@pytest.mark.parametrize("backend", ["sqlite", pytest.param("postgres", marks=needs_pg)])
+def test_pre_audience_keeper_upgrade_appends_and_replays_all_four_event_types(
+        tmp_path, monkeypatch, backend):
+    from plangraph.keeper import auth, db, db_pg, schema, schema_pg
+    from plangraph.keeper.store import Store
+
+    path = tmp_path / "keeper.db"
+    namespace = "t_event_feed_" + uuid.uuid4().hex[:12]
+    options = dict(backend=backend, dsn=DSN, schema=namespace)
+    try:
+        with monkeypatch.context() as prior:
+            if backend == "sqlite":
+                prior.setattr(db, "SCHEMA", schema.SCHEMA.removesuffix(schema.EVENT_AUDIENCE_DDL))
+            else:
+                prior.setattr(schema_pg, "MIGRATIONS",
+                              tuple(step for step in schema_pg.MIGRATIONS if step.version <= 15))
+            with closing(db.open_db(path, create=True, **options)) as old:
+                assert_plain_event_type(old, backend)
+                with Store(old)._write():
+                    auth.add_principal(old, "router", "router", [])
+                    auth.add_principal(old, "lead", "l1", ["demo"])
+                    cursor, old_hash = keeper_events.append_event(
+                        old, "2026-11-20T00:00:00Z", "router", "router",
+                        None, None, "outage_recorded")
+        if backend == "postgres":
+            import psycopg
+            with psycopg.connect(DSN, autocommit=True) as raw:
+                assert db_pg.migrate(raw, namespace) == list(range(16, schema_pg.LATEST + 1))
+        with closing(db.open_db(path, **options)) as conn:
+            assert_plain_event_type(conn, backend)
+            store = Store(conn)
+            router = auth.get_principal(conn, "router")
+            lead = auth.get_principal(conn, "lead")
+            store.create_items(router, [
+                defn("A", owner="lead"), defn("GOAL", ["A"], kind="goal"),
+            ])
+            store.grant_apply(router, "lead", "demo")
+            store.revoke_apply(router, "lead", "demo")
+            question = store.ask_question(router, "demo:A", "Proceed?")
+            store.answer_question(router, question["id"], "Yes")
+            rows = store.event_page(lead, cursor, 100)["rows"]
+            assert [row["type"] for row in rows] == [
+                "item_created", "apply_granted", "apply_revoked",
+                "question_asked", "question_resolved",
+            ]
+            assert keeper_events.read_events(conn)[0]["hash"] == old_hash
+            assert keeper_events.verify_integrity(conn) == []
+    finally:
+        if backend == "postgres":
+            import psycopg
+            with psycopg.connect(DSN, autocommit=True) as raw:
+                raw.execute(f'DROP SCHEMA IF EXISTS "{namespace}" CASCADE')
 
 
 @needs_pg

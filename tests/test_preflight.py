@@ -77,6 +77,38 @@ def test_infra_retry(repo, monkeypatch, capsys):
     assert "INFRA scrub " in output
 
 
+@pytest.mark.parametrize("real_failure", [False, True])
+def test_clippy_failure_is_verified_outside_the_shared_target(repo, monkeypatch, capsys, real_failure):
+    shared = repo / "shared-target"
+    monkeypatch.setenv("PLANGRAPH_CARGO_TARGET_DIR", str(shared))
+    monkeypatch.setattr(preflight, "rust_target_env", lambda env, cleanup: env)
+    monkeypatch.setattr(preflight, "running_disk_refusal", lambda root: None)
+    monkeypatch.setattr(preflight, "require_protoc", lambda *args: None)
+    command = ["cargo", "clippy", "-p", "fixture", "--all-targets"]
+    monkeypatch.setattr(preflight, "rust_commands", lambda *args: [command])
+    targets = []
+
+    def run(args, cwd, env):
+        if args != command:
+            return 0, ""
+        target = Path(env["CARGO_TARGET_DIR"])
+        targets.append(target)
+        if target == shared:
+            return 1, "error[E0432]: unresolved import from mixed build artifacts\n"
+        assert target.is_dir() and not list(target.iterdir())
+        return (1, "error[E0425]: cannot find value in this scope\n") if real_failure else (0, "")
+
+    monkeypatch.setattr(preflight, "run", run)
+    assert preflight.main(["--base", "HEAD", "--fast"], repo) == int(real_failure)
+    assert len(targets) == 2 and targets[0] == shared and targets[1] != shared
+    assert not targets[1].exists()
+    output = capsys.readouterr().out
+    assert f"{'FAIL' if real_failure else 'PASS'} rust " in output
+    assert str(targets[1]) in output
+    assert ("error[E0425]" in output) == real_failure
+    assert "error[E0432]" not in output
+
+
 def test_fast_summary_and_ci_env(repo, monkeypatch, capsys):
     calls = fake_runner(monkeypatch)
     assert preflight.main(["--base", "HEAD", "--fast"], repo) == 0
@@ -88,7 +120,38 @@ def test_fast_summary_and_ci_env(repo, monkeypatch, capsys):
     assert calls[1][2]["FILESIZE_REQUIRE_BASE"] == "HEAD"
     assert calls[1][2]["NEWCODE_BASE"] == "HEAD"
     assert calls[1][2]["CHANGELOG_BASE"] == "HEAD"
-    assert calls[-1][0][-2:] == ["--exempt", str(Path(preflight.__file__).with_name("ci_commit_exempt.txt"))]
+    assert calls[-1][0][-4:] == ["--base", "HEAD", "--head", "HEAD"]
+
+
+def test_commit_policy_catches_removals_before_the_affected_range(repo, monkeypatch, capsys):
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *args],
+            cwd=repo, text=True).strip()
+
+    test_file = repo / "test_example.py"
+    test_file.write_text("def test_old(): pass\n")
+    git("add", str(test_file))
+    git("commit", "-qm", "Add fixture test")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    git("rm", str(test_file))
+    git("commit", "-qm", "Delete fixture test\n\nWriter: fixture")
+    removed_at = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "Newer change\n\nWriter: fixture")
+    gate = Path(preflight.__file__).with_name("ci_commit_gate.py")
+    expected = subprocess.run([sys.executable, str(gate), "check", "--base", "origin/main",
+                               "--head", "HEAD"], cwd=repo, capture_output=True, text=True)
+    assert expected.returncode == 1
+    assert expected.stdout.strip() == f"{removed_at}: test removal without Test-Removal trailer"
+
+    original = preflight.run
+    def run(command, cwd, env):
+        name = Path(command[1]).name
+        return original(command, cwd, env) if name == gate.name else (0, "")
+
+    monkeypatch.setattr(preflight, "run", run)
+    assert preflight.main(["--base", removed_at, "--fast"], repo) == 1
+    assert expected.stdout in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("base,expected", [("HEAD~1", 0), ("HEAD", 1)])

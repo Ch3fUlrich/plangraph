@@ -170,6 +170,69 @@
         assert_eq!(do_probe(&tiny(), &input2).outcome, "nothing");
     }
 
+    /// A committed attempt worktree whose check would leave `ran.marker` behind.
+    fn marking_probe(card: &str) -> (tempfile::TempDir, tempfile::TempDir, ProbeInput) {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let id = AttemptId::new(card, 1);
+        let wt = worktree::create(
+            r.path(),
+            &base,
+            &root.path().join(id.dir_name()),
+            &id,
+        )
+        .unwrap();
+        write(&wt.path, "done.txt", "x");
+        commit_all(&wt.path, "work");
+        let mut input = probe_input(r.path(), root.path(), 1, &base, "touch ran.marker");
+        input.card = card.to_string();
+        (r, root, input)
+    }
+
+    fn marker_of(root: &Path, card: &str) -> std::path::PathBuf {
+        root.join(AttemptId::new(card, 1).dir_name()).join("ran.marker")
+    }
+
+    #[test]
+    fn probe_entry_refuses_an_unadmitted_card_before_running_its_check() {
+        let (_r, root, input) = marking_probe("c1");
+        let cfg = Config {
+            card_allowlist: Some(["listed".to_owned()].into()),
+            ..tiny()
+        };
+        crate::card_admit::tests::assert_failure(
+            admitted_probe(&cfg, &input).unwrap_err(),
+            Some("card_not_allowlisted"),
+            true,
+        );
+        assert!(!marker_of(root.path(), "c1").exists(), "the check ran for a refused card");
+        // The admitted card still probes, through the same entry.
+        let listed = Config {
+            card_allowlist: Some(["c1".to_owned()].into()),
+            ..tiny()
+        };
+        assert_eq!(admitted_probe(&listed, &input).unwrap().outcome, "already_done");
+    }
+
+    #[test]
+    fn probe_check_fails_closed_without_the_attempt_jail() {
+        use crate::harness::JailConfig;
+        // Jail required but not configured: the check must not run.
+        let (_r, root, input) = marking_probe("c1");
+        let res = do_probe_with_jail(&tiny(), &input, Err("PG_JAIL_BIN is not set".into()));
+        assert_eq!(res.outcome, "error");
+        assert!(!marker_of(root.path(), "c1").exists(), "the check ran unjailed");
+        // A configured jail whose helper is missing refuses the same way.
+        let missing = JailConfig {
+            bin: root.path().join("missing-jail"),
+            limits: Default::default(),
+            tmp: root.path().to_path_buf(),
+        };
+        let res = do_probe_with_jail(&tiny(), &input, Ok(Some(missing)));
+        assert_eq!(res.outcome, "error");
+        assert!(!marker_of(root.path(), "c1").exists(), "the check ran without its jail helper");
+    }
+
     #[test]
     fn do_probe_reports_error_for_a_bad_base() {
         let (r, base) = repo();

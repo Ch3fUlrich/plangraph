@@ -210,13 +210,19 @@ def read(session, verb, params, renderer, local=None) -> int:
 
 def write(session, verb, body, renderer=None) -> int:
     try:
-        result = session.call("POST", verb, body=body)
+        if verb in outbox.QUEUE_VERBS and os.environ.get("PG_TOKEN_FILE") \
+                and session.token().startswith("pgr1_"):
+            code, result = outbox.write(session, verb, body)
+            if code:
+                return code
+        else:
+            result = session.call("POST", verb, body=body)
         status = _emit(session, result, renderer or (lambda r: fmt.result_text(verb, r)))
         return EXIT_REFUSED if isinstance(result, dict) and result.get("refused") else status
     except RefusedCli as exc:
         return _refuse(exc)
-    except Unreachable as exc:   # M2B-OUTBOX: a run token with PG_OUTBOX queues instead
-        return outbox.on_unreachable(verb, body, exc, exit_unreachable=EXIT_UNREACHABLE)
+    except Unreachable as exc:
+        return outbox.on_unreachable(exc, exit_unreachable=EXIT_UNREACHABLE)
 
 
 def _epoch(session, key) -> int:

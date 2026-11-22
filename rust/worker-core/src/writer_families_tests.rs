@@ -102,4 +102,57 @@ fn a_merge_commits_writer_trailer_counts_next_to_ordinary_commits() {
     // The merge brings in its side commit (no trailer, unknown author) and carries a trailer itself.
     let families = writer_families(repo, &base, &head, &[], &python).unwrap();
     assert_eq!(families, ["google", "openai"]);
+    // Per commit: the merge's own trailer is the merge's, the ordinary commit keeps its writer, and the
+    // side commit (no trailer, unknown author) resolves to nothing.
+    let read = commit_families(repo, &base, &head, &[], &python).unwrap();
+    let set = |names: &[&str]| {
+        names
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<BTreeSet<String>>()
+    };
+    let by_subject = |subject: &str| {
+        let sha = git(
+            repo,
+            &[
+                "log",
+                "-1",
+                "--format=%H",
+                &format!("--grep={subject}"),
+                &head,
+            ],
+        );
+        read.per_commit
+            .iter()
+            .find(|(s, _)| *s == sha)
+            .unwrap()
+            .1
+            .clone()
+    };
+    assert_eq!(by_subject("merge side"), set(&["google"]));
+    assert_eq!(by_subject("^a$"), set(&["openai"]));
+    assert_eq!(by_subject("^side$"), set(&[]));
+    assert_eq!(read.per_commit.len(), 3);
+}
+
+#[test]
+fn a_range_where_nothing_resolves_is_refused_once_for_every_caller() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    git(repo, &["init", "-q", "-b", "main"]);
+    commit(repo, "base.txt", "base");
+    let base = git(repo, &["rev-parse", "HEAD"]);
+    commit(repo, "x.txt", "x");
+    let head = git(repo, &["rev-parse", "HEAD"]);
+    for error in [
+        commit_families(repo, &base, &head, &[], &python)
+            .err()
+            .unwrap(),
+        writer_families(repo, &base, &head, &[], &python).unwrap_err(),
+    ] {
+        assert!(
+            error.starts_with("refused: could not determine any writer family"),
+            "{error}"
+        );
+    }
 }

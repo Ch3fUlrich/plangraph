@@ -30,6 +30,109 @@ fn repository() -> (tempfile::TempDir, String) {
 }
 
 #[test]
+fn review_completion_requires_the_dispatched_diff() {
+    let (repo, base) = repository();
+    std::fs::write(repo.path().join("caller.rs"), "change for review").unwrap();
+    let head = git(
+        repo.path(),
+        &[
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.test",
+            "commit",
+            "-qam",
+            "change",
+        ],
+    )
+    .ok()
+    .and_then(|_| git(repo.path(), &["rev-parse", "HEAD"]).ok())
+    .unwrap();
+    std::fs::write(repo.path().join(".git/fast-checks").join(&head), "green").unwrap();
+    let mut launch = LaunchSpec {
+        argv: vec!["agy".into()],
+        cwd: repo.path().into(),
+        env: Default::default(),
+        stdin: Some("review".into()),
+        prompt: Some("review".into()),
+        warnings: None,
+        events: None,
+    };
+    git(
+        repo.path(),
+        &["update-ref", "refs/heads/review-base", &base],
+    )
+    .ok()
+    .unwrap();
+    let args = json!({"card":{"diff_ref":{"base":"refs/heads/review-base","head":"HEAD"}}});
+    let leg = json!({"harness":"agy","model":"gemini-4-hydrogen-high"});
+    let dispatch = prepare(args.as_object().unwrap(), &mut launch, &leg)
+        .ok()
+        .flatten()
+        .unwrap();
+    let expected = dispatch.binding.as_ref().unwrap();
+    assert_eq!(expected["base_sha"], base);
+    assert_eq!(expected["head_sha"], head);
+    assert!(launch
+        .prompt
+        .unwrap()
+        .contains(&format!("--no-textconv {base} {head} --")));
+    git(
+        repo.path(),
+        &["update-ref", "refs/heads/review-base", &head],
+    )
+    .ok()
+    .unwrap();
+
+    for (field, replacement) in [
+        ("base_sha", json!(head)),
+        ("head_sha", json!(base)),
+        ("diff_sha256", json!("0".repeat(64))),
+        ("", Value::Null),
+    ] {
+        let id = pg_worker_core::run::record::new_run_id();
+        let mut metadata = json!({
+            "role":"review", "cwd":repo.path(), "attempts":[{"leg":leg,"status":"running"}],
+        });
+        dispatch.apply(&mut metadata);
+        if !field.is_empty() {
+            metadata["review_binding"][field] = replacement;
+        }
+        let mut record =
+            crate::runs::create(repo.path(), &id, "fixture", metadata, Status::Completed)
+                .ok()
+                .unwrap();
+        let log = record.path().with_file_name("live.log");
+        let write_review = |verdict| {
+            let answer = format!("Reviewed caller.rs:1.\nVERDICT: {verdict}\nTEST_GAMING: no\n");
+            std::fs::write(
+                &log,
+                format!(
+                    "{}\n",
+                    json!({"event":"result","result":{"status":"SUCCESS","response":answer}})
+                ),
+            )
+            .unwrap();
+        };
+        write_review("PASS");
+        record.set("live_log", json!(log));
+        crate::runs::finish(&mut record, Status::Completed, &leg, 1);
+        if field.is_empty() {
+            assert_eq!(record.to_value()["completion"]["review_binding"], *expected);
+            write_review("FAIL");
+            crate::runs::finish(&mut record, Status::Completed, &leg, 1);
+            assert_eq!(record.to_value()["verdict"], "pass");
+        } else {
+            assert!(record.to_value()["completion"].is_null(), "{field}");
+            assert_eq!(
+                record.to_value()["review_binding_error"],
+                "review diff does not match dispatch"
+            );
+        }
+    }
+}
+
+#[test]
 fn agy_review_commands_run_in_remote_free_clone_at_stamped_detached_head() {
     let (repo, head) = repository();
     // Detached worktrees need not match the source repository's default branch.
@@ -79,7 +182,8 @@ fn agy_review_commands_run_in_remote_free_clone_at_stamped_detached_head() {
             &json!({"harness":"agy"})
         )
         .ok()
-        .unwrap(),
+        .unwrap()
+        .map(|review| review.head),
         Some(detached.clone())
     );
     let checkout = isolate(&mut launch, &json!({"harness":"agy"}), Some(&detached))

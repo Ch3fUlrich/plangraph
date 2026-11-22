@@ -1,6 +1,7 @@
 //! Git freshness, writer-family trailer extraction, and per-file diff helpers for `plangraph review`.
 use crate::base_fresh::{check_ref, python_command};
 use pg_worker_core::review_split::valid_diff_path;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -95,12 +96,51 @@ pub fn resolve_and_check_fresh(
     })
 }
 
-/// Writer families of `base..head` (the shared trailer reader), with the interpreter that
-/// holds the family table taken from `repo`'s checkout.
-pub fn writer_families(repo: &Path, base_sha: &str, head_sha: &str) -> Result<Vec<String>, String> {
-    pg_worker_core::writer_families::writer_families(repo, base_sha, head_sha, &[], &|| {
-        python_command(Some(repo))
-    })
+/// The commits of one writer-family set: the review seat for them comes from outside `families`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WriterGroup {
+    pub families: Vec<String>,
+    pub commits: Vec<String>,
+}
+
+/// Group commits by their writer family set, in first-seen order. A commit with no resolved
+/// family joins the first group, so a seat still reviews it. One family exclusion applies per
+/// group, never per range.
+pub fn group_by_families(per_commit: &[(String, BTreeSet<String>)]) -> Vec<WriterGroup> {
+    let mut groups: Vec<WriterGroup> = Vec::new();
+    let mut unresolved = Vec::new();
+    for (sha, families) in per_commit {
+        if families.is_empty() {
+            unresolved.push(sha.clone());
+            continue;
+        }
+        let families: Vec<String> = families.iter().cloned().collect();
+        match groups.iter_mut().find(|g| g.families == families) {
+            Some(group) => group.commits.push(sha.clone()),
+            None => groups.push(WriterGroup {
+                families,
+                commits: vec![sha.clone()],
+            }),
+        }
+    }
+    if let Some(first) = groups.first_mut() {
+        first.commits.extend(unresolved);
+    }
+    groups
+}
+
+/// The writer groups of `base..head`; one group when a single writer family set wrote the range.
+pub fn writer_groups(
+    repo: &Path,
+    base_sha: &str,
+    head_sha: &str,
+) -> Result<Vec<WriterGroup>, String> {
+    let read =
+        pg_worker_core::writer_families::commit_families(repo, base_sha, head_sha, &[], &|| {
+            python_command(Some(repo))
+        })?;
+    let groups = group_by_families(&read.per_commit);
+    Ok(groups)
 }
 
 // Same flags as pg-spawnd's inline diff (prompt_git.rs), so the CLI measures what the seat gets.
@@ -149,4 +189,45 @@ pub fn measure_diff_files(
         out.push((path, bytes));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(sha: &str, families: &[&str]) -> (String, BTreeSet<String>) {
+        (sha.into(), families.iter().map(|f| f.to_string()).collect())
+    }
+
+    #[test]
+    fn commits_group_by_writer_family_set_in_first_seen_order() {
+        let groups = group_by_families(&[
+            commit("c1", &["openai"]),
+            commit("c2", &["google"]),
+            commit("c3", &["openai"]),
+            commit("c4", &["anthropic", "google"]),
+            commit("c5", &[]),
+        ]);
+        let got: Vec<(Vec<&str>, Vec<&str>)> = groups
+            .iter()
+            .map(|g| {
+                (
+                    g.families.iter().map(String::as_str).collect(),
+                    g.commits.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                (vec!["openai"], vec!["c1", "c3", "c5"]), // c5 has no family: it joins the first group
+                (vec!["google"], vec!["c2"]),
+                (vec!["anthropic", "google"], vec!["c4"]),
+            ]
+        );
+        assert_eq!(
+            group_by_families(&[commit("a", &["openai"]), commit("b", &["openai"])]).len(),
+            1
+        );
+    }
 }

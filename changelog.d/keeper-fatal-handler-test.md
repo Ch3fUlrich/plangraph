@@ -1,0 +1,1 @@
+- Wait for the keeper stop callback in the reconnect test after receiving the fatal HTTP response.

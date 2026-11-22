@@ -140,6 +140,36 @@ pub fn writer_families(
     leg_models: &[&str],
     python: &dyn Fn() -> Command,
 ) -> Result<Vec<String>, String> {
+    let read = commit_families(repo, base_sha, head_sha, leg_models, python)?;
+    let all: BTreeSet<String> = read
+        .models
+        .into_iter()
+        .chain(
+            read.per_commit
+                .into_iter()
+                .flat_map(|(_, families)| families),
+        )
+        .collect();
+    Ok(all.into_iter().collect())
+}
+
+/// The writer families of every commit of a range, one set per commit (log order), and the
+/// families of the `leg_models`.
+pub struct RangeFamilies {
+    pub per_commit: Vec<(String, BTreeSet<String>)>,
+    pub models: BTreeSet<String>,
+}
+
+/// Per-commit form of [`writer_families`]: the same reading rules, kept per commit so a review can
+/// give each writer-family group its own seat. A merge with ordinary commits around it, or a commit
+/// with nothing resolvable, has an empty set; a range where nothing resolves at all is refused here, once, for every caller.
+pub fn commit_families(
+    repo: &Path,
+    base_sha: &str,
+    head_sha: &str,
+    leg_models: &[&str],
+    python: &dyn Fn() -> Command,
+) -> Result<RangeFamilies, String> {
     let range = format!("{base_sha}..{head_sha}");
     // Merge commits are read too: their Writer trailers name who resolved the merge.
     let format = "--format=%H%n%P%n%an%n%ae%n%(trailers:separator=%x0a)";
@@ -202,16 +232,18 @@ pub fn writer_families(
     let family_of = |text: &str| table.get(text).cloned().flatten();
 
     let has_ordinary = commits.iter().any(|c| !c.merge);
-    let mut families = BTreeSet::new();
+    let mut models = BTreeSet::new();
     for model in leg_models {
         match family_of(model) {
             Some(f) => {
-                families.insert(f);
+                models.insert(f);
             }
             None => return Err(format!("refused: unknown writer family of model {model}")),
         }
     }
+    let mut per_commit = Vec::new();
     for c in &commits {
+        let mut families = BTreeSet::new();
         let mut explicit = !c.writers.is_empty();
         for w in &c.writers {
             match family_of(w) {
@@ -236,25 +268,24 @@ pub fn writer_families(
             }
         }
         // A merge's author is only evidence when the range holds nothing but merges.
-        if explicit || (c.merge && has_ordinary) {
-            continue;
+        if !(explicit || (c.merge && has_ordinary)) {
+            let found: Vec<String> = fallback.iter().filter_map(|t| family_of(t)).collect();
+            if found.is_empty() {
+                families.extend(family_of(&c.author));
+            } else {
+                families.extend(found);
+            }
         }
-        let found: Vec<String> = fallback.iter().filter_map(|t| family_of(t)).collect();
-        if found.is_empty() {
-            families.extend(family_of(&c.author));
-        } else {
-            families.extend(found);
-        }
+        per_commit.push((c.sha.clone(), families));
     }
-
-    if families.is_empty() {
+    if models.is_empty() && per_commit.iter().all(|(_, families)| families.is_empty()) {
         return Err(format!(
             "refused: could not determine any writer family from trailers/authors in {}..{}",
             short(base_sha),
             short(head_sha)
         ));
     }
-    Ok(families.into_iter().collect())
+    Ok(RangeFamilies { per_commit, models })
 }
 
 #[cfg(test)]

@@ -1,0 +1,1 @@
+- A quoted wrapped credential whose first line already meets the token family's minimum length is now masked through its closing quote on the continuation line, in Python and Rust (D-6517). The marker-collision finding was already fixed by a41a9a67d.

@@ -180,9 +180,11 @@ Implementation routes prioritize `cx-gpt-6.2-sol-medium` (with `cx-gpt-6.2-sol-{
 explicit variants), `cx-gpt-6.2-astra`, and `agy-gemini-4-hydrogen-high`, with
 `opencode/deepseek-v4.1-flash-free` (200k) > `opencode-go/deepseek-v4.1-flash` (1M) >
 `opencode-go/glm-5.3-flash` (1M) on `opencode` as implementation fallback.
-While every Codex leg is unavailable (quota_until, down), `agy-claude-sonnet-5-5-high`
-is served directly behind the Codex legs; with any Codex leg available it is skipped as
-`codex_available` (rule 3.58, D-6366).
+D-6550 (rule 3.66) uses native Codex for the lead writer. Explicit model calls
+can still use the registered OpenCode gateway leg. Claude is eligible
+for automatic writer and review fallback when both GPT Sol and Hydrogen are rate-limited.
+Credential, authentication and secrets changes prefer the Claude Sonnet high review
+seat, subject to availability and cross-family review.
 GPT implement and review legs default to medium effort (D-6397); elevated
 effort requires matching `card.effort` and an operator `card.effort_decision`
 of the form `D-<number>`. Native Codex package sessions pass
@@ -190,13 +192,9 @@ of the form `D-<number>`. Native Codex package sessions pass
 Spawn admission budgets 55% of the selected leg's configured context rather
 than the coarse window label. Sol and Astra have a 1,000,000-token configured
 context, including Sol effort variants and native package sessions.
-Review routes follow rule 3.61 (D-6481, amending rule 3.58 / D-6366):
-`gpt-6.2-sol-medium` first, as a native Codex run (harness `codex`) with repository
-access, then `mimo/mimo-v2.6-pro`, `opencode/deepseek-v4.1-flash-free`,
-`opencode-go/deepseek-v4.1-flash` and `opencode-go/glm-5.3-flash`, with
-`agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high` and `mimo/mimo-v2.6-flash` as fallbacks and
-the agy argon legs (`agy-gemini-4-argon-low`, `agy-gemini-4-argon-medium`; plan mode, review only,
-never an implement leg) last of the whole route, behind the non-order extras. A review run that ends without a VERDICT line is
+Review routes under D-6550 prefer `agy-gemini-4-hydrogen-high` and then
+`gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
+available in their configured order, and the Argon review legs stay last. A review run that ends without a VERDICT line is
 recorded `failed` with reason `no_verdict`. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
@@ -246,3 +244,5 @@ the Codex launch maps `omniroute/cx-gpt-6.2-sol-medium` to `--model gpt-6.2-sol`
 `client_missing`). Families
 without an own client (deepseek, glm, mimo, free legs) stay on OpenCode. Pinning a model's
 OpenCode leg with `--leg` while its own client is installed needs `--override-reason`.
+
+Merge paths and main's state: the keeper's phase finish asks `plangraph main-state --admit` after CI is green on the phase head and refuses to merge with `main_red`, `main_pending`, `state_unknown` or `ref_not_forward_only` (docs/ci-parallel.md, "Red main and runner switches").

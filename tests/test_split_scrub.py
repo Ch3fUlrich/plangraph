@@ -164,13 +164,39 @@ def test_private_word_in_file_name_is_never_printed(tmp_path, capsys):
 
 def test_ipv6_compressed_forms_detected_times_not(tmp_path):
     cc, dot = ":" * 2, "."
-    for ok in ("fe80" + cc + "1", "2001:db8" + cc + "1", cc + "ffff:" + dot.join("1234"),
-               "addr [" + cc + "1] up", "fe80" + cc, ":".join("12345678")):
+    for ok in ("fe80" + cc + "1", "2606:4700" + cc + "1111", cc + "ffff:" + dot.join("1234"),
+               "addr [2606:4700" + cc + "1111] up", "fe80" + cc, ":".join("12345678")):
         assert "ipv6" in _hits(tmp_path, "x = " + ok), ok
     for clean in ("at 12:34:56 today", "a[" + cc + "2]", "a[" + cc + "1]", "std" + cc + "vector",
                   "db" + cc + "add", "Foo" + cc + "bar",
                   "x = y[1:2]", "ts 2026-10-02T12:34:56"):
         assert "ipv6" not in _hits(tmp_path, clean), clean
+
+
+def test_ipv6_loopback_and_documentation_range_are_allowed(tmp_path):
+    cc = ":" * 2
+    full = ":".join(["2001", "db8", "0", "0", "0", "0", "0", "1"])
+    last = ":".join(["2001", "0db8"] + ["ffff"] * 6)
+    for fixture in (cc + "1", "[" + cc + "1]", "addr " + cc + "1 up", "2001:db8" + cc + "1",
+                    "2001:DB8" + cc, "[2001:db8" + cc + "ab:1]", full, last):
+        assert "ipv6" not in _hits(tmp_path, "x = " + fixture), fixture
+    for global_address in ("2001:db9" + cc + "1", "2001:db80" + cc + "1", "2606:4700" + cc + "1111",
+                           "2001:4860:4860" + cc + "8888", "[2606:4700" + cc + "1111]",
+                           full + " 2606:4700" + cc + "1111"):
+        assert "ipv6" in _hits(tmp_path, "x = " + global_address), global_address
+
+
+def test_allow_ipv6_is_a_rules_file_key(tmp_path):
+    rules = tmp_path / "r.toml"
+    cc = ":" * 2
+    rules.write_text('[scrub]\nallow_ipv6 = ["2606:4700' + cc + '/32"]\n')
+    cfg = sc.build_config(rules_files=[rules])
+    assert not sc._ipv6_hits("2606:4700" + cc + "1111", cfg)
+    assert not sc._ipv6_hits(cc + "1", cfg) and not sc._ipv6_hits("2001:db8" + cc + "1", cfg)
+    assert sc._ipv6_hits("2001:4860:4860" + cc + "8888", cfg)
+    rules.write_text('[scrub]\nallow_ipv6 = ["not-a-network"]\n')
+    with pytest.raises(ValueError, match="allow_ipv6"):
+        sc.build_config(rules_files=[rules])
 
 
 def test_entropy_variants(tmp_path):

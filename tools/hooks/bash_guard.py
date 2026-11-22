@@ -67,6 +67,7 @@ Run directly for a smoke check:
         | python3 tools/hooks/bash_guard.py; echo "exit=$?"
 """
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -79,6 +80,7 @@ from hook_common import STDIN_MAX, TooLarge, read_stdin_text  # noqa: E402
 # ─── hook entry point ───────────────────────────────────────────────────
 
 def main():
+    strict = os.environ.get("PLANGRAPH_GUARD_FAIL_CLOSED") == "1"
     try:
         payload = json.loads(read_stdin_text())
     except TooLarge:
@@ -86,24 +88,32 @@ def main():
                          % STDIN_MAX)
         return 2
     except Exception as exc:
+        if strict:
+            return 1
         sys.stderr.write(
             "bash-guard: could not parse hook input as JSON, allowing (%s)\n" % exc)
         return 0
     if not isinstance(payload, dict):
+        if strict:
+            return 1
         sys.stderr.write("bash-guard: hook input is not a JSON object, allowing\n")
         return 0
     if payload.get("tool_name") != "Bash":
         return 0
     tool_input = payload.get("tool_input")
     if not isinstance(tool_input, dict):
+        if strict:
+            return 1
         sys.stderr.write("bash-guard: Bash tool_input missing or malformed, allowing\n")
         return 0
     command = tool_input.get("command")
     if not isinstance(command, str) or not command:
-        return 0
+        return 1 if strict else 0
     try:
         reason = check_command(command)
     except Exception as exc:  # check_command never raises; this is the last net
+        if strict:
+            return 1
         reason = ("bash-guard: DENIED - internal error while scanning the command "
                   "(%s); the guard fails closed." % type(exc).__name__)
     if reason:

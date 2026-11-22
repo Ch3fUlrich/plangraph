@@ -1,0 +1,8 @@
+[package]
+name = "pg-receipts"
+version = "0.1.0"
+edition = "2021"
+description = "Pure reference model for external action receipts"
+
+[lints.rust]
+unsafe_code = "forbid"

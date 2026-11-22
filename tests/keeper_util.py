@@ -77,6 +77,11 @@ class World:
             self.tokens[name] = token
             self.principals[name] = auth.authenticate(self.conn, token)
 
+    def execute_many(self, sql, rows):
+        """Run ``sql`` once per row on either backend: PgConnection has no executemany."""
+        for row in rows:
+            self.conn.execute(sql, tuple(row))
+
     def p(self, name):
         return self.principals[name]
 

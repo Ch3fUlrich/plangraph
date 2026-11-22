@@ -10,10 +10,13 @@ import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from contextvars import ContextVar
 from pathlib import Path
 
 _SEND_STATE = ContextVar("seat_verdict_send_state", default=None)
+EXIT_IO, EXIT_REFUSED = 1, 2
 
 
 def _add_src():
@@ -22,6 +25,80 @@ def _add_src():
         sys.path.insert(0, src)
         return src
     return None
+
+
+def mark_verdict_recovery(directory, reason):
+    """Expose an unproven historical verdict to routing without sending it."""
+    added = _add_src()
+    try:
+        from plangraph.spawner.private_io import atomic_write_private
+        atomic_write_private(directory / "verdict.recovery.json",
+                             json.dumps({"reason": reason}) + "\n")
+    finally:
+        if added is not None:
+            sys.path.remove(added)
+
+
+def save_verdict_payload(directory, family, payload):
+    """Pin the verified decision before contacting the keeper."""
+    added = _add_src()
+    try:
+        from plangraph.spawner.notify import inbox_lock
+        from plangraph.spawner.private_io import atomic_write_private
+
+        path = directory / "verdict.payload.json"
+        with inbox_lock(path):
+            if not path.exists():
+                atomic_write_private(path, json.dumps({"family": family, "payload": payload}) + "\n")
+            return read_verdict_payload(directory)
+    finally:
+        if added is not None:
+            sys.path.remove(added)
+
+
+def read_verdict_payload(directory):
+    path = directory / "verdict.payload.json"
+    if path.is_symlink():
+        raise ValueError("verdict payload path is a symlink")
+    return json.loads(path.read_text("utf-8"))
+
+
+def post_verdict(url, route, token, payload, timeout):
+    request = urllib.request.Request(
+        url.rstrip("/") + route, data=json.dumps(payload).encode("utf-8"),
+        method="POST", headers={"Content-Type": "application/json",
+                                "Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as resp:
+            return resp.status, resp.read(65536).decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read(65536).decode("utf-8", "replace")
+
+
+def dispatch_verdict(key, url, token_dir, decision, send, known_families):
+    family, payload = decision["family"], decision["payload"]
+    if family not in known_families or payload.get("key") != key or not payload.get("binding"):
+        return EXIT_REFUSED
+    state = _SEND_STATE.get()
+    try:
+        token = (token_dir / f"reviewer-{family}.token").read_text("utf-8").strip()
+        if not token:
+            raise ValueError("empty reviewer token")
+        if state is not None:
+            state["started"] = True
+        status, reply = send(url, token, payload)
+    except (OSError, ValueError) as exc:
+        if state is not None:
+            state["started"] = False
+        print(f"seat_verdict: send failed: {type(exc).__name__}", file=sys.stderr)
+        return EXIT_IO
+    except BaseException:
+        if state is not None:
+            state["started"] = False
+        raise
+    short = " ".join(reply.split())[:120]
+    print(f"key={key} family={family} ok={payload['ok']} http={status} reply={short}", flush=True)
+    return 0 if 200 <= status < 300 else EXIT_REFUSED if status in (400, 401, 403, 409) else EXIT_IO
 
 
 def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
@@ -66,11 +143,16 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
                     ("sending", "delivered", "skipped", "retry")
                     or type(previous.get("attempts", 0)) is not int or previous.get("attempts", 0) < 0):
                 raise ValueError("ambiguous verdict journal")
+            bound = (directory / "verdict.payload.json").is_file()
+            if previous.get("status") == "sending" and not bound:
+                mark_verdict_recovery(directory, "legacy sending entry has no bound payload")
             if ((directory / "verdict.delivered").exists()
-                    or previous.get("status") in ("sending", "delivered", "skipped")):
+                    or previous.get("status") in ("delivered", "skipped")
+                    or previous.get("status") == "sending" and not bound):
                 row["reasons"].append("verdict already terminal or sending")
                 return 0
-            if retry_reason is not None and (previous.get("status") != "retry" or previous.get("reason") != retry_reason):
+            if retry_reason is not None and not (bound and previous.get("status") in ("sending", "retry")) \
+                    and (previous.get("status") != "retry" or previous.get("reason") != retry_reason):
                 row["delivery"] = "failed"
                 row["reasons"].append("journal is not a transport-only retry")
                 return 1
@@ -90,10 +172,14 @@ def apply_backfill(args, item, seat, poster, row, *, retry_reason=None):
                     atomic_write_private(journal, previous_text)
             if type(rc) is not int or rc < 0: raise ValueError("invalid verifier exit")
             row["verifier_exit"] = rc
+            if (directory / "verdict.recovery.json").is_file():
+                row["reasons"].append("routing recovery required; see verdict.recovery.json")
             if rc and retry_reason is not None: row["reasons"].append(f"poster exit {rc}")
             phase = "verdict outcome write"
             if retry_reason is None or state.get("started") is not False:
-                _verdict_outcome(directory, "delivered" if rc == 0 else "skipped", "backfill verifier exit " + str(rc))
+                retry = rc == EXIT_IO and (directory / "verdict.payload.json").is_file()
+                _verdict_outcome(directory, "delivered" if rc == 0 else "retry" if retry else "skipped",
+                                 "backfill verifier exit " + str(rc))
             row["delivery"] = "failed" if rc else "delivered"
             return int(bool(rc))
     except (Exception, SystemExit) as exc:

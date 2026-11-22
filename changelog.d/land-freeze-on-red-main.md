@@ -1,0 +1,1 @@
+`plangraph main-state` is the one definition of main's state (green, pending, red with failure sets per suite, `state_unknown`, `ref_not_forward_only`) read by `merge_batch land` and the keeper's phase finish before they merge; `EXCEPTION:main-red-fix` passes only while main is red; the runner-switch procedure is in docs/ci-parallel.md and the unattended-orchestration skill.

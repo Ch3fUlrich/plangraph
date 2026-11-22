@@ -48,6 +48,16 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
             },
             "{r}"
         );
+        let page = pg_worker_core::run::lifecycle::page(f.state.path(), 0).unwrap();
+        let rows = page["rows"].as_array().unwrap();
+        assert!(rows.iter().any(|row| row["phase"] == "started"));
+        assert_eq!(rows.last().unwrap()["status"], r["status"]);
+        if !no_fallthrough {
+            assert!(rows.iter().any(|row| row["phase"] == "started"
+                && row["attempts"]
+                    .as_array()
+                    .is_some_and(|attempts| attempts.len() > 1)));
+        }
         assert!(r["attempts"][0]["skip_reason"]
             .as_str()
             .unwrap()

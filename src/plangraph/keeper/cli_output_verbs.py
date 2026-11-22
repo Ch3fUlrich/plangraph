@@ -68,7 +68,7 @@ def _close_merged_with_read_back(session, key, body):
         return _refuse(exc)
     except Unreachable as exc:
         if _read_back_state(session, key) != "done":
-            return outbox.on_unreachable("close_merged", body, exc, exit_unreachable=EXIT_UNREACHABLE)
+            return outbox.on_unreachable(exc, exit_unreachable=EXIT_UNREACHABLE)
         note = _read_back_note(exc)
         print(note, file=sys.stderr)
         return _emit(session, {"key": key, "state": "done", "note": note},

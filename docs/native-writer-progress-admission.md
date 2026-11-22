@@ -57,13 +57,28 @@ verdict has exactly 1–2 confirmed MED, every one has `clear_fix: true`, and
 there are no confirmed HIGH. No further writer is admitted after that round.
 Refusals persist a refused run with the reason and item, without consuming a round.
 
-Automatic replan is deferred to a follow-up: consume a durable stop event,
-select the strongest available planning leg, read the PR diff, item and every
-open finding, close the PR unmerged, and use keeper define to create slices of
-at most 800 changed lines excluding Cargo.lock and generated files. Preserve
-findings verbatim and report one routing line after all effects succeed;
-retry safely without duplicate jobs, PR closes, slice definitions or reports.
-Until then, the orchestrator performs that stop procedure from R-batch-04.
+A refusal with `no_progress` or `round_cap` that carries `card.pr` queues one durable replan job
+(`rust/pg-spawnd/src/round_replan.rs`, one file per item and PR under `replans/` in the spawner
+state; a repeated refusal finds the file and queues nothing; the refused run records
+`replan: queued`). The job runs four saved steps: the strongest available planning leg of
+the route groups the PR's changed files into slices of about 1500 changed lines (a target,
+rule 3.35; `Cargo.lock`, other lock files and generated files do not count; a plan that
+drops or repeats a file is refused); the slice items `<item>-S<n>` are defined through keeper
+define, each with every open finding verbatim; the PR is closed unmerged; one routing line
+`REPLAN <item> <reason> | PR <pr> closed unmerged | slices <keys>` is sent. Each step is
+saved before the next and skipped when saved, so a retry never repeats a definition, a close
+or the report; the report is marked before the send and un-marked only when the send failed,
+so a crash between the mark and the delivery sends the line again, under one idempotency key
+(32 hex, stable per item and PR; `fleet-msg send --msg-id`) the receiver dedupes, and the job
+is `sent` only after the delivery was acknowledged. The engine takes its legs, PR, keeper and
+routing through the `Ports` trait; `round_replan_ports.rs` binds them to the spawner route,
+`gh pr view|close`, the keeper CLI (`show`, `define`) and the fleet bus client, and
+`pg-spawnd serve` runs a pass over the queued jobs every 30 s. The strongest planning leg is
+the routed orchestrate leg with the highest catalog score (`route --leg-scores`); it is named
+in the job file, and the production planner adopts the deterministic grouping. Each slice is
+defined `under` its parent item, so it reaches a goal. The routing line counts as delivered
+only on the receiver's receipt (`sent <id> seq=<n>`): a locally queued line is retried. The
+findings on the slices are those of the latest validated review round of the PR.
 
 A spawner-owned `round_void: true` excludes failed rounds that never launched
 (no PID), or whose bounded Git fingerprint proves HEAD, tracked diff and

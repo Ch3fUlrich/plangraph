@@ -20,12 +20,18 @@ pub enum AdmissionReason {
     #[error("attempt already active: {0}")]
     Overlap(String),
 }
+/// The `type_name` of each typed admission refusal: the one definition both the
+/// worker (which emits it) and the workflow (which recognizes it) use.
+const NOT_ALLOWLISTED: &str = "card_not_allowlisted";
+const NOT_CLAIMABLE: &str = "card_not_claimable";
+const OVERLAP: &str = "card_attempt_overlap";
+pub(crate) const REFUSAL_KINDS: [&str; 3] = [NOT_ALLOWLISTED, NOT_CLAIMABLE, OVERLAP];
 impl AdmissionReason {
     fn kind(&self) -> &'static str {
         match self {
-            Self::NotAllowlisted(_) => "card_not_allowlisted",
-            Self::NotClaimable(_) => "card_not_claimable",
-            Self::Overlap(_) => "card_attempt_overlap",
+            Self::NotAllowlisted(_) => NOT_ALLOWLISTED,
+            Self::NotClaimable(_) => NOT_CLAIMABLE,
+            Self::Overlap(_) => OVERLAP,
         }
     }
 }
@@ -42,8 +48,11 @@ pub(crate) fn attempt_error(error: EntryError) -> ActivityError {
     {
         refusal(reason.kind(), &reason.to_string())
     } else {
+        // Git stderr and io errors can carry credentials: only the redacted
+        // text reaches Temporal history.
+        let message = crate::output_redact::failure_text(&error.to_string());
         ActivityError::application(
-            temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!("{error}")).build(),
+            temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!("{message}")).build(),
         )
     }
 }

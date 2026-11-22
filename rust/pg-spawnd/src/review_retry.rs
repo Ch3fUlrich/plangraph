@@ -39,6 +39,7 @@ pub(crate) fn hook_with_group(
         }
         runs::finish_with_allowlist(record, status, &leg, attempt, &allow_shas);
         if quota.is_none()
+            || crate::cli_review::binding_completed(record)
             || status == Status::Cancelled
             || record.path().with_file_name("cancelled").exists()
             || record.get("survivors").is_some()
@@ -113,7 +114,11 @@ fn next(
     }
     Ok(None)
 }
-type Prepared = (String, crate::launch::LaunchSpec, Option<String>);
+type Prepared = (
+    String,
+    crate::launch::LaunchSpec,
+    Option<crate::cli_review::Dispatch>,
+);
 fn prepare(
     record: &RunRecord,
     args: &Args,
@@ -144,17 +149,20 @@ fn prepare(
         }),
         Duration::from_secs(30),
     )?;
-    let head = crate::prompt::prepare_launch_group(args, leg, &mut launch, false, group)?;
-    if head.is_some()
-        && value["head_sha"]
+    let review = crate::prompt::prepare_launch_group(args, leg, &mut launch, false, group)?;
+    if let Some(dispatch) = &review {
+        if value["head_sha"]
             .as_str()
-            .is_some_and(|old| head.as_deref() != Some(old))
-    {
-        return Err(crate::placement::parameter(
-            "CLI review head changed between attempts",
-        ));
+            .is_some_and(|old| dispatch.head != old)
+            || (!value["review_binding"].is_null()
+                && dispatch.binding.as_ref() != Some(&value["review_binding"]))
+        {
+            return Err(crate::placement::parameter(
+                "CLI review diff changed between attempts",
+            ));
+        }
     }
-    Ok((job_id, launch, head))
+    Ok((job_id, launch, review))
 }
 
 fn advance(
@@ -174,10 +182,13 @@ fn advance(
         .and_then(Path::parent)
         .unwrap();
     let run_id = value["run_id"].as_str().unwrap();
-    let (job_id, mut launch, head) = prepared;
+    let (job_id, mut launch, review) = prepared;
     let mut metadata = json!({"cwd":launch.cwd});
-    if let Some(head) = head {
-        metadata["head_sha"] = json!(head);
+    if let Some(review) = review {
+        review.apply(&mut metadata);
+    } else {
+        metadata["review_binding"] = Value::Null;
+        metadata["review_base"] = Value::Null;
     }
     let pre_isolate_cwd = launch.cwd.clone();
     let checkout = crate::cli_review::isolate(&mut launch, &leg, metadata["head_sha"].as_str())?;
@@ -227,6 +238,7 @@ fn advance(
         "test_gaming",
         "finish_reason",
         "completion",
+        "review_binding_error",
     ] {
         record.set(key, Value::Null);
     }
@@ -320,5 +332,69 @@ pub(crate) fn witness(record: &mut RunRecord, leg: &Value, attempt: u32) {
             row[key] = record.get(key).cloned().unwrap_or(Value::Null);
         }
         record.set("attempts", attempts);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pg_worker_core::run::record::new_run_id;
+
+    #[test]
+    fn non_cli_fallthrough_clears_previous_diff_binding() {
+        let state = tempfile::tempdir().unwrap();
+        let run_id = new_run_id();
+        let base = "a".repeat(40);
+        let head = "b".repeat(40);
+        let previous = json!({"id":"agy-gemini-4-hydrogen-high","harness":"agy","model":"gemini-4-hydrogen-high"});
+        let leg = json!({"id":"fixture-fallback","harness":"opencode"});
+        let mut record = runs::create(
+            state.path(),
+            &run_id,
+            "fixture",
+            json!({
+                "role":"review",
+                "cwd":state.path(),
+                "head_sha":head,
+                "review_base":base,
+                "review_binding":{"base_sha":base,"head_sha":head,"diff_sha256":"c".repeat(64)},
+                "attempts":[{"leg":previous,"status":"failed","skip_reason":"quota"}],
+            }),
+            Status::Failed,
+        )
+        .ok()
+        .unwrap();
+        let args = json!({"role":"review","card":{}});
+        let args = args.as_object().unwrap().clone();
+        let mut launch = crate::launch::LaunchSpec {
+            argv: vec!["opencode".into()],
+            cwd: state.path().into(),
+            env: Default::default(),
+            stdin: Some("review".into()),
+            prompt: Some("review".into()),
+            events: None,
+            warnings: None,
+        };
+        let review = crate::prompt::prepare_launch(&args, &leg, &mut launch, false)
+            .ok()
+            .unwrap();
+        assert!(review.is_none());
+        assert!(advance(
+            &mut record,
+            args,
+            &previous,
+            1,
+            leg.clone(),
+            (new_job_id(), launch, review),
+            None,
+        )
+        .is_ok());
+        let saved = crate::records::read_record(state.path(), &json!(run_id))
+            .ok()
+            .unwrap();
+        assert_eq!(saved["attempts"][1]["leg"], leg);
+        assert_eq!(saved["head_sha"], head);
+        assert!(saved["review_binding"].is_null());
+        assert!(saved["review_base"].is_null());
     }
 }

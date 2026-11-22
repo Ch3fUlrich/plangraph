@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell
-from .evidence_git import plan_items, valid_ref
+from .evidence_git import is_first_parent_merge, plan_items, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
@@ -37,6 +37,7 @@ _REF_COUNT = 5000
 _GREP_WINDOW = COMMIT_LIMIT * 4
 _KEY_RE = re.compile(r"^[A-Za-z0-9_.-]+(?::[A-Za-z0-9_.-]+)?\Z")
 _PR_RE = re.compile(r"#(\d+)")
+_PR_SUFFIX_RE = re.compile(r"\(#([1-9][0-9]*)\)\Z")
 MERGE_REPO_LINE = re.compile(
     r"[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)"
     r"(?:[ \t]+([a-fA-F0-9]{40}|#[1-9][0-9]*))?[ \t]*")
@@ -64,6 +65,13 @@ def _did_num(did):
         return int(str(did).split("-", 1)[1])
     except (IndexError, ValueError):
         return -1
+
+
+def subject_pr(subject):
+    """Read the trailing canonical PR number, falling back to the first reference."""
+    text = subject.strip()
+    match = _PR_SUFFIX_RE.search(text) or _PR_RE.search(text)
+    return int(match[1]) if match else None
 
 
 # ------------------------------------------------------------------ git
@@ -214,11 +222,11 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             introduced.append(sha)
             todo.extend(records.get(sha, ([],))[0])
         if len(parents) > 1:
-            match = _PR_RE.search(commit["subject"])
-            merge = {"sha": landing, "subject": commit["subject"],
-                     "pr": int(match.group(1)) if match else None}
+            pr = subject_pr(commit["subject"])
+            merge = {"sha": landing, "subject": commit["subject"], "pr": pr}
+            own_pr = len(parents) == 2 and pr
             for sha in introduced:
-                if sha != landing and sha in records:
+                if sha in records and (sha != landing or own_pr):
                     records[sha][1]["merge"] = merge
     commits, pulls = {}, {}
     for sha, (_, commit, names) in records.items():
@@ -305,8 +313,8 @@ def indexed_work(index, key):
             if prs is not None else None}
 
 
-def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
-    """Commits on the default ref with a ``Plan-Item: <key>`` trailer, newest first.
+def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT, head=None):
+    """Commits with a ``Plan-Item: <key>`` trailer, newest first, optionally at a pinned head.
 
     Returns ``None`` when unknown (no repo, malformed key, git failure), else a
     list of ``{sha, date, subject}`` (at most *limit*, default :data:`COMMIT_LIMIT`);
@@ -319,13 +327,14 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
     """
     repo, ref = _repo_ref(git, project)
     proj, bare = _split(key)
-    if repo is None or not bare:
+    if repo is None or not bare or (head is not None and not valid_commit_ref(head)):
         return None
-    if fetch:
+    if fetch and head is None:
         try:
             git._maybe_fetch(repo)
         except Exception:
             pass
+    ref = head or ref
     prefix = f"({_ere(proj)}:)?" if proj else ""
     out = _ok(git, repo, [
         "log", "--no-show-signature", "-E", "--grep",
@@ -358,16 +367,13 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT):
 
 def _merge_of(git, repo, ref, sha):
     """The first-parent merge on *ref* that introduced *sha*, or ``None``."""
-    # A merge commit on the ref's first-parent chain (a batch merge that carries
-    # the trailers itself) introduced itself, however many merges came after it.
-    parents = (_ok(git, repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]) or "").split()
-    if len(parents) > 2:
-        chain = _ok(git, repo, ["rev-list", "--first-parent", "--merges", "--end-of-options", f"{sha}^..{ref}"])
-        if chain is not None and sha in chain.split():
-            subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
-                                       "--end-of-options", sha]) or "").strip()
-            match = _PR_RE.search(subject)
-            return {"sha": sha, "subject": subject, "pr": int(match.group(1)) if match else None}
+    own_merge = is_first_parent_merge(git, repo, sha, ref)
+    if own_merge is None:
+        return None
+    if own_merge:
+        subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
+                                   "--end-of-options", sha]) or "").strip()
+        return {"sha": sha, "subject": subject, "pr": subject_pr(subject)}
     # Combining --ancestry-path with --first-parent prunes paths through
     # second parents (nested batches and PR branches refreshed from main).
     # Walk ancestry separately, then intersect with the ref's landing merges.
@@ -388,32 +394,62 @@ def _merge_of(git, repo, ref, sha):
         return None
     subject = (_ok(git, repo, ["show", "-s", "--no-show-signature", "--format=%s",
                                "--end-of-options", found[-1]]) or "").strip()
-    match = _PR_RE.search(subject)
-    return {"sha": found[-1], "subject": subject,
-            "pr": int(match.group(1)) if match else None}
+    return {"sha": found[-1], "subject": subject, "pr": subject_pr(subject)}
 
 
-def pr_merge_of(git, project, head):
-    """``{pr, merge, head}`` when *head* is the second parent of the first-parent merge
-    on the default ref that introduced it, else ``None`` (also when git cannot answer)."""
+def _head_introduced_by_merge(git, repo, parents, head):
+    """True when *head* entered via *parents[1]* of a two-parent merge, not *parents[0]*."""
+    if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents) or not valid_commit_ref(head):
+        return False
+    if parents[1] == head:
+        return True
+    p0_code, _ = _git(git, repo, ["merge-base", "--is-ancestor", "--end-of-options", head, parents[0]])
+    if p0_code != 1:
+        return False
+    p1_code, _ = _git(git, repo, ["merge-base", "--is-ancestor", "--end-of-options", head, parents[1]])
+    return p1_code == 0
+
+
+def pr_merge_of(git, project, head, *, fallback_pr=None, default_head=None):
+    """``{pr, merge, head}`` when *head* was introduced on the second parent of the
+    first-parent merge on the default ref, else ``None`` (also when git cannot answer).
+
+    When the merge subject carries no ``#N``, *fallback_pr* (from the GO row) supplies
+    the PR number and *head* may be any commit introduced on the merge's second parent;
+    otherwise the subject's ``#N`` is authoritative and *head* must equal the second parent.
+    """
     repo, ref = _repo_ref(git, project)
-    if repo is None or not valid_commit_ref(head):
+    if (repo is None or not valid_commit_ref(head)
+            or (default_head is not None and not valid_commit_ref(default_head))):
         return None
-    merge = _merge_of(git, repo, ref, head)
-    if not merge or merge["pr"] is None:
+    merge = _merge_of(git, repo, default_head or ref, head)
+    if not merge:
         return None
     parents = (_ok(git, repo, ["show", "-s", "--format=%P", "--end-of-options",
                                merge["sha"]]) or "").split()
-    if len(parents) != 2 or parents[1] != head:
+    if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
         return None
-    return {"pr": merge["pr"], "merge": merge["sha"], "head": head}
+    if merge["pr"] is not None:
+        if parents[1] != head:
+            return None
+        return {"pr": merge["pr"], "merge": merge["sha"], "head": head}
+    if type(fallback_pr) is not int or fallback_pr <= 0:
+        return None
+    if not _head_introduced_by_merge(git, repo, parents, head):
+        return None
+    return {"pr": fallback_pr, "merge": merge["sha"], "head": head}
 
 
-def named_merge(git, project, revision):
-    """Verify a named merge on the default ref. Refuse a PR known to be unmerged."""
+def named_merge(git, project, revision, *, head=None):
+    """Verify a named merge on the default ref. Refuse a PR known to be unmerged.
+
+    Returns ``head`` (the PR head), ``pr`` and ``landed``: the commit that is on the default ref,
+    which the deploy scan reads (a squash merge leaves the PR head off the ref).
+    """
     repo, ref = _repo_ref(git, project)
-    if repo is None:
+    if repo is None or (head is not None and not valid_commit_ref(head)):
         return None
+    ref = head or ref
     pr = None
     sha = revision.lower()
     if revision.startswith("#"):
@@ -443,7 +479,7 @@ def named_merge(git, project, revision):
             git, repo, ["merge-base", "--is-ancestor", "--end-of-options", sha, ref])[0] != 0:
         return None
     if pr is not None:
-        return {"head": pr_head, "pr": pr}
+        return {"head": pr_head, "pr": pr, "landed": sha}
     introduced = _merge_of(git, repo, ref, sha)
     landed = sha
     if introduced:
@@ -458,9 +494,8 @@ def named_merge(git, project, revision):
         return None
     parent_text, _, subject = shown.partition("\x1f")
     parents = parent_text.split()
-    match = _PR_RE.search(subject)
-    return {"head": parents[1] if len(parents) == 2 else sha,
-            "pr": int(match[1]) if match else None}
+    return {"head": parents[1] if len(parents) == 2 else sha, "pr": subject_pr(subject),
+            "landed": landed}
 
 
 _REFS_LOCK = threading.Lock()
@@ -539,7 +574,7 @@ def _closed_lane_pr(git, repo, hosted, branch, head):
     return 0
 
 
-def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, frozen=False):
+def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, frozen=False, head=None):
     """Branches whose name carries the item id and that are not on the ref.
 
     ``None`` when unknown (no repo, git failure).  Local and remote copies of
@@ -548,12 +583,13 @@ def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, froze
     """
     repo, ref = _repo_ref(git, project)
     _, bare = _split(key)
-    if repo is None or not bare:
+    if repo is None or not bare or (head is not None and not valid_commit_ref(head)):
         return None
     snapshot = _refs(git, repo, fresh)
     if snapshot is None:
         return None
     names, remotes = snapshot
+    target = head or ref
     slug = bare.lower()
     lanes, closed_prs = {}, set()
     verified = {} if cache is None else cache  # hosted-PR answers a caller keeps between calls
@@ -566,7 +602,7 @@ def open_lanes(git, project, key, fresh=False, *, closed=None, cache=None, froze
         head, _, rest = name.partition("/")
         short = rest if remote_ref and head in remotes and rest else name
         code, _ = _git(git, repo, ["merge-base", "--is-ancestor",
-                                   "--end-of-options", full, ref])
+                                   "--end-of-options", full, target])
         if code == 0:            # already on the ref: finished, not open
             continue
         if code != 1:            # git error: the whole answer is unknown

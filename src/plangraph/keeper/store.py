@@ -147,11 +147,15 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             (iso(now if now is not None else self.now()),
              getattr(principal, "name", None), getattr(principal, "role", None),
              action, key, 1 if ok else 0, code or None, msg or None))
+        if not ok and key is not None:
+            self._alerts_count_refusal(
+                key, now if now is not None else self.now())
 
     def _finding(self, key, code, msg, now):
         self.conn.execute(
             "INSERT INTO audit_findings(ts,key,code,msg) VALUES(?,?,?,?)",
             (iso(now), key, code, msg))
+        self._alerts_raise_finding(key, code, msg, now)
 
     def audit_auth_failure(self, reason="", now=None):
         """Record a rejected authentication by reason only, never a token.
@@ -300,7 +304,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
             raise Refused("locked", f"{item['key']} is DONE")
 
     # ------------------------------------------------- shared verb checks
-    def add_evidence(self, principal, key, epoch, kind, ref):
+    def add_evidence(self, principal, key, epoch, kind, ref, *, receipt=None):
         """The claimant evidence verb, fenced for the X7b legacy kinds.
 
         ``commit`` proves only "this sha is on main": no trailer binding, no
@@ -310,7 +314,7 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         if kind in ROUTER_ONLY_EVIDENCE_KINDS:
             return self._run(principal, "add_evidence", key,
                              lambda now: self._refuse_router_only_kind(kind))
-        return super().add_evidence(principal, key, epoch, kind, ref)
+        return super().add_evidence(principal, key, epoch, kind, ref, receipt=receipt)
 
     @staticmethod
     def _refuse_router_only_kind(kind):

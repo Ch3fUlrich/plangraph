@@ -1,0 +1,1 @@
+- Reviews and the review leg probe tell the agent to answer in its reply and not to create a plan file, so Antigravity Hydrogen in plan mode returns its verdict instead of a plan artifact.

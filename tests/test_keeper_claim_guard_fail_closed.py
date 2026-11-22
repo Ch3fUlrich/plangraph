@@ -43,10 +43,13 @@ def test_unreadable_refuses_without_writes(scenario, monkeypatch, failure, force
             path.mkdir()
         elif failure == "encoding":
             path.write_bytes(b"PRIVATE FILE CONTENT\xff")
+
     def state():
+        telemetry = ('INSERT INTO "audit_log"', 'INSERT INTO "alerts"',
+                     'INSERT INTO "sqlite_sequence" VALUES(\'audit_log\'',
+                     'INSERT INTO "sqlite_sequence" VALUES(\'alerts\'')
         return [row for row in world.conn.iterdump()
-                if not row.startswith('INSERT INTO "audit_log"')
-                and not row.startswith('INSERT INTO "sqlite_sequence" VALUES(\'audit_log\'')]
+                if not row.startswith(telemetry)]
 
     before = state()
     with pytest.raises(Refused) as exc:
@@ -54,7 +57,10 @@ def test_unreadable_refuses_without_writes(scenario, monkeypatch, failure, force
     assert exc.value.code == "bad_state"
     assert str(exc.value) == f"bad_state: cannot read decisions file: {path}"
     assert world.store._item("demo:A")["state"] == "open"
-    assert state() == before  # Refusal audit is allowed; events, leases and state are not.
+    assert state() == before
+    assert [tuple(row) for row in world.conn.execute(
+        "SELECT key, kind, code, n, state FROM alerts"
+    )] == [("demo:A", "refusal", "refused", 1, "open")]
     assert src.decision_book(adapter)["rows"] == {}
     assert src.decision_texts(adapter, ["D-1"]) == {}
     world.store.show(world.p("reader"), "demo:A")

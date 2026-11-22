@@ -104,7 +104,33 @@ changed since the head you reviewed before, and whether each earlier HIGH or MED
 finding is fixed or validly refuted. Do not reopen a refuted finding without new
 evidence; raise no new finding on code unchanged since round 1.
 
+## Inline seats
+
+Your role header names your tool mode. With tool mode `inline` you have no file or
+shell tools (a tool call you try fails): the diff of the change is quoted in this
+prompt, and this section replaces every instruction above that needs a tool.
+
+- Validated means a quoted diff line with its `file:line`. Do not run or ask for a test
+  run; name the CI evidence the brief lists (job names, summary lines) instead, and say
+  that you did not run it.
+- Open no file and do not use the skill tool. Write `FILES READ: diff only`.
+- Findings need only the quoted diff lines; what you cannot see in the diff goes under
+  "Unverified" and never blocks.
+- You always give the verdict: the `HEAD:` line and the final `VERDICT:` line. Never
+  decline the verdict because you could not run something; judge the diff you can read.
+
 ## Limits
 
 Read files and run tests only. No edits, no commits, no web access, no spawning. If a
 finding needs a fix, state the fix in the finding; the author applies it.
+
+## Learn as you go
+
+- When something fails, stalls or surprises you (a wrong assumption, a tool that lied, a gate
+  that blocked valid work, a check that passed wrong work), report one line to your
+  orchestrator in the same turn: `LESSON <what happened> <evidence: run id, file:line, command output>`.
+- The orchestrator defines an `LE-*` keeper item the same beat: what happened with evidence,
+  the cause, the change in code that prevents it, a done check. A prompt line or a memory note
+  is never the fix.
+- Before you start work in an area, read the open and done `LE-*` items that name its files.
+- A lesson that happens twice raises the priority of its item.

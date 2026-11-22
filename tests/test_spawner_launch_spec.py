@@ -188,12 +188,15 @@ def test_leg_explicit_invalid(request_data, explicit):
 def test_explicit_document_review(request_data, tmp_path, monkeypatch, with_diff):
     request_data.update(dry_run=True, leg={'id': 'mimo-v2.6-flash', 'explicit': True})
     if with_diff:
-        diff = 'diff --git a/example.py b/example.py\n--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-old\n+new\n'
+        diff = 'diff --git a/example.py b/example.py\nindex 1111111..2222222 100644\n--- a/example.py\n+++ b/example.py\n@@ -1 +1 @@\n-old\n+new\n'
         from plangraph.spawner import inline_diff
         from types import SimpleNamespace
         real_run = inline_diff.subprocess.run
+        # The private-key check reads each side's blob: answer it for this synthetic repo.
         monkeypatch.setattr(inline_diff.subprocess, 'run', lambda args, **kw:
-            SimpleNamespace(stdout=diff, stderr='', returncode=0) if 'diff' in args else real_run(args, **kw))
+            SimpleNamespace(stdout=diff, stderr='', returncode=0) if 'diff' in args else
+            SimpleNamespace(stdout='plain\n', stderr='', returncode=0) if 'cat-file' in args or 'merge-base' in args
+            else real_run(args, **kw))
         request_data['card']['diff_ref'] = dict(repo=str(tmp_path), base='HEAD~1', head='HEAD')
     result = spec.build(request_data)
     service = spec.SpawnService(state=request_data['state'])

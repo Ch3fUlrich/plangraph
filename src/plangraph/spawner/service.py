@@ -11,7 +11,7 @@ from pathlib import Path
 import asyncio, hashlib, json, os, socket, time, uuid
 from .runner import SpawnerRunner
 from .cancel_recorded import cancel_recorded
-from .remote_ps import native_receipt
+from .remote_ps import native_receipt, publish_run_record
 from .seat_spawn import SeatSpawnMixin
 from .private_io import SAVE_READ_ATTEMPTS, read_text_retry
 from .output_keep import OUTPUT_KEEP, keep_output
@@ -78,7 +78,6 @@ class SpawnService(SeatSpawnMixin):
             annotate_tree(record)
             if record.get('tree_sha') is None:
                 record.setdefault('tree_absent', 'spawner code checkout identity unavailable at process startup')
-        from .private_io import atomic_write_private
         from .notify import inbox_lock
         from .runner import redact
         from .seat_artifact import publish
@@ -156,7 +155,7 @@ class SpawnService(SeatSpawnMixin):
                     record.clear()
                     record.update(stored)
                     return False
-            atomic_write_private(path, payload)
+            publish_run_record(self.state, path, payload)
         publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
@@ -192,12 +191,13 @@ class SpawnService(SeatSpawnMixin):
         runs = [with_stale(record) for record in read_runs(self.state)]
         return {'runs': sorted(runs, key=lambda r: r.get('started', 0), reverse=True)}
 
-    def route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
+    def route(self, card, role='implement', writer_families=(), review_of=None, *,
+              benchmark=None, require_bench=False, repository_preview=False):
         try:
             plan = self._route(card, role, writer_families, review_of,
                                benchmark=benchmark, require_bench=require_bench)
             from plangraph.planner.routing import SpawnRefused, explicit_only_skips
-            if plan.error:
+            if plan.error and not (repository_preview and not plan.legs):
                 raise SpawnRefused("\n".join([plan.error, *(f"skip {row['leg']}: {row['reason']}" for row in plan.skipped)]))
             return replace(plan, skipped=type(plan.skipped)((*plan.skipped, *explicit_only_skips(role))), reasons=self._seat_reasons([s.family for s in plan.review_seats], plan.reasons))
         except Exception as exc:
@@ -215,6 +215,11 @@ class SpawnService(SeatSpawnMixin):
         if role == 'review' and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
+        if role == 'review' and isinstance(card, dict) and 'diff_ref' in card:
+            from .inline_diff import changed_paths
+            paths = card.get('paths', card.get('write_set', ()))
+            if isinstance(paths, (tuple, list)):
+                card = dict(card, paths=(*paths, *changed_paths(card['diff_ref'])))
         from plangraph.planner.measured_down import measured_down
         from plangraph.planner.legs import leg_active, service_probe
         down = measured_down(self.state)
@@ -357,6 +362,12 @@ class SpawnService(SeatSpawnMixin):
                 chosen = codex_leg_effort(chosen, card)
             if role == 'implement' and role not in chosen.roles:
                 raise SpawnRefused('writer disabled (D-3828): ' + chosen.id)
+            if role == 'review' and card.get('repository_review_required'):
+                from plangraph.planner.route_policy import has_repository_review_tools
+                if seat_family(chosen.family) in writers | writer_parts(reviewed):
+                    raise SpawnRefused('excluded writer family')
+                if not has_repository_review_tools(chosen):
+                    raise SpawnRefused('repository_review_tools_unavailable: ' + chosen.id)
             if chosen.tier == 'paid':
                 available = self._route(card, role, writer_families, review_of,
                     benchmark=benchmark, require_bench=require_bench)
