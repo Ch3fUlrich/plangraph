@@ -37,6 +37,23 @@ _UTC_DATE_RE = re.compile(
     r"(?:\.[0-9]+)?(?:Z|\+00:00))?\Z")
 
 
+_GO_KEYS = re.compile(r"(?<![\w-])GO-KEYS\b")
+_GO_KEY = r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"
+
+
+def go_key_scope(statement):
+    """Explicit train scope, empty if malformed; None selects the legacy GO grammar."""
+    markers = list(_GO_KEYS.finditer(statement or ""))
+    if not markers:
+        return None
+    if len(markers) != 1:
+        return set()
+    block = re.match(r"\s+\[([^\]]*)\](?=$|[\s;])", statement[markers[0].end():])
+    if not block or not re.fullmatch(rf"{_GO_KEY}(?:\s*,\s*{_GO_KEY})*", block[1].strip()):
+        return set()
+    return {key.strip() for key in block[1].split(",")}
+
+
 def _operator_authority(row):
     """The decisions log grants authority through comma/plus-separated BY tokens."""
     return "operator" in {token.strip().lower() for token in re.split(r"[,+]", row.get("by", ""))}
@@ -335,6 +352,10 @@ class RunsMixin:
         if len(cells) < 3 or cells[1] != item["project"]:
             return False, None
         text = cells[2]
+        from .store_waiver import _go_statement
+        declared = go_key_scope(_go_statement(text))
+        if declared is not None:
+            return item["key"] in declared, None
         keys = re.findall(r"(?<![\w:-])[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_.-]+", text)
         if keys and item["key"] in keys:
             return True, None

@@ -68,6 +68,35 @@ def cell(text):
     return str(text).replace("|", "\\|").replace("\n", " ").strip()
 
 
+def active_train(st, head):
+    """The part table at this exact head, with skipped and reverted parts removed."""
+    from plangraph.keeper.evidence_git import REVERT_GREP, delivery_revert
+
+    skipped = {rec["pr"] for rec in st["skipped"]}
+    dropped = set()
+    log = git("log", "--first-parent", "-E", "-i", "--grep", REVERT_GREP, "--format=%B%x1d",
+              f"{st['base_head']}..{head}", cwd=st["worktree"])
+    for message in log.stdout.split("\x1d"):
+        revert = delivery_revert(message.lstrip("\n"))
+        if revert is None:
+            continue
+        target, keys = revert
+        for part in st["merged"]:
+            if target:
+                removed = target == part["merge"] or target == part["head"]
+            else:
+                removed = bool(keys.intersection(part["items"]))
+            if removed:
+                dropped.add(part["pr"])
+    return dict(st, merged=[rec for rec in st["merged"] if rec["pr"] not in skipped | dropped],
+                dropped=[rec for rec in st["merged"] if rec["pr"] in dropped])
+
+
+def go_key_block(st):
+    keys = {key for rec in st["merged"] for key in rec["items"]}
+    return "GO-KEYS [" + ",".join(sorted(keys)) + "]"
+
+
 def render_body(st):
     rows = ["| PR | Plan-Item | Head | Merge | Title |", "|---|---|---|---|---|"]
     for rec in st["merged"]:
@@ -75,7 +104,9 @@ def render_body(st):
         rows.append(f"| #{rec['pr']} | {cell(', '.join(rec['items']) or '-')} | `{short(rec['head'])}` | "
                     f"`{short(rec['merge'])}` | {cell(title)} |")
     body = [f"Merge batch `{st['name']}` into `{st['base']}`: {len(st['merged'])} PRs, merged with `--no-ff` "
-            f"in this order.", "", *rows]
+            "in this order.", "", *rows, "", go_key_block(st)]
+    if st.get("dropped"):
+        body += ["", "Dropped after merge: " + ", ".join(f"#{p['pr']}" for p in st["dropped"])]
     if st["skipped"]:
         body += ["", "Skipped (not in this batch):"]
         body += [f"- #{s['pr']} (`{short(s['head'])}`): {s['reason']}"
@@ -115,6 +146,9 @@ def cmd_push(args):
     if git("status", "--porcelain", "--untracked-files=no", cwd=wt).stdout.strip():
         raise MergeBatchError(f"{wt} has uncommitted changes: commit them before push")
     head = git("rev-parse", "HEAD", cwd=wt).stdout.strip()
+    active = active_train(st, head)
+    if not active["merged"]:
+        raise MergeBatchError("no parts remain in the train")
     started = landing_now()
     if keeper_landing_configured():
         os.environ.update(PG_LANDING_REPO=st["repo"], PG_LANDING_BATCH=landing_batch_key(st),
@@ -127,10 +161,10 @@ def cmd_push(args):
     git("push", REMOTE, f"refs/heads/{st['branch']}:refs/heads/{st['branch']}", cwd=wt)
     if keeper_landing_configured():
         record_stage(st["repo"], landing_batch_key(st), "push", head, started)
-    title = f"batch {st['name']}: " + " ".join(f"#{rec['pr']}" for rec in st["merged"])
+    title = f"batch {st['name']}: " + " ".join(f"#{rec['pr']}" for rec in active["merged"])
     with tempfile.TemporaryDirectory() as tmp:
         body = Path(tmp, "body.md")
-        body.write_text(render_body(st), encoding="utf-8")
+        body.write_text(render_body(active), encoding="utf-8")
         if st.get("pr"):
             if gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state")["state"] != "OPEN":
                 raise MergeBatchError(f"batch PR #{st['pr']} is not open any more: abort and build again")
@@ -453,6 +487,7 @@ def land_with_lease(args, lease, st):
     if custom_subject is not None:
         _merge_subject(number, None, custom_subject)
     check_approval(args.approval, st["head"])
+    st = active_train(st, st["head"])
     require_part_seats(st)
     fields = "state,headRefOid,isDraft,mergeCommit,baseRefName,title"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
@@ -649,9 +684,10 @@ def cmd_go_req(args):
     plan = st.get("plan") or ""
     if not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", plan):
         raise MergeBatchError("build needs --plan <keeper key> for the batch PLAN block")
+    active = active_train(st, head)
     parts = []
-    seats = require_part_seats(st)
-    for rec in st["merged"]:
+    seats = require_part_seats(active)
+    for rec in active["merged"]:
         runs = ",".join(seats[rec["pr"]])
         parts.append(f"#{rec['pr']} sha={rec['head']} review={runs} verdict=ACCEPT")
     ci = st.get("ci") or {}
@@ -668,7 +704,7 @@ def cmd_go_req(args):
     timeline = f"timeline: {summary}; " if summary else ""
     line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
             f"; CI run {ci['id']} state={ci['state']} conclusion={ci['conclusion']}; "
-            f"{timeline}PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}"
+            f"{go_key_block(active)}; {timeline}PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}"
             + (f"; {windows_report(st, head)}" if windows_report(st, head) else ""))
     if keeper_landing_configured() and st.get("go_requested_head") != head:
         st.update(go_requested_head=head, go_requested_at_ms=landing_now())

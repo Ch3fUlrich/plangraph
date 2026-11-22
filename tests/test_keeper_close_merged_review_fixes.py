@@ -673,3 +673,22 @@ def test_a_part_listed_under_another_ruling_of_the_row_does_not_vouch(unseated_w
     path.write_text(text)
     assert not _scope(unseated_w, "demo:H")
     assert _scope(unseated_w, "demo:A")
+
+
+def test_train_go_keys_block_is_authoritative_over_anchor_and_legacy_part_prose(
+        unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path,
+                      "Batch 23, part head {partP}, keys demo:X; GO-KEYS [demo:A,demo:SPLIT]")
+    assert _scope(unseated_w, "demo:A") and _scope(unseated_w, "demo:SPLIT")
+    assert not _scope(unseated_w, "demo:X")
+    with pytest.raises(Refused, match="merged_pr_go_scope_mismatch"):
+        unseated_w.store.close_merged(unseated_w.p("router"), "demo:H", "D-5504", waive_seats="D-6000")
+
+
+def test_train_go_keys_block_closes_each_listed_key(unseated_w, monkeypatch, tmp_path):
+    _part_table_world(unseated_w, monkeypatch, tmp_path, "GO-KEYS [demo:A,demo:H]")
+    for key in ("demo:A", "demo:H"):
+        unseated_w.conn.execute("UPDATE items SET state='open' WHERE key=?", (key,))
+        result = unseated_w.store.close_merged(unseated_w.p("router"), key, "D-5504",
+                                               from_open=True, apply=True, waive_seats="D-6000")
+        assert result["closed"] is True

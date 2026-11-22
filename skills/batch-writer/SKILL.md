@@ -35,7 +35,10 @@ Use grep for text that is not a symbol.
    target your environment sets; never set `CARGO_TARGET_DIR` or `--target-dir`
    yourself. Fix until green.
 5. One commit per item. All trailers in one final paragraph, exactly as the Run values
-   give them (one `Plan-Item` line per item key the commit fixes). A merge of main into
+   give them (one `Plan-Item` line per item key the commit fixes). A train resolver brief
+   must require `Dropped-Part: <key>` for each removed key and `This reverts commit <sha>`
+   in the body for the reverted commit. Drop commits carry no `Plan-Item` trailers.
+   A merge of main into
    your lane that resolves a conflict in `.github/workflows/*` or another gate file needs
    the item's `Gate-Edit: D-id` trailer in the merge message, or the pre-push gate refuses it.
 6. An item that still fails after two attempts: before any commit of it, discard its

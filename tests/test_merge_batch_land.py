@@ -332,10 +332,13 @@ def test_push_takes_over_a_batch_pr_a_dead_push_created(env):
     assert "| #1 |" in env.load()["prs"]["100"]["body"]
 
 
-def go_ready(env, *, seats=True):
+def go_ready(env, *, seats=True, third=False):
     env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
     env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
-    assert env.run("build", "--name", "g1", "--prs", "1,2", "--plan", "plangraph:BATCH").returncode == 0
+    if third:
+        env.branch_pr(3, {"c.txt": "c\n"}, item="ITEM-C")
+    assert env.run("build", "--name", "g1", "--prs", "1,2,3" if third else "1,2",
+                   "--plan", "plangraph:BATCH").returncode == 0
     assert env.run("push", "--name", "g1").returncode == 0
     st = json.loads(env.state_file("g1").read_text())
     for rec in st["merged"]:
@@ -581,3 +584,24 @@ def test_land_reads_main_last_right_before_the_merge_call():
     text = (Path(__file__).resolve().parents[1] / "tools" / "merge_batch_land.py").read_text(encoding="utf-8")
     src = text[text.index("def cmd_land("):]
     assert src.index("record_reruns(") < src.index("require_main_green(") < src.index('"pr", "merge"')
+
+
+def test_go_req_copies_the_train_part_keys_without_dropped_or_skipped_parts(env):
+    st = go_ready(env, third=True)
+    wt = Path(st["worktree"])
+    dropped = st["merged"][1]
+    env.git("revert", "-m", "1", "--no-commit", dropped["merge"], cwd=wt)
+    env.git("commit", "-qm", "Train 9: drop b2\n\n"
+            f"This reverts commit {dropped['merge']}.\n\nDropped-Part: plangraph:ITEM-B", cwd=wt)
+    st["skipped"].append({"pr": 4, "head": "a" * 40, "files": [], "reason": "fixture skip",
+                          "items": ["plangraph:ITEM-D"]})
+    env.state_file("g1").write_text(json.dumps(st))
+    env.load()["runs"]["42"]["headSha"] = env.git("rev-parse", "HEAD", cwd=wt)
+    env.save()
+    assert env.run("push", "--name", "g1", "--ci-run", "42").returncode == 0
+
+    block = "GO-KEYS [plangraph:ITEM-A,plangraph:ITEM-C]"
+    assert block in env.load()["prs"]["100"]["body"]
+    result = env.run("go-req", "--name", "g1")
+    assert result.returncode == 0 and block in result.stdout
+    assert "#2 sha=" not in result.stdout and "#4 sha=" not in result.stdout

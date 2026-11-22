@@ -28,7 +28,7 @@ from . import auth, context_sources
 from .coverage import writer_families
 from .errors import Refused
 from .evidence_types import Result, as_epoch, valid_commit_ref
-from .store_runs import _WARM_S
+from .store_runs import _WARM_S, go_key_scope
 from .schema import RISK_TAGS
 from ..review.family import FAMILIES, model_family
 
@@ -38,7 +38,6 @@ def _known_family(value):
     return family if family in {f for _, f in FAMILIES} else model_family(family)
 
 
-# --- reading the GO verdict of a decision row (pure text, no I/O) ---
 # A row is a GO when its decision cell starts with ``GO`` (after the router's timestamp
 # prefix) or is a ``RULINGS`` row with exactly one numbered ruling that starts with ``GO``.
 # The statement may name a pull request (``GO #12``, ``GO <project> PR #12``, ``GO <project>
@@ -87,6 +86,8 @@ def _go_binding(statement, project):
 
 def _names_item(statement, key):
     """True when the statement names the item by full key or bare id (whole token)."""
+    if (scope := go_key_scope(statement)) is not None:
+        return key in scope
     bare = key.split(":", 1)[-1]
     return any(re.search(rf"(?<![\w:-]){re.escape(name)}(?![\w:-])", statement)
                for name in (key, bare))
@@ -205,7 +206,6 @@ class WaiverMixin:
             text = self._ctx(item, now).decisions.text(decision_id)
         except Exception:  # noqa: BLE001 - absent/unreadable row text never authorizes
             text = None
-        # DecisionsAdapter.text returns ONLY the DECISION cell (D-276).
         # Only the router's timestamp prefix may precede the GO verdict.
         text = _strip_prefix(text)
         statement = _go_statement(text)
@@ -213,6 +213,8 @@ class WaiverMixin:
             raise Refused("evidence_unverified",
                           f"go_row_not_go: no GO verdict in {decision_id} (merged heads {looked})")
         text = statement
+        if (scope := go_key_scope(text)) is not None and item["key"] not in scope:
+            raise Refused("evidence_unverified", f"merged_pr_go_scope_mismatch: {item['key']} in {decision_id}")
         pr = r"(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])"
         project = self._merge_project(item)
         projects = (item["project"], project)

@@ -1,0 +1,1 @@
+- Generate the landing-train GO key block from the active part table. Carry it inline into the GO request and use it as the keeper scope when the router records it.

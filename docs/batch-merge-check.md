@@ -67,8 +67,11 @@ an explicit `VERDICT: PASS` or `VERDICT: ACCEPT`. The command reads
 persist the freeze manifest.
 Run one full CI at the pushed batch head, then record it with `push --name NAME
 --ci-run RUN_ID`. Obtain one Hydrogen remerge-diff read at that exact head.
-`go-req --name NAME` prints one GO-REQ with per-part evidence and PLAN block;
-record its GO before `land --name NAME --batch-pr NUMBER --approval PATH`.
+`go-req --name NAME` prints one GO-REQ with per-part evidence, a
+`GO-KEYS [project:A,project:B]` block and the PLAN block. The key block is the
+sorted union of the active rows of the pushed PR's part table. Copy it verbatim
+into the GO decision cell before PLAN. Skipped and dropped parts are excluded.
+Record the GO before `land --name NAME --batch-pr NUMBER --approval PATH`.
 The Rust check supplements the existing review, main-green, CI and GO gates;
 it does not replace them. Wiring it into both external entrypoints is required
 before claiming rule 3.39 is enforced in production.
