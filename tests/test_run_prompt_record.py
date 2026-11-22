@@ -82,7 +82,9 @@ def test_prompt_record(tmp_path, monkeypatch):
     assert secret not in received[0]
     assert secret not in json.dumps(record)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert record == dict(prompt_sha256=hashlib.sha256(path.read_bytes()).hexdigest(), wake_variant='initial')
+    assert record == dict(prompt_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                          review_brief_sha256=hashlib.sha256('héllo [REDACTED]'.encode()).hexdigest(),
+                          wake_variant='initial')
     assert saves == [record]
 
 
@@ -128,7 +130,9 @@ def test_single_redaction_at_command_boundary(tmp_path, monkeypatch):
         prompt_record=(path, record, lambda r: pytest.fail('dry save'))))
     assert calls == ['hello']
     assert len(commands) == 1 and commands[0].endswith('\n\nhello')
-    assert record == dict(prompt_sha256=hashlib.sha256(commands[0].encode()).hexdigest(), wake_variant='initial')
+    assert record == dict(prompt_sha256=hashlib.sha256(commands[0].encode()).hexdigest(),
+                          review_brief_sha256=hashlib.sha256(b'hello').hexdigest(),
+                          wake_variant='initial')
     assert not path.exists()
 
 

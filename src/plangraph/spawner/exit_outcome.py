@@ -368,14 +368,18 @@ def terminal_reason(record, job=None):
             and (last_reason or '').startswith('no_verdict')):
         record.update(reason=last_reason, review_status='no_verdict')
         return
-    if (job is not None and record.get('role') == 'review' and record.get('status') == 'completed'
-            and record.get('exit_code') in (None, 0)):
+    if (record.get('role') == 'review' and record.get('status') == 'completed'
+            and record.get('exit_code') in (None, 0) and (job is not None or real)):
         from .prompt_input import TOOLLESS_MODES
+        # A persisted attempt still supplies its verdict text. Require file
+        # evidence at dispatch so replay can preserve older valid receipts.
+        text = job.stdout if job is not None else real[-1].get('stdout_tail', '')
         chosen = record.get('chosen_leg') or leg
-        toolless = (chosen.get('tool_mode') in TOOLLESS_MODES or getattr(job, '_inline_review', False))
-        if missing := review_no_verdict(job.stdout, getattr(job, 'response_finish_reason', None),
+        toolless = job is not None and (chosen.get('tool_mode') in TOOLLESS_MODES
+                                       or getattr(job, '_inline_review', False))
+        if missing := review_no_verdict(text, getattr(job, 'response_finish_reason', None),
                                        toolless=toolless,
-                                       require_files=record.get('review_document') != 'train_delta'):
+                                       require_files=job is not None and record.get('review_document') != 'train_delta'):
             record.update(status='failed', exit_code=6, reason=missing, review_status='no_verdict')
             return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')

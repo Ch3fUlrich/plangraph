@@ -263,12 +263,12 @@ def assert_hydrogen_wire(proc, launches, prompt, probe=False):
 def test_hydrogen_review_completes_with_the_result_reply(hydrogen_review):
     service, proc, _ = hydrogen_review
     proc.communicate = AsyncMock(return_value=(
-        b'{"event":"result","result":{"status":"SUCCESS","response":"VERDICT: ACCEPT"}}\n', b''))
+        b'{"event":"result","result":{"status":"SUCCESS","response":"FILES READ: src/lib.rs\\nVERDICT: ACCEPT"}}\n', b''))
     record = asyncio.run(service.spawn(
         card={"estimate_tokens": 1000}, prompt="Review the proposed change.", role="review", writer_families=("gpt",),
         leg="agy-gemini-4-hydrogen-high", override_reason="D-6550 Hydrogen review fixture",
         no_fallthrough=True, wait_seconds=None))
-    assert (record["status"], record["stdout_tail"]) == ("completed", "VERDICT: ACCEPT")
+    assert (record["status"], record["stdout_tail"]) == ("completed", "FILES READ: src/lib.rs\nVERDICT: ACCEPT")
 
 
 def test_hydrogen_artifact_without_result_records_no_verdict(hydrogen_review):
