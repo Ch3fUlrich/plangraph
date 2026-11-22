@@ -1,3 +1,9 @@
+#[cfg(unix)]
+#[path = "native_writer_late_review_tests.rs"]
+mod late_review_tests;
+#[cfg(unix)]
+use late_review_tests::*;
+
 use super::*;
 #[test]
 fn final_head_review_ignores_old_head_and_requires_last_canonical_verdict() {
@@ -573,95 +579,6 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         .review(&head, None)
         .unwrap_err()
         .starts_with("review run returned no record"));
-}
-
-#[cfg(unix)]
-fn check_review_resume_after_missing_client(host: &mut Host, base: &str, head: &str, cli: &Path) {
-    let previous = json!({"head":base,"text":"HIGH src/lib.rs:1 - previous finding"});
-    let diagnostic = "REVIEW run-missing FAIL client_missing /fixture/codex";
-    fs::write(
-        cli,
-        format!("import json, sys\nprint(json.dumps(dict(run_id='run-missing', stderr_tail={diagnostic:?})))\nsys.exit(10)\n"),
-    ).unwrap();
-    let missing = host.review(head, Some(&previous)).unwrap();
-    assert_eq!(missing["status"], "client_missing");
-    assert_eq!(missing["reason"], diagnostic);
-
-    fs::write(cli, r#"import json, pathlib, sys
-argv = sys.argv
-value = lambda flag: argv[argv.index(flag) + 1]
-card = json.loads(value('--card'))
-prompt = pathlib.Path(value('--prompt-file')).read_text()
-assert 'HIGH src/lib.rs:1 - previous finding' in prompt, prompt
-assert 'delta ' + card['diff_ref']['base'] + '..' + card['diff_ref']['head'] in prompt, prompt
-print(json.dumps(dict(run_id='run-retry', status='completed', stdout_tail='VERDICT: REQUEST_CHANGES')))
-"#).unwrap();
-    let retried = host.review(head, Some(&previous)).unwrap();
-    assert_eq!(retried["verdict"], "REQUEST_CHANGES", "{retried}");
-}
-
-#[cfg(unix)]
-fn check_late_review_reuses_completed_run(host: &mut Host, head: &str, cli: &Path) {
-    let run = host.state.join("runs/run-late");
-    fs::create_dir_all(&run).unwrap();
-    let record = run.join("record.json");
-    let started = pg_worker_core::run::finalize::now().floor() as u64;
-    let mut receipt = json!({"run_id":"run-late","status":"running","started":started});
-    fs::write(&record, receipt.to_string()).unwrap();
-    fs::write(
-        cli,
-        format!(
-            "import sys\nassert sys.argv[sys.argv.index('--wait')+1] == '3600'\nprint({:?})\n",
-            receipt.to_string()
-        ),
-    )
-    .unwrap();
-    let running = host.review(head, None).unwrap();
-    assert_eq!(running["status"], "review_running");
-    assert_eq!(running["run_id"], "run-late");
-    assert_eq!(
-        running["expected_end"].as_f64(),
-        Some((started + 3600) as f64)
-    );
-    let pending = host.reviews.join(format!("late-review-{head}.json"));
-    assert!(pending.is_file());
-    assert!(!pending.with_extension("txt").exists());
-
-    receipt["status"] = json!("completed");
-    receipt["stdout_tail"] = json!("src/lib.rs checked\nVERDICT: ACCEPT\n");
-    fs::write(&record, receipt.to_string()).unwrap();
-    fs::remove_file(cli).unwrap();
-    let reviewed = host.review(head, None).unwrap();
-    assert_eq!(reviewed["run_id"], "run-late");
-    assert_eq!(reviewed["verdict"], "ACCEPT");
-    assert!(!pending.exists());
-    let artifact = fs::read_to_string(pending.with_extension("txt")).unwrap();
-    assert_eq!(
-        artifact,
-        format!("HEAD: {head}\nsrc/lib.rs checked\nVERDICT: ACCEPT\n")
-    );
-}
-
-#[cfg(unix)]
-fn check_review_replaces_unreadable_run(host: &mut Host, head: &str, cli: &Path) {
-    let pending = host.reviews.join(format!("late-review-{head}.json"));
-    let run = host.state.join("runs/run-pruned/record.json");
-    fs::create_dir_all(run.parent().unwrap()).unwrap();
-    fs::write(cli, "import json\nprint(json.dumps(dict(run_id='run-replacement', status='completed', stdout_tail='VERDICT: REQUEST_CHANGES')))\n").unwrap();
-    for corrupt in [false, true] {
-        fs::write(&run, "corrupt record").unwrap();
-        fs::write(
-            &pending,
-            json!({"head":head,"run_id":"run-pruned"}).to_string(),
-        )
-        .unwrap();
-        if !corrupt {
-            fs::remove_file(&run).unwrap();
-        }
-        let result = host.review(head, None).unwrap();
-        assert_eq!(result["run_id"], "run-replacement");
-        assert!(!pending.exists());
-    }
 }
 
 #[cfg(unix)]
