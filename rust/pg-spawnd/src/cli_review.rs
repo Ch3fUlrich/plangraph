@@ -134,20 +134,17 @@ pub(crate) fn prepare(
         ""
     };
     let prompt = format!("{access}Read-only repository review of HEAD {head}. Open callers and tests; never edit. Do not run background commands; wait for every command to finish before deciding. Name at least one reviewed path from the diff or a file:line in your review. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
-    if launch.stdin.as_deref() == Some(old) {
-        launch.stdin = Some(prompt.clone());
-    } else {
-        let mut event: Value = serde_json::from_str(launch.stdin.as_deref().unwrap_or(""))
-            .map_err(|_| parameter("invalid CLI prompt transport"))?;
-        if event["event"] != "user" || event["message"]["content"] != old {
-            return Err(parameter("invalid CLI prompt transport"));
-        }
-        event["message"]["content"] = json!(prompt);
-        launch.stdin = Some(event.to_string() + "\n");
-    }
-    launch.prompt = Some(prompt);
+    binding::replace_prompt(launch, prompt)?;
     Ok(Some(head))
 }
+
+#[path = "cli_review_binding.rs"]
+mod binding;
+#[cfg(test)]
+#[path = "cli_review_binding_tests.rs"]
+mod binding_tests;
+
+pub(crate) use binding::bind_launch;
 
 #[path = "cli_review_checkout.rs"]
 mod checkout;
@@ -232,6 +229,10 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         return;
     }
     let value = record.to_value();
+    let bound = !value["review_binding"].is_null();
+    if bound && !value["completion"].is_null() {
+        return;
+    }
     let Some(state) = record
         .path()
         .parent()
@@ -275,10 +276,13 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     if clean_head(Path::new(cwd)).ok().as_deref() != Some(head) {
         return;
     }
-    if value["review_checkout"]
-        .as_str()
-        .is_some_and(|p| clean_head(Path::new(p)).ok().as_deref() != Some(head))
-    {
+    let review_cwd = Path::new(value["review_checkout"].as_str().unwrap_or(cwd));
+    if review_cwd != Path::new(cwd) && clean_head(review_cwd).ok().as_deref() != Some(head) {
+        return;
+    }
+    if bound && !binding::matches_completion(&value, review_cwd, head) {
+        record.set("verdict", json!("no_verdict"));
+        record.set("reason", json!("review_diff_binding_mismatch"));
         return;
     }
     let mut model = leg["model"].as_str().unwrap().to_owned();
@@ -358,10 +362,11 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
     );
     record.set("test_gaming", json!(gaming.as_slice() != ["no"]));
     record.set("finish_reason", json!("stop"));
-    record.set(
-        "completion",
-        json!({"head_sha":head,"finish_reason":"stop"}),
-    );
+    let mut completion = json!({"head_sha":head,"finish_reason":"stop"});
+    if bound {
+        completion["review_binding"] = value["review_binding"].clone();
+    }
+    record.set("completion", completion);
 }
 #[cfg(test)]
 #[path = "cli_review_isolation_tests.rs"]

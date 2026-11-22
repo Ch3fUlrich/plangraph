@@ -186,6 +186,22 @@ fn advance(
     } else {
         Value::Null
     };
+    if group.is_none() {
+        crate::cli_review::bind_launch(
+            &mut launch,
+            &pre_isolate_cwd,
+            &args["card"]["diff_ref"],
+            &mut metadata,
+        )?;
+        if !value["review_binding"].is_null()
+            && !metadata["review_binding"].is_null()
+            && value["review_binding"] != metadata["review_binding"]
+        {
+            return Err(crate::placement::parameter(
+                "CLI review diff binding changed between attempts",
+            ));
+        }
+    }
     let allow_shas = runs::allow_shas(
         &args,
         &launch,

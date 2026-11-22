@@ -63,4 +63,9 @@ families or advertised as a second Anthropic family.
   row has no harness refuses with `override model missing registry data:
   harness` (the missing field is named).
 
+For a full stamped CLI review with a diff base, the run record stores
+`review_binding` with the resolved base SHA, head SHA and SHA-256 of the pinned
+binary Git diff. The prompt names the exact Git command. A completion carries
+the same binding after the checkout and diff are verified again.
+
 Back: [SPAWNER.md](SPAWNER.md).

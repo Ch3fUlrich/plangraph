@@ -226,6 +226,14 @@ impl Runs {
         base.as_object_mut()
             .unwrap()
             .extend(admission_fields.as_object().unwrap().clone());
+        if role == "review" && !dry && group_meta.is_none() {
+            crate::cli_review::bind_launch(
+                &mut launch,
+                &pre_isolate_cwd,
+                &args["card"]["diff_ref"],
+                &mut base,
+            )?;
+        }
         if !dry && base["writer_round"].is_u64() {
             base["round_work_before"] = json!(crate::round_progress::work_fingerprint(&launch.cwd));
         }
