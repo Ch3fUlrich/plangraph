@@ -7,33 +7,87 @@ use crate::{
 };
 use pg_reap::{Classification, Worktree};
 use std::{
+    collections::BTreeMap,
     fmt::Write as _,
     fs, io,
     path::{Path, PathBuf},
     process::Command,
+    rc::Rc,
     time::{Duration, SystemTime},
 };
 
 /// The approved plan contains only the JSON rows printed for eligible entries.
 pub fn run(options: &Options<'_>, approval: Option<(&str, &str)>) -> io::Result<String> {
-    run_using(options, approval, |options, branch| {
-        let protection = Protection::load_with_processes(
-            options.pins,
-            options.state,
-            options.claims_reader,
-            crate::disk_runtime::process_references,
-        )?;
-        Ok((protection, sweep_facts::pulls(options.repo, branch)?))
-    })
+    run_with_readers(
+        options,
+        approval,
+        |options| {
+            Protection::load_with_processes(
+                options.pins,
+                options.state,
+                options.claims_reader,
+                crate::disk_runtime::process_references,
+            )
+        },
+        sweep_facts::pull_inventory,
+    )
 }
+
+pub(crate) type Evidence = (Rc<Protection>, Rc<Vec<Pull>>);
 
 #[cfg(feature = "test-support")]
 pub fn reap_with_authority(
     options: &Options<'_>,
     approval: Option<(&str, &str)>,
-    authority: impl FnMut(&Options<'_>, &str) -> io::Result<(Protection, Vec<Pull>)>,
+    mut authority: impl FnMut(&Options<'_>, &str) -> io::Result<(Protection, Vec<Pull>)>,
 ) -> io::Result<String> {
-    run_using(options, approval, authority)
+    run_using(options, approval, |options, branch| {
+        authority(options, branch).map(|(protection, pulls)| (Rc::new(protection), Rc::new(pulls)))
+    })
+}
+
+#[cfg(feature = "test-support")]
+pub fn reap_with_readers(
+    options: &Options<'_>,
+    approval: Option<(&str, &str)>,
+    protection: impl FnMut(&Options<'_>) -> io::Result<Protection>,
+    pulls: impl FnMut(&Path, Option<&str>) -> io::Result<Vec<Pull>>,
+) -> io::Result<String> {
+    run_with_readers(options, approval, protection, pulls)
+}
+
+fn run_with_readers(
+    options: &Options<'_>,
+    approval: Option<(&str, &str)>,
+    mut protection: impl FnMut(&Options<'_>) -> io::Result<Protection>,
+    mut pulls: impl FnMut(&Path, Option<&str>) -> io::Result<Vec<Pull>>,
+) -> io::Result<String> {
+    let mut snapshot = None;
+    let mut pull_cache = BTreeMap::new();
+    run_using(options, approval, |options, reference| {
+        let branch = reference.strip_prefix("refs/heads/");
+        if approval.is_some() {
+            return Ok((
+                Rc::new(protection(options)?),
+                Rc::new(pulls(options.repo, branch)?),
+            ));
+        }
+        let protection = cached(snapshot.get_or_insert_with(|| protection(options).map(Rc::new)))?;
+        // All detached heads share one complete open-PR inventory.
+        let pulls = cached(
+            pull_cache
+                .entry(branch.map(str::to_owned))
+                .or_insert_with(|| pulls(options.repo, branch).map(Rc::new)),
+        )?;
+        Ok((protection, pulls))
+    })
+}
+
+fn cached<T>(result: &io::Result<Rc<T>>) -> io::Result<Rc<T>> {
+    result
+        .as_ref()
+        .map(Rc::clone)
+        .map_err(|error| io::Error::new(error.kind(), error.to_string()))
 }
 
 fn within(path: &Path, roots: &[PathBuf]) -> bool {
@@ -63,7 +117,7 @@ fn roots(options: &Options<'_>) -> io::Result<Vec<PathBuf>> {
 fn run_using(
     options: &Options<'_>,
     approval: Option<(&str, &str)>,
-    mut authority: impl FnMut(&Options<'_>, &str) -> io::Result<(Protection, Vec<Pull>)>,
+    mut authority: impl FnMut(&Options<'_>, &str) -> io::Result<Evidence>,
 ) -> io::Result<String> {
     let approval = approval
         .map(|(id, plan)| Approval::parse(id, plan))
@@ -125,6 +179,7 @@ fn run_using(
                 .filter(|plan| plan.rows.contains(&row))
                 .ok_or_else(|| io::Error::other("outside approved plan"))?;
             let (protection, pulls) = authority(options, branch)?;
+            check(options, tree, &inventory, original, &protection, &pulls)?;
             let _legacy = legacy_attempt_lock(original)?;
             let _creation = crate::worktree::mutation_lock(&repo).map_err(io::Error::other)?;
             let fresh = merged_sweep::inventory(&repo)?;
@@ -133,6 +188,7 @@ fn run_using(
                 .find(|w| w.path == tree.path && row.same_worktree(w))
                 .ok_or_else(|| io::Error::other("worktree changed after approval"))?;
             crate::sweep_runs::check_original(options.state, original)?;
+            let (protection, pulls) = authority(options, branch)?;
             check(options, current, &fresh, original, &protection, &pulls)?;
             merged_sweep::verify_checkout(current)?;
             if let Some((slot, _)) = staged {

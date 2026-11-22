@@ -37,6 +37,7 @@ struct Fixture {
     root: PathBuf,
     state: PathBuf,
     sha: String,
+    pins: PathBuf,
 }
 impl Fixture {
     fn new() -> Self {
@@ -48,7 +49,8 @@ impl Fixture {
             fs::create_dir(path).unwrap();
         }
         git(&repo, &["init", "-qb", "main"]);
-        fs::write(repo.join("one"), "one").unwrap();
+        fs::create_dir(repo.join("tracked-subdirectory")).unwrap();
+        fs::write(repo.join("tracked-subdirectory/one"), "one").unwrap();
         git(&repo, &["add", "."]);
         git(&repo, &["commit", "-qm", "initial"]);
         let remote = tmp.path().join("remote");
@@ -82,7 +84,8 @@ impl Fixture {
                 )
                 .unwrap();
         }
-        fs::write(state.join("pins.json"), "[]").unwrap();
+        let pins = state.join("pins.json");
+        fs::write(&pins, "[]").unwrap();
         let sha = git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
         Self {
             _tmp: tmp,
@@ -90,6 +93,7 @@ impl Fixture {
             root,
             state,
             sha,
+            pins,
         }
     }
 }
@@ -323,3 +327,6 @@ fn cli_reports_without_creating_quarantine_and_refuses_incomplete_approval() {
         assert!(f.root.join("topic").exists());
     }
 }
+
+#[path = "reaper/evidence.rs"]
+mod evidence;

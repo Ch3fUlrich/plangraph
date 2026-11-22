@@ -3,7 +3,8 @@ use crate::{
     disk_hygiene,
     merged_sweep::Options,
     reap_journal::{self, Approval, Receipt, Row, RETENTION},
-    sweep_facts::{Protection, Pull},
+    reaper::Evidence,
+    sweep_facts::{self, Protection, Pull},
     sweep_runs,
 };
 use std::{
@@ -18,7 +19,7 @@ pub(crate) fn report(
     options: &Options<'_>,
     quarantine: &Path,
     approval: Option<&Approval<'_>>,
-    authority: &mut impl FnMut(&Options<'_>, &str) -> io::Result<(Protection, Vec<Pull>)>,
+    authority: &mut impl FnMut(&Options<'_>, &str) -> io::Result<Evidence>,
     report: &mut String,
 ) -> io::Result<()> {
     let root = options.state.join("runs");
@@ -41,15 +42,15 @@ pub(crate) fn report(
         let outcome = (|| -> io::Result<String> {
             let original = original(&path, slot.as_deref(), &root, options.repo)?;
             let row = inspect(options, &path, &original, &checkouts)?;
-            let (protection, pulls) =
-                authority(options, row.branch.as_deref().unwrap_or(&row.head))?;
+            let reference = row.branch.as_deref().unwrap_or(&row.head);
+            if approval.is_some_and(|plan| !plan.rows.contains(&row)) {
+                return Err(io::Error::other("outside approved plan"));
+            }
+            let (protection, pulls) = authority(options, reference)?;
             check_protection(&row, &protection, &pulls)?;
             let Some(approval) = approval else {
                 return Ok(serde_json::to_string(&row)?);
             };
-            if !approval.rows.contains(&row) {
-                return Err(io::Error::other("outside approved plan"));
-            }
             let _creation =
                 crate::worktree::mutation_lock(options.repo).map_err(io::Error::other)?;
             let _writer = lock_writer(&path)?;
@@ -62,6 +63,8 @@ pub(crate) fn report(
             {
                 return Err(io::Error::other("run directory changed after approval"));
             }
+            let (protection, pulls) = authority(options, reference)?;
+            check_protection(&row, &protection, &pulls)?;
             if let Some(slot) = &slot {
                 reap_journal::delete(options.state, slot, approval.id, &row, || {
                     fs::remove_dir_all(&path)
@@ -256,7 +259,7 @@ fn check_protection(row: &Row, p: &Protection, pulls: &[Pull]) -> io::Result<()>
     }) {
         return Err(io::Error::other("run branch is claimed"));
     }
-    if pulls.iter().any(|p| p.state == "OPEN") {
+    if sweep_facts::has_open_pull(row.branch.as_deref(), &row.head, pulls) {
         return Err(io::Error::other("open PR"));
     }
     Ok(())

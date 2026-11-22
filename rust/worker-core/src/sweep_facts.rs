@@ -163,6 +163,14 @@ impl Protection {
 pub fn pulls(repo: &Path, branch: &str) -> io::Result<Vec<Pull>> {
     // Detached HEADs use an exhaustive open-PR inventory, never search indexing.
     let branch_name = branch.strip_prefix("refs/heads/");
+    let mut rows = pull_inventory(repo, branch_name)?;
+    if branch_name.is_none() {
+        rows.retain(|row| row.sha == branch);
+    }
+    Ok(rows)
+}
+
+pub(crate) fn pull_inventory(repo: &Path, branch_name: Option<&str>) -> io::Result<Vec<Pull>> {
     let mut command = Command::new("gh");
     command.current_dir(repo).args([
         "pr",
@@ -175,7 +183,7 @@ pub fn pulls(repo: &Path, branch: &str) -> io::Result<Vec<Pull>> {
     }
     command.args(["--limit", "1000", "--json", "number,state,headRefOid"]);
     let text = output(&mut command)?;
-    let mut rows: Vec<Pull> = serde_json::from_str(&text).map_err(io::Error::other)?;
+    let rows: Vec<Pull> = serde_json::from_str(&text).map_err(io::Error::other)?;
     if rows.len() >= 1000
         || rows.iter().any(|r| {
             !["OPEN", "CLOSED", "MERGED"].contains(&r.state.as_str())
@@ -185,11 +193,15 @@ pub fn pulls(repo: &Path, branch: &str) -> io::Result<Vec<Pull>> {
     {
         return Err(io::Error::other("incomplete PR inventory"));
     }
-    if branch_name.is_none() {
-        rows.retain(|row| row.sha == branch);
-    }
     Ok(rows)
 }
+
+pub(crate) fn has_open_pull(branch: Option<&str>, head: &str, pulls: &[Pull]) -> bool {
+    pulls
+        .iter()
+        .any(|p| p.state == "OPEN" && (branch.is_some() || p.sha == head))
+}
+
 pub fn facts(
     repo: &Path,
     tree: &Worktree,
@@ -244,9 +256,7 @@ pub fn facts(
                 .branch
                 .as_ref()
                 .is_some_and(|b| Guards::protected_name(Path::new(b))),
-        open_pr: prs
-            .iter()
-            .any(|p| p.state == "OPEN" && (tree.branch.is_some() || p.sha == tree.head)),
+        open_pr: has_open_pull(tree.branch.as_deref(), &tree.head, prs),
         in_use_by_process: protection.cwds.iter().any(|p| p.starts_with(&canonical)),
         in_use_by_unit: protection.units.iter().any(|p| p.starts_with(&canonical))
             || !unit_names(&protection.unit_refs, path, &canonical).is_empty(),

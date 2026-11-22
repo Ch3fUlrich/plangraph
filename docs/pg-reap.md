@@ -138,8 +138,11 @@ push clones stay protected. Cargo target roots are listed for disk hygiene.
 Send the desired JSON rows to routing for approval. Save the approved rows,
 one per line, and repeat the command with `--approval D-NUMBER --plan FILE`.
 The approval ID is recorded as supplied by routing. Every row must still
-match the live report. The reaper rechecks keeper claims, run ownership,
-GitHub PRs, processes and user units. It serializes Git worktree creation and
+match the live report. Reports use one snapshot of keeper claims, run pins,
+processes and user units, one open PR inventory for all detached heads, and
+one PR query per named branch. Before an approved mutation the reaper reloads
+that evidence and rechecks run ownership under the creation lock and any
+applicable run writer locks. It serializes Git worktree creation and
 quarantine moves, and also takes the legacy attempt root lock for legacy paths.
 A missing authority protects the path. Process discovery checks cwd,
 executable, root and open descriptors. A host that needs the privileged process
