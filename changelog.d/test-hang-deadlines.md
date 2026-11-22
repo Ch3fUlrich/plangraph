@@ -1,2 +1,1 @@
 - Bound pytest and Rust libtest cases individually in CI and preflight. A timeout reports the case ID, emits diagnostics, and kills the running test and its children.
-- Give the spawner, worktree sweep, and Keeper CLI test builds their own deadline. After Cargo returns, the test resumes with its remaining time.

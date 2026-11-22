@@ -192,31 +192,3 @@ def test_case():
 """, "0.1")
     assert result.returncode == pytest.ExitCode.OK, result.stdout + result.stderr
     assert "1 passed" in result.stdout
-
-
-@pytest.mark.parametrize(('fixture_pause', 'test_pause', 'hung'), [
-    (0.8, 0, False),
-    (0.8, 5, True),
-    (5, 0, True),
-])
-def test_cargo_fixture_has_a_separate_deadline(tmp_path, fixture_pause, test_pause, hung):
-    result = run_deadline_fixture(tmp_path, f"""
-import pytest
-import time
-from _split_ci_environment import cargo_fixture_deadline
-
-@pytest.fixture
-def binary():
-    with cargo_fixture_deadline(2):
-        time.sleep({fixture_pause})
-
-def test_case(binary):
-    time.sleep({test_pause})
-""", '0.5')
-    if hung:
-        assert result.returncode != pytest.ExitCode.OK, result.stdout + result.stderr
-        suffix = ' [Cargo fixture]' if fixture_pause > 2 else ''
-        assert f'HUNG test_case.py::test_case{suffix}\n' in result.stderr
-    else:
-        assert result.returncode == pytest.ExitCode.OK, result.stdout + result.stderr
-        assert '1 passed' in result.stdout

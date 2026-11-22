@@ -82,12 +82,10 @@ def native_client_binary(tmp_path_factory):
     import subprocess
     from pathlib import Path
     from _spawnd import built_rust_binary
-    from _split_ci_environment import cargo_fixture_deadline
 
     manifest = Path(__file__).resolve().parents[1] / "rust/Cargo.toml"
-    with cargo_fixture_deadline(600):
-        subprocess.run(["cargo", "build", "--manifest-path", str(manifest),
-                        "-p", "plangraph-cli", "--bin", "plangraph"], check=True)
+    subprocess.run(["cargo", "build", "--manifest-path", str(manifest),
+                    "-p", "plangraph-cli", "--bin", "plangraph"], check=True)
     binary = built_rust_binary("plangraph")
     # Other lanes can replace the shared executable while these tests run.
     return shutil.copy2(binary, tmp_path_factory.mktemp("native-client") / binary.name)

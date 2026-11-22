@@ -2,10 +2,8 @@ import os
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 from contextlib import contextmanager
-from contextvars import ContextVar
 import pytest
 
 @contextmanager
@@ -158,44 +156,11 @@ def _test_subreaper(enabled=None):
     return previous.value
 
 
-_active_test_deadline = ContextVar('active_test_deadline', default=None)
-
-
-def _arm_test_deadline(config, node, seconds):
-    import faulthandler
-    import json
-
-    deadline = time.monotonic() + seconds
-    faulthandler.dump_traceback_later(seconds, file=config._pg_deadline_stderr)
-    # Allow the traceback timer to emit all threads before the watchdog kills the test.
-    watchdog = config._pg_deadline_watchdog
-    watchdog.stdin.write(json.dumps([node, deadline + 0.5]).encode() + b'\n')
-    watchdog.stdin.flush()
-    return deadline
-
-
-@contextmanager
-def cargo_fixture_deadline(seconds):
-    """Bound Cargo setup separately and resume the test with its remaining time."""
-    active = _active_test_deadline.get()
-    if active is None:
-        yield
-        return
-    config, node, deadline = active
-    remaining = max(deadline - time.monotonic(), 0.001)
-    cargo_node = f'{node} [Cargo fixture]'
-    try:
-        cargo_deadline = _arm_test_deadline(config, cargo_node, seconds)
-        _active_test_deadline.set((config, cargo_node, cargo_deadline))
-        yield
-    finally:
-        resumed = _arm_test_deadline(config, node, remaining)
-        _active_test_deadline.set((config, node, resumed))
-
-
 @pytest.hookimpl(wrapper=True, tryfirst=True)
 def pytest_runtest_protocol(item, nextitem):
     import faulthandler
+    import json
+    import time
     config = item.config
     if not hasattr(config, '_pg_deadline_watchdog'):
         if sys.platform.startswith('linux'):
@@ -206,12 +171,14 @@ def pytest_runtest_protocol(item, nextitem):
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=config._pg_deadline_stderr,
         )
     watchdog = config._pg_deadline_watchdog
-    deadline = _arm_test_deadline(config, item.nodeid, _test_deadline(item))
-    token = _active_test_deadline.set((config, item.nodeid, deadline))
+    seconds = _test_deadline(item)
+    faulthandler.dump_traceback_later(seconds, file=config._pg_deadline_stderr)
     try:
+        # Give faulthandler's native timer time to emit all threads before the kill.
+        watchdog.stdin.write(json.dumps([item.nodeid, time.monotonic() + seconds + 0.5]).encode() + b'\n')
+        watchdog.stdin.flush()
         return (yield)
     finally:
-        _active_test_deadline.reset(token)
         faulthandler.cancel_dump_traceback_later()
         watchdog.stdin.write(b'false\n')
         watchdog.stdin.flush()
