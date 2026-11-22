@@ -6,13 +6,18 @@ Run on Linux from the repository root:
 cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test fleet_launch_parity
 ```
 
-The ordinary Rust CI test step runs these fixtures against `pg-spawnd session`
-on Linux. The target also finds the
+The ordinary Rust CI test step runs the self-contained fixtures against
+`pg-spawnd session` on Linux, including the S2 interruption, ledger, counter,
+and watchdog launch-boundary checks. They use the included synthetic policy and
+settings and need no data checkout. The contention test runs both Rust
+allocators and a Rust allocator paired with a Python fixture of the pinned
+counter protocol. The target also looks for the
 annex revision (`2b5a8c90725e2fdf4d5d5671c3e4589f5e03a5bf`) in a checkout
 under `~/code` and stages its launcher and policy to compare both implementations
 against the same fixtures. The data worktree is read-only and can be on any
-revision. Without the pin, the Rust fixtures run with the included synthetic
-policy and settings. To run against a replacement,
+revision. When the pin is available, the suite additionally runs the actual
+Python launcher, Python/Rust contention, and the complete Python watchdog
+recovery scenarios. To run against a replacement,
 set `PLANGRAPH_FLEET_LAUNCH` to
 the executable path. It must accept the same CLI and state environment. The test for
 editing the Python launcher’s bundled admission policy runs only against the staged
@@ -44,6 +49,10 @@ supplied and expected values.
 Legacy respawns with neither a card reference nor a discoverable card keep
 their existing prompt behavior. A referenced card with no usable replacement
 causes a refusal.
+
+The card-based preamble and `PROMPT-STALE` checks are Rust-only behavior under
+`LE-RESTART-PROMPT-CARRIES-OLDER-HANDOFF`. Python launch parity excludes those
+prompt changes.
 
 The harness isolates HOME, state, cwd, and PATH. Rust peers stand in for Claude, SSH,
 and Windows memory probes. A destination test delivers the captured envelope to a
@@ -78,14 +87,14 @@ Rust target invokes that test.
 | 16 | `remote::check` and `check_local_memory`, Windows-side reading over SSH and through local WSL interop. |
 | 17 | `remote::check_selection_errors`, missing and negative floors. Shipped fleet floors are site policy. |
 | 18 | `remote::check` and `refusals.json`, alternate host table, edge flags and local identity. Hostname aliases are site policy. |
-| 19 | `legacy_fallback_prefers_the_next_enabled_host_and_can_warn_and_keep_local` checks the fallback helper’s order and exact diagnostics. |
+| 19 | Library helper. `legacy_fallback_prefers_the_next_enabled_host_and_can_warn_and_keep_local` checks its order and diagnostics. |
 | 20 | `remote::check`, single-line SSH envelope and exact dry-run payload. Destination replay compares the encoded receiver with the pin. `check_mirror` covers the forwarded counter for a real launch. |
 | 21 | `remote::check_destination`, captured payload stages prompt/MCP, forwards the number and returns the remote record. Respawn without a spec refuses. |
 | 22 | `remote::check_mirror`, preparation error returns uncertainty and never invokes SSH. Transport timeout is covered in data test `test_fleet_launch_hosts.py`. |
 | 23 | `remote::check_mirror`, output passthrough, remote record removal from stdout, local host attribution, snapshot and child list. `records::check_respawn` covers the deferred record target. |
 | 24 | `remote::check_destination` and `records::check`, child never inherits the forwarding marker. |
 | 25 | `dry-run.json` and `records::check_respawn`, default, role and explicit caps. Data test `test_fleet_launch_caps.py` covers invalid policy and cap provenance. |
-| 26 | `records::check`, attended window in the guard and launch records. `future_attended_lease_is_deleted_and_window_is_bounded` checks lease validity and cleanup. |
+| 26 | `records::check`, attended window in the guard and launch records. The library-only lease reader is covered by `future_attended_lease_is_deleted_and_window_is_bounded`. |
 | 27 | `refusals::check_enforcement` and `ledger.json`, required metadata and result shape. Path confinement is a data test in `test_fleet_launch_admission.py`. |
 | 28 | `refusals::check_enforcement`, exact real and preview admission messages. Data test `test_fleet_launch_admission.py` covers malformed caps and legacy respawn warnings. |
 | 29 | `refusals::check_enforcement`, status 2, refused ledger row and no dry-run writes. |
@@ -147,12 +156,14 @@ Rust target invokes that test.
 
 ## Companion inventories
 
-Amendment 1 section 3 runs against the pinned Python launcher and Rust in
-temporary state. The harness kills each launcher before Claude returns and while
+Amendment 1 section 3 launch checks always run against Rust in temporary state,
+and also run against Python when the pin is available. The harness kills the launcher before Claude returns and while
 it resolves the ID. It checks exit signals, captured output, ledger rows and
 absent launch records. Remote fixtures cover a failed transport, an unavailable
 SSH executable and a zero exit with an unresolved ID. The timeout unit test
-exercises the same bounded transport at a short deadline. The pinned watchdog
+exercises the same bounded transport at a short deadline. The self-contained
+watchdog fixture sends a deferred respawn and checks the unresolved start
+output and pending record that the watchdog consumes. With the pin, the watchdog
 consumes the output of both launchers and exercises the ten-minute rule and
 adoption of a younger session. The fixture redirects only its launch subprocess
 so the watchdog can keep its existing Python identity import.

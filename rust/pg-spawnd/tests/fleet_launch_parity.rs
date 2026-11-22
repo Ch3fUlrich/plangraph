@@ -42,22 +42,32 @@ fn main() {
     if peers::invoke(name, args.collect()) {
         return;
     }
-    match sandbox::Launcher::find() {
-        Some(sandbox::Launcher::Explicit(path)) => check(&sandbox::Launcher::Explicit(path)),
-        Some(sandbox::Launcher::Pinned(checkout)) => {
-            check(&sandbox::Launcher::Pinned(checkout.clone()));
-            check(&sandbox::Launcher::Rust(Some(checkout.clone())));
-            interrupted::check(&checkout);
+    use sandbox::Launcher;
+    let rust = Launcher::Rust(None);
+    check(&rust);
+    interrupted::check(&rust);
+    interrupted::check_counter(&rust, false);
+    interrupted::check_counter(&rust, true);
+    watchdog::check_launcher_contract(&rust);
+    println!("fleet-launch S2 fixtures passed: interruption, ledger, shared Python/Rust counter and watchdog launch contract");
+
+    match Launcher::find() {
+        Some(Launcher::Pinned(checkout)) => {
+            let python = Launcher::Pinned(checkout.clone());
+            check(&python);
+            check(&Launcher::Rust(Some(checkout.clone())));
+            interrupted::check(&python);
+            interrupted::check_counter(&python, false);
+            watchdog::check_launcher_contract(&python);
             watchdog::check(&checkout);
-            println!("fleet-launch interruption parity passed: interrupted starts, shared counter and watchdog recovery");
+            println!("fleet-launch pinned Python parity passed, including watchdog recovery");
         }
-        Some(sandbox::Launcher::Rust(_)) => unreachable!(),
-        None => {
-            eprintln!("fleet-launch Python comparison skipped: no checkout of the pinned launcher under ~/code");
-            check(&sandbox::Launcher::Rust(None));
+        Some(Launcher::Explicit(path)) => {
+            check(&Launcher::Explicit(path));
+            println!("fleet-launch replacement fixtures passed");
         }
+        _ => {}
     }
-    println!("fleet-launch parity passed: previews, refusals, launch records, session IDs and remote placement");
 }
 
 #[cfg(target_os = "linux")]

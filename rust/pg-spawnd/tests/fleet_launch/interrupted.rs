@@ -16,25 +16,47 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub fn check(checkout: &std::path::Path) {
-    for rust in [false, true] {
-        let launcher = if rust {
-            Launcher::Rust(Some(checkout.to_owned()))
-        } else {
-            Launcher::Pinned(checkout.to_owned())
-        };
-        super::remote::check_interruption(&launcher);
-        check_private_ledgers(&launcher);
-        for phase in ["background", "agents"] {
-            interrupted(&Launcher::Pinned(checkout.to_owned()), rust, phase);
-        }
+pub fn check(launcher: &Launcher) {
+    super::remote::check_interruption(launcher);
+    check_private_ledgers(launcher);
+    for phase in ["background", "agents"] {
+        interrupted(launcher, matches!(launcher, Launcher::Rust(_)), phase);
     }
+}
 
-    let s = Sandbox::new(&Launcher::Pinned(checkout.to_owned()));
+// Counter protocol from the pinned fleet-launch next_seq function. The
+// sentinel lets the fixture release its contention barrier in either order.
+const PYTHON_COUNTER: &str = r#"
+import fcntl, os, pathlib
+path = pathlib.Path(os.environ["ROUTING_STATE_DIR"]) / "session-seq"
+with path.open("a+") as f:
+    pathlib.Path("python-ready").touch()
+    fcntl.flock(f, fcntl.LOCK_EX)
+    f.seek(0)
+    n = int(f.read().strip() or 0) + 1
+    f.seek(0)
+    f.truncate()
+    f.write(str(n))
+print(n)
+"#;
+
+pub fn check_counter(launcher: &Launcher, fixture: bool) {
+    let s = Sandbox::new(launcher);
     fs::create_dir(s.path("state")).unwrap();
     fs::write(s.path("state/session-seq"), "9998").unwrap();
-    let python = s.direct_launch("python-seat", false).output().unwrap();
-    assert!(python.status.success(), "{}", s.normalize(&python.stderr));
+    let seed = s.direct_launch("seed", true).output().unwrap();
+    assert!(seed.status.success(), "{}", s.normalize(&seed.stderr));
+    let (mut peer, ready) = if fixture {
+        let mut command = std::process::Command::new("/usr/bin/python3");
+        s.isolate(&mut command);
+        command.args(["-c", PYTHON_COUNTER]);
+        (command, s.path("python-ready"))
+    } else {
+        (
+            s.direct_launch("second-seat", matches!(launcher, Launcher::Rust(_))),
+            s.path("state/role-locks/second-seat.lock"),
+        )
+    };
 
     let counter = File::open(s.path("state/session-seq")).unwrap();
     // SAFETY: the fixture owns the live descriptor until the barrier is released.
@@ -48,8 +70,7 @@ pub fn check(checkout: &std::path::Path) {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let python = s
-        .direct_launch("python-next", false)
+    let peer = peer
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -57,23 +78,20 @@ pub fn check(checkout: &std::path::Path) {
     let mut waiting = false;
     let deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < deadline {
-        if ["rust-seat", "python-next"]
-            .iter()
-            .all(|role| s.path(&format!("state/role-locks/{role}.lock")).exists())
-        {
+        if ready.exists() && s.path("state/role-locks/rust-seat.lock").exists() {
             waiting = true;
             break;
         }
         thread::sleep(Duration::from_millis(5));
     }
     drop(counter);
-    let python = python.wait_with_output().unwrap();
+    let peer = peer.wait_with_output().unwrap();
     let rust = rust.wait_with_output().unwrap();
     assert!(
         waiting,
         "both launchers must reach allocation while the counter is locked"
     );
-    for output in [&python, &rust] {
+    for output in [&peer, &rust] {
         assert!(output.status.success(), "{}", s.normalize(&output.stderr));
     }
     let mut names: Vec<_> = fs::read_dir(s.path("state/launch/sessions"))
@@ -84,13 +102,22 @@ pub fn check(checkout: &std::path::Path) {
             doc["seq"].as_u64().unwrap()
         })
         .collect();
+    if fixture {
+        names.push(
+            String::from_utf8(peer.stdout)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap(),
+        );
+    }
     names.sort();
     assert_eq!(names, [9999, 10000, 10001]);
     assert_eq!(
         fs::read_to_string(s.path("state/session-seq")).unwrap(),
         "10001"
     );
-    assert_eq!(ledger(&s, "ledger").len(), 3);
+    assert_eq!(ledger(&s, "ledger").len(), if fixture { 2 } else { 3 });
 }
 
 fn check_private_ledgers(launcher: &Launcher) {

@@ -152,3 +152,66 @@ fn recycle(s: &Sandbox, rust: bool) -> Output {
         .output()
         .unwrap()
 }
+
+// Golden launcher boundary from the pinned watchdog's first recycle attempt.
+// The full pinned watchdog test below this boundary also checks its later beats.
+pub fn check_launcher_contract(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let handoff = s.path("handoff.md");
+    let card = handoff.with_extension("card.md");
+    fs::write(&handoff, "# Fixture handoff\n").unwrap();
+    fs::write(&card, "# review card · review-0001 · 2026-11-22T05:00Z\n").unwrap();
+    let previous = json!({
+        "name": "review", "cwd": s.path("work"), "model": "sonnet", "effort": "high",
+        "prompt_file": s.path("prompt"), "card": card, "handoff": handoff,
+        "mcp": s.path("mcp.json"), "session_id": OLD, "session_name": "review-0001",
+        "job_id": "old", "seq": 1, "ts": 1,
+    });
+    s.write_json("state/launch/review.json", previous.clone());
+    fs::write(s.path("state/session-seq"), "1").unwrap();
+    let restart = s.path("restart");
+    fs::write(
+        &restart,
+        format!(
+            "Restart from handoff {}. Run resume-digest first.\n\n{PROMPT}",
+            handoff.display()
+        ),
+    )
+    .unwrap();
+    fs::write(s.path("child.stdout"), "backgrounded no-id\n").unwrap();
+
+    let output = s
+        .command()
+        .arg("review")
+        .arg(s.path("work"))
+        .args(["sonnet", "high"])
+        .arg(restart)
+        .args(["--respawn", "--mcp"])
+        .arg(s.path("mcp.json"))
+        .env("FLEET_DEFER_RECORD", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", s.normalize(&output.stderr));
+    assert_eq!(
+        s.normalize(&output.stdout),
+        concat!(
+            "backgrounded no-id\nfleet-launch: session review-0002\n",
+            "fleet-launch: started-unknown review-0002\n",
+        )
+    );
+    assert_eq!(s.json("state/launch/review.json"), previous);
+    let pending = s.json("state/launch/review.pending.json");
+    assert_eq!(pending["session_name"], "review-0002");
+    assert!(pending["session_id"].is_null());
+    assert_eq!(pending, s.json("state/launch/sessions/review-0002.json"));
+    let child = s.json("child.json");
+    let prompt = child["argv"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert!(prompt.starts_with(&format!("Restart from handoff {}.", handoff.display())));
+    assert!(prompt.ends_with(PROMPT), "{prompt}");
+}
