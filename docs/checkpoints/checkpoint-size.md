@@ -25,6 +25,13 @@ goes alone. The limit is an input (default the interim 100,000 bytes above); the
 (LEDGER-AUTO-FILL, MERGE-TELEMETRY-LEDGER-D6311) gives rounds to ACCEPT by diff size, and
 the experiment item sets it from that measure.
 
+For a train with several parts, provide the planner's repository-relative `files` or
+module directories for each item and the combined `prior_part_files` from the parts
+already assigned to that train. Items that share a source path with an earlier part
+appear in `next_train` with the overlapping paths. Items within a single part can
+share paths. The train builder checks the actual part diffs and lists shared source
+paths with the part numbers. Both checks exclude paths under `docs/` and `changelog.d/`.
+
 ## Evidence slice: 2026-11-13 and 2026-11-14 UTC
 
 Snapshot collected 2026-11-15 from GitHub for the eight PRs named in the item.
