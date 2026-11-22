@@ -397,7 +397,7 @@ def test_cli_mimo_pro_review_uses_gateway_and_records_call_log_witness(tmp_path,
             '    raise SystemExit(0)\n'
             f'Path({str(captured_cfg)!r}).write_text(os.environ.get("OPENCODE_CONFIG_CONTENT", "{{}}"))\n'
             'sys.stdin.read()\n'
-            'print(json.dumps({"type": "text", "part": {"text": "TEST_GAMING: no\\nVERDICT: ACCEPT"}}))\n'
+            'print(json.dumps({"type": "text", "part": {"text": "TEST_GAMING: no\\nVERDICT: REQUEST_CHANGES"}}))\n'
             'print(json.dumps({"type": "step_finish", "part": {"reason": "stop", "tokens": {"output": 5, "reasoning": 0}}}))\n'
         )
         opencode.chmod(0o755)

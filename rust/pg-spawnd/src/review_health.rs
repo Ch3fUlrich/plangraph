@@ -153,7 +153,7 @@ pub(crate) fn report(state: &Path, records: &[Value], since: i64, until: i64) ->
 }
 
 pub(crate) fn demote(state: &Path, plan: &mut Value, records: &[Value]) {
-    let Some(legs) = plan["legs"].as_array_mut() else {
+    let Some(legs) = plan.get_mut("legs").and_then(Value::as_array_mut) else {
         return;
     };
     let mut history = samples(state, records);
