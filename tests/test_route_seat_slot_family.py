@@ -35,7 +35,7 @@ class Runner(_Runner):
     async def spawn(self, **kwargs):
         job = await super().spawn(**kwargs)
         job.exit_code = 0
-        job.stdout = 'VERDICT: PASS\nTEST_GAMING: no\n'
+        job.stdout = 'FILES READ: src/lib.rs\nVERDICT: REQUEST_CHANGES\nTEST_GAMING: no\n'
         if kwargs['model_or_combo'] in ((self.skip,) if isinstance(self.skip, str) else self.skip or ()):
             self.provider_responses[job.job_id] = {'status': 429, 'body': 'rate limited'}
         return job
@@ -217,7 +217,7 @@ def test_recorded_snapshot_skips_probe_before_unwitnessed_opus_fallback(service,
     async def witness(*args, **kwargs):
         model = kwargs['model_or_combo']
         job = JobInfo('replay-job', 'completed', '', model)
-        job.stdout, job.exit_code = 'VERDICT: PASS\nTEST_GAMING: no\n', 0
+        job.stdout, job.exit_code = 'FILES READ: src/lib.rs\nVERDICT: REQUEST_CHANGES\nTEST_GAMING: no\n', 0
         if model == SONNET.model:
             job.served_model, job.served_family = model, SONNET.family
         return job

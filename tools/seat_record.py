@@ -18,6 +18,7 @@ import os
 import posixpath
 import re
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from seat_backfill import _add_src, backfill
@@ -27,8 +28,12 @@ _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
 
 def _reject_toolless_markup(leg, text, live_log):
     """Treat invented tool calls as incomplete when the seat has no tools."""
-    _add_src()
-    from plangraph.review.verdict import has_tool_call_markup
+    added_src = _add_src()
+    try:
+        from plangraph.review.verdict import has_tool_call_markup
+    finally:
+        if added_src:
+            sys.path.remove(added_src)
     leg = leg if isinstance(leg, dict) else {}
     if not has_tool_call_markup(text):
         return

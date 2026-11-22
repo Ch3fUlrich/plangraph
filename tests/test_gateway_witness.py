@@ -372,7 +372,7 @@ def test_gateway_witness_publishes_only_final_completed_response(tmp_path, reaso
     model = 'omniroute/cx-gpt-6.2-sol-medium'
     job = JobInfo(job_id, 'completed', 'fixture', model, role='review', exit_code=0)
     job.prompt_sha256 = 'a' * 64
-    job.stdout = 'VERDICT: PASS\nTEST-GAMING: no - searched fixture diff: 0 hits\n'
+    job.stdout = 'FILES READ: src/lib.rs\nVERDICT: PASS\nTEST-GAMING: no - searched fixture diff: 0 hits\n'
     runner.jobs[job_id] = job
     runner._adapter_tokens[job_id] = object()
     rows = [dict(sessionTag=gw.session_tag(job_id), status=200, model=model,
@@ -399,7 +399,7 @@ def test_gateway_review_reads_completion_from_management_log_detail(tmp_path, mo
     job_id, model = 'job-1', 'omniroute/cx-gpt-6.2-sol-medium'
     job = JobInfo(job_id, 'completed', 'fixture', model, role='review', exit_code=0)
     job.prompt_sha256 = 'a' * 64
-    job.stdout = 'VERDICT: PASS\nTEST-GAMING: no - searched fixture diff: 0 hits\n'
+    job.stdout = 'FILES READ: src/lib.rs\nVERDICT: PASS\nTEST-GAMING: no - searched fixture diff: 0 hits\n'
     runner.jobs[job_id] = job
     runner._adapter_tokens[job_id] = object()
     row = dict(sessionTag=gw.session_tag(job_id), id='fixture-id', status=200, model=model)
