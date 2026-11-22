@@ -9,6 +9,7 @@ import unicodedata
 _REPO_PATH = re.compile(r'\b[\w./-]+\.(?:py|rs|md|txt|json|jsonl|toml|ya?ml|js|ts|tsx|jsx|sh|sql|cfg|ini)\b', re.I)
 _FILE_REQUEST = re.compile(r'\b(?:read|open|check|inspect|review)\b[^\n.!?]{0,80}\b(?:plan|code|source|file)s?\b', re.I)
 _READ = re.compile(r'\b(?:read|open|check|inspect|review)\b(?![ \t]*\()', re.I)
+_REQUEST_CLAUSE = re.compile(r'[.!?;](?=\s|$)|\n')
 _INLINE = re.compile(
     r'(?:^(?P<label>Plan file [^\n]+:|--- [^\n]+ ---)\n)?'
     r'^[ \t]*(?P<fence>`{3,}|~{3,})(?P<info>[^\n]*)\n(?P<body>.*?)^[ \t]*(?P=fence)[ \t]*$'
@@ -23,6 +24,15 @@ _RAW_DIFF = re.compile(
 
 def _paths(text):
     return {m[0].removeprefix('./').rstrip('.') for m in _REPO_PATH.finditer(text)}
+
+
+def _requested_paths(text):
+    """Collect path operands of read instructions within their clause."""
+    requested = set()
+    for clause in _REQUEST_CLAUSE.split(text):
+        if match := _READ.search(clause):
+            requested.update(_paths(clause[match.end():]))
+    return requested
 
 
 def admit_toolless(prompt, role, leg, refuse):
@@ -41,7 +51,7 @@ def admit_toolless(prompt, role, leg, refuse):
     def inline(match):
         labels = _paths(' '.join(match[name] or '' for name in ('label', 'info', 'inline', 'header')))
         body = ''.join(match[name] or '' for name in ('body', 'inline_body', 'header_body'))
-        if labels and body.strip() and not (_FILE_REQUEST.search(body) or (_READ.search(body) and _paths(body))):
+        if labels and body.strip() and not (_FILE_REQUEST.search(body) or _requested_paths(body)):
             supplied.update(labels)
             return ''
         return match[0]  # A label/fence around a read request is not evidence.
@@ -49,8 +59,7 @@ def admit_toolless(prompt, role, leg, refuse):
     brief = re.sub(r'^## Cut files\n(?:- [^\n]+ \((?:byte budget|unavailable or deleted)\)\n|None\n)*',
                    '', prompt, flags=re.M) if role == 'judge' else prompt
     brief = _INLINE.sub(inline, _RAW_DIFF.sub(diff, brief))
-    requested = _paths(brief)
-    if (requested or _FILE_REQUEST.search(brief)) and (not supplied or not requested.issubset(supplied)):
+    if _requested_paths(brief) - supplied or (not supplied and _FILE_REQUEST.search(brief)):
         raise refuse('toolless_needs_inline')
 
 

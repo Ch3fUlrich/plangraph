@@ -269,3 +269,18 @@ def test_reasoning_output_retry(diff_ref, tmp_path, monkeypatch, dispatch, scena
         assert record['status'] == record['reason'] == 'stalled'
     if 'timeout' in scenario or 'stalled' in scenario:
         assert sum(e['event'].startswith('watchdog_') for e in record['events']) == 1
+
+
+def test_inline_diff_admits_context_paths_and_still_checks_read_requests(diff_ref):
+    from plangraph.review.prompt import render_brief
+    from plangraph.routing_errors import SpawnRefused
+
+    seat = SeatSpawnMixin()
+    seat.runner = SimpleNamespace(default_cwd=diff_ref['repo'])
+    leg = SimpleNamespace(harness='opencode', tool_mode='inline-only', max_request_tokens=100000)
+    card = {'diff_ref': diff_ref}
+    brief = render_brief('review', {'callers': 'docs/X.md', 'test_output_paths': 'logs/checks.txt'})
+    out = seat._leg_prompt(brief + '\nRead change.txt.', card, 'review', leg)
+    assert 'docs/X.md' in out and 'logs/checks.txt' in out and '-before\n+after' in out
+    with pytest.raises(SpawnRefused, match='toolless_needs_inline'):
+        seat._leg_prompt(brief + '\nRead docs/X.md and check its claims.', card, 'review', leg)

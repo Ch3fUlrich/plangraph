@@ -499,6 +499,20 @@ mod tests {
     }
 
     #[test]
+    fn files_read_matches_review_evidence_contract() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../../tests/fixtures/files_read.json")).unwrap();
+        for case in cases {
+            let text = case["text"].as_str().unwrap();
+            assert_eq!(
+                has_files_read(text),
+                case["has_files_read"].as_bool().unwrap(),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_verdict_and_test_gaming() {
         assert_eq!(
             parse_verdict_text(

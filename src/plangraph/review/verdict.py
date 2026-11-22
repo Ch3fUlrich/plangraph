@@ -86,6 +86,8 @@ def _unquoted_lines(text: str):
         yield raw
 
 
+# Match the markdown decorations accepted by Rust's review_split::key_tail.
+_FILES_READ_LINE = re.compile(r"^[\s>#*_`-]*(?ai:files read)[*_`]*[ \t]*:[ \t*_`]*(.*)$")
 _FILE_PATH = re.compile(r"(?:[\w.-]+/)+[\w.-]+|[\w-]+\.[\w.-]+|[\w.-]+:[1-9][0-9]*")
 
 
@@ -93,9 +95,8 @@ def has_files_read(text: str) -> bool:
     """Check the last unquoted FILES READ declaration for a path."""
     files = ''
     for raw in _unquoted_lines(text):
-        key, _, value = raw.strip().partition(':')
-        if key.upper() == 'FILES READ':
-            files = value.strip()
+        if match := _FILES_READ_LINE.match(raw):
+            files = match.group(1).strip()
     return (not re.match(r"^(?:none(?:$|[\s(])|(?:inline diff|diff only)(?:$|[\s(])|diff$)", files, re.I)
             and bool(_FILE_PATH.search(files)))
 
