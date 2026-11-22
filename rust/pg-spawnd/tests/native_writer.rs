@@ -169,7 +169,7 @@ run = pathlib.Path(value('--state')) / 'runs' / run_id
 run.mkdir(parents=True)
 marker = pathlib.Path('writer.txt').read_text()
 if 'late marker' in marker:
-    receipt = dict(run_id=run_id, status='running', started=time.time())
+    receipt = dict(run_id=run_id, status='running', chosen_leg={'id':'claude-sonnet-5-5-high','harness':'claude'}, started=time.time())
     (run / 'record.json').write_text(json.dumps(receipt))
     print(json.dumps(receipt))
     sys.exit(0)
@@ -350,7 +350,7 @@ async def check():
             assert 'expected end' in final['reason'], final
             run_file = root/'state'/'runs'/receipt['run_id']/'record.json'
             run = json.loads(run_file.read_text())
-            run.update(status='completed', stdout_tail='Reviewed writer.txt\nVERDICT: ACCEPT\n')
+            run.update(status='completed', stdout_tail='FILES READ: writer.txt\nVERDICT: ACCEPT\n')
             updated = run_file.with_suffix('.tmp')
             updated.write_text(json.dumps(run))
             updated.replace(run_file)
@@ -358,7 +358,7 @@ async def check():
             for _ in range(150):
                 if artifact.is_file(): break
                 await asyncio.sleep(.05)
-            assert artifact.read_text() == f'HEAD: {head}\nReviewed writer.txt\nVERDICT: ACCEPT\n'
+            assert artifact.read_text() == f'HEAD: {head}\nFILES READ: writer.txt\nVERDICT: ACCEPT\n'
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         holding = await admitted_spawn(service, dict(card=card, prompt='brief marker hold marker'))
         holding = service.result(holding['run_id'])

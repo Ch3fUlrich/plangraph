@@ -572,9 +572,22 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert_eq!(deferred["status"], "deferred_to_batch_seat");
     assert_eq!(deferred["causes"][0]["reason"], "limited");
     assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
+    host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
+    check_review_resume_after_missing_client(&mut host, &base, &head, &cli);
+    check_late_review_reuses_completed_run(&mut host, &head, &cli);
+    check_review_replaces_unreadable_run(&mut host, &head, &cli);
+    fs::write(
+        &cli,
+        "import sys\nprint('wrapper failure', file=sys.stderr)\nsys.exit(10)\n",
+    )
+    .unwrap();
+    let error = host.review(&head, None).unwrap_err();
+    assert!(
+        error.contains("exit code 10") && error.contains("wrapper failure"),
+        "{error}"
+    );
     // A spawner that prints no run record is an error, never a verdict.
     host.review_cli = vec!["true".into()];
-    host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
     assert!(host
         .review(&head, None)
         .unwrap_err()

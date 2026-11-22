@@ -22,9 +22,10 @@ value = lambda flag: argv[argv.index(flag) + 1]
 card = json.loads(value('--card'))
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 assert 'HIGH src/lib.rs:1 - previous finding' in prompt, prompt
-assert 'delta ' + card['diff_ref']['base'] + '..' + card['diff_ref']['head'] in prompt, prompt
-print(json.dumps(dict(run_id='run-retry', status='completed', stdout_tail='VERDICT: REQUEST_CHANGES')))
+assert 'git diff ' + card['diff_ref']['base'] + ' ' + card['diff_ref']['head'] in prompt, prompt
+print(json.dumps(dict(run_id='run-retry', status='completed', chosen_leg=dict(id='fixture'), stdout_tail='VERDICT: REQUEST_CHANGES')))
 "#).unwrap();
+    fs::create_dir_all(host.state.join("runs/run-retry")).unwrap();
     let retried = host.review(head, Some(&previous)).unwrap();
     assert_eq!(retried["verdict"], "REQUEST_CHANGES", "{retried}");
 }
@@ -34,7 +35,7 @@ pub(super) fn check_late_review_reuses_completed_run(host: &mut Host, head: &str
     fs::create_dir_all(&run).unwrap();
     let record = run.join("record.json");
     let started = pg_worker_core::run::finalize::now().floor() as u64;
-    let mut receipt = json!({"run_id":"run-late","status":"running","started":started});
+    let mut receipt = json!({"run_id":"run-late","status":"running","chosen_leg":{"id":"fixture"},"started":started});
     fs::write(&record, receipt.to_string()).unwrap();
     fs::write(
         cli,
@@ -56,7 +57,7 @@ pub(super) fn check_late_review_reuses_completed_run(host: &mut Host, head: &str
     assert!(!pending.with_extension("txt").exists());
 
     receipt["status"] = json!("completed");
-    receipt["stdout_tail"] = json!("src/lib.rs checked\nVERDICT: ACCEPT\n");
+    receipt["stdout_tail"] = json!("FILES READ: src/lib.rs\nVERDICT: ACCEPT\n");
     fs::write(&record, receipt.to_string()).unwrap();
     fs::remove_file(cli).unwrap();
     let reviewed = host.review(head, None).unwrap();
@@ -66,7 +67,7 @@ pub(super) fn check_late_review_reuses_completed_run(host: &mut Host, head: &str
     let artifact = fs::read_to_string(pending.with_extension("txt")).unwrap();
     assert_eq!(
         artifact,
-        format!("HEAD: {head}\nsrc/lib.rs checked\nVERDICT: ACCEPT\n")
+        format!("HEAD: {head}\nFILES READ: src/lib.rs\nVERDICT: ACCEPT\n")
     );
 }
 
@@ -74,7 +75,8 @@ pub(super) fn check_review_replaces_unreadable_run(host: &mut Host, head: &str, 
     let pending = host.reviews.join(format!("late-review-{head}.json"));
     let run = host.state.join("runs/run-pruned/record.json");
     fs::create_dir_all(run.parent().unwrap()).unwrap();
-    fs::write(cli, "import json\nprint(json.dumps(dict(run_id='run-replacement', status='completed', stdout_tail='VERDICT: REQUEST_CHANGES')))\n").unwrap();
+    fs::create_dir_all(host.state.join("runs/run-replacement")).unwrap();
+    fs::write(cli, "import json\nprint(json.dumps(dict(run_id='run-replacement', status='completed', chosen_leg=dict(id='fixture'), stdout_tail='VERDICT: REQUEST_CHANGES')))\n").unwrap();
     for corrupt in [false, true] {
         fs::write(&run, "corrupt record").unwrap();
         fs::write(
