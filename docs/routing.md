@@ -71,6 +71,43 @@ Ember, Sol/Terra review-prefix and planning Fable positive paths are synthetic-o
 tests of upstream admission, not real-registry coverage. Real-registry assertions
 pin their absence and missing roles (plus permanent disables for declarations).
 
+## Route shadow comparison
+
+Run `plangraph route-shadow --since YYYY-MM-DD` for a tab-separated report, or
+add `--json` for the same rows and coverage counts in JSON. The date starts at
+midnight UTC. The command reads Keeper with the configured `PG_URL` and
+`PG_TOKEN_FILE` and opens `PLANGRAPH_CATALOG_DB` read-only. The catalog defaults
+to `~/.cache/plangraph/spawner_catalog.db` and can also be set with `--catalog`.
+To run against a read-only export, pass `--attempts FILE` with a JSON array in
+Keeper's `attempts --json` row format. Add `verified` to each exported row when
+verification was checked. `true` means verified `run-record` evidence on the
+same card and run ID, `false` means the evidence was checked and no match was
+found, and null or omitted means verification is unknown.
+
+Each row groups classified, unpinned attempts by task class and role. The
+fixed-order vote comes from each run's recorded `route.baselines.static_v0`.
+The utility vote maximizes benchmark score minus ten score points per USD of
+benchmark task cost among the eligible candidates recorded in `route.top5`.
+It uses preferred model, effort, and harness cells. If only the legacy catalog
+is available, it uses model and effort priors. Candidate model and harness
+come from matching observed leg and effort or an unambiguous exact catalog ID.
+An unscored candidate casts no vote. Fully scored runs count attempts with
+benchmark coverage for every eligible leg. Each arm reports its most frequent
+pick, with lexical leg IDs breaking ties.
+
+Both arms use the observed executions of their picked leg in the same task
+class and role. First-pass rate is the share of first recorded runs per card
+and role within the window that succeeded on the picked leg, among first
+recorded runs whose terminal leg was that pick.
+The attempt table records the terminal outcome of a run so this rate is a
+window-based proxy for first-pass performance. Cost per verified success
+divides total observed cost (including failures) by the number of successful
+runs with verified run-record evidence. The cost is unavailable if recorded
+cost or verification is incomplete or no run was verified. Observed metrics
+are descriptive estimates. Paired replay will compare both policies on the
+same work. The sample flag marks rows below ten attempts by default.
+Use `--sample-floor N` to show a different threshold.
+
 ## DeepSeek review identity (D-5641, D-5643)
 
 The `omniroute-deepseek-flash` subscription leg requests

@@ -1,0 +1,1 @@
+- Add a read-only route shadow report comparing per-class fixed-order picks and benchmark-ranked picks, with observed outcome and sample coverage.
