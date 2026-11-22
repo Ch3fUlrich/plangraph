@@ -6,7 +6,7 @@ use std::io::Write;
 
 #[cfg(target_os = "linux")]
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|health|agents-view|ledger-report|check-manage-key|session> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local|session> [args]";
 #[cfg(not(target_os = "linux"))]
 pub(crate) const USAGE: &str =
     "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local> [args]";
