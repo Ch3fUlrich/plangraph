@@ -24,6 +24,19 @@ def provider_exhausted(skipped):
         limited(r) or r in policy or r.startswith('disabled:') for r in reasons)
 
 
+def read_leg_model(read, leg, model, **scope):
+    """Disambiguate a provider alias from the Antigravity quota namespace."""
+    harness = getattr(leg, "harness", None)
+    foreign = harness not in (None, "agy")
+    if foreign and model.startswith(("agy:", "agy/")):
+        scope["harness"] = harness
+    state = read(model, **scope)
+    evidence = state.get("evidence") or {}
+    if foreign and evidence.get("quota_scope") == "account" and evidence.get("harness") == "agy":
+        return {"state": "ok", "evidence": None}
+    return state
+
+
 def require_available(leg, reader, card):
     """Overrides cannot bypass the same state boundary used by routing."""
     from .leg_state import leg_status
@@ -31,6 +44,7 @@ def require_available(leg, reader, card):
     from .leg_state import leg_key as key
     read = getattr(reader, 'leg_status', reader) or leg_status
     model = key(leg)
-    state = read(model, account=card.get('account'), combo=card.get('combo'))
+    state = read_leg_model(read, leg, model, account=card.get('account'), combo=card.get('combo'))
     if unavailable(state):
-        raise SpawnRefused((agy_limit_reason(model, state) or 'leg ' + state['state']) + ': ' + leg.id)
+        reason = agy_limit_reason(model, state) if getattr(leg, "harness", None) == "agy" else None
+        raise SpawnRefused((reason or 'leg ' + state['state']) + ': ' + leg.id)

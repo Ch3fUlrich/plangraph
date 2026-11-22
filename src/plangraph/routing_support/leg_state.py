@@ -248,9 +248,10 @@ class LegStateStore:
                        (leg, account, combo, 429, _redact(line),
                         None if reset is None else reset - now, reset, now, caller, 'harness-stderr'))
 
-    def leg_status(self, leg, now=None, account=None, combo=None):
-        leg = quota_key(leg)
-        agy = isinstance(leg, str) and leg.startswith("agy:")
+    def leg_status(self, leg, now=None, account=None, combo=None, *, harness=None):
+        is_agy_harness = harness in (None, "agy")
+        leg = quota_key(leg) if is_agy_harness else leg
+        agy = is_agy_harness and isinstance(leg, str) and leg.startswith("agy:")
         ttl = RESET_CAP_S if agy else EVIDENCE_TTL_S
         keys = [leg]
         if agy:
@@ -262,7 +263,7 @@ class LegStateStore:
         try:  # Read-only: no database creation or expiry mutation.
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
-                if leg.startswith(('agy:', 'agy/')):
+                if is_agy_harness and leg.startswith(('agy:', 'agy/')):
                     pool = db.execute(
                         "SELECT * FROM leg_events WHERE leg_key='agy:account-wide' "
                         "AND account IS ? AND ts<=? AND reset_at>? "
@@ -365,8 +366,8 @@ def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, 
     return _default_store().record_harness_limit(leg, line, caller, now, account, combo, down_s)
 
 
-def leg_status(leg, now=None, account=None, combo=None):
-    return _default_store().leg_status(leg, now, account, combo)
+def leg_status(leg, now=None, account=None, combo=None, *, harness=None):
+    return _default_store().leg_status(leg, now, account, combo, harness=harness)
 
 
 def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):

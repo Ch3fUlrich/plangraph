@@ -378,6 +378,7 @@ def test_agy_account_limit_keeps_other_harnesses_and_accounts_available(tmp_path
     kwargs = dict(role="review", writer_families=("deepseek",), legs=legs, leg_reader=store,
                   catalog_rows=({"id": codex.model, "available": 1, "active": True},))
     diff = dict(repo=str(tmp_path), base="base", head="HEAD")
+
     def route(account, now):
         return plan_spawn(dict(estimate_tokens=40000, account=account, diff_ref=diff), now=now,
                           **kwargs)
@@ -391,3 +392,10 @@ def test_agy_account_limit_keeps_other_harnesses_and_accounts_available(tmp_path
 
     assert {leg.id for leg in route("B", 102).legs} == {leg.id for leg in legs}
     assert {leg.id for leg in route("A", 402).legs} == {codex.id, claude.id}
+
+    store.record_provider_response(codex.model, 429, "Codex rate limit", {"retry-after": "60"},
+                                   "fixture", now=500, account="A")
+    plan = route("A", 501)
+    codex_evidence = next(row["evidence"] for row in plan.skipped if row["leg"] == codex.id)
+    assert codex_evidence["body_excerpt"] == "Codex rate limit"
+    assert [leg.id for leg in plan.legs] == [claude.id]

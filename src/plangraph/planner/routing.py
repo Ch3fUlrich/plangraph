@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, asdict, field
-from plangraph.routing_support.liveness import unavailable
+from plangraph.routing_support.liveness import read_leg_model, unavailable
 import json
 import os
 from pathlib import Path
@@ -386,14 +386,12 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         # Sonnet's bare model is also the native Claude subscription identity.
         if leg_obj.harness == "agy" and leg_obj.model == REVIEW_SONNET:
             return reader("agy/" + leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
-        st = reader(leg_obj.model, now=now, account=card.get("account"), combo=card.get("combo"))
+        st = read_leg_model(reader, leg_obj, leg_obj.model, now=now,
+                            account=card.get("account"), combo=card.get("combo"))
         if leg_obj.harness == "agy" and "/" not in leg_obj.model:
             alt = reader(leg_key(leg_obj), now=now, account=card.get("account"), combo=card.get("combo"))
             if unavailable(alt) and (not unavailable(st) or (alt.get('evidence') or {}).get('quota_scope') == 'account'):
                 return alt
-        evidence = st.get('evidence') or {}
-        if evidence.get('quota_scope') == 'account' and evidence.get('harness') == 'agy' and leg_obj.harness != 'agy':
-            return {'state': 'ok', 'evidence': None}
         return st
 
     states = {l.id: _leg_status(l) for l in candidates}
@@ -421,7 +419,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "codex_available"
         if reason == 'limited' and (states[leg.id].get('evidence') or {}).get('kind') == 'auth_refused':
             reason = 'auth_refused'
-        if reason == 'limited':
+        if reason == 'limited' and leg.harness == 'agy':
             reason = agy_limit_reason(leg_key(leg), states[leg.id]) or reason
         if reason == 'limited':
             reason = quota_skip_reason(states[leg.id]) or reason
