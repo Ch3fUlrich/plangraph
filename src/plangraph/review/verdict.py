@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from html import unescape
 from typing import Any
 
 __all__ = [
@@ -97,6 +98,16 @@ def has_files_read(text: str) -> bool:
             files = value.strip()
     return (not re.match(r"^(?:none(?:$|[\s(])|(?:inline diff|diff only)(?:$|[\s(])|diff$)", files, re.I)
             and bool(_FILE_PATH.search(files)))
+
+
+_TOOL_MARKUP = re.compile(
+    r"<\s*(?:[\w.-]+:)?(?:invoke_tool|invoke|parameter|function_calls?|tool_use|tool_calls?)\b"
+    r"|<\s*function\s*=", re.I)
+
+
+def has_tool_call_markup(text: str) -> bool:
+    """Detect serialized calls printed in the final answer."""
+    return bool(_TOOL_MARKUP.search(unescape(text)))
 
 
 def _scan_verdict(text: str) -> tuple[str | None, bool]:

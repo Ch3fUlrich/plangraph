@@ -202,13 +202,15 @@ def tool_call_only(job, record):
     return True
 
 
-def review_no_verdict(text, finish=None):
+def review_no_verdict(text, finish=None, *, toolless=False):
     """Explain why a structurally successful review answer cannot count."""
-    from plangraph.review.verdict import has_files_read, judge
+    from plangraph.review.verdict import has_files_read, has_tool_call_markup, judge
+    if toolless and has_tool_call_markup(text):
+        return 'no_verdict: toolless_tool_markup'
     verdict = judge(text, finish).verdict
     if verdict is None:
         return 'no_verdict'
-    if verdict == 'pass' and not has_files_read(text):
+    if verdict == 'pass' and (toolless or not has_files_read(text)):
         return 'no_verdict: files_read_missing'
     return None
 
@@ -284,7 +286,11 @@ def fallthrough_reason(service, chosen, job, record):
         return 'provider_stop'
     if (not reason and record.get('role') == 'review' and job.status == 'completed'
             and job.exit_code == 0 and not stop):
-        return review_no_verdict(job.stdout, getattr(job, 'response_finish_reason', None))
+        from .prompt_input import TOOLLESS_MODES
+        toolless = (getattr(chosen, 'tool_mode', None) in TOOLLESS_MODES
+                    or getattr(job, '_inline_review', False))
+        return review_no_verdict(job.stdout, getattr(job, 'response_finish_reason', None),
+                                 toolless=toolless)
     # Review/seat failures exhaust the existing route, not the whole run.
     # Ordinary failures carry diagnostics, not booking/notification evidence.
     return reason or (failure_reason(job, harness=getattr(chosen, 'harness', None)) if record.get('role') == 'review'
@@ -363,7 +369,7 @@ def terminal_reason(record, job=None):
         attempts = [a for a in record.get('attempts') or () if a.get('status') != 'skipped']
         text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
         if missing := review_no_verdict(text, getattr(job, 'response_finish_reason', None)):
-            record.update(status='failed', reason=missing, review_status='no_verdict')
+            record.update(status='failed', exit_code=6, reason=missing, review_status='no_verdict')
             return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')
     if reason in ('harness_limit', 'tool_call_only'):

@@ -363,3 +363,32 @@ def test_single_record_cannot_bypass_pin_gate(tmp_path, capsys, location):
     seat = rec_dir(tmp_path, "run-" + "e" * 32, **changes)
     assert sv.main(argv_for(seat)) == sv.EXIT_REFUSED
     assert "pinned seat" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize('markup', ['<tool_call>', '<tool_calls>', '<function=Read>', '&lt;antml:invoke&gt;'])
+def test_prompt_only_fabricated_tool_call_cannot_post(tmp_path, capsys, markup):
+    leg = {'id': 'prompt-only-fixture', 'model': 'claude-haiku-5-5', 'family': 'anthropic',
+           'harness': 'claude', 'tool_mode': 'prompt-only'}
+    seat = rec_dir(tmp_path, 'run-prompt-only', leg=leg, served_model=leg['model'],
+                   live=f'{markup}\nVERDICT: FIX\n')
+    assert sv.main(argv_for(seat)) == 2
+    assert capsys.readouterr().err == 'seat_verdict: refused, record: toolless_tool_markup\n'
+    (seat / 'live.log').write_text('MED src/x.py:5 - quoted diff has an off-by-one - fix the boundary\n'
+                                  'FILES READ: diff only\nVERDICT: FIX\n', encoding='utf-8')
+    assert sv.main(argv_for(seat)) == 0
+    assert json.loads(capsys.readouterr().out)['body']['ok'] is False
+
+
+def test_claude_init_without_tools_cannot_witness_fabricated_reads(tmp_path, capsys):
+    leg = {'id': 'haiku', 'model': 'claude-haiku-5-5', 'family': 'anthropic',
+           'harness': 'claude', 'tool_mode': 'tools'}
+    frames = [{'type': 'system', 'subtype': 'init', 'tools': []},
+              {'type': 'result', 'result': '<tool_call>Read</tool_call>\nVERDICT: FIX'}]
+    seat = rec_dir(tmp_path, 'run-claude', leg=leg, served_model=leg['model'],
+                   live='\n'.join(map(json.dumps, frames)))
+    assert sv.main(argv_for(seat)) == 2
+    assert 'toolless_tool_markup' in capsys.readouterr().err
+    frames[-1]['result'] = 'MED src/x.py:5 - diff proves off-by-one - fix the boundary\nVERDICT: FIX'
+    (seat / 'live.log').write_text('\n'.join(map(json.dumps, frames)), encoding='utf-8')
+    assert sv.main(argv_for(seat)) == 0
+    assert json.loads(capsys.readouterr().out)['body']['ok'] is False
