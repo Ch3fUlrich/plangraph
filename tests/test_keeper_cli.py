@@ -626,3 +626,50 @@ def test_attempts_preserve_fixer_and_cardless_item_identity(
     if item:
         assert w.store.spawn_attempts(w.p("l1main"), "1d") == [stored]
         assert w.store.spawn_attempts(w.p("l1other"), "1d") == []
+
+
+@pytest.mark.parametrize(("status", "attempts_per_refusal"), [(400, 1), (422, 1), (404, 2)])
+def test_refused_attempts_cannot_starve_newer_deliveries(
+        tmp_path, monkeypatch, status, attempts_per_refusal):
+    from collections import Counter
+    from plangraph.spawner.notify import KeeperRefused, retry_spawn_attempts
+
+    calls = Counter()
+
+    class Keeper:
+        url = token_file = "configured"
+
+        def spawn_attempt(self, attempt):
+            run_id = attempt["run_id"]
+            calls[run_id] += 1
+            if run_id.startswith("run-refused-"):
+                raise KeeperRefused(status)
+
+    def project(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, stdout=kwargs["input"])
+
+    monkeypatch.setattr("plangraph.fleet_snapshot._projection_binary", lambda: "pg-spawnd")
+    monkeypatch.setattr(subprocess, "run", project)
+    limit = 2
+    refused = [f"run-refused-{i}" for i in range(limit + 1)]
+    runs = []
+    for ended, run_id in enumerate([*refused, "run-valid"], start=1):
+        directory = tmp_path / "runs" / run_id
+        directory.mkdir(parents=True)
+        runs.append(dict(run_id=run_id, attempt_capture=1, status="completed", ended=ended))
+    # Completion refusals are independent of attempt delivery.
+    completion_journal = tmp_path / "runs" / refused[0] / "keeper.refused"
+    completion_journal.write_text(f"{status}\n", encoding="utf-8")
+
+    keeper = Keeper()
+    retry_spawn_attempts(tmp_path, runs, keeper=keeper, limit=limit)
+    assert (tmp_path / "runs" / refused[0] / "attempt.delivered").exists() == (attempts_per_refusal == 1)
+    for _ in range(2 * attempts_per_refusal):
+        retry_spawn_attempts(tmp_path, runs, keeper=keeper, limit=limit)
+
+    for run_id in refused:
+        marker = tmp_path / "runs" / run_id / "attempt.delivered"
+        assert marker.read_text(encoding="utf-8") == f"refused: HTTP {status}\n"
+        assert calls[run_id] == attempts_per_refusal
+    assert (tmp_path / "runs" / "run-valid" / "attempt.delivered").read_text() == "delivered\n"
+    assert calls["run-valid"] == 1
