@@ -82,7 +82,7 @@ def worktree_disk_root():
     if not os.environ.get('PLANGRAPH_WORKTREE_MOUNTS'):
         return None
     probe = subprocess.run(['pg-spawnd', 'host', 'work-disk'], capture_output=True,
-                           text=True, timeout=30, check=False)
+                           text=True, encoding='utf-8', errors='replace', timeout=30, check=False)
     if probe.returncode:
         reason = probe.stderr.strip()
         raise OSError(reason if reason.startswith('disk_low:') else 'disk_low: work mount probe failed')

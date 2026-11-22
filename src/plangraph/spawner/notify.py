@@ -222,7 +222,7 @@ def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
         try:
             result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
                                     input=json.dumps(run, allow_nan=False), text=True,
-                                    capture_output=True, timeout=5, check=True)
+                                    encoding="utf-8", errors="replace", capture_output=True, timeout=5, check=True)
             attempt = json.loads(result.stdout)
             if attempt is not None:
                 keeper.spawn_attempt(attempt)
