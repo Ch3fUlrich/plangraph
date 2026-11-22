@@ -227,6 +227,52 @@ fn reap_after_kill(
     child.wait()
 }
 
+/// The models named by the `Writer` trailers of the head commit (first word of each trailer value).
+pub(crate) fn head_writers(
+    repo: &RepoEntry,
+    diff: &DiffRef,
+) -> Result<Vec<String>, InlineDiffError> {
+    head_writers_with_timeout(repo, diff, Duration::from_secs(30))
+}
+
+pub(crate) fn head_writers_with_timeout(
+    repo: &RepoEntry,
+    diff: &DiffRef,
+    timeout: Duration,
+) -> Result<Vec<String>, InlineDiffError> {
+    validate(diff)?;
+    let deadline = Instant::now() + timeout;
+    workspace_resolver::ensure_commit_until(
+        repo,
+        &diff.head_sha,
+        Duration::from_secs(10),
+        deadline,
+    )
+    .map_err(|_| InlineDiffError::Git)?;
+    let mut cmd = workspace_resolver::git_command(Path::new(&repo.root));
+    cmd.args([
+        "-c",
+        "core.hooksPath=",
+        "log",
+        "-1",
+        "--no-color",
+        "--format=%(trailers:key=Writer,valueonly,unfold)",
+        &diff.head_sha,
+        "--",
+    ]);
+    let log_deadline = deadline.min(Instant::now() + Duration::from_secs(10));
+    let (status, stdout) = workspace_resolver::git_output_until(&mut cmd, log_deadline, 64 * 1024)
+        .map_err(|_| InlineDiffError::Git)?;
+    if !status.success() {
+        return Err(InlineDiffError::Git);
+    }
+    Ok(String::from_utf8_lossy(&stdout)
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .map(str::to_owned)
+        .collect())
+}
+
 pub(crate) fn validate(diff: &DiffRef) -> Result<(), InlineDiffError> {
     let id = diff.repo_id.as_bytes();
     let valid = !id.is_empty()

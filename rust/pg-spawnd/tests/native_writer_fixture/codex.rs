@@ -21,7 +21,7 @@ if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in pro
         pathlib.Path('partial.txt').write_text('preserved writer work')
         subprocess.run(['git','add','partial.txt'], check=True)
         subprocess.run(['git','commit','-m','partial writer work'], check=True, stdout=subprocess.DEVNULL)
-        checkout = pathlib.Path(os.environ['FIXTURE_DIR'])/'checkout'
+        checkout = pathlib.Path(subprocess.check_output(['git','rev-parse','--path-format=absolute','--git-common-dir'], text=True).strip()).parent
         (checkout/'fresh.txt').write_text('new main base')
         subprocess.run(['git','-C',str(checkout),'add','fresh.txt'], check=True)
         subprocess.run(['git','-C',str(checkout),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fresh main'], check=True, stdout=subprocess.DEVNULL)
@@ -60,7 +60,7 @@ else:
     import os
     if 'reject marker' in prompt:
         run = pathlib.Path.cwd().parent
-        queued = subprocess.run([os.environ['NATIVE_BINARY'], 'steer-local', run.name,
+        queued = subprocess.run(['fixture-spawnd', 'steer-local', run.name,
             '--state', str(run.parent.parent)], input='drop the fixture scope', text=True, capture_output=True)
         assert json.loads(queued.stdout)['steered'], (queued.stdout, queued.stderr)
     pathlib.Path('writer-path').write_text(os.environ['PATH'])

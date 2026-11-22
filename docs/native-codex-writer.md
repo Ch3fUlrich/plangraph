@@ -77,6 +77,27 @@ When a native batch brief provides no status-file path, put one
 paragraph. The review prompt includes these lines for items in the brief and
 the exact committed range. A later `Plan-Item` trailer clears an earlier skip.
 
+The writer child runs Codex with `sandbox_mode="workspace-write"`, never `danger-full-access`
+(`native_writer_sandbox.rs`; AGENT-JAIL step 1, rule 6.7). Network access stays on because the
+writer fetches and builds. Beyond the worktree the writable roots are named: the shared cargo
+target, the review directory, the run directory and the repository's and worktree's git
+directories (Codex keeps a worktree's git directory read-only unless it is named, so a commit
+would fail). The child's environment is an allowlist (`ENV_ALLOW`: home, locale, harness auth,
+git identity, ssh agent, proxy and TLS settings, cargo and rustup homes); every other variable of
+the supervisor, including host secrets, is dropped. A canary run on a worker host comes first
+after a change to either list.
+Package placement requires a fresh `workspace-write` record from `pg-host-readiness`.
+The probe starts Codex's sandbox and commits in a scratch linked worktree using the
+same sandbox overrides as the writer. On Linux, the writer account's AppArmor policy
+must allow Codex's Bubblewrap helper to create its user namespace. A denied sandbox
+startup marks the host unready.
+
+Run the live write-boundary and Git fixtures on a candidate host:
+
+```sh
+cargo test -p pg-spawnd --manifest-path rust/Cargo.toml --bin pg-spawnd native_writer_sandbox::tests -- --ignored
+```
+
 Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
 final head, resume count, fast-check result, every review round, the last review
 path/text/verdict/run ID, pushed ref and exit code. Exits are 0 accepted, 3 review

@@ -110,7 +110,7 @@ fn overflow_refuses_missing_expired_future_failed_and_wrong_sandbox_readiness() 
             "expired" => record.checked_at = 1,
             "future" => record.checked_at = 301,
             "failed" => record.errors.push("sandbox cannot start".into()),
-            "sandbox" => record.sandbox = "workspace-write".into(),
+            "sandbox" => record.sandbox = "danger-full-access".into(),
             "host" => record.host = "station".into(),
             _ => unreachable!(),
         }

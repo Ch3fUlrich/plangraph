@@ -969,7 +969,7 @@ def spawn_service(*args, **kwargs):
                 role=role, plan=plan.to_dict(), chosen_leg=None, served_model=None,
                 served_family=None, request_side_model=None, witness_kind=None,
                 writer_family=None, status='running', started=time.time(),
-                given_writer_families=list(writer_families) or ((source := self.result(review_of, attempts=SAVE_READ_ATTEMPTS)).get('given_writer_families') or [f for f in [source.get('writer_family')] if f] if review_of else []),
+                given_writer_families=self._given_writers(card, role, writer_families, review_of),
                 ended=None, attempts=[], stdout_tail='', stderr_tail='', exit_code=None, cwd=cwd or getattr(self.runner, 'default_cwd', os.getcwd()), **({'placement': _placement} if _placement else {}))
             from .context_pack import annotate
             from .item_key import annotate_item
@@ -989,7 +989,7 @@ def spawn_service(*args, **kwargs):
                 record.update(status='failed' if host_skips else 'limited' if exhausted else 'refused',
                               exit_code=1 if host_skips else 4 if exhausted else 2, ended=time.time(),
                               error='; '.join(s.get('skip_reason') or s.get('reason', '') for s in host_skips) if host_skips else plan.error,
-                              evidence=plan.to_dict()['skipped'])
+                              skipped=plan.to_dict()['skipped'], evidence=plan.to_dict()['skipped'])
                 self._save(record)
                 return self.result(run_id, attempts=SAVE_READ_ATTEMPTS)
             async def execute():

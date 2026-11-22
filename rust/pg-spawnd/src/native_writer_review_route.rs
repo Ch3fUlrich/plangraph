@@ -22,7 +22,7 @@ impl Host {
                 .args(
                     families
                         .iter()
-                        .flat_map(|family| ["--writer-family", family]),
+                        .flat_map(|family| ["--exclude-family", family]),
                 )
                 .arg("--json")
                 .current_dir(clone),

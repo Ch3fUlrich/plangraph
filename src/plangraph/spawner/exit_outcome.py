@@ -383,7 +383,8 @@ def terminal_reason(record, job=None):
 
 
 def orphaned(record, now):
-    """Q21/M14: a 'running' record whose supervisor process is gone ends 'failed', reason 'orphaned'."""
+    """Q21/M14: a 'running' record whose supervisor process is gone and that recorded no exit ends
+    'failed', reason 'orphaned'; one that recorded its child's exit keeps that real exit and output."""
     import os
     path = record.get('supervisor_stderr_path')
     # os.kill(pid, 0) is TerminateProcess on Windows: never probe there.
@@ -405,6 +406,9 @@ def orphaned(record, now):
         pass
     if not os.path.exists(str(path) + '.pid'):
         return None   # no pid evidence: not proof the supervisor died
+    if record.get('exit_code') is not None:
+        # The child's exit was recorded before the supervisor went away: keep its real outcome.
+        return dict(record, status='completed' if record['exit_code'] == 0 else 'failed', ended=now)
     return dict(record, status='failed', exit_code=1, ended=now, reason='orphaned',
                 error=f'orphaned: supervisor pid {pid} is gone')
 

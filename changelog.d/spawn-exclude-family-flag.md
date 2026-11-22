@@ -1,0 +1,1 @@
+`spawn`/`route --exclude-family` names the family excluded from review (`--writer-family` stays as a deprecated alias that warns), and a review card's `diff_ref` head `Writer` trailer excludes its family and refuses a leg of it even when the flag names another family.

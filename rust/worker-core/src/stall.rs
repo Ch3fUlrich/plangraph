@@ -20,6 +20,10 @@ pub use wait::supervise_redirected;
 
 #[path = "stall_capture.rs"]
 mod stall_capture;
+
+mod deadline;
+pub(crate) use deadline::status_until;
+
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]

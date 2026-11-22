@@ -541,7 +541,7 @@ from plangraph.spawner import cli
 from plangraph.spawner.seat_spawn import SeatSpawnMixin
 SeatSpawnMixin.admit_spawn = lambda *a, **k: None
 if sys.argv[1].startswith('cli'):
-    raise SystemExit(cli.main(['--state', sys.argv[2], 'spawn', '--wait', '0.02' if sys.argv[1] == 'cli-wait' else '0', '--card', '{"estimate_tokens":100}', '--cwd', sys.argv[3], '--role', 'review', '--writer-family', 'openai', '--leg', 'cx-gpt-6.2-sol-medium', '--override-reason', 'fixture', 'Review fixture']))
+    raise SystemExit(cli.main(['--state', sys.argv[2], 'spawn', '--wait', '0.02' if sys.argv[1] == 'cli-wait' else '0', '--card', '{"estimate_tokens":100}', '--cwd', sys.argv[3], '--role', 'review', '--exclude-family', 'openai', '--leg', 'cx-gpt-6.2-sol-medium', '--override-reason', 'fixture', 'Review fixture']))
 from plangraph.spawner.mcp import MCPSpawnerServer
 from plangraph.spawner.runner import SpawnerRunner
 server = MCPSpawnerServer(SpawnerRunner(default_cwd=sys.argv[3]), state=sys.argv[2])
@@ -559,6 +559,19 @@ print(json.dumps(asyncio.run(server.call_tool('plangraph_agent_spawn', dict(card
     log = Path(record['supervisor_stderr_path'])
     pid = int(Path(str(log) + '.pid').read_text())
     if sys.platform.startswith('linux'): assert record['supervisor_pid_start'] == proc_kill._stat(pid)[4]
+    assert record['supervisor_pid'] == pid   # the record names its owner process
+    # Probe systemd on its own, so a helper that never wraps cannot make this check vanish.
+    def systemd_scope_works():
+        try:
+            return subprocess.run(['systemd-run', '--user', '--scope', '--quiet', '--collect', 'true'],
+                                  capture_output=True, timeout=10).returncode == 0
+        except subprocess.TimeoutExpired:
+            return False
+    systemd = sys.platform.startswith('linux') and shutil.which('systemd-run') is not None and systemd_scope_works()
+    if systemd:
+        # The supervisor runs in a scope of its own, so stopping the caller's session cannot take the run along.
+        assert Path(f'/proc/{pid}/cgroup').read_text() != Path('/proc/self/cgroup').read_text()
+        assert Path(f'/proc/{pid}/cgroup').read_text().strip().endswith('.scope')
     (state / 'finish').touch()
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:

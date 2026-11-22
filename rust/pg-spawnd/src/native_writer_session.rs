@@ -1,5 +1,5 @@
 //! Codex turn transport and private follow-up briefs on the writer host.
-use super::{model_args, Host};
+use super::Host;
 use serde_json::Value;
 use std::{
     fs,
@@ -50,36 +50,8 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
             .open(&log_path)
             .map_err(|e| e.to_string())?;
         let log_start = log.metadata().map_err(|e| e.to_string())?.len();
-        let mut command = host.command(codex);
-        command.arg("exec");
-        if let Some(id) = session {
-            command.args(["resume", id]);
-        }
-        command
-            .env(
-                "CARGO_TARGET_DIR",
-                pg_worker_core::cargo_cache::shared_cache_roots()
-                    .map_err(|e| e.to_string())?
-                    .remove(0),
-            )
-            .env("CARGO_INCREMENTAL", "0")
-            .args(["--json"])
-            .args(model_args(&host.effort))
-            .args([
-                "-c",
-                "approval_policy=never",
-                "-c",
-                &format!(
-                    "sandbox_mode=\"{}\"",
-                    pg_worker_core::host_readiness::WRITER_SANDBOX
-                ),
-                "-o",
-            ])
-            .arg(directory.join("native.last"))
-            .arg("-")
-            .current_dir(&host.cwd)
-            .stdout(log.try_clone().map_err(|e| e.to_string())?)
-            .stderr(log);
+        let mut command = host.writer_command(codex, session, directory)?;
+        command.stdout(log.try_clone().map_err(|e| e.to_string())?).stderr(log);
         let payload = follow_up_payload(host, directory, session, prompt)?;
         let mut input = tempfile::tempfile_in(directory).map_err(|e| e.to_string())?;
         input

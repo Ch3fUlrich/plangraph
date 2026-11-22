@@ -330,7 +330,7 @@ impl Host {
         args.extend(
             families
                 .iter()
-                .flat_map(|f| ["--writer-family", f.as_str()]),
+                .flat_map(|f| ["--exclude-family", f.as_str()]),
         );
         if let Some((leg, reason)) = &self.review_override {
             args.extend([

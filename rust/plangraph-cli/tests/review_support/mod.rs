@@ -105,7 +105,7 @@ def parse_opts(items):
         if k in ("--card", "--role", "--prompt-file", "--cwd", "--wait"):
             opts[k[2:].replace("-", "_")] = items[i + 1]
             i += 2
-        elif k == "--writer-family":
+        elif k == "--exclude-family":
             opts["writer_family"].append(items[i + 1])
             i += 2
         elif k in ("--json", "--dry-run", "--seats"):

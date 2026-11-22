@@ -197,15 +197,16 @@ no timer or live-host action is installed by this slice.
 
 Run `pg-host-readiness --project PATH --registry FILE --state DIR` on each
 candidate. The registry's `self` entry sets the recorded host. The default
-sandbox is `danger-full-access`, matching the native Codex writer. The tool
+sandbox is `workspace-write`, matching the native Codex writer. The tool
 checks configuration trust, login, CLI version, and sandbox startup and commit
-in a temporary Git worktree without a model call. Use `--scratch-root` for a
+in a temporary linked Git worktree with both Git directories named as writable
+roots. The probes make no model call. Use `--scratch-root` for a
 filesystem matching the intended worktree. Hooks and plugins whose trust cannot
 be established cause a failed check.
 
 The tool prints `READY` on success and `MISSING` with the check failure on exit
 1. It writes both results to
-`DIR/package-readiness/HOST/danger-full-access.json`. Make each host's latest
+`DIR/package-readiness/HOST/workspace-write.json`. Make each host's latest
 record available under the placement command's state directory. `pg-package-host`
 placement refuses missing, failed, future-dated, and older-than-120-second
 package-readiness records and records for a different host or sandbox. Remote capacity samples come from the

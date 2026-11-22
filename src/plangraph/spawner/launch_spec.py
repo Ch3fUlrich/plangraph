@@ -136,10 +136,13 @@ def build(request: dict) -> dict:
                 except ValueError as exc:  # unknown run id
                     raise FamilyError(str(exc)) from None
                 writers.extend(source.get('given_writer_families') or [source.get('writer_family')])
+            # The card's head Writer trailers join the caller's families: one set for the gateway headers and the check.
+            from plangraph.planner.seats import with_head_writers
+            writers = with_head_writers(request['card'], 'review', writers)
             headers = writer_headers(writers)
             if seat_family(leg.family) in {writer_key(w) for w in writers}:
                 raise FamilyError('review seat is a writer family')
-        except FamilyError as exc:
+        except (FamilyError, SpawnRefused) as exc:
             raise LaunchRefused('writer_family', str(exc)) from None
     service.runner.default_cwd = request['cwd']
     service.runner._child_envs = _LaunchOwned()

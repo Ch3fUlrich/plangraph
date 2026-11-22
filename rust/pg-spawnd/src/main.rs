@@ -29,6 +29,7 @@ mod manage_key_alert;
 mod native_steer;
 mod native_writer;
 mod native_writer_host;
+mod native_writer_sandbox;
 mod native_writer_tool;
 mod native_writer_tools;
 mod placement;

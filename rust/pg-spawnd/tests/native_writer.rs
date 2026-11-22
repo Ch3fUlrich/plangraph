@@ -151,13 +151,14 @@ for tool in ('cargo', 'git', 'codex'):
     fs::create_dir_all(&bin).unwrap();
     let codex = bin.join("codex");
     fs::write(&codex, codex_fixture::CODEX).unwrap();
+    std::os::unix::fs::symlink(binary::spawnd(), bin.join("fixture-spawnd")).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
     let review_cli = dir.join("review-cli.py");
     fs::write(&review_cli, r#"import json, pathlib, sys, uuid
 argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
-assert value('--role') == 'review' and value('--writer-family') == 'openai', argv
+assert value('--role') == 'review' and value('--exclude-family') == 'openai', argv
 assert value('--leg') == 'claude-sonnet-5-5-high', argv
 assert value('--override-reason') == 'D-6550 fixture credential review' and '--no-fallthrough' in argv, argv
 card = json.loads(value('--card'))
