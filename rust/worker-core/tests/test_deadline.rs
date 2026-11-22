@@ -109,6 +109,34 @@ fn rust_hang_reports_when_the_debugger_emits_no_frames() {
     assert!(log.contains("user-space stack unavailable"), "{log}");
 }
 
+#[test]
+fn spawnd_cli_fixture_build_runs_before_case_deadline() {
+    let tmp = tempfile::tempdir().unwrap();
+    let suite = tmp.path().join("agy_review_spawn-fixture");
+    fs::write(
+        &suite,
+        r#"#!/bin/sh
+case " $* " in
+  *' --list '*) printf '%s\n' 'review_case: test';;
+  *' prepare_spawnd_cli '*) sleep 1.5; printf 'pg-test-fixture: "%s"\n' "$0";;
+  *) test "$PG_TEST_PREBUILT_SPAWND" = "$0";;
+esac
+"#,
+    )
+    .unwrap();
+    fs::set_permissions(&suite, fs::Permissions::from_mode(0o700)).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_pg-test-deadline"))
+        .args([
+            suite.as_os_str(),
+            "--exact".as_ref(),
+            "review_case".as_ref(),
+        ])
+        .env("PLANGRAPH_TEST_DEADLINE", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
 fn run_rust_hang(debugger_dir: Option<&Path>) -> String {
     let tmp = tempfile::tempdir().unwrap();
     let pidfile = tmp.path().join("pid");
