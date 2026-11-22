@@ -655,6 +655,9 @@ denies:
   never through the Bash tool). `claude -p`/`--print`, `claude --bg --resume
   <uuid|hex>` / `-r <uuid|hex>` without `-n`/`--name`, `claude --resume`,
   `claude agents`, and `claude stop <id>` stay allowed.
+- A while or until condition where a literal `pgrep -f` pattern can match the
+  shell running the loop. Wait on the PID or unit, or put the original command
+  in the Bash tool's background mode.
 - Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
   (see `docs/TESTING.md`).
 
