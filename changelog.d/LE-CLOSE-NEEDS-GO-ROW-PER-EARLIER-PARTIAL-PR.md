@@ -1,0 +1,1 @@
+- Close on the final delivery’s scoped GO after verifying prior partial merges, and infer deploy hosts for shipped units from their train part.

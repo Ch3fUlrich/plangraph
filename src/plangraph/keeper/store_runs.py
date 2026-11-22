@@ -245,9 +245,9 @@ class RunsMixin:
     def _warm(self, project):
         return time.monotonic() - self.__dict__.get("_warmed", {}).get(project, -1e9) < _WARM_S
 
-    def _merged_open_prs(self, item, decision_id, head, now):
+    def _merged_open_prs(self, item, decision_id, head, now, require_each_go=False):
         try:
-            return self._merged_open_prs_checked(item, decision_id, head, now)
+            return self._merged_open_prs_checked(item, decision_id, head, now, require_each_go)
         except Refused:
             raise
         except Exception:
@@ -418,7 +418,7 @@ class RunsMixin:
             return match
         return None
 
-    def _merged_open_prs_checked(self, item, decision_id, head, now):
+    def _merged_open_prs_checked(self, item, decision_id, head, now, require_each_go=False):
         from . import context_sources
         from .evidence_types import valid_commit_ref
         git = self._adapter("git")
@@ -431,11 +431,10 @@ class RunsMixin:
             raise Refused("evidence_unverified", "unmerged_work_or_lanes_unknown")
         commits = context_sources.plan_item_commits(
             git, project, item["key"], fetch=False, limit=None, head=default_head)
-        from .store_waiver import _go_binding, _go_statement, _strip_prefix
-        go_pr, go_head = None, None
+        from .store_waiver import _go_binding, _go_statement, _names_item
+        go_pr = go_head = statement = None
         try:
-            text = _strip_prefix(self._ctx(item, now).decisions.text(decision_id))
-            statement = _go_statement(text)
+            statement = _go_statement(self._ctx(item, now).decisions.text(decision_id))
             go_pr, go_head = _go_binding(statement, project)
             if go_pr is None and project != item["project"]:
                 go_pr, go_head = _go_binding(statement, item["project"])
@@ -446,18 +445,34 @@ class RunsMixin:
                   if named and named["pr"] else {})
         repo = git.repo_path(project)
         ref = default_head or git.repo_ref(project)
+        landed = {}
         for commit in commits or ():
-            merge = commit.get("merge") or {}
-            pr = merge.get("pr")
-            has_subject_pr = type(pr) is int and pr > 0
-            if not has_subject_pr and (
-                    type(go_pr) is not int or go_pr <= 0 or not valid_commit_ref(go_head)):
-                raise Refused("evidence_unverified", "merged_pr_missing")
+            pr = (commit.get("merge") or {}).get("pr")
             merged = git.merge_commit_of(repo, commit["sha"], ref)
             proc = git._run(repo, ["show", "-s", "--format=%P", "--end-of-options", merged[0]]) if merged else None
             parents = proc.stdout.strip().split() if proc and proc.returncode == 0 else []
             if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
                 raise Refused("evidence_unverified", "merged_pr_head_missing")
+            landed[merged[0]] = (pr if type(pr) is int and pr > 0 else None, parents)
+        if (not require_each_go and go_pr and go_head == head and _names_item(statement, item["key"])
+                and self._merged_go_scope_matches(decision_id, item, now)):
+            for sha, (pr, parents) in landed.items():
+                matches = parents[1] == head if pr is not None else context_sources._head_introduced_by_merge(
+                    git, repo, parents, head)
+                if not matches:
+                    continue
+                if pr is not None and pr != go_pr:
+                    raise Refused("evidence_unverified", "merged_pr_go_pr_mismatch")
+                # Earlier partial deliveries count only through the final delivery's first parent.
+                for other in landed.keys() - {sha}:
+                    proc = git._run(repo, ["merge-base", "--is-ancestor", "--end-of-options", other, parents[0]])
+                    if proc.returncode != 0:
+                        raise Refused("evidence_unverified", "merged_pr_go_not_final_delivery")
+                return [{"pr": go_pr, "head": head, "decision_id": decision_id}]
+        for pr, parents in landed.values():
+            has_subject_pr = pr is not None
+            if not has_subject_pr and (not go_pr or not valid_commit_ref(go_head)):
+                raise Refused("evidence_unverified", "merged_pr_missing")
             if has_subject_pr:
                 proofs[parents[1]] = {"pr": pr, "head": parents[1]}
             elif context_sources._head_introduced_by_merge(git, repo, parents, go_head):

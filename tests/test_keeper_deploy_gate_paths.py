@@ -430,3 +430,35 @@ def test_train_deploy_gate_attributes_units_to_their_part(env, subject):  # noqa
         ("A", "deploy/systemd/train.service"),
     }
     assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]
+
+
+def test_train_deploy_hosts_are_read_from_the_part_that_ships_the_unit(env):  # noqa: F811
+    root = env.repo.root
+    base = git(root, "rev-parse", "main")
+    git(root, "checkout", "-q", "-b", "train")
+    for branch, key, hosts in (("notes", "demo:A", "wrong-host"), ("unit", "demo:B", "alpha, beta")):
+        git(root, "checkout", "-q", "-b", branch, base)
+        if branch == "unit":
+            (root / "deploy/systemd").mkdir(parents=True)
+            (root / "deploy/systemd/train.service").write_text("[Service]\n")
+            git(root, "add", "-A")
+        git(root, "commit", "-q", "--allow-empty", "-m", f"work\n\nPlan-Item: {key}")
+        git(root, "checkout", "-q", "train")
+        git(root, "merge", "-q", "--no-ff", "-m", f"Train 9: merge {branch}\n\nDeploy: {hosts}", branch)
+        git(root, "branch", "-D", branch)
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-ff", "-m", "Landing train 9 (#57)", "train")
+    git(root, "branch", "-D", "train")
+
+    result = auto(env, require_seats=False)
+    assert [c["key"] for c in result["closed"]] == ["demo:A"]
+    reason = next(r["reason"] for r in result["listed"] if r["key"] == "demo:B")
+    assert "alpha:train.service" in reason and "beta:train.service" in reason
+    assert "wrong-host" not in reason and "hosts unnamed" not in reason
+
+    from plangraph.keeper.evidence import VERIFIERS
+    env.store.verifiers["deploy"] = VERIFIERS["deploy"]
+    for host in ("alpha", "beta"):
+        env.store.add_evidence_router(env.p("router"), "demo:B", "deploy",
+                                      {"host": host, "unit": "train.service", "is_active": "active"})
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:B"]
