@@ -273,6 +273,14 @@ impl Host {
             .current_dir(clone)
             .output()
             .map_err(|e| e.to_string())?;
+        if printed.status.code() == Some(10) {
+            let stderr = String::from_utf8_lossy(&printed.stderr);
+            let line = stderr
+                .lines()
+                .find(|line| line.contains(" FAIL client_missing "));
+            return Ok(json!({"status":"client_missing","head":head,"reason":
+                line.unwrap_or("client_missing: native Codex review could not start")}));
+        }
         let record =
             printed_record(&String::from_utf8_lossy(&printed.stdout)).ok_or_else(|| {
                 format!(

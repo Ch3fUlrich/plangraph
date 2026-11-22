@@ -172,7 +172,7 @@ impl LaunchAdapter {
         match code {
             0 if stdout.len() <= 16 * 1024 * 1024 => parse(&stdout),
             0 => Err(invalid()),
-            2 => {
+            2 | 10 => {
                 let text = String::from_utf8_lossy(&stderr);
                 let line = text
                     .lines()

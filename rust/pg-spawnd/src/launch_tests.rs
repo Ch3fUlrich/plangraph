@@ -204,3 +204,51 @@ fn refusal_redaction_truncation_and_empty_line() {
         );
     }
 }
+
+#[test]
+fn native_codex_review_client_missing_has_a_distinct_exit_and_keeps_session() {
+    let (dir, _) = fixture();
+    let python = which_python();
+    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let code = r#"
+import io, json, pathlib, subprocess, sys
+from plangraph.spawner.launch_spec import main
+from plangraph.routing_support.clients import resolve_codex_client
+root = pathlib.Path(sys.argv[1])
+session = root / 'review.session'
+session.write_text('session-123')
+request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=False,
+    leg={'id':'gpt-6.2-sol-medium'}, card={}, cwd=str(root), state=str(root), prompt='review')
+out, err = io.StringIO(), io.StringIO()
+status = main(io.BytesIO(json.dumps(request).encode()), out, err)
+assert status == 10, (status, err.getvalue())
+assert err.getvalue().startswith('REVIEW ' + request['run_id'] + ' FAIL client_missing ')
+assert session.read_text() == 'session-123'
+client = root / 'installed-codex'
+client.write_text('#!/bin/sh\nprintf configured-codex')
+client.chmod(0o700)
+resolved, _ = resolve_codex_client({'PATH':'', 'PLANGRAPH_CODEX_BIN':str(client)})
+assert subprocess.check_output([resolved], env={'PATH':''}) == b'configured-codex'
+"#;
+    let output = std::process::Command::new(python)
+        .args(["-c", code])
+        .arg(&dir.0)
+        .env("PYTHONPATH", sources)
+        .env("PATH", "")
+        .env("HOME", &dir.0)
+        .env_remove("PLANGRAPH_CODEX_BIN")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn which_python() -> std::path::PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("python3"))
+        .find(|file| file.is_file())
+        .expect("Python compatibility adapter")
+}

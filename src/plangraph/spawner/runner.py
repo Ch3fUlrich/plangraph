@@ -455,10 +455,12 @@ class SpawnerRunner:
                 job.events.append({'event': 'render_refused', 'reason': render_reason})
                 return job
 
+            from plangraph.routing_support.clients import CODEX_REVIEW_CLIENT_MISSING, PromptTransportError, codex_review_client, launch_stdin_payload
             from .resolver import host_skip_reason_async
-            unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
+            codex, missing_client = codex_review_client(cmd[0], role, job_id)
+            unavailable = missing_client or await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
-                job.status, job.exit_code = 'failed', 1
+                job.status, job.exit_code = 'failed', CODEX_REVIEW_CLIENT_MISSING if missing_client else 1
                 job.stderr, job.end_time = unavailable, time.time()
                 return job
             from .resolver import admitted_by_render
@@ -466,8 +468,7 @@ class SpawnerRunner:
                 job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
             import shutil
-            resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-            from plangraph.routing_support.clients import PromptTransportError, launch_stdin_payload
+            resolved_exe = codex or shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
             try:
                 payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             except PromptTransportError as exc:

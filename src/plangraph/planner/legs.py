@@ -476,6 +476,9 @@ def own_harness_enabled() -> bool:
 
 
 def client_installed(name: str) -> bool:
+    if name == "codex":
+        from plangraph.routing_support.clients import resolve_codex_client
+        return resolve_codex_client()[0] is not None
     return shutil.which(name) is not None
 
 
