@@ -180,7 +180,10 @@ class KeeperHandler(BaseHTTPRequestHandler):
                 else:
                     payload, replayed = self._request_write(name, body or {}, principal, extra)
                     as_text = query.get("fmt", ["json"])[0] == "text"
-                    if not replayed and (name != "write_receipt" or not (payload.get("result") == "duplicate" or payload.get("http_replayed"))):
+                    receipt_read = name == "write_receipt" and (
+                        payload.get("result") == "duplicate" or payload.get("http_replayed"))
+                    preview = name == "close_merged" and body.get("dry_run") is True
+                    if not (replayed or receipt_read or preview):
                         self._snapshot(principal)
                     if payload is None:   # worker verbs: 204, no body
                         self._empty(204)

@@ -457,6 +457,14 @@ class CloseMixin:
             raise Refused("evidence_unverified", f"merge_repo_ambiguous: {names} (name one with Merge-Repo:)")
         return found[0] if found else item
 
+    def _require_inferred_repo_scope(self, item, decision_id, now):
+        """A GO from another project needs an explicit Merge-Repo selection."""
+        if any(context_sources.MERGE_REPO_LINE.fullmatch(line) for line in self._merge_text(item).splitlines()):
+            return
+        rows = self._ctx(item, now).decisions._rows_strict().get(decision_id, ())
+        if len(rows) == 1 and rows[0].split("|")[2].strip() != item["project"]:
+            raise Refused("evidence_unverified", "merged_on_default_missing")
+
     def _pin_close(self, item):
         """Capture the default commit after any refresh, before reading close evidence."""
         git, project = self._adapter("git"), self._merge_project(item)
@@ -579,13 +587,14 @@ class CloseMixin:
                 return pinned, token, changes
         raise Refused("conflict", "merged_on_default_changed")
 
-    def _deploy_pending_result(self, item, pending, now):
+    def _deploy_pending_result(self, item, pending, now, *, record=True):
         """Leave the item open: record the reason as an alert and report it."""
         msg = "deploy_pending: " + ", ".join(pending)
-        with self._write():
-            if self._has_finding(item["key"], "deploy_pending"):
-                self._alerts_raise_finding(item["key"], "deploy_pending", msg, now)
-            else:
-                self._finding(item["key"], "deploy_pending", msg, now)
+        if record:
+            with self._write():
+                if self._has_finding(item["key"], "deploy_pending"):
+                    self._alerts_raise_finding(item["key"], "deploy_pending", msg, now)
+                else:
+                    self._finding(item["key"], "deploy_pending", msg, now)
         return {"key": item["key"], "state": item["state"], "closed": False,
                 "reason": "deploy_pending", "missing": pending}

@@ -168,6 +168,8 @@ class WaiverMixin:
     def _merged_go_proof(self, item, decision_id, now, *, all_work=False):
         project = self._merge_project(item)
         cross_repo = project != item["project"]
+        if cross_repo and item.get("_merge_project"):
+            self._require_inferred_repo_scope(item, decision_id, now)
         named = self._named_merge_proof(item)
         heads = self._merged_heads(item, all_work)
         if named:
@@ -513,7 +515,7 @@ class WaiverMixin:
             if token is not None and not self._deploy_scan_current(item, token):
                 raise Refused("conflict", "merged_on_default_changed")
             if pending:
-                return self._deploy_pending_result(item, pending, now)
+                return self._deploy_pending_result(item, pending, now, record=not dry_run)
             if dry_run or ((from_open or waiver_only) and not apply):
                 return {"key": key, "state": item["state"], "next_state": "done", "would_close": True, "prs": prs, **self._flags_of(flags)}
         with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock
