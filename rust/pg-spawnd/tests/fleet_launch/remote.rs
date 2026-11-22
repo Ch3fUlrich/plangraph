@@ -305,6 +305,17 @@ fn check_destination(launcher: &Launcher) {
     fs::create_dir_all(target.parent().unwrap()).unwrap();
     s.install_destination(target);
 
+    // The receiver runs locally and exercises the forwarded launch contract.
+    let mut policy = s.json("hosts.json");
+    let destination = policy["hosts"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|host| host["name"] == REMOTE)
+        .unwrap();
+    destination["memory_floor_gib"] = json!(0);
+    s.write_json("hosts.json", policy);
+
     let output = deliver(&s, encoded, &payload);
     assert_eq!(
         output.status.code(),
@@ -364,7 +375,6 @@ fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {
             encoded,
         ])
         .env("HOME", s.path("target"))
-        .env("FLEET_MEMINFO", s.path("memory-fixture-hop"))
         .env("ROUTING_STATE_DIR", s.path("target/.local/state/routing"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
