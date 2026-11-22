@@ -7,6 +7,13 @@ fn cli(args: &[&str]) -> Output {
 }
 
 #[test]
+fn prepare_spawnd_cli() {
+    let executable = binary::spawnd();
+    assert!(std::path::Path::new(executable).is_file());
+    assert_eq!(binary::spawnd(), executable);
+}
+
+#[test]
 fn unshared_cli_uses_cargos_executable_without_building() {
     if std::env::var_os("PG_TEST_UNSHARED_CLI").is_some() {
         assert_eq!(binary::spawnd(), env!("CARGO_BIN_EXE_pg-spawnd"));
