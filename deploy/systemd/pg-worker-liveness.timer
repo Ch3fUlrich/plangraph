@@ -1,0 +1,9 @@
+[Unit]
+Description=Probe fleet workers every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

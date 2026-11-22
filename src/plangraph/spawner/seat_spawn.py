@@ -246,6 +246,7 @@ def admit(service, options, *, card=None, preview=False):
     config = overflow.placement_config(registry, role)
     local, orchestration_only = overflow.placement_policy(registry, config)
     remote_first = orchestration_only
+    state = getattr(service, 'state', None)
     review_workspace = role == 'review' and (card or {}).get('review_workspace') is True
     native = (card or {}).get('run_kind') == 'native-codex'
     placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
@@ -274,6 +275,9 @@ def admit(service, options, *, card=None, preview=False):
     movable = not named  # A run with no checkout named anywhere may be placed on any work drive.
     from .host_ready import local_disk_admission
     def disk_admission():
+        refusal = overflow.worker_host_refusal(local, state)
+        if refusal:
+            return None, refusal
         if review_workspace and not local_worker:
             return None, 'review workspace requires a registered worker host'
         if native:
@@ -306,7 +310,7 @@ def admit(service, options, *, card=None, preview=False):
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
     def load_rows():
-        rows = overflow.ready_records(config, role)
+        rows = overflow.apply_worker_refusals(overflow.ready_records(config, role), state)
         if native:
             for row in rows.values():
                 if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
@@ -386,6 +390,8 @@ def admit(service, options, *, card=None, preview=False):
             try:
                 if options.get('cwd') is not None or 'cwd' in (card or {}):
                     raise overflow.RemoteRefusal('explicit cwd cannot overflow to another checkout')
+                if refusal := overflow.worker_host_refusal(name, state):
+                    raise overflow.RemoteRefusal(refusal)
                 target = dict(config['hosts'][name], placement_reason=decision.reason,
                               public_repo_ids=config.get('public_repo_ids', {}))
                 result = overflow.remote_spawn(name, target, card or {},

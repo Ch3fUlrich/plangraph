@@ -94,6 +94,8 @@ pub enum HostClass {
     #[default]
     Worker,
     Restricted,
+    Workstation,
+    Server,
 }
 
 /// One host in the registry.
@@ -210,7 +212,7 @@ impl HostRegistry {
         // V2: ids and aliases share one case-insensitive namespace.
         let mut names: BTreeMap<String, &str> = BTreeMap::new();
         for h in &self.hosts {
-            if !valid_id(&h.id) {
+            if !(valid_id(&h.id) || h.inventory_only() && valid_id(&h.id.replace('.', "-"))) {
                 return Err(HostsError::Namespace(v(&h.id, "-", "id", "bad host id")));
             }
             for name in std::iter::once(&h.id).chain(&h.aliases) {
@@ -248,6 +250,13 @@ impl HostRegistry {
 }
 
 impl HostEntry {
+    pub fn inventory_only(&self) -> bool {
+        matches!(self.class, HostClass::Server | HostClass::Workstation)
+            && self.roles.is_empty()
+            && self.caps.max_runs == 0
+            && self.caps.max_sessions == 0
+    }
+
     /// The entry for one repo id.
     pub fn repo(&self, id: &str) -> Option<&RepoEntry> {
         self.repos.get(id)

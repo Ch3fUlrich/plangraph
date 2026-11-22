@@ -9,7 +9,7 @@ pub(crate) const USAGE: &str =
     "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local|session> [args]";
 #[cfg(not(target_os = "linux"))]
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|worker-liveness|worker-maintenance|resume|writer-stop|writer-resume|steer-local> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -158,6 +158,15 @@ pub(crate) fn execute(
     }
     if verb.as_deref() == Some("check-install") {
         return crate::install_check::execute(rest, out);
+    }
+    if verb.as_deref() == Some("worker-liveness") {
+        return crate::worker_liveness::execute(&rest, out);
+    }
+    if verb.as_deref() == Some("worker-maintenance") {
+        return crate::worker_liveness::maintenance(&rest, out);
+    }
+    if verb.as_deref() == Some("worker-active-runs") {
+        return crate::worker_liveness::inventory(&rest, out);
     }
     if verb.as_deref() == Some("ledger-report") {
         return crate::writer_ledger::report(rest, out);

@@ -228,6 +228,34 @@ def read_readiness(name):
     return {**data, 'fresh': fresh(dict(data, ok=True))}
 
 
+def worker_host_refusal(name, state=None):
+    """Consume the phase published by Rust at the placement origin."""
+    if not name:
+        return None
+    state = Path(state or os.environ.get('PLANGRAPH_SPAWN_STATE') or
+                 Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'plangraph')
+    try:
+        if Path(name).name != name or name in ('.', '..'):
+            raise ValueError('invalid host name')
+        phase = json.loads((state / 'worker-hosts' / (name + '.json')).read_text())['phase']
+        if phase == 'ready':
+            return None
+        if phase in ('unreachable', 'rejoining'):
+            return 'worker host ' + phase
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return 'worker host state unavailable'
+
+
+def apply_worker_refusals(records, state):
+    for name, row in records.items():
+        if refusal := worker_host_refusal(name, state):
+            row['refusal'] = refusal
+    return records
+
+
 def ready_records(config, role='implement'):
     records = {}
     registry = registry_caps()
@@ -630,8 +658,12 @@ def main(argv=None):
         from .prompt_input import resolve_cwd
         cwd = resolve_cwd(args.cwd, card)
         named = cwd or ((card or {}).get('diff_ref') or {}).get('repo') or (card or {}).get('repo')
-        selected, disk = local_disk_admission(named or args.repo, cli.SpawnService(state=args.state), args.role,
-                                              movable=not named)
+        local_host, _ = placement_policy(registry, config)
+        disk = worker_host_refusal(local_host, args.state)
+        selected = None
+        if not disk:
+            selected, disk = local_disk_admission(named or args.repo, cli.SpawnService(state=args.state),
+                                                  args.role, movable=not named)
         if decide(memory, role_mb, floor_mb, {}, False, local_refusal=disk).reason == 'local room':
             placement = ['--cwd', selected] if selected is not None else []
             return cli.main([*local, Path(args.prompt).read_text(), *options, *placement])
@@ -643,7 +675,7 @@ def main(argv=None):
         if not cwd and diff and Path(diff.get('repo')).resolve() != repo:
             public = False
         prompt = Path(args.prompt).read_text()
-        records = ready_records(config, args.role)
+        records = apply_worker_refusals(ready_records(config, args.role), args.state)
         attempts = 0
         while True:
             decision = decide(memory, role_mb, floor_mb, records, public, local_refusal=disk)
@@ -664,6 +696,8 @@ def main(argv=None):
             name = decision.host
             attempts += 1
             try:
+                if refusal := worker_host_refusal(name, args.state):
+                    raise RemoteRefusal(refusal)
                 result = remote_spawn(name, config['hosts'][name], card, prompt, options)
                 refusal = 'remote spawn failed'
             except RemoteRefusal as exc:
