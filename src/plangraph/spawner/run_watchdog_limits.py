@@ -5,6 +5,8 @@ import time
 import json
 from pathlib import Path
 
+ORDINARY_REVIEW_MAX_SECONDS = 90 * 60
+
 
 def class_limits(card, role, defaults):
     """Widen defaults only from an explicitly supplied measured p90 table."""
@@ -31,9 +33,16 @@ def class_limits(card, role, defaults):
 
 def leg_limits(record, limits):
     """Capped roles share one wall clock, including prompt preparation."""
-    if record.get('role') not in ('review', 'implement', 'fix') or limits['max_s'] is None:
+    role = record.get('role')
+    if role not in ('review', 'implement', 'fix'):
+        return limits
+    if limits['max_s'] is None:
+        if role == 'review':
+            record['expected_end'] = record['started'] + ORDINARY_REVIEW_MAX_SECONDS
         return limits
     deadline = record['started'] + limits['max_s']
+    if role == 'review':
+        record['expected_end'] = deadline
     remaining = deadline - time.time()
     if remaining > 0:
         return dict(limits, deadline=deadline, hard_max=True)
@@ -66,7 +75,7 @@ def thresholds(card=None, *, role=None):
         result[key.replace('_min', '_s')] = value * 60
     timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
     if timeout == '' and role == 'review' and 'max_min' not in card:
-        result['max_s'] = max(result['max_s'], 5400)
+        result['max_s'] = max(result['max_s'], ORDINARY_REVIEW_MAX_SECONDS)
     if timeout and 'max_min' not in card:
         try:
             value = float(timeout)

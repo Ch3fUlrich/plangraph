@@ -103,3 +103,8 @@ integration; they do not enforce this gate yet.
 The `codex` client launch (`codex exec`) takes a registered gpt leg model as its plain id plus a
 reasoning effort: `omniroute/cx-gpt-6.2-sol-medium` and `gpt-6.2-sol-medium` both run as
 `--model gpt-6.2-sol -c model_reasoning_effort=medium` (`clients.codex_model`).
+Native review launches resolve the client from `PLANGRAPH_CODEX_BIN`, the user install,
+or PATH. A missing executable returns exit 10 and a `client_missing` diagnostic before
+the review process starts.
+
+If the wait ends while a seat is live, `plangraph review` prints its run ID, expected end, and late review file path. It exits 3 while the review is pending, or exits 1 if a seat has already failed. Late files use `MISSING` for successful runs without a verdict and `ERROR` for failed runs or unusable verdicts. The foreground command issues approvals after all seats pass.

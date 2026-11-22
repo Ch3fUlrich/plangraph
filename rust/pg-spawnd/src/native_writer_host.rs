@@ -57,7 +57,7 @@ struct Host {
     effort: String,
     /// Run state root holding `runs/<run-id>/`; review runs are recorded there too.
     state: PathBuf,
-    /// Writer brief, repeated in every review prompt for its item keys and Done-when lines.
+    /// Writer brief used to supply item keys, criteria and invariants to the reviewer.
     brief: String,
     /// `refs/heads/...` that receives the accepted head; None keeps the head on the host.
     push_ref: Option<String>,
@@ -394,7 +394,8 @@ mod review_route;
 #[path = "native_writer_session.rs"]
 mod session;
 #[cfg(test)]
-use review::{review_diff_base, review_run_text, review_verdict};
+use review::review_diff_base;
+pub(crate) use review::review_record_verdict;
 #[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;

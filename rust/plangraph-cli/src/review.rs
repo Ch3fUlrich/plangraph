@@ -9,10 +9,14 @@ use pg_worker_core::review_split::{
     extract_review_text_from_live_log, group_banner, parse_head_line_text, parse_test_gaming_text,
     parse_verdict_text, plan_groups_from_measured, SeatVerdict, TestGaming,
 };
+use pg_worker_core::{review_completion, review_text::record_answer, run::record::run_dir};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[path = "review_seat_completion.rs"]
+mod completion;
 
 #[derive(Debug, Clone)]
 pub struct ReviewArgs {
@@ -264,9 +268,7 @@ fn extract_records(raw: &Value) -> Result<Vec<Value>, String> {
 
 fn load_authoritative_record(rec: Value, state_dir: Option<&Path>) -> (Value, Option<PathBuf>) {
     let run_id = rec["run_id"].as_str().unwrap_or("").to_owned();
-    let run_dir = state_dir
-        .filter(|_| !run_id.is_empty())
-        .map(|s| s.join("runs").join(&run_id));
+    let run_dir = state_dir.and_then(|state| run_dir(state, &run_id).ok());
     let on_disk = run_dir
         .as_ref()
         .map(|d| d.join("record.json"))
@@ -285,6 +287,9 @@ fn extract_seat_text(record: &Value, run_dir: Option<&Path>) -> String {
             }
         }
     }
+    if let Some(answer) = record_answer(record) {
+        return answer;
+    }
     let live_log_path = record["live_log"]
         .as_str()
         .map(PathBuf::from)
@@ -299,12 +304,6 @@ fn extract_seat_text(record: &Value, run_dir: Option<&Path>) -> String {
             }
         }
     }
-    if let Some(tail) = record["stdout_tail"].as_str() {
-        if let Some(parsed) = extract_review_text_from_live_log(tail) {
-            return parsed;
-        }
-        return tail.to_owned();
-    }
     String::new()
 }
 
@@ -313,10 +312,9 @@ fn evaluate_seat_record(
     total: usize,
     expected_head: &str,
     paths: &[String],
-    rec: Value,
-    state_dir: Option<&Path>,
+    record: &Value,
+    run_dir: Option<&Path>,
 ) -> SeatOutcome {
-    let (record, run_dir) = load_authoritative_record(rec, state_dir);
     let run_id = record["run_id"].as_str().unwrap_or("?").to_owned();
     let status = record["status"].as_str().unwrap_or("unknown").to_owned();
     let exit_code = record["exit_code"].as_i64().unwrap_or(-1);
@@ -337,11 +335,15 @@ fn evaluate_seat_record(
         .and_then(|leg| leg["harness"].as_str())
         .unwrap_or("unknown")
         .to_owned();
-    let text = extract_seat_text(&record, run_dir.as_deref());
+    let text = extract_seat_text(record, run_dir);
     let files_read = pg_worker_core::review_split::files_read_text(&text);
-    let verdict = parse_verdict_text(&text).filter(|verdict| {
-        *verdict != SeatVerdict::Pass || pg_worker_core::review_split::has_files_read(&text)
-    });
+    let verdict = if review_completion::live(&status) {
+        Some(SeatVerdict::Pending)
+    } else {
+        parse_verdict_text(&text).filter(|verdict| {
+            *verdict != SeatVerdict::Pass || pg_worker_core::review_split::has_files_read(&text)
+        })
+    };
     let mut test_gaming = parse_test_gaming_text(&text);
     if test_gaming == TestGaming::Missing {
         if record["test_gaming"] == json!(false) || record["test_gaming"] == json!("no") {
@@ -437,10 +439,32 @@ fn spawn_one_seat(
         format!("spawner spawn returned non-JSON ({e}): stderr={stderr} stdout={stdout}")
     })?;
     let records = extract_records(&raw)?;
-    Ok(records
+    records
         .into_iter()
-        .map(|rec| evaluate_seat_record(slot, total, expected_head, paths, rec, state_dir))
-        .collect())
+        .map(|rec| {
+            let (record, run_dir) = load_authoritative_record(rec, state_dir);
+            let seat = evaluate_seat_record(
+                slot,
+                total,
+                expected_head,
+                paths,
+                &record,
+                run_dir.as_deref(),
+            );
+            if !args.dry_run && seat.verdict == Some(SeatVerdict::Pending) {
+                let state = state_dir.ok_or("review state directory unavailable")?;
+                let (path, expected_end) =
+                    completion::defer(state, expected_head, &seat.run_id, &record)?;
+                println!(
+                    "PENDING run={} expected_end={} review_file={}",
+                    seat.run_id,
+                    expected_end,
+                    path.display()
+                );
+            }
+            Ok(seat)
+        })
+        .collect()
 }
 
 pub fn format_approval(
@@ -612,7 +636,10 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
     };
 
     let tmp = tempfile::tempdir().map_err(|e| format!("tempdir failed: {e}"))?;
-    let state_dir = resolve_state_dir(args.state.as_deref());
+    let state_dir = resolve_state_dir(args.state.as_deref())
+        .map(std::path::absolute)
+        .transpose()
+        .map_err(|error| format!("review state directory: {error}"))?;
     let mut outcomes: Vec<SeatOutcome> = Vec::new();
     if groups.len() == 1 {
         outcomes = review_group(
@@ -673,6 +700,21 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
         return Ok(0);
     }
 
+    let has_pending = outcomes
+        .iter()
+        .any(|seat| seat.verdict == Some(SeatVerdict::Pending));
+    let has_failure = outcomes
+        .iter()
+        .any(|seat| !seat.passed && seat.verdict != Some(SeatVerdict::Pending));
+    if has_pending && !has_failure {
+        println!(
+            "REVIEW head={} seats={} verdict=PENDING approval=none",
+            resolved.head_sha,
+            outcomes.len()
+        );
+        return Ok(3);
+    }
+
     let all_pass = !outcomes.is_empty() && outcomes.iter().all(|s| s.passed);
     let approval_path = args.approval.clone().unwrap_or_else(|| {
         resolved
@@ -713,6 +755,17 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    if let [flag, rest @ ..] = args {
+        if flag == "--finish-seat" {
+            return match completion::finish(rest) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("plangraph review: {error}");
+                    2
+                }
+            };
+        }
+    }
     match parse_args(args) {
         Ok(None) => {
             println!("{}", usage());

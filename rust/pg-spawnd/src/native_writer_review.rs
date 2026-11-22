@@ -1,7 +1,7 @@
 //! Review rounds of the native writer: fast checks with a per-head stamp, then one
 //! spawner review run on the exact head, its verdict read from the run record.
 use super::{context, Host};
-use crate::native_writer::Driver;
+use crate::{late_review, native_writer::Driver};
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
@@ -244,6 +244,10 @@ impl Host {
         previous: Option<&Value>,
     ) -> Result<Value, String> {
         let base = self.git(&["rev-parse", &format!("{}^{{commit}}", self.base_pin())])?;
+        let pending = self.reviews.join(format!("late-review-{head}.json"));
+        if let Some(result) = late_review::recover(&self.state, &pending, head)? {
+            return Ok(result);
+        }
         self.reviews_started += 1;
         let tag = format!("{}-{}", &head[..8.min(head.len())], self.reviews_started);
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
@@ -269,7 +273,8 @@ impl Host {
             &[super::WRITER_MODEL],
             &trusted_python,
         )?;
-        let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
+        let max_min = 60;
+        let card = json!({"estimate_tokens":300000, "max_min":max_min, "stall_min":20,
             "repository_review_required":true, "review_workspace":true,
             "diff_ref":{"repo":self.repo, "base":review_diff_base(base, head, prev), "head":head}});
         if self.review_override.is_none() {
@@ -305,60 +310,116 @@ impl Host {
         let printed = command
             .arg("--prompt-file")
             .arg(&prompt_path)
-            .args(["--wait", "3300", "--json"])
+            .args(["--wait", &(max_min * 60).to_string(), "--json"])
             .current_dir(&self.repo)
             .output()
             .map_err(|e| e.to_string())?;
-        let record =
-            printed_record(&String::from_utf8_lossy(&printed.stdout)).ok_or_else(|| {
-                format!(
-                    "review run returned no record: {}",
-                    String::from_utf8_lossy(&printed.stderr).trim()
-                )
-            })?;
-        let chosen = &record["chosen_leg"];
-        if let Some((leg, _)) = &self.review_override {
-            if chosen["id"] != *leg {
-                return Err(format!("review leg differs from requested leg {leg}"));
+        let stderr = String::from_utf8_lossy(&printed.stderr);
+        let record = printed_record(&String::from_utf8_lossy(&printed.stdout));
+        if printed.status.code() == Some(10) {
+            let stderr_tail = record
+                .as_ref()
+                .and_then(|row| row["stderr_tail"].as_str())
+                .unwrap_or_default();
+            let diagnostic = stderr_tail.lines().chain(stderr.lines()).find(|line| {
+                line.strip_prefix("REVIEW ")
+                    .and_then(|line| line.split_once(" FAIL client_missing "))
+                    .is_some_and(|(tag, path)| {
+                        !tag.is_empty()
+                            && !tag.contains(char::is_whitespace)
+                            && !path.trim().is_empty()
+                    })
+            });
+            if let Some(line) = diagnostic {
+                return Ok(json!({"status":"client_missing","head":head,"reason":line}));
             }
+            let detail = if stderr.trim().is_empty() {
+                stderr_tail.trim()
+            } else {
+                stderr.trim()
+            };
+            return Err(format!("review CLI failed with exit code 10: {detail}"));
+        }
+        let record =
+            record.ok_or_else(|| format!("review run returned no record: {}", stderr.trim()))?;
+        let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
+        if late_review::live(&record) {
+            let started = record["started"]
+                .as_f64()
+                .unwrap_or_else(pg_worker_core::run::finalize::now);
+            let request = json!({"head":head,"run_id":record["run_id"],"expected_leg":self.review_override.as_ref().map(|(leg, _)| leg),
+                "expected_end":started + f64::from(max_min * 60),"changed_paths":paths});
+            let pending = self.reviews.join(format!("late-review-{head}.json"));
+            late_review::save_pending(&pending, &request)?;
+            let mut result = late_review::pending_result(&request);
+            if let Err(error) = late_review::start(&self.state, &pending) {
+                result["reason"] = json!(format!(
+                    "{}; finisher launch failed: {error}",
+                    result["reason"].as_str().unwrap_or("review_running")
+                ));
+            }
+            return Ok(result);
         }
         if record["status"] != "completed" {
             return Err(format!("review run incomplete: {}", record["reason"]));
         }
-        if record["head_sha"] != head
-            || !record["host"].as_str().is_some_and(|host| !host.is_empty())
-        {
-            return Err("review worker returned no exact-head receipt with host".into());
-        }
-        let text = review_run_text(&self.state, &record)?;
-        let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
-        let mut verdict = if matches!(
-            chosen["tool_mode"].as_str(),
-            Some("prompt-only" | "inline-only")
-        ) {
-            json!({"verdict":"no_verdict","status":"no_verdict",
-                   "reason":"repository_review_tools_unavailable","head":head,"text":text})
-        } else {
-            review_verdict(&text, head, &paths)
-        };
-        verdict["files_read"] = json!(pg_worker_core::review_split::files_read_text(&text));
+        let mut verdict = review_record_verdict(
+            &self.state,
+            &record,
+            head,
+            &paths,
+            self.review_override.as_ref().map(|(leg, _)| leg.as_str()),
+        )?;
         let id = record["run_id"].as_str().unwrap_or("run-unknown");
         let path = self.reviews.join(format!("{tag}-{id}.txt"));
+        let text = verdict["text"].as_str().unwrap_or_default();
         atomic_write_private(&path, text.as_bytes()).map_err(|e| e.to_string())?;
-        verdict["run_id"] = json!(id);
         verdict["path"] = json!(path);
-        verdict["leg"] = chosen["id"].clone();
-        verdict["harness"] = chosen["harness"].clone();
-        verdict["host"] = record["host"].clone();
-        if verdict["verdict"] == "ACCEPT" {
-            verdict["accepted_at"] = record["ended"].as_f64().map_or_else(
-                || json!(chrono::Utc::now().to_rfc3339()),
-                |ended| json!(ended),
-            );
-        }
         Ok(verdict)
     }
 }
+pub(crate) fn review_record_verdict(
+    state: &Path,
+    record: &Value,
+    head: &str,
+    paths: &[String],
+    expected_leg: Option<&str>,
+) -> Result<Value, String> {
+    if record["head_sha"] != head
+        || !record["host"].as_str().is_some_and(|host| !host.is_empty())
+    {
+        return Err("review worker returned no exact-head receipt with host".into());
+    }
+    let chosen = &record["chosen_leg"];
+    if let Some(leg) = expected_leg {
+        if chosen["id"] != leg {
+            return Err(format!("review leg differs from requested leg {leg}"));
+        }
+    }
+    let text = review_run_text(state, record)?;
+    let mut verdict = if matches!(
+        chosen["tool_mode"].as_str(),
+        Some("prompt-only" | "inline-only")
+    ) {
+        json!({"verdict":"no_verdict","status":"no_verdict",
+               "reason":"repository_review_tools_unavailable","head":head,"text":text})
+    } else {
+        review_verdict(&text, head, paths)
+    };
+    verdict["files_read"] = json!(pg_worker_core::review_split::files_read_text(&text));
+    verdict["run_id"] = record["run_id"].clone();
+    verdict["leg"] = chosen["id"].clone();
+    verdict["harness"] = chosen["harness"].clone();
+    verdict["host"] = record["host"].clone();
+    if verdict["verdict"] == "ACCEPT" {
+        verdict["accepted_at"] = record["ended"].as_f64().map_or_else(
+            || json!(chrono::Utc::now().to_rfc3339()),
+            |ended| json!(ended),
+        );
+    }
+    Ok(verdict)
+}
+
 /// Structured verdict of one review text bound to `head`: the last VERDICT line decides and
 /// must be canonical; a `HEAD: <sha>` line naming another head, or an ACCEPT that names no
 /// changed file, is `no_verdict`.
@@ -418,7 +479,7 @@ pub(super) fn printed_record(stdout: &str) -> Option<Value> {
 }
 /// Review text of a review run record: the rendered result of its live log, else the
 /// record's `stdout_tail` (OpenCode legs keep their answer text there).
-pub(super) fn review_run_text(state: &Path, record: &Value) -> Result<String, String> {
+pub(crate) fn review_run_text(state: &Path, record: &Value) -> Result<String, String> {
     if let Some(error) = record["review_binding_error"].as_str() {
         return Err(error.to_owned());
     }

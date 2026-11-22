@@ -658,3 +658,149 @@ fn single_writer_family_range_yields_one_seat_and_a_failing_group_blocks() {
     assert!(text.contains("verdict=REQUEST_CHANGES"), "{text}");
     assert_eq!(blocked.status.code(), Some(1));
 }
+
+#[test]
+fn live_leg_returns_pending_and_publishes_late_review_file() {
+    check_live_leg("late", 3, "PENDING");
+}
+
+#[test]
+fn mixed_failed_and_live_seats_report_failure_and_keep_the_live_run() {
+    check_live_leg("late_mixed", 1, "REQUEST_CHANGES");
+}
+
+fn check_live_leg(mode: &str, expected_exit: i32, expected_verdict: &str) {
+    let (tmp, work, _, base) = init_repo_with_origin();
+    fs::write(work.join("file.rs"), "fn changed() {}\n").unwrap();
+    git(&work, &["add", "file.rs"]);
+    git(
+        &work,
+        &["commit", "-m", "change\n\nWriter: gemini run-feature"],
+    );
+    let head = git(&work, &["rev-parse", "HEAD"]);
+    let state = tmp.path().join("state");
+    let log = tmp.path().join("spawner.jsonl");
+    let spawner = write_mock_spawner(tmp.path(), &state, &log, mode);
+    let approval = tmp.path().join("approval.txt");
+    let output = Command::new(plangraph_bin())
+        .current_dir(tmp.path())
+        .args(["review", "--repo"])
+        .arg(&work)
+        .args([
+            "--base",
+            &base,
+            "--head",
+            &head,
+            "--no-fetch",
+            "--wait",
+            "0",
+        ])
+        .args(["--state", "state", "--seats"])
+        .arg("--approval")
+        .arg(&approval)
+        .env("PLANGRAPH_SPAWNER_CMD", spawner)
+        .env("PYTHONPATH", repo_root().join("src"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(expected_exit),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run_id = stdout.lines().find_map(|line| {
+        let (before, _) = line.split_once(" status=running")?;
+        Some(before.split_once("run=")?.1)
+    }).expect("running seat in review report");
+    assert!(
+        stdout.lines().any(|line| line.starts_with("REVIEW ")
+            && line.contains(&format!("verdict={expected_verdict} "))),
+        "{stdout}"
+    );
+    if mode == "late_mixed" {
+        assert!(stdout.contains("run=run-failed status=failed"), "{stdout}");
+    }
+    let run = state.join("runs").join(run_id);
+    let record: Value =
+        serde_json::from_slice(&fs::read(run.join("record.json")).unwrap()).unwrap();
+    let reported: f64 = stdout
+        .split("expected_end=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        (reported - record["expected_end"].as_f64().unwrap()).abs() < 0.001,
+        "{stdout}"
+    );
+
+    fs::write(run.join("release"), "").unwrap();
+    let artifact = run.join("late-review.txt");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+    while !artifact.is_file() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let text = fs::read_to_string(artifact).unwrap();
+    assert!(text.contains(&format!("RUN: {run_id}\n")), "{text}");
+    assert!(
+        text.contains(&format!("HEAD: {head}\n")) && text.contains("VERDICT: PASS\n"),
+        "{text}"
+    );
+    assert!(!approval.exists());
+}
+
+#[test]
+fn late_review_file_marks_a_missing_verdict() {
+    check_late_verdict("completed", 0, "Reviewed the change", "MISSING");
+}
+
+#[test]
+fn late_review_file_marks_a_failed_or_killed_run() {
+    check_late_verdict("failed", 7, "VERDICT: REQUEST_CHANGES", "ERROR");
+    check_late_verdict("killed", 137, "", "ERROR");
+}
+
+#[test]
+fn late_review_file_preserves_a_request_for_changes() {
+    check_late_verdict(
+        "completed",
+        0,
+        "VERDICT: REQUEST_CHANGES",
+        "REQUEST_CHANGES",
+    );
+}
+
+fn check_late_verdict(status: &str, code: i32, answer: &str, expected: &str) {
+    let state = tempfile::tempdir().unwrap();
+    let head = "a".repeat(40);
+    let run = state.path().join("runs/run-terminal");
+    fs::create_dir_all(&run).unwrap();
+    fs::write(
+        run.join("record.json"),
+        serde_json::json!({
+            "run_id":"run-terminal", "status":status, "exit_code":code, "stdout_tail":answer,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = Command::new(plangraph_bin())
+        .args(["review", "--finish-seat"])
+        .arg(state.path())
+        .args([&head, "run-terminal", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let artifact = fs::read_to_string(run.join("late-review.txt")).unwrap();
+    assert_eq!(
+        artifact,
+        format!("RUN: run-terminal\nHEAD: {head}\nSTATUS: {status}\nVERDICT: {expected}\n")
+    );
+}

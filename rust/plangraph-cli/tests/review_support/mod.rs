@@ -166,6 +166,32 @@ if verb == "spawn":
     else:
         reply = f"All clear.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
 
+    if MODE in ("late", "late_mixed"):
+        input_path = run_dir / "terminal.json"
+        terminal = {{"run_id": run_id, "status": "completed", "exit_code": 0, "stdout_tail": reply}}
+        input_path.write_text(json.dumps(terminal))
+        started = __import__("time").time()
+        record = {{"run_id": run_id, "status": "running", "started": started, "expected_end": started + 120}}
+        (run_dir / "record.json").write_text(json.dumps(record))
+        worker = """
+import pathlib, sys, time
+run = pathlib.Path(sys.argv[1])
+deadline = time.monotonic() + 10
+while not (run / "release").exists() and time.monotonic() < deadline:
+    time.sleep(.02)
+(run / "terminal.json").replace(run / "record.json")
+"""
+        from subprocess import Popen, DEVNULL
+        Popen([sys.executable, "-c", worker, str(run_dir)], stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL)
+        assert opts["wait"] == "0", opts
+        if MODE == "late_mixed":
+            assert opts["seats"], opts
+            failed = {{"run_id": "run-failed", "status": "failed", "exit_code": 7}}
+            print(json.dumps({{"seat_group": "seats-test", "seats": [record, failed]}}))
+        else:
+            print(json.dumps(record))
+        sys.exit(0)
+
     live_log.write_text(reply, encoding="utf-8")
     rec = {{
         "run_id": run_id,

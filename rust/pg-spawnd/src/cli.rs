@@ -162,6 +162,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("ledger-report") {
         return crate::writer_ledger::report(rest, out);
     }
+    if verb.as_deref() == Some("finish-late-review") {
+        return crate::late_review::execute(rest);
+    }
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);
     }
