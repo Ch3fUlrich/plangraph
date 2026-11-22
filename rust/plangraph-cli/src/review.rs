@@ -7,6 +7,7 @@ use pg_worker_core::review_split::{
     extract_review_text_from_live_log, group_banner, parse_head_line_text, parse_test_gaming_text,
     parse_verdict_text, plan_groups_from_measured, SeatVerdict, TestGaming,
 };
+use pg_worker_core::review_text::record_answer;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -272,6 +273,9 @@ fn extract_seat_text(record: &Value, run_dir: Option<&Path>) -> String {
             }
         }
     }
+    if let Some(answer) = record_answer(record) {
+        return answer;
+    }
     let live_log_path = record["live_log"]
         .as_str()
         .map(PathBuf::from)
@@ -285,12 +289,6 @@ fn extract_seat_text(record: &Value, run_dir: Option<&Path>) -> String {
                 return raw;
             }
         }
-    }
-    if let Some(tail) = record["stdout_tail"].as_str() {
-        if let Some(parsed) = extract_review_text_from_live_log(tail) {
-            return parsed;
-        }
-        return tail.to_owned();
     }
     String::new()
 }

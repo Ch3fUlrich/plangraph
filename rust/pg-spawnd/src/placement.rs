@@ -142,7 +142,7 @@ pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
     }
     let mut plan: Value = serde_json::from_str(&text)
         .map_err(|_| ToolError::Internal("invalid review plan".into()))?;
-    crate::review_health::demote(&mut plan, &crate::records::list_runs(state));
+    crate::review_health::demote(state, &mut plan, &crate::records::list_runs(state));
     Ok(plan.to_string())
 }
 

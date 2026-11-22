@@ -76,6 +76,7 @@ pub const GITHUB_TOKEN_BODY_FLOOR: usize = redact_tokens::SPECS[1].floor;
 mod redact_wrapped;
 pub mod reset;
 pub mod review_split;
+pub mod review_text;
 pub mod run;
 pub mod sandbox_env;
 mod sandbox_push;

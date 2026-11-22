@@ -1,0 +1,1 @@
+The Rust health report reads rendered review records before inspecting the event stream and lists the run IDs behind each missing-verdict count. The shared stream decoder also rejoins text deltas from the same part.

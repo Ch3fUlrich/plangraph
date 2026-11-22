@@ -1,7 +1,7 @@
 //! Review-result diagnostics for routing and reporting. A verdict here is not an approval.
-use pg_worker_core::review_split::{extract_review_text_from_live_log, parse_verdict_text};
+use pg_worker_core::{review_split::parse_verdict_text, review_text::record_answer};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 
 const WINDOW: usize = 10;
 
@@ -71,7 +71,9 @@ pub(crate) fn classify(record: &Value, text: &str) -> &'static str {
     }
 }
 
-fn samples(records: &[Value]) -> BTreeMap<&str, Vec<(f64, &str, &str)>> {
+type Sample<'a> = (f64, &'a str, &'a str);
+
+fn samples<'a>(state: &Path, records: &'a [Value]) -> BTreeMap<&'a str, Vec<Sample<'a>>> {
     let mut legs: BTreeMap<_, Vec<_>> = BTreeMap::new();
     for record in records {
         if record["role"] != "review"
@@ -92,21 +94,55 @@ fn samples(records: &[Value]) -> BTreeMap<&str, Vec<(f64, &str, &str)>> {
         else {
             continue;
         };
-        let class = record["review_result"].as_str().unwrap_or_else(|| {
-            let raw = record["stdout_tail"].as_str().unwrap_or("");
-            let text = extract_review_text_from_live_log(raw);
-            classify(record, text.as_deref().unwrap_or(raw))
-        });
+        let class = record["review_result"]
+            .as_str()
+            .unwrap_or_else(|| classify(record, &answer(state, record)));
         legs.entry(leg).or_default().push((ended, id, class));
     }
     legs
 }
 
-pub(crate) fn demote(plan: &mut Value, records: &[Value]) {
+pub(crate) fn answer(state: &Path, record: &Value) -> String {
+    record_answer(record).unwrap_or_else(|| {
+        crate::review_artifacts::review_text(state, record)
+            .ok()
+            .filter(|text| {
+                text != crate::review_artifacts::DIAGNOSTIC_REVIEW_TEXT
+                    && !text.starts_with("Agy review unavailable:")
+            })
+            .unwrap_or_default()
+    })
+}
+
+pub(crate) fn report(state: &Path, records: &[Value], since: i64, until: i64) -> Value {
+    let mut view = BTreeMap::new();
+    for (leg, runs) in samples(state, records) {
+        let in_range = runs
+            .into_iter()
+            .filter(|(ended, _, _)| *ended >= since as f64 && *ended < until as f64);
+        let mut total = 0;
+        let mut failures = Vec::new();
+        for (_, run_id, cause) in in_range {
+            total += 1;
+            if cause != "verdict" {
+                failures.push(json!({"run_id":run_id,"cause":cause}));
+            }
+        }
+        if total > 0 {
+            view.insert(
+                leg,
+                json!({"reviews":total,"no_verdict":failures.len(),"runs":failures}),
+            );
+        }
+    }
+    json!(view)
+}
+
+pub(crate) fn demote(state: &Path, plan: &mut Value, records: &[Value]) {
     let Some(legs) = plan["legs"].as_array_mut() else {
         return;
     };
-    let mut history = samples(records);
+    let mut history = samples(state, records);
     let mut alerts = BTreeMap::new();
     for leg in legs.iter().filter_map(|leg| leg["id"].as_str()) {
         let Some(runs) = history.get_mut(leg).filter(|runs| runs.len() >= WINDOW) else {
@@ -169,6 +205,35 @@ mod tests {
     }
 
     #[test]
+    fn reports_run_ids_using_record_answers_before_log_fallback() {
+        let state = tempfile::tempdir().unwrap();
+        let run_dir = state.path().join("runs/run-passing");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let stream = run_dir.join("live.log");
+        std::fs::write(
+            &stream,
+            concat!(
+                "{\"type\":\"text-delta\",\"part\":{\"id\":\"p\",\"delta\":\"VER\"}}\n",
+                "{\"type\":\"text-delta\",\"part\":{\"id\":\"p\",\"delta\":\"DICT: PASS\"}}\n",
+                "{\"type\":\"step_finish\",\"part\":{\"reason\":\"stop\"}}\n"
+            ),
+        )
+        .unwrap();
+        let passing = json!({"role":"review", "status":"completed", "ended":3,
+            "run_id":"run-passing", "chosen_leg":{"id":"mimo"}, "live_log":stream,
+            "stdout_tail":"VERDICT: PASS"});
+        let mut missing = passing.clone();
+        missing["run_id"] = json!("run-missing");
+        missing["stdout_tail"] = json!("Findings only");
+        let report = report(state.path(), &[passing, missing], 0, 4);
+        assert_eq!(
+            report["mimo"],
+            json!({"reviews":2, "no_verdict":1,
+            "runs":[{"run_id":"run-missing", "cause":"missing_verdict"}]})
+        );
+    }
+
+    #[test]
     fn demotes_only_after_four_of_ten_terminal_reviews_without_verdicts() {
         let mut plan = json!({"first_leg":{"id":"a"},"legs":[{"id":"a"},{"id":"b"}]});
         let mut records: Vec<_> = (0..11)
@@ -180,7 +245,7 @@ mod tests {
                 })
             })
             .collect();
-        demote(&mut plan, &records);
+        demote(Path::new(""), &mut plan, &records);
         assert_eq!(plan["first_leg"]["id"], "b");
         assert_eq!(plan["review_health_alerts"][0]["no_verdict"], 4);
         assert_eq!(plan["review_health_alerts"][0]["leg"], "a");
@@ -188,7 +253,7 @@ mod tests {
         records[1]["status"] = json!("running");
         records[0]["stdout_tail"] = json!("VERDICT: PASS");
         let mut plan = json!({"first_leg":{"id":"a"},"legs":[{"id":"a"},{"id":"b"}]});
-        demote(&mut plan, &records);
+        demote(Path::new(""), &mut plan, &records);
         assert_eq!(plan["first_leg"]["id"], "a");
         assert_eq!(plan["review_health_alerts"], json!([]));
     }
