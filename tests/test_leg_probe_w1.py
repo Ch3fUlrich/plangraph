@@ -126,6 +126,13 @@ def test_probe_isolates_git_config_and_hooks(tmp_path, monkeypatch):
     from plangraph.spawner import leg_probe
     from plangraph.spawner.runner import SpawnerRunner
 
+    caller = tmp_path / 'caller'
+    caller.mkdir()
+    env = leg_probe.probe_env()
+    subprocess.run(['git', 'init', '-q'], cwd=caller, env=env, check=True)
+    subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                    'commit', '-qm', 'initial', '--allow-empty'], cwd=caller, env=env, check=True)
+    monkeypatch.chdir(caller)
     hostile = tmp_path / 'hostile.gitconfig'
     hooks = tmp_path / 'hostile-hooks'
     hooks.mkdir()
