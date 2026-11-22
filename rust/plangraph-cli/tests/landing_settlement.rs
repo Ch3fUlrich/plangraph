@@ -362,7 +362,7 @@ for refused in (False, True):
 
     with ExitStack() as stack:
         for name in ('check_approval', 'require_part_seats', 'require_full_run', 'require_current_base',
-                     'require_green', 'record_reruns', 'prepare_train', 'require_main_green',
+                     'require_green', 'record_reruns', 'prepare_train', 'require_main_green', 'require_migration_go',
                      'merge_trailers'):
             stack.enter_context(patch.object(land, name, Mock()))
         stack.enter_context(patch.object(land, 'landing_journal', journal))
@@ -371,7 +371,7 @@ for refused in (False, True):
             dict(state='OPEN', headRefOid=head, isDraft=False, baseRefName='main'), {'object': {'sha': base}}
         ]))
         try:
-            land.land_with_lease(args, lease, state)
+            land.land_with_lease(args, lease, state, "train-pr-merge")
         except land.MergeBatchError as exc:
             assert str(exc) == ('demo:C cannot land before demo:D' if refused else 'host merge boundary')
         else:

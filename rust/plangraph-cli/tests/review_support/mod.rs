@@ -71,7 +71,7 @@ pub fn write_mock_spawner(dir: &Path, state_dir: &Path, log_path: &Path, mode: &
     let script = dir.join("mock_spawner.py");
     let body = format!(
         r#"#!/usr/bin/env python3
-import json, sys, tempfile
+import json, sys, tempfile, uuid
 from pathlib import Path
 
 STATE = Path({state:?})
@@ -138,7 +138,8 @@ if verb == "route":
 if verb == "spawn":
     runs = STATE / "runs"
     runs.mkdir(parents=True, exist_ok=True)
-    run_dir = Path(tempfile.mkdtemp(prefix="run-test-", dir=runs))
+    run_dir = runs / ("run-" + uuid.uuid4().hex)
+    run_dir.mkdir()
     run_id = run_dir.name
     diff_ref = card.get("diff_ref") or {{}}
     head_sha = diff_ref.get("head", "")
