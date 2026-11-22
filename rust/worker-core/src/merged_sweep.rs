@@ -52,7 +52,6 @@ pub fn restore_row(repo: &Path, tree: &Worktree, pr: Option<u64>) -> String {
         pr.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
     )
 }
-/// No --force, and branch deletion compares the recorded SHA atomically.
 pub(crate) fn verify_checkout(tree: &Worktree) -> io::Result<()> {
     if git(Path::new(&tree.path), &["rev-parse", "HEAD"])?.trim() != tree.head
         || git(
@@ -78,6 +77,7 @@ pub(crate) fn verify_checkout(tree: &Worktree) -> io::Result<()> {
     }
     Ok(())
 }
+/// No --force, and branch deletion compares the recorded SHA atomically.
 pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
     verify_checkout(tree)?;
     git(repo, &["worktree", "remove", "--", &tree.path])?;

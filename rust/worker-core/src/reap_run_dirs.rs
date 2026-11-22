@@ -51,8 +51,11 @@ pub(crate) fn report(
             let Some(approval) = approval else {
                 return Ok(serde_json::to_string(&row)?);
             };
-            let _creation =
-                crate::worktree::mutation_lock(options.repo).map_err(io::Error::other)?;
+            let _creation = if slot.is_none() {
+                Some(crate::worktree::mutation_lock(options.repo).map_err(io::Error::other)?)
+            } else {
+                None
+            };
             let _writer = lock_writer(&path)?;
             if inspect(
                 options,

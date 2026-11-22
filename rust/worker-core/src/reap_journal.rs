@@ -178,7 +178,18 @@ pub(crate) fn stage(
     receipt.write(&slot)?;
     fs::File::open(quarantine)?.sync_all()?;
     audit(state, "quarantine-intent", approval, row)?;
-    move_to(&slot.join(&row.kind))?;
+    let dest = slot.join(&row.kind);
+    if let Err(error) = move_to(&dest) {
+        // A Git move can fail after renaming the checkout but before updating its metadata.
+        if matches!(dest.symlink_metadata(), Err(e) if e.kind() == io::ErrorKind::NotFound) {
+            fs::remove_file(slot.join("receipt.json"))
+                .and_then(|()| fs::remove_dir(&slot))
+                .map_err(|cleanup| {
+                    io::Error::other(format!("{error}, quarantine cleanup failed: {cleanup}"))
+                })?;
+        }
+        return Err(error);
+    }
     receipt.quarantined_at = Some(timestamp()?);
     receipt.write(&slot)?;
     audit(state, "quarantined", approval, row)?;
@@ -240,4 +251,41 @@ pub(crate) fn check_mounts(path: &Path) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_quarantine_move_removes_only_an_empty_slot() {
+        for moved in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let state = temp.path().canonicalize().unwrap();
+            let source = state.join("source");
+            fs::create_dir(&source).unwrap();
+            let quarantine = state.join("quarantine");
+            let row = Row::for_path(&state, &source, &source, "worktree").unwrap();
+            let refusal = stage(&state, &quarantine, "D-123", &row, |dest| {
+                if moved {
+                    fs::rename(&source, dest)?;
+                }
+                Err(io::Error::other("fixture move failure"))
+            })
+            .unwrap_err();
+            assert_eq!(refusal.to_string(), "fixture move failure");
+            let slots = fs::read_dir(&quarantine)
+                .unwrap()
+                .collect::<io::Result<Vec<_>>>()
+                .unwrap();
+            assert_eq!(slots.len(), usize::from(moved));
+            if let Some(slot) = slots.first() {
+                assert!(slot.path().join("worktree").is_dir());
+                assert!(Receipt::read(&slot.path())
+                    .unwrap()
+                    .quarantined_at
+                    .is_none());
+            }
+        }
+    }
 }

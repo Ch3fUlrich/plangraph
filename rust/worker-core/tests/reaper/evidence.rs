@@ -49,6 +49,24 @@ fn plan_for(report: &str, action: &str, path: &Path) -> String {
         .to_string()
 }
 
+fn mature_slot(f: &Fixture) -> PathBuf {
+    let slot = fs::read_dir(f.state.join("reap-quarantine"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let receipt = slot.join("receipt.json");
+    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    data["quarantined_at"] = (now - 8 * 86_400).into();
+    fs::write(&receipt, data.to_string()).unwrap();
+    slot
+}
+
 #[test]
 fn a_claim_appearing_after_the_creation_lock_protects_worktrees_and_run_dirs() {
     for run_dir in [false, true] {
@@ -124,20 +142,7 @@ fn an_open_pull_or_process_inside_a_candidate_protects_report_and_approved_actio
     }
 
     reap_with_authority(&opts, Some(("D-123", &stage)), authority).unwrap();
-    let slot = fs::read_dir(f.state.join("reap-quarantine"))
-        .unwrap()
-        .next()
-        .unwrap()
-        .unwrap()
-        .path();
-    let receipt = slot.join("receipt.json");
-    let mut data: serde_json::Value = serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    data["quarantined_at"] = (now - 8 * 86_400).into();
-    fs::write(&receipt, data.to_string()).unwrap();
+    let slot = mature_slot(&f);
 
     let staged = slot.join("worktree");
     let report = reap_with_authority(&opts, None, authority).unwrap();
@@ -210,4 +215,48 @@ fn report_reuses_protection_branch_pulls_and_the_open_inventory_for_detached_hea
     );
     assert_eq!(protection_reads, 1);
     assert_eq!(pull_queries, [Some("topic".into()), None]);
+}
+
+#[test]
+fn attempt_creation_waits_for_the_reaper_lock() {
+    use pg_worker_core::worktree::{create, mutation_lock, AttemptId};
+    let f = Fixture::new();
+    let tree = f.root.join("new-attempt");
+    let held = mutation_lock(&f.repo).unwrap();
+    let error = create(&f.repo, &f.sha, &tree, &AttemptId::new("fixture", 1)).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("lock not acquired before the deadline"),
+        "{error}"
+    );
+    assert!(!tree.exists());
+    drop(held);
+    create(&f.repo, &f.sha, &tree, &AttemptId::new("fixture", 1)).unwrap();
+}
+
+#[test]
+fn approved_run_directory_deletion_leaves_creation_unlocked() {
+    let f = Fixture::new();
+    let run = terminal_run(&f, "run-delete", &f.sha);
+    let opts = options(&f);
+    let report = reap_with_authority(&opts, None, authority).unwrap();
+    let stage = plan_for(&report, "would-quarantine", &run);
+    reap_with_authority(&opts, Some(("D-123", &stage)), authority).unwrap();
+    let slot = mature_slot(&f);
+    let staged = slot.join("run-dir");
+    let report = reap_with_authority(&opts, None, authority).unwrap();
+    let deletion = plan_for(&report, "would-delete", &staged);
+    let mut reads = 0;
+    let lock = f.repo.join(".git/plangraph-worktree.lock");
+    let report = reap_with_authority(&opts, Some(("D-124", &deletion)), |o, b| {
+        reads += 1;
+        if reads == 2 {
+            assert!(pg_worker_core::lockfile::try_lock(&lock).unwrap().is_some());
+        }
+        authority(o, b)
+    })
+    .unwrap();
+    assert_eq!(reads, 2);
+    assert!(report.contains("deleted") && !staged.exists(), "{report}");
 }
