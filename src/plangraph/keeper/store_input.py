@@ -108,17 +108,20 @@ class InputMixin:
         }
 
     @staticmethod
-    def _check_dependency_cap(key, deps, items, previous=()):
+    def _check_dependency_cap(key, deps, items, previous=None):
         """Count distinct unfinished targets, permitting removal from legacy overages."""
         def unfinished(keys):
             return {dep for dep in keys
                     if items.get(dep, {}).get("state") not in ("done", "cancelled")}
 
         active = unfinished(deps)
-        if len(active) > _MAX_DEPS and active - unfinished(previous):
-            raise Refused("validation",
-                          f"{key}: depends_on has {len(active)} open dependencies "
-                          f"(limit {_MAX_DEPS})")
+        if len(active) <= _MAX_DEPS:
+            return
+        if previous is not None and active <= unfinished(previous):
+            return
+        raise Refused("validation",
+                      f"{key}: depends_on has {len(active)} open dependencies "
+                      f"and exceeds the limit of {_MAX_DEPS}")
 
     def _qualify(self, project, dep):
         """``project:dep`` for a bare id, then through the alias table."""

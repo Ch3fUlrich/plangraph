@@ -262,18 +262,12 @@ class CreateMixin:
                     affected.add(gate["key"])
         self._validate_change(candidate, before, affected=affected)
         with self._write():
-            if attach or any(definition["depends_on"] for definition in defs):
+            if any(definition["depends_on"] for definition in defs):
                 locked = {item["key"]: item for item in self._all_items()}
                 targets = {**locked, **{definition["key"]: definition for definition in defs}}
                 for definition in defs:
                     self._check_dependency_cap(definition["key"],
                                                definition["depends_on"], targets)
-                children = {}
-                for definition, gate in attach:
-                    children.setdefault(gate["key"], []).append(definition["key"])
-                for gate_key, added in children.items():
-                    old = locked[gate_key]["depends_on"]
-                    self._check_dependency_cap(gate_key, [*old, *added], targets, old)
             for definition in defs:
                 self._insert_item(principal, definition, now)
             for definition, gate in attach:
@@ -416,7 +410,7 @@ class CreateMixin:
         return self._run(principal, "edit_definition", key,
                          lambda now: self._edit(principal, key, fields, now))
 
-    def _edit(self, principal, key, fields, now):
+    def _edit(self, principal, key, fields, now, *, deps_derived=False):
         has_priority = isinstance(fields, dict) and "priority" in fields
         prio = fields["priority"] if has_priority else None
         rest = ({name: value for name, value in fields.items()
@@ -464,6 +458,7 @@ class CreateMixin:
             # ``{"add": [...], "remove": [...]}``: edges named one by one, so a gate
             # over the list cap can still drop one without passing the whole list.
             rest["depends_on"] = self._deps_from_form(item, rest["depends_on"])
+            deps_derived = True
         edit_fields = dict(rest)
         self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
@@ -650,7 +645,7 @@ class CreateMixin:
                 # unchecked.  Repeat it on the graph as it is under the lock,
                 # through the same call, so the refusal code is identical and
                 # no cycle can be stored.
-                self._recheck_change_under_lock(key, me["depends_on"])
+                self._recheck_change_under_lock(key, me["depends_on"], deps_derived)
                 self.conn.execute("DELETE FROM edges WHERE src=?", (key,))
                 for dep in me["depends_on"]:
                     self.conn.execute(
@@ -710,7 +705,7 @@ class CreateMixin:
         if lease is None or lease.timestamp() <= now:
             raise Refused("forbidden", "a live claim lease is required to add operator dependencies")
 
-    def _recheck_change_under_lock(self, key, deps):
+    def _recheck_change_under_lock(self, key, deps, deps_derived):
         """Repeat the pre-lock ``_validate_change`` on the graph under the lock.
 
         D-2458/1: the holder's cycle check runs before ``BEGIN IMMEDIATE``, so
@@ -722,7 +717,8 @@ class CreateMixin:
         """
         current = self._all_items()
         index = {row["key"]: row for row in current}
-        self._check_dependency_cap(key, deps, index, index[key]["depends_on"])
+        previous = index[key]["depends_on"] if deps_derived else None
+        self._check_dependency_cap(key, deps, index, previous)
         after = []
         for row in current:
             candidate = dict(row)

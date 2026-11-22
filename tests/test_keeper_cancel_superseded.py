@@ -130,6 +130,12 @@ def test_the_list_form_stays_capped_and_add_cannot_grow_a_big_gate(big):
         w.store.edit_definition(w.p("router"), "demo:BIG",
                                 {"depends_on": [f"demo:B{i}" for i in range(250)]})
     assert exc.value.code == "validation"
+    assert "249 open dependencies" in exc.value.msg
+    with pytest.raises(Refused, match="249 open dependencies"):
+        w.store.apply_ops(w.p("router"), [{
+            "op": "edit", "key": "demo:BIG",
+            "fields": {"depends_on": [f"demo:B{i}" for i in range(250)]},
+        }])
     with pytest.raises(Refused) as exc:
         w.store.edit_definition(w.p("router"), "demo:BIG",
                                 {"depends_on": {"add": ["demo:A"]}})

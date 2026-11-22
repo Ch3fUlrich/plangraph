@@ -252,6 +252,6 @@ def test_dependency_cap_counts_only_open_edges(w, monkeypatch):
     with pytest.raises(Refused, match="201 open dependencies.*200"):
         add(live[200])
     with pytest.raises(Refused, match="201 open dependencies.*200"):
-        w.store.create_items(router, [defn("EXTRA", under=key)])
+        w.store.create_items(router, [defn("EXTRA", live, kind="goal")])
     assert "demo:EXTRA" not in {item["key"] for item in w.store._all_items()}
     assert f"demo:{live[200]}" not in w.store._item(key)["depends_on"]
