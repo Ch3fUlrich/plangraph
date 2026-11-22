@@ -12,7 +12,7 @@ that expansion entirely, which is the fix this guard enforces.
 
 Reads one PreToolUse hook JSON object from stdin (``{"tool_name": "Bash",
 "tool_input": {"command": "..."}, ...}``, the shape Claude Code sends) and
-denies (stderr message, exit 2) four shapes:
+denies (stderr message, exit 2) these shapes:
 
 1. An unquoted heredoc whose body contains a literal backtick or ``$(`` -
    the incident shape above.
@@ -35,6 +35,8 @@ denies (stderr message, exit 2) four shapes:
    `bash`/`sh`/`zsh`/`dash`/... `-c` invocation or to `eval` - a `shell -c`
    string is parsed and expanded like an outer command, so the same rules
    apply at every nesting level.
+5. A while or until condition that runs `pgrep -f` with a literal pattern
+   carried by the waiting shell's own command line.
 
 "Anywhere" is literal: the rules check every simple command, whether it sits
 at the top level, in a ``( )`` subshell, a ``{ }`` group, behind `if`/`then`/
