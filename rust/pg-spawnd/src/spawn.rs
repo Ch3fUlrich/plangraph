@@ -166,17 +166,33 @@ pub(crate) fn spawn(
             let reason = match &error {
                 ToolError::Refused { message, .. } => named
                     .into_iter()
-                    .find(|name| message.contains(&format!("{name}:"))),
+                    .find(|name| message.contains(&format!("{name}:")))
+                    .or_else(|| {
+                        message
+                            .contains(" FAIL client_missing ")
+                            .then_some("client_missing")
+                    })
+                    .or_else(|| {
+                        ["missing diff_ref", "no diff_ref", "empty diff"]
+                            .iter()
+                            .any(|marker| message.contains(marker))
+                            .then_some("missing_material")
+                    }),
                 _ => None,
             };
             let Some(reason) = reason else {
                 return Err(error);
             };
-            // LaunchAdapter only maps exit 2 to Refused; retain that error's status.
             let error = error.into_error_data();
             let mut base = error.data.unwrap_or_else(|| json!({}));
             base["role"] = role;
             base["reason"] = json!(reason);
+            if base["role"] == "review" {
+                base["review_result"] = json!(crate::review_health::classify(&base, ""));
+            }
+            if reason == "client_missing" {
+                base["exit_code"] = json!(10);
+            }
             base["error"] = json!(error.message);
             base["stderr_tail"] = base["error"].clone();
             base["stdout_tail"] = json!("");

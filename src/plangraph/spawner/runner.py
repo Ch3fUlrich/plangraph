@@ -30,7 +30,6 @@ from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import detect_model_family
 from plangraph.spawner.gateway_models import record_served_witness
-from plangraph.spawner.mimo_policy import is_mimo_id
 from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
 from plangraph.routing_support import background_process_options
@@ -356,14 +355,9 @@ class SpawnerRunner:
                     child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
-            if render_reason is None and (is_mimo_id(model_or_combo) or role == 'review' and reasoning_cap):
-                from .opencode_answer import cap_reasoning
-                from plangraph.routing_errors import SpawnRefused
-                try:
-                    if not cap_reasoning(child_env, model_or_combo, refuse=True, thinking_off=role == 'review' and reasoning_cap, reasoning_cap_tokens=is_mimo_id(model_or_combo)):
-                        render_reason = 'reasoning_output_limit: reasoning_already_disabled'
-                except SpawnRefused as exc:
-                    render_reason = str(exc)
+            if render_reason is None:
+                from .opencode_answer import configure_launch_output
+                render_reason = configure_launch_output(child_env, model_or_combo, role, reasoning_cap)
             if role == 'review':
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
@@ -454,10 +448,12 @@ class SpawnerRunner:
                 job.events.append({'event': 'render_refused', 'reason': render_reason})
                 return job
 
+            from plangraph.routing_support.clients import CODEX_REVIEW_CLIENT_MISSING, PromptTransportError, codex_review_client, launch_stdin_payload
             from .resolver import host_skip_reason_async
-            unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
+            codex, missing_client = codex_review_client(cmd[0], role, job_id)
+            unavailable = missing_client or await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
-                job.status, job.exit_code = 'failed', 1
+                job.status, job.exit_code = 'failed', CODEX_REVIEW_CLIENT_MISSING if missing_client else 1
                 job.stderr, job.end_time = unavailable, time.time()
                 return job
             from .resolver import admitted_by_render
@@ -465,8 +461,7 @@ class SpawnerRunner:
                 job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
             import shutil
-            resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-            from plangraph.routing_support.clients import PromptTransportError, launch_stdin_payload
+            resolved_exe = codex or shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
             try:
                 payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             except PromptTransportError as exc:

@@ -15,7 +15,7 @@ from plangraph.routing_errors import SpawnRefused
 from plangraph.routing_support import background_process_options
 from .env_redact import _diff_block, PrivateKeyScan
 
-HEADER = "\n\n=== INLINE DIFF (base {base}, head {head}; this leg reads the change only from here) ===\n"
+HEADER = "\n\n=== INLINE DIFF (base {base}, head {head}; assess the change from this material without calling tools) ===\n"
 FOOTER = "\n=== END INLINE DIFF ===\n"
 
 

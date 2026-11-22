@@ -7,6 +7,7 @@ operator's current lists; ``PLANGRAPH_ROUTE_POLICY`` names a replacement file.
 * ``off_families`` -- switched off for now (glm);
 * ``paused_harnesses`` -- ``{harness: {"allowed_roles": [...]}}``: a paused
   harness serves only the listed roles (qodercli: review seats only);
+* ``review_tools_denied_legs`` -- review legs parked because the harness denies file tools;
 * ``review_allowed_families`` -- families lifted for the *review* role only
   (D-3552: deepseek/glm for review seats; implement/orchestrate stay banned/off).
   kimi is refused here: it stays banned for every role (D-3084).
@@ -27,7 +28,8 @@ __all__ = ["RoutePolicy", "load_route_policy", "DEFAULT_POLICY_PATH"]
 
 DEFAULT_POLICY_PATH = Path(__file__).with_name("route_policy.json")
 _ROLES = ("implement", "review", "orchestrate")
-_KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families")
+_KEYS = ("banned_families", "off_families", "paused_harnesses", "review_allowed_families",
+         "review_tools_denied_legs")
 
 
 def review_priority(leg) -> int:
@@ -79,6 +81,7 @@ class RoutePolicy:
     off_families: tuple[str, ...] = ()
     paused_harnesses: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
     review_allowed_families: tuple[str, ...] = ()
+    review_tools_denied_legs: tuple[str, ...] = ()
 
     def allows(self, harness: str, role: str) -> bool:
         """False when ``harness`` is paused and ``role`` is not one it still serves."""
@@ -110,6 +113,8 @@ class RoutePolicy:
                 return "off_family"
         if not self.allows(leg.harness, role):
             return "paused_harness"
+        if role == "review" and leg.id in self.review_tools_denied_legs:
+            return "opencode_tools_denied"
         from .legs import NO_VERDICT_SEATS
         if role == "review" and leg.model in NO_VERDICT_SEATS:
             return "no_verdict_seat"
@@ -146,6 +151,7 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
     banned = _str_list(doc, "banned_families", problems)
     off = _str_list(doc, "off_families", problems)
     review_allowed = _str_list(doc, "review_allowed_families", problems)
+    tools_denied = _str_list(doc, "review_tools_denied_legs", problems)
     from .seats import seat_family
     if any(seat_family(f) == "kimi" for f in review_allowed):
         problems.append("review_allowed_families: kimi is never a seat (D-3084)")
@@ -163,7 +169,7 @@ def load_route_policy(path: Path | str | None = None) -> RoutePolicy:
         paused[harness] = tuple(roles)
     if problems:
         raise ValueError("invalid route policy: " + "; ".join(problems))
-    return RoutePolicy(banned, off, paused, review_allowed)
+    return RoutePolicy(banned, off, paused, review_allowed, tools_denied)
 
 
 def codex_leg_effort(leg, card):
