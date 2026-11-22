@@ -367,7 +367,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
     # Review writers are keeper families (fail closed on an unknown name).
     writer_set = writer_parts(writer_families) if role == "review" else {w for w in writer_families if w}
-    if role == "review" and not writer_set:   # D-1533: no writer named = none excluded; fail closed
+    from .route_policy import train_delta_document
+    delta_document = train_delta_document(card, role)
+    if role == "review" and not writer_set and not delta_document:
         raise SpawnRefused("review needs a writer family (writer_families or review_of)")
     # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
@@ -435,7 +437,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "low_risk_only"
         elif role == "review" and card.get("repository_review_required") and not has_repository_review_tools(leg):
             reason = "repository_review_tools_unavailable"
-        elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
+        elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card and not delta_document:
             reason = "inline_only_needs_diff"
         elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai" and not (
                 low_risk and leg.id in LOW_RISK_ONLY_LEGS):

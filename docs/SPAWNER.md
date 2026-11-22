@@ -160,7 +160,7 @@ Cards may also be inline JSON; `spawn --prompt-file FILE` replaces the prompt ar
 relative, missing, non-checkout and conflicting flag/card paths are refused.
 Without either, the caller's cwd is unchanged. The selected path is recorded in
 `record.cwd` and passed to the runner; `completion.head_sha` is that checkout's
-HEAD at completion, not at launch. `seat_verdict --head` must still match it. Python review dispatch records the brief digest before adding the role header and skill for [train delta admission](landing-train.md).
+HEAD at completion, not at launch. `seat_verdict --head` must still match it. Python review dispatch records the brief digest and the serving attempt's response finish reason for [train delta admission](landing-train.md).
 Explicit cwd takes precedence over `diff_ref.repo` for placement; explicit-cwd runs stay local regardless of the public allowlist (below-floor runs queue). SSH overflow is only eligible without explicit cwd and requires every checkout/diff repository to pass the public allowlist; a supplied `diff_ref` without `repo` is refused. Run worktrees retain `selected_cwd` for fresh attempts and fixer continuations even after the parent's attempt is pruned; legacy records recover the service's default checkout. Cwd must be a checkout root with a committed HEAD and is stored as its resolved absolute path. Validation runs once off the async loop; checkout Git operations ignore repository redirects, injected config parameters and alternate object directories.
 `--dry-run` plans without a child. Spawn returns a `wait_cmd`:
 `plangraph-spawn wait RUN_ID --timeout SECONDS` (omit timeout to block indefinitely).

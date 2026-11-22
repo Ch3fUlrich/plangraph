@@ -205,6 +205,7 @@ class SpawnService(SeatSpawnMixin):
             raise
     def _route(self, card, role='implement', writer_families=(), review_of=None, *, benchmark=None, require_bench=False):
         from plangraph.routing_support.leg_state_flag import service_plan, SpawnRefused
+        from plangraph.planner.route_policy import train_delta_document
         families = list(writer_families)
         if review_of:
             record = self.result(review_of, attempts=SAVE_READ_ATTEMPTS)
@@ -212,7 +213,8 @@ class SpawnService(SeatSpawnMixin):
             if not any(family):
                 raise SpawnRefused('writer family unavailable')
             families.extend(family)
-        if role == 'review' and not any(str(f or '').strip() for f in families):
+        delta_document = train_delta_document(card, role)
+        if role == 'review' and not delta_document and not any(str(f or '').strip() for f in families):
             # No writer named = no family excluded (D-1533): fail closed.
             raise SpawnRefused('review needs a writer family (writer_families or review_of)')
         if role == 'review' and isinstance(card, dict) and 'diff_ref' in card:
@@ -229,7 +231,10 @@ class SpawnService(SeatSpawnMixin):
             extra['installed'] = probe
         plan = service_plan(self, card=card, role=role, writer_families=families, benchmark=benchmark, strict=require_bench, **extra)
         live = lambda legs: tuple(leg for leg in legs if leg_active(leg))
-        return replace(plan, legs=witness_order(card, role, live(plan.legs), down), review_seats=live(plan.review_seats))
+        ordered = witness_order(card, role, live(plan.legs), down)
+        if delta_document and not plan.error:
+            ordered = witness_gate_legs(card, role, ordered)
+        return replace(plan, legs=ordered, review_seats=live(plan.review_seats))
     async def _continue_writer(self, record, output):
         from .fixer import remaining_gaps, render_fixer_brief
         gaps = remaining_gaps(output)

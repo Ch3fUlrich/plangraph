@@ -40,6 +40,14 @@ def has_repository_review_tools(leg):
     return leg.tool_mode == "tools" and leg.harness != "opencode"
 
 
+def train_delta_document(card, role):
+    """The verified replay brief is the entire input for this witnessed review."""
+    return (role == "review" and isinstance(card, Mapping)
+            and card.get("review_document") == "train_delta"
+            and card.get("witness_required") is True
+            and "diff_ref" not in card and not card.get("repository_review_required"))
+
+
 def implement_key(leg, tier_idx, pos):
     """Eligible Sol xhigh then Gemini precede other cost tiers (rule 3.23a/D-5212).
 

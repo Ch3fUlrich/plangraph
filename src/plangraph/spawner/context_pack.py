@@ -395,6 +395,9 @@ def warnings(prompt: str, card, cwd) -> list[str]:
 def annotate(record: dict, prompt: str, card, cwd) -> Pack:
     """Validate ``context`` (refuses a bad entry), put the warnings on ``record`` and its events, and return the
     :class:`Pack` the legs reuse."""
+    from plangraph.planner.route_policy import train_delta_document
+    if train_delta_document(card, record.get('role')):
+        record['review_document'] = 'train_delta'
     pack = build(prompt, card, cwd)
     if pack.warnings:
         record['warnings'] = list(pack.warnings)

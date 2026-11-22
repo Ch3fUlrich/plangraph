@@ -1084,7 +1084,7 @@ def spawn_service(*args, **kwargs):
                             served_witness_reason=job.served_witness_reason,
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
-                            stdout_tail=job.stdout, stderr_tail=job.stderr))
+                            stdout_tail=job.stdout, stderr_tail=job.stderr, finish_reason=getattr(job, 'response_finish_reason', None)))
                         if stop and not unavailable and job.status != 'cancelled':
                             notify_leg_refused(self, record, chosen, reason or 'provider_stop')
                         if job.status in ('completed', 'dry_run', 'terminated_after_answer') and not unavailable and not stop:

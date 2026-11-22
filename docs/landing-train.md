@@ -46,8 +46,9 @@ recomputed), `--open`, `--freeze` and `--result`.
 `verify --delta-out FILE` exports a replay artifact with the frozen base, train head, policy and each merge's
 parents, actual tree and replay tree. For an adopted resolution it includes the diff from Git's conflict
 tree to the committed tree. `land-train review` takes the same proof inputs and `--item KEY`. It dispatches
-the canonical artifact from a clean checkout of the train head on the witness-capable review route,
-excluding authors of the merge delta. `land-train admit --item KEY --review-run ID` repeats the proof and
+the canonical artifact as a witnessed document review from a clean checkout of the train head.
+Only authors of the merge delta are excluded. A mechanical merge can have an empty exclusion set.
+`land-train admit --item KEY --review-run ID` repeats the proof and
 requires a passing gateway-witnessed review in the keeper mirror. The serving attempt must be from
 outside the delta's writer families, and the run must match the exact train head and artifact prompt.
 

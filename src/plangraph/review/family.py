@@ -226,14 +226,14 @@ def check_cross_family(writer_family: str, reviewer_model: str) -> str:
     return family
 
 
-def writer_headers(writer_families):
+def writer_headers(writer_families, *, allow_empty=False):
     """Resolve writers once and use the gateway's served-family vocabulary."""
     aliases = {"openai": "gpt", "anthropic": "claude", "google": "gemini",
                "xiaomi": "mimo", "alibaba": "qwen", "meta": "muse", "zhipu": "glm"}
     keys = sorted({writer_key(w) for w in writer_families})
-    if not keys:
+    if not keys and not allow_empty:
         raise FamilyError("review needs a resolvable writer family (writer_families or review_of)")
     families = [aliases.get(key, key) for key in keys]
     from plangraph.routing_support.clients import build_routing_envelope_headers
-    return build_routing_envelope_headers(role="review", author_model=families[0],
+    return build_routing_envelope_headers(role="review", author_model=next(iter(families), None),
                                           exclude_families=families)
