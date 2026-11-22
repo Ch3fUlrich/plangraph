@@ -488,6 +488,13 @@ class CloseMixin:
         changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head)}
         return (head, tagged), changes
 
+    def _merged_go_deploy_changes(self, item, head):
+        git, project = self._adapter("git"), self._merge_project(item)
+        try:
+            return set(git.deploy_changes(git.repo_path(project), head, item["_close_head"]))
+        except Exception:  # noqa: BLE001 - an unreadable diff cannot clear the deploy gate
+            raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
+
     def _deploy_pending(self, item, changes):
         """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for."""
         targets = deploy_targets(changes)
