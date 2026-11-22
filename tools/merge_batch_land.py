@@ -583,17 +583,14 @@ def part_seat(run_id, key, head):
     from plangraph.keeper.config import ConfigError, load_config
     from plangraph.keeper.evidence_runs import RunRecordAdapter
     from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
+    from plangraph.keeper.store_merge_locks import require_train_review
 
     if not isinstance(run_id, str) or not run_id.startswith("run-") or not RunRecordAdapter(None).valid_run_id(run_id):
         raise MergeBatchError("a keeper-bound review requires a spawner run id")
     try:
         config = load_config(keeper_config_path())
         adapter = SpawnerRecordAdapter(config.spawner_records_dir)
-        seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
-                                     allow_cli_reported=True, require_diff_head=True,
-                                     require_explicit_accept=True)
-        if len(seats) != 1 or seats[0]["verdict"] != "pass":
-            raise ValueError(f"{run_id}: expected one passing review seat")
+        require_train_review(adapter, key, head, run_id)
     except (ConfigError, OSError, ValueError) as exc:
         raise MergeBatchError(f"keeper-bound review for {key}: {exc}") from None
 

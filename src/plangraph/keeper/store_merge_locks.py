@@ -58,6 +58,16 @@ def _land_manifest(body):
     return sorted(manifest, key=lambda part: part["pr"])
 
 
+
+def require_train_review(adapter, key, head, run_id):
+    """Require one passing seat bound to this item and exact part head."""
+    seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
+                                 allow_cli_reported=True, require_diff_head=True,
+                                 require_explicit_accept=True) if adapter is not None else []
+    if len(seats) != 1 or seats[0]["verdict"] != "pass":
+        raise ValueError(f"{run_id}: expected one passing review seat")
+
+
 def _saved_manifest(row):
     manifest = json.loads(row["manifest"])
     if isinstance(manifest, list):
@@ -227,14 +237,10 @@ class MergeLocksMixin:
         for part in parts:
             for key, run in part.get("review_runs", {}).items():
                 try:
-                    seats = adapter.review_seats(
-                        {"key": key, "run_ids": json.dumps([run])}, part["head"], "",
-                        allow_cli_reported=True, require_diff_head=True, require_explicit_accept=True,
-                    ) if adapter is not None else []
+                    require_train_review(adapter, key, part["head"], run)
                 except (ValueError, OSError):
-                    seats = []
-                if len(seats) != 1 or seats[0]["verdict"] != "pass":
-                    raise Refused("evidence_unverified", f"{key}: no explicit ACCEPT for part #{part['pr']}")
+                    raise Refused("evidence_unverified",
+                                  f"{key}: no explicit ACCEPT for part #{part['pr']}") from None
 
     def _landing_timing(self, principal, repo, action, body):
         roles = ("router", "system", "spawner") if action == "stage" else ("router", "system")
