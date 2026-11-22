@@ -7,6 +7,10 @@ use pg_worker_core::run::{
 use serde_json::{json, Value};
 use std::{collections::BTreeSet, path::Path, time::Duration};
 
+#[cfg(test)]
+#[path = "review_retry_tests.rs"]
+mod tests;
+
 pub(crate) fn hook_with_group(
     args: Args,
     leg: Value,
@@ -193,14 +197,11 @@ fn advance(
             &args["card"]["diff_ref"],
             &mut metadata,
         )?;
-        if !value["review_binding"].is_null()
-            && !metadata["review_binding"].is_null()
-            && value["review_binding"] != metadata["review_binding"]
-        {
-            return Err(crate::placement::parameter(
-                "CLI review diff binding changed between attempts",
-            ));
-        }
+    }
+    if !value["review_binding"].is_null() && value["review_binding"] != metadata["review_binding"] {
+        return Err(crate::placement::parameter(
+            "CLI review diff binding changed between attempts",
+        ));
     }
     let allow_shas = runs::allow_shas(
         &args,
