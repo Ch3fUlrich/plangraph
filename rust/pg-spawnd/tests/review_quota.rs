@@ -1,4 +1,8 @@
 #![cfg(unix)]
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 #[path = "common/binary.rs"]
 mod binary;
 mod common;
@@ -101,7 +105,7 @@ fn shell_quote(value: &str) -> String {
 #[test]
 fn python_review_quota_on_clean_exit_is_still_a_refusal() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = std::process::Command::new("python3")
+    let out = test_python::command()
         .current_dir(&root).env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 from types import SimpleNamespace as NS
@@ -137,7 +141,7 @@ with TemporaryDirectory() as tmp:
 #[test]
 fn keeper_counts_the_substitute_as_one_review() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = std::process::Command::new("python3")
+    let out = test_python::command()
         .current_dir(&root).env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter

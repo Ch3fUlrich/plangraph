@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::{
     fs,
     path::Path,
@@ -419,7 +423,7 @@ fn pre_push_prints_hook_head_and_refuses_day_old_missing_commits() {
     // Exercise the installed Python entry point using this fixture as its checkout.
     let script = "import runpy,sys; m=runpy.run_path(sys.argv[1]); m['push_main'].__globals__['TOOLS']=__import__('pathlib').Path(sys.argv[2])/'tools'; sys.exit(m['main']())";
     let invoke = || {
-        Command::new("python3")
+        test_python::command()
             .args(["-c", script])
             .arg(&hook)
             .arg(&hooks)

@@ -1,7 +1,11 @@
 //! Exercise the Python compatibility boundary with Rust-owned assertions.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::{json, Value};
 use std::io::Write;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 const PACKAGE: &str = "@opencode/ai/providers/openai-compatible";
 const FLASH: &str = "mimo/mimo-v2.6-flash";
@@ -10,7 +14,7 @@ const PRO: &str = "mimo/mimo-v2.6-pro";
 fn python(body: &str, input: Value) -> Value {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let home = tempfile::tempdir().unwrap();
-    let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = test_python::command();
     command
         .current_dir(&root)
         .env_clear()

@@ -1,5 +1,9 @@
 //! Exercise the guard's negative probes in the rust-worker CI job.
-use std::{path::Path, process::Command};
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
+use std::path::Path;
 
 #[test]
 fn admission_guard_rejects_bypass_probes() {
@@ -10,7 +14,7 @@ fn admission_guard_rejects_bypass_probes() {
         .unwrap()
         .parent()
         .unwrap();
-    let output = Command::new("python3")
+    let output = test_python::command()
         .arg(root.join("tools/probe_admission_policy_guard.py"))
         .current_dir(root)
         .output()

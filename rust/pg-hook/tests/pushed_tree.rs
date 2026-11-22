@@ -1,9 +1,13 @@
 #![cfg(unix)]
 
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Output, Stdio};
 
 fn source() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -49,7 +53,7 @@ fn fixture() -> (tempfile::TempDir, String) {
 }
 
 fn hook(root: &Path, heads: &[&str], preflight: bool) -> Output {
-    let mut command = Command::new("python3");
+    let mut command = test_python::command();
     command
         .arg(source().join("tools/hooks/pre-push"))
         .arg("origin")

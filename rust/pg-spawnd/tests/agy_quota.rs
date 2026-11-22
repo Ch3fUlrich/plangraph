@@ -1,12 +1,15 @@
 //! Exercise the shared routing/store boundary used by the Rust route adapter.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::Value;
-use std::process::Command;
 
 #[test]
 fn hydrogen_and_argon_limits_are_independent_and_exposed() {
     let state = tempfile::tempdir().unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .env("XDG_STATE_HOME", state.path())
@@ -134,7 +137,7 @@ print(json.dumps(dict(snapshot=snapshot, legacy=legacy_state, sonnet_only=sonnet
 fn native_sonnet_and_agy_quota_keys_are_independent() {
     let state = tempfile::tempdir().unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .args([
@@ -231,7 +234,7 @@ assert store.leg_status(agy)['state'] == 'ok'
 fn provider_stated_resets_are_booked_and_honoured_uncapped() {
     let state = tempfile::tempdir().unwrap();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .env("XDG_STATE_HOME", state.path())

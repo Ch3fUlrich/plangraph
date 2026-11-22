@@ -1,10 +1,14 @@
 //! Check catalog identities against the same overlay and renderer used at launch.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::Value;
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
 
 fn catalog() -> Vec<Value> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = test_python::command()
         .args([
             "-c",
             r#"

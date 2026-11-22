@@ -4,6 +4,10 @@
 //! checks, confinement, exit classification, retry policy and process
 //! supervision.
 
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 pub mod activity;
 pub mod budget;
 pub mod check;

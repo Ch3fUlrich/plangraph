@@ -1,6 +1,9 @@
 //! Exercise the existing Python keeper until its storage port lands.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::path::Path;
-use std::process::Command;
 
 fn keeper_case(case: &str) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -8,7 +11,7 @@ fn keeper_case(case: &str) {
         .unwrap()
         .parent()
         .unwrap();
-    let output = Command::new("python3")
+    let output = test_python::command()
         .current_dir(root)
         .env("PYTHONPATH", root.join("src"))
         .args(["-c", CASE, case])

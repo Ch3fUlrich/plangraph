@@ -1,3 +1,5 @@
+use crate::test_python;
+
 use super::*;
 #[test]
 fn actual_seat_verdict_dry_run_reads_pair() {
@@ -31,25 +33,24 @@ fn actual_seat_verdict_dry_run_reads_pair() {
         );
         assert_eq!(fs::read_to_string(seat.join("review.txt")).unwrap(), body);
         if pass || body.contains("quoted") || body == "analysis\nVERDICT: HALT" {
-            let output =
-                std::process::Command::new(if cfg!(windows) { "python" } else { "python3" })
-                    .arg(concat!(
-                        env!("CARGO_MANIFEST_DIR"),
-                        "/../../tools/seat_verdict.py"
-                    ))
-                    .args([
-                        "--dry-run",
-                        "--key",
-                        "test",
-                        "--writer-family",
-                        "meta",
-                        "--token-dir",
-                    ])
-                    .arg(&state)
-                    .arg("--seat-dir")
-                    .arg(&seat)
-                    .output()
-                    .unwrap();
+            let output = test_python::command()
+                .arg(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../../tools/seat_verdict.py"
+                ))
+                .args([
+                    "--dry-run",
+                    "--key",
+                    "test",
+                    "--writer-family",
+                    "meta",
+                    "--token-dir",
+                ])
+                .arg(&state)
+                .arg("--seat-dir")
+                .arg(&seat)
+                .output()
+                .unwrap();
             assert!(
                 output.status.success(),
                 "{}",

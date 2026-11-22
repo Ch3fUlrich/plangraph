@@ -1,4 +1,8 @@
 //! Root-level Cargo invocations and builds under rust/ must share one compiler.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::{path::Path, process::Command};
 
 #[test]
@@ -49,7 +53,7 @@ fn ci_temporal_inputs_select_the_worker_job() {
         "rust/Cargo.toml",
         "rust/Cargo.lock",
     ] {
-        let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+        let output = test_python::command()
             .args(["tools/ci_select.py", "select", "--files", path])
             .current_dir(&root)
             .output()
@@ -123,7 +127,7 @@ fn worker_and_temporal_helper_share_the_cached_target() {
 #[test]
 fn dell_provisions_the_pin_before_resolving_the_direct_sysroot() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .args(["-c", "import sys; sys.path.insert(0, 'tools'); from dell_ci_jobs import isolated_script; print(isolated_script('true', '/source', '/job', cargo_deps=True))"])
         .current_dir(&root)
         .output().unwrap();

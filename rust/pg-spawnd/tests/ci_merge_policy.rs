@@ -1,12 +1,16 @@
 //! Exercise the actual Python entry points from Rust regression tests.
-use std::{path::PathBuf, process::Command};
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
+use std::path::PathBuf;
 
 fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 fn python(source: &str) {
     let fixture = tempfile::tempdir().unwrap();
-    let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+    let mut command = test_python::command();
     pg_worker_core::git_test_support::configure(&mut command, fixture.path());
     let output = command
         .args(["-c", source])

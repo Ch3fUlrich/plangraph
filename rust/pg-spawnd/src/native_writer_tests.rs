@@ -1,3 +1,5 @@
+use crate::test_python;
+
 use super::*;
 use serde_json::json;
 
@@ -241,7 +243,7 @@ fn native_resume_cap_and_final_gates_fail_closed() {
 #[test]
 fn native_placement_uses_existing_ram_overflow_and_disk_floor() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" }).current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let output = test_python::command().current_dir(&root).env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 from unittest.mock import patch
 from types import SimpleNamespace
@@ -276,7 +278,7 @@ with patch.object(o, 'registry_caps', return_value={'self':'primary','hosts':[]}
 #[test]
 fn native_remote_result_returns_final_head_and_review_to_origin_record() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" }).current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let output = test_python::command().current_dir(&root).env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 import json, os, pathlib, tempfile
 from unittest.mock import patch
@@ -310,7 +312,7 @@ fn native_rust_mcp_bridge_rejects_review_before_starting_adapter() {
 #[test]
 fn native_remote_receipts_never_probe_or_kill_origin_pids_and_cancel_on_target() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" }).current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let output = test_python::command().current_dir(&root).env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 import asyncio, json, os, pathlib, tempfile, time
 from unittest.mock import patch, AsyncMock
@@ -415,7 +417,7 @@ fn native_cards_require_explicit_absolute_repo_before_admission() {
         }
     }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" }).current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let output = test_python::command().current_dir(&root).env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 import asyncio, pathlib, tempfile
 from unittest.mock import patch
@@ -444,7 +446,7 @@ asyncio.run(check())
 #[test]
 fn native_remote_reads_are_local_and_explicit_refresh_does_not_block_loop() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" }).current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let output = test_python::command().current_dir(&root).env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 import asyncio, pathlib, tempfile, threading
 from unittest.mock import patch
@@ -492,7 +494,7 @@ asyncio.run(check())
 #[test]
 fn native_remote_wait_refreshes_terminal_evidence_at_a_bounded_cadence() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new(if cfg!(windows) { "python" } else { "python3" }).current_dir(&root).env("PYTHONPATH", root.join("src"))
+    let output = test_python::command().current_dir(&root).env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 import asyncio, pathlib, tempfile, time
 from unittest.mock import patch

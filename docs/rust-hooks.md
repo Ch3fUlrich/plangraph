@@ -52,8 +52,8 @@ through independent no-op test hooks: all six inject cases produce comparisons,
 including two intentional seeded-inbox mismatches and four matches. Together these
 exercise every one of the 29 corpus cases and the comparator
 without claiming that pending production hooks have passed parity. Replay tests
-resolve Python before clearing the environment; override CLI tests select that absolute
-interpreter in place with no PATH. The default-interpreter import regression uses a
+resolve Python with the Rust test helper before clearing the environment. Override CLI
+tests select that absolute interpreter in place with no PATH. The default-interpreter import regression uses a
 temporary Unix PATH containing only a symlink to the resolved interpreter.
 Replay helpers use `-I`; CLI tests clear the environment and use temporary HOME/state.
 The commit-message fixture tests drop every inherited `GIT_*` variable so they cannot act on the hook's own repository.

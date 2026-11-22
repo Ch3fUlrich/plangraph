@@ -1,11 +1,15 @@
 //! Keeper mirrors use Unix ownership checks; exercise the real record reader.
 #![cfg(unix)]
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::{path::Path, process::Command};
 
 #[test]
 fn merged_review_seats_ignore_native_writers_and_origin_receipts() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let out = Command::new("python3")
+    let out = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"

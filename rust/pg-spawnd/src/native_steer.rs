@@ -1,4 +1,7 @@
 //! Private, ordered per-run steer messages. The writer records delivery after a turn.
+#[cfg(test)]
+use crate::test_python;
+
 use crate::{errors::ToolError, placement::Args};
 use pg_worker_core::{
     lockfile,
@@ -214,7 +217,7 @@ mod tests {
     fn native_steer_cli_and_mcp_use_configured_posix_and_wsl_routes() {
         let state = tempfile::tempdir().unwrap();
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
-        let mut command = std::process::Command::new("python3");
+        let mut command = test_python::command();
         let output = command
             .env("PYTHONPATH", source)
             .arg("-c")

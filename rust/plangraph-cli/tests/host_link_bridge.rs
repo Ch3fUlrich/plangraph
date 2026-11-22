@@ -1,5 +1,9 @@
 #![cfg(unix)]
 
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use pg_worker_core::host_link::{observe, observe_ssh};
 use serde_json::{json, Value};
 use std::{
@@ -50,7 +54,7 @@ fn blocked_peer_alert_reaches_keeper_through_the_watchdog_bridge() {
     }
 
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let result = Command::new("python3")
+    let result = test_python::command()
         .args([
             "-c",
             r#"

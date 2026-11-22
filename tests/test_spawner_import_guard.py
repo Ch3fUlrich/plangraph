@@ -172,7 +172,9 @@ def rust_python_test_imports(root: Path) -> list[str]:
         source = path.read_text(encoding='utf-8')
         strings = _rust_strings(source)
         values = {value for value, _ in strings}
-        if '-c' not in values or not any(Path(value).name in {'python3', 'python'} for value in values):
+        launches_python = ('test_python::command' in source
+                           or any(Path(value).name in {'python3', 'python'} for value in values))
+        if '-c' not in values or not launches_python:
             continue
         for body, offset in strings:
             try:
@@ -215,6 +217,8 @@ def test_rust_python_dependency_guard_red(tmp_path: Path) -> None:
     assert len(rust_python_test_imports(tmp_path)) == 1
     path.write_text('// Command::new("python3").args(["-c", "import pytest"]);')
     assert rust_python_test_imports(tmp_path) == []
+    path.write_text('test_python::command().args(["-c", "import pytest"]);')
+    assert len(rust_python_test_imports(tmp_path)) == 1
 
 
 @pytest.mark.parametrize('source', [
@@ -240,3 +244,116 @@ def test_rust_python_guard_covers_helpers_and_rust_literals(tmp_path, source):
     hits = rust_python_test_imports(tmp_path)
     assert len(hits) == 1
     assert hits[0].startswith('rust/crate/src/lib.rs:')
+
+
+@pytest.mark.parametrize(('relative', 'bare', 'clean'), [
+    ('rust/crate/tests/fixture.rs',
+     'std::process::Command::new("python").args(["-c", "pass"]);',
+     'test_python::command().args(["-c", "pass"]);'),
+    ('rust/crate/src/fixture_tests.rs',
+     'Command::new(if cfg!(windows) { "python" } else { "python3" });',
+     'test_python::command();'),
+    ('tests/test_fixture.py',
+     'from subprocess import run as invoke\ninvoke(args=["python3", "-c", "pass"])',
+     'python, env = python_test_env()\nsubprocess.run([python, "-c", "pass"], env=env)'),
+])
+def test_bare_python_subprocess_guard(tmp_path, relative, bare, clean):
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(bare, encoding='utf-8')
+    assert len(bare_python_subprocesses(tmp_path)) == 1
+    assert bare_python_subprocesses(tmp_path)[0].startswith(f'{relative}:')
+    path.write_text(clean, encoding='utf-8')
+    assert bare_python_subprocesses(tmp_path) == []
+
+
+def test_python_helper_replaces_inherited_python_settings(monkeypatch, tmp_path):
+    import subprocess
+    from _split_ci_environment import python_test_env
+
+    monkeypatch.setenv('PYTHONPATH', str(tmp_path / 'foreign-src'))
+    monkeypatch.setenv('VIRTUAL_ENV', str(tmp_path / 'foreign-venv'))
+    python, env = python_test_env()
+    root = Path(__file__).resolve().parents[1]
+    out = subprocess.check_output(
+        [python, '-c', 'from plangraph.review.family import model_family; '
+         'print(model_family("gpt-6.2-sol"))'], cwd=tmp_path, env=env, text=True)
+    assert out.strip() == 'openai'
+    assert env['PYTHONPATH'] == str(root / 'src')
+    assert env.get('VIRTUAL_ENV') in (None, str(root / '.venv'))
+
+
+_PYTHON_NAMES = {'python', 'python3', 'python.exe', 'python3.exe'}
+_SUBPROCESS_APIS = {'run', 'Popen', 'call', 'check_call', 'check_output'}
+
+
+def _python_subprocess_lines(source):
+    tree = ast.parse(source)
+    modules = {'subprocess'}
+    calls = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update(alias.asname or alias.name for alias in node.names
+                           if alias.name == 'subprocess')
+        if isinstance(node, ast.ImportFrom) and node.module == 'subprocess':
+            calls.update(alias.asname or alias.name for alias in node.names
+                         if alias.name in _SUBPROCESS_APIS)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not ((isinstance(func, ast.Name) and func.id in calls)
+                or (isinstance(func, ast.Attribute) and func.attr in _SUBPROCESS_APIS
+                    and isinstance(func.value, ast.Name) and func.value.id in modules)):
+            continue
+        argv = node.args[0] if node.args else next(
+            (kw.value for kw in node.keywords if kw.arg == 'args'), None)
+        first = argv.elts[0] if isinstance(argv, (ast.List, ast.Tuple)) and argv.elts else argv
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            words = first.value.split()
+            if words and Path(words[0]).name in _PYTHON_NAMES:
+                yield node.lineno
+
+
+_RUST_COMMAND_PREFIX = re.compile(
+    r'\bCommand\s*::\s*new\s*\(\s*(?:if\s+cfg!\s*\([^)]*\)\s*\{\s*)?'
+    r'(?:r\#*)?$')
+
+
+def _rust_subprocess_lines(source):
+    if 'Command' not in source:
+        return []
+    offsets = set()
+    for value, offset in _rust_strings(source):
+        if Path(value).name in _PYTHON_NAMES:
+            if match := _RUST_COMMAND_PREFIX.search(source, 0, offset):
+                offsets.add(match.start())
+    return sorted(source.count('\n', 0, offset) + 1 for offset in offsets)
+
+
+def bare_python_subprocesses(root):
+    """Name literal Python subprocess launches in test sources."""
+    hits = []
+    for path in sorted((root / 'tests').rglob('*.py')):
+        hits.extend(f'{path.relative_to(root).as_posix()}:{line}: use python_test_env'
+                    for line in _python_subprocess_lines(path.read_text(encoding='utf-8')))
+    for path in sorted((root / 'rust').rglob('*.rs')):
+        parts = path.relative_to(root / 'rust').parts
+        if 'target' in parts or parts[:1] == ('test_support',):
+            continue
+        source = path.read_text(encoding='utf-8')
+        if ('tests' not in parts and not path.stem.endswith(('_test', '_tests'))
+                and not re.search(r'#\[\s*test\s*\]', source)):
+            continue
+        relative = path.relative_to(root).as_posix()
+        for line in _rust_subprocess_lines(source):
+            # This production adapter selects its caller's runtime interpreter.
+            if (relative == 'rust/plangraph-cli/src/feeder/adapters.rs'
+                    and source.splitlines()[line - 1] == '    let mut cmd = Command::new("python3");'):
+                continue
+            hits.append(f'{relative}:{line}: use test_python::command')
+    return hits
+
+
+def test_no_bare_python_subprocesses():
+    assert bare_python_subprocesses(Path(__file__).resolve().parents[1]) == []

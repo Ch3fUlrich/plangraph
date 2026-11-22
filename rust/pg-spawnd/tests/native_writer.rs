@@ -1,5 +1,9 @@
 //! End-to-end Python admission -> Rust worker -> native CLI, without a model seat.
 #![cfg(unix)]
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 #[path = "common/binary.rs"]
 mod binary;
 #[path = "native_writer_fixture/codex.rs"]
@@ -187,7 +191,7 @@ print(json.dumps({'run_id':run_id,'status':'completed','live_log':str(run / 'liv
     let home = dir.join("home");
     let runtime = home.join("runtime");
     fs::create_dir_all(&runtime).unwrap();
-    let mut python = Command::new("python3");
+    let mut python = test_python::command();
     // Drop caller Git redirects first; the fixture HOME and Git config below override its paths.
     pg_worker_core::git_test_support::configure(&mut python, &dir);
     for (key, _) in std::env::vars_os() {

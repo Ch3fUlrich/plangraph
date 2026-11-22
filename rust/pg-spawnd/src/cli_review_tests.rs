@@ -1,6 +1,7 @@
+use crate::test_python;
+
 use super::*;
 use pg_worker_core::run::record::new_run_id;
-use std::process::Command;
 
 pub(super) fn git_ok(dir: &Path, args: &[&str]) {
     assert!(pg_worker_core::git_test_support::command(dir)
@@ -160,7 +161,7 @@ fn assert_keeper_accepts_cli_review(dir: &Path, record: &Path, head: &str, id: &
     }
     std::fs::copy(record, mirror.join("record.json")).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))
         .args([
@@ -288,7 +289,7 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
             &json!({"account":"fixture-A"}),
         )
         .unwrap();
-        let output = Command::new("python3")
+        let output = test_python::command()
             .current_dir(&root)
             .env("PYTHONPATH", root.join("src"))
             .env("XDG_STATE_HOME", dir.path())
@@ -303,7 +304,7 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let output = Command::new("python3").current_dir(&root)
+    let output = test_python::command().current_dir(&root)
         .env("PYTHONPATH", root.join("src")).env("XDG_STATE_HOME", dir.path())
         .args(["-c", "import json; from plangraph.routing_support.leg_state import _default_store; print(json.dumps({m:_default_store().leg_status(k,account=a) for m,k,a in [('gemini-4-hydrogen','agy:gemini-4-hydrogen','fixture-A'),('gemini-4-neon','agy:gemini-4-neon','fixture-A'),('claude-sonnet-5-5','claude-sonnet-5-5-high','fixture-A'),('agy-sonnet','agy:claude-sonnet-5-5','fixture-A'),('other-account','agy:gemini-4-neon','fixture-B')]}))"])
         .output().unwrap();
@@ -368,7 +369,7 @@ fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind
         .status()
         .unwrap()
         .success());
-    let output = Command::new("python3").current_dir(&checkout)
+    let output = test_python::command().current_dir(&checkout)
         .env("PYTHONPATH", root.join("src")).env("XDG_STATE_HOME", dir.path())
         .env("PLANGRAPH_OMNIROUTE_LEG_STATE", "0")
         .args(["-c", r#"
