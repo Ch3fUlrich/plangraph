@@ -71,7 +71,7 @@ pub fn write_mock_spawner(dir: &Path, state_dir: &Path, log_path: &Path, mode: &
     let script = dir.join("mock_spawner.py");
     let body = format!(
         r#"#!/usr/bin/env python3
-import json, sys, tempfile
+import json, sys, tempfile, uuid
 from pathlib import Path
 
 STATE = Path({state:?})
@@ -138,7 +138,8 @@ if verb == "route":
 if verb == "spawn":
     runs = STATE / "runs"
     runs.mkdir(parents=True, exist_ok=True)
-    run_dir = Path(tempfile.mkdtemp(prefix="run-test-", dir=runs))
+    run_dir = runs / ("run-" + uuid.uuid4().hex)
+    run_dir.mkdir()
     run_id = run_dir.name
     diff_ref = card.get("diff_ref") or {{}}
     head_sha = diff_ref.get("head", "")
@@ -146,30 +147,58 @@ if verb == "spawn":
 
     if (MODE == "split_fail_beta" and "beta/b.rs" in diff_ref.get("paths", [])
             or MODE == "fail_openai_group" and opts["writer_family"] == ["openai"]):
-        reply = f"Found issue in this group.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: REQUEST_CHANGES\n"
+        reply = f"Found issue in this group.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: REQUEST_CHANGES\n"
+    elif MODE == "diff_only":
+        reply = f"Looks fine.\nFILES READ: diff only\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: ACCEPT\n"
     elif MODE == "test_gaming_yes":
-        reply = f"Looks fine.\nHEAD: {{head_sha}}\nTEST-GAMING: yes\nVERDICT: PASS\n"
+        reply = f"Looks fine.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: yes\nVERDICT: PASS\n"
     elif MODE == "redacted_head":
-        reply = "Looks fine.\nHEAD: [REDACTED]\nTEST-GAMING: no\nVERDICT: PASS\n"
+        reply = "Looks fine.\nFILES READ: src/lib.rs\nHEAD: [REDACTED]\nTEST-GAMING: no\nVERDICT: PASS\n"
     elif MODE == "no_head":
-        reply = "Looks fine.\nTEST-GAMING: no\nVERDICT: PASS\n"
+        reply = "Looks fine.\nFILES READ: src/lib.rs\nTEST-GAMING: no\nVERDICT: PASS\n"
     elif MODE == "seats_envelope":
-        reply = f"Looks fine.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
+        reply = f"Looks fine.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
     elif MODE == "fenced_pass":
         reply = "\n".join([
             json.dumps({{"type": "step_start", "part": {{}}}}),
-            json.dumps({{"type": "text", "part": {{"text": f"Example block:\n```text\nVERDICT: REQUEST_CHANGES\n```\nVerified everything.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS"}}}}),
+            json.dumps({{"type": "text", "part": {{"text": f"Example block:\n```text\nVERDICT: REQUEST_CHANGES\n```\nVerified everything.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS"}}}}),
             json.dumps({{"type": "step_finish", "part": {{"reason": "stop"}}}}),
         ]) + "\n"
     else:
-        reply = f"All clear.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
+        reply = f"All clear.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
+
+    if MODE in ("late", "late_mixed"):
+        input_path = run_dir / "terminal.json"
+        terminal = {{"run_id": run_id, "status": "completed", "exit_code": 0, "stdout_tail": reply}}
+        input_path.write_text(json.dumps(terminal))
+        started = __import__("time").time()
+        record = {{"run_id": run_id, "status": "running", "started": started, "expected_end": started + 120}}
+        (run_dir / "record.json").write_text(json.dumps(record))
+        worker = """
+import pathlib, sys, time
+run = pathlib.Path(sys.argv[1])
+deadline = time.monotonic() + 10
+while not (run / "release").exists() and time.monotonic() < deadline:
+    time.sleep(.02)
+(run / "terminal.json").replace(run / "record.json")
+"""
+        from subprocess import Popen, DEVNULL
+        Popen([sys.executable, "-c", worker, str(run_dir)], stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL)
+        assert opts["wait"] == "0", opts
+        if MODE == "late_mixed":
+            assert opts["seats"], opts
+            failed = {{"run_id": "run-failed", "status": "failed", "exit_code": 7}}
+            print(json.dumps({{"seat_group": "seats-test", "seats": [record, failed]}}))
+        else:
+            print(json.dumps(record))
+        sys.exit(0)
 
     live_log.write_text(reply, encoding="utf-8")
     rec = {{
         "run_id": run_id,
         "status": "completed",
         "exit_code": 0,
-        "chosen_leg": {{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY}},
+        "chosen_leg": {{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY, "harness": "opencode"}},
         "live_log": str(live_log),
         "stdout_tail": "" if MODE == "fenced_pass" else reply,
     }}

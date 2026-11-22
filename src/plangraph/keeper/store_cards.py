@@ -1,4 +1,7 @@
 """Card storage and project authorization."""
+import json
+from urllib.parse import urlsplit
+
 from .store_card_values import *
 from .store_card_values import (_dump, _load_list, _text, _str_list, _count, _number, _exec_parts, _forward, _CARD_KEYS, _CARD_LISTS, _HAND_BACK_STATES)
 from .store_card_questions import CardQuestionsMixin
@@ -27,6 +30,46 @@ class CardsMixin(ExecMixin, CardQuestionsMixin, CardUpdatesMixin):
         if not isinstance(value, str) or self._parse_iso(value) is None:
             raise Refused("validation", f"{name} must be an ISO timestamp or null")
         return value
+
+    def incident(self, principal, key, text, evidence=None):
+        """Append an attributed incident to a live card without changing its lifecycle."""
+        def append(now):
+            self._require_role(principal, "l1", "router")
+            report = _text("text", text, required=True, key=key)
+            url = _text("evidence", evidence, cap=2048, key=key)
+            if evidence is not None:
+                try:
+                    parts = urlsplit(url or "")
+                    valid = parts.scheme in ("http", "https") and parts.hostname
+                    valid = valid and not any(c.isspace() for c in url)
+                except ValueError:
+                    valid = False
+                if not valid:
+                    raise Refused("validation", "evidence must be an HTTP(S) URL")
+            payload = {"text": report}
+            if url:
+                payload["evidence"] = url
+            with self._write():
+                item = self._get_or_refuse(key)
+                self._may_manage(principal, item["project"])
+                if item["state"] in ("done", "cancelled"):
+                    raise Refused("bad_state", f"{key} is {item['state']}")
+                self._append(principal, key, "incident_appended", payload, now)
+                self.conn.execute("UPDATE items SET updated_at=? WHERE key=?",
+                                  (self._iso(now), key))
+            return {"key": key, **payload, "at": self._iso(now), "author": principal.name}
+        return self._run(principal, "incident", key, append)
+
+    def _incidents_by_key(self, key=None):
+        """Read the incident ledger in append order, with no per-item snapshot queries."""
+        sql = "SELECT key,ts,actor,payload FROM events WHERE type='incident_appended'"
+        if key is not None:
+            sql += " AND key=?"
+        incidents = {}
+        for row in self.conn.execute(sql + " ORDER BY seq", () if key is None else (key,)):
+            incidents.setdefault(row["key"], []).append(
+                {**json.loads(row["payload"]), "at": row["ts"], "author": row["actor"]})
+        return incidents
 
     # ---------------------------------------------------------------- cards
     def put_card(self, principal, key, card):
@@ -69,12 +112,20 @@ class CardsMixin(ExecMixin, CardQuestionsMixin, CardUpdatesMixin):
                         normalised.append(path)
                 entries = normalised
             values[name] = _dump(entries)
+        from plangraph.planner.routing import log_level_lowering, rule_level
+        try:
+            effort = rule_level(dict(card, window_class=window,
+                                     write_set=_load_list(values["write_set"]),
+                                     risk_tags=_load_list(values["risk_tags"])))
+        except (ValueError, TypeError) as exc:
+            raise Refused("validation", str(exc)) from exc
+        values.update(level=effort["level"], level_reason=effort["reason"])
         with self._write():
             item = self._get_or_refuse(key)
             self._may_write_for(principal, item["project"])
             self._assert_unlocked(item)
             cols = ["outcome", *_CARD_LISTS, "check_kind", "check_cmd", "heldout_check",
-                    "window_class", "risk_tags", "estimate_tokens"]
+                    "window_class", "risk_tags", "estimate_tokens", "level", "level_reason"]
             marks = ",".join("?" for _ in cols)
             sets = ",".join(f"{c}=excluded.{c}" for c in cols)
             self.conn.execute(
@@ -82,6 +133,7 @@ class CardsMixin(ExecMixin, CardQuestionsMixin, CardUpdatesMixin):
                 f" VALUES(?,{marks},?)"
                 f" ON CONFLICT(key) DO UPDATE SET {sets},updated_at=excluded.updated_at",
                 (key, *[values[c] for c in cols], self._iso(now)))
+        log_level_lowering(effort, key, self._iso(now))
         return {"key": key}
 
     def get_card(self, principal, key):
@@ -94,5 +146,8 @@ class CardsMixin(ExecMixin, CardQuestionsMixin, CardUpdatesMixin):
         card = dict(row)
         for name in (*_CARD_LISTS, "risk_tags"):
             card[name] = _load_list(card[name])
+        incidents = self._incidents_by_key(key).get(key)
+        if incidents:
+            card["incidents"] = incidents
         return card
 

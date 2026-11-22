@@ -570,6 +570,8 @@ raise SystemExit(code)
                     seen.add(line)
         print(json.dumps(result, indent=2))
         if isinstance(result, dict):
+            if args.verb == 'spawn' and (args.card or {}).get('run_kind') == 'native-codex':
+                return spawn_exit_code(result)
             if 'writers' in result:
                 for run in spawn_runs(result):
                     if run.get('reason'): print(run['run_id'] + ': ' + run['reason'], file=sys.stderr)

@@ -225,6 +225,44 @@ fn run() -> Result<Vec<String>, String> {
     Ok(errors)
 }
 
+fn class_search(revisions: &[String]) -> Result<Vec<String>, String> {
+    if revisions.is_empty() {
+        return Err("--class-search needs at least one fix revision".into());
+    }
+    let format = Regex::new(r"^Class-Search: (\S.*) -> ([0-9]+) hits, ([0-9]+) changed$").unwrap();
+    let mut findings = Vec::new();
+    for revision in revisions {
+        let message = git(&[
+            "show",
+            "--no-patch",
+            "--no-notes",
+            "--format=%H%x00%b",
+            "--end-of-options",
+            &format!("{revision}^{{commit}}"),
+            "--",
+        ])?;
+        let (sha, body) = message.split_once('\0').ok_or("malformed commit message")?;
+        let entries: Vec<_> = body
+            .lines()
+            .filter(|line| line.starts_with("Class-Search:"))
+            .collect();
+        if entries.is_empty()
+            || entries.iter().any(|line| {
+                format.captures(line).is_none_or(|fields| {
+                    let hits = fields[2].parse::<usize>();
+                    let changed = fields[3].parse::<usize>();
+                    !matches!((hits, changed), (Ok(hits), Ok(changed)) if changed <= hits)
+                })
+            })
+        {
+            findings.push(format!(
+                "{sha}: missing or invalid Class-Search in fix commit body"
+            ));
+        }
+    }
+    Ok(findings)
+}
+
 fn main() {
     let args: Vec<_> = env::args().skip(1).collect();
     let result = if args
@@ -234,6 +272,8 @@ fn main() {
         plan_items::run(&args[1..])
     } else if args.first().is_some_and(|arg| arg == "--part-entry") {
         part_entry::run(&args[1..]).map_err(|e| format!("part-entry: {e}"))
+    } else if args.first().is_some_and(|arg| arg == "--class-search") {
+        class_search(&args[1..])
     } else {
         run()
     };

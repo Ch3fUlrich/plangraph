@@ -46,6 +46,11 @@ For an untrusted writer: the added lines must have no URLs or network calls (`gi
 D-row naming tip sha, seats, evidence shas you sampled.
 
 ## GO-REQ plan block (D-4692, D-4926)
+For a landing train, copy the inline `GO-KEYS [project:A,project:B]` block from
+the head-bound GO-REQ into the GO row before the PLAN block. The keeper treats
+that block as the full scope of the GO. Keep its brackets and comma-separated
+full keys when printing or copying the GO row.
+
 Put `PLAN <item-key> conforms=yes|no deviations=<text, or none>` last in every GO-REQ and in the GO row's decision cell. The key is the keeper item key; pass it to the gate with `--key KEY`, and the gate also needs `pgk show KEY` to succeed. `bin/go-row-gate` reads the block after GO-HEAD validation and refuses (exit 5) when:
 - the block is missing, repeated, or its key differs from the item;
 - `conforms=yes` has any deviations value other than exactly `none`;

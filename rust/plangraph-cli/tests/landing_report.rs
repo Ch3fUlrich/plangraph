@@ -146,17 +146,21 @@ from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
 import merge_batch_build as build
 import merge_batch_land as landing
+import merge_batch_util as util
 
 head = 'a'*40
 state = dict(repo='example/repo', name='train-1', pr=17, worktree='fixture', status='pushed',
              base_head='b'*40, head=head, plan='example:TRAIN',
-             merged=[dict(pr=5, head='c'*40)],
+             merged=[dict(pr=5, head='c'*40, merge='d'*40, items=['example:PART'])],
              ci=dict(head=head, id=12, state='completed', conclusion='success'))
 report = Mock(return_value=Namespace(stdout=json.dumps({'summary': 'ci=2.5m push=0.5m'})))
 save = Mock()
 output = io.StringIO()
 with (patch.object(landing, 'load_state', return_value=state),
       patch.object(landing, 'git', side_effect=[Namespace(stdout=head), Namespace(stdout='1 file changed')]),
+      patch.object(util, 'git', side_effect=[
+          Namespace(stdout=''), Namespace(stdout='c'*40),
+          Namespace(stdout='Part\n\nPlan-Item: example:PART\n')]),
       patch.object(landing, 'gh_json', return_value=dict(state='OPEN', headRefOid=head)),
       patch.object(landing, 'require_part_seats', return_value={5: ['run-fixture']}),
       patch.object(landing, 'batch_workflow_gate'),
@@ -173,7 +177,8 @@ assert state['go_requested_head'] == head
 assert output.getvalue().splitlines() == [
     f'GO-REQ #17 example/repo head {head}; diff stat: 1 file changed; parts: '
     f'#5 sha={state["merged"][0]["head"]} review=run-fixture verdict=ACCEPT; '
-    'CI run 12 state=completed conclusion=success; timeline: ci=2.5m push=0.5m; '
+    'CI run 12 state=completed conclusion=success; GO-KEYS [example:PART,example:TRAIN]; '
+    'timeline: ci=2.5m push=0.5m; '
     'MIGRATION 23; PLAN example:TRAIN conforms=yes deviations=none']
 "#,
     );

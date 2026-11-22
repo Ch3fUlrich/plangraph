@@ -202,7 +202,7 @@ def test_python_spawner_run_preserves_allowlisted_shas_in_stdout_tail_and_livelo
     svc = SpawnService(state=tmp_path / 'state')
     script = (f"import sys; sys.stdin.read(); "
               f"print('base: {base}'); print('tree: {tree}'); print('other: {other}'); "
-              f"print('long64: {long64}'); print('HEAD: {head}'); print('VERDICT: PASS')")
+              f"print('long64: {long64}'); print('HEAD: {head}'); print('VERDICT: REQUEST_CHANGES')")
     orig_build = __import__('plangraph.spawner.runner', fromlist=['build_command']).build_command
     import plangraph.spawner.runner as runner_mod
     runner_mod.build_command = lambda **kw: [sys.executable, '-c', script]

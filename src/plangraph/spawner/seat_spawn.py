@@ -208,7 +208,9 @@ def _open_queue(service, role, decision, window, host=None, card=None):
     if host:
         record['host'] = host
     from .item_key import annotate_item
+    from .notify import annotate_native
     annotate_item(record, card)
+    annotate_native(record, card)
     service._save(record)
     return record
 
@@ -242,33 +244,53 @@ def admit(service, options, *, card=None, preview=False):
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
     config = overflow.placement_config(registry, role)
-    local, remote_first = overflow.placement_policy(registry, config)
+    local, orchestration_only = overflow.placement_policy(registry, config)
+    remote_first = orchestration_only
+    review_workspace = role == 'review' and (card or {}).get('review_workspace') is True
     native = (card or {}).get('run_kind') == 'native-codex'
     placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
-    repository_review = role == 'review' and (card or {}).get('repository_review_required') is True
+    local_repository_review = (role == 'review' and (card or {}).get('repository_review_required') is True
+                               and not review_workspace)
     explicit_cwd = options.get('cwd') is not None or 'cwd' in (card or {})
-    compare_local = (config.get('registry') and not (placed or explicit_cwd or repository_review)
+    compare_local = (config.get('registry') and not (placed or explicit_cwd or local_repository_review)
                      and (native or role == 'review' and (card or {}).get('diff_ref') is not None))
-    if placed or repository_review:
+    if review_workspace:
+        remote_first = False
+        compare_local = not (placed or explicit_cwd)
+    if placed or local_repository_review:
         config['hosts'] = {}
     # A repository review stays local but still needs orchestration fallback health.
-    if placed and not repository_review:
+    if placed and not local_repository_review:
         remote_first = False
+    local_host = overflow.host_config(registry, local)
+    local_worker = bool(local_host) and not orchestration_only
     if preview and not (remote_first or compare_local):
         return None
     role_mb, floor = overflow.local_limits(registry, role)
     _, memory = resources(service)
-    repo = Path(options.get('cwd') or (card or {}).get('cwd') or
-                ((card or {}).get('diff_ref') or {}).get('repo') or
-                (card or {}).get('repo') or
-                getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
-    from .host_ready import local_disk_refusal
-    disk = local_disk_refusal(repo, service, role)
+    named = (options.get('cwd') or (card or {}).get('cwd') or
+             ((card or {}).get('diff_ref') or {}).get('repo') or (card or {}).get('repo'))
+    repo = Path(named or getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
+    movable = not named  # A run with no checkout named anywhere may be placed on any work drive.
+    from .host_ready import local_disk_admission
+    def disk_admission():
+        if review_workspace and not local_worker:
+            return None, 'review workspace requires a registered worker host'
+        if native:
+            return local_disk_admission(repo, service, role, movable=movable, native=True)
+        return local_disk_admission(repo, service, role, movable=movable)
+
+    selected, disk = disk_admission()
+
+    def use_local():
+        if selected is not None:
+            options['cwd'] = selected
+
     if not (remote_first or compare_local) and not disk and not overflow.memory_refusal(memory, role_mb, floor):
         if native or placed:
             options['_placement'] = dict(host=local, reason=os.environ.get(
                 'PLANGRAPH_PLACEMENT_REASON', 'local room'), free_mb=memory)
-        return None
+        return use_local()
     public = overflow.repos_public(config, repo, (card or {}).get('diff_ref'))
     benchmark_local = (remote_first or compare_local) and options.get('benchmark') is not None
     def local_readiness_refusal():
@@ -289,11 +311,20 @@ def admit(service, options, *, card=None, preview=False):
             for row in rows.values():
                 if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
                     row.setdefault('refusal', 'disk_low: need 5 GB free to start')
+        if review_workspace:
+            for name, row in rows.items():
+                host = overflow.host_config(registry, name)
+                if not host or host.get('orchestration_only') is True or row.get('orchestration_only') is True:
+                    row.setdefault('refusal', 'review workspace requires a registered worker host')
+                elif row.get('disk_free_gb') is None:
+                    row.setdefault('refusal', 'review workspace requires a disk readiness measurement')
         rows.pop(local, None)
         return rows
     rows = load_rows()
     health = disk or local_readiness_refusal() or (overflow.local_health_refusal(config, memory) if remote_first else None)
-    queued, window = None, 0 if remote_first or preview or placed or compare_local else admission_window()
+    retry_native_disk = native and disk and disk.startswith(('disk_low:', 'cargo_target_cap:'))
+    may_queue = not (remote_first or preview) and (retry_native_disk or not (placed or compare_local))
+    queued, window = None, admission_window() if may_queue else 0
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -310,7 +341,7 @@ def admit(service, options, *, card=None, preview=False):
             decision = overflow.decide(memory, role_mb, floor, rows, public,
                                        remote_first=remote_first, local_refusal=health,
                                        host_order=tuple(config.get('hosts', {})), compare_local=compare_local,
-                                       local_fallback=overflow.host_config(registry, local).get('placement_fallback', False))
+                                       local_fallback=local_host.get('placement_fallback', False))
             if benchmark_local and decision.reason == 'local_fallback_no_remote':
                 decision = overflow.Decision(None, 'local_benchmark_database')
             if options.get('benchmark') is not None and decision.host is not None:
@@ -321,11 +352,11 @@ def admit(service, options, *, card=None, preview=False):
                 return placement
             if compare_local and decision.host is None and not health and not overflow.memory_refusal(memory, role_mb, floor):
                 options['_placement'] = placement
-                return None
+                return use_local()
             if remote_first:
                 options['_placement'] = placement
                 if decision.host is None and decision.reason in ('local_fallback_no_remote', 'local_benchmark_database'):
-                    return None
+                    return use_local()
             if decision.host is None:
                 if window > 0 and queued is None:
                     queued = _open_queue(service, role, decision, window, local, card)
@@ -333,15 +364,15 @@ def admit(service, options, *, card=None, preview=False):
                     if time.time() < queued['queued_until']:
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
                         _, memory = resources(service)
-                        disk = local_disk_refusal(repo, service, role)
+                        selected, disk = disk_admission()
                         health = disk or local_readiness_refusal()
                         rows = load_rows()
-                        if not disk and not overflow.memory_refusal(memory, role_mb, floor):
+                        if not (health if native else disk) and not overflow.memory_refusal(memory, role_mb, floor):
                             taken = _close_queue(service, queued)
                             if taken is not None:
                                 return taken
                             if native: options['_placement'] = dict(host=local, reason='local room', free_mb=memory)
-                            return None
+                            return use_local()
                         continue
                     return _close_queue(service, queued, status='refused', reason=decision.reason,
                                         overflow_reason=decision.reason, exit_code=2, **_no_hosts_hint(config),
@@ -385,7 +416,11 @@ def admit(service, options, *, card=None, preview=False):
     if placement.get('host'):
         record.setdefault('host', placement['host'])
     from .item_key import annotate_item
+    from .notify import annotate_native
     annotate_item(record, card)
+    annotate_native(record, card)
+    if native and record['status'] == 'refused':
+        record.setdefault('ended', time.time())
     return record
 
 
@@ -394,9 +429,11 @@ INLINE_DIFF_HARNESSES = frozenset({'opencode'})
 
 
 def _needs_inline_diff(leg, card):
+    from plangraph.planner.route_policy import opencode_repository_review
     return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
+            or (getattr(leg, 'tool_mode', 'tools') == 'prompt-only' and card.get('diff_ref') is not None)
             or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
-                and card.get('diff_ref') is not None))
+                and card.get('diff_ref') is not None and not opencode_repository_review(leg)))
 
 
 def annotate_review_warning(record):
@@ -477,6 +514,8 @@ class SeatSpawnMixin:
                     return {'writers': await asyncio.gather(*(dispatch(g, b) for g, b in zip(groups, briefs)))}
                 options['prompt'] = briefs[0]
                 return await self._spawn(**options)
+            if options.get('cwd') is not None:
+                bound.arguments['cwd'] = options['cwd']
             dispatch_kwargs = bound.kwargs
             if '_placement' in options:
                 dispatch_kwargs['_placement'] = options['_placement']
@@ -518,7 +557,8 @@ class SeatSpawnMixin:
             from plangraph.review.family import FamilyError, writer_headers
             try:
                 options['headers'] = dict(options.get('headers') or {},
-                    **writer_headers(record.get('given_writer_families') or []))
+                    **writer_headers(record.get('given_writer_families') or [],
+                                     allow_empty=record.get('review_document') == 'train_delta'))
             except FamilyError as exc:
                 raise SpawnRefused(str(exc)) from None
             if record.get('item_key') and not options.get('dry_run'):
@@ -646,11 +686,19 @@ class SeatSpawnMixin:
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
         ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
         inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3).
-        OpenCode tools-mode reviews inline a diff when supplied, but also support non-diff reviews."""
+        Go tools-mode review seats read the checkout directly."""
+        from plangraph.planner.route_policy import train_delta_document
+        from .prompt_guard import admit_toolless
+        if train_delta_document(card, role):
+            return prompt
+        if not isinstance(prompt, str):
+            admit_toolless(prompt, role, leg, SpawnRefused)
         if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
             from . import context_pack
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)
-        if role == 'review' and _needs_inline_diff(leg, card):
+        if ((role == 'review' or role == 'judge' and card.get('diff_ref') is not None
+             and getattr(leg, 'tool_mode', 'tools') in ('prompt-only', 'inline-only'))
+                and _needs_inline_diff(leg, card)):
             from .inline_diff import InlineDiffError, inline_diff_prompt
             try:
                 prompt = inline_diff_prompt(prompt, card.get('diff_ref'), max_chars=leg.max_request_tokens * 3,
@@ -658,6 +706,7 @@ class SeatSpawnMixin:
             except InlineDiffError as exc:
                 _refuse_oversized_diff(exc, leg)
                 raise
+        admit_toolless(prompt, role, leg, SpawnRefused)
         return prompt
 
     async def _spawn_seats(self, *, card, prompt, role, writer_families, review_of, model, leg,

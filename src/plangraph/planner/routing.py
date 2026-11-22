@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, asdict, field, replace
 from plangraph.routing_support.liveness import read_leg_model, unavailable
+from plangraph.routing_support.risk import evaluate_risk, measure_card_shape
 import json
 import os
 from pathlib import Path
@@ -80,6 +81,77 @@ def effective_estimate(estimate_tokens: int | None, subtasks: int = 1) -> int:
 
 def _window_share(window_class: str) -> int:
     return USABLE_FRACTION_PCT * WINDOW_TOKENS[window_class] // 100
+
+
+def effort_profiles() -> dict:
+    return json.loads((Path(__file__).resolve().parents[1] /
+                       "config" / "effort_profiles.json").read_text(encoding="utf-8"))
+
+
+def _effort_measure(card):
+    paths = card.get("paths", card.get("write_set", ()))
+    has_tests = card.get("has_tests")
+    if has_tests is None and (card.get("check_cmd") or card.get("smoke_checks")):
+        has_tests = True
+    return measure_card_shape(paths, fanout=card.get("fanout"), has_tests=has_tests)
+
+
+def task_class(card, *, measurement=None) -> str:
+    measured = measurement if measurement is not None else _effort_measure(card)
+    size = ("small", "small", "medium", "large", "large")[int(measured.bucket[1])]
+    kind = card.get("check_kind", "change")
+    if kind not in ("change", "regression"):
+        raise ValueError("check_kind must be change or regression")
+    return f"{size}_{kind}"
+
+
+def rule_level(card) -> dict:
+    """Compute the routing profile from card facts without changing routing order."""
+    measured = _effort_measure(card)
+    table = effort_profiles()
+    bands = tuple(table["risk_floors"])
+    assessed = evaluate_risk(paths=measured.files, bucket=measured.bucket,
+                             has_tests=measured.has_tests, fanout=measured.fanout,
+                             is_docs_only=measured.is_docs_only,
+                             is_pure_doc=card.get("is_pure_doc", False),
+                             risk_tags=card.get("risk_tags", ()))
+    declared = card.get("risk", assessed.risk)
+    if declared not in bands:
+        raise ValueError("invalid effort risk band")
+    risk = max(assessed.risk, declared, key=bands.index)
+    level, reason = int(measured.bucket[1]), "size_bucket"
+    if risk == "critical":
+        level, reason = 4, "critical_risk"
+    elif risk == "high" and level < 3:
+        level, reason = 3, "high_risk"
+    elif not measured.has_tests and level < 3:
+        level, reason = 3, "no_tests"
+    estimate = card.get("estimate_tokens") or 0
+    window = card.get("window_class") or WINDOW_CLASSES[-1]
+    over_window = not _fits(estimate, window)
+    if over_window:
+        level, reason = 4, "estimate_exceeds_window"
+    assigned = card.get("level")
+    if assigned is not None and assigned not in table["levels"]:
+        raise ValueError("level must be L0 through L4")
+    lowered = assigned if assigned is not None and int(assigned[1]) < level else None
+    if assigned is not None and int(assigned[1]) > level:
+        level, reason = int(assigned[1]), "planner_raise"
+    label = f"L{level}"
+    profile = table["levels"][label]
+    return dict(level=label, reason=reason, lowered=lowered,
+                floor=max(profile["floor"], table["risk_floors"][risk]),
+                bucket=measured.bucket, risk_band=risk, seats=profile["seats"],
+                cascade=profile["cascade"], decompose=measured.should_decompose or over_window,
+                task_class=task_class(card, measurement=measured),
+                check_kind=card.get("check_kind", "change"), version=table["version"])
+
+
+def log_level_lowering(effort, item, ts):
+    if effort.get("lowered") is not None:
+        import logging
+        logging.getLogger(__name__).info("effort_level_lowered %s", json.dumps(
+            dict(ts=ts, item=item or "adhoc", assigned=effort["lowered"], reason=effort["reason"])))
 
 
 def _fits(effective: int, window_class: str) -> bool:
@@ -257,6 +329,8 @@ class SpawnPlan:
     placement: dict = field(default_factory=lambda: dict(host=None, reason='placement_not_evaluated', free_mb=None))
 
     agy_quota_states: dict = field(default_factory=dict)
+    effort: dict = field(default_factory=dict)
+    static_v0: str | None = None
 
     @property
     def first_leg(self) -> Leg | None:
@@ -345,6 +419,11 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     if requested_risk not in bands:
         raise SpawnRefused('risk has invalid value')
     ranking_risk = max((assessment.risk, requested_risk), key=bands.index)
+    try:
+        effort = rule_level(card)
+    except (ValueError, TypeError) as exc:
+        raise SpawnRefused(str(exc)) from exc
+    log_level_lowering(effort, card.get("item_key") or card.get("item"), time.time())
     if (assessment.risk in ('high', 'critical') or card.get('risk') in ('high', 'critical')) and card.get('reviewer_count', 2) < 2:
         raise SpawnRefused('high/critical changes require two reviewers')
     if card.get('reviewer_count') == 0 and (
@@ -384,7 +463,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
         bench_reasons.extend(["benchmark data absent", "no benchmark p"])
     # Review writers are keeper families (fail closed on an unknown name).
     writer_set = writer_parts(writer_families) if role == "review" else {w for w in writer_families if w}
-    if role == "review" and not writer_set:   # D-1533: no writer named = none excluded; fail closed
+    from .route_policy import train_delta_document
+    delta_document = train_delta_document(card, role)
+    if role == "review" and not writer_set and not delta_document:
         raise SpawnRefused("review needs a writer family (writer_families or review_of)")
     # D-2511: exclude every writer family from all review seats.
     excluded = family_spellings((writer_set if role == "review" else set())
@@ -453,7 +534,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             reason = "low_risk_only"
         elif role == "review" and card.get("repository_review_required") and not has_repository_review_tools(leg):
             reason = "repository_review_tools_unavailable"
-        elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card:
+        elif role == "review" and leg.tool_mode == "inline-only" and 'diff_ref' not in card and not delta_document:
             reason = "inline_only_needs_diff"
         elif native_review and leg.id not in REVIEW_ORDER and seat_family(leg.family) != "openai" and not (
                 low_risk and leg.id in LOW_RISK_ONLY_LEGS):
@@ -471,6 +552,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                   "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
                   "p_source": "measured" if row is not None else "prior"}
+        if row is not None:
+            detail.update(intelligence=row.get("aa_intelligence"), cost_per_task=row.get("cost_per_task_usd"))
         if reason:
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
@@ -478,7 +561,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     policy_skipped = {s["leg"] for s in skipped if s["reason"] in (
         "banned_family", "off_family", "paused_harness", "inline_only_needs_diff", "no_verdict_seat",
         "review_route_excluded", "low_risk_only", "claude_requires_gpt_and_hydrogen_limits",
-        "repository_review_tools_unavailable", "benchmark_unmeasured")}
+        "repository_review_tools_unavailable", "benchmark_unmeasured", "opencode_tools_denied")}
     try:
         route = route_card(card, legs=candidates, unavailable=limited | policy_skipped,
                            exclude_families=excluded, role=role, now=now)
@@ -561,7 +644,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details), groups, coverage, placement, quota_states)
+                     tuple(candidate_details), groups, coverage, placement, quota_states, effort, route.first_leg.id)
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

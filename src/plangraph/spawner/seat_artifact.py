@@ -3,7 +3,7 @@ import json
 import re
 from pathlib import Path
 
-from plangraph.review.verdict import judge
+from plangraph.review.verdict import has_files_read, judge
 from .private_io import atomic_write_private
 
 
@@ -34,7 +34,7 @@ def publish(directory, record, job):
     verdict = judge(job.stdout, finish)
     if verdict.verdict is None or verdict.test_gaming == 'missing':
         return
-    if verdict.verdict == 'pass' and verdict.test_gaming != 'no':
+    if verdict.verdict == 'pass' and (verdict.test_gaming != 'no' or not has_files_read(job.stdout)):
         return
     doc = dict(served_model=model, prompt_sha256=digest,
                correlation_id=job.job_id, run_id=record['run_id'],

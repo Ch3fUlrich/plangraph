@@ -147,6 +147,8 @@ model-named combos and clean routes that have no remaining servable legs.
 
 D-5903 round 3 explicitly retains the Hydrogen tools review seat for cards without `diff_ref`, including when Mimo/OpenCode/Muse seats are unavailable. Like other agy tools seats it reviews the selected checkout (explicit `cwd`, otherwise the runner default); a no-diff card does not request an automatic checkout of another revision. Hydrogen reviews use read-only plan mode.
 
+[Train delta review](landing-train.md) routes its replay brief as a witnessed document. The gateway witness gate filters the existing route, and only merge-delta writer families are excluded. Ordinary checkout reviews retain their writer-family and diff requirements.
+
 The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.
 
 Reviews (rule 3.50, D-6028) start on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so
@@ -203,13 +205,15 @@ Sol and Astra declare 1,000,000 tokens, including effort variants and native ses
 Smaller spawn routes use 55% of declared leg context. Legs without a bound and keeper budgets use the 55% class share.
 Review routes under D-6550 prefer `agy-gemini-4-hydrogen-high` and then
 `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
-available in their configured order, and the Argon review legs stay last. A review run that ends without a VERDICT line is
-recorded `failed` with reason `no_verdict`. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
+available in their configured order, and the Argon review legs stay last. Repository-required reviews admit OpenCode Go DeepSeek and GLM tools legs, which get checkout reads and scoped test commands.
+A missing verdict or a diff-only acceptance cannot complete a repository review. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.
 The five-head benchmark for Flint, Big Pickle and Beam was skipped in this lane.
 The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_risk_and_families`.
+The Rust route reports legs with more than three missing verdicts in their last
+ten completed reviews under `review_health_alerts` and puts them after healthier candidates.
 
 ## Automatic work mode (D-5952 / rule 3.41)
 
@@ -266,3 +270,18 @@ without an own client (deepseek, glm, mimo, free legs) stay on OpenCode. Pinning
 OpenCode leg with `--leg` while its own client is installed needs `--override-reason`.
 
 Merge paths and main's state: the keeper's phase finish asks `plangraph main-state --admit` after CI is green on the phase head and refuses to merge with `main_red`, `main_pending`, `state_unknown` or `ref_not_forward_only` (docs/ci-parallel.md, "Red main and runner switches").
+
+The D-5174 effort profile is computed from the measured S0–S4 bucket, risk,
+test coverage, fanout, write set, and context fit. The effective AA floor is
+the larger of the risk and level floors. A planner can raise a level. A lower
+assignment records its requested value and the rule reason. Task classes group
+S0–S1, S2, and S3–S4 by change or regression check. Version 1 uses the plan's
+starting floors. Cite a replay delta for future changes to the profile table.
+
+Keeper attempts retain the routed profile, plan hash and selected leg alongside
+the captured eligibility, rejected legs, top five, pin and benchmark baselines.
+The watchdog delivers one terminal record per spawner run, including runs that
+fell through to a different leg. Missing benchmark evidence stays null.
+## Worker claim bases
+
+A worker card claimed against an accepted landing-train part receives the train head in `base_sha`. A retry of the same live lease uses the pinned SHA. Ordinary claims use the phase branch tip when one is available, otherwise the configured base branch tip.

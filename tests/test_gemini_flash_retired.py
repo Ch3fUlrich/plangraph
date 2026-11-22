@@ -256,7 +256,7 @@ def test_hydrogen_tools_review_launches_in_head_checkout(tmp_path, monkeypatch):
         return SimpleNamespace(pid=None, returncode=0)
     async def collect(*args):
         return json.dumps(dict(event='result', result=dict(status='SUCCESS',
-                          response='VERDICT: ACCEPT\nTEST_GAMING: none'))).encode(), b''
+                          response='FILES READ: marker.txt\nVERDICT: ACCEPT\nTEST_GAMING: none'))).encode(), b''
     async def ready(*args, **kwargs):
         pass
     async def launch(plan, **kwargs):

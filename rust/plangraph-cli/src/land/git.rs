@@ -26,6 +26,7 @@ pub fn command(dir: &Path, attributes: Option<&Path>) -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_AUTHOR_NAME", "plangraph-train")
         .env("GIT_AUTHOR_EMAIL", "train@example.invalid")
@@ -63,6 +64,12 @@ pub fn run(dir: &Path, attributes: Option<&Path>, args: &[&str]) -> Result<Outpu
 
 /// stdout of a git command that must succeed.
 pub fn out(dir: &Path, args: &[&str]) -> Result<String, String> {
+    Ok(String::from_utf8_lossy(&bytes(dir, args)?)
+        .trim()
+        .to_owned())
+}
+
+pub(super) fn bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let o = run(dir, None, args)?;
     if !o.status.success() {
         return Err(format!(
@@ -70,7 +77,7 @@ pub fn out(dir: &Path, args: &[&str]) -> Result<String, String> {
             String::from_utf8_lossy(&o.stderr).trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    Ok(o.stdout)
 }
 
 pub fn is_ancestor(dir: &Path, old: &str, new: &str) -> Result<bool, String> {
@@ -93,6 +100,36 @@ pub fn commits(dir: &Path, range: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
+pub(super) fn replay_diff(
+    dir: &Path,
+    attributes: Option<&Path>,
+    before: &str,
+    after: &str,
+) -> Result<Vec<u8>, String> {
+    let output = run(
+        dir,
+        attributes,
+        &[
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-color",
+            "--no-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            before,
+            after,
+            "--",
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(format!(
+            "replay: could not read resolution diff from {before} to {after}"
+        ));
+    }
+    Ok(output.stdout)
+}
+
 /// The outcome of merging `head` onto the checkout at `dir` with the protected inputs.
 pub enum Merged {
     /// A merge commit with this tree and sha.
@@ -100,7 +137,9 @@ pub enum Merged {
         tree: String,
         commit: String,
     },
-    Conflict,
+    Conflict {
+        tree: String,
+    },
 }
 
 /// Merges `head` into the detached checkout at `dir` with `--no-ff`; on conflict the merge is aborted.
@@ -123,12 +162,9 @@ pub fn merge(
         let tree = out(dir, &["rev-parse", "HEAD^{tree}"])?;
         return Ok(Merged::Clean { tree, commit });
     }
-    let _ = run(dir, attributes, &["merge", "--abort"]);
-    if String::from_utf8_lossy(&o.stdout).contains("CONFLICT")
-        || String::from_utf8_lossy(&o.stderr).contains("CONFLICT")
-        || o.status.code() == Some(1)
-    {
-        return Ok(Merged::Conflict);
+    if let Ok(tree) = out(dir, &["rev-parse", "--verify", "AUTO_MERGE^{tree}"]) {
+        out(dir, &["merge", "--abort"])?;
+        return Ok(Merged::Conflict { tree });
     }
     Err(format!(
         "git merge failed: {}",

@@ -1,6 +1,7 @@
 mod adapter;
 mod agent_view;
 mod agent_view_projection;
+mod attempt_outcome;
 mod cli;
 mod cli_review;
 mod doctor_sources;
@@ -22,6 +23,7 @@ mod land_go;
 mod land_go_shell;
 #[cfg(test)]
 mod land_go_tests;
+mod late_review;
 mod launch;
 mod leg_ref;
 mod lifecycle_cli;
@@ -36,7 +38,7 @@ mod placement;
 mod pre_review;
 mod prompt;
 mod prompt_git;
-mod pyjson;
+use pg_spawnd::pyjson;
 mod reconcile;
 #[allow(dead_code)]
 mod reconcile_attach;
@@ -52,8 +54,10 @@ mod reconcile_watch;
 mod records;
 mod review_artifacts;
 mod review_citation;
+mod review_health;
 mod review_retry;
 mod review_split;
+mod review_test_evidence;
 mod role_header;
 mod round_progress;
 mod round_replan;
@@ -78,6 +82,26 @@ mod writer_ledger;
 use pg_worker_core::host_probe::probe;
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("session")) {
+        let ops = std::env::var_os("PLANGRAPH_FLEET_OPS")
+            .map(std::path::PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("ROUTER_HOME")
+                    .map(|router| std::path::PathBuf::from(router).join("ops"))
+            })
+            .unwrap_or_else(|| {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|exe| Some(exe.parent()?.parent()?.join("ops")))
+                    .filter(|ops| ops.is_dir())
+                    .unwrap_or_else(|| "ops".into())
+            });
+        std::process::exit(pg_spawnd::session::run(
+            std::env::args().skip(2).collect(),
+            &ops,
+        ));
+    }
     #[cfg(windows)]
     if let Ok(path) = std::env::current_exe() {
         pg_worker_core::run::job_holder_windows::set_holder_path(path);

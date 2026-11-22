@@ -3,6 +3,9 @@
 #[path = "fleet_launch/dry_run.rs"]
 mod dry_run;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/interrupted.rs"]
+mod interrupted;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/peers.rs"]
 mod peers;
 #[cfg(target_os = "linux")]
@@ -15,8 +18,14 @@ mod refusals;
 #[path = "fleet_launch/remote.rs"]
 mod remote;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/restart.rs"]
+mod restart;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/sandbox.rs"]
 mod sandbox;
+#[cfg(target_os = "linux")]
+#[path = "fleet_launch/watchdog.rs"]
+mod watchdog;
 
 #[cfg(target_os = "linux")]
 fn main() {
@@ -33,18 +42,44 @@ fn main() {
     if peers::invoke(name, args.collect()) {
         return;
     }
-    let Some(launcher) = sandbox::Launcher::find() else {
-        eprintln!(
-            "fleet-launch parity skipped: no checkout of the pinned fleet launcher under ~/code and PLANGRAPH_FLEET_LAUNCH is unset"
-        );
-        return;
-    };
-    dry_run::check(&launcher);
-    refusals::check(&launcher);
-    records::check(&launcher);
-    records::check_id_resolution(&launcher);
-    remote::check(&launcher);
-    println!("fleet-launch parity passed: previews, refusals, launch records, session IDs and remote placement");
+    use sandbox::Launcher;
+    let rust = Launcher::Rust(None);
+    check(&rust);
+    interrupted::check(&rust);
+    interrupted::check_counter(&rust, false);
+    interrupted::check_counter(&rust, true);
+    watchdog::check_launcher_contract(&rust);
+    println!("fleet-launch S2 fixtures passed: interruption, ledger, shared Python/Rust counter and watchdog launch contract");
+
+    match Launcher::find() {
+        Some(Launcher::Pinned(checkout)) => {
+            let python = Launcher::Pinned(checkout.clone());
+            check(&python);
+            check(&Launcher::Rust(Some(checkout.clone())));
+            interrupted::check(&python);
+            interrupted::check_counter(&python, false);
+            watchdog::check_launcher_contract(&python);
+            watchdog::check(&checkout);
+            println!("fleet-launch pinned Python parity passed, including watchdog recovery");
+        }
+        Some(Launcher::Explicit(path)) => {
+            check(&Launcher::Explicit(path));
+            println!("fleet-launch replacement fixtures passed");
+        }
+        _ => {}
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn check(launcher: &sandbox::Launcher) {
+    dry_run::check(launcher);
+    refusals::check(launcher);
+    records::check(launcher);
+    records::check_id_resolution(launcher);
+    remote::check(launcher);
+    if matches!(launcher, sandbox::Launcher::Rust(_)) {
+        restart::check(launcher);
+    }
 }
 
 #[cfg(not(target_os = "linux"))]

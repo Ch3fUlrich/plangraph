@@ -1,6 +1,84 @@
 use super::*;
 
 #[test]
+fn spawned_writer_and_seat_publish_effort_and_route() {
+    use pg_worker_core::run::{group::Confinement, supervise::Config, supervisor::SupervisorCfg};
+    let state = tempfile::tempdir().unwrap();
+    let supervisor = Supervisor::new(SupervisorCfg::new(Config {
+        state_dir: state.path().to_path_buf(),
+        host: "fixture-host".into(),
+        confinement: Confinement::Plain,
+        ..Config::default()
+    }))
+    .unwrap();
+    let runs = Runs::new(Arc::new(supervisor));
+    for (role, item, expected) in [
+        ("implement", Some("demo:CHANGE"), "demo:CHANGE"),
+        ("review", Some("demo:CHANGE"), "demo:CHANGE"),
+        ("review", None, "adhoc"),
+    ] {
+        let leg =
+            json!({"id":"fixture","harness":"fixture","model":"requested","family":"fixture"});
+        let args = json!({"role":role,"prompt":"fixture","card":{"item_key":item}});
+        let result = runs
+            .spawn_using(
+                state.path(),
+                args.as_object().unwrap(),
+                "fixture-host",
+                json!(role),
+                json!({"first_leg":leg,"legs":[leg],"static_v0":"fixture",
+                    "candidates":[{"leg":"fixture","intelligence":50.0,"cost_per_task":0.2}],
+                    "skipped":[{"leg":"other","reason":"quota"}],
+                    "effort":{"level":"L3","reason":"high_risk","lowered":"L0",
+                    "task_class":"small_change","bucket":"S1","risk_band":"high"}}),
+                |_, _| {
+                    Ok(crate::launch::LaunchSpec {
+                        argv: vec!["/bin/cat".into()],
+                        cwd: state.path().to_path_buf(),
+                        env: BTreeMap::new(),
+                        stdin: Some("fixture".into()),
+                        prompt: Some("fixture".into()),
+                        warnings: None,
+                        events: None,
+                    })
+                },
+            )
+            .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+        assert_ne!(result["status"], "refused", "{}", result["reason"]);
+        let run_id = result["run_id"].as_str().unwrap();
+        assert!(runs
+            .supervisor
+            .wait_finished(run_id, Duration::from_secs(5)));
+        let record = crate::records::read_record(state.path(), &result["run_id"])
+            .unwrap_or_else(|error| panic!("{}", error.into_error_data().message));
+        let lowered = record["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|event| event["event"] == "effort_level_lowered")
+            .unwrap();
+        assert!(lowered["ts"].is_number());
+        assert_eq!(lowered["item"], expected);
+        assert_eq!(lowered["assigned"], "L0");
+        assert_eq!(lowered["reason"], "high_risk");
+        let row = crate::attempt_outcome::project(record).unwrap();
+        assert_eq!(row["attempt_id"], run_id);
+        assert_eq!(row["role"], role);
+        assert_eq!(row["host"], "fixture-host");
+        assert_eq!(row["card_key"], json!(item));
+        assert_eq!(row["level"], "L3");
+        assert_eq!(row["level_reason"], "high_risk");
+        assert_eq!(row["task_class"], "small_change");
+        assert_eq!(row["bucket"], "S1");
+        assert_eq!(row["risk_band"], "high");
+        assert_eq!(
+            row["route"]["baselines"],
+            json!({"static_v0":"fixture","strongest":"fixture","cheapest":"fixture"})
+        );
+    }
+}
+
+#[test]
 fn queue_refusal_preserves_missing_seat_events() {
     for role in ["review", "judge"] {
         for dry in [false, true] {

@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 
 from ..projector.ddl import PG as PROJECTOR_PG
-from .schema import EVENT_AUDIENCE_DDL, EXIT_CLASSES, JEV_KINDS, JEV_STATUSES, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL, WINDOW_CLASSES
+from .schema import EVENT_AUDIENCE_DDL, EXIT_CLASSES, INCIDENTS_DDL, JEV_KINDS, JEV_STATUSES, LANDING_CLAIMS_DDL, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL, WINDOW_CLASSES
 from .messages_schema import PG as MESSAGES_DDL
 from .schema_pg_spawner import PG as SPAWNER_DDL
 from .schema_pg_baseline import BASELINE as _V1
@@ -330,6 +330,18 @@ CREATE TABLE alert_log (
 );
 """
 
+_CARD_EFFORT = """
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS level TEXT COLLATE "C";
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS level_reason TEXT COLLATE "C";
+"""
+
+from .schema import ATTEMPT_SPAWN_COLUMNS, ATTEMPT_SPAWN_INDEXES
+
+_SPAWN_ATTEMPTS = ("ALTER TABLE attempts ALTER COLUMN key DROP NOT NULL;\n"
+        + "\n".join(f"ALTER TABLE attempts ADD COLUMN IF NOT EXISTS {name} {declaration};"
+                    for name, declaration in ATTEMPT_SPAWN_COLUMNS)
+        + ATTEMPT_SPAWN_INDEXES)
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
@@ -354,7 +366,12 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(19, "landing train settlement",
                         LANDING_TRAINS_DDL.replace("TEXT", 'TEXT COLLATE "C"')),
               Migration(20, "landing CI jobs",
-                        LANDING_JOBS_DDL.replace("TEXT", 'TEXT COLLATE "C"')))
+                        LANDING_JOBS_DDL.replace("TEXT", 'TEXT COLLATE "C"')),
+              Migration(21, "landing claim bases",
+                        LANDING_CLAIMS_DDL.replace("TEXT", 'TEXT COLLATE "C"')),
+              Migration(22, "item incident log index", INCIDENTS_DDL),
+              Migration(23, "card effort decision", _CARD_EFFORT),
+              Migration(24, "spawn attempt outcomes", _SPAWN_ATTEMPTS))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
@@ -381,4 +398,7 @@ def parse_tables(ddl: str) -> dict:
             r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]+);", ddl):
         table, column, declaration = match.groups()
         out.setdefault(table, []).append((column, "NOT NULL" in declaration))
+    for table, column in re.findall(
+            r"ALTER TABLE (\w+) ALTER COLUMN (\w+) DROP NOT NULL;", ddl):
+        out[table] = [(name, required and name != column) for name, required in out[table]]
     return out

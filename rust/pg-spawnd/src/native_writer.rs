@@ -106,6 +106,13 @@ fn finish(
         "failed"
     });
     record["reason"] = json!(reason);
+    if exit == 0 && record["status_line"] == "DONE" && record["review"]["verdict"] == "ACCEPT" {
+        record["review_test_status"] = json!(if record["review"]["tested"] == true {
+            "reported"
+        } else {
+            "untested"
+        });
+    }
     if matches!(exit, 4 | 9) {
         record["result"] = json!("BLOCKED");
     }
@@ -266,6 +273,24 @@ fn review_round(
             {
                 return Ok(review)
             }
+            Ok(review) if review["status"] == "client_missing" => {
+                return Err((
+                    10,
+                    review["reason"]
+                        .as_str()
+                        .unwrap_or("client_missing")
+                        .to_owned(),
+                ));
+            }
+            Ok(review) if review["status"] == "review_running" => {
+                return Err((
+                    4,
+                    review["reason"]
+                        .as_str()
+                        .unwrap_or("review_running")
+                        .to_owned(),
+                ));
+            }
             Ok(review) => {
                 last = review["reason"]
                     .as_str()
@@ -361,7 +386,7 @@ fn writer_attempt(
         }
         record["review_rounds"] = json!(record["review_rounds"].as_u64().unwrap_or(0) + 1);
         let summary = json!({"head":head, "run_id":review["run_id"], "verdict":review["verdict"],
-            "leg":review["leg"], "harness":review["harness"]});
+            "host":review["host"], "leg":review["leg"], "harness":review["harness"]});
         record["review"] = review;
         if record["reviews"].as_array().is_none() {
             record["reviews"] = json!([]);

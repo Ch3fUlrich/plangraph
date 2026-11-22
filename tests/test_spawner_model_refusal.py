@@ -15,7 +15,7 @@ from plangraph.spawner.runner import SpawnerRunner, spawn_service
 
 
 def stream(shape, stop='refusal'):
-    text = 'partial answer\nVERDICT: PASS'
+    text = 'partial answer\nFILES READ: src/lib.rs\nVERDICT: PASS'
     message = {'type': 'assistant', 'message': {
         'content': [{'type': 'text', 'text': text}], 'stop_reason': None}}
     ending = ({'type': 'result', 'result': text, 'stop_reason': stop} if shape == 'result'
@@ -86,7 +86,10 @@ def test_no_booking_even_for_limit_text():
     pytest.param('opencode', 'tools', id='opencode'),
 ])
 def test_route_is_terminal_only_for_claude(tmp_path, monkeypatch, harness, tool_mode):
-    lines, _ = stream('partial')
+    lines, text = stream('partial')
+    if harness == 'opencode':
+        lines += [json.dumps({'type': 'text', 'part': {'text': text}}),
+                  json.dumps({'type': 'step_finish', 'part': {'reason': 'stop'}})]
     calls, notifications = [], []
     async def run():
         factory = fake_claude(tmp_path, lines)

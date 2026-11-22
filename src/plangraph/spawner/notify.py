@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import urllib.error
@@ -96,33 +97,35 @@ class KeeperRefused(Exception):
 _TRANSIENT_REFUSALS = frozenset({401, 403, 408, 425, 429})
 
 
-def refusal_is_final(directory, refusal):
+def refusal_is_final(directory, refusal, *, journal_name='keeper.refused'):
     """Whether a refused delivery is never sent again.
 
     A conflict (HTTP 409: the item no longer takes this record, e.g. it is done)
     is final at once; any other 4xx that is not transient is final when the same
-    status repeats for this run (the first one is remembered in ``keeper.refused``).
+    status repeats for this delivery (the first one is remembered in its journal).
     """
     if refusal.status == 409:
         return True
     if refusal.status in _TRANSIENT_REFUSALS:
         return False
-    seen = Path(directory) / 'keeper.refused'
+    seen = Path(directory) / journal_name
     if seen.exists() and seen.read_text(encoding='utf-8').strip() == str(refusal.status):
         return True
     atomic_write_private(seen, f'{refusal.status}\n')
     return False
 
 
-def settle_refusal(marker, recipient, refusal):
+def settle_refusal(marker, recipient, refusal, *, final_statuses=()):
     """Mark a final refusal as delivered-as-refused (never resent); log a retryable one."""
     import logging
     log = logging.getLogger(__name__)
-    if refusal_is_final(Path(marker).parent, refusal):
+    marker = Path(marker)
+    if refusal.status in final_statuses or refusal_is_final(
+            marker.parent, refusal, journal_name=marker.with_suffix('.refused').name):
         atomic_write_private(marker, f'refused: HTTP {refusal.status}\n')
-        log.warning('completion delivery to %s refused (HTTP %s): not retried', recipient, refusal.status)
+        log.warning('delivery to %s refused (HTTP %s): not retried', recipient, refusal.status)
     else:
-        log.warning('completion delivery to %s refused (HTTP %s): will retry', recipient, refusal.status)
+        log.warning('delivery to %s refused (HTTP %s): will retry', recipient, refusal.status)
 
 
 class KeeperSink:
@@ -141,9 +144,14 @@ class KeeperSink:
         if not event.get('item'):
             raise ValueError('live keeper delivery requires PLANGRAPH_SPAWN_ITEM or record item')
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
-        payload = {'key': event['item'], 'run': {
-            'run_id': event['run_id'], 'phase': 'finished', 'rc': event['rc']}}
-        request = urllib.request.Request(self.url.rstrip('/') + '/v1/record_run',
+        run = {'run_id': event['run_id'], 'phase': 'finished', 'rc': event['rc']}
+        if event.get('run_kind') == 'native-codex' and event['event'] == 'REFUSED':
+            run['native_launch_refusal'] = (event.get('reason') or 'native launch refused')[:512]
+        payload = {'key': event['item'], 'run': run}
+        self._post("record_run", payload, token)
+
+    def _post(self, verb, payload, token):
+        request = urllib.request.Request(self.url.rstrip('/') + '/v1/' + verb,
             data=json.dumps(payload).encode(), method='POST',
             headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
         opener = urllib.request.build_opener(_NoRedirectHandler())
@@ -156,6 +164,10 @@ class KeeperSink:
             if 400 <= exc.code < 500:
                 raise KeeperRefused(exc.code) from None
             raise
+
+    def spawn_attempt(self, attempt):
+        token = Path(self.token_file).read_text(encoding="utf-8").strip()
+        self._post("record_spawn_attempt", attempt, token)
 
     def item(self, key):
         from urllib.parse import urlencode
@@ -189,6 +201,47 @@ class KeeperSink:
             if json.load(response) != binding:
                 raise ValueError('keeper did not acknowledge seat admission')
         request['verdict_binding'] = binding
+
+
+def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
+    """Deliver terminal snapshots idempotently and retain undelivered records."""
+    import re
+    from plangraph.fleet_snapshot import _projection_binary
+
+    keeper = keeper if keeper is not None else KeeperSink()
+    if not keeper.url or not keeper.token_file:
+        return []
+    pending = []
+    for run in runs:
+        run_id = run.get("run_id", "")
+        if (run.get("attempt_capture") != 1 or not run.get("ended")
+                or run.get("status") in ("queued", "running", "queue_claimed")
+                or not re.fullmatch(r"run-[A-Za-z0-9-]+", run_id)):
+            continue
+        marker = Path(state) / "runs" / run_id / "attempt.delivered"
+        if not marker.exists():
+            pending.append((run, marker))
+    findings = []
+    for run, marker in sorted(pending, key=lambda pair: pair[0]["ended"])[:limit]:
+        try:
+            result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
+                                    input=json.dumps(run, allow_nan=False), text=True,
+                                    encoding="utf-8", errors="replace", capture_output=True, timeout=5, check=True)
+            attempt = json.loads(result.stdout)
+            if attempt is not None:
+                try:
+                    keeper.spawn_attempt(attempt)
+                except KeeperRefused as refusal:
+                    settle_refusal(marker, f"keeper (attempt {run['run_id']})",
+                                   refusal, final_statuses=(400, 422))
+                    raise
+            atomic_write_private(marker, "delivered\n" if attempt is not None else "not_launched\n")
+        except (OSError, ValueError, RuntimeError, KeeperRefused, subprocess.SubprocessError) as exc:
+            findings.append(dict(rule="spawn-attempt-delivery", run_id=run["run_id"],
+                                 reason=type(exc).__name__))
+            if isinstance(exc, (OSError, subprocess.TimeoutExpired)):
+                break
+    return findings
 
 
 def deliver_verdict(directory, record, keeper):
@@ -313,23 +366,46 @@ def _deliver_verdict(directory, record, keeper):
             outcome('retry' if not verifier_started or (directory / 'verdict.payload.json').is_file() else 'skipped', type(exc).__name__)
 
 
+def annotate_native(record, card):
+    """Carry the native card's recipient into persistent run records."""
+    if (card or {}).get('run_kind') == 'native-codex':
+        record['run_kind'] = 'native-codex'
+        parent = card.get('parent_session') or os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION')
+        if isinstance(parent, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', parent):
+            record['parent_session'] = parent
+
+
+def completion_recipient(recipient, record):
+    if recipient == 'parent' and record.get('run_kind') == 'native-codex':
+        return record.get('parent_session') or recipient
+    return recipient
+
+
 def completion_event(record, cwd):
     from .runner import redact
     from .prompt_input import checkout_env
-    try:
-        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
-                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
-                                       env=checkout_env(), timeout=10).strip()
-    except (OSError, subprocess.SubprocessError):
-        head = None
+    native = record.get('run_kind') == 'native-codex'
+    head = record.get('final_head') if native else (
+        record.get('head_sha') if record.get('review_checkout') else None)
+    if not native and head is None:
+        try:
+            head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
+                                           text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
+                                           env=checkout_env(), timeout=10).strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    refused = native and record.get('status') == 'refused'
     rc = record.get('exit_code')
+    if refused:
+        rc = rc or 2
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],
         idempotency_key=record['run_id'] + ':' + record['status'],
-        event='DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
-        reason=record.get('reason'),
+        event='REFUSED' if refused else 'DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
+        reason=record.get('reason') or (record.get('error') if native else None),
+        **({'run_kind': 'native-codex', 'status': record['status']} if native else {}),
         **({'watchdog': record['watchdog']} if 'watchdog' in record else {}),
-        parent_session=os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
-        item=record.get('item') or os.environ.get('PLANGRAPH_SPAWN_ITEM'),
+        parent_session=record.get('parent_session') if native else os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
+        item=record.get('item') or (record.get('item_key') if native else None) or os.environ.get('PLANGRAPH_SPAWN_ITEM'),
         take_cmd=f'git cherry-pick {head}' if head else 'git log --oneline',
         discard_cmd=f'plangraph-spawn result {record["run_id"]} # discard: do not cherry-pick'))
 

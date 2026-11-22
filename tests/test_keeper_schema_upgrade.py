@@ -108,7 +108,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
 
 
 def test_schema_version_is_sixteen():
-    assert schema.SCHEMA_VERSION == 21
+    assert schema.SCHEMA_VERSION == 24
 
 
 def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path):
@@ -141,7 +141,7 @@ def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 21
+    assert schema.SCHEMA_VERSION == 24
     assert "message_nonces" in tables(conn)
     assert "message_envelopes" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
@@ -181,7 +181,7 @@ def test_v14_db_upgrades_to_v15_creates_messages_and_keeps_chain(tmp_path):
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 21
+    assert schema.SCHEMA_VERSION == 24
     assert "messages" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert {"trg_messages_no_update", "trg_messages_no_delete"} <= triggers
@@ -217,7 +217,7 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     conn = kdb.open_db(path, backend="sqlite")
     # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
     # production upgrades detect missing columns without reading/writing the pragma.
-    assert schema.SCHEMA_VERSION == 21
+    assert schema.SCHEMA_VERSION == 24
     row = dict(Store(conn, clock=Clock())._item("demo:A"))
     for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
         assert column in row and row.pop(column) is None
@@ -381,7 +381,7 @@ OVERSIGHT_TABLES = {"oversight_tokens", "oversight_ops"}
 
 def test_fresh_sqlite_db_is_v16_with_oversight_and_bus_tables(tmp_path):
     conn = kdb.open_db(tmp_path / "fresh.db", create=True, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 21
+    assert schema.SCHEMA_VERSION == 24
     assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
     conn.close()
 
@@ -438,7 +438,7 @@ def test_pg_fresh_and_main_migration_8_upgrade_to_9(monkeypatch, tmp_path):
 
     try:
         full = schema_pg.MIGRATIONS
-        expected = BUS_TABLES | OVERSIGHT_TABLES | {"alerts", "alert_log", "landing_stages", "landing_trains", "landing_ci_jobs"}
+        expected = BUS_TABLES | OVERSIGHT_TABLES | {"alerts", "alert_log", "landing_stages", "landing_trains", "landing_ci_jobs", "landing_claim_bases"}
         assert db_pg.migrate(raw, fresh) == list(range(1, schema_pg.LATEST + 1))
         assert expected <= pg_tables(fresh)
 
@@ -632,3 +632,65 @@ def test_split_statements_refuses_pragma_and_vacuum_in_transaction(tmp_path, mon
     monkeypatch.setattr(kdb, "OVERSIGHT_DDL", "VACUUM;")
     with pytest.raises(ValueError, match="disallowed statement in transaction: VACUUM"):
         kdb.open_db(path, create=False)
+
+
+def _incident_migration_window(steps):
+    position = next(index for index, step in enumerate(steps)
+                    if step.name == "item incident log index")
+    return steps[:position], [step.version for step in steps[position:]]
+
+
+@pytest.mark.parametrize("incident_version,last_version", [(15, 15), (22, 24)])
+def test_incident_migration_window_uses_the_index_step(incident_version, last_version):
+    from plangraph.keeper.schema_pg import Migration
+
+    steps = tuple(Migration(
+        number, "item incident log index" if number == incident_version else "other step", "")
+        for number in range(1, last_version + 1))
+    previous, pending = _incident_migration_window(steps)
+    assert [step.version for step in previous] == list(range(1, incident_version))
+    assert pending == list(range(incident_version, last_version + 1))
+
+
+@needs_pg
+def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypatch):
+    import uuid
+
+    import psycopg
+
+    from plangraph.keeper import db_pg, schema_pg
+
+    name = "t_schemaup_" + uuid.uuid4().hex[:12]
+    path = tmp_path / "pg-incidents.db"
+    previous, pending = _incident_migration_window(schema_pg.MIGRATIONS)
+    with psycopg.connect(PG_DSN, autocommit=True) as raw:
+        try:
+            with monkeypatch.context() as old:
+                old.setattr(schema_pg, "MIGRATIONS", previous)
+                conn = kdb.open_db(path, create=True, backend="postgres",
+                                   dsn=PG_DSN, schema=name)
+            try:
+                token = auth.add_principal(conn, "router", "router", [])
+                owner = auth.authenticate(conn, token)
+                store = Store(conn, clock=Clock())
+                store.create_items(owner, [defn("A"), defn("GOAL", ["A"], kind="goal")])
+                history = keeper_events.read_events(conn)
+                assert conn.execute("SELECT to_regclass('idx_events_incidents')").fetchone()[0] is None
+            finally:
+                conn.close()
+            assert db_pg.migrate(raw, name) == pending
+            assert db_pg.migrate(raw, name) == []
+            conn = kdb.open_db(path, backend="postgres", dsn=PG_DSN, schema=name)
+            try:
+                assert conn.execute("SELECT to_regclass('idx_events_incidents')").fetchone()[0]
+                assert keeper_events.read_events(conn) == history
+                store = Store(conn, clock=Clock())
+                owner = auth.authenticate(conn, token)
+                report = store.incident(owner, "demo:A", "after upgrade")
+                assert store.show(owner, "demo:A")["incidents"] == [
+                    {field: report[field] for field in ("text", "at", "author")}]
+                assert store.verify_integrity() == []
+            finally:
+                conn.close()
+        finally:
+            raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')

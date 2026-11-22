@@ -51,7 +51,7 @@ def test_recorded_refusal_books_and_runs_next_leg(tmp_path, monkeypatch, stream,
         setattr(job, stream, ('error: ' + LINE if stream == 'stdout' else LINE)
                 if name == 'first' else 'review complete')
         if name != 'first':
-            job.stdout += '\nVERDICT: pass\n'
+            job.stdout += '\nFILES READ: src/lib.rs\nVERDICT: pass\n'
         runner.jobs[name] = job
         return job
 

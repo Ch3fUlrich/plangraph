@@ -1,8 +1,8 @@
 [Unit]
-Description=Sweep merged worktrees hourly
+Description=Report worktree cleanup candidates daily
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=daily
 Persistent=true
 
 [Install]

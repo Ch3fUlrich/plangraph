@@ -47,9 +47,9 @@ def checkouts(tmp_path, monkeypatch):
 @pytest.fixture
 def service(tmp_path, monkeypatch, checkouts):
     calls = []
-    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-flash')
+    chosen = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
     plan = SpawnPlan((chosen,), (), 'test', (chosen,), ())
-    text = 'Review complete\nTEST_GAMING: no\nVERDICT: ACCEPT'
+    text = 'Review complete\nFILES READ: change.txt\nTEST_GAMING: no\nVERDICT: ACCEPT'
 
     class Process:
         pid = None
@@ -77,6 +77,7 @@ def service(tmp_path, monkeypatch, checkouts):
         return plan
 
     monkeypatch.setenv('AUTOOS_OMNIROUTE_KEY', 'test-credential')
+    monkeypatch.setattr('plangraph.spawner.opencode_isolation.install_go_credential', lambda _: True)
     monkeypatch.delenv('PLANGRAPH_SPAWN_NOTIFY_CMD', raising=False)
     monkeypatch.setattr(resolver, 'host_skip_reason_async', available)
     monkeypatch.setattr(resolver, 'plan_for_launch_async', launch)
@@ -121,14 +122,14 @@ def test_spawn_completion_uses_selected_checkout(service, checkouts, capsys, too
     if source in ('card', 'both', 'mcp'):
         card['cwd'] = str(reviewed)
     service.advance_head = source == 'both'
-    chosen = 'mimo-v2.6-flash'
+    chosen = 'opencode-go-deepseek-v4-flash'
     if source == 'mcp':
         server = mcp.MCPSpawnerServer(service.runner, state=service.state)
         server.service = service
         result = asyncio.run(server.call_tool('plangraph_agent_spawn', dict(
             card=card, prompt='Review the checkout', role='review', writer_families=['gpt'],
             wait_seconds=None, seats=dispatch == 'seats',
-            **({'model_or_combo': 'mimo/mimo-v2.6-flash', 'override_reason': 'hermetic checkout test'}
+            **({'model_or_combo': 'opencode-go/deepseek-v4.1-flash', 'override_reason': 'hermetic checkout test'}
                if dispatch == 'explicit' else {}))))
     else:
         args = ['spawn', 'Review the checkout', '--role', 'review', '--writer-family', 'gpt',
@@ -404,7 +405,7 @@ def test_named_cwd_posts_witnessed_seat_with_artifacts(service, checkouts, tmp_p
 
     monkeypatch.setattr(notify.KeeperSink, 'admit_seat_verdict', admit)
     service.witness_finish = 'stop'
-    service.witness_text = 'TEST-GAMING: no - searched the supplied change: 0 hits\nVERDICT: ACCEPT'
+    service.witness_text = 'FILES READ: change.txt\nTEST-GAMING: no - searched the supplied change: 0 hits\nVERDICT: ACCEPT'
     record = asyncio.run(service.spawn(
         card={'estimate_tokens': 1000, 'item_key': 'demo:CWD', 'cwd': str(reviewed),
               'diff_ref': {'repo': str(reviewed), 'base': git(reviewed, 'rev-parse', 'HEAD~1'), 'head': head}},

@@ -19,9 +19,10 @@ from pathlib import Path
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .schema_guards import RECEIPTS_DDL
+from .schema import ATTEMPTS_GUARDS, ATTEMPTS_TABLE, ATTEMPT_SPAWN_INDEXES
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
-from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, JEV_DDL,
-                     LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
+from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, INCIDENTS_DDL, JEV_DDL,
+                     LANDING_CLAIMS_DDL, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
                      LOCKS_DDL, METRICS_DDL, OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL,
                      SCHEMA, TRIGGERS)
 
@@ -118,7 +119,8 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "exec_principal", "TEXT"),
                   ("items", "exec_retired_runs", "TEXT"),
                   ("cards", "check_kind", "TEXT NOT NULL DEFAULT 'change'"),
-                  ("cards", "check_reads", "TEXT NOT NULL DEFAULT '[]'"))
+                  ("cards", "check_reads", "TEXT NOT NULL DEFAULT '[]'"),
+                  ("cards", "level", "TEXT"), ("cards", "level_reason", "TEXT"))
 
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)
@@ -190,6 +192,29 @@ def _split_statements(
     return statements
 
 
+def _migrate_spawn_attempts(conn):
+    """Preserve existing rows and both foreign keys while admitting nullable spawn keys."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='idx_attempts_spawn_since'").fetchone():
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(attempts)")]
+        if "attempt_id" not in columns:
+            conn.execute(ATTEMPTS_TABLE.replace("attempts (", "attempts_v24 (", 1))
+            names = ",".join(columns)
+            conn.execute(f"INSERT INTO attempts_v24 ({names}) SELECT {names} FROM attempts")
+            conn.execute("DROP TABLE attempts")
+            conn.execute("ALTER TABLE attempts_v24 RENAME TO attempts")
+            for statement in _split_statements(ATTEMPTS_GUARDS, disallow=("PRAGMA", "VACUUM")):
+                conn.execute(statement)
+        for statement in _split_statements(ATTEMPT_SPAWN_INDEXES, disallow=("PRAGMA", "VACUUM")):
+            conn.execute(statement)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 def _upgrade(conn):
     """Install missing schema objects and import historical receipts idempotently."""
     for table, column, ddl in _ADDED_COLUMNS:
@@ -214,6 +239,7 @@ def _upgrade(conn):
     conn.executescript(LANDING_STAGES_DDL)
     conn.executescript(LANDING_TRAINS_DDL)
     conn.executescript(LANDING_JOBS_DDL)
+    conn.executescript(LANDING_CLAIMS_DDL)
     from .messages_schema import SQLITE
     conn.executescript(SQLITE)
     # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)
@@ -236,6 +262,8 @@ def _upgrade(conn):
         raise
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'").fetchone():
+        conn.executescript(INCIDENTS_DDL)
 
 
 def open_db(path, *, create: bool = False,
@@ -278,6 +306,7 @@ def open_db(path, *, create: bool = False,
                 f"{path} is not a keeper database (schema missing); "
                 "create it with open_db(..., create=True)")
         _upgrade(conn)
+    _migrate_spawn_attempts(conn)
     # Defensive mode hardens shadow tables and blocks several bypasses; enable
     # it after setup (it must not interfere with the CREATE statements above)
     # and before the authorizer, which then covers the rest.

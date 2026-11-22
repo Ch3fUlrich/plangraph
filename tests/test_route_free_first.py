@@ -159,7 +159,7 @@ def test_route_and_refusal(tmp_path, capsys):
     plan = json.loads(capsys.readouterr().out)
     assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.2-sol-medium'
     assert plan['first_leg']['effort'] == 'medium'
-    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement', 'agy_quota_states'}
+    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement', 'agy_quota_states', 'effort', 'static_v0'}
     assert plan['placement'] == {'host': None, 'reason': 'placement_not_evaluated', 'free_mb': None}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
@@ -429,7 +429,8 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert not {leg.family for leg in review.legs} & set(writers)
         assert not {leg.family for leg in review.review_seats} & set(writers)
         families = {leg.id: leg.family for leg in review_route_pool()}
-        assert review.first_leg.id == next(id for id in REVIEW_ORDER if families[id] not in writers)
+        assert review.first_leg.id == next(leg_id for leg_id in REVIEW_ORDER
+                                           if families[leg_id] not in writers and leg_id != "mimo-v2.6-pro")
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {

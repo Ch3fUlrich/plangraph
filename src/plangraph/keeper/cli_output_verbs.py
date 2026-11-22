@@ -9,6 +9,13 @@ from .brief import creation_error
 from .credential_guard import mask_all
 
 
+def cmd_attempts(args, session):
+    from .cli_verbs import read
+
+    return read(session, "attempts", {"since": args.since}, lambda values: "\n".join(
+        f"{row['attempt_id']} {row['item']} {row['role']} {row['served_model']}" for row in values))
+
+
 def cmd_close_merged(args, session):
     from .cli_verbs import SLOW_TIMEOUT, RefusedCli, Unreachable, _refuse
     body = {"key": args.key, "decision_id": args.decision_id, "families": args.families,
@@ -22,6 +29,9 @@ def cmd_close_merged(args, session):
     print("key\tclass\treason")
     try:
         result = session.call("POST", "close_merged", body=body, timeout=SLOW_TIMEOUT)
+        if result.get("closed") is not True and not result.get("would_close"):
+            print(f"{args.key}\tREFUSED\t{_close_reason(result)}")
+            return 2
         classification = "WOULD-CLOSE" if result.get("would_close") else "CLOSED"
         if result.get("flags"):
             classification = "FLAGGED"
@@ -39,6 +49,12 @@ def cmd_close_merged(args, session):
             print(f"{args.key}\tCLOSED\t{_read_back_note(exc)}")
             return 0
         return _refuse(exc)
+
+
+def _close_reason(result):
+    reason = result.get("reason") or "close declined"
+    missing = result.get("missing") or []
+    return reason + (": " + ", ".join(missing) if missing else "")
 
 
 def _read_back_state(session, key):
@@ -66,8 +82,11 @@ def _close_merged_with_read_back(session, key, body):
         _refuse,
     )
     try:
-        return _emit(session, session.call("POST", "close_merged", body=body, timeout=SLOW_TIMEOUT),
-                     lambda r: fmt.result_text("close_merged", r))
+        result = session.call("POST", "close_merged", body=body, timeout=SLOW_TIMEOUT)
+        if result.get("closed") is False:
+            _emit(session, result, lambda r: f"{key} REFUSED {_close_reason(r)}")
+            return 2
+        return _emit(session, result, lambda r: fmt.result_text("close_merged", r))
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:

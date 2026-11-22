@@ -1,0 +1,15 @@
+[
+  {"text": "FILES READ: src/a.rs\nVERDICT: ACCEPT", "has_files_read": true},
+  {"text": "**FILES READ:** src/a.rs\nVERDICT: ACCEPT", "has_files_read": true},
+  {"text": "- **Files Read** : `docs/a.md`\nVERDICT: ACCEPT", "has_files_read": true},
+  {"text": "# FILES READ: Makefile:2\r\nVERDICT: ACCEPT", "has_files_read": true},
+  {"text": "FILES READ: diff.rs\nVERDICT: ACCEPT", "has_files_read": true},
+  {"text": "VERDICT: ACCEPT", "has_files_read": false},
+  {"text": "**FILES READ:**\nVERDICT: ACCEPT", "has_files_read": false},
+  {"text": "- FILES READ: a few files\nVERDICT: ACCEPT", "has_files_read": false},
+  {"text": "> **FILES READ:** src/a.rs\nVERDICT: ACCEPT", "has_files_read": false},
+  {"text": "```text\n**FILES READ:** src/a.rs\n```\nVERDICT: ACCEPT", "has_files_read": false},
+  {"text": "FILES READ: src/a.rs\n- FILES READ: diff only (src/a.rs)\nVERDICT: ACCEPT", "has_files_read": false},
+  {"text": "FILES READ: src/a.rs\n**FILES READ:** none (inline diff only)\nVERDICT: ACCEPT", "has_files_read": false},
+  {"text": "FILES READ: src/a.rs\n~~~text\nFILES READ: none\n~~~\nVERDICT: ACCEPT", "has_files_read": true}
+]

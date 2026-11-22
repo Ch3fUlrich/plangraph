@@ -287,7 +287,7 @@ def test_framed_stdout_callers_receive_plain_answer(tmp_path, monkeypatch, rc):
     from plangraph.spawner.runner import spawn_service
     from plangraph.spawner.seat_artifact import publish
 
-    text = 'Review complete\nTEST-GAMING: no - searched tests: 0 hits\nVERDICT: ACCEPT'
+    text = 'Review complete\nFILES READ: src/lib.rs\nTEST-GAMING: no - searched tests: 0 hits\nVERDICT: ACCEPT'
     output = json.dumps({'type': 'text', 'part': {'text': text}})
     job = _monitor(tmp_path, monkeypatch, output, rc=rc)
     assert job.stdout == text

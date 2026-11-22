@@ -155,7 +155,7 @@ for tool in ('cargo', 'git', 'codex'):
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
     let review_cli = dir.join("review-cli.py");
-    fs::write(&review_cli, r#"import json, pathlib, sys, uuid
+    fs::write(&review_cli, r#"import json, pathlib, subprocess, sys, time, uuid
 argv = sys.argv[1:]
 value = lambda flag: argv[argv.index(flag) + 1]
 assert value('--role') == 'review' and value('--exclude-family') == 'openai', argv
@@ -167,12 +167,26 @@ prompt = pathlib.Path(value('--prompt-file')).read_text()
 run_id = 'run-' + uuid.uuid4().hex
 run = pathlib.Path(value('--state')) / 'runs' / run_id
 run.mkdir(parents=True)
-if 'reject marker' in prompt:
+assert card['review_workspace'] and '--cwd' not in argv
+marker = subprocess.check_output(['git', 'show', head + ':writer.txt'], text=True)
+if 'late marker' in marker:
+    receipt = dict(run_id=run_id, status='running', started=time.time())
+    (run / 'record.json').write_text(json.dumps(receipt))
+    print(json.dumps(receipt))
+    sys.exit(0)
+if 'client marker' in marker and '----- previous review -----' in prompt:
+    assert 'HIGH writer.txt:1 - fixture finding' in prompt, prompt
+    print(json.dumps(dict(run_id=run_id, status='failed',
+        stderr_tail=f'REVIEW {run_id} FAIL client_missing /fixture/codex')))
+    sys.exit(10)
+if 'reject marker' in marker or 'client marker' in marker:
     text = 'HIGH writer.txt:1 - fixture finding\nHEAD: ' + head + '\nVERDICT: REQUEST_CHANGES\n'
 else:
-    text = 'FILES READ: writer.txt\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
+    fixed = subprocess.run(['git', 'cat-file', '-e', head + ':fix.txt'], capture_output=True).returncode == 0
+    tests = 'TESTS: cargo test -p fixture — 1 passed\n' if fixed else ''
+    text = 'FILES READ: writer.txt\n' + tests + 'HEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type':'result','is_error':False,'result':text}) + '\n')
-print(json.dumps({'run_id':run_id,'status':'completed','live_log':str(run / 'live.log'),'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
+print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'fixture-worker','overflow_remote':True,'stdout_tail':text,'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
 "#).unwrap();
     fs::create_dir_all(dir.join("supervisor-bin")).unwrap();
     // The fixture does not depend on free space on the host's /tmp mount.
@@ -263,6 +277,10 @@ async def check():
     assert record['host'] and record['exit_code'] == 0, record
     assert record['session_id'] == 'fixture-session' and record['resumes'] == 0, record
     assert record['review']['verdict'] == 'ACCEPT' and record['review']['head'] == record['final_head'], record
+    assert record['review_test_status'] == 'untested', record
+    review_text = pathlib.Path(record['review']['path']).read_text()
+    assert [line for line in review_text.splitlines() if line.startswith('TESTS:')] == [
+        'TESTS: none: reviewer supplied no test result'], review_text
     assert record['review']['leg'] == 'claude-sonnet-5-5-high' and record['review']['harness'] == 'claude' and record['status_line'] == 'DONE', record
     assert record['fast_checks'] == {'head': record['final_head'], 'status': 'passed'}, record
     assert pathlib.Path(record['cwd']).is_dir(), record
@@ -279,6 +297,9 @@ async def check():
         assert fixed[field] == record[field], (field, fixed)
     assert fixed['review']['head'] == fixed['final_head'], fixed
     assert fixed['review']['run_id'] != record['review']['run_id'], fixed
+    assert fixed['resume_from']['head'] == record['final_head'], fixed
+    assert fixed['fast_checks'] == {'head': fixed['final_head'], 'status': 'passed'}, fixed
+    assert fixed['review_test_status'] == 'reported', fixed
     ledger = pathlib.Path(fixed['cwd']).parent/'ledger.jsonl'
     rows = [json.loads(line) for line in ledger.read_text().splitlines()]
     assert len(rows) == 2 and rows[0]['tokens'] == rows[1]['tokens'] == 1234, rows
@@ -318,6 +339,40 @@ async def check():
             assert final['result'] == 'BLOCKED' and final['exit_code'] == 9, final
         else:
             assert final['session_id'] == 'fixture-session', final
+    for marker in ('client marker', 'late marker'):
+        with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
+            reviewed = await admitted_spawn(service, dict(card=card, prompt='brief marker ' + marker))
+            await service.tasks[reviewed['run_id']]
+        final = service.result(reviewed['run_id'])
+        if marker == 'client marker':
+            assert final['exit_code'] == 10 and final['reason'].endswith('FAIL client_missing /fixture/codex'), final
+            assert final['review']['verdict'] == 'REQUEST_CHANGES', final
+            assert final['review']['head'] != final['final_head'], final
+            assert 'HIGH writer.txt:1' in final['review']['text'], final
+            assert final['review_rounds'] == 1 and final['resumes'] == 1, final
+            assert final['session_id'] == 'fixture-session', final
+            assert pathlib.Path(final['review']['path']).read_text() == final['review']['text'], final
+        else:
+            head = final['final_head']
+            pending = pathlib.Path(final['review_dir']) / f'late-review-{head}.json'
+            receipt = json.loads(pending.read_text())
+            assert final['exit_code'] == 4 and receipt['run_id'] in final['reason'], final
+            assert 'expected end' in final['reason'], final
+            run_file = root/'state'/'runs'/receipt['run_id']/'record.json'
+            run = json.loads(run_file.read_text())
+            run.update(status='completed', host='fixture-worker', head_sha=head, overflow_remote=True,
+                       chosen_leg={'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'},
+                       stdout_tail='FILES READ: writer.txt\nVERDICT: ACCEPT\n')
+            updated = run_file.with_suffix('.tmp')
+            updated.write_text(json.dumps(run))
+            updated.replace(run_file)
+            artifact = pending.with_suffix('.txt')
+            for _ in range(150):
+                if artifact.is_file(): break
+                await asyncio.sleep(.05)
+            assert artifact.read_text() == (
+                f'HEAD: {head}\nTESTS: none: reviewer supplied no test result\n'
+                'FILES READ: writer.txt\nVERDICT: ACCEPT\n')
     with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
         holding = await admitted_spawn(service, dict(card=card, prompt='brief marker hold marker'))
         holding = service.result(holding['run_id'])
@@ -343,7 +398,7 @@ async def check():
             except ProcessLookupError: pass
 # Exercise admission with fixed local policy; installed host policy may queue or
 # remotely place the run, neither of which has a local supervisor task.
-with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_path), patch('plangraph.spawner.host_ready.disk_free_gb', return_value=10), patch.object(overflow, 'placement_policy', return_value=('fixture', False)), patch.object(overflow, 'local_limits', return_value=(2048, 3000)), patch('plangraph.spawner.host_ready.local_disk_refusal', return_value=None):
+with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_path), patch('plangraph.spawner.host_ready.disk_free_gb', return_value=10), patch.object(overflow, 'placement_policy', return_value=('fixture', False)), patch.object(overflow, 'local_limits', return_value=(2048, 3000)), patch('plangraph.spawner.host_ready.local_disk_admission', return_value=(None, None)):
     asyncio.run(check())
 "#]).output().unwrap();
     assert!(

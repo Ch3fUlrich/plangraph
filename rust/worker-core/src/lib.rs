@@ -64,6 +64,12 @@ pub mod placement_rule_store;
 pub mod placement_rules;
 pub mod private_targets;
 pub mod probe;
+#[cfg(unix)]
+mod reap_journal;
+#[cfg(unix)]
+mod reap_run_dirs;
+#[cfg(unix)]
+pub mod reaper;
 pub mod redact;
 mod redact_tokens;
 pub mod remote_steps;
@@ -76,7 +82,9 @@ pub mod work_disks;
 pub const GITHUB_TOKEN_BODY_FLOOR: usize = redact_tokens::SPECS[1].floor;
 mod redact_wrapped;
 pub mod reset;
+pub mod review_completion;
 pub mod review_split;
+pub mod review_text;
 pub mod run;
 pub mod sandbox_env;
 mod sandbox_push;
@@ -116,4 +124,7 @@ mod test_repo_guard;
 pub mod git_test_support;
 
 pub mod cargo_cache;
+pub mod cargo_pool;
+mod cargo_pool_telemetry;
+mod cargo_pool_trim;
 pub mod claude_job_reports;

@@ -164,6 +164,13 @@ def overlay_env(base_env):
     return env
 
 
+def prepare_gateway_env(base_env, model):
+    """Apply the launch overlay and render the selected model's provider."""
+    from .opencode_render import render_gateway_providers
+    env = overlay_env(base_env)
+    return env, render_gateway_providers(env, model)
+
+
 #: No child-side ``settings`` node exists to honour: no ``OPENCODE_CONFIG_CONTENT``,
 #: unparsable content, or a provider block ``build_child_env`` builds from scratch.
 _ABSENT = object()

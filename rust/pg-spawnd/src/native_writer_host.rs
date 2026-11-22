@@ -57,7 +57,7 @@ struct Host {
     effort: String,
     /// Run state root holding `runs/<run-id>/`; review runs are recorded there too.
     state: PathBuf,
-    /// Writer brief, repeated in every review prompt for its item keys and Done-when lines.
+    /// Writer brief used to supply item keys, criteria and invariants to the reviewer.
     brief: String,
     /// `refs/heads/...` that receives the accepted head; None keeps the head on the host.
     push_ref: Option<String>,
@@ -259,14 +259,18 @@ impl Driver for Host {
         .map_err(|_| "stale base: pushed ref does not contain origin/main".to_owned())?;
         fs::create_dir_all(self.cwd.parent().ok_or("worktree parent missing")?)
             .map_err(|e| e.to_string())?;
-        output(
-            self.command("git")
-                .arg("-C")
-                .arg(&self.repo)
-                .args(["worktree", "add", "--detach"])
-                .arg(&self.cwd)
-                .arg(&base),
-        )?;
+        {
+            let _creation =
+                pg_worker_core::worktree::mutation_lock(&self.repo).map_err(|e| e.to_string())?;
+            output(
+                self.command("git")
+                    .arg("-C")
+                    .arg(&self.repo)
+                    .args(["worktree", "add", "--detach"])
+                    .arg(&self.cwd)
+                    .arg(&base),
+            )?;
+        }
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
         Ok(base)
     }
@@ -352,6 +356,9 @@ impl Driver for Host {
         let mut record = record.clone();
         record["cwd"] = json!(self.cwd);
         record["review_dir"] = json!(self.reviews);
+        if record["plan"]["effort"].is_object() {
+            record["attempt_capture"] = json!(1);
+        }
         lifecycle::publish(&self.state, &self.record_path, &record).map_err(|e| e.to_string())?;
         let ledger = if record["ended"].is_number() {
             self.ledger_row(&record).and_then(|row| {
@@ -387,7 +394,10 @@ mod review_route;
 #[path = "native_writer_session.rs"]
 mod session;
 #[cfg(test)]
-use review::{review_diff_base, review_run_text, review_verdict};
+use review::review_diff_base;
+pub(crate) use review::review_record_verdict;
+#[cfg(test)]
+use review::{review_run_text, review_verdict};
 #[cfg(test)]
 #[path = "native_writer_base_tests.rs"]
 mod base_tests;

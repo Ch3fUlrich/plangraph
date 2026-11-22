@@ -12,7 +12,11 @@ fn actual_seat_verdict_dry_run_reads_pair() {
         ("analysis only", false),
         ("VERDICT: pass | fix", false),
         ("quoted \"VERDICT: HALT\"\n**Verdict**: ACCEPT", false),
-        ("analysis\nVERDICT: PASS", true),
+        ("FILES READ: src/lib.rs\nVERDICT: PASS", true),
+        ("analysis\nVERDICT: PASS", false),
+        ("FILES READ: diff only\nVERDICT: PASS", false),
+        ("FILES READ: none (inline diff only)\nVERDICT: PASS", false),
+        ("```\nFILES READ: src/lib.rs\n```\nVERDICT: PASS", false),
         ("approve", false),
         ("VERDICT: pass - fix", false),
         ("verdict: pass-through", false),
@@ -71,6 +75,31 @@ fn actual_seat_verdict_dry_run_reads_pair() {
         "analysis\nVERDICT: HALT"
     );
     fs::remove_dir_all(state).unwrap();
+}
+
+#[test]
+fn seat_verdict_artifact_reports_test_evidence() {
+    let state = tempfile::tempdir().unwrap();
+    let record = json!({"run_id":"run-test","served_model":"gpt-5","witness_kind":"response",
+        "finish_reason":"stop","test_gaming":"no","verdict":"PASS"});
+    for (tests, expected) in [
+        ("", false),
+        ("TESTS: none: shell denied\n", false),
+        ("TESTS: cargo test -p fixture — passed\n", true),
+    ] {
+        write_review_artifacts(
+            state.path(),
+            &record,
+            &format!("FILES READ: src/lib.rs\n{tests}VERDICT: PASS"),
+        )
+        .unwrap();
+        let evidence: Value = serde_json::from_slice(
+            &fs::read(state.path().join("runs/run-test/seat/evidence.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(evidence["verdict"], "PASS");
+        assert_eq!(evidence["tested"], expected);
+    }
 }
 #[test]
 fn missing_witness_or_finish_never_pass() {

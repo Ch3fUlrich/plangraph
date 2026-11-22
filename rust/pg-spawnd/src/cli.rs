@@ -4,6 +4,10 @@ use pg_worker_core::host_probe::{HostProbe, HostProbeError};
 use std::ffi::OsString;
 use std::io::Write;
 
+#[cfg(target_os = "linux")]
+pub(crate) const USAGE: &str =
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local|session> [args]";
+#[cfg(not(target_os = "linux"))]
 pub(crate) const USAGE: &str =
     "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local> [args]";
 
@@ -134,6 +138,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("host") {
         return crate::host_tools::execute(&rest, out);
     }
+    if let Some(name @ ("project-spawn-attempt" | "validate-attempt-route")) = verb.as_deref() {
+        return crate::attempt_outcome::execute(name, rest, out);
+    }
     if verb.as_deref() == Some("steps") {
         // The plan arrives on stdin; the exit code is the plan's, not a usage error's.
         if !rest.is_empty() {
@@ -154,6 +161,9 @@ pub(crate) fn execute(
     }
     if verb.as_deref() == Some("ledger-report") {
         return crate::writer_ledger::report(rest, out);
+    }
+    if verb.as_deref() == Some("finish-late-review") {
+        return crate::late_review::execute(rest);
     }
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);

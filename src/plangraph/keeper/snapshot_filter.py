@@ -14,7 +14,7 @@ FIELDS = tuple((
     "done_criteria evidence_kinds operator priority review_tier source note epoch "
     "claimed_by worker_run reviewer_run lease_until model review_waiver reviews "
     "evidence updated_at corrected_by fixes fixed_by writer_model seat_models "
-    "run_ids created_at done_at reviewed merged answer"
+    "run_ids created_at done_at reviewed merged answer incidents"
 ).split()) + tuple(MODEL_FIELDS)
 BLOCKS = ("items", "aliases", "activity", "decision_text", "progress")
 PARAMS = ("open", "closed", "since", "fields", "blocks")
@@ -123,6 +123,8 @@ def _full(store, now, values=None):
     answers = store.answer_map()   # SYNC-MD-IMPORT: the page's Answers list
     evidence = store._evidence_by_key()      # set-based: one query each, not one per item
     verdicts = store._verdicts_by_key()
+    incidents = store._incidents_by_key() if not values or not values["fields"] \
+        or "incidents" in values["fields"] else {}
     progress_items = [dict({name: item.get(name) for name in PROGRESS_FIELDS},
                            created_at=item.get("created_at") or created_ts.get(item["key"]),
                            done_at=done_ts.get(item["key"])) for item in items]
@@ -156,6 +158,7 @@ def _full(store, now, values=None):
             "evidence": [{"kind": r["kind"], "ref": r["ref"], "epoch": r["epoch"],
                           "verified": r["verified"], "at": r["at"]}
                          for r in evidence.get(item["key"], [])],
+            **({"incidents": incidents[item["key"]]} if item["key"] in incidents else {}),
             "updated_at": item["updated_at"],
             "corrected_by": sorted(corrected.get(item["key"], [])),
             "fixes": item.get("fixes"),

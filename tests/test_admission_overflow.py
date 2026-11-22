@@ -40,6 +40,96 @@ def test_local_room_ignores_counts(setup, monkeypatch, memory):
     remote.assert_not_called()
 
 
+@pytest.mark.parametrize('options,card,movable', [
+    ({}, None, True),
+    ({'cwd': '/named/checkout'}, None, False),
+    ({}, {'cwd': '/named/checkout'}, False),
+    ({'role': 'review'}, {'diff_ref': {'repo': '/named/checkout'}}, False),
+    ({}, {'repo': '/named/checkout'}, False),
+])
+def test_admission_passes_the_placement_decision_to_the_disk_check(setup, monkeypatch, options, card, movable):
+    from plangraph.spawner import host_ready
+    service, _, _ = setup
+    monkeypatch.setattr(a, 'resources', lambda service: (100, 9000))
+    seen = []
+    def disk(worktree, svc, role='implement', movable=False):
+        seen.append(movable)
+        return None, None
+    monkeypatch.setattr(host_ready, 'local_disk_admission', disk)
+    assert service.admit_spawn(options, card=card) is None
+    assert seen == [movable]
+
+
+@pytest.fixture
+def alternate_checkout(tmp_path):
+    import subprocess
+    path = tmp_path / 'alternate'
+    subprocess.run(['git', 'init', '-q', str(path)], check=True)
+    subprocess.run(['git', '-C', str(path), '-c', 'user.name=Test', '-c',
+                    'user.email=test@example.invalid', 'commit', '--allow-empty', '-qm', 'init'], check=True)
+    return path
+
+
+@pytest.mark.parametrize('queued', [False, True])
+def test_unnamed_spawn_launches_on_the_admitted_drive(setup, monkeypatch, tmp_path, queued, alternate_checkout):
+    from pathlib import Path
+    from plangraph.spawner import host_ready
+    from plangraph.spawner.service import SpawnService
+
+    default = tmp_path / 'default'
+    alternate = alternate_checkout
+    service = SpawnService(state=tmp_path / 'run-state')
+    service.runner.default_cwd = str(default)
+    _, path, remote = setup
+    path.unlink()
+    monkeypatch.setattr(overflow, 'ready_records', lambda config, role: {})
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps([
+        {'path': str(default), 'disk_floor_gb': 5}, {'path': str(alternate), 'disk_floor_gb': 5}]))
+    free = {default: 1, alternate: 1 if queued else 20}
+    monkeypatch.setattr(host_ready, 'disk_free_gb', lambda p: free.get(Path(p), 20))
+    monkeypatch.setattr(host_ready, 'cargo_target_size_gb', lambda p: 0)
+    monkeypatch.setattr(host_ready, '_cleanup_before_disk_refusal', lambda *args: None)
+    monkeypatch.setattr(a, 'resources', lambda service: (0, 8000))
+    monkeypatch.setattr(a, 'admission_window', lambda: 30 if queued else 0)
+    recheck = Mock(side_effect=lambda delay: free.update({alternate: 20}))
+    monkeypatch.setattr(a, '_sleep', recheck)
+
+    async def launch(card=None, prompt='', *, cwd=None):
+        return {'status': 'running', 'cwd': cwd}
+    monkeypatch.setattr(service, '_spawn', launch)
+    result = asyncio.run(service.spawn(prompt='Implement the requested change.'))
+    assert result == {'status': 'running', 'cwd': str(alternate)}
+    assert recheck.call_count == int(queued)
+    remote.assert_not_called()
+
+
+@pytest.mark.parametrize('resource', ['cargo-target', 'state', 'state/trees', 'state/worktrees'])
+def test_healthy_work_drive_cannot_mask_another_filesystem_below_floor(
+        setup, monkeypatch, tmp_path, resource, alternate_checkout):
+    from pathlib import Path
+    from plangraph.spawner import host_ready
+
+    service, path, remote = setup
+    path.unlink()
+    service.state = tmp_path / 'state'
+    monkeypatch.setenv('PLANGRAPH_DISK_FLOOR_GB', '5')
+    target = tmp_path / 'cargo-target'
+    monkeypatch.setattr(host_ready, 'shared_cargo_target', lambda: target)
+    monkeypatch.setattr(host_ready, 'unsafe_cache_dir', lambda *args: None)
+    monkeypatch.setattr(host_ready, 'cargo_target_size_gb', lambda p: 0)
+    monkeypatch.setattr(host_ready, 'disk_free_gb', lambda p: 1 if Path(p) == tmp_path / resource else 20)
+    monkeypatch.setattr(host_ready, '_cleanup_before_disk_refusal', lambda *args: None)
+    monkeypatch.setattr(overflow, 'ready_records', lambda config, role: {})
+    monkeypatch.setattr(a, 'resources', lambda service: (0, 8000))
+    monkeypatch.setattr(a, 'admission_window', lambda: 0)
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps([{'path': str(alternate_checkout), 'disk_floor_gb': 5}]))
+
+    result = service.admit_spawn({})
+    assert result['status'] == 'refused'
+    assert 'disk_low: free 1.00 GB, floor 5 GB' in result['reason']
+    remote.assert_not_called()
+
+
 def test_dry_run_preserves_local(setup):
     service, path, remote = setup
     assert service.admit_spawn({'dry_run': True}) is None
@@ -352,6 +442,7 @@ def test_orchestration_real_remote_launch(orchestration, monkeypatch, tmp_path):
 
 
 real_remote_spawn = overflow.remote_spawn
+real_ready_records = overflow.ready_records
 
 
 def test_orchestration_config_thresholds(orchestration, monkeypatch):
@@ -400,3 +491,148 @@ def test_orchestration_cli_remote_first(orchestration, monkeypatch, capsys, cli_
     assert (overflow.main if entry == 'overflow' else cli.main)(args) == 0
     assert json.loads(capsys.readouterr().out)['placement']['host'] == 'host-b'
     remote.assert_called_once()
+
+
+def test_build_review_requires_worker_with_disk_and_ram(orchestration):
+    service, rows, remote, path, registry = orchestration
+    config = json.loads(path.read_text())
+    config['hosts']['host-c'] = {'ssh': 'host-c'}
+    path.write_text(json.dumps(config))
+    data = json.loads(registry.read_text())
+    data['hosts'].append(dict(data['hosts'][1], id='host-c'))
+    registry.write_text(json.dumps(data))
+    rows['host-b'].update(disk_free_gb=4)
+    rows['host-c'] = dict(rows['host-b'], ssh='host-c', disk_free_gb=30)
+    card = {'review_workspace': True, 'repository_review_required': True,
+            'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
+    options = {'role': 'review', 'prompt': 'review the exact head'}
+    record = service.admit_spawn(options, card=card)
+    assert record['host'] == record['placement']['host'] == 'host-c'
+    assert remote.call_args.args[0] == 'host-c'
+    assert remote.call_args.args[2] == card
+
+    remote.reset_mock()
+    rows['host-c']['mem_available_mb'] = 1024
+    record = service.admit_spawn(options, card=card)
+    assert record['status'] == 'refused'
+    assert 'disk_low' in record['reason'] and 'memory:' in record['reason']
+    remote.assert_not_called()
+
+
+@pytest.mark.parametrize('local,projected_only,admitted', [
+    ('host-b', False, True), ('host-a', False, False), ('host-b', True, False),
+])
+def test_placed_build_review_uses_host_role(orchestration, monkeypatch, local, projected_only, admitted):
+    service, rows, remote, path, registry = orchestration
+    config = json.loads(path.read_text())
+    if projected_only:
+        config['hosts'][local]['orchestration_only'] = True
+        data = json.loads(registry.read_text())
+        next(host for host in data['hosts'] if host['id'] == local).pop('orchestration_only')
+        registry.write_text(json.dumps(data))
+    path.write_text(json.dumps(config))
+    rows.clear()
+    monkeypatch.setenv('PLANGRAPH_HOST_NAME', local)
+    monkeypatch.setenv('PLANGRAPH_PLACED_HOST', local)
+    options = {'role': 'review'}
+    card = {'review_workspace': True, 'repository_review_required': True,
+            'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
+    record = service.admit_spawn(options, card=card)
+    if admitted:
+        assert record is None
+        assert options['_placement']['host'] == local
+    else:
+        assert record['status'] == 'refused'
+        assert 'requires a registered worker host' in record['reason']
+    remote.assert_not_called()
+
+
+def test_build_review_refuses_remote_orchestration_route(orchestration, monkeypatch):
+    service, rows, remote, path, registry = orchestration
+    config = json.loads(path.read_text())
+    config['hosts']['host-b']['orchestration_only'] = True
+    path.write_text(json.dumps(config))
+    data = json.loads(registry.read_text())
+    data['hosts'][1].pop('orchestration_only')
+    registry.write_text(json.dumps(data))
+    monkeypatch.setattr(overflow, 'ready_records', real_ready_records)
+    monkeypatch.setattr(overflow, 'read_readiness', lambda name: dict(rows[name], disk_free_gb=30))
+    card = {'review_workspace': True, 'repository_review_required': True,
+            'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
+    record = service.admit_spawn({'role': 'review'}, card=card)
+    assert record['status'] == 'refused'
+    assert 'host-b: review workspace requires a registered worker host' in record['reason']
+    remote.assert_not_called()
+
+
+def test_native_disk_refusal_is_terminal_and_notifies_named_parent(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready, seat_spawn
+
+    state = tmp_path / 'state'
+    keeper = Mock()
+    service = overflow.cli.SpawnService(state=state, keeper_sink=keeper)
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '0')
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *args, **kwargs:
+                        (None, 'cargo_target_cap: cache full'))
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:A',
+                parent_session='fixture-parent')
+
+    refusal = service.admit_spawn({'role': 'implement'}, card=card)
+    assert overflow.cli.spawn_exit_code(refusal) != 0
+    assert refusal['status'] == 'refused' and refusal['ended'] >= refusal['started']
+    event = json.loads((state / 'inbox/fixture-parent.jsonl').read_text())
+    assert event['event'] == 'REFUSED' and event['run_id'] == refusal['run_id']
+    assert event['item'] == 'demo:A' and 'cargo_target_cap' in event['reason']
+    keeper.deliver.assert_called_once_with('keeper', event)
+
+
+def test_native_spawn_cli_returns_nonzero_for_zero_exit_refusal(tmp_path, monkeypatch, capsys):
+    receipt = dict(status='refused', exit_code=0, reason='cargo_target_cap: cache full')
+    child = Mock(stdin=io.StringIO(), stdout=io.StringIO(json.dumps(receipt) + '\n'))
+    monkeypatch.setattr(overflow.cli, '_start_supervisor', Mock(return_value=child))
+    card = json.dumps(dict(run_kind='native-codex', repo=str(tmp_path)))
+    assert overflow.cli.main(['--state', str(tmp_path), 'spawn', '--card', card, 'fixture']) == 1
+    assert json.loads(capsys.readouterr().out) == receipt
+
+
+def test_placed_native_writer_retries_a_cleared_cache_cap(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready, seat_spawn
+
+    service = overflow.cli.SpawnService(state=tmp_path / 'state', keeper_sink=Mock())
+    monkeypatch.setenv('PLANGRAPH_PLACED_HOST', 'fixture')
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '60')
+    monkeypatch.setattr(seat_spawn, '_sleep', lambda _: None)
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
+    disk = Mock(side_effect=[(None, 'cargo_target_cap: cache full'), (None, None)])
+    monkeypatch.setattr(host_ready, 'local_disk_admission', disk)
+    options = {'role': 'implement'}
+    card = dict(run_kind='native-codex', repo=str(tmp_path))
+    assert service.admit_spawn(options, card=card) is None
+    assert disk.call_count == 2
+    assert options['_placement']['host'] == 'fixture'
+    assert service.ps()['runs'] == []
+
+
+def test_native_shared_cache_cap_scales_and_probes_symlink_target(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready as h
+
+    target = tmp_path / 'target'
+    target.mkdir()
+    link = tmp_path / 'target-link'
+    link.symlink_to(target)
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(link))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 20)
+    probe = Mock(return_value=10)
+    monkeypatch.setattr(h, 'disk_free_gb', probe)
+    monkeypatch.setattr(h, 'cargo_run_busy', lambda row: True)
+    service = SimpleNamespace(ps=lambda: {'runs': [dict(role='implement', status='running')]})
+    assert h.local_disk_refusal(tmp_path / 'checkout', service, native=True) is None
+    probe.assert_any_call(target)

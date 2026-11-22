@@ -1,0 +1,2 @@
+- Keeper claims can use an open landing train as their base when its accepted parts cover every unfinished dependency. The keeper records the base SHA, releases the claim if its train or a supporting part is dropped, and checks dependency order before the lander merges.
+- Settlement records verified merges with an unmet dependency warning in the landing journal and continues through the remaining steps.

@@ -485,7 +485,7 @@ class CloseMixin:
         tagged = frozenset(commit["sha"] for commit in commits)
         named = self._named_merge_proof(item)
         landed = tagged | {named["landed"]} if named else tagged
-        changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head)}
+        changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head, item["key"])}
         return (head, tagged), changes
 
     def _merged_go_deploy_changes(self, item, head):

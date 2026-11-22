@@ -139,6 +139,17 @@ pub struct AttemptWorktree {
     pub head: String,
 }
 
+/// Serialize worktree registration and quarantine moves in the common Git directory.
+pub fn mutation_lock(repo: &Path) -> Result<crate::lockfile::LockGuard, GitError> {
+    let common = git(
+        repo,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    let path = Path::new(&common).join("plangraph-worktree.lock");
+    crate::lockfile::lock_with_retry(&path, std::time::Duration::from_secs(5), &mut rand::rng())
+        .map_err(|e| std::io::Error::other(e).into())
+}
+
 /// Create a worktree at `dest` for `id`, on a new branch starting at `base_sha`.
 pub fn create(
     repo: &Path,
@@ -147,6 +158,7 @@ pub fn create(
     id: &AttemptId,
 ) -> Result<AttemptWorktree, GitError> {
     check_rev(base_sha)?;
+    let _creation = mutation_lock(repo)?;
     let dest_s = dest.to_string_lossy();
     // `--`: nothing after it can be taken for an option.
     git(

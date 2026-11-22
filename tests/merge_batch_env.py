@@ -5,14 +5,31 @@ other live tool) is unreachable; the tool under test runs as a subprocess with a
 """
 import json
 from contextlib import contextmanager
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "tools" / "merge_batch.py"
 STUB = Path(__file__).with_name("merge_batch_gh_stub.py")
+
+
+@pytest.fixture(scope="session")
+def train_cli():
+    """Build the real validator used by the hook inside hermetic Git fixtures."""
+    command = ["cargo", "build", "--locked", "--manifest-path", str(ROOT / "rust" / "Cargo.toml"),
+               "-p", "plangraph-cli", "--bin", "plangraph", "--message-format=json"]
+    env = dict(os.environ, CARGO_BUILD_JOBS="1")
+    result = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True, check=True)
+    artifacts = (json.loads(line) for line in result.stdout.splitlines())
+    return next(Path(entry["executable"]) for entry in artifacts
+                if entry.get("executable") and entry["target"]["name"] == "plangraph")
+
+
 #: A `git` that interferes with the n-th `git $CRASH_SUB` it is asked to run (see Env.run): kill the parent
 #: (the tool) right after it, like an OOM kill; fail after it ran (its side effect stands); refuse it (exit
 #: non-zero without running, so it leaves no side effect behind).
@@ -294,13 +311,15 @@ def first_parent(env, ref, cwd=None):
     return env.git("log", "--first-parent", "--format=%s", ref, cwd=cwd).splitlines()
 
 
-def pushed(env, name="l1", prs=(1, 2, 3), checks="pass"):
+def pushed(env, name="l1", prs=(1, 2, 3), checks="pass", plan=None):
     """A pushed batch of PRs 1..3 whose batch PR is #100 with green checks and a passing approval."""
     env.branch_pr(1, {"a.txt": "a\n"}, item="ITEM-A")
     env.branch_pr(2, {"b.txt": "b\n"}, item="ITEM-B")
     env.branch_pr(3, {"c.txt": "c\n"}, item="ITEM-C")
-    assert env.run("build", "--name", name, "--prs", ",".join(map(str, prs))).returncode == 0
-    assert env.run("push", "--name", name).stdout == "100\n"
+    assert env.run("build", "--name", name, "--prs", ",".join(map(str, prs)),
+                   *(["--plan", plan] if plan else [])).returncode == 0
+    push = env.run("push", "--name", name)
+    assert push.stdout == "100\n", push.stderr
     for rec in json.loads(env.state_file(name).read_text())["merged"]:
         env.attach_seat(name, rec)
     env.load()  # the stub created PR 100

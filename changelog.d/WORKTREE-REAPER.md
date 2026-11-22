@@ -1,0 +1,3 @@
+- Make the daily worktree reaper report first. Require routing approval against exact worktree or run-directory rows, stage approved paths in quarantine, and recheck live safety and approval after seven days before deleting.
+- Refresh live evidence under the mutation locks, reuse one protection snapshot and cache PR inventories during reports, and cover late claims, open PRs and process use in reaper tests.
+- Verify creation lock contention on all three creation paths, release worktree creators from run-directory deletion, and remove empty quarantine slots after failed moves.

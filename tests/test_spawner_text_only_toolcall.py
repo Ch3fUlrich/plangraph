@@ -36,7 +36,7 @@ def test_recorded_output_fails_and_falls_through(tmp_path, role, fallback, monke
             job = JobInfo(jid, 'completed', '', kwargs['model_or_combo'],
                           role=role, cwd=str(tmp_path))
             job.command = ['opencode']
-            job.exit_code, job.stdout = 0, RECORDED if not self.jobs else 'VERDICT: PASS'
+            job.exit_code, job.stdout = 0, RECORDED if not self.jobs else 'FILES READ: src/lib.rs\nVERDICT: PASS'
             if role == 'implement' and not self.jobs:
                 job.status, job.exit_code = 'failed', 1
                 job.events.append({'event': 'writer_no_changes'})

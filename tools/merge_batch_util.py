@@ -5,11 +5,13 @@ import ast
 import json
 import os
 import re
-import shlex
+import sqlite3
+import statistics
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from preflight import run_test_process
@@ -17,6 +19,7 @@ from preflight import run_test_process
 REMOTE = "origin"
 BATCH_READY = "batch-ready"  # the label that marks a PR ready to join a batch, draft or not
 NEEDS_UPDATE = "needs-update"
+TESTED_FF = "tested-ff"  # the landing mode that moves main to the tested head (plangraph.settings.LANDING_MODES)
 EXIT_REFUSED, EXIT_USAGE, EXIT_CONFLICT = 1, 2, 3
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
@@ -104,6 +107,55 @@ def items_in(text):
         if match.group(1) not in found:
             found.append(match.group(1))
     return found
+
+
+def part_items(st, rec, *, require_keys=True):
+    wt, merge, head = st["worktree"], rec["merge"], rec["head"]
+    if git("rev-parse", f"{merge}^2", cwd=wt).stdout.strip() != head:
+        raise MergeBatchError(f"part #{rec['pr']} merge does not bind its head")
+    from plangraph.keeper.evidence_git import plan_items  # the keeper's reading of a commit's trailers
+
+    messages = git("log", "--format=%B%x1d", f"{merge}^1..{head}", cwd=wt).stdout.split("\x1d")
+    keys = {key for message in messages for key in plan_items(message)}
+    if (require_keys and not keys) or any(not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", key) for key in keys):
+        raise MergeBatchError(f"part #{rec['pr']} needs a Plan-Item for its keeper-bound review")
+    return keys
+
+
+def active_train(st, head):
+    """The part table at this exact head, with skipped and reverted parts removed."""
+    from plangraph.keeper.evidence_git import REVERT_GREP, delivery_revert
+
+    base = st.get("base_head")
+    if not base:
+        raise MergeBatchError("batch has no saved base head for train evidence; rebuild the batch")
+    skipped = {rec["pr"] for rec in st.get("skipped", [])}
+    dropped = set()
+    log = git("log", "--first-parent", "-E", "-i", "--grep", REVERT_GREP, "--format=%B%x1d",
+              f"{base}..{head}", cwd=st["worktree"])
+    for message in log.stdout.split("\x1d"):
+        revert = delivery_revert(message.lstrip("\n"))
+        if revert is None:
+            continue
+        target, keys = revert
+        for part in st["merged"]:
+            part_target = target and (part["merge"].startswith(target) or part["head"].startswith(target))
+            if part_target or keys.intersection(part["items"]):
+                dropped.add(part["pr"])
+    return dict(st, merged=[rec for rec in st["merged"] if rec["pr"] not in skipped | dropped],
+                dropped=[rec for rec in st["merged"] if rec["pr"] in dropped])
+
+
+def train_keys(st):
+    keys = {key for rec in st["merged"] for key in part_items(st, rec, require_keys=False)}
+    batch = st.get("plan")
+    if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
+        keys.add(batch)
+    return sorted(keys)
+
+
+def go_key_block(st):
+    return "GO-KEYS [" + ",".join(train_keys(st)) + "]"
 
 
 def keeper_migration(st):
@@ -393,35 +445,275 @@ def batch_workflow_gate(st):
     workflow_gate(st["worktree"], st["base_head"], st["head"])
 
 
-WINDOWS_HOST_ENV = "PLANGRAPH_WINDOWS_HOST"
-WINDOWS_TARGET_CAP_GB = 20
-WINDOWS_TIMEOUT = 3600
+# --- landing telemetry (LAND-MODE-MEASURE): one row per landing, the report compares the modes ------
+#: Columns a landing row takes, besides the key (repo, train, landed_sha). A time is an ISO-8601 string.
+LANDING_COLUMNS = ("mode", "pr", "parts", "first_ready_at", "build_started_at", "ci_run_id", "ci_started_at",
+                   "ci_ended_at", "go_at", "landed_at", "green_at", "ci_reruns", "fit_commits", "left_out",
+                   "red_main", "fix_tasks")
+LANDING_SCHEMA = """CREATE TABLE IF NOT EXISTS landing (
+    repo TEXT NOT NULL, train TEXT NOT NULL, landed_sha TEXT NOT NULL, mode TEXT NOT NULL, pr INTEGER,
+    parts TEXT NOT NULL, first_ready_at TEXT, build_started_at TEXT, ci_run_id INTEGER, ci_started_at TEXT,
+    ci_ended_at TEXT, go_at TEXT, landed_at TEXT, green_at TEXT, ci_reruns INTEGER, fit_commits INTEGER,
+    left_out INTEGER, red_main INTEGER, fix_tasks INTEGER, PRIMARY KEY (repo, landed_sha))"""
 
 
-def windows_commands(workflow_text):
-    """Read cargo test commands from the CI Windows steps using YAML scalar semantics."""
-    try:
-        import yaml
-    except ImportError as exc:
-        raise MergeBatchError("reading the Windows job requires PyYAML from requirements-ci.txt") from exc
-    try:
-        steps = yaml.safe_load(workflow_text)["jobs"]["rust-windows"]["steps"]
-    except yaml.YAMLError as exc:
-        raise MergeBatchError(f"cannot parse tests.yml: {exc}") from exc
-    except (KeyError, TypeError) as exc:
-        raise MergeBatchError("tests.yml has no Windows job steps (rust-windows)") from exc
+def landing_modes():
+    """The landing modes of the setting (plangraph.settings.LANDING_MODES, the one list)."""
+    from plangraph.settings import LANDING_MODES
 
-    commands = []
+    return LANDING_MODES
+
+
+def landing_db_path():
+    """The telemetry database file: $PLANGRAPH_LANDING_DB, else plangraph/landing-telemetry.sqlite3 under
+    $XDG_DATA_HOME (default ~/.local/share)."""
+    explicit = os.environ.get("PLANGRAPH_LANDING_DB")
+    if explicit:
+        return Path(explicit)
+    data = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(data) / "plangraph" / "landing-telemetry.sqlite3"
+
+
+def landing_db():
+    """The open telemetry database. A missing table is created (one write transaction, the check repeated under
+    the lock); a current file is opened without any write lock, so a report runs beside the lander. A file whose
+    table is keyed by train (written by an earlier draft) is refused and left untouched: its rows say nothing
+    about which writer of one landing is authoritative, so nothing is guessed; move the file aside."""
+    path = landing_db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=30, isolation_level=None)
+    db.row_factory = sqlite3.Row
+
+    def table():
+        return list(db.execute("PRAGMA table_info(landing)"))
+
+    if not table():
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            if not table():
+                db.execute(LANDING_SCHEMA)
+            db.execute("COMMIT")
+        except BaseException:
+            db.execute("ROLLBACK")
+            raise
+    if "train" in [c["name"] for c in table() if c["pk"]]:
+        db.close()
+        raise MergeBatchError(f"landing telemetry {path} is keyed by train (an earlier draft): move it aside, "
+                              "a landing is now identified by repository and landed sha")
+    db.isolation_level = ""  # the callers use ``with db`` transactions
+    return db
+
+
+def record_landing(row, fill_only=False):
+    """Write the one telemetry row of a landing, identified by (repo, landed_sha); a second write for it adds
+    what the first did not know and never blanks a known value. ``fill_only`` (a backfill) fills only the columns
+    that are still unknown and never changes a recorded mode, train or part list: a live row stays authoritative.
+
+    ``row`` needs repo, train, landed_sha and a mode of LANDING_MODES; ``parts`` is a list of PR numbers.
+    A column the lander cannot know yet stays NULL (``landing-settle`` fills the green and red-main
+    columns later). An unknown mode is refused, so a row never names a path that does not exist."""
+    if row.get("mode") not in landing_modes():
+        raise MergeBatchError(f"landing telemetry: unknown mode {row.get('mode')!r}")
+    for key in ("repo", "train", "landed_sha"):
+        if not row.get(key):
+            raise MergeBatchError(f"landing telemetry: row has no {key}")
+    values = {name: row.get(name) for name in LANDING_COLUMNS} | {"train": row["train"]}
+    values["parts"] = json.dumps(sorted(row.get("parts") or [], key=str))
+    columns = ("train", *LANDING_COLUMNS)
+    with landing_db() as db:
+        db.execute("INSERT OR IGNORE INTO landing (repo, landed_sha, train, mode, parts) VALUES (?, ?, ?, ?, ?)",
+                   (row["repo"], row["landed_sha"], row["train"], row["mode"], values["parts"]))
+        # a landing is identified by (repo, landed sha): a later writer (backfill after the lander, or the reverse)
+        # fills what it knows and never blanks what an earlier one recorded
+        known = {k: v for k, v in values.items() if k in columns and v is not None}
+        if fill_only:
+            known = {k: v for k, v in known.items() if k not in ("train", "mode")}
+            assign = ", ".join(f"{k}=COALESCE({k}, ?)" for k in known)
+        else:
+            assign = ", ".join(f"{k}=?" for k in known)
+        db.execute(f"UPDATE landing SET {assign} WHERE repo=? AND landed_sha=?",
+                   [*known.values(), row["repo"], row["landed_sha"]])
+
+
+def landing_rows():
+    """Every telemetry row, oldest landing first, with ``parts`` as a list."""
+    with landing_db() as db:
+        rows = [dict(r) for r in db.execute("SELECT * FROM landing ORDER BY landed_at, train")]
+    for r in rows:
+        r["parts"] = json.loads(r["parts"])
+    return rows
+
+
+def require_landing_row(repo, train, sha, mode):
+    """The lander's own check: the landing has its telemetry row, naming the mode it landed in."""
+    with landing_db() as db:
+        found = db.execute("SELECT mode FROM landing WHERE repo=? AND landed_sha=?", (repo, sha)).fetchone()
+    if found is None or found["mode"] != mode:
+        raise MergeBatchError(f"landing of {train} at {short(sha)} has no telemetry row for mode {mode}: "
+                              "the landing is not counted (landing-report would miss it)")
+
+
+def minutes(start, end):
+    """Minutes from one ISO-8601 time to another (negative when end is first); None when either is unknown."""
     try:
-        for step in steps:
-            value = step.get("run", "")
-            commands.extend(shlex.split(line) for line in value.splitlines()
-                            if line.lstrip().startswith("cargo test "))
-    except (AttributeError, TypeError, ValueError) as exc:
-        raise MergeBatchError(f"invalid run step in the Windows job of tests.yml: {exc}") from exc
-    if not commands:
-        raise MergeBatchError("the Windows job of tests.yml selects no cargo test command: refusing to run zero tests")
-    return commands
+        first, last = (datetime.fromisoformat(str(t).replace("Z", "+00:00")) for t in (start, end))
+    except (TypeError, ValueError):
+        return None
+    return (last - first).total_seconds() / 60
+
+
+def _spread(values):
+    values = [v for v in values if v is not None]
+    return {"median": float(statistics.median(values)), "worst": float(max(values))} if values else None
+
+
+def landing_report(rows=None):
+    """One entry per landing mode, comparing the modes: trains, median and worst minutes from the first part
+    READY to landed and from landed to the first green run, mean CI test minutes per landed part, the count
+    of trains whose main went red, and the mean fix tasks per train that has the count. A value that is not
+    known for a train stays out of its statistic; a statistic with no value is None."""
+    rows = landing_rows() if rows is None else rows
+    report = []
+    for mode in landing_modes():
+        mine = [r for r in rows if r["mode"] == mode]
+        if not mine:
+            continue
+        test = [minutes(r["ci_started_at"], r["ci_ended_at"]) for r in mine]
+        per_part = [m / len(r["parts"]) for m, r in zip(test, mine) if m is not None and r["parts"]]
+        fixes = [r["fix_tasks"] for r in mine if r["fix_tasks"] is not None]
+        report.append({
+            "mode": mode, "trains": len(mine), "parts": sum(len(r["parts"]) for r in mine),
+            "ready_to_landed_min": _spread([minutes(r["first_ready_at"], r["landed_at"]) for r in mine]),
+            "landed_to_green_min": _spread([minutes(r["landed_at"], r["green_at"]) for r in mine]),
+            "test_min_per_part": sum(per_part) / len(per_part) if per_part else None,
+            "ci_reruns": sum(r["ci_reruns"] or 0 for r in mine),
+            "red_main": sum(1 for r in mine if r["red_main"]),
+            "fix_tasks_per_train": sum(fixes) / len(fixes) if fixes else None})
+    return report
+
+
+def render_landing_report(report):
+    """The comparison of landing_report as a text table, one line per mode."""
+    def spread(value):
+        return "-" if value is None else f"{value['median']:.0f}/{value['worst']:.0f}"
+
+    def number(value):
+        return "-" if value is None else f"{value:.1f}"
+
+    lines = ["mode            trains parts ready->landed(med/worst min) landed->green(med/worst min) "
+             "test min/part reruns red main fix/train"]
+    for r in report:
+        lines.append(f"{r['mode']:<15} {r['trains']:>6} {r['parts']:>5} {spread(r['ready_to_landed_min']):>25} "
+                     f"{spread(r['landed_to_green_min']):>26} {number(r['test_min_per_part']):>13} "
+                     f"{r['ci_reruns']:>6} {r['red_main']:>8} {number(r['fix_tasks_per_train']):>9}")
+    return "\n".join(lines) + "\n"
+
+
+def settle_landings(fetch_runs):
+    """Fill the green and red-main columns of landings from the runs on the landed sha.
+
+    ``fetch_runs(repo, sha)`` returns the workflow runs (dicts with status, conclusion, updated_at) on that
+    sha. A completed failure or timeout marks the row red_main=1; with none and a completed run, red_main=0;
+    the first completed success sets green_at when it is unknown. A row with no completed run is left as
+    it is. Returns the number of rows changed."""
+    changed = 0
+    with landing_db() as db:
+        pending = db.execute("SELECT repo, train, landed_sha, green_at, red_main FROM landing "
+                             "WHERE green_at IS NULL OR red_main IS NULL").fetchall()
+        for found in pending:
+            done = [r for r in fetch_runs(found["repo"], found["landed_sha"]) if r.get("status") == "completed"]
+            wins = sorted(r["updated_at"] for r in done if r.get("conclusion") == "success")
+            red = any(r.get("conclusion") in ("failure", "timed_out") for r in done)
+            if not done:
+                continue
+            green_at = found["green_at"] or (wins[0] if wins else None)
+            red_main = 1 if red else 0
+            if (green_at, red_main) != (found["green_at"], found["red_main"]):
+                db.execute("UPDATE landing SET green_at=?, red_main=? WHERE repo=? AND landed_sha=?",
+                           (green_at, red_main, found["repo"], found["landed_sha"]))
+                changed += 1
+    return changed
+
+
+def set_fix_tasks(train, count):
+    """Record how many fix tasks named ``train`` on every telemetry row of that train."""
+    with landing_db() as db:
+        changed = db.execute("UPDATE landing SET fix_tasks=? WHERE train=?", (count, train)).rowcount
+    if not changed:
+        raise MergeBatchError(f"no telemetry row for train {train!r}")
+
+
+def iso_now():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def ci_window(repo, head):
+    """Run id and times of the full tests run on ``head`` (empty when GitHub does not say)."""
+    try:
+        runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}"
+                              "&event=pull_request&per_page=100")["workflow_runs"]
+        run_ = max(runs, key=lambda r: r["id"])
+        return {"ci_run_id": run_["id"], "ci_started_at": run_.get("run_started_at") or run_.get("created_at"),
+                "ci_ended_at": run_.get("updated_at"), "ci_reruns": len(runs) - 1 + run_.get("run_attempt", 1) - 1}
+    except (MergeBatchError, KeyError, ValueError, TypeError):
+        return {}
+
+
+def first_ready(repo, recs):
+    """The earliest time a part got the batch-ready label (None when GitHub does not say)."""
+    times = []
+    for rec in recs:
+        try:
+            events = gh_json("api", f"repos/{repo}/issues/{rec['pr']}/events?per_page=100")
+            times += [e["created_at"] for e in events
+                      if e.get("event") == "labeled" and (e.get("label") or {}).get("name") == "batch-ready"]
+        except (MergeBatchError, KeyError, ValueError, TypeError):
+            continue
+    return min(times) if times else None
+
+
+def landing_receipt_inputs(st, reruns, go_row):
+    """Freeze the receipt inputs that cannot be reconstructed from the train and GitHub."""
+    go_path = Path(go_row) if go_row else None
+    go_at = (datetime.fromtimestamp(go_path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+             if go_path and go_path.is_file() else st.get("go_at"))
+    return {"train": st["name"], "build_started_at": st.get("created"), "go_at": go_at,
+            "ci_reruns": len(reruns), "fit_commits": sum(bool(r["resolved"]) for r in st["merged"]),
+            "left_out": len(st["skipped"]), "plan_item": st.get("plan"),
+            "review_runs": {str(r["pr"]): r.get("review_runs") or {} for r in st["merged"]}}
+
+
+def write_landing_records(train, mode, merge, inputs):
+    """Write and verify the telemetry row, then write its receipt for the verified landing."""
+    repo, name = train["repo"], check_name(inputs["train"])
+    parts, landed_at = train["parts"], train["landed_at"]
+    row = {"repo": repo, "mode": mode, "train": name, "pr": train["pr"], "parts": [r["pr"] for r in parts],
+           "landed_sha": merge, "first_ready_at": first_ready(repo, parts), "build_started_at": inputs["build_started_at"],
+           "go_at": inputs["go_at"] or landed_at, "landed_at": landed_at, "ci_reruns": inputs["ci_reruns"],
+           "fit_commits": inputs["fit_commits"], "left_out": inputs["left_out"]}
+    window = ci_window(repo, train["head"])
+    window.pop("ci_reruns", None)  # use the reruns recorded when the train was admitted
+    row.update(window)
+    receipt = {key: inputs[key] for key in ("plan_item", "review_runs")}
+    if mode == TESTED_FF:
+        row["green_at"] = row.get("ci_ended_at")  # the green run is the run on the landed commit itself
+    try:
+        record_landing(row)
+        require_landing_row(repo, name, merge, mode)
+        receipts = state_dir() / "receipts"
+        receipts.mkdir(parents=True, exist_ok=True)
+        (receipts / f"{name}-{merge}.json").write_text(json.dumps({**row, **receipt}, indent=2, sort_keys=True) + "\n",
+                                                     encoding="utf-8")
+    except (sqlite3.Error, OSError) as exc:
+        raise MergeBatchError(f"landing telemetry row not written: {exc}") from None
+    print(f"landing receipt: mode={mode} train={name} sha={merge}", file=sys.stderr)
+
+
+def write_landing(st, mode, merge, reruns, go_row):
+    """Write the landing records from local state and save the timestamp for retries."""
+    st.setdefault("landed_at", iso_now())
+    write_landing_records(dict(st, parts=st["merged"]), mode, merge, landing_receipt_inputs(st, reruns, go_row))
+    save_state(st)
 
 
 def pr_labels(st):
@@ -433,81 +725,6 @@ def pr_labels(st):
         return [label["name"] for label in view.get("labels", [])]
     except (MergeBatchError, KeyError, TypeError):
         return []
-
-
-def windows_needed(paths, full=False):
-    """The Windows job runs whenever CI selects Rust, also for a Python-only change (tools/ci_select.py), and
-    always when CI runs the full suite: a train or batch candidate (ci_select.full_run_required)."""
-    import ci_select
-    return bool(full or ci_select.select(list(paths))["rust"])
-
-
-def windows_script(bundle, head, commands, cap_gb):
-    """PowerShell for the disposable checkout: clone the bundle, test with its own capped target, always clean up."""
-    steps = "\n".join(
-        f"  Push-Location \"$root\\src\\rust\"; {' '.join(c)} --no-fail-fast 2>&1 | Write-Output; "
-        "$code = $LASTEXITCODE; Pop-Location\n"
-        f"  if ($code -ne 0) {{ $failed = $code }}\n"
-        "  $size = (Get-ChildItem $env:CARGO_TARGET_DIR -Recurse -File -ErrorAction SilentlyContinue | "
-        "Measure-Object Length -Sum).Sum / 1GB\n"
-        f"  if ($size -gt {cap_gb}) {{ Write-Output 'target cap {cap_gb} GB exceeded'; $failed = 3; break }}"
-        for c in commands)
-    return (f"$ErrorActionPreference = 'Stop'\n$root = Join-Path $env:TEMP ('pg-train-' + [guid]::NewGuid().ToString('N').Substring(0,8))\n"
-            f"$bundle = Join-Path $HOME '{bundle}'\n$failed = 0\n"
-            "try {\n  New-Item -ItemType Directory -Path $root | Out-Null\n"
-            "  git clone -q --no-checkout $bundle \"$root\\src\"\n"
-            f"  git -C \"$root\\src\" checkout -q {head}\n"
-            "  $env:CARGO_TARGET_DIR = \"$root\\target\"\n  $ErrorActionPreference = 'Continue'\n"
-            f"{steps}\n}} finally {{\n  Set-Location $HOME\n  Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue\n"
-            f"  Remove-Item -Force $bundle -ErrorAction SilentlyContinue\n}}\nexit $failed\n")
-
-
-def _transport(argv, input_text=None, timeout=None):
-    return subprocess.run(argv, input=input_text, capture_output=True, text=True, errors="replace", timeout=timeout)
-
-
-def windows_gate(st, workflow_text, transport=_transport):
-    """Run the CI Windows selection against the batch head on the Windows host; return the result line.
-
-    None when the train needs no Windows job or no host is configured; MergeBatchError, naming the failing test
-    ids, when the run is red. The line and its duration are kept in the state for the GO-REQ."""
-    wt, head = st["worktree"], git("rev-parse", "HEAD", cwd=st["worktree"]).stdout.strip()
-    paths = git("diff", "--name-only", f"{st['base_head']}...{head}", cwd=wt).stdout.split()
-    import ci_select
-    full = ci_select.full_run_required("pull_request", st.get("base", "main"), st["branch"], pr_labels(st))
-    if not windows_needed(paths, full):
-        return None
-    host = os.environ.get(WINDOWS_HOST_ENV, "").strip()
-    if not host:
-        print(f"merge_batch: Windows tests not run: set {WINDOWS_HOST_ENV} to the native Windows ssh host", file=sys.stderr)
-        return None
-    commands = windows_commands(workflow_text)
-    started = time.monotonic()
-    with tempfile.TemporaryDirectory() as tmp:
-        bundle_name = f"train-{head[:12]}.bundle"
-        bundle = Path(tmp, bundle_name)
-        git("bundle", "create", str(bundle), f"refs/heads/{st['branch']}", cwd=wt)
-        sent = transport(["scp", "-q", str(bundle), f"{host}:{bundle_name}"], None, WINDOWS_TIMEOUT)
-        if sent.returncode:
-            raise MergeBatchError(f"windows: cannot send the bundle to {host}: {first_line(sent.stderr)}")
-        done = transport(["ssh", host, "powershell", "-NoProfile", "-NonInteractive", "-Command", "-"],
-                         windows_script(bundle_name, head, commands, WINDOWS_TARGET_CAP_GB), WINDOWS_TIMEOUT)
-    seconds = int(time.monotonic() - started)
-    if done.returncode:
-        import ci_select
-        ids = ci_select._load_tool("preflight").failing_tests(done.stdout or "")
-        detail = ", ".join(ids) if ids else first_line(done.stdout or done.stderr)
-        raise MergeBatchError(f"windows tests failed on {host} for {head[:12]} after {seconds}s: {detail}")
-    line = f"windows ok head={head[:12]} host={host} commands={len(commands)} seconds={seconds}"
-    st["windows"] = {"head": head, "line": line}
-    save_state(st)
-    return line
-
-
-def windows_report(st, head):
-    """The Windows run of this exact head for the GO-REQ, or None when none ran for it."""
-    recorded = st.get("windows") or {}
-    return recorded["line"] if recorded.get("head") == head else None
 
 
 def landing_now():
@@ -545,9 +762,15 @@ def cleanup_landed(st, landed, *, strict=False):
                 if name == branch or (not name and git("rev-parse", "HEAD", cwd=path).stdout.strip() == rec["head"]):
                     targets.append((path, name, rec["head"]))
         pins = os.environ.get("PG_PINS", str(Path.home() / ".config/plangraph/pins.json"))
-        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--delete-remote"]
+        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--delete-remote", "--include-merged"]
+        roots = dict.fromkeys(Path(path).parent for path, _, _ in targets)
+        for key in ("PG_WORKTREES", "PG_CLAUDE_WORKTREES", "PG_RUNS", "PG_RUN_WORKTREES"):
+            if os.environ.get(key):
+                roots[Path(os.environ[key])] = None
+        for root in roots or (repo,):
+            argv.extend(["--root", str(root)])
         for path, branch, sha in targets:
-            argv.extend(["--root", str(Path(path).parent), "--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
+            argv.extend(["--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
         for rec in landed:
             branch = st["prs"][str(rec["pr"])]["ref"]
             argv.extend(["--remote-target", f"{branch}:{rec['head']}"])

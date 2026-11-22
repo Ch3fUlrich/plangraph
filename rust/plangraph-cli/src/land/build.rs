@@ -1,4 +1,5 @@
 //! The git-backed train builder and the verifier that repeats it (P3, P4, P5, P7, P9).
+use super::delta::{Delta, DeltaMerge};
 use super::git::{self, Checkout, Merged, POLICY_VERSION};
 use super::resolve::Adopted;
 use super::train::*;
@@ -75,6 +76,9 @@ fn in_base(repo: &Path, base: &str, sha: &str) -> bool {
 
 /// Builds the train on a detached checkout and returns manifest and result. The caller pushes nothing here.
 pub fn build(input: &BuildInput) -> Result<Outcome, String> {
+    for part in &input.parts {
+        part.check_receipt()?;
+    }
     let repo = input.repo;
     let attrs = Attrs::new(&input.attributes)?;
     let date = base_date(repo, &input.base)?;
@@ -136,9 +140,10 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
                     head: part.head.clone(),
                     parent: part.parent.clone(),
                     own: Own::of(&own),
+                    receipt: part.receipt.clone(),
                 });
             }
-            Merged::Conflict => {
+            Merged::Conflict { .. } => {
                 let adopted = input.resolutions.iter().find(|a| {
                     // Bound to this build and this part's position in its snapshot order.
                     a.build == input.build
@@ -164,6 +169,7 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
                         head: part.head.clone(),
                         parent: part.parent.clone(),
                         own: Own::of(&own),
+                        receipt: part.receipt.clone(),
                     });
                     continue;
                 }
@@ -224,6 +230,9 @@ pub fn build(input: &BuildInput) -> Result<Outcome, String> {
 
 /// Publishes the train as the branch `branch` (a ref under the builder's namespace).
 pub fn publish(repo: &Path, branch: &str, manifest: &Manifest) -> Result<(), String> {
+    if super::push::is_train_branch(branch) {
+        super::push::write_manifest(repo, branch, manifest)?;
+    }
     git::out(
         repo,
         &[
@@ -236,10 +245,10 @@ pub fn publish(repo: &Path, branch: &str, manifest: &Manifest) -> Result<(), Str
 }
 
 /// The gate's proof that the train branch is exactly the manifest: closure, own commits, the whole
-/// registered heads and dependencies, the first-parent chain with two expected parents per merge, a clean replay of every merge with the recorded
+/// registered heads and dependencies, the attributed first-parent chain, a clean replay of every merge with the recorded
 /// inputs, and the exact set of introduced commits.
 pub fn verify_manifest(repo: &Path, m: &Manifest, selection: &[PartIn]) -> Result<(), String> {
-    verify_manifest_with(repo, m, selection, &[], &[])
+    verify_manifest_with(repo, m, selection, &[], &[]).map(|_| ())
 }
 
 /// As `verify_manifest`, with the adopted resolutions of the freeze's build: a part merged by a resolution
@@ -250,7 +259,10 @@ pub fn verify_manifest_with(
     selection: &[PartIn],
     adopted: &[Adopted],
     protected: &[String],
-) -> Result<(), String> {
+) -> Result<Delta, String> {
+    for part in selection {
+        part.check_receipt()?;
+    }
     if m.policy.version != POLICY_VERSION {
         return Err(format!(
             "policy version {} is not {POLICY_VERSION}",
@@ -276,11 +288,12 @@ pub fn verify_manifest_with(
             pr: part.pr,
             head: part.head.clone(),
             parent: part.parent.clone(),
+            receipt: part.receipt.clone(),
         };
         // The verifier recomputes the selection itself; the manifest cannot declare another head or parent.
         if !selection.contains(&p_in) {
             return Err(format!(
-                "registered: part #{} differs from the registered head and dependencies",
+                "registered: part #{} differs from the registered head, dependencies or receipt",
                 part.pr
             ));
         }
@@ -308,39 +321,52 @@ pub fn verify_manifest_with(
         expected.extend(own);
         seen.insert(part.pr, part.head.clone());
     }
-    let chain = git::out(
-        repo,
-        &[
-            "rev-list",
-            "--first-parent",
-            "--reverse",
-            "--parents",
-            &m.train_sha,
-            &format!("^{}", m.base),
-        ],
-    )?;
-    let rows: Vec<Vec<&str>> = chain.lines().map(|l| l.split(' ').collect()).collect();
-    if rows.len() != m.parts.len() {
-        return Err(format!(
-            "chain: {} commits on the first-parent chain, {} parts",
-            rows.len(),
-            m.parts.len()
-        ));
-    }
+    use super::chain::Step;
+    let heads: Vec<&str> = m.parts.iter().map(|part| part.head.as_str()).collect();
+    let chain = super::chain::validate(repo, &m.base, &m.train_sha, &heads)?;
     let attrs = Attrs::new(&m.policy.attributes)?;
     let date = base_date(repo, &m.base)?;
-    let mut prev = m.base.clone();
-    for (i, row) in rows.iter().enumerate() {
+    let mut replayed = Vec::with_capacity(m.parts.len());
+    let mut resolutions = Vec::new();
+    for step in chain {
+        let (commit, prev) = match step {
+            Step::Merge { commit, parent } => (commit, parent),
+            Step::Resolution {
+                commit,
+                parent,
+                writer,
+                harness,
+            } => {
+                let patch = git::replay_diff(repo, Some(&attrs.path), &parent, &commit)?;
+                expected.insert(commit.clone());
+                resolutions.push(super::delta::DeltaResolution::new(
+                    commit, parent, writer, harness, patch,
+                )?);
+                continue;
+            }
+        };
+        let i = replayed.len();
         let part = &m.parts[i];
-        if row[0] != m.merges[i] || row.len() != 3 || row[1] != prev || row[2] != part.head {
+        if commit != m.merges[i] {
             return Err(format!(
-                "chain: commit {} is not the merge of #{} onto the previous commit",
-                row[0], part.pr
+                "chain: commit {commit} differs from the manifest merge of #{}",
+                part.pr
             ));
         }
         let check = Checkout::new(repo, &prev)?;
         let resolved = m.resolution.iter().find(|r| r.part == part.pr);
         let merge = git::merge(check.path(), Some(&attrs.path), &part.head, "replay", &date)?;
+        let actual = git::out(repo, &["rev-parse", &format!("{commit}^{{tree}}")])?;
+        let (tree, remerge_diff) = match merge {
+            Merged::Clean { tree, .. } => (tree, None),
+            Merged::Conflict { tree } if resolved.is_some() => {
+                let patch = git::replay_diff(check.path(), Some(&attrs.path), &tree, &actual)?;
+                (tree, Some(patch))
+            }
+            Merged::Conflict { .. } => {
+                return Err(format!("replay: merge of #{} conflicts", part.pr))
+            }
+        };
         if let Some(r) = resolved {
             let position = stack_order(selection)
                 .iter()
@@ -368,28 +394,24 @@ pub fn verify_manifest_with(
             }
             check_resolution(repo, a, protected)
                 .map_err(|e| format!("resolution: #{}: {e}", part.pr))?;
-            if matches!(merge, Merged::Clean { .. }) {
+            if remerge_diff.is_none() {
                 return Err(format!(
                     "resolution: #{} merges cleanly, no resolution is needed",
                     part.pr
                 ));
             }
-            prev = row[0].to_owned();
-            continue;
+        } else if tree != actual {
+            return Err(format!(
+                "replay: merge of #{} has an extra or missing edit",
+                part.pr
+            ));
         }
-        match merge {
-            Merged::Clean { tree, .. } => {
-                let actual = git::out(repo, &["rev-parse", &format!("{}^{{tree}}", row[0])])?;
-                if tree != actual {
-                    return Err(format!(
-                        "replay: merge of #{} has an extra or missing edit",
-                        part.pr
-                    ));
-                }
-            }
-            Merged::Conflict => return Err(format!("replay: merge of #{} conflicts", part.pr)),
-        }
-        prev = row[0].to_owned();
+        replayed.push(DeltaMerge::new(
+            [prev, part.head.clone()],
+            actual,
+            tree,
+            remerge_diff,
+        )?);
     }
     let introduced: BTreeSet<String> = git::commits(repo, &format!("{}..{}", m.base, m.train_sha))?
         .into_iter()
@@ -401,7 +423,13 @@ pub fn verify_manifest_with(
             extra.len()
         ));
     }
-    Ok(())
+    Ok(Delta {
+        base: m.base.clone(),
+        train_sha: m.train_sha.clone(),
+        policy: m.policy.clone(),
+        merges: replayed,
+        resolutions,
+    })
 }
 
 /// The gate's check of a build result against its snapshot and, when there is a train, its manifest.

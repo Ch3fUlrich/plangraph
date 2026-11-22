@@ -79,8 +79,22 @@ pub(crate) fn text(value: &Value) -> String {
     encode(value, &mut out, &mut PythonFormatter).expect("vector write");
     String::from_utf8(out).expect("JSON is UTF-8")
 }
-pub(crate) fn card_hash(card: &Value) -> String {
+/// Hash the sorted Python JSON representation of an admission card.
+pub fn card_hash(card: &Value) -> String {
     format!("{:x}", Sha256::digest(text(card).as_bytes()))
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn preserve_order(value: &Value) -> String {
+    use serde::Serialize;
+    let mut out = Vec::new();
+    value
+        .serialize(&mut serde_json::Serializer::with_formatter(
+            &mut out,
+            PythonFormatter,
+        ))
+        .expect("vector write");
+    String::from_utf8(out).expect("JSON is UTF-8")
 }
 #[cfg(test)]
 mod tests {

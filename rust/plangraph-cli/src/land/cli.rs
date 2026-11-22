@@ -6,9 +6,11 @@ use super::main_state::State;
 use super::resolve::{self, Adopted, Append, Outcome, Refusal};
 use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest, PartIn};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train verify --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES]\n\
-parts FILE: JSON array of {pr, head, parent: {pr, head} | null} in selection order (the registrar's READY entries)\n\
+const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
+  plangraph land-train check-chain --repo DIR --head SHA --heads FILE\n\
+parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
 resolution log FILE: {\"writers\": {build: writer}, \"log\": [[append, result], ...]}; adopted results come from its replay";
 
 #[derive(Clone)]
@@ -137,7 +139,8 @@ fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
 }
 
 pub fn run(home: &Path, args: &[String]) -> i32 {
-    match run_inner(home, args) {
+    let python = || crate::base_fresh::python_command(None);
+    match run_inner(home, args, &python) {
         Ok(lines) => {
             lines.iter().for_each(|l| println!("{l}"));
             0
@@ -153,7 +156,11 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
     }
 }
 
-fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
+pub(super) fn run_inner(
+    home: &Path,
+    args: &[String],
+    python: &dyn Fn() -> Command,
+) -> Result<Vec<String>, String> {
     let (cmd, rest) = args.split_first().ok_or(USAGE)?;
     let mut flags = std::collections::BTreeMap::new();
     let mut it = rest.iter();
@@ -167,6 +174,20 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
             .cloned()
             .ok_or_else(|| format!("{USAGE}\nmissing --{k}"))
     };
+    if cmd == "push" {
+        let repo = PathBuf::from(need("repo")?);
+        let branch = need("branch")?;
+        super::push::run(&repo, &branch)?;
+        return Ok(vec![format!("pushed {branch}")]);
+    }
+    if cmd == "check-chain" {
+        super::chain::check_push(
+            Path::new(&need("repo")?),
+            &need("head")?,
+            Path::new(&need("heads")?),
+        )?;
+        return Ok(Vec::new());
+    }
     let parts: Vec<PartIn> = read(&need("parts")?)?;
     let protected: Vec<String> = flags
         .get("protected")
@@ -216,14 +237,14 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
                     branch: flags
                         .get("branch")
                         .cloned()
-                        .unwrap_or_else(|| format!("land/build/{name}")),
+                        .unwrap_or_else(|| format!("land/train-{name}")),
                     name,
                 },
                 &answer.state,
                 &answer.tip,
             )
         }
-        "verify" => {
+        "verify" | "review" | "admit" => {
             let manifest: Manifest = read(&need("manifest")?)?;
             let repo = PathBuf::from(need("repo")?);
             let open: BuildOpen = read(&need("open")?)?;
@@ -242,12 +263,33 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
                         .into(),
                 );
             }
-            build::verify_manifest_with(&repo, &manifest, &parts, &adopted, &protected)?;
+            let delta =
+                build::verify_manifest_with(&repo, &manifest, &parts, &adopted, &protected)?;
             build::verify_result(&repo, &manifest.base, &result, Some(&manifest))?;
-            Ok(vec![format!(
+            let mut lines = vec![format!(
                 "train {} matches its manifest, result and freeze",
                 manifest.build
-            )])
+            )];
+            if flags.contains_key("delta-out") || cmd != "verify" {
+                let packet = super::delta::ReviewPacket::new(&delta, &repo, &manifest, python)?;
+                if cmd == "admit" {
+                    let config = std::env::var_os("XDG_CONFIG_HOME")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| home.join(".config"))
+                        .join("plangraph/keeper.json");
+                    packet.require_review(&config, &need("item")?, &need("review-run")?, python)?;
+                }
+                if cmd == "review" {
+                    let run_id = packet.dispatch(&repo, &need("item")?, python)?;
+                    lines.push(format!("train delta review run {run_id}"));
+                }
+                if let Some(path) = flags.get("delta-out") {
+                    let packet = serde_json::to_vec_pretty(&packet).map_err(|e| e.to_string())?;
+                    pg_worker_core::run::record_io::atomic_write_private(Path::new(path), &packet)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            Ok(lines)
         }
         _ => Err(USAGE.into()),
     }

@@ -241,6 +241,15 @@ impl Runs {
             .map(Value::Object)
             .collect();
         crate::records::annotate_item(&mut base, &args["card"], &mut events);
+        if plan["effort"].is_object() {
+            base["attempt_capture"] = json!(1);
+            if let Some(assigned) = plan["effort"]["lowered"].as_str() {
+                events.push(json!({"event":"effort_level_lowered",
+                    "ts":pg_worker_core::run::finalize::now(),
+                    "item":base["item_key"].as_str().unwrap_or("adhoc"),
+                    "assigned":assigned, "reason":plan["effort"]["reason"]}));
+            }
+        }
         if !dry && crate::gitconfig_guard::writer_role(role) {
             let dir = crate::gitconfig_guard::run_dir(state, run_id)
                 .map_err(|_| internal("invalid run id"))?;
@@ -596,6 +605,13 @@ pub(crate) fn finish_with_allowlist(
         if value["role"] == "review" {
             let text = crate::review_artifacts::review_text(&state, &value)
                 .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
+            if !dry && status != Status::Cancelled {
+                let answer = crate::review_health::answer(&state, &value);
+                record.set(
+                    "review_result",
+                    json!(crate::review_health::classify(&value, &answer)),
+                );
+            }
             let result = crate::review_artifacts::write_review_artifacts_with_allowlist(
                 &state, &value, &text, allow_shas,
             );

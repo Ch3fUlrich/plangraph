@@ -18,12 +18,39 @@ import os
 import posixpath
 import re
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-from seat_backfill import backfill
+from seat_backfill import _add_src, backfill
 _HEAD_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 # F8: both spellings count (review/tail.md uses TEST-GAMING).
 _TEST_GAMING = re.compile(r"^TEST[_-]GAMING:[ \t]*(.*)$", re.I | re.M)
+
+def _reject_toolless_markup(leg, text, live_log):
+    """Treat invented tool calls as incomplete when the seat has no tools."""
+    added_src = _add_src()
+    try:
+        from plangraph.review.verdict import has_tool_call_markup
+    finally:
+        if added_src:
+            sys.path.remove(added_src)
+    leg = leg if isinstance(leg, dict) else {}
+    if not has_tool_call_markup(text):
+        return
+    if leg.get("tool_mode") in ("prompt-only", "inline-only"):
+        raise ValueError("toolless_tool_markup")
+    if leg.get("harness") != "claude":
+        return
+    for line in reversed(live_log.splitlines()):
+        try:
+            event = json.loads(line)
+        except (ValueError, RecursionError):
+            continue
+        if isinstance(event, dict) and event.get("type") == "system" and event.get("subtype") == "init":
+            if event.get("tools") == []:
+                raise ValueError("toolless_tool_markup")
+            break
+
 
 class RecordPending(ValueError):
     """Completion persistence may still supply missing fields."""
@@ -39,12 +66,15 @@ def _canon_family(name):
 def _review_text_from_log(live_log: str) -> str:
     """Completed final-step text, or a stop answer retained across empty steps."""
     event_log, texts, completed, stopped = False, [], None, False
+    claude_result = None
     for line in live_log.split("\n"):
         line = line.removesuffix("\r")
         try:
             event = json.loads(line)
         except (ValueError, RecursionError):
             continue
+        if isinstance(event, dict) and event.get("type") == "result" and "result" in event:
+            claude_result = event["result"] if isinstance(event["result"], str) and not event.get("is_error") else ""
         if (not isinstance(event, dict)
                 or event.get("type") not in ("step_start", "step_finish", "text", "tool_use")
                 or not isinstance(event.get("part"), dict)):
@@ -69,6 +99,8 @@ def _review_text_from_log(live_log: str) -> str:
                     completed = "\n".join(texts)
             else:
                 completed = "\n".join(texts)
+    if claude_result is not None:
+        return claude_result
     text = completed if completed is not None else ""
     return text if event_log else live_log
 
@@ -184,6 +216,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise RecordPending(f"record has no review text ({detail})")
     served = record.get("served_model")
     leg = record.get("chosen_leg")
+    _reject_toolless_markup(leg, review_text, live_log)
     chosen = leg.get("model") if isinstance(leg, dict) else None
     leg_family = leg.get("family") if isinstance(leg, dict) else None
     if leg_family is not None and _canon_family(leg_family) != _canon_family(chosen):

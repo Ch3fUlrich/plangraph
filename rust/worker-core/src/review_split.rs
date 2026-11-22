@@ -287,6 +287,37 @@ fn last_unquoted_key_tail(text: &str, keys: &[&str]) -> Option<String> {
     last_line
 }
 
+/// Return the last repository-read declaration outside quoted material.
+pub fn files_read_text(text: &str) -> Option<String> {
+    let files = last_unquoted_key_tail(text, &["FILES READ"])?;
+    let files = files.trim();
+    let lower = files.to_ascii_lowercase();
+    if files.is_empty()
+        || lower == "diff"
+        || ["none", "diff only", "inline diff"]
+            .into_iter()
+            .any(|marker| {
+                lower.strip_prefix(marker).is_some_and(|tail| {
+                    tail.is_empty() || tail.starts_with(|c: char| c.is_whitespace() || c == '(')
+                })
+            })
+    {
+        return None;
+    }
+    Some(files.to_owned())
+}
+
+/// Whether a review declares at least one repository path in FILES READ.
+pub fn has_files_read(text: &str) -> bool {
+    static PATH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    files_read_text(text).is_some_and(|files| {
+        PATH.get_or_init(|| {
+            regex::Regex::new(r"(?:[\w.-]+/)+[\w.-]+|[\w-]+\.[\w.-]+|[\w.-]+:[1-9][0-9]*").unwrap()
+        })
+        .is_match(&files)
+    })
+}
+
 pub fn parse_verdict_text(text: &str) -> Option<SeatVerdict> {
     let tail = last_unquoted_key_tail(text, &["VERDICT"])?;
     let tail_trim = tail.trim();
@@ -367,80 +398,7 @@ pub fn parse_head_line_text(text: &str) -> Option<String> {
     (!token.is_empty()).then(|| token.to_owned())
 }
 
-/// Extract rendered review answer text from claude, agy, or opencode `live.log` NDJSON.
-pub fn extract_review_text_from_live_log(live_log: &str) -> Option<String> {
-    let mut result: Option<String> = None;
-    let mut oc_event_log = false;
-    let mut oc_texts: Vec<String> = Vec::new();
-    let mut oc_completed: Option<String> = None;
-    let mut oc_stopped = false;
-
-    for line in live_log.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(frame) = serde_json::from_str::<Value>(line) else {
-            return None;
-        };
-        if frame["event"] == "result" {
-            result = if frame["result"]["status"] == "SUCCESS" {
-                frame["result"]["response"].as_str().map(str::to_owned)
-            } else {
-                None
-            };
-        } else if frame["type"] == "result" {
-            result = if frame["is_error"] == false {
-                frame["result"].as_str().map(str::to_owned)
-            } else {
-                None
-            };
-        } else if let (Some(kind), Some(part)) = (
-            frame["type"].as_str(),
-            frame.get("part").and_then(Value::as_object),
-        ) {
-            match kind {
-                "step_start" => {
-                    oc_event_log = true;
-                    oc_texts.clear();
-                    if !oc_stopped {
-                        oc_completed = None;
-                    }
-                }
-                "text" => {
-                    if let Some(text) = part.get("text").and_then(Value::as_str) {
-                        oc_texts.push(text.to_owned());
-                        if !text.trim().is_empty() {
-                            oc_completed = None;
-                        }
-                    }
-                }
-                "tool_use" => {
-                    oc_completed = None;
-                }
-                "step_finish" => {
-                    oc_event_log = true;
-                    oc_stopped = part.get("reason").and_then(Value::as_str) == Some("stop");
-                    if oc_stopped {
-                        if oc_texts.iter().any(|t| !t.trim().is_empty()) {
-                            oc_completed = Some(oc_texts.join("\n"));
-                        }
-                    } else {
-                        oc_completed = Some(oc_texts.join("\n"));
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    if let Some(text) = result {
-        return Some(text);
-    }
-    if oc_event_log {
-        return oc_completed.filter(|t| !t.trim().is_empty());
-    }
-    None
-}
+pub use crate::review_text::extract_review_text_from_live_log;
 
 #[cfg(test)]
 mod tests {
@@ -465,6 +423,20 @@ mod tests {
                 vec!["beta/b1.rs".to_string(), "gamma/g1.rs".to_string()],
             ]
         );
+    }
+
+    #[test]
+    fn files_read_matches_review_evidence_contract() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../../tests/fixtures/files_read.json")).unwrap();
+        for case in cases {
+            let text = case["text"].as_str().unwrap();
+            assert_eq!(
+                has_files_read(text),
+                case["has_files_read"].as_bool().unwrap(),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]

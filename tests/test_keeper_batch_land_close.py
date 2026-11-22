@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from keeper_util import World, defn, to_in_review
+from keeper_util import World, defn, seed, to_in_review
 from plangraph.keeper import auth, context_sources
 from plangraph.keeper.evidence_decisions import DecisionsAdapter
 from plangraph.keeper.evidence_git import GitAdapter
@@ -23,6 +23,41 @@ def seat_record(root, run, key, head):
         "head_sha": head, "completion": {"head_sha": head},
         "stdout_tail": "TEST_GAMING: no\nVERDICT: PASS\n"}), encoding="utf-8")
     path.chmod(0o600)
+
+
+@pytest.mark.parametrize("dependency_in_train", [False, True])
+def test_verified_landing_records_unmet_dependency_and_can_settle(tmp_path, dependency_in_train):
+    w = World(tmp_path, backend="sqlite")
+    try:
+        seed(w, [("PARENT", []), ("CHILD", ["PARENT"])])
+        router = w.p("router")
+        repo, head, merge = "example/repo", "c" * 40, "d" * 40
+        lease = w.store.land(router, dict(repo=repo, action="acquire", owner="fixture"))
+
+        def journal(action, **fields):
+            return w.store.land(router, dict(lease, repo=repo, pr=100, action=action, **fields))
+
+        parts = [dict(pr=2, head="b" * 40, items=["demo:CHILD"])]
+        if dependency_in_train:
+            parts.insert(0, dict(pr=1, head="a" * 40, items=["demo:PARENT"]))
+        journal("prepare", base="0" * 40, head=head, mode="train-pr-merge", parts=parts)
+        warning = "demo:CHILD cannot land before demo:PARENT"
+        if dependency_in_train:
+            journal("check_dependencies", head=head)
+        else:
+            with pytest.raises(Refused, match=warning) as refusal:
+                journal("check_dependencies", head=head)
+            assert refusal.value.code == "conflict"
+        assert journal("show")["train"]["merge"] is None
+
+        # The host already confirms the merge. Only the child actually landed.
+        landed = journal("landed", merge=merge, included=[2])
+        assert (landed["merge"], landed["included"], landed["dependency_warning"]) == (merge, [2], warning)
+        assert journal("landed", merge=merge, included=[2]) == landed
+        assert journal("show")["train"] == landed
+        assert "evidence" not in journal("advance", merge=merge, step="evidence")["open_steps"]
+    finally:
+        w.close()
 
 
 @pytest.fixture

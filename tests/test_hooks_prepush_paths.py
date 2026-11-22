@@ -1,14 +1,21 @@
 """The pre-push hook has a lane path (no tests) and a train path (manifest, no tests) (LAND-PUSH-GATE-FAST-ONLY)."""
 import json
+import os
 import runpy
 
 import pytest
 
+from merge_batch_env import train_cli  # noqa: F401
 from test_hooks_prepush import HOOK, commit_file, fake_ip, git, push_line, repo, run_hook  # noqa: F401
 
 LOG_PREFLIGHT = ("import json, os, sys\n"
                  "from pathlib import Path\n"
                  "Path(os.environ['TEST_PREFLIGHT_MARKER']).write_text(json.dumps(sys.argv[1:]))\n")
+
+
+@pytest.fixture
+def train_validator_on_path(train_cli, monkeypatch):
+    monkeypatch.setenv("PATH", str(train_cli.parent), prepend=os.pathsep)
 
 
 def install_preflight(r, marker):
@@ -47,6 +54,7 @@ def test_a_lane_push_runs_preflight_in_lane_mode_and_no_tests(repo, tmp_path):
     assert "--fast" not in argv or "--lane" in argv
 
 
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_with_its_exact_manifest_passes_without_tests(repo, tmp_path):
     r, base = repo
     install_preflight(r, tmp_path / "unused")
@@ -60,6 +68,7 @@ def test_a_train_push_with_its_exact_manifest_passes_without_tests(repo, tmp_pat
     assert "pre-push: train path" in res.stderr
 
 
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_with_a_parent_outside_its_manifest_is_refused(repo, tmp_path):
     r, base = repo
     install_preflight(r, tmp_path / "unused")
@@ -74,6 +83,7 @@ def test_a_train_push_with_a_parent_outside_its_manifest_is_refused(repo, tmp_pa
 
 
 @pytest.mark.parametrize("case", ["order", "extra-commit", "no-manifest", "bad-manifest"])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_a_train_push_that_is_not_exactly_the_manifest_is_refused(repo, tmp_path, case):
     r, base = repo
     install_preflight(r, tmp_path / "unused")
@@ -118,6 +128,7 @@ def test_a_train_push_is_not_judged_by_the_open_pull_request_parent_check(repo, 
 
 
 @pytest.mark.parametrize("ref", ["lane/x", "land/train-20261121-3"])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_scrub_still_refuses_on_both_paths(repo, tmp_path, ref):
     r, base = repo
     install_preflight(r, tmp_path / "unused")
@@ -143,6 +154,7 @@ def _one(tmp_path, head):
 
 
 @pytest.mark.parametrize("ref", ["lane/x", "land/train-20261121-3"])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
     """A valid one-merge train whose part commit lacks the trailers: the manifest passes, commit policy refuses."""
     r, base = repo
@@ -167,6 +179,7 @@ def test_commit_policy_still_refuses_on_both_paths(repo, tmp_path, ref):
 
 
 @pytest.mark.parametrize("ref,lane", [("refs/heads/lane/x", True), ("refs/heads/main", False), ("refs/tags/v9", False)])
+@pytest.mark.usefixtures("train_validator_on_path")
 def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, lane):
     r, base = repo
     env = install_preflight(r, tmp_path / "argv")
@@ -175,3 +188,42 @@ def test_only_lane_and_train_pushes_get_the_fast_only_mode(repo, tmp_path, ref, 
     res = run_hook(r, [line], env)
     assert res.returncode == 0, res.stdout + res.stderr
     assert ("--lane" in json.loads((tmp_path / "argv").read_text())) is lane
+
+
+@pytest.mark.parametrize("extra", [None, "unrelated", "no-harness", "foreign-parent"])
+@pytest.mark.usefixtures("train_validator_on_path")
+def test_a_train_push_permits_only_attributed_resolves_and_drops(repo, tmp_path, extra):
+    r, _ = repo
+    env = install_preflight(r, tmp_path / "argv")
+    base = git(r, "rev-parse", "HEAD").strip()
+    git(r, "update-ref", "refs/remotes/origin/main", base)
+    _, parts = make_train(r, base, parts=3)
+
+    def commit(message):
+        git(r, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+            "commit", "--allow-empty", "-qm", message)
+
+    trailers = "Writer: codex/train-resolver\nHarness: codex"
+    commit(f"Train 9: resolve first issue\n\n{trailers}")
+    commit(f"Train 9: resolve second issue\n\n{trailers}")
+    merge = git(r, "rev-parse", "HEAD~2").strip()
+    git(r, "revert", "--no-commit", "-m", "1", merge)
+    commit(f"Train 9: drop last part\n\nThis reverts commit {merge}.\n\nDropped-Part: plangraph:TEST\n{trailers}")
+    if extra == "unrelated":
+        commit(f"Unrelated\n\n{trailers}")
+    elif extra == "no-harness":
+        commit("Train 9: resolve without a harness\n\nWriter: codex/train-resolver")
+    elif extra == "foreign-parent":
+        git(r, "checkout", "-qb", "foreign", base)
+        commit(f"Foreign work\n\n{trailers}")
+        git(r, "checkout", "-q", "train")
+        git(r, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+            "merge", "-q", "--no-ff", "foreign", "-m", "Foreign merge")
+    head = git(r, "rev-parse", "HEAD").strip()
+    result = run_hook(r, [push_line("land/train-9", head, "0" * 40)], {**env, **manifest(tmp_path, parts)})
+    if extra is None:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "manifest ok" in result.stderr and (tmp_path / "argv").exists()
+    else:
+        assert result.returncode == 1 and not (tmp_path / "argv").exists()
+        assert ("outside its manifest" if extra == "foreign-parent" else "extra commit") in result.stderr

@@ -30,7 +30,6 @@ from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import detect_model_family
 from plangraph.spawner.gateway_models import record_served_witness
-from plangraph.spawner.mimo_policy import is_mimo_id
 from plangraph.planner.legs import DEFAULT_LEGS, EXPLICIT_LEGS
 from plangraph.spawner.winjob import WinJobApi  # re-export: tests patch runner.WinJobApi
 from plangraph.routing_support import background_process_options
@@ -231,7 +230,8 @@ class SpawnerRunner:
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
-        from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
+        brief_sha256 = hashlib.sha256(prompt.encode()).hexdigest() if role == 'review' and prompt_record else None
+        from .prompt_input import TOOLLESS_MODES, compose  # the role header and skill are fixed repository text, never redacted
         prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
                          tool_mode=getattr(leg, 'tool_mode', None))
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
@@ -239,7 +239,8 @@ class SpawnerRunner:
             path, record, save = prompt_record
             if not dry_run:  # REMOVE-AT-R10
                 atomic_write_private(path, prompt)
-            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant)
+            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant,
+                          **({'review_brief_sha256': brief_sha256} if brief_sha256 is not None else {}))
             if not dry_run:  # REMOVE-AT-R10
                 save(record)
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
@@ -294,13 +295,14 @@ class SpawnerRunner:
         )
 
         child_env = build_child_env(extra_env, headers=envelope_headers)
+        from .host_ready import cargo_child_env
+        review_target = (extra_env or {}).get('CARGO_TARGET_DIR') if role == 'review' else None
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
         if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
             child_env = with_agent_shell(claude_child_env(child_env))
-        from .host_ready import cargo_child_env
-        child_env = cargo_child_env(child_env, pin_configured=True)
+        child_env = cargo_child_env(child_env, pin_configured=True, target=review_target)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':
@@ -316,10 +318,8 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
-            from .opencode_overlay import overlay_env
-            child_env = overlay_env(child_env)
-            from plangraph.routing_support.opencode_render import render_gateway_providers
-            render_reason = render_gateway_providers(child_env, model_or_combo)
+            from .opencode_overlay import prepare_gateway_env
+            child_env, render_reason = prepare_gateway_env(child_env, model_or_combo)
             if render_reason is None:
                 # Overlay only copies an env name through when the parent already
                 # holds it; hand the child the host keys from the AutoOS keys file
@@ -329,7 +329,8 @@ class SpawnerRunner:
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
-            from .opencode_isolation import close_config_layers, review_credential_reason
+            from .opencode_isolation import apply_review_permissions, close_config_layers, review_credential_reason
+            from plangraph.planner.route_policy import opencode_repository_review
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
                 # D-2905 (1): the per-job dir is also the spawner-owned store, read only after child exit
@@ -345,25 +346,11 @@ class SpawnerRunner:
                              if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
                     del child_env[name]
-                # D-2905 (1): deny every tool for the review seat, then record
-                # the spawner's own check of the FINAL env value.
-                try:
-                    cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
-                    if not isinstance(cfg, dict):
-                        raise ValueError('not an object')
-                    cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
-                    cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
-                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
-                except (ValueError, TypeError):
-                    pass  # unparseable config cannot be proven denied below
-            if render_reason is None and (is_mimo_id(model_or_combo) or role == 'review' and reasoning_cap):
-                from .opencode_answer import cap_reasoning
-                from plangraph.routing_errors import SpawnRefused
-                try:
-                    if not cap_reasoning(child_env, model_or_combo, refuse=True, thinking_off=role == 'review' and reasoning_cap, reasoning_cap_tokens=is_mimo_id(model_or_combo)):
-                        render_reason = 'reasoning_output_limit: reasoning_already_disabled'
-                except SpawnRefused as exc:
-                    render_reason = str(exc)
+                apply_review_permissions(child_env, _DENIED_TOOLS,
+                                         repository_tools=chosen is not None and opencode_repository_review(leg))
+            if render_reason is None:
+                from .opencode_answer import configure_launch_output
+                render_reason = configure_launch_output(child_env, model_or_combo, role, reasoning_cap)
             if role == 'review':
                 tools_event = {'event': 'opencode_tools_denied' if _opencode_tools_denied(
                     child_env.get('OPENCODE_CONFIG_CONTENT') or '', child_env) else 'opencode_tools_not_denied'}
@@ -373,7 +360,7 @@ class SpawnerRunner:
                 cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                 from .gateway_witness import tag_session
                 tag_session(cfg, job_id)
-                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg)
             except (ValueError, TypeError, AttributeError):
                 pass  # An unparseable config cannot supply a session-tag witness.
         else:
@@ -381,10 +368,14 @@ class SpawnerRunner:
             if cmd[0] == 'agy' and (prepare_launch or not dry_run):
                 from plangraph.routing_support.clients import prepare_agy_review_home
                 render_reason = prepare_agy_review_home(child_env, role, model_or_combo, self._ocdata_dirs, job_id)
-        if render_reason is None:
-            self._child_envs[job_id] = child_env
-
         try:
+            if cmd[0] == 'claude' and (prepare_launch or not dry_run):
+                from plangraph.routing_support.claude_seat import configure_review_tests
+                configure_review_tests(cmd, child_env, leg, role, self._ocdata_dirs, job_id,
+                                       review_target=review_target)
+            if render_reason is None:
+                self._child_envs[job_id] = child_env
+
             if dry_run:
                 served_model = model_or_combo
                 served_family = detect_model_family(model_or_combo)
@@ -441,8 +432,13 @@ class SpawnerRunner:
             from .probe_cleanup import register
             self.jobs[job_id] = job; register(job_id)
             job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
-            from .run_watchdog import thresholds, edit_signature
+            from .run_watchdog import thresholds, edit_signature, inline_review_limits
+            job._inline_review = role == 'review' and (
+                getattr(leg, 'tool_mode', None) in TOOLLESS_MODES
+                or tools_event and tools_event['event'] == 'opencode_tools_denied')
             job._watchdog_limits = watchdog or thresholds(role=role)
+            if job._inline_review:
+                job._watchdog_limits = inline_review_limits(job._watchdog_limits, job.start_time)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir) if role in ('implement', 'fix') else None
             if tools_event:
@@ -454,10 +450,12 @@ class SpawnerRunner:
                 job.events.append({'event': 'render_refused', 'reason': render_reason})
                 return job
 
+            from plangraph.routing_support.clients import CODEX_REVIEW_CLIENT_MISSING, PromptTransportError, codex_review_client, launch_stdin_payload
             from .resolver import host_skip_reason_async
-            unavailable = await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
+            codex, missing_client = codex_review_client(cmd[0], role, job_id)
+            unavailable = missing_client or await host_skip_reason_async(dict(model=model_or_combo, harness=cmd[0]), env=child_env)
             if unavailable:
-                job.status, job.exit_code = 'failed', 1
+                job.status, job.exit_code = 'failed', CODEX_REVIEW_CLIENT_MISSING if missing_client else 1
                 job.stderr, job.end_time = unavailable, time.time()
                 return job
             from .resolver import admitted_by_render
@@ -465,8 +463,7 @@ class SpawnerRunner:
                 job.events.append({'event': 'admitted_by_render', 'model': model_or_combo})
 
             import shutil
-            resolved_exe = shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
-            from plangraph.routing_support.clients import PromptTransportError, launch_stdin_payload
+            resolved_exe = codex or shutil.which(cmd[0], path=child_env.get("PATH")) or cmd[0]
             try:
                 payload = launch_stdin_payload(cmd, prompt, resolved_exe, is_nt=_is_nt())
             except PromptTransportError as exc:
@@ -489,7 +486,7 @@ class SpawnerRunner:
                 await asyncio.to_thread(record_baseline, job, work_dir, list(self.jobs.values()))   # D-3236
             from .host_ready import cargo_lease
             self._cargo_leases = getattr(self, '_cargo_leases', {})
-            self._cargo_leases[job_id] = await asyncio.to_thread(cargo_lease)
+            self._cargo_leases[job_id] = None if review_target else await asyncio.to_thread(cargo_lease)
             try:
                 from .service import claim_first_dispatch
                 claim_first_dispatch(prompt_record)
@@ -681,7 +678,9 @@ class SpawnerRunner:
             job.stderr = redact_output(env_redact.redact_env_values(stderr_text, env), allow_shas=allow_shas)
             job.exit_code = exit_code
             job.end_time = time.time()
-            if job.status not in ('stalled', 'timeout', 'cancelled'):
+            if any(event.get('event') == 'inline_review_no_verdict' for event in job.events):
+                job.status, job.exit_code = 'failed', 6
+            elif job.status not in ('stalled', 'timeout', 'cancelled'):
                 # Preserve the existing denied-review terminal verdict contract.
                 tails = [text.rstrip('\r\n').splitlines()
                          for text in (stdout_text, final_answer(stdout_text, allow_unfinished=True) or '')]
@@ -857,7 +856,7 @@ def spawn_service(*args, **kwargs):
         def _save(self, record, *, retry=False):
             import socket
             record.setdefault('host', os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname())
-            from .notify import completion_event, CommandSink, KeeperNotConfigured, KeeperRefused, KeeperSink, settle_refusal
+            from .notify import completion_event, completion_recipient, CommandSink, KeeperNotConfigured, KeeperRefused, KeeperSink, settle_refusal
             job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
             if job is not None:
                 record['last_activity_ts'] = getattr(job, 'last_activity_ts', None)
@@ -888,7 +887,7 @@ def spawn_service(*args, **kwargs):
                         no_keeper_item = (recipient == 'keeper' and isinstance(sink, KeeperSink)
                                           and not record['completion'].get('item'))
                         if not no_keeper_item:
-                            sink.deliver(recipient, record['completion'])
+                            sink.deliver(completion_recipient(recipient, record), record['completion'])
                         from .private_io import atomic_write_private
                         atomic_write_private(marker, 'not-applicable: no item\n' if no_keeper_item else 'delivered\n')
                     except KeeperRefused as refusal:
@@ -1080,7 +1079,7 @@ def spawn_service(*args, **kwargs):
                             served_witness_reason=job.served_witness_reason,
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
-                            stdout_tail=job.stdout, stderr_tail=job.stderr))
+                            stdout_tail=job.stdout, stderr_tail=job.stderr, finish_reason=getattr(job, 'response_finish_reason', None)))
                         if stop and not unavailable and job.status != 'cancelled':
                             notify_leg_refused(self, record, chosen, reason or 'provider_stop')
                         if job.status in ('completed', 'dry_run', 'terminated_after_answer') and not unavailable and not stop:

@@ -89,7 +89,7 @@ class SpawnerRecordAdapter:
             raise ValueError("record exceeds size limit")
 
     def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False,
-                     require_diff_head=False, require_explicit_accept=False):
+                     require_diff_head=False, require_explicit_accept=False, train_delta=None):
         """Read cited mirrored review witnesses, never infer a served model."""
         from ..review.family import model_family
         ids = json.loads(item.get("run_ids") or "[]")
@@ -148,6 +148,30 @@ class SpawnerRecordAdapter:
             cli = record.get("witness_kind") == "cli_reported"
             serving = next((a for a in reversed(attempts or []) if isinstance(a, dict)
                             and a.get('status') != 'skipped'), {}) if isinstance(attempts, list) else {}
+            if record.get("review_document") == "train_delta" and train_delta is None:
+                raise ValueError(f"{run_id}: train delta seat requires replay evidence")
+            if train_delta is not None:
+                prompt, excluded = train_delta
+                witness = "response-side-gateway-call-log"
+                if (record.get("witness_kind") != witness or serving.get("witness_kind") != witness
+                        or serving.get("status") != "completed" or serving.get("served_model") != model):
+                    raise ValueError(f"{run_id}: train delta needs an authenticated serving attempt")
+                if record.get("review_brief_sha256") != prompt:
+                    raise ValueError(f"{run_id}: train delta prompt binding mismatch")
+                if family in excluded:
+                    raise ValueError(f"{run_id}: reviewer family wrote part of the train delta")
+                # The router can explicitly skip unused alternates after a successful launch.
+                if all(isinstance(a, dict) for a in attempts):
+                    attempts = [a for a in attempts if a.get("status") != "skipped"]
+                if "finish_reason" in serving:
+                    finish = serving["finish_reason"]
+                    finishes.append(finish)
+                elif finish is None and len(attempts) == 1:
+                    # Old dispatch records kept the final step only in the run events.
+                    events = record.get("events")
+                    if isinstance(events, list):
+                        finish = next((e.get("finish_reason") for e in reversed(events)
+                                       if isinstance(e, dict) and e.get("event") == "opencode_step_finish"), None)
             if (cli and (not allow_cli_reported or record.get("head_sha") != (completion or {}).get("head_sha")
                          or record.get("verdict") != "pass" or record.get("test_gaming") is not False
                          or not _one_serving_attempt(attempts, model)

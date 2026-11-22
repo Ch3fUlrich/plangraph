@@ -1,4 +1,5 @@
 use super::*;
+
 #[test]
 fn final_head_review_ignores_old_head_and_requires_last_canonical_verdict() {
     let head = "b".repeat(40);
@@ -56,7 +57,8 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
     .unwrap();
     let record = json!({"run_id":"run-fixture", "host":"fixture", "started":0,
         "ended":120, "status":"failed", "exit_code":6, "resumes":1,
-        "item_key":"plangraph:FIXTURE"});
+        "item_key":"plangraph:FIXTURE", "run_kind":"native-codex", "role":"implement",
+        "requested_model": WRITER_MODEL, "plan":{"effort":{"level":"L2","reason":"size_bucket"}}});
     let mut running = record.clone();
     running.as_object_mut().unwrap().remove("ended");
     host.save(&running).unwrap();
@@ -82,6 +84,10 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
     let saved: Value =
         serde_json::from_str(&fs::read_to_string(&host.record_path).unwrap()).unwrap();
     assert_eq!(saved["ledger_error"], "terminal writer ledger row changed");
+    assert_eq!(saved["attempt_capture"], 1);
+    let attempt = crate::attempt_outcome::project(saved).unwrap();
+    assert_eq!(attempt["requested_model"], WRITER_MODEL);
+    assert_eq!(attempt["level"], "L2");
     assert_eq!(
         fs::read_to_string(dir.path().join("ledger.jsonl")).unwrap(),
         text
@@ -427,7 +433,7 @@ if verb == 'route':
     else:
         print(json.dumps({'legs': [{'id':'agy-gemini-4-hydrogen-high'}], 'skipped': []}))
     sys.exit(0)
-assert verb == 'spawn' and pathlib.Path(value('--cwd')) == pathlib.Path.cwd()
+assert verb == 'spawn' and '--cwd' not in argv
 families = [argv[i + 1] for i, a in enumerate(argv) if a == '--exclude-family']
 # The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
 assert sorted(families) == ['anthropic', 'google', 'openai'], families
@@ -441,7 +447,8 @@ assert 'Done criteria: By test: first line\nsecond criteria line\n' in inline, i
 assert 'Invariants named by the item: never push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading' in inline, inline
 head = card['diff_ref']['head']
 repo = pathlib.Path(card['diff_ref']['repo'])
-assert repo != pathlib.Path.cwd()
+assert repo == pathlib.Path.cwd()
+assert card['review_workspace'] is True
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'SKIPPED plangraph:OTHER-HOST-ITEM Fixture contract unavailable.\n' in prompt, prompt
@@ -473,13 +480,12 @@ excerpt = re.search(r'with their cargo runs: (\S+\.session\.log)', prompt).group
 assert excerpt.endswith('/fast-checks/' + head + '.session.log') and 'cargo test: 3 passed' in pathlib.Path(excerpt).read_text(), prompt
 assert '== ci_commit_gate.py (exit status: 0)' in pathlib.Path(log).read_text(), prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
-assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'
 run.mkdir(parents=True, exist_ok=True)
 text = 'FILES READ: src/lib.rs:1\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type': 'result', 'is_error': False, 'result': text}) + '\n')
 print('banner line')
-print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'agy-gemini-4-hydrogen-high', 'harness': 'agy', 'tool_mode': 'tools'}}, indent=2))
+print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-worker', 'head_sha': head, 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'agy-gemini-4-hydrogen-high', 'harness': 'agy', 'tool_mode': 'inline-only' if (state / 'inline-seat').exists() else 'tools'}}, indent=2))
 "#,
     )
     .unwrap();
@@ -537,6 +543,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert_eq!(review["run_id"], "run-rv1");
     assert_eq!(review["leg"], "agy-gemini-4-hydrogen-high");
     assert_eq!(review["harness"], "agy");
+    assert_eq!(review["host"], "fixture-worker");
     assert!(Path::new(review["path"].as_str().unwrap()).is_file());
     assert!(!host
         .reviews
@@ -555,12 +562,32 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         review_verdict(&text, &head, &[])["verdict"],
         "REQUEST_CHANGES"
     );
+    fs::write(state.join("inline-seat"), "").unwrap();
+    let inline = host.review(&head, None).unwrap();
+    assert_eq!(inline["verdict"], "no_verdict", "{inline}");
+    assert_eq!(inline["reason"], "repository_review_tools_unavailable");
+    assert_eq!(inline["harness"], "agy");
+    fs::remove_file(state.join("inline-seat")).unwrap();
     fs::write(state.join("no-review-seat"), "").unwrap();
     let previous = json!({"head":head, "text":"VERDICT: REQUEST_CHANGES"});
     let deferred = host.review(&head, Some(&previous)).unwrap();
     assert_eq!(deferred["status"], "deferred_to_batch_seat");
     assert_eq!(deferred["causes"][0]["reason"], "limited");
     assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
+    fs::remove_file(state.join("no-review-seat")).unwrap();
+    check_review_resume_after_missing_client(&mut host, &base, &head, &cli);
+    check_late_review_reuses_completed_run(&mut host, &head, &cli);
+    check_review_replaces_unreadable_run(&mut host, &head, &cli);
+    write_review_transport_fixture(
+        &cli,
+        "import sys\nprint('wrapper failure', file=sys.stderr)\nsys.exit(10)\n",
+    )
+    .unwrap();
+    let error = host.review(&head, None).unwrap_err();
+    assert!(
+        error.contains("review CLI failed with exit code 10: wrapper failure"),
+        "{error}"
+    );
     // A spawner that prints no run record is an error, never a verdict.
     host.review_cli = vec!["true".into()];
     host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
@@ -748,3 +775,9 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     let excerpt = host.stamp(&head_c).unwrap().with_extension("session.log");
     assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
 }
+
+#[cfg(unix)]
+#[path = "native_writer_late_review_fixture.rs"]
+mod late_fixture;
+#[cfg(unix)]
+use late_fixture::*;

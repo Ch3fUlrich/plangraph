@@ -89,7 +89,7 @@ NO_DEFAULT_TAGS = frozenset({"auth", "secrets", "money", "live-step", "public-re
 _CARD_LISTS = ("read_set", "write_set", "exports", "forbid_paths", "smoke_checks", "check_reads")
 _CARD_TEXT = ("check_cmd", "heldout_check")
 _CARD_KEYS = frozenset(("outcome", "window_class", "risk_tags", "estimate_tokens",
-                        "check_kind", *_CARD_LISTS, *_CARD_TEXT))
+                        "check_kind", "level", "level_reason", *_CARD_LISTS, *_CARD_TEXT))
 _ATTEMPT_KEYS = frozenset((
     "n", "harness", "model", "combo", "class", "started_at", "ended_at", "exit_class",
     "tokens_in", "tokens_out", "cost", "run_id", "workflow_id", "log_ref"))

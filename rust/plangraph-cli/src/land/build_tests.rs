@@ -4,11 +4,11 @@ use super::train::*;
 use std::path::Path;
 use std::process::Command;
 
-struct Fx {
+pub(super) struct Fx {
     dir: tempfile::TempDir,
 }
 
-fn g(dir: &Path, args: &[&str]) -> String {
+pub(super) fn g(dir: &Path, args: &[&str]) -> String {
     let o = Command::new("git")
         .current_dir(dir)
         .env_clear()
@@ -32,7 +32,7 @@ fn g(dir: &Path, args: &[&str]) -> String {
 }
 
 impl Fx {
-    fn new() -> Fx {
+    pub(super) fn new() -> Fx {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         g(p, &["init", "-q", "-b", "main"]);
@@ -46,14 +46,14 @@ impl Fx {
         g(p, &["commit", "-q", "-m", "base"]);
         Fx { dir }
     }
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         self.dir.path()
     }
-    fn base(&self) -> String {
+    pub(super) fn base(&self) -> String {
         g(self.path(), &["rev-parse", "main"])
     }
     /// One commit on a new branch from `from`: replaces `file` with `content`; returns the new head.
-    fn commit(&self, from: &str, file: &str, content: &str) -> String {
+    pub(super) fn commit(&self, from: &str, file: &str, content: &str) -> String {
         let p = self.path();
         g(p, &["checkout", "-q", "--detach", from]);
         std::fs::write(p.join(file), content).unwrap();
@@ -63,7 +63,12 @@ impl Fx {
         g(p, &["checkout", "-q", "main"]);
         head
     }
-    fn input(&self, parts: Vec<PartIn>, attributes: &str, cap: Option<usize>) -> BuildInput<'_> {
+    pub(super) fn input(
+        &self,
+        parts: Vec<PartIn>,
+        attributes: &str,
+        cap: Option<usize>,
+    ) -> BuildInput<'_> {
         BuildInput {
             repo: self.path(),
             build: "b1".into(),
@@ -77,7 +82,7 @@ impl Fx {
     }
 }
 
-fn part(pr: u64, head: &str, parent: Option<(u64, &str)>) -> PartIn {
+pub(super) fn part(pr: u64, head: &str, parent: Option<(u64, &str)>) -> PartIn {
     PartIn {
         pr,
         head: head.into(),
@@ -85,6 +90,10 @@ fn part(pr: u64, head: &str, parent: Option<(u64, &str)>) -> PartIn {
             pr,
             head: head.into(),
         }),
+        receipt: PartReceipt {
+            run_id: format!("run-{pr}"),
+            head: head.into(),
+        },
     }
 }
 
@@ -181,6 +190,7 @@ fn dropping_a_parent_drops_its_child_and_the_child_cannot_bring_the_parents_comm
             head: p.clone(),
         }),
         own: Own::of(&[]),
+        receipt: parts[2].receipt.clone(),
     });
     cheat.merges.push(m.train_sha.clone());
     let err = verify_manifest(fx.path(), &cheat, &parts).unwrap_err();
@@ -780,3 +790,9 @@ fn the_open_record_freeze_manifest_and_result_must_belong_to_one_build_base_and_
     other_result.build = "b9".into();
     assert!(bind_artifacts(&open, &freeze, &m, &other_result).is_err());
 }
+
+#[path = "build_receipt_tests.rs"]
+mod receipt_tests;
+
+#[path = "build_delta_tests.rs"]
+mod delta_tests;

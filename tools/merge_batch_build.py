@@ -17,10 +17,18 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents, stack_sorted
-from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff, run,
+from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key)
+                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key,
+                              keeper_landing_configured, landing_receipt_inputs)
+
+
+def merge_trailers(st):
+    """The trailer paragraph of every merge commit the build makes: the batch plan key as ``Plan-Item`` (the
+    keeper finds the batch item in git without a merge body) and ``Land-Base``, the base the batch is built and
+    tested on (the landing mode tested-ff leases main on it, and it is part of the tested commit)."""
+    return "\n".join([*([f"Plan-Item: {st['plan']}"] if st.get("plan") else []), f"Land-Base: {st['base_head']}"])
 
 
 def default_worktree(name):
@@ -198,8 +206,8 @@ def run_pending(st, skip_conflicts):
             continue
         st["merging"] = {"pr": num, "head": pr["head"]}
         save_state(st)  # before the merge: a crash right after it leaves this marker and continue finds the commit
-        proc = git(*attrs_args(st), "merge", "--no-ff", "-m", f"Merge PR #{num}: {pr['title']}", pr["head"],
-                   cwd=wt, ok=None)
+        proc = git(*attrs_args(st), "merge", "--no-ff", "-m", f"Merge PR #{num}: {pr['title']}",
+                   "-m", merge_trailers(st), pr["head"], cwd=wt, ok=None)
         stop = settle_merge(st, num, proc, skip_conflicts)
     if stop is not None:
         return stop
@@ -470,6 +478,11 @@ def cmd_abort(args):
         print(f"batch {name!r} has no state file: removing what its build left", file=sys.stderr)
     else:
         raise MergeBatchError(f"no batch {name!r} in progress (merge_batch.py status lists them)")
+    if st.get("pr") and keeper_landing_configured():
+        with landing_lease(st["repo"]) as lease:
+            train = landing_journal(st["repo"], "show", pr=st["pr"])["train"]
+            if train is not None and not train["merge"]:
+                landing_journal(st["repo"], "abandon", pr=st["pr"], **lease)
     os.chdir(state_dir().parent)  # the git dir: the cwd may be the worktree that is about to go
     registered = dict(worktrees())
     paths = {path for path, branch in registered.items() if branch == st["branch"]}
@@ -521,6 +534,85 @@ def record_part_cost(st, run_id, head, telemetry_dir=None):
         except (MergeBatchError, KeyError, ValueError, TypeError, OSError) as exc:
             print(f"merge_batch: part cost of #{number} not recorded: {exc}", file=sys.stderr)
     return written
+
+
+def landing_mode_of(st):
+    """The landing mode of the batch's repository from the ``landing.mode`` setting (plangraph.settings); an
+    unknown mode or a broken settings file refuses the land before anything is asked of GitHub."""
+    from plangraph.settings import SettingsError, landing_mode
+
+    try:
+        return landing_mode(st["repo"])
+    except SettingsError as exc:
+        raise MergeBatchError(f"landing mode refused: {exc}") from None
+
+
+def main_tip(st):
+    """origin's tip of the base branch, fetched into the batch worktree."""
+    wt, base = st["worktree"], st["base"]
+    git("fetch", "--quiet", REMOTE, f"+refs/heads/{base}:refs/remotes/{REMOTE}/{base}", cwd=wt)
+    return git("rev-parse", f"refs/remotes/{REMOTE}/{base}", cwd=wt).stdout.strip()
+
+
+def in_history(st, sha, tip):
+    return git("merge-base", "--is-ancestor", sha, tip, cwd=st["worktree"], ok=(0, 1)).returncode == 0
+
+
+def wait_marked_merged(repo, number, wait):
+    """After a push of the head GitHub marks the pull requests merged by itself; wait for it up to ``wait``
+    seconds, never failing (the branch holds the truth)."""
+    deadline = time.monotonic() + wait
+    while True:
+        if gh_json("pr", "view", str(number), "--repo", repo, "--json", "state")["state"] != "OPEN":
+            return
+        if time.monotonic() >= deadline:
+            print(f"batch PR #{number} is not marked merged by GitHub yet (its head is in the branch)", file=sys.stderr)
+            return
+        time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
+
+
+def require_tested_ff_evidence(st):
+    """What the keeper reads after a landing that has no merge commit: the batch plan key must be a ``Plan-Item``
+    trailer of a commit of the batch (``build --plan`` writes it into every merge commit it makes), and the
+    seat policy must be acknowledged as off (seats_acknowledged), because the ``Review-Run`` citations of a merge body
+    cannot be added to a tested commit without changing the tested sha (merge-close then flags the seat as missing).
+    The batch head must carry exactly one ``Land-Base`` trailer, the recorded base."""
+    from plangraph.keeper.evidence_git import plan_items
+
+    plan = st.get("plan")
+    bodies = git("log", "--format=%B%x1d", f"{st['base_head']}..{st['head']}", cwd=st["worktree"]).stdout.split("\x1d")
+    if isinstance(plan, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", plan):
+        if not any(plan in plan_items(body) for body in bodies):
+            raise MergeBatchError(f"tested-ff: the batch plan key {plan} is no Plan-Item trailer of a batch commit "
+                                  "(it was built without it): build the batch again, or land in train-pr-merge")
+    # git's own parse, entries joined by a unit separator and counted before anything is dropped: a blank or a second
+    # Land-Base trailer is a mismatch, a body line is no trailer
+    trailers = git("log", "-1", "--format=%(trailers:key=Land-Base,valueonly,separator=%x1f)", st["head"],
+                   cwd=st["worktree"]).stdout.rstrip("\n")
+    if trailers != st["base_head"]:
+        raise MergeBatchError(f"tested-ff: the batch head must carry exactly one Land-Base trailer, the recorded base "
+                              f"{short(st['base_head'])} (it was built without it, by hand, or with another): "
+                              "build the batch again")
+    if not seats_acknowledged():
+        raise MergeBatchError("tested-ff: set PG_MERGE_CLOSE_REQUIRE_SEATS=off (or false, 0): a tested commit has no merge "
+                              "body to cite the part reviews (Review-Run), so merge-close flags the seat as missing "
+                              "instead of demanding it; the keeper daemon's own policy cannot be read from here, so "
+                              "the choice is explicit (or land in train-pr-merge)")
+
+
+def seats_acknowledged():
+    """True when PG_MERGE_CLOSE_REQUIRE_SEATS is explicitly 0, false or off: the value the lander's own merge-close
+    sends to the keeper (Rust ``plangraph merge-close`` reads the same variable), so the close flags a missing seat
+    instead of demanding it. Anything else, unset included, is not an acknowledgement: the keeper daemon's own
+    ``require_seats`` is not readable from here, and a guess from local files could differ from it."""
+    return os.environ.get("PG_MERGE_CLOSE_REQUIRE_SEATS", "").strip().lower() in ("0", "false", "off")
+
+
+def frozen_landing(st):
+    """Read the saved landing attempt only for the currently pushed head."""
+    attempt = st.get("landing_attempt") or {}
+    head = st.get("head")
+    return attempt if head and attempt.get("head") == head else {}
 
 
 def landing_journal(repo, action, **fields):
@@ -583,33 +675,60 @@ def landing_lease(repo):
 
 
 def read_verified_merge(train):
+    """Verify the frozen train on main, or report whether its PR is still pending."""
     repo, number, head = train["repo"], train["pr"], train["head"]
     main = f"refs/remotes/{REMOTE}/main"
-    pr = gh_json("pr", "view", str(number), "--repo", repo,
-                 "--json", "state,headRefOid,mergeCommit,baseRefName")
-    if pr["state"] == "CLOSED":
-        return None, "closed"
-    merge = (pr.get("mergeCommit") or {}).get("oid")
-    if pr["state"] != "MERGED" or not merge:
-        return None, "pending"
-    if pr["headRefOid"] != head or pr["baseRefName"] != "main" or not re.fullmatch(r"[0-9a-f]{40}", merge):
-        raise MergeBatchError(f"train #{number} has inconsistent merge evidence")
-    git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
-    parents = git("show", "-s", "--format=%P", merge).stdout.split()
-    if (parents != [train["base"], head] or
-            git("merge-base", "--is-ancestor", merge, main, ok=(0, 1)).returncode or
-            git("rev-parse", f"{merge}^{{tree}}").stdout != git("rev-parse", f"{head}^{{tree}}").stdout):
-        raise MergeBatchError(f"train #{number} merge {merge} did not land the exact tested tree on main")
+    if train.get("mode") == TESTED_FF:
+        git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
+        missing = git("rev-parse", "--verify", "--quiet", f"{head}^{{commit}}", ok=(0, 1)).returncode
+        if missing or git("merge-base", "--is-ancestor", head, main, ok=(0, 1)).returncode:
+            if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+                raise MergeBatchError(f"train #{number} is missing from local main history; use a full checkout to settle")
+            pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", "state")
+            return None, pr["state"].lower() if pr["state"] in ("OPEN", "CLOSED") else "pending"
+        if git("merge-base", "--is-ancestor", train["base"], head, ok=(0, 1)).returncode:
+            raise MergeBatchError(f"train #{number} did not fast-forward the tested base")
+        merge = head
+    else:
+        pr = gh_json("pr", "view", str(number), "--repo", repo,
+                     "--json", "state,headRefOid,mergeCommit,baseRefName")
+        if pr["state"] in ("OPEN", "CLOSED"):
+            return None, pr["state"].lower()
+        merge = (pr.get("mergeCommit") or {}).get("oid")
+        if pr["state"] != "MERGED" or not merge:
+            return None, "pending"
+        if pr["headRefOid"] != head or pr["baseRefName"] != "main" or not re.fullmatch(r"[0-9a-f]{40}", merge):
+            raise MergeBatchError(f"train #{number} has inconsistent merge evidence")
+        git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
+        parents = git("show", "-s", "--format=%P", merge).stdout.split()
+        if (parents != [train["base"], head] or
+                git("merge-base", "--is-ancestor", merge, main, ok=(0, 1)).returncode or
+                git("rev-parse", f"{merge}^{{tree}}").stdout != git("rev-parse", f"{head}^{{tree}}").stdout):
+            raise MergeBatchError(f"train #{number} merge {merge} did not land the exact tested tree on main")
     for part in train["parts"]:
         if git("merge-base", "--is-ancestor", part["head"], head, ok=(0, 1)).returncode:
             raise MergeBatchError(f"train #{number} did not contain part #{part['pr']}")
     return merge, "merged"
 
 
-def prepare_train(st, lease):
-    parts = [dict(part, ref=st["prs"][str(part["pr"])]["ref"]) for part in st["merged"]]
+def prepare_train(st, lease, mode=None):
+    """Journal the active parts at the frozen head and their receipt inputs."""
+    parts = []
+    for part in st["merged"]:
+        entry = dict(part, ref=st["prs"][str(part["pr"])]["ref"])
+        review = entry.get("review")
+        if review and (review.get("verdict"), review.get("head")) != ("ACCEPT", entry["head"]):
+            entry.pop("review_runs", None)
+        parts.append(entry)
+    attempt = frozen_landing(st)
+    inputs = {}
+    if mode is not None or attempt:
+        mode = mode or attempt["mode"]
+        inputs = landing_receipt_inputs(st, attempt.get("reruns", []), attempt.get("go_row"))
+        inputs["review_runs"] = {str(part["pr"]): part.get("review_runs") or {} for part in parts}
+        inputs = dict(mode=mode, receipt_inputs=inputs)
     return landing_journal(st["repo"], "prepare", pr=st["pr"], base=st["base_head"],
-                           head=st["head"], parts=parts, batch_key=landing_batch_key(st), **lease)
+                           head=st["head"], parts=parts, batch_key=landing_batch_key(st), **inputs, **lease)
 
 
 def settle(repo, recs, wait):

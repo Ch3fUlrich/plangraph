@@ -40,8 +40,8 @@ def test_hook_preflight_keeps_policy_context(tmp_path, monkeypatch, ref, fast, e
     monkeypatch.setitem(scope, 'file_size_gate', lambda head: size_heads.append(head) or 0)
     expected_train = ref.startswith('land/train-')
     train_gates, commit_gates = [], []
-    manifest = ['2' * 40]
-    monkeypatch.setitem(scope, 'read_train_manifest', lambda path: manifest)
+    manifest = str(tmp_path / 'train-heads.txt')
+    monkeypatch.setenv('PLANGRAPH_TRAIN_MANIFEST', manifest)
     monkeypatch.setitem(scope, 'train_gate',
                         lambda local_sha, manifest: train_gates.append((local_sha, manifest)))
     monkeypatch.setitem(scope, 'commit_gate',

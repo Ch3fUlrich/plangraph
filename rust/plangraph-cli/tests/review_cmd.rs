@@ -453,7 +453,16 @@ fn redacted_head_line_blocks_pass_and_seats_envelope_extracts_records() {
         String::from_utf8_lossy(&out_seats.stdout)
     );
     let body = fs::read_to_string(&approval_seats).unwrap();
+    assert!(body.contains(r#"harness=opencode files_read="src/lib.rs""#));
     assert!(body.contains(&format!("HEAD: {head_sha}\nVERDICT: PASS")));
+}
+
+#[test]
+fn diff_only_accept_does_not_write_approval() {
+    let (out, approval, _log, _tmp) =
+        review_with_mode("diff_only", &[("f.rs", b"pub fn f() {}\n")]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!approval.exists());
 }
 
 fn review_with_mode(
@@ -649,3 +658,58 @@ fn single_writer_family_range_yields_one_seat_and_a_failing_group_blocks() {
     assert!(text.contains("verdict=REQUEST_CHANGES"), "{text}");
     assert_eq!(blocked.status.code(), Some(1));
 }
+
+#[test]
+fn late_review_file_marks_a_missing_verdict() {
+    check_late_verdict("completed", 0, "Reviewed the change", "MISSING");
+}
+
+#[test]
+fn late_review_file_marks_a_failed_or_killed_run() {
+    check_late_verdict("failed", 7, "VERDICT: REQUEST_CHANGES", "ERROR");
+    check_late_verdict("killed", 137, "", "ERROR");
+}
+
+#[test]
+fn late_review_file_preserves_a_request_for_changes() {
+    check_late_verdict(
+        "completed",
+        0,
+        "VERDICT: REQUEST_CHANGES",
+        "REQUEST_CHANGES",
+    );
+}
+
+fn check_late_verdict(status: &str, code: i32, answer: &str, expected: &str) {
+    let state = tempfile::tempdir().unwrap();
+    let head = "a".repeat(40);
+    let run = state.path().join("runs/run-terminal");
+    fs::create_dir_all(&run).unwrap();
+    fs::write(
+        run.join("record.json"),
+        serde_json::json!({
+            "run_id":"run-terminal", "status":status, "exit_code":code, "stdout_tail":answer,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = Command::new(plangraph_bin())
+        .args(["review", "--finish-seat"])
+        .arg(state.path())
+        .args([&head, "run-terminal", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let artifact = fs::read_to_string(run.join("late-review.txt")).unwrap();
+    assert_eq!(
+        artifact,
+        format!("RUN: run-terminal\nHEAD: {head}\nSTATUS: {status}\nVERDICT: {expected}\n")
+    );
+}
+
+#[path = "review_cmd/late.rs"]
+mod late;

@@ -23,6 +23,7 @@ pub struct Options<'a> {
     pub state: &'a Path,
     pub claims_reader: Option<&'a Path>,
     pub apply: bool,
+    pub include_merged: bool,
     pub delete_remote: bool,
 }
 pub fn eligible(tree: &Worktree, facts: &pg_reap::Facts, inventory: &[Worktree]) -> bool {
@@ -33,7 +34,7 @@ pub fn eligible(tree: &Worktree, facts: &pg_reap::Facts, inventory: &[Worktree])
         }
     )
 }
-fn inventory(repo: &Path) -> io::Result<Vec<Worktree>> {
+pub(crate) fn inventory(repo: &Path) -> io::Result<Vec<Worktree>> {
     parse_porcelain(&git(repo, &["worktree", "list", "--porcelain"])?).map_err(io::Error::other)
 }
 fn escape(s: &str) -> String {
@@ -52,8 +53,7 @@ pub fn restore_row(repo: &Path, tree: &Worktree, pr: Option<u64>) -> String {
         pr.map(|p| p.to_string()).unwrap_or_else(|| "-".into())
     )
 }
-/// No --force, and branch deletion compares the recorded SHA atomically.
-pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
+pub(crate) fn verify_checkout(tree: &Worktree) -> io::Result<()> {
     if git(Path::new(&tree.path), &["rev-parse", "HEAD"])?.trim() != tree.head
         || git(
             Path::new(&tree.path),
@@ -76,6 +76,11 @@ pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
     {
         return Err(io::Error::other("worktree changed before removal"));
     }
+    Ok(())
+}
+/// No --force, and branch deletion compares the recorded SHA atomically.
+pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
+    verify_checkout(tree)?;
     git(repo, &["worktree", "remove", "--", &tree.path])?;
     if let Some(branch) = &tree.branch {
         git(repo, &["update-ref", "-d", branch, &tree.head])?;
@@ -83,14 +88,18 @@ pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
     Ok(())
 }
 pub fn run(options: &Options<'_>) -> io::Result<String> {
-    run_using(options, |options, branch| {
-        if options.claims_reader.is_none() {
-            return Err(io::Error::other("claims reader unavailable: protected"));
-        }
-        let prs = sweep_facts::pulls(options.repo, branch)?;
-        let protection = Protection::load(options.pins, options.state, options.claims_reader)?;
-        Ok((protection, prs))
-    })
+    run_using(options, authority)
+}
+fn authority(
+    options: &Options<'_>,
+    branch: &str,
+) -> io::Result<(Protection, Vec<sweep_facts::Pull>)> {
+    if options.claims_reader.is_none() {
+        return Err(io::Error::other("claims reader unavailable: protected"));
+    }
+    let prs = sweep_facts::pulls(options.repo, branch)?;
+    let protection = Protection::load(options.pins, options.state, options.claims_reader)?;
+    Ok((protection, prs))
 }
 /// Inject authorities only in hermetic tests; the mutation and restore path is shared.
 #[cfg(feature = "test-support")]
@@ -179,16 +188,19 @@ fn run_using(
             else {
                 return Err(io::Error::other("worktree changed"));
             };
-            if !options.targets.is_empty()
-                && !options.targets.iter().any(|target| {
-                    target
-                        == &format!(
-                            "{}:{}:{}",
-                            current.path,
-                            current.branch.as_deref().unwrap_or("-"),
-                            current.head
-                        )
-                })
+            let exact = format!(
+                "{}:{}:{}",
+                current.path,
+                current.branch.as_deref().unwrap_or("-"),
+                current.head
+            );
+            let exact_match = options.targets.contains(&exact);
+            let selected_path = options
+                .targets
+                .iter()
+                .any(|target| target.rsplitn(3, ':').nth(2) == Some(current.path.as_str()));
+            if !exact_match
+                && (selected_path || !options.include_merged && !options.targets.is_empty())
             {
                 return Err(io::Error::other("outside exact targets"));
             }
@@ -234,6 +246,7 @@ fn run_using(
                 remove(options.repo, current)?;
                 if options.delete_remote
                     && options.remote_targets.is_empty()
+                    && (!options.include_merged || exact_match)
                     && merged_pr.is_some()
                     && current.branch.is_some()
                 {

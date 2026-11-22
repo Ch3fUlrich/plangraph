@@ -3,3 +3,5 @@ attempt report or probe, the probe entry applies the admission policy and runs t
 attempt jail (failing closed without it), supervised output is redacted before the capture limit drops its
 front (a secret on the cut leaves no fragment), activity failure messages are redacted and capped before they
 reach Temporal, and the pilot payload test asserts the report and park packet the workflow builds.
+
+Withhold truncated startup diagnostics and verify redaction in keeper report and park payloads.

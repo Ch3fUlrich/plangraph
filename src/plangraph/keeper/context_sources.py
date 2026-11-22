@@ -24,8 +24,8 @@ import time
 from urllib.parse import urlsplit
 
 from .errors import Refused
-from .evidence_decisions import DecisionsAdapter, _decision_cell
-from .evidence_git import is_first_parent_merge, plan_items, valid_ref
+from .evidence_decisions import DecisionsAdapter, _decision_cell, _did_num, superseded_map
+from .evidence_git import REVERT_GREP, delivery_revert, is_first_parent_merge, plan_items, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
@@ -42,13 +42,6 @@ MERGE_REPO_LINE = re.compile(
     r"[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)"
     r"(?:[ \t]+([a-fA-F0-9]{40}|#[1-9][0-9]*))?[ \t]*")
 _DID_RE = re.compile(r"(?<![\w-])[Dd]-0*(\d{1,6})(?!\d)")
-# Row 40 "supersedes / corrects / withdraws / replaces D-12" retires D-12.
-_SUPERSEDES_RE = re.compile(
-    r"(?i)\b(?:supersedes|corrects|withdraws|replaces)\s+D-0*(\d+)\b")
-# Row 12 whose DECISION cell opens with "WITHDRAWN by D-40" / "superseded by
-# D-40" retires itself; the same phrase later in a cell may be about anything.
-_OWN_RETIRED_RE = re.compile(
-    r"(?i)^\W{0,3}(?:superseded|withdrawn|replaced|corrected)\s+by\s+D-0*(\d+)\b")
 
 
 def decision_ids(*texts) -> list:
@@ -58,13 +51,6 @@ def decision_ids(*texts) -> list:
         if isinstance(text, str):
             found.update(int(n) for n in _DID_RE.findall(text))
     return [f"D-{n}" for n in sorted(found)]
-
-
-def _did_num(did):
-    try:
-        return int(str(did).split("-", 1)[1])
-    except (IndexError, ValueError):
-        return -1
 
 
 def subject_pr(subject):
@@ -116,6 +102,28 @@ def _split(key):
     return (project or None), bare
 
 
+def _cancelled_delivery(git, repo, candidates, reverts):
+    cancelled = set()
+    for sha, (target, names) in reverts.items():  # Descendants precede their ancestors.
+        if sha in cancelled:
+            continue
+        parents = _ok(git, repo, ["rev-list", "--parents", "-n1", "--end-of-options", target]) if target else None
+        if parents:
+            commit, *previous = parents.split()
+            if not previous:
+                cancelled.add(commit)
+                continue
+            removed = _ok(git, repo, ["rev-list", "--end-of-options", commit, f"^{previous[0]}"])
+            if removed is not None:
+                cancelled.update(removed.split())
+                continue
+        for commit, keys in candidates.items():
+            if names.intersection(keys) and _git(
+                    git, repo, ["merge-base", "--is-ancestor", "--end-of-options", commit, sha])[0] == 0:
+                cancelled.add(commit)
+    return cancelled
+
+
 def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
@@ -151,7 +159,8 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
         else:
             problems.append("origin target ref unavailable")
     origin_stale = bool(problems)
-    if _github_repo(origin.strip()):
+    prs_expected = bool(_github_repo(origin.strip()))
+    if prs_expected:
         try:
             proc = subprocess.run(
                 ["gh", "pr", "list", "--state", "open", "--limit", "10000",
@@ -175,20 +184,22 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             problems.append("open PR inventory unavailable")
     refs_out = _ok(git, repo, ["for-each-ref", "--format=%(refname) %(objectname)"])
     target = _ok(git, repo, ["rev-parse", "--verify", "--end-of-options", ref])
-    out = _ok(git, repo, ["log", "--all", "--no-show-signature",
+    out = _ok(git, repo, ["log", "--all", "--date-order", "--no-show-signature",
                          "--format=%H%x1f%P%x1f%cI%x1f%s%x1f%B%x1d"])
     if refs_out is None or target is None or out is None:
         if not origin:
             return None
         origin_stale = True
         problems.append("repository index unavailable")
-    records = {}
+    records, reverts = {}, {}
     for record in (out or "").split("\x1d"):
         fields = record.strip("\n").split("\x1f")
         if len(fields) == 5 and valid_commit_ref(fields[0]):
             sha, parents, date, subject, trailers = fields
+            if (revert := delivery_revert(trailers)) is not None:
+                reverts[sha] = revert
             records[sha] = (parents.split(), {"sha": sha, "date": date,
-                            "subject": subject}, plan_items(trailers))
+                            "subject": subject}, [] if sha in reverts else plan_items(trailers))
 
     def ancestors(head):
         seen, todo = set(), [head]
@@ -229,8 +240,10 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
                 if sha in records and (sha != landing or own_pr):
                     records[sha][1]["merge"] = merge
     commits, pulls = {}, {}
+    cancelled = _cancelled_delivery(git, repo, {s: records[s][2] for s in merged if s in records and records[s][2]},
+                                    {s: r for s, r in reverts.items() if s in merged})
     for sha, (_, commit, names) in records.items():
-        if sha in merged:
+        if sha in merged and sha not in cancelled:
             for name in names:
                 commits.setdefault(name.strip(), []).append(commit)
     for pr in prs or []:
@@ -242,7 +255,12 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
         name, sha = line.split(" ", 1)
         if name.startswith(("refs/heads/", "refs/remotes/")) and sha not in merged:
             branches.append(name.removeprefix("refs/heads/").removeprefix("refs/remotes/"))
-    result = {"commits": commits, "prs": pulls if prs is not None else None,
+    prs_unverified = prs_expected and (prs is None or origin_stale)
+    previous_prs = hit[1].get("last_verified_prs") if hit and prs_expected else None
+    verified_prs = pulls if prs is not None and not prs_unverified else None
+    result = {"commits": commits, "prs": verified_prs,
+              "last_verified_prs": verified_prs if verified_prs is not None else previous_prs,
+              "prs_unverified": prs_unverified,
               "branches": branches, "order": {sha: i for i, sha in enumerate(records)},
               "stale": bool(problems), "origin_stale": origin_stale,
               "reason": "; ".join(problems),
@@ -297,6 +315,18 @@ def work_index_cached(git, project):
     return hit[1]
 
 
+def indexed_open_pulls(indexes, key, project, *, cached=False):
+    """Match exact trailers across repositories; bare IDs belong to their own project."""
+    _, bare = _split(key)
+    pulls = set()
+    for name, index in indexes.items():
+        prs = (index or {}).get("last_verified_prs" if cached else "prs") or {}
+        pulls.update(prs.get(key, ()))
+        if name == project:
+            pulls.update(prs.get(bare, ()))
+    return sorted(pulls)
+
+
 def indexed_work(index, key):
     """Resolve full/bare trailers and lane names without I/O."""
     if index is None or index.get("origin_stale"):
@@ -316,14 +346,9 @@ def indexed_work(index, key):
 def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT, head=None):
     """Commits with a ``Plan-Item: <key>`` trailer, newest first, optionally at a pinned head.
 
-    Returns ``None`` when unknown (no repo, malformed key, git failure), else a
-    list of ``{sha, date, subject}`` (at most *limit*, default :data:`COMMIT_LIMIT`);
-    ``limit=None`` reads the complete matching history and annotates every merge. The newest
-    carries ``merge`` = ``{sha, subject, pr}`` when a merge on the ref's
-    first-parent chain brought it in.  git itself selects only messages with
-    a ``Plan-Item:`` line equal to the full key or the bare id (anchored
-    regex), and the parsed trailer is compared exactly again: ``X`` never
-    matches ``X-FU`` and a later mention elsewhere never counts.
+    Returns None when unknown. A finite limit bounds the tagged candidates;
+    ``limit=None`` returns the whole matching history and annotates every merge.
+    The parsed trailer must match exactly after the git message prefilter.
     """
     repo, ref = _repo_ref(git, project)
     proj, bare = _split(key)
@@ -336,28 +361,30 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT, head
             pass
     ref = head or ref
     prefix = f"({_ere(proj)}:)?" if proj else ""
+    pattern = f"^Plan-Item:[ \t]*{prefix}{_ere(bare)}[ \t]*$"
     out = _ok(git, repo, [
-        "log", "--no-show-signature", "-E", "--grep",
-        f"^Plan-Item:[[:space:]]*{prefix}{_ere(bare)}[[:space:]]*$",
-        *(["-n", str(_GREP_WINDOW)] if limit is not None else []),
-        "--format=%H%x1f%cI%x1f%s%x1f%B%x1d",
-        "--end-of-options", ref])
+        "log", "--date-order", "--no-show-signature", "-E", "--grep", pattern,
+        "--regexp-ignore-case", "--grep", REVERT_GREP,
+        "--format=%H%x1f%cI%x1f%s%x1f%B%x1d", "--end-of-options", ref])
     if out is None:
         return None
-    commits, seen = [], 0
+    hits, candidates, reverts, seen = [], {}, {}, 0
     for record in out.split("\x1d"):
         fields = record.strip("\n").split("\x1f")
-        if len(fields) != 4:
+        if len(fields) != 4 or not valid_commit_ref(fields[0]):
             continue
-        seen += 1
-        sha, date, subject, trailers = fields
-        names = set(plan_items(trailers))
-        if (key in names or bare in names) and valid_commit_ref(sha.strip()):
-            commits.append({"sha": sha.strip(), "date": date, "subject": subject})
-        if limit is not None and len(commits) >= limit:
-            break
+        sha, date, subject, message = fields
+        if (revert := delivery_revert(message)) is not None:
+            reverts[sha] = revert
+        elif re.search(pattern, message, re.M | re.I):
+            seen += 1
+            if (limit is None or seen <= _GREP_WINDOW) and (names := {key, bare}.intersection(plan_items(message))):
+                candidates[sha] = names
+                hits.append({"sha": sha, "date": date, "subject": subject})
+    cancelled = _cancelled_delivery(git, repo, candidates, reverts) if candidates else ()
+    commits = [c for c in hits if c["sha"] not in cancelled][:limit]
     if limit is not None and not commits and seen >= _GREP_WINDOW:
-        return None              # window full of near misses: not proven absent
+        return None
     for commit in (commits[:1] if limit is not None else commits):
         merge = _merge_of(git, repo, ref, commit["sha"])
         if merge:
@@ -752,26 +779,3 @@ def decisions_naming(book, key):
     if "-" in bare and len(bare) >= 6:
         hits |= book["index"].get(bare, set())
     return sorted(hits, key=_did_num)
-
-
-def superseded_map(rows):
-    """``{"D-old": "D-new"}``: decisions a later row retires.
-
-    Row ``D-new`` says ``supersedes|corrects|withdraws|replaces D-old``, or
-    row ``D-old``'s DECISION cell opens with ``WITHDRAWN|superseded by D-new``.
-    Only the DECISION cell (3rd column) is read.
-    """
-    out = {}
-    for did, lines in rows.items():
-        own = _did_num(did)
-        for line in lines:
-            cell = _decision_cell(line)
-            match = _OWN_RETIRED_RE.match(cell)
-            if match and int(match.group(1)) > own:
-                out.setdefault(did, f"D-{int(match.group(1))}")
-            for found in _SUPERSEDES_RE.finditer(cell):
-                old = f"D-{int(found.group(1))}"
-                newest = out.get(old)
-                if _did_num(old) < own and (newest is None or _did_num(newest) < own):
-                    out[old] = did
-    return out

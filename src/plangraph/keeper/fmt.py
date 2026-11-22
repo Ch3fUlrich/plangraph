@@ -65,8 +65,15 @@ def ready_context_rows(rows, ub) -> str:
             line += " | NEEDS_RECONCILE: " + row["reason"]
         elif row.get("ready_status") == "in_progress":
             line += " | IN_PROGRESS: " + ", ".join(f"PR #{p}" for p in row["prs"])
+        if row.get("base_sha"):
+            line += f" | base {row['base_sha']}"
         out.append(line)
     return "\n".join(out)
+
+
+def _incident_text(entry):
+    url = f" ({entry['evidence']})" if entry.get("evidence") else ""
+    return f"INCIDENT {entry['at']} {entry['author']} {entry['text']}{url}"
 
 
 def show_text(info: dict) -> str:
@@ -93,6 +100,7 @@ def show_text(info: dict) -> str:
             for e in evidence))
     else:
         lines.append("evidence -")
+    lines.extend(_incident_text(entry) for entry in info.get("incidents", ()))
     lines.extend(_context_lines(info))
     if info.get("host"):
         lines.append(f"host {info['host']}")
@@ -337,8 +345,11 @@ def whoami_text(who: dict) -> str:
 
 def snapshot_text(snap: dict) -> str:
     items = snap.get("items") or []
-    return (f"snapshot {len(items)} items | generated {snap.get('generated')} | "
-            f"head {(snap.get('head') or '-')[:12]}")
+    lines = [f"snapshot {len(items)} items | generated {snap.get('generated')} | "
+             f"head {(snap.get('head') or '-')[:12]}"]
+    lines.extend(f"{item['key']} {_incident_text(entry)}"
+                 for item in items for entry in item.get("incidents", ()))
+    return "\n".join(lines)
 
 
 def flags_text(flags) -> str:
@@ -362,7 +373,8 @@ def result_text(verb: str, result) -> str:
             return text
         if verb == "claim":
             return (f"{result.get('key')} claimed epoch {result.get('epoch')} "
-                    f"lease {result.get('lease_until')}")
+                    f"lease {result.get('lease_until')}"
+                    + (f" | base {result['base_sha']}" if result.get("base_sha") else ""))
         if verb == "verdict":
             if result.get("state") == "done":
                 return "done (2/2)"

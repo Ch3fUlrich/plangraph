@@ -29,12 +29,29 @@ _WARM_S = 60  # how long a warm scan may be read under the request lock
 _RUN_ID_RE = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASES = ("started", "finished")
 _VERDICTS = ("pass", "fail", "invalid", None)
-_TOP_KEYS = frozenset({"run_id", "phase", "rc", "writer", "seats", "item_key"})
+_TOP_KEYS = frozenset({"run_id", "phase", "rc", "writer", "seats", "item_key", "native_launch_refusal"})
 _WRITER_KEYS = frozenset({"model", "family", "source"})
 _SEAT_KEYS = frozenset({"model", "verdict", "run_id"})
 _UTC_DATE_RE = re.compile(
     r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}:[0-9]{2}"
     r"(?:\.[0-9]+)?(?:Z|\+00:00))?\Z")
+
+
+_GO_KEYS = re.compile(r"(?<![\w-])GO-KEYS\b")
+_GO_KEY = r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+"
+
+
+def go_key_scope(statement):
+    """Explicit train scope, empty if malformed; None selects the legacy GO grammar."""
+    markers = list(_GO_KEYS.finditer(statement or ""))
+    if not markers:
+        return None
+    if len(markers) != 1:
+        return set()
+    block = re.match(r"\s+\[([^\]]*)\](?=$|[\s;])", statement[markers[0].end():])
+    if not block or not re.fullmatch(rf"{_GO_KEY}(?:\s*,\s*{_GO_KEY})*", block[1].strip()):
+        return set()
+    return {key.strip() for key in block[1].split(",")}
 
 
 def _operator_authority(row):
@@ -123,8 +140,14 @@ def normalise_run(run) -> dict:
     item_key = run.get("item_key")
     if item_key is not None and not isinstance(item_key, str):
         raise Refused("validation", "item_key must be a string or null")
-    return {"run_id": run_id, "phase": phase, "rc": rc,
-            "writer": writer, "seats": seats, "item_key": item_key}
+    result = {"run_id": run_id, "phase": phase, "rc": rc,
+              "writer": writer, "seats": seats, "item_key": item_key}
+    if "native_launch_refusal" in run:
+        reason = run["native_launch_refusal"]
+        if phase != "finished" or not rc or not isinstance(reason, str) or not 1 <= len(reason) <= 512:
+            raise Refused("validation", "native launch refusal requires a finished, nonzero run and a reason")
+        result["native_launch_refusal"] = reason
+    return result
 
 
 #: Refusal codes of the seat proof that the keeper setting ``require_seats`` (off) turns into a flag.
@@ -336,6 +359,10 @@ class RunsMixin:
         if len(cells) < 3 or cells[1] not in (item["project"], project):
             return False, None
         text = cells[2]
+        from .store_waiver import _go_statement
+        declared = go_key_scope(_go_statement(text))
+        if declared is not None:
+            return item["key"] in declared, None
         keys = re.findall(r"(?<![\w:-])[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_.-]+", text)
         if keys and item["key"] in keys:
             return True, None
@@ -542,6 +569,8 @@ class RunsMixin:
                 return {"key": key, "run_id": run_id, "phase": phase,
                         "duplicate": True}
             self._append(principal, key, "run_recorded", normed, now)
+            if reason := normed.get("native_launch_refusal"):
+                self._finding(key, "native_launch_refused", f"{run_id}: {reason}", now)
             try:
                 have = json.loads(fresh.get("run_ids")) if fresh.get("run_ids") else []
             except (ValueError, TypeError):

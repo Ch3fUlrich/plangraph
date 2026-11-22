@@ -172,6 +172,12 @@ fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
         record["review_override_reason"] = json!(reason);
     }
     record["effort"] = json!(host.effort);
+    record["requested_model"] = json!(super::WRITER_MODEL);
+    if record["plan"].is_object() {
+        record["plan"]["legs"] = json!([{"id":"native-codex", "model":super::WRITER_MODEL,
+                                         "harness":"codex", "effort":host.effort}]);
+        record["plan"]["static_v0"] = json!("native-codex");
+    }
     record["cwd"] = json!(host.cwd);
     host.save(&record)?;
     native_writer::run(
@@ -257,6 +263,7 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
         "round_stop",
         "round_counts",
         "status_line",
+        "review_test_status",
         "push_failures",
         "pushed",
         "ledger_error",

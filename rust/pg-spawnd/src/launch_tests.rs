@@ -345,6 +345,80 @@ fn registered_head_fetch_timeout_reaps_git_and_releases_the_lock() {
 }
 
 #[test]
+fn native_codex_review_client_missing_has_a_distinct_exit() {
+    let (dir, _) = fixture();
+    let python = which_python();
+    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let code = r#"
+import io, json, pathlib, subprocess, sys
+from plangraph.spawner.launch_spec import main
+from plangraph.routing_support.clients import resolve_codex_client
+root = pathlib.Path(sys.argv[1])
+request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=False,
+    leg={'id':'gpt-6.2-sol-medium'}, card={}, cwd=str(root), state=str(root), prompt='review')
+out, err = io.StringIO(), io.StringIO()
+status = main(io.BytesIO(json.dumps(request).encode()), out, err)
+assert status == 10, (status, err.getvalue())
+assert err.getvalue().startswith('REVIEW ' + request['run_id'] + ' FAIL client_missing ')
+client = root / 'installed-codex'
+client.write_text('#!/bin/sh\nprintf configured-codex')
+client.chmod(0o700)
+resolved, _ = resolve_codex_client({'PATH':'', 'PLANGRAPH_CODEX_BIN':str(client)})
+assert subprocess.check_output([resolved], env={'PATH':''}) == b'configured-codex'
+"#;
+    let output = std::process::Command::new(python)
+        .args(["-c", code])
+        .arg(&dir.0)
+        .env("PYTHONPATH", sources)
+        .env("PATH", "")
+        .env("HOME", &dir.0)
+        .env_remove("PLANGRAPH_CODEX_BIN")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn which_python() -> std::path::PathBuf {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("python3"))
+        .find(|file| file.is_file())
+        .expect("Python compatibility adapter")
+}
+
+#[test]
+fn review_route_skips_mimo_pro_with_tools_denied_reason() {
+    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let script = r#"
+from pathlib import Path
+from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
+from plangraph.planner.routing import plan_spawn
+policy = load_route_policy(DEFAULT_POLICY_PATH)
+card = dict(estimate_tokens=2000, diff_ref=dict(repo=str(Path.cwd()), base='HEAD~1', head='HEAD'))
+pro = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
+plan = plan_spawn(card, role='review', writer_families=('gpt',), policy=policy,
+    catalog_rows=(), leg_reader=lambda *args, **kwargs: dict(state='available', evidence=None))
+assert pro.id not in {leg.id for leg in (*plan.legs, *plan.review_seats)}
+assert any(row['leg'] == pro.id and row['reason'] == 'opencode_tools_denied' for row in plan.skipped), plan.skipped
+assert policy.skip_reason(pro, 'implement') is None
+"#;
+    let output = std::process::Command::new(which_python())
+        .args(["-c", script])
+        .env("PYTHONPATH", sources)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn a_non_ascii_registered_head_refuses_without_echoing_the_head() {
     let (_dir, repos, mut request) = repo_with_writer_trailer(None);
     let head = format!("{}é{}", "a".repeat(11), "a".repeat(27));
@@ -387,4 +461,31 @@ fn unresolved_registered_refs_refuse_without_echoing_or_starting_the_adapter() {
             "the adapter child started before the lookup"
         );
     }
+}
+
+#[test]
+fn deepseek_review_uses_the_catalogued_output_ceiling() {
+    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let code = r#"
+from plangraph.spawner.opencode_answer import configure_launch_output
+from plangraph.catalog_data import SEED_MODELS
+model = 'opencode-go/deepseek-v4.1-flash'
+limit = next(row['max_output_tokens'] for row in SEED_MODELS if row['model_id'] == model)
+review_env = {}
+assert configure_launch_output(review_env, model, 'review', False) is None
+assert review_env['OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX'] == str(limit)
+writer_env = {}
+assert configure_launch_output(writer_env, model, 'implement', False) is None
+assert writer_env == {}
+"#;
+    let output = std::process::Command::new(which_python())
+        .args(["-c", code])
+        .env("PYTHONPATH", sources)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

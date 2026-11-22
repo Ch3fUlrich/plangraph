@@ -43,6 +43,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -238,14 +239,14 @@ def assistant_tail(path):
 def status_line(text: str):
     """`(status, line)` of the first keyword line of `text`, else (None, None).
 
-    `status` is the bare keyword; `line` is the whole matching line, redacted
-    and truncated to MAX_LINE, so a token the line quotes never travels.
+    Keep the line intact for local fix-commit verification. The inbox
+    report redacts and truncates it before appending.
     """
     for raw in text.splitlines():
         line = raw.strip()
         m = STATUS_RE.match(line)
         if m:
-            return m.group(1), redact(line)[:MAX_LINE]
+            return m.group(1), line
     return None, None
 
 
@@ -264,6 +265,38 @@ def append_inbox(parent: str, record: dict) -> None:
             raise OSError("short write")
     finally:
         os.close(fd)
+
+
+def lesson_fix_status(status, line, cwd):
+    """Report an open lesson failure when a selected fix lacks its search record."""
+    if status not in ("DONE", "MERGE-READY"):
+        return status, line
+    commit = os.environ.get("PG_LESSON_FIX_COMMIT")
+    fields = line.split(maxsplit=3)
+    reported = not commit and len(fields) >= 2 and fields[1].endswith("-fix")
+    if reported:
+        commit = fields[2] if len(fields) >= 3 else ""
+    elif not commit:
+        return status, line
+    binary = os.environ.get("PG_POLICY_BIN") or "pg-policy"
+    if re.fullmatch(r"[0-9a-f]{40}", commit):
+        try:
+            if reported:
+                head = subprocess.run(["git", "rev-parse", "--verify", "HEAD^{commit}"],
+                                      cwd=cwd, capture_output=True, text=True,
+                                      timeout=3, check=True)
+                if head.stdout.strip() != commit:
+                    return "FAIL", "FAIL LESSON-TO-GATE reported fix commit differs from HEAD"
+            result = subprocess.run([binary, "--class-search", commit], cwd=cwd,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    timeout=3, check=False)
+            if result.returncode == 0:
+                return status, line
+            if result.returncode == 1:
+                return "FAIL", "FAIL LESSON-TO-GATE Class-Search missing or invalid on fix commit"
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    return "FAIL", "FAIL LESSON-TO-GATE unable to verify Class-Search on fix commit"
 
 
 def run_hook() -> int:
@@ -298,13 +331,15 @@ def run_hook() -> int:
             seen = None
         if seen == turn.encode("utf-8"):
             return 0
+        cwd = payload.get("cwd")
+        status, line = lesson_fix_status(status, line, cwd if isinstance(cwd, str) else None)
         append_inbox(parent, {
             "ts": int(time.time()),
             "from": name,
             "session_id": session_id,
             "turn": turn,
             "status": status,
-            "line": line,
+            "line": redact(line)[:MAX_LINE],
         })
         ensure_dir(marker.parent)
         atomic_write(marker, turn.encode("utf-8"))

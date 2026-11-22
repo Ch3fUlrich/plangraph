@@ -7,20 +7,28 @@ import logging
 import os
 from pathlib import Path
 import re
-import shlex
 import shutil
 import math
 import subprocess
 import sys
 import time
 
-from .doctor import clean
-from .host_ready_source import check_sources
 from .private_io import atomic_write_private
+from .host_ready_source import (
+    checkout_floor, admission_shortfall, work_drive_checkouts,
+    configured_work_drives as _configured_work_drives,
+    select_drive,
+    legacy_cache_roots as _legacy_cache_roots,
+    pool_slot_roots as _pool_slot_roots,
+    record_disk_floor_alarm as _record_disk_floor_alarm,
+    windows_cargo_lease as _windows_cargo_lease,
+    HOST_TIMEOUT, probe_host, python_test_tools,
+)
 
-HOST_TIMEOUT = 120
 MAX_AGE = 600
 _sccache_missing_warned = False
+# Mirrors pg_worker_core::cargo_pool::DEFAULT_CARGO_TARGET_CAP_GB (a test pins both).
+DEFAULT_CARGO_TARGET_CAP_GB = 12
 
 
 def shared_cargo_target():
@@ -28,8 +36,10 @@ def shared_cargo_target():
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()
 
 
-def cargo_child_env(env, *, pin_configured=False):
-    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(shared_cargo_target()))
+def cargo_child_env(env, *, pin_configured=False, target=None):
+    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(target or shared_cargo_target()))
+    if target is not None:
+        result['CARGO_BUILD_BUILD_DIR'] = str(target)
     if pin_configured:
         for name in ('RUSTC_WRAPPER', 'SCCACHE_CACHE_SIZE', 'SCCACHE_DIR', 'CARGO_HOME',
                      'PIP_CACHE_DIR', 'npm_config_cache', 'UV_CACHE_DIR', 'TMPDIR'):
@@ -112,36 +122,11 @@ def cargo_target_size_gb(path):
     return total / (1024 ** 3)
 
 
-def _windows_cargo_lease(path, exclusive):
-    # Shared handles admit concurrent readers; an exclusive cleanup handle
-    # cannot open while any run holds a read handle. Closing releases the lease.
-    import ctypes
-    from ctypes import wintypes
-    import msvcrt
-    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
-    create = kernel.CreateFileW
-    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
-                       wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-    create.restype = wintypes.HANDLE
-    handle = create(str(path), 0xC0000000 if exclusive else 0x80000000,
-                    0 if exclusive else 1, None, 4, 0x80, None)
-    if handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY)
-    except BaseException:
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.CloseHandle(handle)
-        raise
-    return os.fdopen(fd, 'rb')
-
-
 CLEANUP_WAIT_ENV = 'PLANGRAPH_CARGO_CLEANUP_WAIT_S'
 
 
-def cargo_lease(exclusive=False, wait=0.0):
-    """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
-    target = shared_cargo_target()
+def _cargo_lease_for(target, exclusive=False, wait=0.0):
+    target = Path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     path = target.with_name(target.name + '.plangraph-lock')
     deadline = time.monotonic() + wait
@@ -161,6 +146,11 @@ def cargo_lease(exclusive=False, wait=0.0):
             if not exclusive or time.monotonic() >= deadline:
                 raise
             time.sleep(min(0.5, max(deadline - time.monotonic(), 0)))
+
+
+def cargo_lease(exclusive=False, wait=0.0):
+    """Shared lease for a build; exclusive for cleanup, which waits up to ``wait`` seconds for live builds."""
+    return _cargo_lease_for(shared_cargo_target(), exclusive=exclusive, wait=wait)
 
 
 CLI_TESTS_KEEP_ENV = 'PLANGRAPH_CLI_TESTS_KEEP'
@@ -289,7 +279,7 @@ def reclaim_cargo_target(target, cap, checkout, wait=None, identified=False):
 
 
 def cargo_target_cap_gb():
-    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+    cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', str(DEFAULT_CARGO_TARGET_CAP_GB)))
     if not math.isfinite(cap) or cap < 0:
         raise ValueError('invalid cache cap')
     return cap
@@ -310,15 +300,91 @@ def cargo_run_busy(record):
     return not run_pids_dead(record)
 
 
+def _safe_cache_dir(target, worktree):
+    try:
+        unsafe_cache_dir(target, worktree)
+    except ValueError:
+        return False
+    return True
+
+
+def _shared_cache_roots():
+    primary = shared_cargo_target()
+    roots = [primary]
+    for extra in _legacy_cache_roots() + _pool_slot_roots(primary):
+        if extra not in roots:
+            roots.append(extra)
+    return roots
+
+
+def _clean_single_cache(target, service, cap=None):
+    """Remove an idle, unleased shared cache dir. Returns True if cleaned."""
+    if not target.exists() or target.is_symlink():
+        return False
+    if cap is not None and cargo_target_size_gb(target) < cap:
+        return False
+    try:
+        wait = float(os.environ.get(CLEANUP_WAIT_ENV, '30'))
+        with _cargo_lease_for(target, exclusive=True, wait=wait if math.isfinite(wait) and wait >= 0 else 30.0):
+            if any(cargo_run_busy(r) for r in service.ps()['runs']):
+                return False
+            if target.exists():
+                if cap is not None and cargo_target_size_gb(target) < cap:
+                    return True  # A competing cleanup already made room.
+                shutil.rmtree(target)
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _cleanup_before_disk_refusal(worktree, service):
+    """Reclaim idle rebuildable build caches before refusing disk_low."""
+    cleaned = False
+    for root in _shared_cache_roots():
+        if _safe_cache_dir(root, worktree) and _clean_single_cache(root, service):
+            cleaned = True
+    try:
+        wt_path = Path(worktree)
+        if wt_path.is_dir() and not any(cargo_run_busy(r) for r in service.ps()['runs']):
+            proc = subprocess.run(
+                ['git', '-C', str(wt_path), 'worktree', 'list', '--porcelain'],
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15)
+            if proc.returncode == 0:
+                live_cwds = {Path(r['cwd']).resolve() for r in service.ps()['runs']
+                             if cargo_run_busy(r) and r.get('cwd')}
+                for line in proc.stdout.splitlines():
+                    if not line.startswith('worktree '):
+                        continue
+                    tree = Path(line[len('worktree '):])
+                    if not tree.is_dir() or tree.is_symlink():
+                        continue
+                    if any(tree.resolve() == c or tree.resolve().is_relative_to(c) for c in live_cwds):
+                        continue
+                    rust_target = tree / 'rust/target'
+                    if rust_target.is_dir() and not rust_target.is_symlink():
+                        try:
+                            with _cargo_lease_for(rust_target, exclusive=True, wait=0.0):
+                                shutil.rmtree(rust_target)
+                                cleaned = True
+                        except OSError:
+                            pass
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return cleaned
+
+
+def select_work_drive(drives, cleanup):
+    """The one drive decision (see host_ready_source.select_drive), measured with ``disk_free_gb``."""
+    return select_drive(drives, cleanup, disk_free_gb)
+
+
 #: Roles that build nothing, so the shared build cache's size cap does not bind them.
 NO_BUILD_ROLES = ('review',)
 
 
-def local_disk_refusal(worktree, service, role='implement'):
-    """Check the worktree filesystem and bound the host's shared build cache.
-
-    A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap.
-    """
+def local_disk_admission(worktree, service, role='implement', movable=False, *, native=False):
+    """Return an alternate checkout to launch in, or the disk refusal reason."""
     # SettingsError derives from ValueError: validate before measurement's catch.
     from plangraph.settings import _policy_data, SettingsError, as_spawn_refused
     try:
@@ -327,36 +393,72 @@ def local_disk_refusal(worktree, service, role='implement'):
         raise as_spawn_refused(exc) from None
     try:
         floor = float(os.environ.get('PLANGRAPH_DISK_FLOOR_GB', '5'))
-        cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
+        cap = cargo_target_cap_gb()
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
-        target = shared_cargo_target()
+        configured_target = shared_cargo_target()
+        target = configured_target.resolve() if native else configured_target
         unsafe_cache_dir(target, worktree)
         building = role not in NO_BUILD_ROLES
         size = cargo_target_size_gb(target) if building else 0
-        if building and size >= cap:
-            if any(cargo_run_busy(r) for r in service.ps()['runs']):
-                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
-            try:
-                reclaim_cargo_target(target, cap, worktree)
-            except OSError:
-                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
+        if building and cap and size >= cap:
+            runs = service.ps()['runs']
+            if native:
+                runs = [row for row in runs if not row.get('overflow_remote') and row.get('role') == 'implement']
+            active = sum(cargo_run_busy(row) for row in runs)
+            limit = cap * (1 + active) if native else cap
+            if size >= limit:
+                measured = f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {limit:g} GB'
+                if active:
+                    return None, measured + '; busy'
+                if configured_target.is_symlink():
+                    return None, measured + '; cleanup unavailable for a symlinked target'
+                try:
+                    reclaim_cargo_target(target, cap, worktree)
+                except OSError:
+                    return None, measured + '; busy or cleanup unavailable'
+        if building:
+            # The legacy caches and the pool slots stay under the same cap.
+            for extra in _legacy_cache_roots() + _pool_slot_roots(target):
+                if extra != target and _safe_cache_dir(extra, worktree) and cargo_target_size_gb(extra) >= cap:
+                    _clean_single_cache(extra, service, cap=cap)
         if cap == 0 and building:
-            return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
-        paths = [worktree, target]
-        if getattr(service, 'state', None) is not None:
-            paths.append(worktree_disk_root() or policy.get('worktree_root') or service.state / 'worktrees')
-            paths.append(service.state / 'trees')
-        free = min(disk_free_gb(p) for p in paths)
-        if free < floor:
-            return f'disk_low: free {free:.2f} GB, floor {floor:g} GB'
+            return None, f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
+        configured = _configured_work_drives(policy)
+        place = movable and configured
+        drives = (work_drive_checkouts(configured) if place else
+                  [(worktree, checkout_floor(worktree, configured, floor))])
+        if not drives:
+            return None, 'disk_low: no configured work drive is a launchable Git checkout'
+
+        def check(checkout):
+            unsafe_cache_dir(target, checkout)
+            actual = policy if Path(checkout) == Path(worktree) else _policy_data(checkout) or {}
+            if root := worktree_disk_root():
+                actual = dict(actual, worktree_root=root)
+            return admission_shortfall(target, getattr(service, 'state', None), actual, floor, disk_free_gb)
+
+        selected, low = select_drive(drives, lambda: _cleanup_before_disk_refusal(worktree, service),
+                                     disk_free_gb, check=check)
+        if low is not None:
+            free, need = low
+            reason = f'disk_low: free {free:.2f} GB, floor {need:g} GB'
+            _record_disk_floor_alarm(service, free, need, reason)
+            return None, reason
+        return selected if place else None, None
+    except SettingsError as exc:
+        raise as_spawn_refused(exc) from None
     except OSError as error:
         if str(error).startswith('disk_low:'):
-            return str(error)
-        return 'disk_low: measurement or configuration unavailable'
+            return None, str(error)
+        return None, 'disk_low: measurement or configuration unavailable'
     except (ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
-        return 'disk_low: measurement or configuration unavailable'
-    return None
+        return None, 'disk_low: measurement or configuration unavailable'
+
+
+def local_disk_refusal(worktree, service, role='implement', movable=False, *, native=False):
+    """Return only the disk refusal for callers that do not launch a run."""
+    return local_disk_admission(worktree, service, role, movable, native=native)[1]
 
 
 async def collect_with_disk_guard(runner, job_id, proc):
@@ -491,218 +593,8 @@ def pre_push_report(repo, unit=None, environ=None):
     return report
 
 
-def python_test_tools(measure, fail, prefix, repo, unit=None, spawner=None):
-    """Run pre_push_report on the host and report missing pytest/xdist or a writable umask."""
-    command = prefix + 'host_ready --test-tools ' + shlex.quote(repo)
-    if unit:
-        command += ' --unit ' + shlex.quote(unit)
-    plan = spawner(command[len(prefix):]) if spawner else {}
-    report = measure('python', command, json.loads, **plan)
-    if report is None:
-        return False
-    missing = [m for m in report['missing'] if m in ('pytest', 'xdist')]
-    if missing:
-        fail('python', 'missing ' + ' '.join(missing))
-    if unit and report['unit_umask'] is None:
-        fail('umask', f'unit umask of {unit} unavailable')
-    for label, value in (('umask', report['umask']), ('unit umask', report['unit_umask'])):
-        if value is not None and int(value, 8) & 0o022 != 0o022:
-            fail('umask', f'{label} {value} leaves new files group- or other-writable')
-    return not missing
-
-
 def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT):
-    record = dict(host=name, ok=False, checked_at=None, failures=[], reachable=False,
-                  mem_available_mb=None, disk_free_gb=None, checkout_sha=None,
-                  main_sha=None, doctor_ok=None, keeper_ok=None,
-                  spawner_session=None, live_runs=None, behind_main=None,
-                  src_ok=None, trust_ok=None, tools_ok=None, python_ok=None, tokens_ok=None)
-    deadline = time.monotonic() + timeout
-    reachability_failed = False
-
-    def fail(check, reason):
-        record['failures'].append(clean(f'{check}: {reason}'))
-
-    def command(check, script, steps=None, outputs=None, **plan):
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            fail(check, 'timeout')
-            return None
-        try:
-            from .remote_ps import invocation, plan_body
-            if config.get('local'):
-                argv, body = ['pg-spawnd', 'steps'], plan_body(script, steps, **plan)
-            else:
-                remote, body = invocation(config, script, steps, **plan)
-                argv = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
-                        '--', config['ssh'], remote]
-            extra = {} if body is None else {'input': body.decode('utf-8')}
-            reply = runner(argv, capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=remaining, **extra)
-            if body is not None and outputs and reply.returncode in outputs:
-                return outputs[reply.returncode] + '\n'  # A plan reports its branch as an exit code.
-            if reply.returncode and not (check == 'doctor' and reply.returncode == 1):
-                fail(check, 'command_failed')
-                return None
-            return reply.stdout
-        except subprocess.TimeoutExpired:
-            fail(check, 'timeout')
-        except OSError:
-            fail(check, 'command_failed')
-        return None
-
-    def command_argv(check, *words):
-        """Run one argv: arguments with shell-special characters stay literal on every transport."""
-        return command(check, shlex.join(words), [{'argv': list(words)}])
-
-    def measure_argv(check, words, parse):
-        return measure(check, shlex.join(words), parse, steps=[{'argv': list(words)}])
-
-    def measure(check, script, parse, **plan):
-        output = command(check, script, **plan)
-        if output is not None:
-            try:
-                return parse(output)
-            except (ValueError, TypeError, KeyError, IndexError, AttributeError):
-                fail(check, 'invalid_response')
-        return None
-
-    try:
-        if not config.get('local') and not config['ssh']:
-            fail('reachable', 'no_route')
-            reachability_failed = True
-        elif command('reachable', 'true') is not None:
-            record['reachable'] = True
-            record['src_ok'] = check_sources(name, config, command, fail)
-            if config.get('registry'):
-                record['tools_ok'] = command(
-                    'tools', 'command -v git && command -v python3 && command -v codex',
-                    [{'argv': [tool, '--version']} for tool in ('git', 'python3', 'codex')]) is not None
-                record['tokens_ok'] = command('tokens', 'codex login status') is not None
-                record['trust_ok'] = command_argv(
-                    'trust', 'pg-host-readiness', '--project', config['repo']) is not None
-            repo = shlex.quote(config['repo'])
-            prefix = 'cd ' + shlex.quote(config['spawner_src']) + ' && '
-            if config.get('env_file'):
-                prefix += 'set -a && . ' + shlex.quote(config['env_file']) + ' >/dev/null 2>&1 && '
-            if config.get('state_dir'):
-                prefix += 'PLANGRAPH_SPAWN_STATE=' + shlex.quote(config['state_dir']) + ' '
-            prefix += 'PYTHONPATH=src python3 -m plangraph.spawner.'
-            def spawner(rest):
-                """The step plan of `python3 -m plangraph.spawner.<rest>` run from the source dir."""
-                name, *args = shlex.split(rest)
-                env = {'PYTHONPATH': 'src'}
-                if config.get('state_dir'):
-                    env['PLANGRAPH_SPAWN_STATE'] = config['state_dir']
-                plan = dict(cwd=config['spawner_src'], steps=[
-                    {'argv': ['python3', '-m', 'plangraph.spawner.' + name, *args], 'env': env}])
-                if config.get('env_file'):
-                    plan['env_file'] = config['env_file']
-                return plan
-            if config.get('registry'):
-                session = config.get('session_unit') or ''
-                record['python_ok'] = python_test_tools(
-                    measure, fail, prefix, config['repo'],
-                    session if session.endswith('.service') else None, spawner)
-            record['mem_available_mb'] = measure('memory', 'cat /proc/meminfo',
-                lambda s: int(re.search(r'^MemAvailable:\s+(\d+) kB$', s, re.M)[1]) // 1024)
-            record['disk_free_gb'] = measure_argv('disk', ['df', '-Pk', '--', config['repo']],
-                lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
-            for mount in config.get('work_mounts', []):
-                if not isinstance(mount, str) or not mount.startswith('/') or mount == '/':
-                    fail('disk', 'invalid work mount')
-                    continue
-                if command_argv('disk.mount', 'mountpoint', '-q', '--', mount) is None:
-                    fail('disk', f'work mount unavailable: {mount}')
-                    continue
-                free = measure_argv('disk', ['df', '-Pk', '--', mount],
-                    lambda s: int(s.splitlines()[-1].split()[3]) // (1024 * 1024))
-                if free is not None:
-                    record.setdefault('work_mounts', {})[mount] = free
-                    if free < config.get('disk_floor_gb', 5):
-                        fail('disk', f'disk_low: {mount}: free {free} GB')
-            def sha(s):
-                value = s.strip()
-                if not re.fullmatch(r'[0-9a-f]{40,64}', value):
-                    raise ValueError()
-                return value
-            record['checkout_sha'] = measure_argv('checkout', ['git', '-C', config['repo'], 'rev-parse', 'HEAD'], sha)
-            fetched = command_argv('fetch', 'git', '-C', config['repo'], 'fetch', 'origin', 'main')
-            if fetched is not None:
-                record['main_sha'] = measure_argv('main', ['git', '-C', config['repo'], 'rev-parse', 'origin/main'], sha)
-                def count(s):
-                    if not re.fullmatch(r'\d+', s.strip()):
-                        raise ValueError()
-                    return int(s.strip())
-                record['behind_main'] = measure_argv('behind_main', ['git', '-C', config['repo'], 'rev-list', '--count', 'HEAD..origin/main'],
-                    count)
-                if record['behind_main']:
-                    fail('behind_main', str(record['behind_main']) + ' behind')
-            if record['checkout_sha'] and record['main_sha'] and record['checkout_sha'] != record['main_sha']:
-                fail('checkout', 'behind')
-            def parse_doctor(output):
-                doctor = json.loads(output)
-                ok, rows = doctor['ok'], doctor['checks']
-                if not isinstance(ok, bool) or not isinstance(rows, list):
-                    raise ValueError()
-                for row in rows:
-                    if not isinstance(row['name'], str) or row['status'] not in ('pass', 'warn', 'fail'):
-                        raise ValueError()
-                return ok, rows
-            doctor = measure('doctor', prefix + 'doctor --json', parse_doctor, **spawner('doctor --json'))
-            if doctor is not None:
-                ok, rows = doctor
-                record['doctor_ok'] = ok and not any(r['status'] == 'fail' for r in rows)
-                record['keeper_ok'] = any(r['name'] == 'keeper_whoami' and r['status'] == 'pass' for r in rows)
-                for row in rows:
-                    if row['status'] == 'fail':
-                        label = row['name'] if re.fullmatch(r'[a-z_]+', row['name']) else 'check'
-                        fail('doctor.' + label, 'failed')
-                if not record['doctor_ok']:
-                    fail('doctor', 'failed')
-                if not record['keeper_ok']:
-                    fail('keeper', 'whoami_failed')
-            if config.get('session_unit'):
-                session = config['session_unit']
-                probe = ('systemctl --user is-active --quiet -- ' if session.endswith((
-                    '.service', '.scope', '.socket', '.target', '.timer', '.path', '.mount',
-                    '.automount', '.swap', '.slice', '.device')) else
-                    'plangraph wait-pid --check --pid-file ' if session.endswith('.pid') else 'pgrep -x -- ')
-                record['spawner_session'] = command_argv('session', *shlex.split(probe), session) is not None
-            elif not config.get('registry'):
-                fail('session', 'not_configured')
-            run_probe = 'remote_ps' if config.get('registry') else 'cli ps'
-            def count_live_runs(output):
-                runs = json.loads(output)['runs']
-                if not isinstance(runs, list) or any(not isinstance(row['status'], str) for row in runs):
-                    raise ValueError()
-                return sum(row['status'] == 'running' for row in runs)
-            record['live_runs'] = measure('runs', prefix + run_probe, count_live_runs,
-                                          **spawner(run_probe))
-            if record['mem_available_mb'] is not None and record['mem_available_mb'] < config['floor_mb']:
-                fail('memory', 'below_floor')
-            if record['disk_free_gb'] is not None and record['disk_free_gb'] < config.get('disk_floor_gb', 5):
-                fail('disk', f"disk_low: free {record['disk_free_gb']} GB")
-        else:
-            reachability_failed = True
-    except (MemoryError, RecursionError):
-        raise
-    except Exception:
-        # Ordinary host/probe errors must not hide any host's lines.
-        fail('config', 'invalid_response_or_config')
-    record['checked_at'] = datetime.now(timezone.utc).isoformat()
-    if reachability_failed:
-        fail('unreachable', 'other_checks_unknown')
-    record['ok'] = not record['failures']
-    try:
-        atomic_write_private(Path(state) / (name + '.json'), json.dumps(record))
-    except (MemoryError, RecursionError):
-        raise
-    except Exception:
-        # Persistence errors also leave a reportable failure, never abort the fan-out.
-        fail('state', 'write_failed')
-        record['ok'] = False
-    return record
+    return probe_host(name, config, state, runner, timeout, persist=atomic_write_private)
 
 
 def main(argv=None):

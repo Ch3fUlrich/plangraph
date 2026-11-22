@@ -1,13 +1,11 @@
 use pg_worker_core::{
     disk_hygiene::{self, Guards, Report, Thresholds},
-    disk_runtime,
-    run::record_io,
-    sweep_facts, work_disks,
+    disk_runtime, sweep_facts, work_disks,
 };
 use std::{
     env, io,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::SystemTime,
 };
 
 fn execute(args: &[String], state: &std::path::Path) -> io::Result<Report> {
@@ -37,9 +35,10 @@ fn execute_with(
 ) -> io::Result<Report> {
     let (mut repo, mut pins) = (None, None);
     let mut roots = Vec::new();
+    let mut tmp_root = None;
     let (mut apply, mut dry) = (false, false);
     let mut thresholds = Thresholds::default();
-    let mut cap = 10_000_000_000u64;
+    let mut cap = pg_worker_core::cargo_pool::configured_cap_bytes();
     let mut args = args.iter();
     while let Some(flag) = args.next() {
         match flag.as_str() {
@@ -57,7 +56,7 @@ fn execute_with(
             }
             "--apply" => apply = true,
             "--dry-run" => dry = true,
-            "--repo" | "--root" | "--pins" | "--state" => {
+            "--repo" | "--root" | "--pins" | "--tmp-root" | "--state" => {
                 let value = PathBuf::from(
                     args.next()
                         .filter(|value| !value.is_empty())
@@ -67,6 +66,7 @@ fn execute_with(
                     "--repo" => repo = Some(value),
                     "--root" => roots.push(value),
                     "--pins" => pins = Some(value),
+                    "--tmp-root" => tmp_root = Some(value),
                     _ => {}
                 }
             }
@@ -178,18 +178,37 @@ fn execute_with(
             .skipped
             .push("build running: cache cleanup deferred".into());
     }
-    let (scratch, shared) = caches()?;
+    let (mut scratch, shared) = caches()?;
+    if let Some(root) = tmp_root {
+        scratch = vec![root];
+    }
     if !building {
         let mut private_guards = Guards {
             pinned: guards.pinned.clone(),
             live: guards.live.clone(),
         };
         private_guards.pinned.extend(shared.iter().cloned());
+        let worktrees = disk_hygiene::git(&repo, &["worktree", "list", "--porcelain"])?
+            .lines()
+            .filter_map(|line| line.strip_prefix("worktree "))
+            .map(PathBuf::from)
+            .filter(|path| available.keys().any(|root| path.starts_with(root)))
+            .collect::<Vec<_>>();
+        if let Err(error) = pg_worker_core::private_targets::sweep(
+            None,
+            &worktrees,
+            &private_guards,
+            apply,
+            &mut report,
+        ) {
+            report.alarm = true;
+            report.error = Some(error.to_string());
+        }
         private_guards.pinned.extend(available.keys().cloned());
         private_guards.pinned.extend(configured.keys().cloned());
         for path in &scratch {
             if let Err(error) = pg_worker_core::private_targets::sweep(
-                path,
+                Some(path),
                 &[],
                 &private_guards,
                 apply,
@@ -220,6 +239,20 @@ fn execute_with(
                 report.error = Some(error.to_string());
             }
         }
+        // Pool slots are guarded by their own leases, so idle ones are trimmed even while
+        // another build runs; the primary target also waits for the process scan.
+        if let Some(primary) = pg_worker_core::cargo_cache::shared_cache_roots()?.first() {
+            let mut slots = pg_worker_core::cargo_pool::existing_pool_slots(primary);
+            if building {
+                slots.remove(0);
+            }
+            if let Err(error) =
+                pg_worker_core::cargo_pool::enforce_pool_cap(&slots, cap, apply, &mut report)
+            {
+                report.alarm = true;
+                report.error = Some(error.to_string());
+            }
+        }
     }
     Ok(report)
 }
@@ -245,17 +278,7 @@ fn run() -> io::Result<()> {
             serde_json::json!({"alarm":true,"error":error.to_string(),"freed_bytes":0,"actions":[],"skipped":[],"dry_run":!args.iter().any(|a| a == "--apply"),"free_bytes":null})
         }
     };
-    let mut report = report;
-    report["ts"] = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(io::Error::other)?
-        .as_secs()
-        .into();
-    let bytes = serde_json::to_vec(&report)?;
-    record_io::atomic_write_private(&state.join("disk-hygiene.json"), &bytes)?;
-    let mut line = bytes.clone();
-    line.push(b'\n');
-    record_io::append_private(&state.join("disk-hygiene.ndjson"), &line)?;
+    let bytes = disk_runtime::write_hygiene_report(&state, &report)?;
     println!("{}", String::from_utf8_lossy(&bytes));
     result.and_then(|r| match r.error {
         Some(e) => Err(io::Error::other(e)),

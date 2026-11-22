@@ -36,6 +36,7 @@ Use grep for text that is not a symbol.
    D-id; fixes inside existing Python files stay allowed.
 3. Stay inside the item's files. One implementation per capability: extend what exists,
    add no second copy.
+   For a failing test or review finding, commit a regression test for the whole class and record the search in the commit body as `Class-Search: <pattern> -> <n> hits, <m> changed`.
 4. Before the commit: apply `cargo fmt`, run the seconds-fast checks and the tests you
    changed. Build and test only the crates you touched (`-p <crate>`), into the cargo
    target your environment sets; never set `CARGO_TARGET_DIR` or `--target-dir`
@@ -44,7 +45,10 @@ Use grep for text that is not a symbol.
    pytest node IDs and output from the scrubbed fast-check environment. Add a
    `Fails-at-Base: <base-sha> <pytest-node-id>` trailer for each claimed failure.
 5. One commit per item. All trailers in one final paragraph, exactly as the Run values
-   give them (one `Plan-Item` line per item key the commit fixes). A merge of main into
+   give them (one `Plan-Item` line per item key the commit fixes). A train resolver brief
+   must require `Dropped-Part: <key>` for each removed key and `This reverts commit <sha>`
+   in the body for the reverted commit. Drop commits carry no `Plan-Item` trailers.
+   A merge of main into
    your lane that resolves a conflict in `.github/workflows/*` or another gate file needs
    the item's `Gate-Edit: D-id` trailer in the merge message, or the pre-push gate refuses it.
 6. An item that still fails after two attempts: before any commit of it, discard its

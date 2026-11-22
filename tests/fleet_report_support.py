@@ -29,7 +29,7 @@ def hooks(tools_importable, monkeypatch):
     return fleet_report, fleet_inject, hook_common, redact_common
 
 
-def run_stop(report, monkeypatch, tmp_path: Path, text: str) -> list[dict]:
+def run_stop(report, monkeypatch, tmp_path: Path, text: str, *, cwd=None) -> list[dict]:
     """Run the Stop hook for a child whose last reply is *text*; the records
     appended to its parent's inbox (state and launch dir under *tmp_path*)."""
     launch = tmp_path / "launch"
@@ -44,7 +44,8 @@ def run_stop(report, monkeypatch, tmp_path: Path, text: str) -> list[dict]:
     monkeypatch.setenv("FLEET_LAUNCH_DIR", str(launch))
     monkeypatch.delenv("FLEET_SESSION_NAME", raising=False)
     monkeypatch.setattr(sys, "stdin", io.StringIO(
-        json.dumps({"session_id": SID, "transcript_path": str(transcript)})))
+        json.dumps({"session_id": SID, "transcript_path": str(transcript),
+                    "cwd": str(cwd) if cwd is not None else None})))
     assert report.run_hook() == 0
     inbox = tmp_path / "state" / "inbox" / f"{PARENT}.jsonl"
     if not inbox.exists():

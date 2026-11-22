@@ -16,7 +16,8 @@ import time
 import urllib.parse
 import urllib.request
 
-from plangraph.routing_support.opencode_overlay import _strip_jsonc
+from plangraph.routing_errors import SpawnRefused
+from plangraph.routing_support.opencode_overlay import _strip_jsonc, prepare_gateway_env
 from plangraph.routing_support.opencode_render import (  # management token loader: one implementation
     TOKEN_ENV, TOKEN_FILE_ENV, _owner_only, load_token,
     _NoManagementRedirect, gateway_management_base_url, valid_gateway_endpoint,
@@ -131,9 +132,7 @@ def gateway_leg(model, env=None, *, mimo_endpoints=None):
 
 def require_witness(model, env=None, *, secrets=None):
     """Fail closed before launching a review whose card requires gateway evidence."""
-    from plangraph.planner.routing import SpawnRefused
-    from plangraph.routing_support.clients import build_child_env
-    env = build_child_env() if env is None else env
+    env = review_child_env(model) if env is None else env
     secrets = os.environ if secrets is None else secrets
     provider = str(model or '').split('/', 1)[0]
     reason = None if gateway_leg(model, env) else (
@@ -365,36 +364,46 @@ def witness_gate(card, role, model, env=None, *, secrets=None):
         require_witness(model, env, secrets=secrets)
 
 
-def review_child_env():
+def review_child_env(model=None):
     """Mirror runner.spawn's review env (writer_launch returns no review extras).
 
     The fresh run nonce and later session tag do not affect routing evidence.
     Use the runner's default envelope, including headers that trigger rendering.
     """
     from plangraph.routing_support.clients import build_child_env, build_routing_envelope_headers
-    return build_child_env({}, headers=build_routing_envelope_headers(
+    env = build_child_env({}, headers=build_routing_envelope_headers(
         role='review', risk='normal', min_intelligence=44.0, required_context=32000))
+    if isinstance(model, str) and model.startswith(('mimo/', 'omniroute/')):
+        env, refusal = prepare_gateway_env(env, model)
+        if refusal:
+            raise SpawnRefused('witness required: ' + refusal)
+    return env
 
 
 def witness_order(card, role, legs, down):
     """Sort using the same child config and capability predicate as the gate."""
-    need = bool(role == 'review' and card and card.get('witness_required'))
-    env = review_child_env() if need else None
-    return tuple(sorted(legs, key=lambda leg: (
-        need and not gateway_leg(leg.model, env), leg.id in down)))
+    if not (role == 'review' and card and card.get('witness_required')):
+        return tuple(sorted(legs, key=lambda leg: leg.id in down))
+
+    def priority(leg):
+        try:
+            capable = gateway_leg(leg.model, review_child_env(leg.model))
+        except SpawnRefused:
+            capable = False
+        return not capable, leg.id in down
+
+    return tuple(sorted(legs, key=priority))
 
 
 def witness_gate_legs(card, role, legs):
     """Keep only witness-capable fallbacks; refuse only if none can witness."""
     if not (role == 'review' and card and card.get('witness_required')):
         return legs
-    from plangraph.planner.routing import SpawnRefused
-    env = review_child_env()
     capable = []
     refusals = []
     for leg in legs:
         try:
-            witness_gate(card, role, leg.model, env)
+            witness_gate(card, role, leg.model)
         except SpawnRefused as exc:
             refusals.append(str(exc))
         else:

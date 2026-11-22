@@ -116,6 +116,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "src/plangraph/keeper/evidence_spawner.py",
     "src/plangraph/routing_support/leg_state.py",
     "tests/fixtures/doctor_sources.json",
+    "tests/fixtures/files_read.json",
     "src/plangraph/config/role_headers.json",
     "tests/fixtures/keeper_mcp_replies.json",
     "tests/fixtures/keeper_mcp_tools.json",
@@ -273,6 +274,51 @@ def full_run_required(event: str, base_ref: str = "", head_ref: str = "", labels
     return FULL_LABEL in names or head_ref.startswith(BATCH_PREFIX)
 
 
+#: Commit-status contexts of the landing mode ``tested-ff`` (LAND-MODE-TESTED-FF). ``land-auth`` is the
+#: authorization only the land App writes; ``ci-full`` is the evidence the full run of the train pull request
+#: posts for the commit it tested.
+LAND_AUTH = "land-auth"
+CI_FULL = "ci-full"
+_AUTH_EVIDENCE = re.compile(r"attempt \S+ evidence run (\d+) attempt (\d+)")
+_FULL_EVIDENCE = re.compile(r"run (\d+) attempt (\d+) tree ([0-9a-f]{40})")
+
+
+def _latest(statuses, context: str):
+    found = [s for s in statuses if isinstance(s, dict) and s.get("context") == context]
+    return max(found, key=lambda s: s.get("id") or 0) if found else None
+
+
+def ci_full_description(run_id, attempt, tested_tree: str, head_tree: str):
+    """The description of the ``ci-full`` status of a full run (``run <id> attempt <n> tree <tree>``), or None
+    when the tree the run tested is not the tree of the head commit it would vouch for."""
+    if not tested_tree or tested_tree != head_tree:
+        return None
+    return f"run {run_id} attempt {attempt} tree {tested_tree}"
+
+
+def landing_evidence(statuses, tree: str, creator_id):
+    """``"<run id> attempt <n>"`` when the commit is a tested landing, else None (the full suite runs).
+
+    A tested landing has the newest ``land-auth`` status in state success, created by ``creator_id`` (the id of
+    the land App's bot user; statuses report their creator, and an unset id never matches), whose description
+    names an evidence run and attempt, and the newest ``ci-full`` status in state success whose description
+    names that same run and attempt and the tree of this commit (``tree``). Anything else, a newer failed
+    ``land-auth`` included, is not tested: a push run then runs everything, as before."""
+    if not creator_id or not tree:
+        return None
+    auth = _latest(statuses, LAND_AUTH)
+    if not auth or auth.get("state") != "success" or (auth.get("creator") or {}).get("id") != creator_id:
+        return None
+    named = _AUTH_EVIDENCE.fullmatch(auth.get("description") or "")
+    full = _latest(statuses, CI_FULL)
+    seen = _FULL_EVIDENCE.fullmatch((full or {}).get("description") or "")
+    if not named or not full or full.get("state") != "success" or not seen:
+        return None
+    if seen.group(1, 2) != named.group(1, 2) or seen.group(3) != tree:
+        return None
+    return f"{named.group(1)} attempt {named.group(2)}"
+
+
 def gate(needs: dict, require_full: bool = False) -> list[str]:
     if not isinstance(needs, dict) or "select" not in needs or not isinstance(needs["select"], dict):
         return ["select: missing"]
@@ -287,7 +333,8 @@ def gate(needs: dict, require_full: bool = False) -> list[str]:
         outputs = {}
 
     problems: list[str] = []
-    if require_full and outputs.get("full") != "true":
+    # A push run of a commit with landing evidence ran only the fast jobs on purpose (landing_evidence).
+    if require_full and outputs.get("full") != "true" and outputs.get("tested") != "true":
         problems.append("select: merge candidate ran the affected selection, not the full suite")
     for suite in ALWAYS + SUITES + ("rust-windows",):
         selection = "rust" if suite == "rust-windows" else suite
@@ -452,9 +499,26 @@ def main(argv: list[str] | None = None) -> int:
         sub.add_argument("--head-ref", default="", help="Pull request head branch name")
         sub.add_argument("--labels", default="[]", help="JSON list of the pull request label names")
 
+    select_parser.add_argument("--statuses", default=None, help="JSON list of the commit statuses of the pushed commit")
+    select_parser.add_argument("--tree", default="", help="tree id of the pushed commit")
+    select_parser.add_argument("--land-creator-id", type=int, default=None, help="id of the land App's bot user")
+    ci_full_parser = subparsers.add_parser("ci-full")
+    ci_full_parser.add_argument("--run-id", required=True)
+    ci_full_parser.add_argument("--attempt", required=True)
+    ci_full_parser.add_argument("--tested-tree", required=True)
+    ci_full_parser.add_argument("--head-tree", required=True)
+
     gate_parser.add_argument("--needs", type=str, required=True, help="JSON string of needs object")
 
     args = parser.parse_args(argv)
+
+    if args.command == "ci-full":
+        text = ci_full_description(args.run_id, args.attempt, args.tested_tree, args.head_tree)
+        if text is None:
+            sys.stderr.write("ci-full: the tested tree is not the head tree; no evidence posted\n")
+            return 1
+        sys.stdout.write(text + "\n")
+        return 0
 
     candidate = False
     if args.command in ("select", "gate") and args.event is not None:
@@ -490,8 +554,19 @@ def main(argv: list[str] | None = None) -> int:
         else:
             selection = {s: True for s in SUITES} | {"full": True}
 
+        evidence = None
+        if args.event == "push" and args.statuses:
+            try:
+                with open(args.statuses, encoding="utf-8") as handle:
+                    evidence = landing_evidence(json.load(handle), args.tree, args.land_creator_id)
+            except (OSError, ValueError):
+                evidence = None  # an unreadable record is no evidence: the full suite runs
+        if evidence:
+            selection = {s: False for s in SUITES} | {"full": False}
         lines = [f"{s}={'true' if selection[s] else 'false'}" for s in SUITES]
         lines.append(f"full={'true' if selection['full'] else 'false'}")
+        if evidence:
+            lines += ["tested=true", f"evidence={evidence}"]
         output_str = "\n".join(lines) + "\n"
 
         sys.stdout.write(output_str)

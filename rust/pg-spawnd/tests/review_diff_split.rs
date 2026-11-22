@@ -191,7 +191,7 @@ fn extract_inline_diff(prompt: &str) -> &str {
 fn diff_ref_with_paths_inlines_only_requested_paths() {
     let mut f = ReviewFixture::new(
         5000,
-        r#"cat >/dev/null; printf '%s\n' '{"type":"result","is_error":false,"result":"VERDICT: ACCEPT\n"}'"#,
+        r#"cat >/dev/null; printf '%s\n' '{"type":"result","is_error":false,"result":"FILES READ: alpha/a.txt\nVERDICT: ACCEPT\n"}'"#,
     );
     let base = f.git(&["rev-parse", "HEAD"]);
     std::fs::create_dir_all(f.repo.join("src")).unwrap();
@@ -287,7 +287,7 @@ fn mcp_response_wait_stops_at_its_deadline() {
 fn oversize_diff_splits_into_group_seats_covering_full_diff_and_fitting_limit() {
     let mut f = ReviewFixture::new(
         220, // 660 chars max per seat prompt
-        r#"cat >/dev/null; printf '%s\n' '{"type":"result","is_error":false,"result":"Reviewed.\nVERDICT: ACCEPT\n"}'"#,
+        r#"cat >/dev/null; printf '%s\n' '{"type":"result","is_error":false,"result":"Reviewed.\nFILES READ: alpha/a.txt, beta/b.txt\nVERDICT: ACCEPT\n"}'"#,
     );
     let base = f.git(&["rev-parse", "HEAD"]);
     std::fs::create_dir_all(f.repo.join("alpha")).unwrap();
@@ -431,7 +431,7 @@ input=$(cat)
 if printf '%s' "$input" | grep -q 'beta/bad.txt'; then
   printf '%s\n' '{"type":"result","is_error":false,"result":"Bug in beta/bad.txt.\nVERDICT: REQUEST_CHANGES\n"}'
 else
-  printf '%s\n' '{"type":"result","is_error":false,"result":"LGTM.\nVERDICT: ACCEPT\n"}'
+  printf '%s\n' '{"type":"result","is_error":false,"result":"LGTM.\nFILES READ: alpha/a.txt\nVERDICT: ACCEPT\n"}'
 fi
 "#;
     let mut f = ReviewFixture::new(220, cmd);

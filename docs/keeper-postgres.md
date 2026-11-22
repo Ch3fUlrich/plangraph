@@ -74,10 +74,11 @@ record wins. A new execution of that stage uses a new attempt number. The read
 query in `landing_stage_list.sql` returns the batch's stages in start-time order.
 
 Migration 19 installs the keeper landing journal. A configured lander writes the
-train's frozen manifest before requesting a PR merge. `merge_batch.py settle`
-discovers unfinished trains and verifies the exact merged tree against main.
-Settlement records the checked PR outcomes before advancing the cursor and
-excludes moved PRs from cleanup. Recovery uses the keeper merge lease for that repo.
+train's frozen manifest, landing mode and receipt inputs before a PR merge or tested fast-forward.
+`merge_batch.py settle` discovers unfinished trains and verifies the landed commit
+against main. For tested fast-forward, the exact tested head must be an ancestor
+of main. Settlement records the checked PR outcomes before advancing the cursor
+and excludes moved PRs from cleanup. Recovery uses the keeper merge lease for that repo.
 A new push can replace the prepared manifest while the train is open.
 Set `PG_LANDING_HOSTS` to the host registry for the three repository checkouts.
 Each host entry supplies `PG_LANDING_BUILD_STAMP` and, for repair,
@@ -100,6 +101,11 @@ timestamps, or `plangraph landing report OWNER/REPO --day YYYY-MM-DD` for the sl
 stage completed that UTC day. The GO request includes the elapsed stage summary.
 Import the green main Actions attempt under the same batch key to populate
 the exact merged-head completion and the elapsed time from the folded parts' ACCEPT.
+
+Migration 21 records dependency claims against accepted open-train heads. Migration 22 indexes
+keeper incident events by item and sequence. Migration 23 records card effort decisions, and
+migration 24 stores terminal spawn attempt outcomes. SQLite installs the claim and incident changes in schemas v22 and v23
+and both of the remaining changes in schema v24.
 
 For a batch that advances the keeper schema, copy the GO request's standalone
 `MIGRATION <version>` field into the GO decision for the exact batch head.

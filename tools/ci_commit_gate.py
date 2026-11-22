@@ -1,8 +1,8 @@
 '''CI commit gate: Writer attribution, hand-edit, gate-edit, test-removal, open_pr_merged reasons.
 
-Trailer checks use ``git log --no-merges base..head``. A merge commit is checked only for
-its own gate-file edits (combined diff plus the parents' conflict list: a conflict resolution in a
-workflow needs its own Gate-Edit trailer); merge parents are checked separately when open PR heads are supplied. Exempt commits skip only trailer rules;
+Trailer checks use ``git log --no-merges base..head``. A merge commit is checked for
+its own gate-file edits and test removals. Merge parents are checked separately when
+open PR heads are supplied. Exempt commits skip only trailer rules;
 an exempt entry does not waive open_pr_merged. A repo-relative
 exempt path is read from the BASE commit, never from the working tree, so a PR
 cannot exempt the commits it introduces.
@@ -261,6 +261,13 @@ def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
     Other commits and gits without merge-tree --write-tree fall back to the combined diff.
     The batch land and the pre-push/CI gate both read this one function.
     '''
+    paths, _, _ = _merge_edit_evidence(sha, cwd)
+    return paths
+
+
+def _merge_edit_evidence(
+    sha: str, cwd: str | Path | None
+) -> tuple[list[str], list[str], tuple[str, list[str]] | None]:
     parents = _git_text(['rev-list', '--parents', '-n', '1', sha], cwd=cwd).split()[1:]
     merged = _auto_merge(parents, cwd) if len(parents) == 2 else None
     if merged is None:
@@ -283,12 +290,13 @@ def merge_edited_paths(sha: str, cwd: str | Path | None = None) -> list[str]:
             elif both:
                 # Rename detection was skipped: any destination may hide a conflict. Fail closed.
                 paths |= sides[0][0] | sides[1][0]
-        return sorted(paths)
+        return sorted(paths), parents, merged
     tree, conflicts = merged
     out = _git_text(
         ['diff-tree', '--name-only', '-r', '-z', '--no-renames', tree, f'{sha}^{{tree}}'], cwd=cwd
     )
-    return sorted({path for path in out.split('\0') if path} | set(conflicts))
+    paths = sorted({path for path in out.split('\0') if path} | set(conflicts))
+    return paths, parents, merged
 
 
 def _trailer_block_lines(message: str) -> list[str]:
@@ -391,8 +399,11 @@ def _commit_removes_test(
     head: str,
     cwd: str | Path | None = None,
     paths: list[str] | None = None,
+    *,
+    parent: str | None = None,
 ) -> bool:
-    parent = _parent_sha(sha, cwd=cwd)
+    if parent is None:
+        parent = _parent_sha(sha, cwd=cwd)
     if paths is None:
         paths = _touched_paths(sha, cwd=cwd)
     for path in paths:
@@ -420,6 +431,25 @@ def _commit_removes_test(
             if name in base_names and name not in head_names:
                 return True
     return False
+
+
+def _merge_removes_test(
+    sha: str, paths: list[str], parents: list[str],
+    replay: tuple[str, list[str]] | None, cwd: str | Path | None,
+    *, landing_base: str | None = None,
+) -> bool:
+    paths = [path for path in paths if TEST_PATH_RE.search(path)]
+    if replay is not None:
+        tree, conflicts = replay
+        # The replay tree already incorporates any deletion inherited cleanly from a part.
+        if _commit_removes_test(sha, landing_base or tree, sha, cwd=cwd, paths=paths, parent=tree):
+            return True
+        # A conflicted replay may leave one side's tests out of its provisional tree.
+        paths = [path for path in paths if path in conflicts]
+    return bool(paths) and any(
+        _commit_removes_test(sha, landing_base or parent, sha, cwd=cwd, paths=paths, parent=parent)
+        for parent in parents
+    )
 
 
 def _exempt_at_base(base: str, rel: str, cwd: str | Path | None = None) -> set[str] | None:
@@ -567,17 +597,28 @@ def check(
         ):
             violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
 
-    for sha, message in _iter_merges(base, head, cwd=cwd):
+    merges = _iter_merges(base, head, cwd=cwd)
+    landing_merges = set(_git_text(['rev-list', '--first-parent', '--merges', f'{base}..{head}'], cwd).split()) if merges else set()
+    base_lineage = set(_git_text(['rev-list', '--first-parent', base], cwd).split()) if merges else set()
+    for sha, message in merges:
         if sha.lower() in exempt_set:
             continue
+        paths, parents, replay = _merge_edit_evidence(sha, cwd)
         # A merge that resolves a gate-file conflict edits the gate: the same trailer rule as
         # a plain commit (the batch land refuses it otherwise, after the frozen push).
         if (
             any(fnmatch.fnmatchcase(path, pattern)
-                for path in merge_edited_paths(sha, cwd=cwd) for pattern in GATE_PATHS)
+                for path in paths for pattern in GATE_PATHS)
             and not _has_trailer(_trailer_block_lines(message), GATE_EDIT_RE)
         ):
             violations.append(f'{sha}: {GATE_EDIT_VIOLATION}')
+        # An inherited lane sync with published main is prior branch history.
+        # Protect tests from the landing base there, and both parents at each new integration.
+        sync = sha not in landing_merges and len(parents) == 2 and parents[1] in base_lineage
+        if not _has_test_removal_trailer(message.splitlines()) and _merge_removes_test(
+            sha, paths, parents, replay, cwd, landing_base=base if sync else None
+        ):
+            violations.append(f'{sha}: {TEST_REMOVAL_VIOLATION}')
 
     return violations
 

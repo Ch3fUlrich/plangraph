@@ -18,10 +18,11 @@ def working_tree_skill(monkeypatch):
     monkeypatch.setattr(prompt_input, 'read_skill', lambda name, cwd: SKILL if name == 'review' else None)
 
 
-def test_inline_prompt_has_the_inline_rules_and_no_tool_run_demand_with_the_real_skill_loader():
+@pytest.mark.parametrize('mode', ['inline-only', 'prompt-only'])
+def test_inline_prompt_has_the_inline_rules_and_no_tool_run_demand_with_the_real_skill_loader(mode):
     # Whatever skill text origin/main serves, an inline seat's prompt holds the inline rules only.
     text = prompt_input.compose('Review the change', 'review', 'opencode', None, 'mimo-v2.6-pro',
-                                tool_mode='inline-only')
+                                tool_mode=mode)
     for rule in ('tool mode inline', 'no tools', 'quoted diff line', 'FILES READ: diff only', 'VERDICT: ACCEPT'):
         assert rule in text, rule
     for demand in ('Run tests', 'run tests', 'Run only the tests', 'run the tests', 'You may read the repository'):
@@ -145,3 +146,72 @@ def test_native_inline_keeps_the_entire_versioned_brief(working_tree_skill, know
     inline = prompt_input.compose(prompt, 'review', 'opencode', None, tool_mode='inline-only')
     assert 'Run a shell command to check the fixture.' not in inline
     assert inline.split('\n\n', 1)[1] == versioned + ITEMS
+
+
+@pytest.mark.parametrize('body', [
+    "Read plans/x.md and check its claims.",
+    "```text\nRead plans/x.md and check its claims.\n```",
+    "=== INLINE plans/x.md ===\nRead plans/x.md and check its claims.\n=== END plans/x.md ===",
+])
+def test_toolless_file_request_without_material_is_refused(tmp_path, body):
+    from plangraph.routing_errors import SpawnRefused
+    seat = SeatSpawnMixin()
+    seat.runner = SimpleNamespace(default_cwd=str(tmp_path))
+    leg = SimpleNamespace(harness='claude', tool_mode='prompt-only', max_request_tokens=1000)
+    with pytest.raises(SpawnRefused, match='toolless_needs_inline'):
+        seat._leg_prompt(body, {}, 'review', leg, document_review=True)
+
+
+def test_toolless_judge_accepts_supplied_evidence_and_cut_file_list(tmp_path):
+    from tools.judge_prompt import build_judge_prompt
+    seat = SeatSpawnMixin()
+    seat.runner = SimpleNamespace(default_cwd=str(tmp_path))
+    leg = SimpleNamespace(harness='opencode', tool_mode='inline-only', max_request_tokens=10000)
+    prompt = build_judge_prompt(
+        'MED src/x.rs:1 - stale value - refresh it',
+        'diff --git a/src/x.rs b/src/x.rs\n--- a/src/x.rs\n+++ b/src/x.rs\n@@ -1 +1 @@\n-old\n+new\n',
+        {'src/x.rs': 'new', 'plans/cut.md': None}, {})
+    result = seat._leg_prompt(prompt, {}, 'judge', leg, pack=SimpleNamespace(text=''),
+                              document_review=False)
+    assert '## Cut files\n- plans/cut.md' in result
+    from plangraph.routing_errors import SpawnRefused
+    with pytest.raises(SpawnRefused, match='toolless_needs_inline'):
+        seat._leg_prompt(result + '\nRead plans/cut.md and verify it.', {}, 'judge', leg,
+                         pack=SimpleNamespace(text=''), document_review=False)
+
+
+def test_toolless_inline_plan_admitted(tmp_path):
+    from plangraph.routing_errors import SpawnRefused
+    seat = SeatSpawnMixin()
+    seat.runner = SimpleNamespace(default_cwd=str(tmp_path))
+    leg = SimpleNamespace(harness='claude', tool_mode='prompt-only', max_request_tokens=1000)
+    request = 'Read plans/x.md and check its claims.'
+    with pytest.raises(SpawnRefused, match='toolless_needs_inline'):
+        seat._leg_prompt(request, {}, 'review', leg, document_review=True)
+    prompt = request + '\nPlan file plans/x.md:\n```markdown\n# Plan\nCheck the change.\n```'
+    assert seat._leg_prompt(prompt, {}, 'review', leg, document_review=True) == prompt
+
+
+def test_toolless_judge_launches_without_document_review(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+    from tools.judge_prompt import build_judge_prompt
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.context_pack import Pack
+    from plangraph.spawner.service import SpawnService
+
+    leg = replace(DEFAULT_LEGS[0], tool_mode='inline-only')
+    runner = SimpleNamespace(default_cwd=str(tmp_path), provider_responses={})
+    service = SpawnService(runner, state=tmp_path / 'state')
+    monkeypatch.setattr(service, '_annotate_spawn', lambda *args: Pack())
+    launch = AsyncMock(return_value=SimpleNamespace(job_id='fixture', status='completed',
+        exit_code=0, served_model=leg.model, served_family=leg.family, served_witness_reason='fixture',
+        stdout='VERDICT: FAIL', stderr='', events=[]))
+    monkeypatch.setattr(service, '_launch_leg', launch)
+    prompt = build_judge_prompt('Check src/x.rs:1', '', {'src/x.rs': 'new', 'cut.rs': None}, {})
+    result = asyncio.run(service._spawn(card={'title': 'judge'}, prompt=prompt, role='judge',
+                         _plan=SpawnPlan((leg,), (), 'fixture', (), ()), wait_seconds=None))
+    assert result['status'] == 'completed'
+    launch.assert_awaited_once()
+    assert launch.await_args.kwargs['prompt'] == prompt
