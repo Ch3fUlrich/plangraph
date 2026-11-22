@@ -260,6 +260,26 @@ _DENIED_TOOLS = ('bash', 'doom_loop', 'edit', 'external_directory', 'glob', 'gre
                  'webfetch', 'websearch')
 
 
+def apply_review_permissions(env, denied_tools, *, repository_tools):
+    """Set the isolated review permissions while preserving provider config."""
+    try:
+        config = json.loads(env.get('OPENCODE_CONFIG_CONTENT') or '{}')
+    except (ValueError, TypeError):
+        return  # An unparseable config cannot be proven denied.
+    if not isinstance(config, dict):
+        return
+    permission = dict.fromkeys(('*', *denied_tools), 'deny')
+    if repository_tools:
+        permission.update(read='allow', glob='allow', grep='allow', list='allow')
+        permission['bash'] = {'*': 'deny', **dict.fromkeys((
+            'git diff *', 'git show *', 'git status *', 'git log *',
+            'git rev-parse *', 'cargo test *', 'pytest *',
+            'python -m pytest *', 'python3 -m pytest *',
+        ), 'allow')}
+    config.update(permission=permission, mcp={}, plugin=[])
+    env['OPENCODE_CONFIG_CONTENT'] = json.dumps(config)
+
+
 def _opencode_managed_dir(env: Mapping) -> Path:
     """opencode's system (managed) config dir as the child will resolve it.
 
