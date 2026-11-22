@@ -25,7 +25,7 @@ from urllib.parse import urlsplit
 
 from .errors import Refused
 from .evidence_decisions import DecisionsAdapter, _decision_cell
-from .evidence_git import is_first_parent_merge, plan_items, valid_ref
+from .evidence_git import REVERT_GREP, delivery_revert, is_first_parent_merge, plan_items, valid_ref
 from .evidence_types import valid_commit_ref
 
 __all__ = ["plan_item_commits", "open_lanes", "pr_merge_of", "decision_ids", "decision_book", "decision_texts",
@@ -116,6 +116,26 @@ def _split(key):
     return (project or None), bare
 
 
+def _cancelled_delivery(git, repo, candidates, reverts):
+    cancelled = set()
+    for sha, (target, names) in reverts.items():
+        parents = _ok(git, repo, ["rev-list", "--parents", "-n1", "--end-of-options", target]) if target else None
+        if parents:
+            commit, *previous = parents.split()
+            if not previous:
+                cancelled.add(commit)
+                continue
+            removed = _ok(git, repo, ["rev-list", "--end-of-options", commit, f"^{previous[0]}"])
+            if removed is not None:
+                cancelled.update(removed.split())
+                continue
+        for commit, keys in candidates.items():
+            if names.intersection(keys) and _git(
+                    git, repo, ["merge-base", "--is-ancestor", "--end-of-options", commit, sha])[0] == 0:
+                cancelled.add(commit)
+    return cancelled
+
+
 def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
     """One cached origin-refreshed snapshot; no item-dependent subprocesses.
 
@@ -182,13 +202,15 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
             return None
         origin_stale = True
         problems.append("repository index unavailable")
-    records = {}
+    records, reverts = {}, {}
     for record in (out or "").split("\x1d"):
         fields = record.strip("\n").split("\x1f")
         if len(fields) == 5 and valid_commit_ref(fields[0]):
             sha, parents, date, subject, trailers = fields
+            if (revert := delivery_revert(trailers)) is not None:
+                reverts[sha] = revert
             records[sha] = (parents.split(), {"sha": sha, "date": date,
-                            "subject": subject}, plan_items(trailers))
+                            "subject": subject}, [] if sha in reverts else plan_items(trailers))
 
     def ancestors(head):
         seen, todo = set(), [head]
@@ -229,8 +251,10 @@ def work_index(git, project, *, fresh=False, max_age=None, cached_only=False):
                 if sha in records and (sha != landing or own_pr):
                     records[sha][1]["merge"] = merge
     commits, pulls = {}, {}
+    cancelled = _cancelled_delivery(git, repo, {s: records[s][2] for s in merged if s in records and records[s][2]},
+                                    {s: r for s, r in reverts.items() if s in merged})
     for sha, (_, commit, names) in records.items():
-        if sha in merged:
+        if sha in merged and sha not in cancelled:
             for name in names:
                 commits.setdefault(name.strip(), []).append(commit)
     for pr in prs or []:
@@ -316,14 +340,9 @@ def indexed_work(index, key):
 def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT, head=None):
     """Commits with a ``Plan-Item: <key>`` trailer, newest first, optionally at a pinned head.
 
-    Returns ``None`` when unknown (no repo, malformed key, git failure), else a
-    list of ``{sha, date, subject}`` (at most *limit*, default :data:`COMMIT_LIMIT`);
-    ``limit=None`` reads the complete matching history and annotates every merge. The newest
-    carries ``merge`` = ``{sha, subject, pr}`` when a merge on the ref's
-    first-parent chain brought it in.  git itself selects only messages with
-    a ``Plan-Item:`` line equal to the full key or the bare id (anchored
-    regex), and the parsed trailer is compared exactly again: ``X`` never
-    matches ``X-FU`` and a later mention elsewhere never counts.
+    Returns None when unknown. A finite limit bounds the tagged candidates;
+    ``limit=None`` returns the whole matching history and annotates every merge.
+    The parsed trailer must match exactly after the git message prefilter.
     """
     repo, ref = _repo_ref(git, project)
     proj, bare = _split(key)
@@ -336,28 +355,30 @@ def plan_item_commits(git, project, key, *, fetch=True, limit=COMMIT_LIMIT, head
             pass
     ref = head or ref
     prefix = f"({_ere(proj)}:)?" if proj else ""
+    pattern = f"^Plan-Item:[ \t]*{prefix}{_ere(bare)}[ \t]*$"
     out = _ok(git, repo, [
-        "log", "--no-show-signature", "-E", "--grep",
-        f"^Plan-Item:[[:space:]]*{prefix}{_ere(bare)}[[:space:]]*$",
-        *(["-n", str(_GREP_WINDOW)] if limit is not None else []),
-        "--format=%H%x1f%cI%x1f%s%x1f%B%x1d",
-        "--end-of-options", ref])
+        "log", "--no-show-signature", "-E", "--grep", pattern,
+        "--regexp-ignore-case", "--grep", REVERT_GREP,
+        "--format=%H%x1f%cI%x1f%s%x1f%B%x1d", "--end-of-options", ref])
     if out is None:
         return None
-    commits, seen = [], 0
+    hits, candidates, reverts, seen = [], {}, {}, 0
     for record in out.split("\x1d"):
         fields = record.strip("\n").split("\x1f")
-        if len(fields) != 4:
+        if len(fields) != 4 or not valid_commit_ref(fields[0]):
             continue
-        seen += 1
-        sha, date, subject, trailers = fields
-        names = set(plan_items(trailers))
-        if (key in names or bare in names) and valid_commit_ref(sha.strip()):
-            commits.append({"sha": sha.strip(), "date": date, "subject": subject})
-        if limit is not None and len(commits) >= limit:
-            break
+        sha, date, subject, message = fields
+        if (revert := delivery_revert(message)) is not None:
+            reverts[sha] = revert
+        elif re.search(pattern, message, re.M | re.I):
+            seen += 1
+            if (limit is None or seen <= _GREP_WINDOW) and (names := {key, bare}.intersection(plan_items(message))):
+                candidates[sha] = names
+                hits.append({"sha": sha, "date": date, "subject": subject})
+    cancelled = _cancelled_delivery(git, repo, candidates, reverts) if candidates else ()
+    commits = [c for c in hits if c["sha"] not in cancelled][:limit]
     if limit is not None and not commits and seen >= _GREP_WINDOW:
-        return None              # window full of near misses: not proven absent
+        return None
     for commit in (commits[:1] if limit is not None else commits):
         merge = _merge_of(git, repo, ref, commit["sha"])
         if merge:

@@ -539,3 +539,31 @@ def test_off_closes_witnessed_merges_without_a_flag_and_leaves_sensitive_cards(e
     assert [c["key"] for c in result["closed"]] == ["demo:C"] and "flags" not in result["closed"][0]
     assert [r["key"] for r in result["listed"]] == ["demo:S"]
     assert state(env, "demo:S")["state"] == "in_review"
+
+
+@pytest.mark.parametrize("style", ["revert", "drop", "legacy"])
+def test_reverted_delivery_is_ready_and_claimable_until_landed_again(env, style):
+    from plangraph.keeper import context_sources as source
+
+    root = env.repo.root
+    adapter = env.store.ctx["git"]
+    env.repo.land("first", "Plan-Item: demo:A", 57)
+    first_merge = git(root, "rev-parse", "main")
+    if style == "revert":
+        message = f'Revert "work"\n\nThis reverts commit {first_merge}.'
+    elif style == "drop":
+        message = f"Train 9: drop b41\n\nThis reverts commit {first_merge}.\n\nDropped-Part: demo:A"
+    else:
+        message = "Train 9: drop b41 (revert its merge)\n\nPlan-Item: demo:A"
+    git(root, "commit", "--allow-empty", "-qm", message)
+    pinned = git(root, "rev-parse", "main")
+    assert source.plan_item_commits(adapter, "demo", "demo:A", head=pinned, limit=None) == []
+    index = source.work_index(adapter, "demo", fresh=True)
+    assert source.indexed_work(index, "demo:A")["commits"] == []
+    assert "demo:A" in env.store.ready(env.p("reader"))
+    assert auto(env, require_seats=False)["closed"] == []
+    to_claimed(env, "demo:A")
+    env.repo.land("again", "Plan-Item: demo:A", 58)
+    index = source.work_index(adapter, "demo", fresh=True)
+    assert [c["merge"]["pr"] for c in source.indexed_work(index, "demo:A")["commits"]] == [58]
+    assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]

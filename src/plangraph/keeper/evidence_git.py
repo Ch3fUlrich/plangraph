@@ -102,6 +102,27 @@ def trailer_entries(message: str) -> list[tuple[str, str]]:
     return [(key, value) for key, value in entries]
 
 
+# Include the historical train subjects as well as canonical git revert messages.
+REVERT_GREP = r"^(Revert|Train [0-9]+: drop |This reverts commit |Dropped-Part:)"
+_TRAIN_DROP = re.compile(r"^Train [0-9]+: drop ", re.I)
+_REVERT_TARGET = re.compile(r"\bThis reverts commit ([0-9a-f]{7,40})\b", re.I)
+_LEGACY_TARGET = re.compile(r"\brevers(?:e|t)\w* (?:[^\n]*?merge )?([0-9a-f]{7,40})\b", re.I)
+
+
+def delivery_revert(message):
+    """A cancellation's target and fallback keys, or None for ordinary work."""
+    subject = message.partition("\n")[0]
+    drop = _TRAIN_DROP.match(subject)
+    target = _REVERT_TARGET.search(message)
+    names = {v for k, v in trailer_entries(message) if k.lower() == "dropped-part"}
+    if not (drop or target or names or subject.lower().startswith("revert")):
+        return None
+    names.update(plan_items(message))
+    # Old drops named all removals by key, even when the prose cited only one SHA.
+    target = target or (drop and not names and _LEGACY_TARGET.search(message))
+    return (target[1].lower() if target else None, names)
+
+
 def plan_items(message: str) -> list[str]:
     """The ``Plan-Item`` values among :func:`trailer_entries` of *message* (a continued value is longer than a key)."""
     return [value for key, value in trailer_entries(message) if key.lower() == "plan-item"]

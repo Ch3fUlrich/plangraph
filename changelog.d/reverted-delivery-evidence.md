@@ -1,0 +1,1 @@
+- Exclude reverted commit and dropped part evidence from readiness, claim, and merged-close proofs. Keep later deliveries eligible.
