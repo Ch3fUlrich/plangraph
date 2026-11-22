@@ -1,6 +1,7 @@
 """Read verbs: ready, show, blocked, waves, critical_path, percent, alerts,
 digest, snapshot, whoami — all built on plangraph.views."""
 import json
+import re
 
 import pytest
 
@@ -188,17 +189,33 @@ def test_the_reaper_clears_alerts_older_than_the_window(w):
     assert _telemetry(w, "alert_cleared") == [("demo:A", "late")]
 
 
-def test_alerts_call_reads_only_the_alerts_table(w):
+class _StatementSpy:
+    """Record the store's SQL before handing it to either backend."""
+
+    def __init__(self, conn):
+        self._conn, self.sql = conn, []
+
+    def execute(self, sql, *args):
+        self.sql.append(" ".join(sql.split()))
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+def test_alerts_call_reads_only_the_alerts_table(w, monkeypatch):
     _refuse_twice(w)
     w.store._finding("demo:A", "late", "x", w.store.now())
-    statements = []
-    w.conn.set_trace_callback(statements.append)
-    alerts = w.store.alerts(w.p("reader"))
-    w.conn.set_trace_callback(None)
+    spy = _StatementSpy(w.store.conn)
+    with monkeypatch.context() as patch:
+        patch.setattr(w.store, "conn", spy)
+        alerts = w.store.alerts(w.p("reader"))
     assert [f["code"] for f in alerts["findings"]] == ["late"]
     assert {r["key"] for r in alerts["refusals"]} == {"demo:A"}
-    reads = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
-    assert not [s for s in reads if "audit_log" in s or "audit_findings" in s]
+    reads = [sql.lower() for sql in spy.sql if sql.upper().startswith(("SELECT ", "WITH "))]
+    tables = {table for sql in reads for table in re.findall(r'\b(?:from|join) +"?(\w+)', sql)}
+    # Principal authentication and item scoping still read their own tables.
+    assert tables - {"principals", "items", "edges"} == {"alerts"}, reads
 
 
 def test_backfill_builds_the_table_from_history_and_is_idempotent(w):
@@ -249,28 +266,13 @@ def test_first_backfill_merges_into_the_live_rows_of_the_same_identity(w):
     assert len(_alert_rows(w)) == 2
 
 
-def test_backfill_checks_its_marker_inside_the_write_transaction(w):
+def test_backfill_checks_its_marker_inside_the_write_transaction(w, monkeypatch):
     _refuse_twice(w)
 
-    class Spy:
-        """Records every statement on whichever backend the fixture runs."""
-
-        def __init__(self, conn):
-            self._conn, self.sql = conn, []
-
-        def execute(self, sql, *args):
-            self.sql.append(" ".join(sql.split()))
-            return self._conn.execute(sql, *args)
-
-        def __getattr__(self, name):
-            return getattr(self._conn, name)
-
-    spy = Spy(w.store.conn)
-    w.store.conn = spy
-    try:
+    spy = _StatementSpy(w.store.conn)
+    with monkeypatch.context() as patch:
+        patch.setattr(w.store, "conn", spy)
         w.store.backfill_alerts()
-    finally:
-        w.store.conn = spy._conn
     marker = next(i for i, sql in enumerate(spy.sql) if "action='alerts_backfill'" in sql)
     begin = next(i for i, sql in enumerate(spy.sql) if sql.startswith("BEGIN"))
     assert begin < marker
