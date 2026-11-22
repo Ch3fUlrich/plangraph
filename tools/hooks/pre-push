@@ -300,7 +300,7 @@ def folded_heads(prs, parts):
 
 
 def commit_gate(head, remote_ref="", remote_sha="", *, open_prs=True):
-    """Refuse bad trailers before expensive checks; only the network probe is optional."""
+    """Check commit trailers and, when enabled, foreign open-PR parents."""
     base = git_out("rev-parse", "--verify", "refs/remotes/origin/main^{commit}")
     if not base:
         print("pre-push: origin/main unavailable: commit gate refused", file=sys.stderr)
@@ -505,7 +505,10 @@ def push_main():
                 print(f"pre-push: {problem}: push refused", file=sys.stderr)
                 return 1
             print(f"pre-push: train path for {remote_ref}: manifest ok, no affected tests", file=sys.stderr)
-        if commit_gate(local_sha, remote_ref, remote_sha, open_prs=not train) or file_size_gate(local_sha):
+        # The first train push is backed by the manifest alone. Updates also
+        # check the existing PR plan and distinguish its parts from foreign PRs.
+        open_prs = not train or not is_zero(remote_sha)
+        if commit_gate(local_sha, remote_ref, remote_sha, open_prs=open_prs) or file_size_gate(local_sha):
             return 1
     explicit = "PLANGRAPH_SCRUB_WORDS" in os.environ
     words = os.environ.get("PLANGRAPH_SCRUB_WORDS") if explicit else None

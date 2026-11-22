@@ -72,12 +72,13 @@ def install_pre_push(env):
 
 @pytest.mark.parametrize("case", ["own", "train-pr", "train-head", "train-unrelated",
                                   "train-wrong-pr", "train-fenced", "lane", "fork", "no-gh"])
-def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, case):
+def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, tmp_path, case):
     branch = "lane/topic" if case in ("lane", "fork") else "land/train-fixture"
     writer = "\n\nWriter: codex/test"
     closed = env.branch_pr(1, {"closed": "closed\n"}, state="CLOSED", trailer=writer)
     part = env.branch_pr(2, {"part": "part\n"}, trailer=writer)
     other = env.branch_pr(3, {"other": "other\n"}, trailer=writer)
+    follow_up = env.branch_pr(4, {"follow-up": "follow-up\n"}, state="CLOSED", trailer=writer)
     env.git("checkout", "-qb", branch)
     env.git("merge", "-q", "--no-ff", "-m", "merge closed part", closed)
     previous = env.git("rev-parse", "HEAD")
@@ -96,11 +97,16 @@ def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, case):
         body = f"```text\n{body}\n```"
     env.state["prs"]["100"]["body"] = body
     env.save()
-    if case not in ("own", "fork"):
-        env.git("merge", "-q", "--no-ff", "-m", "merge recorded part", part)
+    parts = [closed]
+    next_head = follow_up if case in ("own", "fork") else part
+    env.git("merge", "-q", "--no-ff", "-m", f"follow-up{writer}\nFolded-PR: #2 {part}", next_head)
+    parts.append(next_head)
     if case == "train-unrelated":
         env.git("merge", "-q", "--no-ff", "-m", "merge unrelated part", other)
-    env.git("commit", "-q", "--allow-empty", "-m", f"follow-up{writer}\nFolded-PR: #2 {part}")
+        parts.append(other)
+    manifest = tmp_path / "train-manifest.txt"
+    manifest.write_text("\n".join(parts) + "\n")
+    env.env["PLANGRAPH_TRAIN_MANIFEST"] = str(manifest)
     install_pre_push(env)
     if case == "no-gh":
         (env.stubs / "gh").unlink()
