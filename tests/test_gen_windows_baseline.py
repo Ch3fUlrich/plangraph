@@ -3,7 +3,9 @@ import pytest
 from gen_windows_baseline import generate, MARKER
 def test_scrub_and_refusal(tmp_path, monkeypatch):
     monkeypatch.setenv("USERNAME", "fake-person")
+    monkeypatch.setenv("USER", "fake-person")
     monkeypatch.setenv("COMPUTERNAME", "fake-machine")
+    monkeypatch.setenv("HOSTNAME", "fake-machine")
     out, log = tmp_path / "record", tmp_path / "log"
     log.write_text("FAILED tests/example.py::test_example\n1 failed, 1 passed, 219 skipped in 1.00s\n")
     prefixes = ("C:\\Users\\", "/c/Users/", "/home/", "/Users/")
