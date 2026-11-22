@@ -41,15 +41,16 @@ def test_hook_preflight_keeps_policy_context(tmp_path, monkeypatch, ref, fast, e
     expected_train = ref.startswith('land/train-')
     train_gates, commit_gates = [], []
     manifest = ['2' * 40]
-    monkeypatch.setitem(scope, 'read_train_manifest', lambda _: manifest)
-    monkeypatch.setitem(scope, 'train_gate', lambda head, parts: train_gates.append((head, parts)))
+    monkeypatch.setitem(scope, 'read_train_manifest', lambda path: manifest)
+    monkeypatch.setitem(scope, 'train_gate',
+                        lambda local_sha, manifest: train_gates.append((local_sha, manifest)))
     monkeypatch.setitem(scope, 'commit_gate',
-                        lambda head, remote_ref, remote_sha, *, open_prs=True:
+                        lambda head, remote_ref='', remote_sha='', *, open_prs=True:
                         commit_gates.append((head, remote_ref, remote_sha, open_prs)) or 0)
-    monkeypatch.setitem(scope, 'base_commit', lambda *a: 'base')
-    monkeypatch.setitem(scope, 'affected_base_commit', lambda *a: 'affected-base')
-    monkeypatch.setitem(scope, 'main_baselines', lambda *a: [])
-    monkeypatch.setitem(scope, 'changelog_docs_warn', lambda *a: None)
+    monkeypatch.setitem(scope, 'base_commit', lambda remote_sha, local_sha: 'base')
+    monkeypatch.setitem(scope, 'affected_base_commit', lambda remote_sha, local_sha: 'affected-base')
+    monkeypatch.setitem(scope, 'main_baselines', lambda local_sha: [])
+    monkeypatch.setitem(scope, 'changelog_docs_warn', lambda base, head: None)
     worktrees = []
 
     def git(*args):
