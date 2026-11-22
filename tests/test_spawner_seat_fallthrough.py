@@ -111,8 +111,11 @@ def replay(request, tmp_path, monkeypatch, recorded_plan):
                       if refusal_event or terminal == 'model_refusal' else CAPTURE['events'] if index == 0 else [])
             if refusal_reason is not None:
                 record['reason'] = refusal_reason
+            reply = ('FILES READ: diff only\nVERDICT: REQUEST_CHANGES\n'
+                     if chosen.tool_mode in ('prompt-only', 'inline-only')
+                     else 'FILES READ: src/lib.rs\nVERDICT: pass\n')
             job = NS(job_id=chosen.id, status=status, exit_code=0 if ok else 1,
-                     stdout=first_reply if index == 0 and first_reply is not None else 'FILES READ: src/lib.rs\nVERDICT: pass\n' if ok else '', stderr=stderr,
+                     stdout=first_reply if index == 0 and first_reply is not None else reply if ok else '', stderr=stderr,
                      served_model=chosen.model, served_family=chosen.family,
                      served_witness_reason='fixture', events=events, survivors=[],
                      request_side_model=chosen.model, witness_kind='fixture', role=role)
