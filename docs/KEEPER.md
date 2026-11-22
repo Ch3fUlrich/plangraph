@@ -331,6 +331,19 @@ for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), 
 Env `PG_URL`, `PG_TOKEN_FILE` (path of a mode-600 file; never pass a token on argv). Default output = the smallest useful text; `--json` for full.
 Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads the local `plan.snapshot.json` read-only for read verbs and says so).
 
+`pg define` and `pg define --edit` refuse review clauses in `done_criteria`
+or `description` that pin a model or leg from the routing catalog. Ask for
+“a review seat outside every writer family” so the spawner can choose the seat.
+`pg check` lists existing nonterminal items with model pins as
+`NAMED-REVIEW-MODEL`. The JSON output includes `named_review_models`, and
+`--strict` exits 1 when it finds a pin.
+
+When a description edit introduces a newer plan version or explicitly
+supersedes a rule still cited in the title or done criteria, the edit response
+returns both fields and a reminder to update them together. The keeper
+includes that finding in the stale reason on `show` and applies the existing
+audited stale-claim override procedure.
+
 ## Tests (minimum; write first)
 state machine: every allowed edge + every disallowed edge refused · claim race: 3 threads → exactly one winner · stale epoch refused ·
 lease reaper · attack suite at store level: edit/delete/reopen/re-point a DONE item, `corrects` pointing at non-done, evidence/event/edge

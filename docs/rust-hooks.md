@@ -69,6 +69,48 @@ and preserve all workspace members in main's path order, including `pg-reap`.
 Hook ports, property tests, 14-day zero-diff observation, rollback canary and settings
 integration remain deferred; the production switch belongs to **RUST-HOOKS-SWITCH**.
 
+## Session guards
+
+Run `tools/hooks/install_hooks.sh --session-rust` with the shared
+`CARGO_TARGET_DIR` set. The installer adds `pg-hook` to the hook directory
+and its checksum manifest. Register the guarded commands printed by the
+installer's `--help` in the harness settings.
+
+### Lesson Stop hook
+
+Register `pg-hook lesson-stop` for `Stop`, including continuation Stop
+events. It reads the session transcript and exits 2 while it finds unrecorded
+signals. The diagnostic gives each signal's ID and kind. Transcript content
+stays local.
+
+Record resolutions in `lesson-<session_id>.tsv` under
+`PG_LESSON_LEDGER_DIR`. The default directory is
+`$XDG_STATE_HOME/plangraph/lessons`, falling back to
+`$HOME/.local/state/plangraph/lessons`. Each row contains the signal ID, a tab,
+and either a new keeper LE key or `attached to <key>` for an existing item.
+For example, pair `tool:tool1` with `plangraph:LE-COMMAND`. Each entry resolves
+its own signal. Message IDs use transcript line and content-block positions.
+Keep the ledger outside the repository.
+
+The hook recognizes Claude and Codex tool failures and Claude teammate
+messages with a leading `BLOCKED`, `FAIL` or `CORRECTION` status. Start
+operator corrections with `Correction:` to record them as signals in either
+transcript format.
+
+### Agent message timestamps
+
+Register `pg-hook message-time` for `PreToolUse` on `SendMessage` and the
+shell tool. It checks the message field or a literal `fleet-msg send`
+invocation. The fleet client also checks the resulting message before it loads
+the transport, including when a shell expanded the arguments. It finds the
+default installed binary automatically. Set `PG_MESSAGE_TIME_HOOK` to an
+absolute executable path for a custom install.
+
+The guard checks `HH:MMZ` and `HH:MM:SSZ` against the current UTC date.
+ISO timestamps carry their own date and offset. The guard allows one minute
+beyond the current clock. Prefix approximate times with `about`, as in
+`about 04:0xZ`. A refusal identifies the timestamp and exits 2.
+
 ## Git commit messages
 
 Run `tools/hooks/install_hooks.sh --git` with the host's shared

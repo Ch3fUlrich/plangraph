@@ -482,8 +482,8 @@ skip `PostToolUse` threshold guidance and do not disable `PreToolUse` denial. Te
 isolate state and mock the kick. The HANDOFF-NOW and HARD-CAP lines carry the absolute
 command `python3 <guard path> ready <handoff>` (`ready_command`); `ctx_guard_session.py`
 has no ready step and exits 2 naming that command when called with `ready` or `status`.
-`tools/hooks/install_hooks.sh` only copies `*.py` files and registers nothing in
-Claude Code settings (`setup/manifest.toml` defers hook merging); register the
+`tools/hooks/install_hooks.sh` copies the Python hooks by default. The installer
+leaves harness settings to the operator. Register the
 guarded missing-file wrapper on both `PreToolUse` (with an all-tools matcher) and
 `PostToolUse` (using either `context_guard.py` or `ctx_guard_session.py`, not both):
 
@@ -509,6 +509,10 @@ before the cursor are not detected (transcripts are append-only), and records ov
 The standalone Rust `turn-budget-hook` lives in `rust/worker-core`, beside the
 existing watchdog binaries. The default `tools/hooks/install_hooks.sh` mode
 copies Python hooks; its `--git` mode installs the Rust Git hook.
+Use `--session-rust` to install the session guard binary and include it in
+`SHA256SUMS`. Register the Stop and PreToolUse commands separately using
+`tools/hooks/install_hooks.sh --help`. The events and inputs are documented in
+[Rust session guards](docs/rust-hooks.md#session-guards).
 Build, registration examples, injectable state paths and the polling-recognition
 boundary are documented in [Turn-budget hook](docs/turn-budget-hook.md).
 Run its hermetic contracts with `cargo test --manifest-path rust/Cargo.toml -p

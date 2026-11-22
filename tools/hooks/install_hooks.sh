@@ -5,9 +5,9 @@
 # import - from this script's own directory into DEST (default:
 # ${DEST:-$HOME/.local/share/plangraph/hooks}), writes a DEST/SHA256SUMS
 # manifest over the copied files via sha256sum, and prints the list of
-# installed files (one destination path per line, SHA256SUMS last). Only *.py
-# is shipped: the tests/ tree and non-Python files such as the pre-push hook
-# are never copied here. A second run over an existing install is fine: the
+# installed files (one destination path per line, SHA256SUMS last). The
+# default install ships *.py. Test files and pre-push stay in the checkout.
+# A second run over an existing install is fine: the
 # copies replace same-named files and the manifest is rewritten to match.
 #
 # The install refuses (exit 1, nothing created) a DEST that is, or lies
@@ -45,7 +45,7 @@
 # Optional Rust session guards are installed with --session-rust. Register
 # the Stop event with:
 #   sh -c 'test -x "$1" || exit 1; exec "$1" lesson-stop' _ DEST/pg-hook
-# See docs/lesson-stop.md for the ledger contract. Register PreToolUse
+# See docs/rust-hooks.md for the ledger contract. Register PreToolUse
 # for SendMessage and Bash (or exec_command) with:
 #   sh -c 'test -x "$1" || exit 1; exec "$1" message-time' _ DEST/pg-hook
 #
