@@ -15,7 +15,7 @@ from plangraph.spawner.runner import SpawnerRunner, spawn_service
 
 
 def stream(shape, stop='refusal'):
-    text = 'partial answer\nVERDICT: PASS'
+    text = 'partial answer\nFILES READ: src/lib.rs\nVERDICT: PASS'
     message = {'type': 'assistant', 'message': {
         'content': [{'type': 'text', 'text': text}], 'stop_reason': None}}
     ending = ({'type': 'result', 'result': text, 'stop_reason': stop} if shape == 'result'

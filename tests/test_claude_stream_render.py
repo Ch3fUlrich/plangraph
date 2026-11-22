@@ -59,7 +59,7 @@ def transcript(answer, *, result=True, tool_turn=False, stop="end_turn", is_erro
     return lines
 
 
-ANSWER = "Finding: none.\nTEST-GAMING: no\nFILES READ: src/lib.rs\nVERDICT: PASS"
+ANSWER = "Finding: none.\nTEST-GAMING: no\nVERDICT: PASS"
 
 
 def test_the_raw_stream_has_no_parseable_verdict():
@@ -146,7 +146,8 @@ def run_review(tmp_path, monkeypatch, lines, exit_code=0):
     monkeypatch.setenv("PATH", str(binary) + os.pathsep + os.environ["PATH"])
     monkeypatch.setenv("PLANGRAPH_GATEWAY_URL", "http://127.0.0.1:9/v1")
     monkeypatch.delenv("PLANGRAPH_SPAWN_RUN_TIMEOUT", raising=False)
-    leg = next(l for l in DEFAULT_LEGS if l.id == "claude-haiku-5.5")
+    from dataclasses import replace
+    leg = replace(next(l for l in DEFAULT_LEGS if l.id == "claude-haiku-5.5"), tool_mode="tools")
 
     async def run():
         runner = SpawnerRunner(process_factory=fake_claude(tmp_path, lines, exit_code), default_cwd=str(tmp_path))
@@ -159,12 +160,13 @@ def run_review(tmp_path, monkeypatch, lines, exit_code=0):
 
 
 def test_dispatch_record_carries_the_review_text_and_the_raw_stream_sits_beside_it(tmp_path, monkeypatch):
-    lines = transcript(ANSWER, tool_turn=True)
+    answer = "FILES READ: src/lib.rs\n" + ANSWER
+    lines = transcript(answer, tool_turn=True)
     record, run_dir = run_review(tmp_path, monkeypatch, lines)
     assert record["status"] == "completed", record["status"]
     attempt = record["attempts"][-1]
-    assert attempt["stdout_tail"] == ANSWER and record["stdout_tail"] == ANSWER
-    assert sv.parse_verdict(attempt["stdout_tail"]) == (True, 2)
+    assert attempt["stdout_tail"] == answer and record["stdout_tail"] == answer
+    assert sv.parse_verdict(attempt["stdout_tail"]) == (True, 3)
     raw = (run_dir / "claude-stream.jsonl").read_text()
     assert raw.splitlines() == lines and "weigh the diff" in raw
     assert [e for e in record["events"] if e["event"] == "claude_stream_rendered"] == [

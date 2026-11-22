@@ -249,7 +249,7 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         if outcome == 'cancelled':
             await asyncio.Future()
         return JobInfo('fixture', 'completed', 'review', chosen.model, role='review', exit_code=0,
-                       stdout='Reviewed source.\nVERDICT: ACCEPT\n')
+                       stdout='Reviewed source.\nFILES READ: source\nVERDICT: ACCEPT\n')
 
     monkeypatch.setattr(service, '_launch_leg', launch)
     async def run():

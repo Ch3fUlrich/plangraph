@@ -29,7 +29,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         'digest = ":".join(digest[i:i + 8] for i in range(0, len(digest), 8))\n'
         'proof = f"bytes={len(prompt)} sha256={digest}"\n'
         'print(json.dumps({"event":"result", "result":{"status":"SUCCESS",'
-        '"response":"VERDICT: ACCEPT " + proof}}))\n'
+        '"response":"FILES READ: src/lib.rs\\nVERDICT: ACCEPT " + proof}}))\n'
     )
     binary.chmod(0o700)
     # No inherited PATH, gateway endpoint, state, credentials, or notification hook.
@@ -65,7 +65,7 @@ def test_real_review_child_reaches_leg(tmp_path, monkeypatch, size):
         # Keep every digest bit, separated so output redaction cannot mistake it for a secret.
         digest = hashlib.sha256(prompt.encode()).hexdigest()
         digest = ':'.join(digest[i:i + 8] for i in range(0, len(digest), 8))
-        assert record['stdout_tail'].strip() == f'VERDICT: ACCEPT bytes={len(prompt.encode())} sha256={digest}'
+        assert record['stdout_tail'].strip() == f'FILES READ: src/lib.rs\nVERDICT: ACCEPT bytes={len(prompt.encode())} sha256={digest}'
         assert record['attempts'][0]['status'] == 'completed'
         assert runner.jobs[record['job_id']].command[0] == 'agy'
         assert runner.jobs[record['job_id']].exit_code == 0
