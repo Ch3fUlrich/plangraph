@@ -647,7 +647,9 @@ def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypat
     with psycopg.connect(PG_DSN, autocommit=True) as raw:
         try:
             with monkeypatch.context() as old:
-                old.setattr(schema_pg, "MIGRATIONS", schema_pg.MIGRATIONS[:14])
+                incident = next(step.version for step in schema_pg.MIGRATIONS
+                                if "idx_events_incidents" in step.sql)
+                old.setattr(schema_pg, "MIGRATIONS", schema_pg.MIGRATIONS[:incident - 1])
                 conn = kdb.open_db(path, create=True, backend="postgres",
                                    dsn=PG_DSN, schema=name)
             try:
@@ -659,7 +661,7 @@ def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypat
                 assert conn.execute("SELECT to_regclass('idx_events_incidents')").fetchone()[0] is None
             finally:
                 conn.close()
-            assert db_pg.migrate(raw, name) == [15]
+            assert db_pg.migrate(raw, name) == list(range(incident, schema_pg.LATEST + 1))
             assert db_pg.migrate(raw, name) == []
             conn = kdb.open_db(path, backend="postgres", dsn=PG_DSN, schema=name)
             try:

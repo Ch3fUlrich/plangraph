@@ -396,12 +396,13 @@ def test_keeper_card_roundtrips_computed_effort_decision(w, caplog):
 def test_attempt_migration_from_existing_sqlite_store(tmp_path):
     import sqlite3
     from plangraph.keeper.db import open_db
+    from plangraph.keeper.schema import TABLES
 
     path = tmp_path / "before.db"
     with sqlite3.connect(path) as old:
+        old.executescript(TABLES)
+        old.execute("INSERT INTO items(key,project,id,title,updated_at) VALUES ('demo:A','demo','A','A','now')")
         old.executescript("""
-            CREATE TABLE items (key TEXT PRIMARY KEY);
-            INSERT INTO items VALUES ('demo:A');
             CREATE TABLE attempts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL REFERENCES items(key),
                 n INTEGER NOT NULL, harness TEXT, model TEXT, combo TEXT, class TEXT,

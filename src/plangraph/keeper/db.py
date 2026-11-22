@@ -192,7 +192,7 @@ def _split_statements(
     return statements
 
 
-def _migrate_18_spawn_attempts(conn):
+def _migrate_spawn_attempts(conn):
     """Preserve existing rows and both foreign keys while admitting nullable spawn keys."""
     if conn.execute("SELECT 1 FROM sqlite_master WHERE name='idx_attempts_spawn_since'").fetchone():
         return
@@ -200,11 +200,11 @@ def _migrate_18_spawn_attempts(conn):
     try:
         columns = [row[1] for row in conn.execute("PRAGMA table_info(attempts)")]
         if "attempt_id" not in columns:
-            conn.execute(ATTEMPTS_TABLE.replace("attempts (", "attempts_v18 (", 1))
+            conn.execute(ATTEMPTS_TABLE.replace("attempts (", "attempts_upgrade (", 1))
             names = ",".join(columns)
-            conn.execute(f"INSERT INTO attempts_v18 ({names}) SELECT {names} FROM attempts")
+            conn.execute(f"INSERT INTO attempts_upgrade ({names}) SELECT {names} FROM attempts")
             conn.execute("DROP TABLE attempts")
-            conn.execute("ALTER TABLE attempts_v18 RENAME TO attempts")
+            conn.execute("ALTER TABLE attempts_upgrade RENAME TO attempts")
             for statement in _split_statements(ATTEMPTS_GUARDS, disallow=("PRAGMA", "VACUUM")):
                 conn.execute(statement)
         for statement in _split_statements(ATTEMPT_SPAWN_INDEXES, disallow=("PRAGMA", "VACUUM")):
@@ -304,7 +304,7 @@ def open_db(path, *, create: bool = False,
                 f"{path} is not a keeper database (schema missing); "
                 "create it with open_db(..., create=True)")
         _upgrade(conn)
-    _migrate_18_spawn_attempts(conn)
+    _migrate_spawn_attempts(conn)
     # Defensive mode hardens shadow tables and blocks several bypasses; enable
     # it after setup (it must not interfere with the CREATE statements above)
     # and before the authorizer, which then covers the rest.
