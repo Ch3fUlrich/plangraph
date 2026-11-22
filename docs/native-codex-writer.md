@@ -152,6 +152,10 @@ The plan-order launcher scripts remain until the migration slice.
 Overflow receipts keep target process identity under `remote_process`; origin
 watchdogs never sample that PID locally. Cancel is forwarded to the target by run
 ID. A failed SSH cancel leaves the last known run status intact with a query error.
+Set `parent_session` on the card to receive terminal results in that session's
+inbox on the supervising host. A refused launch also raises a Keeper finding
+when the run is linked to an item. Transient native disk and cache refusals are
+rechecked during the admission window before the supervisor returns a refusal.
 
 The Rust MCP bridge delegates native launch, result refresh and cancellation to
 the same Python owner. Remote receipts refresh before returning a result; cancel

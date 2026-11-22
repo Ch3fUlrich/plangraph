@@ -115,6 +115,71 @@ def test_cli_shared_ram_refusal(registry, monkeypatch, tmp_path):
     assert reason in result['reason'] and result['status'] == 'refused'
 
 
+def test_native_disk_refusal_is_terminal_and_notifies_named_parent(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready, seat_spawn
+
+    state = tmp_path / 'state'
+    keeper = Mock()
+    service = o.cli.SpawnService(state=state, keeper_sink=keeper)
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '0')
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
+    monkeypatch.setattr(o, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(o, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(o, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(host_ready, 'local_disk_refusal', lambda *args, **kwargs:
+                        'cargo_target_cap: cache full')
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:A',
+                parent_session='fixture-parent')
+
+    refusal = service.admit_spawn({'role': 'implement'}, card=card)
+    assert o.cli.spawn_exit_code(refusal) != 0
+    assert refusal['status'] == 'refused' and refusal['ended'] >= refusal['started']
+    event = json.loads((state / 'inbox/fixture-parent.jsonl').read_text())
+    assert event['event'] == 'REFUSED' and event['run_id'] == refusal['run_id']
+    assert event['item'] == 'demo:A' and 'cargo_target_cap' in event['reason']
+    keeper.deliver.assert_called_once_with('keeper', event)
+
+
+def test_placed_native_writer_retries_a_cleared_cache_cap(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready, seat_spawn
+
+    service = o.cli.SpawnService(state=tmp_path / 'state', keeper_sink=Mock())
+    monkeypatch.setenv('PLANGRAPH_PLACED_HOST', 'fixture')
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '60')
+    monkeypatch.setattr(seat_spawn, '_sleep', lambda _: None)
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
+    monkeypatch.setattr(o, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(o, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(o, 'ready_records', lambda *args: {})
+    disk = Mock(side_effect=['cargo_target_cap: cache full', None])
+    monkeypatch.setattr(host_ready, 'local_disk_refusal', disk)
+    options = {'role': 'implement'}
+    card = dict(run_kind='native-codex', repo=str(tmp_path))
+    assert service.admit_spawn(options, card=card) is None
+    assert disk.call_count == 2
+    assert options['_placement']['host'] == 'fixture'
+    assert service.ps()['runs'] == []
+
+
+def test_native_shared_cache_cap_scales_and_probes_symlink_target(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+
+    target = tmp_path / 'target'
+    target.mkdir()
+    link = tmp_path / 'target-link'
+    link.symlink_to(target)
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(link))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 20)
+    probe = Mock(return_value=10)
+    monkeypatch.setattr(h, 'disk_free_gb', probe)
+    monkeypatch.setattr(h, 'cargo_run_busy', lambda row: True)
+    service = SimpleNamespace(ps=lambda: {'runs': [dict(role='implement', status='running')]})
+    assert h.local_disk_refusal(tmp_path / 'checkout', service, native=True) is None
+    probe.assert_any_call(target)
+
+
 @pytest.mark.parametrize('total,free,used', [(0, 0, 0), (1000, 100, 90), (1000, 99, 90.1)])
 def test_swap_used_reader(monkeypatch, total, free, used):
     monkeypatch.setattr(o.Path, 'read_text', lambda self:

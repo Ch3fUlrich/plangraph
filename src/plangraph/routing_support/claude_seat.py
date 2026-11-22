@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from tempfile import mkdtemp
 
 REVIEW_TOOLS = "Read,Grep,Glob,Bash(python3 -m pytest -q *)"
 REVIEW_DENIED = ("Write,Edit,Bash(python3 -m pytest -q -*),Bash(python3 -m pytest -q * -*),"
@@ -27,8 +28,14 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
-def configure_review_tests(argv: list[str], env: dict[str, str], scratch: Path) -> None:
+def configure_review_tests(argv, env, leg, role, run_dirs, job_id):
     """Apply the Sonnet review profile to the actual launch and its subprocesses."""
+    from plangraph.planner.legs import REVIEW_SONNET
+
+    if role != "review" or leg is None or leg.id != REVIEW_SONNET or leg.tool_mode != "tools":
+        return
+    scratch = Path(mkdtemp(prefix="plangraph-claude-review-")).resolve()
+    run_dirs[job_id] = scratch
     target = scratch / "cargo-target"
     target.mkdir()
     env.update(CARGO_TARGET_DIR=str(target), CLAUDE_CODE_TMPDIR=str(scratch),

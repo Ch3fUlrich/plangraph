@@ -507,7 +507,9 @@ async def native_spawn(self, card, options):
     if options.get('_placement'):
         record['placement'] = options['_placement']
     from .item_key import annotate_item
+    from .notify import annotate_native
     annotate_item(record, card)
+    annotate_native(record, card)
     directory = self._path(record['run_id']).parent
     self._save(record)
     request = dict(record=record, card=card, prompt=options.get('prompt', ''), record_path=str(self._path(record['run_id'])))
@@ -545,6 +547,7 @@ async def native_spawn(self, card, options):
                 if final.get('status') == 'running':
                     final.update(status='failed', exit_code=process.returncode or 6,
                                  reason=error.decode(errors='replace')[-4096:], ended=time.time())
+                final.setdefault('ended', time.time())
                 self._save(final)
         except asyncio.CancelledError:
             survivors = await self.runner.kill_recorded(process.pid, identity)

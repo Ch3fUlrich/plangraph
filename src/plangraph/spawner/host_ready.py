@@ -314,7 +314,7 @@ def cargo_run_busy(record):
 NO_BUILD_ROLES = ('review',)
 
 
-def local_disk_refusal(worktree, service, role='implement'):
+def local_disk_refusal(worktree, service, role='implement', *, native=False):
     """Check the worktree filesystem and bound the host's shared build cache.
 
     A role in NO_BUILD_ROLES keeps the free-space floor but not the cache cap.
@@ -330,17 +330,27 @@ def local_disk_refusal(worktree, service, role='implement'):
         cap = float(os.environ.get('PLANGRAPH_CARGO_TARGET_CAP_GB', '12'))
         if not all(math.isfinite(v) and v >= 0 for v in (floor, cap)):
             raise ValueError('invalid disk limits')
-        target = shared_cargo_target()
+        configured_target = shared_cargo_target()
+        target = configured_target.resolve() if native else configured_target
         unsafe_cache_dir(target, worktree)
         building = role not in NO_BUILD_ROLES
         size = cargo_target_size_gb(target) if building else 0
         if building and size >= cap:
-            if any(cargo_run_busy(r) for r in service.ps()['runs']):
-                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy'
-            try:
-                reclaim_cargo_target(target, cap, worktree)
-            except OSError:
-                return f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB; busy or cleanup unavailable'
+            writers = [r for r in service.ps()['runs']
+                       if not native or (not r.get('overflow_remote') and r.get('role') == 'implement')]
+            active = sum(cargo_run_busy(r) for r in writers)
+            if native:
+                cap *= 1 + active
+            if cap and size >= cap:
+                measured = f'cargo_target_cap: measured {size:.2f} GB in {target}, cap {cap:g} GB'
+                if active:
+                    return measured + '; busy'
+                if configured_target.is_symlink():
+                    return measured + '; cleanup unavailable for a symlinked target'
+                try:
+                    reclaim_cargo_target(target, cap, worktree)
+                except OSError:
+                    return measured + '; busy or cleanup unavailable'
         if cap == 0 and building:
             return f'cargo_target_cap: cap 0 GB for {target}; no build capacity'
         paths = [worktree, target]

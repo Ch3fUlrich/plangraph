@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import subprocess
 import urllib.error
@@ -141,8 +142,10 @@ class KeeperSink:
         if not event.get('item'):
             raise ValueError('live keeper delivery requires PLANGRAPH_SPAWN_ITEM or record item')
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
-        payload = {'key': event['item'], 'run': {
-            'run_id': event['run_id'], 'phase': 'finished', 'rc': event['rc']}}
+        run = {'run_id': event['run_id'], 'phase': 'finished', 'rc': event['rc']}
+        if event.get('run_kind') == 'native-codex' and event['event'] == 'REFUSED':
+            run['native_launch_refusal'] = (event.get('reason') or 'native launch refused')[:512]
+        payload = {'key': event['item'], 'run': run}
         request = urllib.request.Request(self.url.rstrip('/') + '/v1/record_run',
             data=json.dumps(payload).encode(), method='POST',
             headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
@@ -313,23 +316,45 @@ def _deliver_verdict(directory, record, keeper):
             outcome('retry' if not verifier_started or (directory / 'verdict.payload.json').is_file() else 'skipped', type(exc).__name__)
 
 
+def annotate_native(record, card):
+    """Carry the native card's recipient into persistent run records."""
+    if (card or {}).get('run_kind') == 'native-codex':
+        record['run_kind'] = 'native-codex'
+        parent = card.get('parent_session') or os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION')
+        if isinstance(parent, str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,127}', parent):
+            record['parent_session'] = parent
+
+
+def completion_recipient(recipient, record):
+    if recipient == 'parent' and record.get('run_kind') == 'native-codex':
+        return record.get('parent_session') or recipient
+    return recipient
+
+
 def completion_event(record, cwd):
     from .runner import redact
     from .prompt_input import checkout_env
-    try:
-        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
-                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
-                                       env=checkout_env(), timeout=10).strip()
-    except (OSError, subprocess.SubprocessError):
-        head = None
+    native = record.get('run_kind') == 'native-codex'
+    head = record.get('final_head')
+    if not native:
+        try:
+            head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
+                                           text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
+                                           env=checkout_env(), timeout=10).strip()
+        except (OSError, subprocess.SubprocessError):
+            head = None
+    refused = native and record.get('status') == 'refused'
     rc = record.get('exit_code')
+    if refused:
+        rc = rc or 2
     return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],
         idempotency_key=record['run_id'] + ':' + record['status'],
-        event='DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
-        reason=record.get('reason'),
+        event='REFUSED' if refused else 'DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
+        reason=record.get('reason') or (record.get('error') if native else None),
+        **({'run_kind': 'native-codex', 'status': record['status']} if native else {}),
         **({'watchdog': record['watchdog']} if 'watchdog' in record else {}),
-        parent_session=os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
-        item=record.get('item') or os.environ.get('PLANGRAPH_SPAWN_ITEM'),
+        parent_session=record.get('parent_session') if native else os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
+        item=record.get('item') or (record.get('item_key') if native else None) or os.environ.get('PLANGRAPH_SPAWN_ITEM'),
         take_cmd=f'git cherry-pick {head}' if head else 'git log --oneline',
         discard_cmd=f'plangraph-spawn result {record["run_id"]} # discard: do not cherry-pick'))
 

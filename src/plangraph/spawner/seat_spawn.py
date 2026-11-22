@@ -208,7 +208,9 @@ def _open_queue(service, role, decision, window, host=None, card=None):
     if host:
         record['host'] = host
     from .item_key import annotate_item
+    from .notify import annotate_native
     annotate_item(record, card)
+    annotate_native(record, card)
     service._save(record)
     return record
 
@@ -263,7 +265,9 @@ def admit(service, options, *, card=None, preview=False):
                 (card or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     from .host_ready import local_disk_refusal
-    disk = local_disk_refusal(repo, service, role)
+    def check_disk():
+        return local_disk_refusal(repo, service, role, native=True) if native else local_disk_refusal(repo, service, role)
+    disk = check_disk()
     if not (remote_first or compare_local) and not disk and not overflow.memory_refusal(memory, role_mb, floor):
         if native or placed:
             options['_placement'] = dict(host=local, reason=os.environ.get(
@@ -293,7 +297,9 @@ def admit(service, options, *, card=None, preview=False):
         return rows
     rows = load_rows()
     health = disk or local_readiness_refusal() or (overflow.local_health_refusal(config, memory) if remote_first else None)
-    queued, window = None, 0 if remote_first or preview or placed or compare_local else admission_window()
+    retry_native_disk = native and disk and disk.startswith(('disk_low:', 'cargo_target_cap:'))
+    may_queue = not (remote_first or preview) and (retry_native_disk or not (placed or compare_local))
+    queued, window = None, admission_window() if may_queue else 0
     flags = []
     for key in ('role', 'model', 'leg', 'override_reason', 'review_of', 'review_scope'):
         if options.get(key) is not None:
@@ -333,10 +339,10 @@ def admit(service, options, *, card=None, preview=False):
                     if time.time() < queued['queued_until']:
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
                         _, memory = resources(service)
-                        disk = local_disk_refusal(repo, service, role)
+                        disk = check_disk()
                         health = disk or local_readiness_refusal()
                         rows = load_rows()
-                        if not disk and not overflow.memory_refusal(memory, role_mb, floor):
+                        if not health and not overflow.memory_refusal(memory, role_mb, floor):
                             taken = _close_queue(service, queued)
                             if taken is not None:
                                 return taken
@@ -385,7 +391,11 @@ def admit(service, options, *, card=None, preview=False):
     if placement.get('host'):
         record.setdefault('host', placement['host'])
     from .item_key import annotate_item
+    from .notify import annotate_native
     annotate_item(record, card)
+    annotate_native(record, card)
+    if native and record['status'] == 'refused':
+        record.setdefault('ended', time.time())
     return record
 
 

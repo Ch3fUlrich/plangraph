@@ -90,6 +90,16 @@ def test_duplicate_is_idempotent(w):
     assert verify_integrity(w.conn) == []
 
 
+def test_native_launch_refusal_opens_one_keeper_alert(w):
+    to_claimed(w, "demo:A")
+    run = {"run_id": "refused-1", "phase": "finished", "rc": 2,
+           "native_launch_refusal": "cargo_target_cap: cache full"}
+    for _ in range(2):
+        w.store.record_run(sp(w), "demo:A", run)
+    rows = w.conn.execute("SELECT code, state, n FROM alerts WHERE key='demo:A'").fetchall()
+    assert [tuple(row) for row in rows] == [("native_launch_refused", "open", 1)]
+
+
 def test_non_spawner_forbidden(w):
     to_claimed(w, "demo:A")
     with pytest.raises(Refused) as exc:
