@@ -272,7 +272,7 @@ async def check():
     prompt_file.write_text('brief marker external fix')
     resumed = subprocess.run([os.environ['NATIVE_BINARY'], 'resume', run['run_id'],
         '--state', str(root/'state'), '--prompt-file', str(prompt_file)], capture_output=True, text=True)
-    assert resumed.returncode == 0, resumed.stderr
+    assert resumed.returncode == 0, resumed.stderr + (pathlib.Path(record["cwd"]).parent / "native.log").read_text()
     fixed = service.result(run['run_id'])
     assert fixed['status'] == 'completed' and fixed['final_head'] != record['final_head'], fixed
     for field in ('run_id', 'session_id', 'cwd', 'tool_path', 'review_dir'):

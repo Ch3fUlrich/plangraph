@@ -6,7 +6,9 @@ if 'resume' in sys.argv:
     assert brief.stat().st_mode & 0o777 == 0o600 and brief.parent == pathlib.Path.cwd().parent
     prompt = brief.read_text()
     original, heading, prompt = prompt.partition('\n\n# Follow-up\n\n')
-    assert heading and original == 'brief marker reject marker\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n', original
+    expected = ('brief marker' if 'external fix' in prompt else
+                'brief marker reject marker\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n')
+    assert heading and original == expected, original
 if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in prompt:
     import os, signal
     attempts = pathlib.Path('attempts')
