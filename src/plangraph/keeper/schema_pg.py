@@ -296,6 +296,11 @@ CREATE TABLE apply_grants (
 );
 """
 
+_V15 = """
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS level TEXT COLLATE "C";
+ALTER TABLE cards ADD COLUMN IF NOT EXISTS level_reason TEXT COLLATE "C";
+"""
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
@@ -310,7 +315,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(12, "host samples", HOST_SAMPLES_DDL),
               Migration(13, "l1 apply grants", _V13),
               Migration(14, "host samples: partition function not executable by PUBLIC",
-                        HOST_SAMPLES_ACL_DDL))
+                        HOST_SAMPLES_ACL_DDL),
+              Migration(15, "card effort decision", _V15))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)

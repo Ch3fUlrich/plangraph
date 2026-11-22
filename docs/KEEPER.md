@@ -745,3 +745,7 @@ and was not claimed since; `priority KEY <same value>` re-confirms and restarts 
 change is a `priority_set` event with `was` and `reason`. `digest` carries `priority_levels` (open
 items per level) and `level10_warning` when level 10 holds more open items than lanes closed in
 the last 7 days.
+
+Keeper cards retain the computed effort level and reason when written. A
+planner may supply an assigned level, and the keeper logs any attempt to
+lower it below the computed level.

@@ -69,12 +69,20 @@ class CardsMixin(ExecMixin, CardQuestionsMixin, CardUpdatesMixin):
                         normalised.append(path)
                 entries = normalised
             values[name] = _dump(entries)
+        from plangraph.planner.routing import log_level_lowering, rule_level
+        try:
+            effort = rule_level(dict(card, window_class=window,
+                                     write_set=_load_list(values["write_set"]),
+                                     risk_tags=_load_list(values["risk_tags"])))
+        except (ValueError, TypeError) as exc:
+            raise Refused("validation", str(exc)) from exc
+        values.update(level=effort["level"], level_reason=effort["reason"])
         with self._write():
             item = self._get_or_refuse(key)
             self._may_write_for(principal, item["project"])
             self._assert_unlocked(item)
             cols = ["outcome", *_CARD_LISTS, "check_kind", "check_cmd", "heldout_check",
-                    "window_class", "risk_tags", "estimate_tokens"]
+                    "window_class", "risk_tags", "estimate_tokens", "level", "level_reason"]
             marks = ",".join("?" for _ in cols)
             sets = ",".join(f"{c}=excluded.{c}" for c in cols)
             self.conn.execute(
@@ -82,6 +90,7 @@ class CardsMixin(ExecMixin, CardQuestionsMixin, CardUpdatesMixin):
                 f" VALUES(?,{marks},?)"
                 f" ON CONFLICT(key) DO UPDATE SET {sets},updated_at=excluded.updated_at",
                 (key, *[values[c] for c in cols], self._iso(now)))
+        log_level_lowering(effort, key, self._iso(now))
         return {"key": key}
 
     def get_card(self, principal, key):

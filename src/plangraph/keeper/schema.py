@@ -93,7 +93,9 @@ CREATE TABLE IF NOT EXISTS cards (
     window_class    TEXT CHECK (window_class IN ({_in(WINDOW_CLASSES)})),
     risk_tags       TEXT NOT NULL DEFAULT '[]',
     estimate_tokens INTEGER,
-    updated_at      TEXT
+    updated_at      TEXT,
+    level           TEXT,
+    level_reason    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS attempts (

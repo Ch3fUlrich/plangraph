@@ -115,7 +115,8 @@ _ADDED_COLUMNS = (("items", "description", "TEXT"), ("items", "host", "TEXT"),
                   ("items", "exec_principal", "TEXT"),
                   ("items", "exec_retired_runs", "TEXT"),
                   ("cards", "check_kind", "TEXT NOT NULL DEFAULT 'change'"),
-                  ("cards", "check_reads", "TEXT NOT NULL DEFAULT '[]'"))
+                  ("cards", "check_reads", "TEXT NOT NULL DEFAULT '[]'"),
+                  ("cards", "level", "TEXT"), ("cards", "level_reason", "TEXT"))
 
 
 _LOCK_TRIGGER = re.compile(r"CREATE TRIGGER (trg_\w+_locked_\w+).*?END;", re.S)

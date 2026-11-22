@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "source": "D-5174 starting floors; subsequent changes cite the replay delta",
+  "risk_floors": {"low": 37.5, "normal": 44, "high": 46, "critical": 50},
+  "levels": {
+    "L0": {"floor": 37.5, "seats": 0, "cascade": true},
+    "L1": {"floor": 44, "seats": 1, "cascade": true},
+    "L2": {"floor": 49, "seats": 1, "cascade": true},
+    "L3": {"floor": 50, "seats": 2, "cascade": false},
+    "L4": {"floor": 51, "seats": 2, "cascade": false}
+  }
+}

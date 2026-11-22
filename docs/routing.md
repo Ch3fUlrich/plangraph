@@ -246,3 +246,10 @@ the Codex launch maps `omniroute/cx-gpt-6.2-sol-medium` to `--model gpt-6.2-sol`
 `client_missing`). Families
 without an own client (deepseek, glm, mimo, free legs) stay on OpenCode. Pinning a model's
 OpenCode leg with `--leg` while its own client is installed needs `--override-reason`.
+
+The D-5174 effort profile is computed from the measured S0–S4 bucket, risk,
+test coverage, fanout, write set, and context fit. The effective AA floor is
+the larger of the risk and level floors. A planner can raise a level. A lower
+assignment records its requested value and the rule reason. Task classes group
+S0–S1, S2, and S3–S4 by change or regression check. Version 1 uses the plan's
+starting floors. Cite a replay delta for future changes to the profile table.

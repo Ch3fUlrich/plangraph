@@ -379,3 +379,15 @@ def test_new_states_do_not_break_validation_or_cancel(w):
     w.store.cancel(router, a, "parked card dropped")
     assert w.store._item(a)["state"] == "cancelled"
     assert keeper_events.verify_integrity(w.conn) == []
+
+
+def test_keeper_card_roundtrips_computed_effort_decision(w, caplog):
+    (key,) = seed(w, [("A", [])])
+    with caplog.at_level("INFO", logger="plangraph.planner.routing"):
+        w.store.put_card(w.p("router"), key, card(level="L0"))
+    stored = w.store.get_card(w.p("reader"), key)
+    assert stored["level"] == "L3"
+    assert stored["level_reason"] == "high_risk"
+    event = json.loads(caplog.messages[-1].split(" ", 1)[1])
+    assert event == {"ts": w.store._iso(w.clock()), "item": key,
+                     "assigned": "L0", "reason": "high_risk"}
