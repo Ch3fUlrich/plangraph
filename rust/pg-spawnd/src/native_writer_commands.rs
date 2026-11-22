@@ -1,7 +1,5 @@
 use super::{native_writer, writer_effort, Driver, Host, WRITER_EFFORT};
-use pg_worker_core::{
-    run::record::{run_dir, valid_run_id},
-};
+use pg_worker_core::run::record::{run_dir, valid_run_id};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -64,7 +62,8 @@ impl Host {
             reviews_started: 0,
             review_override: None,
             turn_timeout: std::time::Duration::from_secs(
-                60 * request["card"]["max_min"].as_u64()
+                60 * request["card"]["max_min"]
+                    .as_u64()
                     .filter(|minutes| (1..=1440).contains(minutes))
                     .unwrap_or(60),
             ),
@@ -103,7 +102,10 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     let _owner = crate::writer_control::supervisor_guard(&record_path)?;
     let mut record = request["record"].clone();
     let directory = record_path.parent().ok_or("record directory missing")?;
-    let id = record["run_id"].as_str().filter(|id| valid_run_id(id)).ok_or("invalid run id")?;
+    let id = record["run_id"]
+        .as_str()
+        .filter(|id| valid_run_id(id))
+        .ok_or("invalid run id")?;
     let default = directory.join("worktree");
     let cwd = match pg_worker_core::work_disks::worktree_disk() {
         Ok(Some((root, _))) => root.join(id),
@@ -114,8 +116,10 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             record["exit_code"] = json!(8);
             record["reason"] = json!(error.to_string());
             return pg_worker_core::run::record_io::atomic_write_private(
-                &record_path, record.to_string().as_bytes(),
-            ).map_err(|error| error.to_string());
+                &record_path,
+                record.to_string().as_bytes(),
+            )
+            .map_err(|error| error.to_string());
         }
     };
     record["cwd"] = json!(cwd);
@@ -131,8 +135,7 @@ pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
         .parent()
         .ok_or("writer record directory missing")?
         .join("native-request.json");
-    let request: Value =
-        read_record(&request_path)?;
+    let request: Value = read_record(&request_path)?;
     let requested = request["record_path"]
         .as_str()
         .ok_or("writer request record path missing")?;
@@ -157,7 +160,11 @@ pub(crate) fn resume_saved(args: Vec<String>) -> Result<(), String> {
 }
 
 fn execute_request(request: &Value, mut record: Value) -> Result<(), String> {
-    let record_path = PathBuf::from(request["record_path"].as_str().ok_or("record_path missing")?);
+    let record_path = PathBuf::from(
+        request["record_path"]
+            .as_str()
+            .ok_or("record_path missing")?,
+    );
     mark_process(&mut record);
     let mut host = Host::from_request(request, &record, record_path)?;
     if let Err(reason) = host.configure(request) {

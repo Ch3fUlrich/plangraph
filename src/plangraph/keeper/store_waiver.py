@@ -149,31 +149,6 @@ class WaiverMixin:
         names = list(scan()) if callable(scan) else []
         return [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
 
-    def _with_merge_repo(self, item):
-        """The item tagged with the one scanned repository that holds its Plan-Item commits.
-
-        A hint (``Merge-Repo:``) or a hit in the item's own repository decides at once;
-        otherwise exactly one other scanned repository must hold them, else the refusal names all.
-        """
-        if item.get("_merge_project") or self._merge_repository(item) != (item["project"], None):
-            return item
-        git, found = self._adapter("git"), []
-        for project in self._scan_projects(item):
-            try:
-                pinned = self._pin_close(dict(item, _merge_project=project))
-                commits = context_sources.plan_item_commits(
-                    git, project, item["key"], fetch=False, head=pinned["_close_head"])
-            except Exception:  # noqa: BLE001 - an unreadable repository names nothing
-                commits = None
-            if commits:
-                found.append(pinned)
-                if project == item["project"]:
-                    return pinned
-        if len(found) > 1:
-            names = ", ".join(candidate["_merge_project"] for candidate in found)
-            raise Refused("evidence_unverified", f"merge_repo_ambiguous: {names} (name one with Merge-Repo:)")
-        return found[0] if found else item
-
     def _merge_project(self, item):
         return self._merge_repository(item)[0]
 

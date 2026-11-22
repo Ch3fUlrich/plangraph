@@ -64,9 +64,13 @@ fn run_command_input(
     input: Option<&str>,
 ) -> Result<(i32, Vec<u8>, String), ToolError> {
     {
-        cmd.stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;

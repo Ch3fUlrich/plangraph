@@ -409,3 +409,7 @@ mod supervision_tests;
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "native_writer_host_sandbox_tests.rs"]
+mod sandbox_tests;

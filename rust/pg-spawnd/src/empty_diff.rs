@@ -1,8 +1,8 @@
 //! A review card whose diff is empty fails once, before routing or any leg is tried.
 use crate::errors::{RefusalKind, ToolError};
 use crate::placement::{parameter, Args};
-use pg_worker_core::workspace::DiffRef;
 use pg_worker_core::hosts::RepoEntry;
+use pg_worker_core::workspace::DiffRef;
 use pg_worker_core::workspace_resolver;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -32,11 +32,15 @@ fn check_with(args: &Args, repos: &BTreeMap<String, RepoEntry>) -> Result<(), To
         return match crate::prompt_git::has_diff(repo, &diff) {
             Ok(true) => Ok(()),
             Ok(false) => Err(empty(&diff.base_sha, &diff.head_sha)),
-            Err(error) => Err(parameter(format!("could not check registry review diff: {error}"))),
+            Err(error) => Err(parameter(format!(
+                "could not check registry review diff: {error}"
+            ))),
         };
     }
     let (Some(repo), Some(base), Some(head)) = (
-        reference["repo"].as_str().filter(|r| Path::new(r).is_absolute()),
+        reference["repo"]
+            .as_str()
+            .filter(|r| Path::new(r).is_absolute()),
         plain(&reference["base"]),
         plain(&reference["head"]),
     ) else {

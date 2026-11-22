@@ -15,7 +15,7 @@ fn same_head_re_review_diffs_against_the_batch_base() {
 fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
     use super::review::{TOOLS_ONLY_CLOSE, TOOLS_ONLY_OPEN};
     let dir = tempfile::tempdir().unwrap();
-    let mut host = Host {
+    let host = Host {
         repo: dir.path().into(),
         cwd: dir.path().into(),
         run_id: "run-tools".into(),
@@ -33,15 +33,30 @@ fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
         review_cli: vec!["false".into()],
         python_src: None,
     };
-    let (base, head) = ("b".repeat(40), "c".repeat(40));
-    let prompt = host.review_prompt(
-        &base,
-        &head,
-        None,
-        &["openai".to_owned()],
-        "VERSIONED BRIEF",
-        "A nonempty review skill.",
-    );
+    host.git(&["init", "-q"]).unwrap();
+    host.git(&[
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "fixture",
+    ])
+    .unwrap();
+    let head = host.git(&["rev-parse", "HEAD"]).unwrap();
+    let base = head.clone();
+    let prompt = host
+        .review_prompt(
+            &base,
+            &head,
+            None,
+            &["openai".to_owned()],
+            "VERSIONED BRIEF",
+            "A nonempty review skill.",
+        )
+        .unwrap();
     assert!(prompt.starts_with(TOOLS_ONLY_OPEN));
     let open = 0;
     let close = prompt.find(TOOLS_ONLY_CLOSE).unwrap();
