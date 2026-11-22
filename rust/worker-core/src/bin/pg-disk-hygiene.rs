@@ -1,7 +1,6 @@
 use pg_worker_core::{
     disk_hygiene::{self, Guards, Report, Thresholds},
     disk_runtime,
-    run::record_io,
     sweep_facts, work_disks,
 };
 use std::{

@@ -12,6 +12,7 @@ fn options(f: &Fixture) -> Options<'_> {
         pins: &f.pins,
         claims_reader: None,
         apply: false,
+        include_merged: false,
         delete_remote: false,
     }
 }

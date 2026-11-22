@@ -141,6 +141,7 @@ fn reaper_requires_exact_approval_and_quarantines_without_removing_the_branch() 
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: false,
+        include_merged: false,
         delete_remote: false,
     };
     let report = reap_with_authority(&opts, None, authority).unwrap();
@@ -204,6 +205,7 @@ fn native_terminal_run_logs_are_separate_from_worktree_ownership() {
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: false,
+        include_merged: false,
         delete_remote: false,
     };
     fs::create_dir(run.join("worktree")).unwrap();
@@ -241,6 +243,7 @@ fn deletion_needs_its_own_plan_and_audits_bytes() {
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: false,
+        include_merged: false,
         delete_remote: false,
     };
     let report = reap_with_authority(&opts, None, authority).unwrap();
