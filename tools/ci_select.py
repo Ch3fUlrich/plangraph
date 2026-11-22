@@ -48,6 +48,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "deploy/systemd/pg-ci-watch.service",  # a ci_watch test pins its flags.
     "docs/ci-watch.md",  # the same test pins the documented command.
     "deploy/systemd/pg-feeder.service",
+    "deploy/systemd/pg-wsl-cache-guard.service",
+    "deploy/systemd/pg-wsl-cache-guard.timer",
     "deploy/liveness/router.toml",
     "tools/liveness_watchdog.py",
     "src/plangraph/keeper/errors.py",
