@@ -20,7 +20,8 @@ from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_con
                               TESTED_FF, REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, keeper_migration, part_review, run, write_landing, write_landing_records,
-                              cleanup_landed, close_merged_items, windows_commands, windows_gate, windows_needed, windows_report, windows_script)
+                              cleanup_landed, close_merged_items)
+from merge_batch_plan import windows_commands, windows_gate, windows_needed, windows_report, windows_script
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")

@@ -216,7 +216,7 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', message)
     base, head = git('rev-parse', 'HEAD^', 'HEAD').splitlines()
     git('checkout', '--detach', base)
-    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-flash')
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'opencode-go-deepseek-v4-flash')
     service = SpawnService(state=tmp_path / 'state')
     service.runner.default_cwd = str(receiver)
     async def admit(*args, **kwargs):

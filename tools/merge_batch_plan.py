@@ -1,5 +1,7 @@
-"""Planning for tools/merge_batch.py: stack order, HIGH tier, batch caps, the plan table (pure)."""
+"""Planning for tools/merge_batch.py: stack order, HIGH tier, batch caps, the plan table and Windows checks."""
 from __future__ import annotations
+
+import fnmatch
 import os
 import shlex
 import subprocess
@@ -8,9 +10,8 @@ import tempfile
 import time
 from pathlib import Path
 
-import fnmatch
-
-from merge_batch_util import BATCH_READY, NEEDS_UPDATE, MergeBatchError
+from merge_batch_util import (BATCH_READY, NEEDS_UPDATE, MergeBatchError, first_line, git,
+                              pr_labels, save_state)
 
 try:
     from ci_commit_gate import AUTH_DOOR_PATHS, GATE_PATHS
@@ -194,9 +195,6 @@ def render_table(plan):
     if not plan["batches"]:
         out.append("no PR is eligible for a batch")
     return "\n".join(out)
-
-
-from merge_batch_util import first_line, git, pr_labels, save_state
 
 
 WINDOWS_HOST_ENV = "PLANGRAPH_WINDOWS_HOST"

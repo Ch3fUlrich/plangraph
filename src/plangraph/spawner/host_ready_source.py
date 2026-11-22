@@ -266,7 +266,7 @@ def python_test_tools(measure, fail, prefix, repo, unit=None, spawner=None):
     return not missing
 
 
-def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT):
+def probe_host(name, config, state, runner, timeout, *, persist):
     record = dict(host=name, ok=False, checked_at=None, failures=[], reachable=False,
                   mem_available_mb=None, disk_free_gb=None, checkout_sha=None,
                   main_sha=None, doctor_ok=None, keeper_ok=None,
@@ -462,7 +462,7 @@ def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT)
         fail('unreachable', 'other_checks_unknown')
     record['ok'] = not record['failures']
     try:
-        atomic_write_private(Path(state) / (name + '.json'), json.dumps(record))
+        persist(Path(state) / (name + '.json'), json.dumps(record))
     except (MemoryError, RecursionError):
         raise
     except Exception:

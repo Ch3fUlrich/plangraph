@@ -22,7 +22,7 @@ from .host_ready_source import (
     pool_slot_roots as _pool_slot_roots,
     record_disk_floor_alarm as _record_disk_floor_alarm,
     windows_cargo_lease as _windows_cargo_lease,
-    HOST_TIMEOUT, check_host,
+    HOST_TIMEOUT, probe_host, python_test_tools,
 )
 
 MAX_AGE = 600
@@ -581,6 +581,10 @@ def pre_push_report(repo, unit=None, environ=None):
         except (OSError, subprocess.SubprocessError):
             pass
     return report
+
+
+def check_host(name, config, state, runner=subprocess.run, timeout=HOST_TIMEOUT):
+    return probe_host(name, config, state, runner, timeout, persist=atomic_write_private)
 
 
 def main(argv=None):

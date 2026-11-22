@@ -8,7 +8,7 @@ use crate::review_git::{
 use pg_worker_core::review_split::{
     group_banner, plan_groups_from_measured, SeatVerdict, TestGaming,
 };
-use pg_worker_core::{review_completion, run::record::run_dir};
+use pg_worker_core::run::record::run_dir;
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
