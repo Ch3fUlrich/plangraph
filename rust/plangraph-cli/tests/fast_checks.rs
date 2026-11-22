@@ -109,6 +109,7 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     }
 
     let dir = tempfile::tempdir().unwrap();
+    let cargo_cache = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q"]);
     let tools = root.join("tools");
@@ -143,10 +144,14 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     git(root, &["add", "."]);
     git(root, &["commit", "-qm", "base"]);
     let base = git(root, &["rev-parse", "HEAD"]);
-    let run = || {
+    let run = |base: &str| {
         Command::new(env!("CARGO_BIN_EXE_plangraph"))
             .current_dir(root)
-            .args(["fast-checks", "--base", &base])
+            .args(["fast-checks", "--base", base])
+            .env(
+                "PLANGRAPH_CARGO_TARGET_DIR",
+                cargo_cache.path().join("target"),
+            )
             .env("AUTOOS_CTX_HARD", "1")
             .env("CLAUDE_JOB_DIR", "fixture")
             .output()
@@ -154,7 +159,7 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
     };
 
     fs::write(root.join("changed.txt"), "changed\n").unwrap();
-    let output = run();
+    let output = run(&base);
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout).contains("affected environment verified"));
 
@@ -164,7 +169,7 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
         root,
         &["commit", "-qm", "claimed base failure", "-m", &note],
     );
-    let output = run();
+    let output = run(&base);
     assert!(!output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stderr).contains("passed at base"));
     assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
@@ -180,13 +185,7 @@ fn fast_checks_scrubs_affected_tests_and_refuses_a_passing_base_replay() {
         root,
         &["commit", "-qm", "verified base failure", "-m", &note],
     );
-    let output = Command::new(env!("CARGO_BIN_EXE_plangraph"))
-        .current_dir(root)
-        .args(["fast-checks", "--base", &failing_base])
-        .env("AUTOOS_CTX_HARD", "1")
-        .env("CLAUDE_JOB_DIR", "fixture")
-        .output()
-        .unwrap();
+    let output = run(&failing_base);
     assert!(output.status.success(), "{output:?}");
     assert!(String::from_utf8_lossy(&output.stdout)
         .contains("FAILED test_example.py::test_example - fixture failure"));

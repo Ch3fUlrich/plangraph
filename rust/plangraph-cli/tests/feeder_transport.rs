@@ -103,7 +103,7 @@ def save(record):
     saved.append(dict(record)); store[record['run_id']]=dict(record)
 service=SimpleNamespace(runner=SimpleNamespace(default_cwd='.'),_save=save,result=lambda run_id: store[run_id])
 os.environ.update(PLANGRAPH_ADMISSION_WAIT_S='0.5',PLANGRAPH_ADMISSION_POLL_S='0.01')
-with patch.object(overflow,'registry_caps',return_value={'self':'dell','hosts':[]}), patch.object(overflow,'placement_policy',return_value=('dell',False)), patch.object(overflow,'local_limits',return_value=(3000,2048)), patch.object(seat_spawn,'resources',return_value=(0,100)), patch.object(host_ready,'local_disk_refusal',return_value=None), patch.object(overflow,'ready_records',return_value={}), patch.object(overflow,'repos_public',return_value=False), patch.object(overflow,'decide',return_value=overflow.Decision(None,'low memory')):
+with patch.object(overflow,'registry_caps',return_value={'self':'dell','hosts':[]}), patch.object(overflow,'placement_policy',return_value=('dell',False)), patch.object(overflow,'local_limits',return_value=(3000,2048)), patch.object(seat_spawn,'resources',return_value=(0,100)), patch.object(host_ready,'local_disk_admission',return_value=(None,None)), patch.object(overflow,'ready_records',return_value={}), patch.object(overflow,'repos_public',return_value=False), patch.object(overflow,'decide',return_value=overflow.Decision(None,'low memory')):
     final=seat_spawn.admit(service,{'role':'implement'},card={'item_key':'plangraph:QUEUE-TEST','repo':'.'})
     print(json.dumps(dict(saved[0],final=final)))
 "#]).output().unwrap();
