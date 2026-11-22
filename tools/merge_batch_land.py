@@ -474,6 +474,8 @@ def settle_train(train, lease, st=None, *, wait=0, allow_open=False):
         checked = check_landed_parts(repo, number, train["parts"], merge, wait, report=False)
         train = landing_journal(repo, "landed", pr=number, merge=merge,
                                 included=[part["pr"] for part in checked], **lease)
+        if warning := train.get("dependency_warning"):
+            print(f"train #{number} settled with an unmet dependency: {warning}", file=sys.stderr)
     if st is not None and st.get("head") != train["head"]:
         st = None
     attempt = frozen_landing(st) if st is not None else {}

@@ -241,17 +241,24 @@ class MergeLocksMixin:
             if action == "landed":
                 if manifest.get("mode") == "tested-ff" and merge != row["head"]:
                     raise Refused("conflict", "tested-ff must land the exact prepared head")
-                if row["merged"] is None and "included" not in body:
-                    self._check_train_dependencies(repo, _landing_data(row))
+                first_outcomes = "included" in body and "included" not in manifest
                 if "included" in body:
                     included = _included_parts(body["included"], manifest["parts"])
                     if manifest.get("included", included) != included:
                         raise Refused("conflict", "part outcomes differ from the landing journal")
-                    if row["merged"] is None or "included" not in manifest:
-                        self._check_train_dependencies(repo, _landing_data(row), included)
                     manifest["included"] = included
                 if "mode" in manifest and "included" not in manifest:
                     raise Refused("conflict", "landing requires checked part outcomes")
+                if row["merged"] is None or first_outcomes:
+                    # Settlement records the verified host outcome even if an edge is unmet.
+                    try:
+                        self._check_train_dependencies(repo, _landing_data(row), manifest.get("included"))
+                    except Refused as exc:
+                        if exc.code != "conflict":
+                            raise
+                        manifest["dependency_warning"] = exc.msg
+                    else:
+                        manifest.pop("dependency_warning", None)
                 if "receipt_inputs" in manifest and "landed_at" not in manifest:
                     manifest["landed_at"] = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
                 if row["merged"] is None or "included" in body:

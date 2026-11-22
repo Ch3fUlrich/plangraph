@@ -28,6 +28,8 @@ The keeper matches the exact folded head in a verified landed train.
 A lane can appear in `pg ready` and be claimed when one open train and its open ancestors contain accepted parts for every unfinished dependency. Each acceptance binds a review run to the item and exact part head. The ready response and claim reply expose the selected train's `base_sha`.
 SQLite schema v22 and PostgreSQL migration 21 add `landing_claim_bases` to pin the train and supporting parts to the claim epoch. If the train head changes, a supporting part is dropped, or a supporting train closes unmerged, the keeper records a `released` event with the reason, clears lane ownership, and returns the item to `open`. The item appears in `pg ready` again when its dependencies qualify.
 
+The lander checks dependencies before merging. When settlement verifies a merge on main, the keeper records the actual included parts and keeps the first unmet dependency as `dependency_warning` in the landing journal. Settlement can then finish and the warning remains visible in the journal.
+
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
 `items(key PK, project, id, title, kind, track, owner, estimate_h, estimate_src, done_criteria, evidence_kinds json, operator,
