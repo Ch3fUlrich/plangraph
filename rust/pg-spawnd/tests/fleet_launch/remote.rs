@@ -1,11 +1,12 @@
 use super::sandbox::{Launcher, Sandbox, LOCAL, PROMPT, REMOTE, SID};
+use super::test_python;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::fs;
 use std::io::Write;
 use std::{
     path::{Component, Path},
-    process::{Command, Output, Stdio},
+    process::{Output, Stdio},
 };
 
 const DRY: &str = "forwarded dry run\n";
@@ -139,7 +140,8 @@ pub fn check_interruption(launcher: &Launcher) {
     s.hosts(json!([{"name": REMOTE, "ssh": "fixture-hop", "memory_floor_gib": 0}]));
     fs::write(s.path("memory-fixture-hop"), "MemAvailable: 1024 kB\n").unwrap();
     fs::write(s.path("ssh-remove-after-probe"), "").unwrap();
-    std::os::unix::fs::symlink("/usr/bin/python3", s.path("bin/python3")).unwrap();
+    std::os::unix::fs::symlink(test_python::command().get_program(), s.path("bin/python3"))
+        .unwrap();
     let out = s
         .launch("review")
         .args(["--host", REMOTE])
@@ -363,13 +365,9 @@ fn check_destination(launcher: &Launcher) {
 }
 
 fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {
-    let mut command = Command::new("/usr/bin/timeout");
-    s.isolate(&mut command);
-    let mut child = command
+    let mut child = s
+        .python_command()
         .args([
-            "--kill-after=2s",
-            "30s",
-            "/usr/bin/python3",
             "-c",
             "import base64,sys;exec(base64.b64decode(sys.argv[1]))",
             encoded,

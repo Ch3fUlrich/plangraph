@@ -1,9 +1,7 @@
-#[path = "../../../test_support/python.rs"]
-mod test_python;
-
 use super::{
     records::ledger,
     sandbox::{Launcher, Sandbox},
+    test_python,
 };
 use std::{
     ffi::CString,

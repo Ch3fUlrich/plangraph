@@ -253,6 +253,12 @@ def test_rust_python_guard_covers_helpers_and_rust_literals(tmp_path, source):
     ('rust/crate/src/fixture_tests.rs',
      'Command::new(if cfg!(windows) { "python" } else { "python3" });',
      'test_python::command();'),
+    ('rust/crate/tests/fixture.rs',
+     'Command::new("/usr/bin/timeout").args(["30s", "/usr/bin/python3"]);',
+     'Command::new("/usr/bin/timeout").arg("30s").arg(test_python::command().get_program());'),
+    ('rust/crate/tests/fixture.rs',
+     'symlink("/usr/bin/python3", fixture.join("python3"));',
+     'symlink(test_python::command().get_program(), fixture.join("python3"));'),
     ('tests/test_fixture.py',
      'from subprocess import run as invoke\ninvoke(args=["python3", "-c", "pass"])',
      'python, env = python_test_env()\nsubprocess.run([python, "-c", "pass"], env=env)'),
@@ -321,13 +327,15 @@ _RUST_COMMAND_PREFIX = re.compile(
 
 
 def _rust_subprocess_lines(source):
-    if 'Command' not in source:
-        return []
     offsets = set()
     for value, offset in _rust_strings(source):
-        if Path(value).name in _PYTHON_NAMES:
-            if match := _RUST_COMMAND_PREFIX.search(source, 0, offset):
-                offsets.add(match.start())
+        path = Path(value)
+        if path.name not in _PYTHON_NAMES:
+            continue
+        if match := _RUST_COMMAND_PREFIX.search(source, 0, offset):
+            offsets.add(match.start())
+        elif path.parent.as_posix() in {"/bin", "/usr/bin", "/usr/local/bin"}:
+            offsets.add(offset)
     return sorted(source.count('\n', 0, offset) + 1 for offset in offsets)
 
 

@@ -1,5 +1,5 @@
-use super::records;
 use super::sandbox::{Launcher, Sandbox, LOCAL, SID};
+use super::{records, test_python};
 use serde::Deserialize;
 use serde_json::json;
 use std::fs::{self, File};
@@ -163,7 +163,7 @@ fn check_io_failures(launcher: &Launcher) {
 fn check_child_failures(launcher: &Launcher) {
     let s = Sandbox::new(launcher);
     fs::remove_file(s.path("bin/claude")).unwrap();
-    symlink("/usr/bin/python3", s.path("bin/python3")).unwrap();
+    symlink(test_python::command().get_program(), s.path("bin/python3")).unwrap();
     let out = s
         .launch("review")
         .env("PATH", s.path("bin"))
