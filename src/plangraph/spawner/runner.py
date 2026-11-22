@@ -296,12 +296,12 @@ class SpawnerRunner:
         child_env = build_child_env(extra_env, headers=envelope_headers)
         from .host_ready import cargo_child_env
         review_target = (extra_env or {}).get('CARGO_TARGET_DIR') if role == 'review' else None
-        child_env = cargo_child_env(child_env, target=review_target)
         # D-3505: harnesses take their project dir from an inherited $PWD over the
         # process cwd; a caller's PWD put probe commits into the caller's worktree.
         child_env['PWD'] = _abspath(work_dir)
         if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
             child_env = with_agent_shell(claude_child_env(child_env))
+        child_env = cargo_child_env(child_env, target=review_target)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':

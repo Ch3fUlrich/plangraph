@@ -241,7 +241,8 @@ def admit(service, options, *, card=None, preview=False):
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
     config = overflow.placement_config(registry, role)
-    local, remote_first = overflow.placement_policy(registry, config)
+    local, orchestration_only = overflow.placement_policy(registry, config)
+    remote_first = orchestration_only
     review_workspace = role == 'review' and (card or {}).get('review_workspace') is True
     native = (card or {}).get('run_kind') == 'native-codex'
     placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
@@ -259,7 +260,7 @@ def admit(service, options, *, card=None, preview=False):
     if placed and not local_repository_review:
         remote_first = False
     local_host = overflow.host_config(registry, local)
-    local_worker = bool(local_host) and local_host.get('orchestration_only') is not True
+    local_worker = bool(local_host) and not orchestration_only
     if preview and not (remote_first or compare_local):
         return None
     role_mb, floor = overflow.local_limits(registry, role)

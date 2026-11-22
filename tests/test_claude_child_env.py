@@ -10,6 +10,7 @@ import asyncio
 import os
 import sys
 from dataclasses import replace
+from unittest.mock import Mock
 
 import pytest
 
@@ -96,7 +97,7 @@ def test_failure_message_carries_names_only():
     assert sentinel not in text and '/h-value' not in text
 
 
-def drive_spawn(monkeypatch, tmp_path, *, extra_env=None, path_dirs=(), system_path=True):
+def drive_spawn(monkeypatch, tmp_path, *, extra_env=None, path_dirs=(), system_path=True, role='review'):
     """Run SpawnerRunner.spawn for the claude harness up to the exec boundary; return (env passed, job)."""
     for name in UNLISTED:
         monkeypatch.setenv(name, 'v')
@@ -119,11 +120,33 @@ def drive_spawn(monkeypatch, tmp_path, *, extra_env=None, path_dirs=(), system_p
     runner = SpawnerRunner(default_cwd=str(tmp_path), process_factory=factory)
     job = None
     try:
-        job = asyncio.run(runner.spawn('review this', 'claude-haiku-5-5', role='review', client='claude',
+        job = asyncio.run(runner.spawn('review this', 'claude-haiku-5-5', role=role, client='claude',
                                        cwd=str(tmp_path), extra_env=extra_env))
     except Stop:
         pass
     return seen.get('env'), job
+
+
+@pytest.mark.parametrize('role', ['review', 'implement'])
+def test_cargo_target_and_shared_lease_at_spawn(monkeypatch, tmp_path, role):
+    shared, leased = (str(tmp_path / name) for name in ('shared', 'leased'))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', shared)
+    monkeypatch.setenv('CARGO_BUILD_BUILD_DIR', str(tmp_path / 'ambient'))
+    shared_lease = Mock()
+    cargo_lease = Mock(return_value=shared_lease)
+    monkeypatch.setattr('plangraph.spawner.host_ready.cargo_lease', cargo_lease)
+    env, _ = drive_spawn(monkeypatch, tmp_path, role=role,
+                         path_dirs=[fake_binary(tmp_path / 'bin', 'claude')],
+                         extra_env={'CARGO_TARGET_DIR': leased})
+    if role == 'review':
+        cargo_lease.assert_not_called()
+        assert env['CARGO_TARGET_DIR'] == leased
+        assert env.get('CARGO_BUILD_BUILD_DIR') == leased
+    else:
+        cargo_lease.assert_called_once_with()
+        shared_lease.close.assert_called_once_with()
+        assert env['CARGO_TARGET_DIR'] == shared
+        assert 'CARGO_BUILD_BUILD_DIR' not in env
 
 
 def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path):

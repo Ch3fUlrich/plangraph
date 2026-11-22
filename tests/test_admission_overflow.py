@@ -352,6 +352,7 @@ def test_orchestration_real_remote_launch(orchestration, monkeypatch, tmp_path):
 
 
 real_remote_spawn = overflow.remote_spawn
+real_ready_records = overflow.ready_records
 
 
 def test_orchestration_config_thresholds(orchestration, monkeypatch):
@@ -428,11 +429,17 @@ def test_build_review_requires_worker_with_disk_and_ram(orchestration):
     remote.assert_not_called()
 
 
-@pytest.mark.parametrize('local,admitted', [('host-b', True), ('host-a', False)])
-def test_placed_build_review_uses_registry_host_role(orchestration, monkeypatch, local, admitted):
-    service, rows, remote, path, _ = orchestration
+@pytest.mark.parametrize('local,projected_only,admitted', [
+    ('host-b', False, True), ('host-a', False, False), ('host-b', True, False),
+])
+def test_placed_build_review_uses_host_role(orchestration, monkeypatch, local, projected_only, admitted):
+    service, rows, remote, path, registry = orchestration
     config = json.loads(path.read_text())
-    config['hosts'][local] = {'orchestration_only': True}
+    if projected_only:
+        config['hosts'][local]['orchestration_only'] = True
+        data = json.loads(registry.read_text())
+        next(host for host in data['hosts'] if host['id'] == local).pop('orchestration_only')
+        registry.write_text(json.dumps(data))
     path.write_text(json.dumps(config))
     rows.clear()
     monkeypatch.setenv('PLANGRAPH_HOST_NAME', local)
@@ -447,4 +454,22 @@ def test_placed_build_review_uses_registry_host_role(orchestration, monkeypatch,
     else:
         assert record['status'] == 'refused'
         assert 'requires a registered worker host' in record['reason']
+    remote.assert_not_called()
+
+
+def test_build_review_refuses_remote_orchestration_route(orchestration, monkeypatch):
+    service, rows, remote, path, registry = orchestration
+    config = json.loads(path.read_text())
+    config['hosts']['host-b']['orchestration_only'] = True
+    path.write_text(json.dumps(config))
+    data = json.loads(registry.read_text())
+    data['hosts'][1].pop('orchestration_only')
+    registry.write_text(json.dumps(data))
+    monkeypatch.setattr(overflow, 'ready_records', real_ready_records)
+    monkeypatch.setattr(overflow, 'read_readiness', lambda name: dict(rows[name], disk_free_gb=30))
+    card = {'review_workspace': True, 'repository_review_required': True,
+            'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
+    record = service.admit_spawn({'role': 'review'}, card=card)
+    assert record['status'] == 'refused'
+    assert 'host-b: review workspace requires a registered worker host' in record['reason']
     remote.assert_not_called()

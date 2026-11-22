@@ -1,1 +1,1 @@
-Build-capable native reviews materialize the exact reviewed head and a Cargo target under one worker-owned directory. The Cargo target is added to the review launch environment. The worker releases the directory when the review ends.
+Build-capable native reviews materialize the exact reviewed head and a Cargo target under one worker-owned directory. The launch sets both Cargo output directories to the leased target, including for Claude. The worker releases the directory when the review ends.
