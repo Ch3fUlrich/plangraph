@@ -185,33 +185,60 @@ fn train_delta_admission_requires_an_independent_authenticated_seat_on_its_promp
 #[cfg(unix)]
 #[test]
 fn train_delta_dispatch_routes_a_witnessed_document_review() {
+    check_train_delta_dispatch(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn train_delta_dispatch_routes_mimo_when_openai_wrote_the_resolution() {
+    check_train_delta_dispatch(true);
+}
+
+#[cfg(unix)]
+fn check_train_delta_dispatch(openai_resolution: bool) {
     use super::super::delta::ReviewPacket;
     let fx = Fx::new();
-    let part_head = fx.commit(&fx.base(), "a.txt", "a\n");
-    g(fx.path(), &["checkout", "--detach", &part_head]);
-    g(
-        fx.path(),
-        &["commit", "--amend", "-m", "part\n\nWriter: gpt-6.2-sol"],
-    );
-    let first = g(fx.path(), &["rev-parse", "HEAD"]);
-    let other = fx.commit(&fx.base(), "b.txt", "b\n");
-    g(fx.path(), &["checkout", "--detach", &other]);
-    g(
-        fx.path(),
-        &[
-            "commit",
-            "--amend",
-            "-m",
-            "part\n\nWriter: gemini-4-hydrogen-high",
-        ],
-    );
-    let second = g(fx.path(), &["rev-parse", "HEAD"]);
-    let parts = vec![part(1, &first, None), part(2, &second, None)];
-    let m = build(&fx.input(parts.clone(), "", None))
-        .unwrap()
-        .manifest
-        .unwrap();
-    let delta = verify_manifest_with(fx.path(), &m, &parts, &[], &[]).unwrap();
+    let (parts, resolutions) = if openai_resolution {
+        let (x, p, prefix) = conflicting(&fx);
+        let candidate = resolve(&fx, &prefix, &p, "shared.txt", "final resolution\n");
+        g(fx.path(), &["checkout", "--detach", &candidate]);
+        g(
+            fx.path(),
+            &[
+                "commit",
+                "--amend",
+                "-m",
+                "resolution\n\nWriter: gpt-6.2-sol",
+            ],
+        );
+        let resolution = adopted(&prefix, &p, &g(fx.path(), &["rev-parse", "HEAD"]));
+        (vec![part(1, &x, None), part(2, &p, None)], vec![resolution])
+    } else {
+        let part_head = fx.commit(&fx.base(), "a.txt", "a\n");
+        g(fx.path(), &["checkout", "--detach", &part_head]);
+        g(
+            fx.path(),
+            &["commit", "--amend", "-m", "part\n\nWriter: gpt-6.2-sol"],
+        );
+        let first = g(fx.path(), &["rev-parse", "HEAD"]);
+        let other = fx.commit(&fx.base(), "b.txt", "b\n");
+        g(fx.path(), &["checkout", "--detach", &other]);
+        g(
+            fx.path(),
+            &[
+                "commit",
+                "--amend",
+                "-m",
+                "part\n\nWriter: gemini-4-hydrogen-high",
+            ],
+        );
+        let second = g(fx.path(), &["rev-parse", "HEAD"]);
+        (vec![part(1, &first, None), part(2, &second, None)], vec![])
+    };
+    let mut input = fx.input(parts.clone(), "", None);
+    input.resolutions = resolutions.clone();
+    let m = build(&input).unwrap().manifest.unwrap();
+    let delta = verify_manifest_with(fx.path(), &m, &parts, &resolutions, &[]).unwrap();
     g(fx.path(), &["checkout", "--detach", &m.train_sha]);
     g(
         fx.path(),
@@ -223,11 +250,16 @@ fn train_delta_dispatch_routes_a_witnessed_document_review() {
     let state = tempfile::tempdir().unwrap();
     let fake_gateway = || {
         let mut cmd = python();
-        cmd.env("PG_DELTA_TEST_STATE", state.path()).args([
-            "-c",
-            r#"
+        cmd.env("PG_DELTA_TEST_STATE", state.path())
+            .env(
+                "PG_DELTA_TEST_WRITER",
+                if openai_resolution { "openai" } else { "" },
+            )
+            .args([
+                "-c",
+                r#"
 import contextlib, hashlib, io, json, os, sys
-from unittest.mock import patch
+from pathlib import Path
 from plangraph.spawner import cli, gateway_witness as gw
 from plangraph.spawner.runner import spawn_service
 
@@ -236,33 +268,36 @@ card = json.loads(args[args.index('--card') + 1])
 writers = [args[i + 1] for i, arg in enumerate(args) if arg == '--writer-family']
 prompt = open(args[args.index('--prompt-file') + 1], encoding='utf-8').read()
 state = os.environ['PG_DELTA_TEST_STATE']
-env = {'OMNIROUTE_BASE_URL': 'http://127.0.0.1:1/v1',
-       'OPENCODE_CONFIG_CONTENT': json.dumps({'provider': {'mimo': {}}})}
-os.environ.update(env)
+expected_writer = os.environ['PG_DELTA_TEST_WRITER']
+assert writers == ([expected_writer] if expected_writer else []), writers
+# Exercise the real overlay and renderer without depending on the host provider file.
+os.environ.pop('OPENCODE_CONFIG_CONTENT', None)
+providers = Path(state) / 'providers.json'
+providers.write_text('{"providers": {}}', encoding='utf-8')
+os.environ['PLANGRAPH_PROVIDERS_FILE'] = str(providers)
+os.environ['OMNIROUTE_BASE_URL'] = 'http://127.0.0.1:1/v1'
 os.environ[gw.TOKEN_ENV] = 'local-fixture'
 os.environ['PLANGRAPH_OMNIROUTE_LEG_STATE'] = '0'
 os.environ['PLANGRAPH_OWN_HARNESS'] = 'off'
 os.environ['XDG_CONFIG_HOME'] = state
 os.environ['XDG_STATE_HOME'] = state
-with patch.object(gw, 'review_child_env', return_value=env):
-    plan = spawn_service(state=state)._route(card, 'review', writer_families=writers)
-    capable = gw.witness_gate_legs(card, 'review', plan.legs)
-    assert not writers, writers
-    assert capable and all(gw.gateway_leg(leg.model, env) for leg in capable)
-    assert 'diff_ref' not in card
-    rendered = io.StringIO()
-    with contextlib.redirect_stdout(rendered):
-        assert cli.main(['--state', state, *args, '--dry-run']) == 0, rendered.getvalue()
-    result = json.loads(rendered.getvalue())
-    assert result['status'] == 'dry_run', (result.get('error'), result.get('attempts'))
-    assert result['review_document'] == 'train_delta'
-    attempt = next(a for a in result['attempts'] if a['status'] == 'dry_run')
-    assert 'finish_reason' in attempt
-    assert result['review_brief_sha256'] == hashlib.sha256(prompt.encode()).hexdigest()
-    assert gw.gateway_leg(result['chosen_leg']['model'], env), result['chosen_leg']
+plan = spawn_service(state=state)._route(card, 'review', writer_families=writers)
+assert gw.witness_gate_legs(card, 'review', plan.legs) == plan.legs
+assert 'diff_ref' not in card
+rendered = io.StringIO()
+with contextlib.redirect_stdout(rendered):
+    assert cli.main(['--state', state, *args, '--dry-run']) == 0, rendered.getvalue()
+result = json.loads(rendered.getvalue())
+assert result['status'] == 'dry_run', (result.get('error'), result.get('attempts'))
+assert result['review_document'] == 'train_delta'
+attempt = next(a for a in result['attempts'] if a['status'] == 'dry_run')
+assert 'finish_reason' in attempt
+assert result['review_brief_sha256'] == hashlib.sha256(prompt.encode()).hexdigest()
+if expected_writer == 'openai':
+    assert result['chosen_leg']['id'] in ('mimo-v2.6-pro', 'mimo-v2.6-flash'), result['chosen_leg']
 print(rendered.getvalue())
 "#,
-        ]);
+            ]);
         cmd
     };
     packet

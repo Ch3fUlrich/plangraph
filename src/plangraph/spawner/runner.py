@@ -318,10 +318,8 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
-            from .opencode_overlay import overlay_env
-            child_env = overlay_env(child_env)
-            from plangraph.routing_support.opencode_render import render_gateway_providers
-            render_reason = render_gateway_providers(child_env, model_or_combo)
+            from .opencode_overlay import prepare_gateway_env
+            child_env, render_reason = prepare_gateway_env(child_env, model_or_combo)
             if render_reason is None:
                 # Overlay only copies an env name through when the parent already
                 # holds it; hand the child the host keys from the AutoOS keys file

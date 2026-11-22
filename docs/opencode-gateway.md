@@ -8,7 +8,9 @@ gateway config into a `{"providers": {...}}` file, omitting unrelated providers;
 credentials must remain environment-variable references, never secret values.
 
 The per-run overlay and renderer route both `mimo` and `omniroute` through
-the configured gateway. The renderer first honours a valid child OmniRoute
+the configured gateway. Witness-required review routing applies the same
+overlay and renderer to each gateway candidate before checking eligibility.
+The renderer first honours a valid child OmniRoute
 provider URL already present in `OPENCODE_CONFIG_CONTENT`, including a
 `gateway_url` supplied to `build_child_env` in the spawner/keeper config.
 Only when no valid child URL is present does it consider `OMNIROUTE_BASE_URL`,
