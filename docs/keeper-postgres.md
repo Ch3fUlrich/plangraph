@@ -101,6 +101,32 @@ stage completed that UTC day. The GO request includes the elapsed stage summary.
 Import the green main Actions attempt under the same batch key to populate
 the exact merged-head completion and the elapsed time from the folded parts' ACCEPT.
 
+For a batch that advances the keeper schema, copy the GO request's standalone
+`MIGRATION <version>` field into the GO decision for the exact batch head.
+The landing command requires that field on the same GO statement.
+
+For the merged-unit restart, the access owner provisions a regular file owned by
+the deploy user with mode `0600`. It holds the migration role's DSN for the same
+database as the keeper configuration. The role needs schema ownership or its
+equivalent DDL and migration-table permissions. Creating a missing schema still
+requires database-level permission.
+
+On the keeper host, point the effective unit at the candidate checkout and use
+its runtime configuration:
+
+    plangraph keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE
+
+The command reloads the user systemd manager before reading the unit. It checks
+the unit's working directory and expects a direct Python `-m plangraph.keeper.daemon
+--config PATH` command. Both admin commands use that interpreter and the user
+manager's environment, including the unit's `Environment`, `EnvironmentFile`
+and `UnsetEnvironment` settings.
+
+The command runs `pg admin migrate` with the migration DSN file, then opens
+the candidate schema with the runtime role through `pg admin check-schema`.
+It requests the restart only after both commands succeed. A reload, migration
+or runtime schema-check failure leaves the existing keeper process running.
+
 ## Hash chain
 
 `events.hash` is computed in Python from canonical JSON (sorted keys, no whitespace, ASCII) over text values; nothing in it

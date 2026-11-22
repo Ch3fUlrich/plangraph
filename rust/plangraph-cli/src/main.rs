@@ -3,6 +3,8 @@ mod router_liveness;
 use plangraph_cli::{base_fresh, env, feeder, setup};
 use std::path::PathBuf;
 
+mod keeper_restart;
+
 fn main() {
     std::process::exit(run());
 }
@@ -10,6 +12,12 @@ fn run() -> i32 {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().is_some_and(|arg| arg == "keeper-outbox") {
         return plangraph_cli::keeper_outbox::run(&args[1..]);
+    }
+    if args
+        .first()
+        .is_some_and(|command| command == "keeper-restart")
+    {
+        return keeper_restart::run(&args[1..]);
     }
     if args.first().map(String::as_str) == Some("fast-checks") {
         return plangraph_cli::fast_checks::run(&args[1..]);
@@ -172,7 +180,7 @@ fn run() -> i32 {
         ["setup", "check", "--component", name] => (setup::Mode::Check, Some(*name)),
         _ => {
             eprintln!(
-                "usage: plangraph setup apply [--component NAME] [--dry-run] | setup check [--component NAME] | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | keeper events [--since SEQ] [--limit N] | state wait --role ROLE [--once] | land-timeline | land-train | main-state | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | throughput | quota [--db PATH] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | host-link-deliver | install-router-liveness TARGET CONFIG | --version"
+                "usage: plangraph setup apply [--component NAME] [--dry-run] | setup check [--component NAME] | env check | base-fresh <repo> | batch-merge-check FACTS.json | ci-watch [--dry-run] [--keeper] | keeper events [--since SEQ] [--limit N] | state wait --role ROLE [--once] | land-timeline | land-train | main-state | merge-close [--count | --repos] [--project NAME] | review --repo <path> --head <sha> [--base origin/main] [--item <key>] [--focus <file>] | runner plan|install|check | feed --once [--dry-run] | throughput | keeper-restart CHECKOUT KEEPER_CONFIG MIGRATION_DSN_FILE | quota [--db PATH] | wait-pid (--pid PID | --pid-file PATH) [--expect SUBSTR] [--check | --timeout SECS] | host-sync [--data-dir PATH] [--bin-dir PATH] | host-link-deliver | install-router-liveness TARGET CONFIG | --version"
             );
             return 2;
         }

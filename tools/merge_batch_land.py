@@ -18,7 +18,7 @@ from merge_batch_build import (
 from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
                               REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
-                              batch_workflow_gate, part_review, run,
+                              batch_workflow_gate, keeper_migration, part_review, run,
                               cleanup_landed, close_merged_items, windows_commands, windows_gate, windows_needed, windows_report, windows_script)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
@@ -353,6 +353,35 @@ def keeper_config_path():
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph" / "keeper.json"
 
 
+def require_migration_go(st, go_row):
+    version = keeper_migration(st)
+    if version is None:
+        return
+    from plangraph.keeper.store_waiver import _go_binding, _go_statement
+
+    marker = f"MIGRATION {version}"
+    refusal = f"GO row for PR #{st['pr']} at {st['head']} must include {marker}"
+    if not go_row:
+        raise MergeBatchError(refusal)
+    try:
+        lines = Path(go_row).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise MergeBatchError(f"{refusal}: {exc}") from None
+    expected = st["pr"], st["head"]
+    repo = st["repo"]
+    project = repo.rsplit("/", 1)[-1]
+    for line in lines:
+        cells = line.strip().split("|")
+        decision = cells[3].strip() if len(cells) > 4 and not cells[0] else line.strip()
+        statement = _go_statement(decision)
+        if statement and any(_go_binding(statement, name) == expected for name in (repo, project)):
+            markers = [field.strip() for field in statement.split(";")[1:]
+                       if field.strip().startswith("MIGRATION ")]
+            if markers == [marker]:
+                return
+    raise MergeBatchError(refusal)
+
+
 def _merge_subject(number, title, custom):
     """Return a single-line merge commit subject ending ``(#N)``, or raise."""
     suffix = f"(#{number})"
@@ -465,6 +494,7 @@ def land_with_lease(args, lease, st):
             raise MergeBatchError(f"batch PR #{number} is a draft")
         if pr.get("baseRefName") != "main":
             raise MergeBatchError("full_ci: batch PR must target main")
+        require_migration_go(st, args.go_row)
         batch_key = landing_batch_key(st) if lease else None
         reruns = require_full_run(repo, st["head"], st["branch"], batch_key)
         require_current_base(repo, st["head"])
@@ -664,11 +694,13 @@ def cmd_go_req(args):
     deviations = [declared] if declared != "none" else []
     deviations += st.get("forced", [])
     deviation = "; ".join(deviations) or "none"
+    version = keeper_migration(st)
+    migration = f"MIGRATION {version}; " if version is not None else ""
     summary = landing_report(st).get("summary") if keeper_landing_configured() else None
     timeline = f"timeline: {summary}; " if summary else ""
     line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
             f"; CI run {ci['id']} state={ci['state']} conclusion={ci['conclusion']}; "
-            f"{timeline}PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}"
+            f"{timeline}{migration}PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}"
             + (f"; {windows_report(st, head)}" if windows_report(st, head) else ""))
     if keeper_landing_configured() and st.get("go_requested_head") != head:
         st.update(go_requested_head=head, go_requested_at_ms=landing_now())

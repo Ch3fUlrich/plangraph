@@ -140,7 +140,7 @@ def parser():
     cmd.add_argument("--approval", metavar="PATH",
                      help="seat verdict text ending in 'HEAD: <the batch head sha in full>' and "
                           "'VERDICT: PASS' lines")
-    cmd.add_argument("--go-row", metavar="PATH", help="recorded GO row; red-main exception must name this full head and EXCEPTION:main-red-fix")
+    cmd.add_argument("--go-row", metavar="PATH", help="recorded GO row; required for a keeper migration or a red-main exception")
     cmd.add_argument("--checks", metavar="NAME,..", help="check names to require instead of the required checks")
     cmd.add_argument("--wait", type=float, default=20.0, help="seconds to wait for GitHub to mark PRs merged")
     cmd.add_argument("--subject", metavar="TEXT",

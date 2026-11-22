@@ -234,7 +234,9 @@ def _add_admin(sub):
     init = commands.add_parser("init", help="create the DB schema")
     init.add_argument("--router", help="also create a router principal")
 
-    commands.add_parser("migrate", help="apply pending schema migrations (Postgres) / upgrade (SQLite)")
+    migrate = commands.add_parser("migrate", help="apply pending schema migrations (Postgres) / upgrade (SQLite)")
+    migrate.add_argument("--dsn-file", help="private file holding the Postgres migration role DSN")
+    commands.add_parser("check-schema", help="check the Postgres schema using the running keeper's role")
 
     add = commands.add_parser("add-principal")
     add.add_argument("name")
