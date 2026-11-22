@@ -13,9 +13,6 @@ use std::{
 };
 
 const DEFAULT_SECONDS: u64 = 120;
-const CLI_FIXTURE_TEST: &str = "prepare_spawnd_cli";
-const CLI_FIXTURE_ENV: &str = "PG_TEST_PREBUILT_SPAWND";
-const CLI_FIXTURE_MARKER: &str = "pg-test-fixture: ";
 
 fn stack(pid: u32) {
     #[cfg(target_os = "linux")]
@@ -114,39 +111,6 @@ fn cases(binary: &OsStr, args: &[OsString], opts: &Opts) -> io::Result<Vec<Strin
         .collect())
 }
 
-fn prepare_spawnd_cli(binary: &OsStr, opts: &Opts) -> io::Result<String> {
-    // The checkout-isolated Cargo build has its own bound, outside the case budget.
-    let opts = Opts {
-        timeout: Some(Duration::from_secs(600)),
-        ..opts.clone()
-    };
-    let mut prepare = Command::new(binary);
-    prepare.args(["--exact", CLI_FIXTURE_TEST, "--nocapture"]);
-    eprintln!("agy_review_spawn: preparing checkout CLI fixture");
-    let result = supervise_with_diagnostics(
-        prepare,
-        &opts,
-        &|| false,
-        |pid| {
-            eprintln!("HUNG agy_review_spawn::{CLI_FIXTURE_TEST}");
-            stack(pid);
-        },
-        children::reap,
-    )?;
-    let output = String::from_utf8_lossy(&result.output);
-    if result.timed_out || result.code != Some(0) {
-        return Err(io::Error::other(format!(
-            "CLI fixture preparation failed: {output}"
-        )));
-    }
-    output
-        .lines()
-        .find_map(|line| line.strip_prefix(CLI_FIXTURE_MARKER))
-        .and_then(|path| serde_json::from_str::<String>(path).ok())
-        .filter(|path| Path::new(path).is_absolute() && Path::new(path).is_file())
-        .ok_or_else(|| io::Error::other(format!("CLI fixture reported no executable: {output}")))
-}
-
 fn run() -> io::Result<bool> {
     let mut args = env::args_os().skip(1);
     let binary = args
@@ -181,20 +145,9 @@ fn run() -> io::Result<bool> {
         .unwrap_or("libtest");
     let suite = stem.rsplit_once('-').map_or(stem, |(name, _)| name);
     children::adopt()?;
-    let spawnd = if suite == "agy_review_spawn" && !listed.is_empty() {
-        Some(prepare_spawnd_cli(&binary, &opts)?)
-    } else {
-        None
-    };
     let mut failures = 0;
     for (index, case) in listed.iter().enumerate() {
-        if spawnd.is_some() && case == CLI_FIXTURE_TEST {
-            continue; // It passed during suite preparation.
-        }
         let mut cmd = Command::new(&binary);
-        if let Some(path) = &spawnd {
-            cmd.env(CLI_FIXTURE_ENV, path);
-        }
         // The original filters were already evaluated by --list. Forward options only.
         let mut flags = args.iter();
         while let Some(arg) = flags.next() {
