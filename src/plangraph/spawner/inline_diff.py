@@ -14,7 +14,7 @@ from bisect import bisect_right
 from plangraph.planner.seats import _check_diff_ref
 from plangraph.routing_errors import SpawnRefused
 from plangraph.routing_support import background_process_options
-from .env_redact import _source_block
+from .env_redact import _source_block, private_key_line
 from .redact_tokens import _wrapped_spans
 
 HEADER = "\n\n=== INLINE DIFF (base {base}, head {head}; this leg reads the change only from here) ===\n"
@@ -48,11 +48,53 @@ def _scrub_hunk(lines):
     return ''.join(lines)
 
 
-def _scrub_hunks(diff):
-    # Scan old and new content separately. Diff markers are framing bytes.
+_HUNK = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
+_INDEX = re.compile(r'(?m)^index ([0-9a-f]{40,64})\.\.([0-9a-f]{40,64})(?: |$)')
+
+
+def _private_key_ranges(repo, blob, timeout):
+    if not blob.strip('0'):
+        return ()
+    git = ['git', '-C', repo, 'cat-file']
+    try:
+        opts = dict(stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout,
+                    check=True, **background_process_options())
+        size = int(subprocess.run(git + ['-s', blob], **opts).stdout)
+        if not 0 <= size <= 8 * 1024 * 1024:
+            return None
+        data = subprocess.run(git + ['blob', blob], **opts).stdout
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    ranges, start, inside = [], None, False
+    for number, line in enumerate(data.decode('utf-8', 'replace').split('\n'), 1):
+        overlap, inside = private_key_line(line, inside)
+        if overlap and start is None:
+            start = number
+        if start is not None and not inside:
+            ranges.append((start, number))
+            start = None
+    if start is not None:
+        ranges.append((start, number))
+    return ranges
+
+
+def _scrub_hunks(diff, repo, timeout):
+    # Read immutable old and new blobs because a hunk can start inside a key.
     parts = re.split(r'(?m)(^@@ .*?\n|^diff --git .*?\n)', diff)
+    ranges = ()
     for index in range(1, len(parts), 2):
-        if parts[index].startswith('@@ '):
+        header = parts[index]
+        if header.startswith('diff --git'):
+            blobs = _INDEX.search(parts[index + 1])
+            ranges = [_private_key_ranges(repo, blob, timeout) for blob in blobs.groups()] if blobs else [None]
+            continue
+        hunk = _HUNK.match(header)
+        if hunk and any(keys is None or any(
+            int(start) <= last and first < int(start) + int(count or 1)
+            for first, last in keys
+        ) for keys, start, count in zip(ranges, hunk.groups()[::2], hunk.groups()[1::2])):
+            parts[index:index + 2] = ['[autoos:source hunk withheld]\n', '']
+        else:
             parts[index + 1] = _scrub_hunk(parts[index + 1].splitlines(keepends=True))
     return ''.join(parts)
 
@@ -83,7 +125,7 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     try:
         proc = subprocess.run(
             ["git", "--literal-pathspecs", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
-             "--no-textconv", f"{base}...{head}", "--", *paths],
+             "--no-textconv", "--full-index", f"{base}...{head}", "--", *paths],
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout, check=False,
             **background_process_options())
@@ -98,4 +140,4 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     if len(proc.stdout) > max_chars:
         raise InlineDiffError(f"prompt_too_large: diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
                               chars=len(proc.stdout), max_chars=max_chars)
-    return prompt + HEADER.format(base=base, head=head) + _source_block(_scrub_hunks(proc.stdout)) + FOOTER
+    return prompt + HEADER.format(base=base, head=head) + _source_block(_scrub_hunks(proc.stdout, diff_ref["repo"], timeout)) + FOOTER

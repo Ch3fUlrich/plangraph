@@ -123,10 +123,10 @@ def test_every_slice_passes_through_redact_before_packing(tree):
     track(tree, "cfg.py", f'a = 1\nSERVICE_KEY=hunter2\nheader = "Bearer abc.def.ghi"\nb = "{leaked}"\nlast = 2\n')
     pack = pack_for(tree, "cfg.py:1-5")
     assert "a = 1" in pack.text and "last = 2" in pack.text
-    assert "SERVICE_KEY=hunter2" in pack.text   # source mode skips credential-name assignments only
+    assert "SERVICE_KEY=[REDACTED]" in pack.text and "hunter2" not in pack.text
     assert "abc.def.ghi" not in pack.text and leaked not in pack.text
     assert 'header = "Bearer [REDACTED]"' in pack.text and 'b = "[REDACTED]"' in pack.text
-    assert pack.text.count("[REDACTED]") == 2
+    assert pack.text.count("[REDACTED]") == 3
 
 
 def test_redact_runs_on_the_text_that_is_packed(tree, monkeypatch):
@@ -375,3 +375,12 @@ def test_oversize_slice_is_dropped_without_holding_the_file(tree, monkeypatch):
     assert texts[0] is None and texts[1] == "w" * 100 + "\n" + "w" * 100 and total is None
     pack = pack_for(tree, "wide.py:1-300", "wide.py:2-3")
     assert "omitted: wide.py:1-300" in pack.text and "--- wide.py:2-3 ---" in pack.text and len(pack.text) <= 1000
+
+
+def test_context_slice_inside_private_key_is_refused(tree):
+    track(tree, "sample.txt", "before\n-----BEGIN TEST PRIVATE KEY-----\n"
+          "synthetic-pem-body\n-----END TEST PRIVATE KEY-----\nafter\n")
+    pack = pack_for(tree, "sample.txt:3-3", "sample.txt:5-5")
+    assert "synthetic-pem-body" not in pack.text
+    assert "after" in pack.text
+    assert any("secret-looking content" in warning for warning in pack.warnings)

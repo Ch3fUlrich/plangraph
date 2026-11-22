@@ -169,7 +169,7 @@ def _name_headers(text):
         yield header_start, index
 
 
-def redact_wide_assignments(text, assignment):
+def redact_wide_assignments(text, assignment, keep):
     """OLD wins; NEW consumes physical lines without exposing old wrapped masks."""
     old_matches = iter(assignment.finditer(text))
     old = next(old_matches, None)
@@ -184,7 +184,7 @@ def redact_wide_assignments(text, assignment):
         if old is not None and old.start() < end:
             continue  # OLD value containment or intersecting half-open headers.
         value_end = _LINE_REMAINDER.match(text, end).end()
-        if value_end > end:
+        if value_end > end and not keep(text[end:value_end]):
             # Keep every continuation the pre-A1 wrapped scanner would mask.
             while span is not None and span[0] < value_end:
                 value_end = _LINE_REMAINDER.match(text, max(value_end, span[1])).end()

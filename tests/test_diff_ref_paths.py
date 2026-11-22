@@ -79,3 +79,22 @@ def test_wrapped_token_is_masked_in_final_inline_prompt(repo):
     final = _redact_prompt(prompt, redact)
     assert not any(part in final for part in (first, second))
     assert '+retained context' in final
+
+
+def test_inline_hunk_inside_private_key_is_withheld(repo):
+    root, _, _ = repo
+    path = root / "sample.txt"
+    start = "-----BEGIN TEST PRIVATE KEY-----\n" + "synthetic filler\n" * 5
+    end = "synthetic filler\n" * 5 + "-----END TEST PRIVATE KEY-----\n"
+    path.write_text(start + "synthetic-old-body\n" + end)
+    _git(root, "add", "sample.txt")
+    _git(root, "commit", "-qm", "before")
+    base = _git(root, "rev-parse", "HEAD")
+    path.write_text(start + "synthetic-new-body\n" + end)
+    _git(root, "add", "sample.txt")
+    _git(root, "commit", "-qm", "after")
+    head = _git(root, "rev-parse", "HEAD")
+    prompt = inline_diff_prompt("review", {"repo": str(root), "base": base, "head": head},
+                                max_chars=100000)
+    assert "synthetic-old-body" not in prompt and "synthetic-new-body" not in prompt
+    assert "hunk withheld" in prompt

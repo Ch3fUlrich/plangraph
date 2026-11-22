@@ -18,7 +18,7 @@ Safety, in order of strength:
 * Refused per entry (a ``context_path_refused`` warning, the file is never read): a secret-looking name
   (``DENY``, case-insensitive on every path part, a superset of the repo's own fences in opencode.jsonc),
   a ``.git`` path part, an untracked file.
-* A slice holding a private-key block is dropped before masking (``context_path_refused`` ...
+* A slice overlapping a private-key block is dropped before masking (``context_path_refused`` ...
   ``secret-looking content``); every remaining slice goes through ``redact_source`` before packing.
 
 Cost: ``build`` runs once per spawn.  It lists the tracked files with one ``git ls-files``, reads each
@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
-from .env_redact import redact_source, _source_block, _join_prompt
+from .env_redact import private_key_line, redact_source, _source_block, _join_prompt
 from .inline_diff import InlineDiffError
 
 LANGUAGE_RULE = ('new code is Rust with Rust tests; no new Python or shell file; '
@@ -54,7 +54,7 @@ MAX_ENTRIES = 64
 _SLICE = re.compile(r'^(.+):(\d+)-(\d+)$')
 _RANGE = re.compile(r':\d+(?:-\d+)?$')  # 'big.py:1-50' names big.py
 _TOKEN = re.compile(r'''[^\s`'"<>()\[\]{},;=]+''')
-_PRIVATE_KEY = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY')
+_KEY_SLICE = object()
 #: Secret-looking path parts, fnmatch on every lower-cased part of the path.  The first group mirrors the repo's
 #: own read fences in opencode.jsonc (tests/test_spawner_context_guard.py derives its samples from that file).
 DENY = (
@@ -210,18 +210,27 @@ def _extract(path: Path, wanted, cap: int):
     last wanted line, i.e. the file has at least that many)."""
     last = max(end for _, end in wanted)
     chunks, sizes, n = [[] for _ in wanted], [0] * len(wanted), 0
-    for line in _lines(path, max(cap, 0)):
+    inside = False
+    limit = max(cap, 65536)
+    for line in _lines(path, limit):
         n += 1
+        overlap, inside = private_key_line(line, inside)
+        # The unretained suffix could contain a BEGIN marker.
+        if len(line) > limit:
+            overlap = inside = True
         for i, (start, end) in enumerate(wanted):
-            if start <= n <= end and chunks[i] is not None:
-                sizes[i] += len(line) + 1
-                if sizes[i] > cap:
-                    chunks[i] = None
-                else:
-                    chunks[i].append(line)
+            if start <= n <= end:
+                if overlap:
+                    chunks[i] = _KEY_SLICE
+                elif isinstance(chunks[i], list):
+                    sizes[i] += len(line) + 1
+                    if sizes[i] > cap:
+                        chunks[i] = None
+                    else:
+                        chunks[i].append(line)
         if n >= last:
-            return [None if c is None else '\n'.join(c) for c in chunks], None
-    return [None if c is None else '\n'.join(c) for c in chunks], n
+            break
+    return ['\n'.join(c) if isinstance(c, list) else c for c in chunks], n if n < last else None
 
 
 def _slices(root: Path, ents, files: frozenset[str], cap: int):
@@ -251,10 +260,10 @@ def _slices(root: Path, ents, files: frozenset[str], cap: int):
             if total is not None and end > total:
                 notes[i].append(f'context_range_past_eof: {raw}:{start}-{end} (file has {total} lines; clamped)')
                 end = total
+            if text is _KEY_SLICE:
+                notes[i].append(f'context_path_refused: {raw} (secret-looking content)')
+                continue
             if text is not None:
-                if _PRIVATE_KEY.search(text):
-                    notes[i].append(f'context_path_refused: {raw} (secret-looking content)')
-                    continue
                 text = redact_source(text)
             found[i] = (path, raw, start, end, text)
     return [found[i] for i in sorted(found)], [w for per in notes for w in per]

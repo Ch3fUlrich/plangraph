@@ -157,12 +157,16 @@ def test_source_mode_keeps_dict_key_and_env_value_scrubbing():
     assert env_redact.redact_env_values(env_redact.redact_source(value), {'API_KEY': value}) == '[autoos:redacted]'
 
 
-@pytest.mark.parametrize('value', ['tuple(sorted((left, right)))', '(scope, name)',
-                                  'None', 'False', '123', '[]', '{}', 'arbitrary-value'])
-def test_assignment_rule_stays_fail_closed_for_every_value_shape(value):
+@pytest.mark.parametrize('value, computed', [
+    ('tuple(sorted((left, right)))', True), ('(scope, name)', True),
+    ('None', False), ('False', False), ('123', False), ('[]', False), ('{}', False),
+    ('arbitrary-value', False), ('factory("synthetic")', False),
+])
+def test_assignment_rule_stays_fail_closed_for_every_value_shape(value, computed):
     text = 'pair_' + 'key = ' + value
-    assert env_redact.redact(text) == 'pair_key = [REDACTED]'
-    assert env_redact.redact_source(text) == text
+    masked = 'pair_key = [REDACTED]'
+    assert env_redact.redact(text) == masked
+    assert env_redact.redact_source(text) == (text if computed else masked)
 
 
 def test_direct_caller_prompt_keeps_full_strength(monkeypatch, tmp_path):
@@ -195,3 +199,21 @@ def test_card_context_labels_are_not_source_blocks(monkeypatch, tmp_path):
 def test_source_scrub_failure_withholds_text(monkeypatch):
     monkeypatch.setattr(env_redact.re, 'sub', lambda *a, **k: (_ for _ in ()).throw(ValueError()))
     assert 'redaction failed; output withheld' in env_redact.redact_source(CODE)
+
+
+def test_literal_credentials_masked_in_dispatched_source(monkeypatch, tmp_path):
+    literal = 'synthetic-' + 'fixture-password'
+    assignment = 'PASSWORD = "' + literal + '"'
+    (tmp_path / 'sample.py').write_text(assignment + '\n')
+    monkeypatch.setattr(context_pack, 'tracked', lambda root: frozenset({'sample.py'}))
+    pack = context_pack.build('', {'context': ['sample.py:1-1']}, tmp_path)
+    prompt = diff_prompt(monkeypatch, tmp_path, pack=pack, inline=True, extra=assignment)
+    out = capture(monkeypatch, tmp_path, prompt)
+    assert literal not in out
+    assert out.count('PASSWORD = "[REDACTED]"') == 2
+
+
+def test_bearer_placeholder_does_not_exempt_a_glued_value():
+    text = 'Bearer [REDACTED]' + 'Synthetic9'
+    for scrub in (env_redact.redact, env_redact.redact_source, env_redact.redact_output):
+        assert scrub(text) == 'Bearer [REDACTED]'

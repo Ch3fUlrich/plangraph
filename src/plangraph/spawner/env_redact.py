@@ -1,4 +1,5 @@
 """Value-based child credential scrubbing, before any output truncation."""
+import ast
 import json
 import os
 import re
@@ -8,11 +9,23 @@ from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignment
 from .redact_tokens import redact_wide_assignments, pending_wrapped_line
 
 
+_PEM_MARKER = re.compile(r'-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----')
+
+
+def private_key_line(line, inside):
+    """Return whether the line overlaps a private key and the state after it."""
+    overlap = inside
+    for marker in _PEM_MARKER.finditer(line):
+        inside = marker[1] == 'BEGIN'
+        overlap = overlap or inside
+    return overlap, inside
+
+
 def _redact_pem(text):
     # Scan markers once: a lazy complete-block regex retries every unterminated
     # BEGIN against the whole suffix, quadratic on adversarial prompt text.
     out, copied, start = [], 0, None
-    for match in re.finditer(r'-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----', text):
+    for match in _PEM_MARKER.finditer(text):
         if match[1] == 'BEGIN' and start is None:
             start = match.start()
         elif match[1] == 'END' and start is not None:
@@ -29,9 +42,22 @@ _ASSIGNMENT = re.compile(
     r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
 
 
-def _redact_assignments(text):
+def _computed_assignment(value):
+    value = value.strip()
+    try:
+        expr = ast.parse(value, mode='eval').body
+    except (SyntaxError, ValueError, RecursionError):
+        return False
+    nodes = (ast.Call, ast.Tuple, ast.Name, ast.Attribute, ast.Load)
+    return (isinstance(expr, (ast.Call, ast.Tuple)) and ast.get_source_segment(value, expr) == value
+            and all(isinstance(node, nodes) for node in ast.walk(expr)))
+
+
+def _redact_assignments(text, keep=None):
     def replace(m):
         value = m[0][len(m[1]):]
+        if keep is not None and keep(value):
+            return m[0]
         return m[1] + (value[0] + '[REDACTED]' + value[-1]
                        if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
     return _ASSIGNMENT.sub(replace, text)
@@ -43,7 +69,7 @@ def redact(value):
 
 
 def redact_source(value):
-    """Spawner-read source only: skip credential-name assignments, nothing else."""
+    """Spawner-read source may keep recognized computed assignment values."""
     return _redact(value, source=True)
 
 
@@ -154,13 +180,13 @@ def _redact(value, *, source):
             return [_redact(v, source=source) for v in value]
         if isinstance(value, str):
             value = _redact_pem(value)
-            if not source:
-                value = redact_wide_assignments(value, _ASSIGNMENT)
-                # P joins values behind shielded names, then main's order runs.
-                value = join_shielded_assignments(value, _ASSIGNMENT)
-                value = _redact_assignments(value)
+            keep = _computed_assignment if source else lambda value: False
+            value = redact_wide_assignments(value, _ASSIGNMENT, keep)
+            value = join_shielded_assignments(value, _ASSIGNMENT)
+            value = _redact_assignments(value, keep)
             value = redact_wrapped(value)
-            value = re.sub(r'(?i)Bearer\s+(?:\[REDACTED\]|[^\s"\x27]+)', 'Bearer [REDACTED]', value)
+            value = re.sub(r'(?i)Bearer\s+(?:\[REDACTED\](?=[;,:)]*(?:[\s"\x27]|$))|[^\s"\x27]+)',
+                           'Bearer [REDACTED]', value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
