@@ -1,5 +1,6 @@
 use super::sandbox::{Launcher, Sandbox};
 use serde::Deserialize;
+use serde_json::json;
 
 #[derive(Deserialize)]
 struct Case {
@@ -44,4 +45,34 @@ pub fn check(launcher: &Launcher) {
         s.expect(&out, 0, &expected, &stderr);
         s.no_launch();
     }
+    if matches!(launcher, Launcher::Pinned(_) | Launcher::Rust(_)) {
+        check_pinned_profile(launcher);
+    }
+}
+
+fn check_pinned_profile(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    let profile = "router/ops/fleet-settings.json";
+    let mut settings = s.json(profile);
+    settings["env"]["AUTOOS_CTX_HANDOFF"] = json!("110000");
+    settings["env"]["AUTOOS_CTX_HARD"] = json!("170000");
+    for key in [
+        "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+        "CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS",
+    ] {
+        settings["env"][key] = json!("400000");
+    }
+    s.write_json(profile, settings);
+    let out = s
+        .launch("review")
+        .args(["--ctx-guard", "110000,170000", "--dry-run"])
+        .output()
+        .unwrap();
+    let expected = include_str!("../fixtures/fleet-launch/dry-run.txt")
+        .replace("$WINDOW", "400000")
+        .replace("$SETTINGS", "$ROOT/router/ops/fleet-settings.json")
+        .replace("$ROLE", "review")
+        .replace("$DENY_QUESTION", ",AskUserQuestion");
+    s.expect(&out, 0, &expected, "fleet-launch: admission allowed\n");
+    s.no_launch();
 }

@@ -4,6 +4,10 @@ use pg_worker_core::host_probe::{HostProbe, HostProbeError};
 use std::ffi::OsString;
 use std::io::Write;
 
+#[cfg(target_os = "linux")]
+pub(crate) const USAGE: &str =
+    "Usage: pg-spawnd <probe|serve|shim|steps|health|agents-view|ledger-report|check-manage-key|session> [args]";
+#[cfg(not(target_os = "linux"))]
 pub(crate) const USAGE: &str =
     "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local> [args]";
 
