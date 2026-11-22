@@ -467,6 +467,45 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
         w.store.close_merged(w.p("router"), "demo:H", "D-5504", ["google", "deepseek"])
 
 
+@pytest.mark.parametrize("evidence", ["trailer", "merge-subject", "wrong-pr", "wrong-project", "duplicate-head"])
+@pytest.mark.parametrize("state", ["open", "in_review"])
+def test_close_merged_reads_the_data_default_only_with_a_note(w, monkeypatch, tmp_path, evidence, state):
+    from plangraph.keeper import context_sources
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    primary, data = tmp_path / "demo", tmp_path / "data"
+    merged_repo(primary, [])
+    key = "demo:A"
+    heads = merged_repo(data, [(165, key if evidence == "trailer" else None, "2026-11-01T12:00:00Z")])
+    w.store.ctx["git"] = GitAdapter({"demo": str(primary), "plangraph-data": str(data)})
+    monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
+    monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **kw: [])
+    pr = 166 if evidence == "wrong-pr" else 165
+    project = "unrelated" if evidence == "wrong-project" else "plangraph-data"
+    head = f"GO-HEAD {heads[165]}"
+    if evidence == "duplicate-head":
+        head += f"; {head}"
+    w.decision_path.write_text(HEADER + f"| D-5504 | {project} | GO #{pr} plangraph-data, "
+                               f"item demo:OTHER and A; {head} | ROUTER | 2026-11-05 |\n")
+    router = w.p("router")
+    w.conn.execute("UPDATE items SET state=? WHERE key=?", (state, key))
+
+    def close():
+        return w.store.close_merged(router, key, "D-5504", ["google"],
+                                    from_open=state == "open", apply=True)
+
+    with pytest.raises(Refused, match="merged_on_default_missing"):
+        close()
+    w.store.edit_definition(router, key, {"note": "Merge-Repo: plangraph-data"})
+    if evidence in ("wrong-pr", "wrong-project", "duplicate-head"):
+        with pytest.raises(Refused, match="merged_on_default_missing"):
+            close()
+        assert w.store._item(key)["state"] == state
+    else:
+        assert close()["state"] == "done"
+        assert w.store._evidence(key)[-1]["ref"]["merged_head"] == heads[165]
+
+
 @pytest.mark.parametrize("state", ["MERGED", "OPEN", "CLOSED"])
 def test_merge_repo_note_verifies_a_hosted_pr(w, monkeypatch, tmp_path, state):
     import json

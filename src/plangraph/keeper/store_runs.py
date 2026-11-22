@@ -313,13 +313,16 @@ class RunsMixin:
         if len(rows) != 1:
             return False
         cells = [c.strip() for c in rows[0].split("|")[1:]]
-        if len(cells) < 3 or cells[1] != item["project"]:
+        project = self._merge_project(item)
+        if len(cells) < 3 or cells[1] not in (item["project"], project):
             return False
         text = cells[2]
         keys = re.findall(r"(?<![\w:-])[A-Za-z][A-Za-z0-9_.-]*:[A-Za-z0-9_.-]+", text)
-        if keys:
-            return item["key"] in keys
-        if not require_key:
+        if item["key"] in keys:
+            return True
+        if keys and project == item["project"]:
+            return False
+        if not keys and not require_key:
             return True  # legacy head-only GO; the caller selected this row
         bare = item["key"].split(":", 1)[1]
         return re.search(r"(?<![\w:-])" + re.escape(bare) + r"(?![\w:-])", text) is not None
@@ -349,9 +352,9 @@ class RunsMixin:
             if len(parents) != 2 or not all(valid_commit_ref(p) for p in parents):
                 raise Refused("evidence_unverified", "merged_pr_head_missing")
             proofs[parents[1]] = {"pr": merge["pr"], "head": parents[1]}
-        if proofs and head not in proofs:
-            # A GO row bound to its own merged PR (merged_go_row) may name a head
-            # the trailer search did not reach; that PR is proof in its own right.
+        if head not in proofs and (proofs or (commits == [] and project != item["project"])):
+            # The named repository can prove a head from the merge subject even
+            # when its Plan-Item history contains no commits for this item.
             bound = context_sources.pr_merge_of(git, project, head)
             if bound:
                 proofs[head] = {"pr": bound["pr"], "head": head}

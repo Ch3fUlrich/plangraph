@@ -70,6 +70,10 @@ HTTP `POST /v1/close_merged` and MCP `close_merged` take
 Plan-Item commits to their introducing default-ref merge's second parent
 (the PR head), never a later direct follow-up or caller-supplied head.
 Missing, unknown or failing Git proof refuses `evidence_unverified: merged_on_default_missing`.
+The item's project supplies the default repository. A `Merge-Repo: <project>`
+line in the item's note or description selects another registered repository.
+For that repository, a GO row that names the item can also prove the PR directly
+by matching its number and second-parent head to a merge on the default ref.
 The existing decisions index must verify the D-id; only its DECISION cell
 authorizes, beginning with `GO <head>` (8+ hex prefix, optional backticks) or
 `GO #PR ... GO-HEAD <sha40>`, optionally prefixed by `(HH:MMZ, date -u)`.

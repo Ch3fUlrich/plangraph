@@ -80,7 +80,7 @@ def _go_binding(statement, project):
     if named and statement[:named.end()].count("`") % 2:
         named = None
     heads = _GO_HEAD.findall(statement)
-    if not named or len(set(h.lower() for h in heads)) != 1:
+    if not named or len(heads) != 1:
         return None, None
     return int(named[1]), heads[0].lower()
 
@@ -149,28 +149,6 @@ class WaiverMixin:
         names = list(scan()) if callable(scan) else []
         return [*([item["project"]] if item["project"] in names else []), *[n for n in names if n != item["project"]]]
 
-    def _with_merge_repo(self, item):
-        """The item tagged with the one scanned repository that holds its Plan-Item commits.
-
-        A hint (``Merge-Repo:``) or a hit in the item's own repository decides at once;
-        otherwise exactly one other scanned repository must hold them, else the refusal names all.
-        """
-        if item.get("_merge_project") or self._merge_repository(item) != (item["project"], None):
-            return item
-        git, found = self._adapter("git"), []
-        for project in self._scan_projects(item):
-            try:
-                commits = context_sources.plan_item_commits(git, project, item["key"], fetch=False)
-            except Exception:  # noqa: BLE001 - an unreadable repository names nothing
-                commits = None
-            if commits:
-                found.append(project)
-                if project == item["project"]:
-                    return item
-        if len(found) > 1:
-            raise Refused("evidence_unverified", f"merge_repo_ambiguous: {', '.join(found)} (name one with Merge-Repo:)")
-        return dict(item, _merge_project=found[0]) if found else item
-
     def _merge_project(self, item):
         return self._merge_repository(item)[0]
 
@@ -217,12 +195,14 @@ class WaiverMixin:
         return heads
 
     def _merged_go_proof(self, item, decision_id, now, *, all_work=False):
+        project = self._merge_project(item)
+        cross_repo = project != item["project"]
         named = self._named_merge_proof(item)
         heads = self._merged_heads(item, all_work)
         if named:
             heads.add(named["head"])
         looked = ", ".join(sorted(h[:12] for h in heads)) or "none"
-        if not heads:
+        if not heads and not cross_repo:
             raise Refused("evidence_unverified", "merged_on_default_missing")
         result = self._verify_evidence(item, "decision", {"id": decision_id}, now)
         if not result.ok:
@@ -240,7 +220,6 @@ class WaiverMixin:
                           f"go_row_not_go: no GO verdict in {decision_id} (merged heads {looked})")
         text = statement
         pr = r"(?:#[0-9]+|`#[0-9]+`)(?=$|[\s,;:.])"
-        project = self._merge_project(item)
         projects = (item["project"], project)
         bindings = [_go_binding(text, candidate)[0] for candidate in projects]
         if (re.match(rf"^GO\s+{pr}", text) or any(bindings)
@@ -258,7 +237,10 @@ class WaiverMixin:
         matched = {head for head in heads if len(bounds) == 1
                    and head.startswith(bounds[0].lower())}
         if len(matched) != 1:
-            matched = self._merged_pr_bound_head(item, text, now)
+            if not cross_repo or self._merged_go_scope_matches(decision_id, item, now):
+                matched = self._merged_pr_bound_head(item, text)
+        if not heads and not matched:
+            raise Refused("evidence_unverified", "merged_on_default_missing")
         if named and (matched != {named["head"]} or not _names_item(text, item["key"])):
             raise Refused("evidence_unverified", "merge_repo_go_scope_or_head_mismatch")
         if named and named["pr"] and any(bindings) and named["pr"] not in bindings:
@@ -269,18 +251,21 @@ class WaiverMixin:
                           f"{', '.join(b[:12] for b in bounds) or 'no head'}, merged heads {looked}")
         return matched.pop(), result
 
-    def _merged_pr_bound_head(self, item, text, now):
+    def _merged_pr_bound_head(self, item, text):
         """The GO-HEAD of a row that names a merged PR and this item, as a one-head set.
 
         The PR the row names must have merged on the default branch with exactly
         that head, and the row must name the item; the trailer search is not asked.
         """
-        pr, head = _go_binding(text, item["project"])
+        project = self._merge_project(item)
+        pr, head = _go_binding(text, project)
+        if pr is None and project != item["project"]:
+            pr, head = _go_binding(text, item["project"])
         if pr is None or not _names_item(text, item["key"]):
             return set()
         try:
             merged = context_sources.pr_merge_of(
-                self._adapter("git"), self._merge_project(item), head)
+                self._adapter("git"), project, head)
         except Refused:
             raise
         except Exception:  # noqa: BLE001 - an unreadable merge never authorizes
@@ -528,11 +513,14 @@ class WaiverMixin:
             from_open = item["state"] in ("open", "claimed")
         self._merged_review_state(item, from_open)  # DONE is bad_state, not locked
         self._assert_unlocked(item)
-        item = self._with_merge_repo(item)
+        project, revision = self._merge_repository(item)
         if not isinstance(decision_id, str) or not re.fullmatch(r"D-[0-9]+", decision_id):
             raise Refused("validation", "decision_id must look like D-NNN")
         # The operator waiver row itself as the decision: no GO row is read.
         waiver_only = waive_seats is not None and waive_seats == decision_id
+        if not waiver_only and revision is None and project != item["project"]:
+            if not self._refresh_merged_default_ref(self._adapter("git"), project):
+                raise Refused("evidence_unverified", f"merge_repo_default_refresh_failed: {project}")
         with self._decisions_snapshot(item, now):
             if waiver_only:
                 head, prs, waiver, _ = self._merged_waiver_only(item, decision_id, now, all_work=from_open)
@@ -553,10 +541,9 @@ class WaiverMixin:
             # Lease maintenance changes no close authority. All other fields
             # (including epoch/round, definition and writer proofs) must agree.
             stable = lambda row: {k: v for k, v in row.items()
-                                  if k not in ("updated_at", "lease_until", "_merge_project")}
+                                  if k not in ("updated_at", "lease_until")}
             if stable(fresh) != stable(item):
                 raise Refused("conflict", f"{key} changed under the transaction")
-            fresh = dict(fresh, **({"_merge_project": item["_merge_project"]} if "_merge_project" in item else {}))
             if waiver_only:
                 current_head, current_prs, current_waiver, result = self._merged_waiver_only(
                     fresh, decision_id, now, all_work=from_open)
