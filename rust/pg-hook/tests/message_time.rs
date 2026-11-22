@@ -3,6 +3,8 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const PYTHON: &str = if cfg!(windows) { "python" } else { "python3" };
+
 fn run(tool_name: &str, input: Value) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_pg-hook"))
         .arg("message-time")
@@ -107,7 +109,7 @@ fn time_of_day_uses_the_utc_clock() {
 #[test]
 fn fleet_client_checks_the_final_message_before_loading_transport() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
-    let output = Command::new("python3")
+    let output = Command::new(PYTHON)
         .args([
             "-m",
             "plangraph.fleet_bus.client",
@@ -130,7 +132,7 @@ fn fleet_client_checks_the_final_message_before_loading_transport() {
 #[test]
 fn fleet_mcp_refuses_future_time_before_loading_transport() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
-    let output = Command::new("python3")
+    let output = Command::new(PYTHON)
         .args([
             "-c",
             r#"
