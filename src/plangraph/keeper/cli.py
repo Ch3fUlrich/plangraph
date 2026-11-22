@@ -90,10 +90,6 @@ def _add_reads(sub):
     show.add_argument("--brief", action="store_true",
                       help="short task brief instead of the full item")
 
-    attempts = _p(sub, "attempts", help="recent attempts from local spawner records")
-    attempts.add_argument("--since", required=True, help="relative window such as 1d or 12h")
-    attempts.add_argument("--state", help="local spawner state directory")
-
     blocked = _p(sub, "blocked", help="open items and their unmet deps")
     blocked.add_argument("--project")
 
@@ -346,9 +342,6 @@ def main(argv=None) -> int:
         return cli_admin.dispatch(args)
     if args.command == "sync":
         return _cmd_sync(args)
-    if args.command == "attempts":
-        from .cli_output_verbs import cmd_attempts
-        return cmd_attempts(args)
     session = Session(json_mode=args.json, config_path=args.config,
                       url=getattr(args, "url", None))
     return HANDLERS[args.command](args, session)

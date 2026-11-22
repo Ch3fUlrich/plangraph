@@ -1,23 +1,5 @@
 # Implement route defaults (D-5206)
 
-## Effort profile version 1
-
-The Rust spawner retains the effort decision with the admitted route. It starts
-from the measured S0–S4 bucket and takes the highest level indicated by the
-risk floor, missing tests, write count, fanout, or token estimate. The planner
-may raise it. A lower assignment records the assigned level and the rule reason.
-Task classes pair change or regression checks with size groups S0–S1, S2, and
-S3–S4. `rust/pg-spawnd/effort_profiles.json` holds floors, seats and cascades.
-Version 1 initializes the table before replay data exists. Future table changes
-must cite the measured replay delta. Existing leg ordering remains in force.
-
-`pg attempts --since 1d --json` reads local spawner records, with an optional
-`--state` directory. It emits one row per recorded harness attempt, using
-`adhoc` for unkeyed runs. The route envelope carries the admitted and rejected
-legs, the top five scores, and available benchmark baselines. Null fields
-represent unavailable evidence. Dry runs, queued runs, and skipped legs are
-excluded. The reader leaves keeper SQL tables untouched.
-
 Gateway snapshot HTTP 401/403 exclusions appear as `auth_refused` in candidate
 and skipped-leg details, carrying gateway URL, principal, and HTTP status as
 evidence. They do not claim gateway unreachability.

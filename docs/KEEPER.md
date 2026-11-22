@@ -324,10 +324,6 @@ meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for C
 for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), `review_overdue_s` (14400), `alert_window_s` (604800; `alerts` lists findings and repeated refusals only for open, claimed or in_review items and only inside this window; the JSON `history` holds the counts left out, no row is deleted), each a JSON integer from 1 to 315360000 seconds. Applied to the daemon's Store at start; restart to change. Secret config values are never printed.
 
 ## CLI `pg`
-`pg attempts --since 1d --json` reads recent harness attempts from this host's
-spawner state. Supply `--state PATH` to read a different local state directory.
-An attempt without an item key appears as `adhoc`.
-
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,
 `evidence KEY --kind K --commit SHA | --run ID | --task N | --decision D-NNN`, `submit KEY`, `verdict KEY --pass|--changes "why"`,
 `waive KEY D-NNN`, `cancel KEY`, `priority KEY N` (integer 0–10: 10 most important, 0 optional; define, import, edit and batch writes refuse other values with `validation`), `define …` (a new or created lane needs a non-blank `done_criteria`, refused with `done_criteria_missing` for every principal, and an edit may not empty it; legacy imports and `audit-meta` are unchanged; all new items, including decisions, require non-blank `Why:` and `How:` sections; missing sections report `missing_why_how`. MCP create and CLI define defer decision checks to storage, including `apply_ops`, after duplicate-key, conflict and locked refusals; legacy imports and existing-item edits remain exempt. `pg check` warns on open items without), `blocked`, `waves`, `critical`, `percent`, `alerts`, `digest`, `snapshot`, `whoami`,

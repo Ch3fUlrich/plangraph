@@ -240,8 +240,6 @@ class SpawnPlan:
     placement: dict = field(default_factory=lambda: dict(host=None, reason='placement_not_evaluated', free_mb=None))
 
     agy_quota_states: dict = field(default_factory=dict)
-    effort_features: dict = field(default_factory=dict)
-    static_v0: str | None = None
 
     @property
     def first_leg(self) -> Leg | None:
@@ -322,16 +320,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     if requested_risk not in bands:
         raise SpawnRefused('risk has invalid value')
     ranking_risk = max((assessment.risk, requested_risk), key=bands.index)
-    from plangraph.spawner.measure import measure
-    paths = card.get('write_set', card.get('paths', ()))
-    measured_card = measure(paths=paths, fanout=card.get('fanout', 0),
-                            has_tests=card.get('has_tests'))
-    effort_features = dict(bucket=measured_card.bucket, risk_band=ranking_risk,
-                           has_tests=measured_card.has_tests, fanout=measured_card.fanout,
-                           write_count=measured_card.file_count,
-                           estimate_tokens=card['estimate_tokens'],
-                           check_kind=card.get('check_kind', 'change'),
-                           level=card.get('level'))
     if (assessment.risk in ('high', 'critical') or card.get('risk') in ('high', 'critical')) and card.get('reviewer_count', 2) < 2:
         raise SpawnRefused('high/critical changes require two reviewers')
     if card.get('reviewer_count') == 0 and (
@@ -443,9 +431,6 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                   "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
                   "p_source": "measured" if row is not None else "prior"}
-        if row is not None:
-            detail.update(intelligence=row.get("aa_intelligence"),
-                          cost_per_task=row.get("cost_per_task_usd"))
         if reason:
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
@@ -534,8 +519,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details), groups, coverage, placement, quota_states,
-                     effort_features, route.first_leg.id)
+                     tuple(candidate_details), groups, coverage, placement, quota_states)
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

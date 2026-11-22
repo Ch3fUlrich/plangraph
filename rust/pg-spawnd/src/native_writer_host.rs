@@ -487,7 +487,6 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         }
     }
     record["effort"] = json!(host.effort);
-    record["requested_model"] = json!(WRITER_MODEL);
     record["cwd"] = json!(host.cwd);
     host.save(&record)?;
     native_writer::run(

@@ -418,7 +418,6 @@ class SpawnService(SeatSpawnMixin):
                     stop = redact(self.runner.provider_responses.get(job.job_id))
                     if terminal_record(record, job) or refusal_record(record, job):
                         record['attempts'].append(dict(leg=asdict(chosen), status=job.status if job.status in ('stalled', 'timeout') else 'failed', skip_reason=record['reason'],
-                            started=getattr(job, 'start_time', None), ended=getattr(job, 'end_time', None),
                             served_model=job.served_model, served_family=job.served_family,
                             served_witness_reason=job.served_witness_reason,
                             stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events, provider_response=stop))
@@ -433,7 +432,6 @@ class SpawnService(SeatSpawnMixin):
                     stop_status = stop.get('status') if isinstance(stop, dict) else None
                     down_token = (unavailable or '').split(':', 1)[0].strip() if (unavailable_reason(job.exit_code, job.stdout, job.stderr) or harness_limit_line(job.exit_code, job.stdout, job.stderr)) else ''
                     record['attempts'].append(dict(leg=asdict(chosen), status=job.status,
-                        started=getattr(job, 'start_time', None), ended=getattr(job, 'end_time', None),
                         # Only failed/skipped attempts count; only 402/429 override unavailable.
                         down_reason=('credit_limit' if stop_status == 402 else 'usage_limit' if stop_status == 429 else
                             down_token if down_token in ('not_served_on_host', 'credit_limit', 'usage_limit') else None)
