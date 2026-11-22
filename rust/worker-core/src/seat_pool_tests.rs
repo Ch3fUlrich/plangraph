@@ -165,3 +165,34 @@ fn caches_outside_survive_reset_stress() {
         caches_outside_survive_reset();
     }
 }
+
+#[test]
+fn seat_creation_waits_for_the_reaper_lock() {
+    let f = Fixture::new();
+    let root = Path::new(&f.repo.root);
+    let dir = tempfile::tempdir().unwrap();
+    let tree = dir.path().join("seat");
+    let sha = workspace(&f).revision_sha.unwrap();
+    let held = crate::worktree::mutation_lock(root).unwrap();
+    std::thread::scope(|scope| {
+        let (start, started) = std::sync::mpsc::channel();
+        let (finish, finished) = std::sync::mpsc::channel();
+        let (repo, dest) = (&f.repo, &tree);
+        let worker = scope.spawn(move || {
+            start.send(()).unwrap();
+            finish.send(create(repo, dest, &sha)).unwrap();
+        });
+        started.recv().unwrap();
+        let before_release = finished.recv_timeout(Duration::from_secs(1));
+        let registered = tree.exists();
+        drop(held);
+        worker.join().unwrap();
+        assert!(matches!(
+            before_release,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        assert!(!registered);
+        finished.recv().unwrap().unwrap();
+        assert!(tree.exists());
+    });
+}

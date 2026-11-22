@@ -259,14 +259,18 @@ impl Driver for Host {
         .map_err(|_| "stale base: pushed ref does not contain origin/main".to_owned())?;
         fs::create_dir_all(self.cwd.parent().ok_or("worktree parent missing")?)
             .map_err(|e| e.to_string())?;
-        output(
-            self.command("git")
-                .arg("-C")
-                .arg(&self.repo)
-                .args(["worktree", "add", "--detach"])
-                .arg(&self.cwd)
-                .arg(&base),
-        )?;
+        {
+            let _creation =
+                pg_worker_core::worktree::mutation_lock(&self.repo).map_err(|e| e.to_string())?;
+            output(
+                self.command("git")
+                    .arg("-C")
+                    .arg(&self.repo)
+                    .args(["worktree", "add", "--detach"])
+                    .arg(&self.cwd)
+                    .arg(&base),
+            )?;
+        }
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
         Ok(base)
     }

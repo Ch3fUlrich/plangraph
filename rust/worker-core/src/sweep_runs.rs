@@ -14,7 +14,7 @@ pub fn known(status: &str) -> bool {
         || matches!(status, "starting" | "claimed" | "unknown" | "cancelling")
 }
 
-fn finished(row: &Value) -> io::Result<bool> {
+pub(crate) fn finished(row: &Value) -> io::Result<bool> {
     let status = row["status"]
         .as_str()
         .ok_or_else(|| io::Error::other("run status unavailable"))?;
@@ -77,10 +77,19 @@ pub fn check(state: &Path, path: &Path) -> io::Result<()> {
         return Err(io::Error::other("empty run state path"));
     }
     let state = state.canonicalize()?;
-    let path = path.canonicalize()?;
+    check_canonical(&state, &path.canonicalize()?)
+}
+
+/// A quarantine receipt keeps the original canonical path after the Git move.
+#[cfg(unix)]
+pub(crate) fn check_original(state: &Path, path: &Path) -> io::Result<()> {
+    check_canonical(state, path)
+}
+
+fn check_canonical(state: &Path, path: &Path) -> io::Result<()> {
     // Inventory records resolved worktree paths, including relocated state roots.
-    let native = root(&state, "runs")?;
-    let legacy = root(&state, "worktrees")?;
+    let native = root(state, "runs")?;
+    let legacy = root(state, "worktrees")?;
     if let Ok(relative) = path.strip_prefix(&native) {
         let run = relative
             .components()
@@ -97,7 +106,7 @@ pub fn check(state: &Path, path: &Path) -> io::Result<()> {
             let row = read(&entry?.path().join("record.json"))?;
             let done = finished(&row)?;
             // A selected clone ancestor does not prove ownership of an attempt.
-            if paths(&row)?.iter().any(|p| p.starts_with(&path)) {
+            if paths(&row)?.iter().any(|p| p.starts_with(path)) {
                 owned = true;
                 if !done {
                     return Err(io::Error::other("nonterminal run"));

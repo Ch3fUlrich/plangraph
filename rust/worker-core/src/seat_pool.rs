@@ -84,11 +84,13 @@ fn create(repo: &RepoEntry, path: &Path, sha: &str) -> Result<(), WriterError> {
     )?;
     let mut cmd = git_command(root);
     cmd.args(["-c", "core.hooksPath=", "-c", "submodule.recurse=false"]);
+    let creation = lock(&common.join("plangraph-worktree.lock"))?;
     let out = cmd
         .args(["worktree", "add", "--no-checkout", "--detach", "--"])
         .arg(crate::workspace_launch::git_worktree_path(path))
         .arg(sha)
         .output()?;
+    drop(creation);
     if !out.status.success() {
         return Err(WriterError::Git);
     }

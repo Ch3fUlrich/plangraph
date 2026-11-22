@@ -125,10 +125,19 @@ mod tests {
 }
 impl Protection {
     pub fn load(pins: &Path, state: &Path, reader: Option<&Path>) -> io::Result<Self> {
+        Self::load_with_processes(pins, state, reader, disk_runtime::processes)
+    }
+
+    pub(crate) fn load_with_processes(
+        pins: &Path,
+        state: &Path,
+        reader: Option<&Path>,
+        processes: impl FnOnce() -> io::Result<(Vec<PathBuf>, bool)>,
+    ) -> io::Result<Self> {
         let reader =
             reader.ok_or_else(|| io::Error::other("claims reader unavailable: protected"))?;
         let guards = Guards::load(pins, state)?;
-        let cwds = disk_runtime::processes()?.0;
+        let cwds = processes()?.0;
         // Live process cwds are matched below only when inside the candidate.
         let units = unit_paths()?;
         let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
@@ -154,6 +163,14 @@ impl Protection {
 pub fn pulls(repo: &Path, branch: &str) -> io::Result<Vec<Pull>> {
     // Detached HEADs use an exhaustive open-PR inventory, never search indexing.
     let branch_name = branch.strip_prefix("refs/heads/");
+    let mut rows = pull_inventory(repo, branch_name)?;
+    if branch_name.is_none() {
+        rows.retain(|row| row.sha == branch);
+    }
+    Ok(rows)
+}
+
+pub(crate) fn pull_inventory(repo: &Path, branch_name: Option<&str>) -> io::Result<Vec<Pull>> {
     let mut command = Command::new("gh");
     command.current_dir(repo).args([
         "pr",
@@ -166,7 +183,7 @@ pub fn pulls(repo: &Path, branch: &str) -> io::Result<Vec<Pull>> {
     }
     command.args(["--limit", "1000", "--json", "number,state,headRefOid"]);
     let text = output(&mut command)?;
-    let mut rows: Vec<Pull> = serde_json::from_str(&text).map_err(io::Error::other)?;
+    let rows: Vec<Pull> = serde_json::from_str(&text).map_err(io::Error::other)?;
     if rows.len() >= 1000
         || rows.iter().any(|r| {
             !["OPEN", "CLOSED", "MERGED"].contains(&r.state.as_str())
@@ -176,11 +193,15 @@ pub fn pulls(repo: &Path, branch: &str) -> io::Result<Vec<Pull>> {
     {
         return Err(io::Error::other("incomplete PR inventory"));
     }
-    if branch_name.is_none() {
-        rows.retain(|row| row.sha == branch);
-    }
     Ok(rows)
 }
+
+pub(crate) fn has_open_pull(branch: Option<&str>, head: &str, pulls: &[Pull]) -> bool {
+    pulls
+        .iter()
+        .any(|p| p.state == "OPEN" && (branch.is_some() || p.sha == head))
+}
+
 pub fn facts(
     repo: &Path,
     tree: &Worktree,
@@ -219,18 +240,7 @@ pub fn facts(
     };
     Ok(Facts {
         idle_hours: idle_minutes(tree, now)? / 60,
-        clean: git(
-            path,
-            &[
-                "--no-optional-locks",
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=all",
-                "--ignored",
-            ],
-        )?
-        .trim()
-        .is_empty(),
+        clean: clean_status(path)?,
         merged_into_main: merged.trim() == "0",
         pushed: !pushed.trim().is_empty(),
         failed: false,
@@ -246,9 +256,7 @@ pub fn facts(
                 .branch
                 .as_ref()
                 .is_some_and(|b| Guards::protected_name(Path::new(b))),
-        open_pr: prs
-            .iter()
-            .any(|p| p.state == "OPEN" && (tree.branch.is_some() || p.sha == tree.head)),
+        open_pr: has_open_pull(tree.branch.as_deref(), &tree.head, prs),
         in_use_by_process: protection.cwds.iter().any(|p| p.starts_with(&canonical)),
         in_use_by_unit: protection.units.iter().any(|p| p.starts_with(&canonical))
             || !unit_names(&protection.unit_refs, path, &canonical).is_empty(),
@@ -257,6 +265,21 @@ pub fn facts(
             || branch == "refs/heads/main"
             || branch == "refs/heads/master",
     })
+}
+
+pub(crate) fn clean_status(path: &Path) -> io::Result<bool> {
+    Ok(git(
+        path,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored",
+        ],
+    )?
+    .trim()
+    .is_empty())
 }
 
 /// Age uses the newest HEAD/index mtime, including detached HEADs.

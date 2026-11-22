@@ -50,6 +50,7 @@ fn run() -> io::Result<()> {
     let mut reader = env::var_os("PG_SWEEP_CLAIMS_READER").map(PathBuf::from);
     let (mut apply, mut dry, mut daily, mut remote) = (false, false, false, false);
     let mut include_merged = false;
+    let (mut reap, mut approval, mut plan) = (false, None, None);
     let mut remote_targets = Vec::new();
     let (mut targets, mut idle_minutes) = (Vec::new(), 60);
     let mut args = env::args().skip(1);
@@ -71,6 +72,19 @@ fn run() -> io::Result<()> {
                     .ok_or_else(|| io::Error::other("missing target"))?,
             ),
             "--apply" => apply = true,
+            "--reap" => reap = true,
+            "--approval" => {
+                approval = Some(
+                    args.next()
+                        .ok_or_else(|| io::Error::other("missing approval id"))?,
+                )
+            }
+            "--plan" => {
+                plan = Some(
+                    args.next()
+                        .ok_or_else(|| io::Error::other("missing plan path"))?,
+                )
+            }
             "--dry-run" => dry = true,
             "--daily" => daily = true,
             "--delete-remote" => remote = true,
@@ -107,6 +121,39 @@ fn run() -> io::Result<()> {
     roots.extend(pg_worker_core::work_disks::configured_roots());
     let pins = pins.ok_or_else(|| io::Error::other("--pins required"))?;
     let state = state.ok_or_else(|| io::Error::other("HOME or --state required"))?;
+    let options = Options {
+        repo: &repo,
+        roots: &roots,
+        targets: &targets,
+        remote_targets: &remote_targets,
+        idle_minutes,
+        pins: &pins,
+        state: &state,
+        claims_reader: reader.as_deref(),
+        apply,
+        include_merged,
+        delete_remote: remote,
+    };
+    if reap {
+        if dry && (approval.is_some() || plan.is_some()) {
+            return Err(io::Error::other("dry run cannot consume approval"));
+        }
+        if apply
+            || daily
+            || remote
+            || include_merged
+            || !targets.is_empty()
+            || !remote_targets.is_empty()
+        {
+            return Err(io::Error::other(
+                "legacy sweep options cannot be used with --reap",
+            ));
+        }
+        return run_reaper(&options, approval.as_deref(), plan.as_deref());
+    }
+    if approval.is_some() || plan.is_some() {
+        return Err(io::Error::other("--approval and --plan require --reap"));
+    }
     let marker = state.join("merged-sweep.last");
     if daily && apply {
         match fs::metadata(&marker) {
@@ -123,27 +170,38 @@ fn run() -> io::Result<()> {
             Err(e) => return Err(e),
         }
     }
-    print!(
-        "{}",
-        merged_sweep::run(&Options {
-            repo: &repo,
-            roots: &roots,
-            targets: &targets,
-            remote_targets: &remote_targets,
-            idle_minutes,
-            pins: &pins,
-            state: &state,
-            claims_reader: reader.as_deref(),
-            apply,
-            include_merged,
-            delete_remote: remote
-        })?
-    );
+    print!("{}", merged_sweep::run(&options)?);
     if daily && apply {
         record_io::atomic_write_private(&marker, b"completed\n")?;
     }
     Ok(())
 }
+#[cfg(unix)]
+fn run_reaper(options: &Options<'_>, approval: Option<&str>, plan: Option<&str>) -> io::Result<()> {
+    let approved = match (approval, plan) {
+        (None, None) => None,
+        (Some(id), Some(path)) => Some((id, fs::read_to_string(path)?)),
+        _ => {
+            return Err(io::Error::other(
+                "--approval and --plan must be supplied together",
+            ))
+        }
+    };
+    print!(
+        "{}",
+        pg_worker_core::reaper::run(
+            options,
+            approved.as_ref().map(|(id, plan)| (*id, plan.as_str())),
+        )?
+    );
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn run_reaper(_: &Options<'_>, _: Option<&str>, _: Option<&str>) -> io::Result<()> {
+    Err(io::Error::other("--reap requires Unix"))
+}
+
 fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,

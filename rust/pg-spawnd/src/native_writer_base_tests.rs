@@ -164,3 +164,19 @@ fn a_base_ref_ending_in_a_unicode_space_is_matched_byte_for_byte() {
     let local_head = git_in(&host.repo, &["rev-parse", "refs/heads/lane/local"]);
     assert_eq!(host.prepare().unwrap(), local_head);
 }
+
+#[test]
+fn native_creation_waits_for_the_reaper_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut host = local_base_fixture(dir.path());
+    let held = pg_worker_core::worktree::mutation_lock(&host.repo).unwrap();
+    let error = host.prepare().unwrap_err();
+    assert!(
+        error.contains("lock not acquired before the deadline"),
+        "{error}"
+    );
+    assert!(!host.cwd.exists());
+    drop(held);
+    host.prepare().unwrap();
+    assert!(host.cwd.exists());
+}

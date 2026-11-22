@@ -64,6 +64,12 @@ pub mod placement_rule_store;
 pub mod placement_rules;
 pub mod private_targets;
 pub mod probe;
+#[cfg(unix)]
+mod reap_journal;
+#[cfg(unix)]
+mod reap_run_dirs;
+#[cfg(unix)]
+pub mod reaper;
 pub mod redact;
 mod redact_tokens;
 pub mod remote_steps;

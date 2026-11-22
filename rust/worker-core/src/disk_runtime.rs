@@ -46,9 +46,17 @@ pub fn disk_space(_: &Path) -> io::Result<DiskSpace> {
 /// Fail closed for every visible process, regardless of proc inode owner.
 /// Non-dumpable processes can have root-owned proc inodes even for this user.
 pub fn processes_direct() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
-    scan_processes(Path::new("/proc"))
+    scan_process_paths(Path::new("/proc"), false)
 }
-fn scan_processes(root: &Path) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
+/// Includes files and executables even when a process has changed its working directory.
+pub fn process_references_direct() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
+    scan_process_paths(Path::new("/proc"), true)
+}
+
+fn scan_process_paths(
+    root: &Path,
+    references: bool,
+) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
     let mut cwds = Vec::new();
     let mut building = false;
     for entry in fs::read_dir(root)? {
@@ -73,34 +81,64 @@ fn scan_processes(root: &Path) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
             Err(e) if !vanished(&e) => return Err(e),
             _ => {}
         }
-        match fs::read_link(path.join("cwd")) {
-            Ok(cwd) => cwds.push(cwd),
-            Err(e) if !vanished(&e) => return Err(e),
-            _ => {}
+        push_process_path(&path.join("cwd"), &mut cwds)?;
+        if references {
+            push_process_path(&path.join("exe"), &mut cwds)?;
+            push_process_path(&path.join("root"), &mut cwds)?;
+            match fs::read_dir(path.join("fd")) {
+                Ok(fds) => {
+                    for fd in fds {
+                        match fd {
+                            Ok(fd) => push_process_path(&fd.path(), &mut cwds)?,
+                            Err(e) if !vanished(&e) => return Err(e),
+                            Err(_) => {}
+                        }
+                    }
+                }
+                Err(e) if !vanished(&e) => return Err(e),
+                Err(_) => {}
+            }
         }
     }
     Ok((cwds, building))
 }
 
+fn push_process_path(path: &Path, output: &mut Vec<std::path::PathBuf>) -> io::Result<()> {
+    match fs::read_link(path) {
+        Ok(target) if target.is_absolute() => output.push(target),
+        Err(e) if !vanished(&e) => return Err(e),
+        _ => {}
+    }
+    Ok(())
+}
+
 pub fn processes() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
-    resolve_processes(processes_direct(), || {
-        let reader = std::env::var_os("PG_PROCESS_CWD_READER")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| "/usr/local/libexec/pg-process-cwds".into());
-        if !reader.is_absolute() {
-            return Err(io::Error::other("process reader must be absolute"));
-        }
-        let bytes = crate::host_command::output(
-            &mut std::process::Command::new(reader),
-            std::time::Duration::from_secs(30),
-        )?;
-        let rows: (Vec<std::path::PathBuf>, bool) =
-            serde_json::from_slice(&bytes).map_err(io::Error::other)?;
-        if rows.0.iter().any(|p| !p.is_absolute()) {
-            return Err(io::Error::other("invalid process cwd"));
-        }
-        Ok(rows)
+    resolve_processes(processes_direct(), || read_processes(&[]))
+}
+
+pub fn process_references() -> io::Result<(Vec<std::path::PathBuf>, bool)> {
+    resolve_processes(process_references_direct(), || {
+        read_processes(&["--references"])
     })
+}
+
+fn read_processes(args: &[&str]) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
+    let reader = std::env::var_os("PG_PROCESS_CWD_READER")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| "/usr/local/libexec/pg-process-cwds".into());
+    if !reader.is_absolute() {
+        return Err(io::Error::other("process reader must be absolute"));
+    }
+    let bytes = crate::host_command::output(
+        std::process::Command::new(reader).args(args),
+        std::time::Duration::from_secs(30),
+    )?;
+    let rows: (Vec<std::path::PathBuf>, bool) =
+        serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    if rows.0.iter().any(|p| !p.is_absolute()) {
+        return Err(io::Error::other("invalid process path"));
+    }
+    Ok(rows)
 }
 fn vanished(error: &io::Error) -> bool {
     error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
