@@ -49,6 +49,27 @@ def record_steps(job, stdout, stderr, env):
                                cap_available=cap_reasoning(dict(env), job.model_or_combo, thinking_off=True)))
 
 
+def configure_launch_output(env, model, role, reasoning_cap):
+    """Apply the review output ceiling after dropping inherited OpenCode overrides."""
+    from .mimo_policy import is_mimo_id
+    from plangraph.catalog_data import SEED_MODELS
+    from plangraph.routing_errors import SpawnRefused
+    mimo = is_mimo_id(model)
+    retry = role == 'review' and reasoning_cap
+    if mimo or retry:
+        try:
+            if not cap_reasoning(env, model, refuse=True, thinking_off=retry, reasoning_cap_tokens=mimo):
+                return 'reasoning_output_limit: reasoning_already_disabled'
+        except SpawnRefused as exc:
+            return str(exc)
+    if role == 'review' and model == 'opencode-go/deepseek-v4.1-flash':
+        maximum = next((row.get('max_output_tokens') for row in SEED_MODELS
+                        if row['model_id'] == model), None)
+        if type(maximum) is int and maximum > 0:
+            env['OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX'] = str(maximum)
+    return None
+
+
 def cap_reasoning(env, model, *, refuse=False, thinking_off=False, reasoning_cap_tokens=None):
     """Validate an existing MiMo entry, then cap this run; optionally retain the seat retry control.
 

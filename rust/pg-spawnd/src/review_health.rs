@@ -38,12 +38,13 @@ pub(crate) fn classify(record: &Value, text: &str) -> &'static str {
         "length_stop"
     } else if reason.contains("prompt_too_large") {
         "prompt_too_large"
-    } else if reason.contains("missing diff_ref")
+    } else if reason == "missing_material"
+        || reason.contains("missing diff_ref")
         || reason.contains("no diff_ref")
         || reason.contains("empty diff")
     {
         "missing_material"
-    } else if record["status"] == "timeout"
+    } else if matches!(record["status"].as_str(), Some("timeout" | "timed_out"))
         || record["exit_code"] == 124
         || matches!(reason, "timeout" | "max_time" | "max_s")
     {
@@ -51,7 +52,10 @@ pub(crate) fn classify(record: &Value, text: &str) -> &'static str {
     } else if reason.contains("client_missing") {
         "client_missing"
     } else if record["review_status"] != "no_verdict"
-        && record["exit_code"].as_i64().is_none_or(|code| code == 0)
+        && (matches!(
+            record["status"].as_str(),
+            Some("completed" | "terminated_after_answer" | "succeeded")
+        ) || record["exit_code"].as_i64().is_none_or(|code| code == 0))
         && parse_verdict_text(text).is_some()
     {
         "verdict"
@@ -79,7 +83,17 @@ fn samples<'a>(state: &Path, records: &'a [Value]) -> BTreeMap<&'a str, Vec<Samp
         if record["role"] != "review"
             || !matches!(
                 record["status"].as_str(),
-                Some("completed" | "failed" | "timeout" | "stalled" | "limited")
+                Some(
+                    "completed"
+                        | "succeeded"
+                        | "terminated_after_answer"
+                        | "failed"
+                        | "timeout"
+                        | "timed_out"
+                        | "stalled"
+                        | "limited"
+                        | "killed"
+                )
             )
         {
             continue;

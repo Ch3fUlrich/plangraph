@@ -158,7 +158,7 @@ impl Host {
         families: &[String],
         versioned: &str,
     ) -> String {
-        let mut prompt = format!("{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nYour working directory is a disposable checkout at exactly head {head} (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let mut prompt = format!("{versioned}\n\nThe review is of exactly head {head}. When tools are available, open callers, tests and docs to verify each finding; run read-only checks and never edit. For an inline-only review, use the supplied material.\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", families.join(", "));
         match previous {
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head} (git diff {prev} {head}), check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head} (git diff {base} {head}).\n")),

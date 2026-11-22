@@ -401,7 +401,7 @@ head = card['diff_ref']['head']
 repo = pathlib.Path(card['diff_ref']['repo'])
 assert repo != pathlib.Path.cwd()
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
-assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
+assert 'the item brief' not in prompt and head in prompt, prompt  # Item context replaces the full writer brief.
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
 assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
 skill, context = prompt.index('REVIEW-SKILL-FIXTURE-LINE'), prompt.index('=== ITEM CONTEXT')

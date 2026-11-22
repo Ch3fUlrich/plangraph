@@ -281,3 +281,30 @@ assert policy.skip_reason(pro, 'implement') is None
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn deepseek_review_uses_the_catalogued_output_ceiling() {
+    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let code = r#"
+from plangraph.spawner.opencode_answer import configure_launch_output
+from plangraph.catalog_data import SEED_MODELS
+model = 'opencode-go/deepseek-v4.1-flash'
+limit = next(row['max_output_tokens'] for row in SEED_MODELS if row['model_id'] == model)
+review_env = {}
+assert configure_launch_output(review_env, model, 'review', False) is None
+assert review_env['OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX'] == str(limit)
+writer_env = {}
+assert configure_launch_output(writer_env, model, 'implement', False) is None
+assert writer_env == {}
+"#;
+    let output = std::process::Command::new(which_python())
+        .args(["-c", code])
+        .env("PYTHONPATH", sources)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

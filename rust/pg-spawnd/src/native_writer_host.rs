@@ -57,7 +57,7 @@ struct Host {
     effort: String,
     /// Run state root holding `runs/<run-id>/`; review runs are recorded there too.
     state: PathBuf,
-    /// Writer brief, repeated in every review prompt for its item keys and Done-when lines.
+    /// Writer brief used to supply item keys, criteria and invariants to the reviewer.
     brief: String,
     /// `refs/heads/...` that receives the accepted head; None keeps the head on the host.
     push_ref: Option<String>,
