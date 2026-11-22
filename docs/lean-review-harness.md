@@ -105,3 +105,5 @@ reasoning effort: `omniroute/cx-gpt-6.2-sol-medium` and `gpt-6.2-sol-medium` bot
 Native review launches resolve the client from `PLANGRAPH_CODEX_BIN`, the user install,
 or PATH. A missing executable returns exit 10 and a `client_missing` diagnostic before
 the review process starts.
+
+If the wait ends while a seat is live, `plangraph review` exits 3 and prints its run ID, expected end, and late review file path. The file records the seat's terminal verdict. Approvals are issued only by the foreground review command after all its seats pass.

@@ -134,7 +134,7 @@ if verb == "route":
 
 if verb == "spawn":
     idx = sum(1 for line in LOG.read_text().splitlines() if '"verb": "spawn"' in line)
-    run_id = f"run-test-{{idx:04d}}"
+    run_id = f"run-test{{idx:04d}}"
     run_dir = STATE / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     head_sha = (card.get("diff_ref") or {{}}).get("head", "")
@@ -158,6 +158,27 @@ if verb == "spawn":
         ]) + "\n"
     else:
         reply = f"All clear.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
+
+    if MODE == "late":
+        input_path = run_dir / "terminal.json"
+        terminal = {{"run_id": run_id, "status": "completed", "exit_code": 0, "stdout_tail": reply}}
+        input_path.write_text(json.dumps(terminal))
+        started = __import__("time").time()
+        record = {{"run_id": run_id, "status": "running", "started": started, "expected_end": started + 120}}
+        (run_dir / "record.json").write_text(json.dumps(record))
+        worker = """
+import pathlib, sys, time
+run = pathlib.Path(sys.argv[1])
+deadline = time.monotonic() + 10
+while not (run / "release").exists() and time.monotonic() < deadline:
+    time.sleep(.02)
+(run / "terminal.json").replace(run / "record.json")
+"""
+        from subprocess import Popen, DEVNULL
+        Popen([sys.executable, "-c", worker, str(run_dir)], stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL)
+        assert opts["wait"] == "0", opts
+        print(json.dumps(record))
+        sys.exit(0)
 
     live_log.write_text(reply, encoding="utf-8")
     rec = {{

@@ -1,22 +1,26 @@
 //! The native review run can finish after its caller's wait ends.
-use pg_worker_core::run::{finalize::now, record::valid_run_id, record_io::atomic_write_private};
-use serde_json::{json, Value};
-use std::{
-    fs,
-    path::Path,
-    process::{Command, Stdio},
-    time::Duration,
+use pg_worker_core::{
+    review_completion::{self, GRACE_SECONDS},
+    run::{
+        finalize::now,
+        record::valid_run_id,
+        record_io::{atomic_write_private, ensure_private_dir},
+    },
 };
+use serde_json::{json, Value};
+use std::{fs, path::Path, time::Duration};
 
 pub(crate) fn live(record: &Value) -> bool {
-    matches!(record["status"].as_str(), Some("queued" | "running"))
+    record["status"]
+        .as_str()
+        .is_some_and(review_completion::live)
 }
 
 pub(crate) fn save_pending(path: &Path, request: &Value) -> Result<(), String> {
     atomic_write_private(path, request.to_string().as_bytes()).map_err(|e| e.to_string())
 }
 
-pub(crate) fn read_pending(path: &Path) -> Result<Option<Value>, String> {
+fn read_pending(path: &Path) -> Result<Option<Value>, String> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
@@ -26,9 +30,67 @@ pub(crate) fn read_pending(path: &Path) -> Result<Option<Value>, String> {
     }
 }
 
-pub(crate) fn read_run(state: &Path, request: &Value) -> Result<Value, String> {
-    crate::records::read_record(state, &request["run_id"])
-        .map_err(|e| e.into_error_data().message.into_owned())
+fn receipt_lock(pending: &Path) -> Result<fs::File, String> {
+    let dir = pending.parent().ok_or("late review directory missing")?;
+    ensure_private_dir(dir).map_err(|e| e.to_string())?;
+    let lock = fs::File::options()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(pending.with_extension("lock"))
+        .map_err(|e| e.to_string())?;
+    lock.lock().map_err(|e| e.to_string())?;
+    Ok(lock)
+}
+
+fn remove(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+pub(crate) fn recover(state: &Path, pending: &Path, head: &str) -> Result<Option<Value>, String> {
+    let _lock = receipt_lock(pending)?;
+    let ready = pending.with_extension("ready.json");
+    if let Some(result) = read_pending(&ready)? {
+        if result["head"] != head {
+            return Err("late review head mismatch".into());
+        }
+        remove(pending)?;
+        remove(&ready)?;
+        return Ok(Some(result));
+    }
+    let Some(request) = read_pending(pending)? else {
+        return Ok(None);
+    };
+    if request["head"] != head {
+        return Err("late review head mismatch".into());
+    }
+    let record = match read_run(state, &request) {
+        Ok(record) => record,
+        Err(_) => {
+            remove(pending)?;
+            clean_checkout(pending, &request);
+            return Ok(None);
+        }
+    };
+    if let Some(result) = publish(state, pending, &request, &record)? {
+        remove(pending)?;
+        Ok(Some(result))
+    } else {
+        Ok(Some(pending_result(&request)))
+    }
+}
+
+fn read_run(state: &Path, request: &Value) -> Result<Value, String> {
+    let record = crate::records::read_record(state, &request["run_id"])
+        .map_err(|e| e.into_error_data().message.into_owned())?;
+    if record["run_id"] != request["run_id"] {
+        return Err("late review run id mismatch".into());
+    }
+    Ok(record)
 }
 
 pub(crate) fn pending_result(request: &Value) -> Value {
@@ -40,7 +102,7 @@ pub(crate) fn pending_result(request: &Value) -> Value {
     })
 }
 
-pub(crate) fn publish(
+fn publish(
     state: &Path,
     pending: &Path,
     request: &Value,
@@ -63,6 +125,11 @@ pub(crate) fn publish(
     result["path"] = json!(file);
     result["run_id"] = record["run_id"].clone();
     result["leg"] = record["chosen_leg"]["id"].clone();
+    clean_checkout(pending, request);
+    Ok(Some(result))
+}
+
+fn clean_checkout(pending: &Path, request: &Value) {
     if let Some(checkout) = request["checkout"].as_str().map(Path::new).filter(|p| {
         p.parent() == pending.parent()
             && p.file_name()
@@ -71,27 +138,16 @@ pub(crate) fn publish(
     }) {
         let _ = fs::remove_dir_all(checkout);
     }
-    Ok(Some(result))
 }
 
 /// Start a local finisher with no inherited pipes, so the review CLI can return the receipt.
 pub(crate) fn start(state: &Path, pending: &Path) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut command = Command::new(exe);
-    command
-        .arg("finish-late-review")
-        .arg(state)
-        .arg(pending)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    command.spawn().map_err(|e| e.to_string())?;
-    Ok(())
+    review_completion::start([
+        "finish-late-review".as_ref(),
+        state.as_os_str(),
+        pending.as_os_str(),
+    ])
+    .map_err(|e| e.to_string())
 }
 
 pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
@@ -107,17 +163,34 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
     }
     let expected_end = request["expected_end"]
         .as_f64()
+        .filter(|n| n.is_finite())
         .ok_or("late review deadline missing")?;
-    // Allow a final record save and remote status propagation after the card deadline.
-    while now() < expected_end + 600.0 {
-        if let Ok(record) = read_run(state, &request) {
-            if publish(state, pending, &request, &record)?.is_some() {
+    loop {
+        {
+            let _lock = receipt_lock(pending)?;
+            if read_pending(pending)?.as_ref() != Some(&request) {
                 return Ok(());
+            }
+            let record = match read_run(state, &request) {
+                Ok(record) => record,
+                Err(error) => {
+                    remove(pending)?;
+                    clean_checkout(pending, &request);
+                    return Err(error);
+                }
+            };
+            if let Some(result) = publish(state, pending, &request, &record)? {
+                save_pending(&pending.with_extension("ready.json"), &result)?;
+                return remove(pending);
+            }
+            // Allow the run record to settle after the card deadline.
+            if now() >= expected_end + GRACE_SECONDS {
+                remove(pending)?;
+                return Err("late review did not reach terminal status".into());
             }
         }
         std::thread::sleep(Duration::from_secs(2));
     }
-    Err("late review did not reach terminal status".into())
 }
 
 #[cfg(test)]
@@ -147,5 +220,32 @@ mod tests {
         let text = std::fs::read_to_string(result["path"].as_str().unwrap()).unwrap();
         assert!(text.contains("HEAD: abc\n"));
         assert!(text.contains("VERDICT: ACCEPT"));
+    }
+    #[test]
+    fn finisher_retires_pending_receipt_and_keeps_completion_recoverable() {
+        let dir = tempfile::tempdir().unwrap();
+        let pending = dir.path().join("review-receipt.json");
+        let request = json!({"head":"abc","run_id":"run-fixture","expected_end":now()+10.0,
+            "changed_paths":["src/lib.rs"]});
+        save_pending(&pending, &request).unwrap();
+        let run = dir.path().join("runs/run-fixture/record.json");
+        save_pending(
+            &run,
+            &json!({"run_id":"run-fixture","status":"completed",
+            "stdout_tail":"src/lib.rs checked\nVERDICT: ACCEPT"}),
+        )
+        .unwrap();
+        execute(vec![
+            dir.path().display().to_string(),
+            pending.display().to_string(),
+        ])
+        .unwrap();
+        assert!(pending.with_extension("txt").is_file());
+        assert!(!pending.exists());
+        fs::remove_file(run).unwrap();
+        let result = recover(dir.path(), &pending, "abc").unwrap().unwrap();
+        assert_eq!(result["run_id"], "run-fixture");
+        assert_eq!(result["verdict"], "ACCEPT");
+        assert!(recover(dir.path(), &pending, "abc").unwrap().is_none());
     }
 }

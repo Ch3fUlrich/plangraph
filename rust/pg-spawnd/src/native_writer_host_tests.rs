@@ -483,6 +483,17 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
         .exists());
     check_review_resume_after_missing_client(&mut host, &base, &head, &cli);
     check_late_review_reuses_completed_run(&mut host, &head, &cli);
+    check_review_replaces_unreadable_run(&mut host, &head, &cli);
+    fs::write(
+        &cli,
+        "import sys\nprint('wrapper failure', file=sys.stderr)\nsys.exit(10)\n",
+    )
+    .unwrap();
+    let error = host.review(&head, None).unwrap_err();
+    assert!(
+        error.contains("exit code 10") && error.contains("wrapper failure"),
+        "{error}"
+    );
     // OpenCode legs: no result frame in the live log, the answer is the stdout tail.
     let record = json!({"run_id":"run-rv2", "status":"completed",
         "stdout_tail":format!("HIGH src/lib.rs:1 - x\nHEAD: {head}\nVERDICT: REQUEST_CHANGES\n")});
@@ -564,6 +575,28 @@ fn check_late_review_reuses_completed_run(host: &mut Host, head: &str, cli: &Pat
         artifact,
         format!("HEAD: {head}\nsrc/lib.rs checked\nVERDICT: ACCEPT\n")
     );
+}
+
+#[cfg(unix)]
+fn check_review_replaces_unreadable_run(host: &mut Host, head: &str, cli: &Path) {
+    let pending = host.reviews.join(format!("late-review-{head}.json"));
+    let run = host.state.join("runs/run-pruned/record.json");
+    fs::create_dir_all(run.parent().unwrap()).unwrap();
+    fs::write(cli, "import json\nprint(json.dumps(dict(run_id='run-replacement', status='completed', stdout_tail='VERDICT: REQUEST_CHANGES')))\n").unwrap();
+    for corrupt in [false, true] {
+        fs::write(&run, "corrupt record").unwrap();
+        fs::write(
+            &pending,
+            json!({"head":head,"run_id":"run-pruned"}).to_string(),
+        )
+        .unwrap();
+        if !corrupt {
+            fs::remove_file(&run).unwrap();
+        }
+        let result = host.review(head, None).unwrap();
+        assert_eq!(result["run_id"], "run-replacement");
+        assert!(!pending.exists());
+    }
 }
 
 #[cfg(unix)]

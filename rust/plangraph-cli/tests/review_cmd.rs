@@ -540,3 +540,84 @@ fn binary_file_is_measured_as_the_inlined_base85_patch() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("blob.bin"));
     assert!(!fs::read_to_string(&log).unwrap().contains("\"spawn\""));
 }
+
+#[test]
+fn live_leg_returns_pending_and_publishes_late_review_file() {
+    let (tmp, work, _, base) = init_repo_with_origin();
+    fs::write(work.join("file.rs"), "fn changed() {}\n").unwrap();
+    git(&work, &["add", "file.rs"]);
+    git(
+        &work,
+        &["commit", "-m", "change\n\nWriter: gemini run-feature"],
+    );
+    let head = git(&work, &["rev-parse", "HEAD"]);
+    let state = tmp.path().join("state");
+    let log = tmp.path().join("spawner.jsonl");
+    let spawner = write_mock_spawner(tmp.path(), &state, &log, "late");
+    let approval = tmp.path().join("approval.txt");
+    let output = Command::new(plangraph_bin())
+        .current_dir(tmp.path())
+        .args(["review", "--repo"])
+        .arg(&work)
+        .args([
+            "--base",
+            &base,
+            "--head",
+            &head,
+            "--no-fetch",
+            "--wait",
+            "0",
+        ])
+        .args(["--state", "state"])
+        .arg("--approval")
+        .arg(&approval)
+        .env("PLANGRAPH_SPAWNER_CMD", spawner)
+        .env("PYTHONPATH", repo_root().join("src"))
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("run=run-test0001 status=running"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("verdict=PENDING") && !stdout.contains("verdict=MISSING"),
+        "{stdout}"
+    );
+    let run = state.join("runs/run-test0001");
+    let record: Value =
+        serde_json::from_slice(&fs::read(run.join("record.json")).unwrap()).unwrap();
+    let reported: f64 = stdout
+        .split("expected_end=")
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(
+        (reported - record["expected_end"].as_f64().unwrap()).abs() < 0.001,
+        "{stdout}"
+    );
+
+    fs::write(run.join("release"), "").unwrap();
+    let artifact = run.join("late-review.txt");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(6);
+    while !artifact.is_file() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    let text = fs::read_to_string(artifact).unwrap();
+    assert!(text.contains("RUN: run-test0001\n"), "{text}");
+    assert!(
+        text.contains(&format!("HEAD: {head}\n")) && text.contains("VERDICT: PASS\n"),
+        "{text}"
+    );
+    assert!(!approval.exists());
+}

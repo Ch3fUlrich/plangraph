@@ -175,18 +175,8 @@ impl Host {
     ) -> Result<Value, String> {
         let base = self.git(&["rev-parse", &format!("{}^{{commit}}", self.base_pin())])?;
         let pending = self.reviews.join(format!("late-review-{head}.json"));
-        if let Some(request) = late_review::read_pending(&pending)? {
-            if request["head"] != head {
-                return Err("late review head mismatch".into());
-            }
-            let record = late_review::read_run(&self.state, &request)?;
-            return match late_review::publish(&self.state, &pending, &request, &record)? {
-                Some(result) => {
-                    fs::remove_file(&pending).map_err(|e| e.to_string())?;
-                    Ok(result)
-                }
-                None => Ok(late_review::pending_result(&request)),
-            };
+        if let Some(result) = late_review::recover(&self.state, &pending, head)? {
+            return Ok(result);
         }
         self.reviews_started += 1;
         let tag = format!("{}-{}", &head[..8.min(head.len())], self.reviews_started);
@@ -276,15 +266,28 @@ impl Host {
         let stderr = String::from_utf8_lossy(&printed.stderr);
         let record = printed_record(&String::from_utf8_lossy(&printed.stdout));
         if printed.status.code() == Some(10) {
-            let line = record
+            let stderr_tail = record
                 .as_ref()
                 .and_then(|row| row["stderr_tail"].as_str())
-                .unwrap_or_default()
-                .lines()
-                .chain(stderr.lines())
-                .find(|line| line.starts_with("REVIEW ") && line.contains(" FAIL client_missing "));
-            return Ok(json!({"status":"client_missing","head":head,"reason":
-                line.unwrap_or("client_missing: native Codex review could not start")}));
+                .unwrap_or_default();
+            let diagnostic = stderr_tail.lines().chain(stderr.lines()).find(|line| {
+                line.strip_prefix("REVIEW ")
+                    .and_then(|line| line.split_once(" FAIL client_missing "))
+                    .is_some_and(|(tag, path)| {
+                        !tag.is_empty()
+                            && !tag.contains(char::is_whitespace)
+                            && !path.trim().is_empty()
+                    })
+            });
+            if let Some(line) = diagnostic {
+                return Ok(json!({"status":"client_missing","head":head,"reason":line}));
+            }
+            let detail = if stderr.trim().is_empty() {
+                stderr_tail.trim()
+            } else {
+                stderr.trim()
+            };
+            return Err(format!("review CLI failed with exit code 10: {detail}"));
         }
         let record =
             record.ok_or_else(|| format!("review run returned no record: {}", stderr.trim()))?;

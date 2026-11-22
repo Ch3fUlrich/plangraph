@@ -34,6 +34,8 @@ def leg_limits(record, limits):
     if record.get('role') not in ('review', 'implement', 'fix') or limits['max_s'] is None:
         return limits
     deadline = record['started'] + limits['max_s']
+    if record.get('role') == 'review':
+        record['expected_end'] = deadline
     remaining = deadline - time.time()
     if remaining > 0:
         return dict(limits, deadline=deadline, hard_max=True)
