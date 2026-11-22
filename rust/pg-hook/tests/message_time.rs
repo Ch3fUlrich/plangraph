@@ -126,3 +126,30 @@ fn fleet_client_checks_the_final_message_before_loading_transport() {
         "{diagnostic}"
     );
 }
+
+#[test]
+fn fleet_mcp_refuses_future_time_before_loading_transport() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            r#"
+from unittest.mock import patch
+from plangraph.keeper.mcp import _call_tool
+
+params = {"name": "fleet_msg_send", "arguments": {
+    "to": "peer", "text": "Created 2099-01-01T04:02:00Z",
+}}
+with patch("plangraph.fleet_bus.client.build_client", side_effect=AssertionError("transport loaded")):
+    reply = _call_tool(1, params, None)
+result = reply["result"]
+assert result["isError"], result
+assert "message-time: 2099-01-01T04:02:00Z" in result["content"][0]["text"], result
+"#,
+        ])
+        .env("PYTHONPATH", source)
+        .env("PG_MESSAGE_TIME_HOOK", env!("CARGO_BIN_EXE_pg-hook"))
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}

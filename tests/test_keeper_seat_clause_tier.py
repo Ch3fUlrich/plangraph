@@ -271,6 +271,9 @@ def test_description_edit_reports_the_superseded_contract(world_like):
     from plangraph.keeper.fmt import result_text
     assert "title: Launch per spawn plan v6.4" in result_text("edit_definition", result)
     assert "mixed plan versions" in world.store.show(router, key, brief=True)["stale"]
+    with pytest.raises(Refused, match="mixed plan versions in title, done_criteria") as refusal:
+        world.store.claim(world.p("l1main"), key)
+    assert refusal.value.code == "bad_state"
     corrected = world.store.edit_definition(router, key, {
         "description": "Use one counter per spawn plan v9.",
         "title": "Launch per spawn plan v9",
@@ -278,6 +281,22 @@ def test_description_edit_reports_the_superseded_contract(world_like):
     })
     assert "warnings" not in corrected
     assert "stale" not in world.store.show(router, key, brief=True)
+    assert world.store.claim(world.p("l1main"), key)["epoch"] == 1
+
+
+def test_explicitly_superseded_rule_blocks_claim(world_like):
+    world = world_like
+    router = world.p("router")
+    key = _create(world, done_criteria="Verify the routing change under rule 2.12b.")
+    result = world.store.edit_definition(router, key, {
+        "description": "Use rule 2.13, which supersedes rule 2.12b.",
+    })
+    assert result["warnings"][-1] == (
+        "done_criteria: Verify the routing change under rule 2.12b.")
+    assert world.store.show(router, key, brief=True)["stale"] == (
+        "superseded rule 2.12b in done_criteria")
+    with pytest.raises(Refused, match=r"superseded rule 2\.12b in done_criteria"):
+        world.store.claim(world.p("l1main"), key)
 
 
 @pytest.mark.parametrize("field,clause", [

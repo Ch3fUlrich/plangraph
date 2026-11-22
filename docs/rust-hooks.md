@@ -102,7 +102,7 @@ transcript format.
 Register `pg-hook message-time` for `PreToolUse` on `SendMessage` and the
 shell tool. It checks the message field or a literal `fleet-msg send`
 invocation. The fleet client also checks the resulting message before it loads
-the transport, including when a shell expanded the arguments. It finds the
+the transport for CLI sends and MCP `fleet_msg_send`. It finds the
 default installed binary automatically. Set `PG_MESSAGE_TIME_HOOK` to an
 absolute executable path for a custom install.
 

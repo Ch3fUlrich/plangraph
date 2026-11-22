@@ -675,16 +675,18 @@ def build_client(env=None, *, status=None, probe=None, wake=None, log=None):
 def call_tool(name, args, env=None, *, wake=None, log=None):
     """The MCP surface of this client: same signing, spool and refusals."""
     args = args if isinstance(args, dict) else {}
-    client = build_client(env, wake=wake, log=log)
     if name == "fleet_msg_send":
         to, text = args.get("to"), args.get("text")
         if not isinstance(to, str) or not to:
             raise Refused("to must be a nonempty agent or host name")
         if not isinstance(text, str):
             raise Refused("text must be a string")
+        _check_message_time(text)
+        client = build_client(env, wake=wake, log=log)
         return json.dumps(client.send(to, text), sort_keys=True,
                           ensure_ascii=False, default=str)
     if name == "fleet_msg_read":
+        client = build_client(env, wake=wake, log=log)
         rows = client.read(args.get("since"))
         return json.dumps({"rows": rows}, sort_keys=True, ensure_ascii=False)
     raise Refused(f"unknown bus tool: {name}")

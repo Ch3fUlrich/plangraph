@@ -77,3 +77,76 @@ fn codex_tool_exits_are_checked_on_stop() {
         .unwrap()
         .contains("tool:call_one"));
 }
+
+#[cfg(unix)]
+#[test]
+fn session_installer_builds_copies_and_checksums_the_hook() {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let fixture = tempfile::tempdir().unwrap();
+    let dest = fixture.path().join("installed");
+    let bin = fixture.path().join("bin");
+    let target = fixture.path().join("mock-build");
+    fs::create_dir(&bin).unwrap();
+    let cargo = bin.join("cargo");
+    fs::write(
+        &cargo,
+        concat!(
+            "#!/bin/sh\nset -eu\n",
+            "printf '%s\\n' \"$@\" > \"$CARGO_TARGET_DIR/argv\"\n",
+            "mkdir \"$CARGO_TARGET_DIR/debug\"\n",
+            "printf 'fixture binary' > \"$CARGO_TARGET_DIR/debug/pg-hook\"\n"
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let mut install = Command::new("sh");
+    install
+        .arg(root.join("tools/hooks/install_hooks.sh"))
+        .arg("--session-rust")
+        .env("DEST", &dest)
+        .env("PATH", path);
+
+    let refused = install.env_remove("CARGO_TARGET_DIR").output().unwrap();
+    assert!(!refused.status.success(), "{refused:?}");
+    assert!(String::from_utf8_lossy(&refused.stderr)
+        .contains("set the shared host CARGO_TARGET_DIR before installing Rust hooks"));
+    assert!(!dest.exists());
+
+    fs::create_dir(&target).unwrap();
+    let installed = install.env("CARGO_TARGET_DIR", &target).output().unwrap();
+    assert!(installed.status.success(), "{installed:?}");
+    let argv = fs::read_to_string(target.join("argv")).unwrap();
+    let manifest = root.canonicalize().unwrap().join("rust/Cargo.toml");
+    assert_eq!(
+        argv.lines().collect::<Vec<_>>(),
+        [
+            "build",
+            "--manifest-path",
+            manifest.to_str().unwrap(),
+            "-p",
+            "pg-hook",
+            "--bin",
+            "pg-hook"
+        ]
+    );
+    let hook = dest.join("pg-hook");
+    assert_eq!(fs::read(&hook).unwrap(), b"fixture binary");
+    assert_ne!(fs::metadata(&hook).unwrap().permissions().mode() & 0o111, 0);
+    let check = Command::new("sha256sum")
+        .args(["-c", "SHA256SUMS"])
+        .current_dir(dest)
+        .output()
+        .unwrap();
+    assert!(check.status.success(), "{check:?}");
+    assert!(String::from_utf8_lossy(&check.stdout)
+        .lines()
+        .any(|line| line == "pg-hook: OK"));
+}
