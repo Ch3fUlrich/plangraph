@@ -260,6 +260,12 @@ def test_check_lists_gates_with_cancelled_dependencies(json_mode, capsys):
     "Use gpt-6.2-sol approvers.",
     "Approvals from gpt-6.2-sol.",
     "Signed off by gpt-6.2-sol.",
+    "Reviewer: gpt-6.2-sol high",
+    "Verdict: gpt-6.2-sol",
+    "Sign-off: gpt-6.2-sol",
+    "Reviewer is gpt-6.2-sol",
+    "Seat=gpt-6.2-sol",
+    "Approver = `gpt-6.2-sol`",
 ])
 def test_check_lists_open_items_with_named_review_models(world, tmp_path, monkeypatch, capsys, clause):
     world.store.import_items(world.p("router"), [

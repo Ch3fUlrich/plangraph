@@ -309,6 +309,12 @@ def test_explicitly_superseded_rule_blocks_claim(world_like):
     ("description", "Use gpt-6.2-sol approvers."),
     ("done_criteria", "Approvals from gpt-6.2-sol."),
     ("description", "Signed off by gpt-6.2-sol."),
+    ("done_criteria", "Reviewer: gpt-6.2-sol high"),
+    ("description", "Verdict: gpt-6.2-sol"),
+    ("done_criteria", "Sign-off: gpt-6.2-sol"),
+    ("description", "Reviewer is gpt-6.2-sol"),
+    ("done_criteria", "Seat=gpt-6.2-sol"),
+    ("description", "Approver = `gpt-6.2-sol`"),
 ])
 def test_define_and_edit_refuse_named_review_seats(world_like, field, clause):
     fields = {field: clause}
@@ -323,6 +329,7 @@ def test_define_and_edit_refuse_named_review_seats(world_like, field, clause):
     "Review report records tests on gpt-6.2-sol.",
     "Review gpt-6.2-sol output.",
     "Review of gpt-6.2-sol output.",
+    "Review: gpt-6.2-sol output.",
     "Review of the model gpt-6.2-sol.",
 ])
 def test_model_name_outside_review_clause_is_allowed(world_like, criteria):

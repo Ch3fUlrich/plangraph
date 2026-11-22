@@ -72,12 +72,15 @@ _REVIEW_FIELD_NAMES = ("done_criteria", "description")
 _REVIEW_ACTOR = (
     r"review(?:s|ed|ing|ers?)?|seats?|approv(?:e[ds]?|ers?|ing|als?)"
     r"|verdicts?|sign(?:[- ]?|ed[- ])off")
+_REVIEW_LABEL = r"reviewers?|seats?|approvers?|verdicts?|sign[- ]?offs?"
 _MODEL_WORD = re.compile(r"[a-z0-9][a-z0-9._/-]*", re.IGNORECASE)
 _BEFORE_MODEL = re.compile(
-    rf"\b(?:{_REVIEW_ACTOR})[ \t]+"
+    rf"\b(?:(?:{_REVIEW_ACTOR})[ \t]+"
     r"(?:(?:by|from|with|via)(?:[ \t]+(?:a|an|the))?(?:[ \t]+(?:seat|model))?"
     r"|(?:seats?|models?)(?:[ \t]+is)?)"
-    r"(?:[ \t]+|[ \t]*[:=][ \t]*)[`*'\"]*$", re.IGNORECASE)
+    r"(?:[ \t]+|[ \t]*[:=][ \t]*)"
+    rf"|(?:{_REVIEW_LABEL})(?:[ \t]*[:=][ \t]*|[ \t]+is[ \t]+))"
+    r"[`*'\"]*$", re.IGNORECASE)
 _AFTER_MODEL = re.compile(
     rf"^[`*'\"]*(?:[ \t]+(?:low|medium|high|xhigh|max|ultra|independent|external))?"
     rf"(?:[ \t]+|[ \t]*-[ \t]*)(?:{_REVIEW_ACTOR})\b", re.IGNORECASE)
