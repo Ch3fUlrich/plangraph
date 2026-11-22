@@ -23,6 +23,11 @@ fn host_stop_case(mode: &str, expected: &str) {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
+    let status = pg_worker_core::git_test_support::command(root)
+        .args(["init", "-q"])
+        .status()
+        .unwrap();
+    assert!(status.success());
     for (program, script) in [
         ("codex", "#!/bin/sh\necho $$ > writer.pid\nexec sleep 4\n"),
         (
