@@ -387,6 +387,9 @@ def test_implement_benchmark_highest_cx_still_writer_order_and_skips_limited():
         for leg in DEFAULT_LEGS)
     plan = plan_spawn(c, role="implement", benchmark=rows, leg_reader=reader, legs=legs)
     assert plan.first_leg.id == "cx-gpt-6.2-sol-medium"
+    assert plan.static_v0 == plan.first_leg.id
+    scored = next(row for row in plan.candidates if row["leg"] == plan.first_leg.id)
+    assert scored["intelligence"] == 999 and scored["cost_per_task"] == 0
     assert "mimo-v2.6-pro" not in [l.id for l in plan.legs]
     review = plan_spawn(dict(c, diff_ref={"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}), role="review", writer_families=("gpt",), benchmark=rows, leg_reader=reader)
     from test_route_free_first import WRITERS, FREE

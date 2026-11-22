@@ -301,6 +301,13 @@ ALTER TABLE cards ADD COLUMN IF NOT EXISTS level TEXT COLLATE "C";
 ALTER TABLE cards ADD COLUMN IF NOT EXISTS level_reason TEXT COLLATE "C";
 """
 
+from .schema import ATTEMPT_SPAWN_COLUMNS, ATTEMPT_SPAWN_INDEXES
+
+_V16 = ("ALTER TABLE attempts ALTER COLUMN key DROP NOT NULL;\n"
+        + "\n".join(f"ALTER TABLE attempts ADD COLUMN IF NOT EXISTS {name} {declaration};"
+                    for name, declaration in ATTEMPT_SPAWN_COLUMNS)
+        + ATTEMPT_SPAWN_INDEXES)
+
 MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(2, "design 3: cards, attempts, decisions, questions, answers, budget", _V2),
               Migration(3, "projector: applied, watermark, alarms", PROJECTOR_PG),
@@ -316,7 +323,8 @@ MIGRATIONS = (Migration(1, "baseline: sqlite schema v9", _V1),
               Migration(13, "l1 apply grants", _V13),
               Migration(14, "host samples: partition function not executable by PUBLIC",
                         HOST_SAMPLES_ACL_DDL),
-              Migration(15, "card effort decision", _V15))
+              Migration(15, "card effort decision", _V15),
+              Migration(16, "spawn attempt outcomes", _V16))
 LATEST = MIGRATIONS[-1].version
 
 _TABLE = re.compile(r"CREATE TABLE (?:IF NOT EXISTS )?(\w+) \(\n(.*?)\n\)(?: PARTITION BY RANGE \([^)]*\))?;", re.S)
@@ -343,4 +351,7 @@ def parse_tables(ddl: str) -> dict:
             r"ALTER TABLE (\w+) ADD COLUMN IF NOT EXISTS (\w+) ([^;]+);", ddl):
         table, column, declaration = match.groups()
         out.setdefault(table, []).append((column, "NOT NULL" in declaration))
+    for table, column in re.findall(
+            r"ALTER TABLE (\w+) ALTER COLUMN (\w+) DROP NOT NULL;", ddl):
+        out[table] = [(name, required and name != column) for name, required in out[table]]
     return out

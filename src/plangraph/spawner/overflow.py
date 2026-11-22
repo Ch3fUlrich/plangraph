@@ -489,6 +489,11 @@ async def native_spawn(self, card, options):
         raise ValueError('native-codex dry-run is not supported')
     repo = native_repo(card)
     from plangraph.routing_errors import SpawnRefused
+    from plangraph.planner.routing import rule_level
+    try:
+        effort = rule_level(card)
+    except (TypeError, ValueError) as exc:
+        raise SpawnRefused(str(exc)) from exc
     binary = _projection_binary()
     # Resolve on the placed host before creating a run or acknowledging admission.
     probe = await asyncio.create_subprocess_exec(binary, 'native-tools',
@@ -500,7 +505,8 @@ async def native_spawn(self, card, options):
     record = dict(run_id='run-' + uuid.uuid4().hex, run_kind='native-codex',
         host=(options.get('_placement') or {}).get('host') or os.environ.get('PLANGRAPH_HOST_NAME') or socket.gethostname(),
         status='running', started=time.time(), role='implement', writer_family='openai',
-        base_ref=card.get('base_ref'), repo=str(repo))
+        base_ref=card.get('base_ref'), repo=str(repo),
+        plan=dict(effort=effort, p_source='override'))
     record.update(tool_environment)
     from .exit_outcome import native_harness_fields
     record.update(native_harness_fields(record['host']))

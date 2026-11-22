@@ -391,3 +391,40 @@ def test_keeper_card_roundtrips_computed_effort_decision(w, caplog):
     event = json.loads(caplog.messages[-1].split(" ", 1)[1])
     assert event == {"ts": w.store._iso(w.clock()), "item": key,
                      "assigned": "L0", "reason": "high_risk"}
+
+
+def test_attempt_migration_from_existing_sqlite_store(tmp_path):
+    import sqlite3
+    from plangraph.keeper.db import open_db
+
+    path = tmp_path / "before.db"
+    with sqlite3.connect(path) as old:
+        old.executescript("""
+            CREATE TABLE items (key TEXT PRIMARY KEY);
+            INSERT INTO items VALUES ('demo:A');
+            CREATE TABLE attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT NOT NULL REFERENCES items(key),
+                n INTEGER NOT NULL, harness TEXT, model TEXT, combo TEXT, class TEXT,
+                started_at TEXT, ended_at TEXT, exit_class TEXT NOT NULL, tokens_in INTEGER,
+                tokens_out INTEGER, cost REAL, run_id TEXT, workflow_id TEXT, log_ref TEXT,
+                UNIQUE (key, n)
+            );
+            INSERT INTO attempts(id,key,n,exit_class) VALUES (9,'demo:A',1,'ok');
+        """)
+    conn = open_db(path)
+    try:
+        assert tuple(conn.execute("SELECT key,n,exit_class FROM attempts WHERE id=9").fetchone()) == ("demo:A", 1, "ok")
+        conn.execute("INSERT INTO attempts(key,card_key,n,attempt_id,exit_class) VALUES (NULL,NULL,1,'run-adhoc','ok')")
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+            conn.execute("INSERT INTO attempts(card_key,n,exit_class) VALUES ('demo:missing',2,'ok')")
+        with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
+            conn.execute("INSERT INTO attempts(key,n,exit_class) VALUES ('demo:missing',2,'ok')")
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("UPDATE attempts SET n=2 WHERE id=9")
+    finally:
+        conn.close()
+    conn = open_db(path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0] == 2
+    finally:
+        conn.close()

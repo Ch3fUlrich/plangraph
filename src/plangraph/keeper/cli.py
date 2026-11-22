@@ -29,6 +29,7 @@ def _p(sub, name, **kw):
 
 HANDLERS = {
     "ready": cli_verbs.cmd_ready,
+    "attempts": cli_output_verbs.cmd_attempts,
     "show": cli_verbs.cmd_show,
     "claim": cli_verbs.cmd_claim,
     "delegate": cli_verbs.cmd_delegate,
@@ -72,6 +73,7 @@ HANDLERS = {
 
 
 def _add_reads(sub):
+    _p(sub, "attempts", help="recent keeper spawn attempts").add_argument("--since", default="1d")
     ready = _p(sub, "ready", help="items ready to work now")
     ready.add_argument("--project")
     ready.add_argument("--all", action="store_true")

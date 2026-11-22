@@ -316,6 +316,7 @@ class SpawnPlan:
 
     agy_quota_states: dict = field(default_factory=dict)
     effort: dict = field(default_factory=dict)
+    static_v0: str | None = None
 
     @property
     def first_leg(self) -> Leg | None:
@@ -512,6 +513,8 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
                   "u_core": score_model(dict(row, tier=leg.tier), role=role, risk=ranking_risk,
                                         need_tokens=card["estimate_tokens"]) if row is not None else None,
                   "p_source": "measured" if row is not None else "prior"}
+        if row is not None:
+            detail.update(intelligence=row.get("aa_intelligence"), cost_per_task=row.get("cost_per_task_usd"))
         if reason:
             detail.update(reason=reason, evidence=states[leg.id]["evidence"])
         candidate_details.append(detail)
@@ -600,7 +603,7 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
     threshold = admit_fixer_threshold(card=card)
     groups = split_findings(card.get('findings', ()), limit=threshold) if role == 'implement' else ()
     return SpawnPlan(tuple(ordered), tuple(skipped), source, tuple(seats), tuple(reasons), error, gaps,
-                     tuple(candidate_details), groups, coverage, placement, quota_states, effort)
+                     tuple(candidate_details), groups, coverage, placement, quota_states, effort, route.first_leg.id)
 
 
 def hand_picked(model, card=None, override_reason=None, *, log_path=None, caller=None):

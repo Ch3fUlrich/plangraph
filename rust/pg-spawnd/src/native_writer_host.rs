@@ -487,6 +487,12 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
         }
     }
     record["effort"] = json!(host.effort);
+    record["requested_model"] = json!(WRITER_MODEL);
+    if record["plan"].is_object() {
+        record["plan"]["legs"] = json!([{"id":"native-codex", "model":WRITER_MODEL,
+                                          "harness":"codex", "effort":host.effort}]);
+        record["plan"]["static_v0"] = json!("native-codex");
+    }
     record["cwd"] = json!(host.cwd);
     host.save(&record)?;
     native_writer::run(

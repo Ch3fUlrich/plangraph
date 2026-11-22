@@ -18,6 +18,7 @@ from pathlib import Path
 
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
+from .schema import ATTEMPTS_GUARDS, ATTEMPTS_TABLE, ATTEMPT_SPAWN_INDEXES
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
 from .schema import (ALIASES_DDL, DESIGN3_DDL, GRANTS_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
                      OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
@@ -188,6 +189,29 @@ def _split_statements(
     return statements
 
 
+def _migrate_18_spawn_attempts(conn):
+    """Preserve existing rows and both foreign keys while admitting nullable spawn keys."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='idx_attempts_spawn_since'").fetchone():
+        return
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(attempts)")]
+        if "attempt_id" not in columns:
+            conn.execute(ATTEMPTS_TABLE.replace("attempts (", "attempts_v18 (", 1))
+            names = ",".join(columns)
+            conn.execute(f"INSERT INTO attempts_v18 ({names}) SELECT {names} FROM attempts")
+            conn.execute("DROP TABLE attempts")
+            conn.execute("ALTER TABLE attempts_v18 RENAME TO attempts")
+            for statement in _split_statements(ATTEMPTS_GUARDS, disallow=("PRAGMA", "VACUUM")):
+                conn.execute(statement)
+        for statement in _split_statements(ATTEMPT_SPAWN_INDEXES, disallow=("PRAGMA", "VACUUM")):
+            conn.execute(statement)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
+
 def _upgrade(conn):
     """Add any column/table/trigger an older database lacks; idempotent, DML-free."""
     for table, column, ddl in _ADDED_COLUMNS:
@@ -268,6 +292,7 @@ def open_db(path, *, create: bool = False,
                 f"{path} is not a keeper database (schema missing); "
                 "create it with open_db(..., create=True)")
         _upgrade(conn)
+    _migrate_18_spawn_attempts(conn)
     # Defensive mode hardens shadow tables and blocks several bypasses; enable
     # it after setup (it must not interfere with the CREATE statements above)
     # and before the authorizer, which then covers the rest.

@@ -253,3 +253,8 @@ the larger of the risk and level floors. A planner can raise a level. A lower
 assignment records its requested value and the rule reason. Task classes group
 S0–S1, S2, and S3–S4 by change or regression check. Version 1 uses the plan's
 starting floors. Cite a replay delta for future changes to the profile table.
+
+Keeper attempts retain the routed profile, plan hash and selected leg alongside
+the captured eligibility, rejected legs, top five, pin and benchmark baselines.
+The watchdog delivers one terminal record per spawner run, including runs that
+fell through to a different leg. Missing benchmark evidence stays null.

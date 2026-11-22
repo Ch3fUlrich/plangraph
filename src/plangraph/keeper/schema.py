@@ -25,9 +25,10 @@ __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL"
 #: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
 #: oversight step reached main first and keeps v14 (``OVERSIGHT_SCHEMA_VERSION``,
 #: installed presence-based); the bus steps renumber after it: v15 durable
-#: messages, v16 message nonces/envelopes, v17 placement rules.  Every step past v12 installs
+#: messages, v16 message nonces/envelopes, v17 placement rules, v18 spawn attempts.
+#: Every step past v12 installs
 #: presence-based in ``db._upgrade``; nothing keys off this number at runtime.
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 #: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
 #: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
@@ -77,6 +78,51 @@ def _in(values):
 #: logical twin).  List-valued columns hold canonical JSON text.  ``attempts``,
 #: ``decisions`` and ``answers`` are append-only.  ``IF NOT EXISTS`` so
 #: ``db._upgrade`` can install it at open on a v9 database.
+ATTEMPT_SPAWN_COLUMNS = (
+    ("attempt_id", "TEXT"), ("card_key", "TEXT REFERENCES cards(key)"),
+    ("role", "TEXT"), ("leg", "TEXT"), ("requested_model", "TEXT"),
+    ("served_model", "TEXT"), ("effort", "TEXT"), ("level", "TEXT"),
+    ("level_reason", "TEXT"), ("task_class", "TEXT"), ("risk_band", "TEXT"),
+    ("bucket", "TEXT"), ("host", "TEXT"), ("plan_hash", "TEXT"), ("route", "TEXT"),
+)
+
+ATTEMPT_SPAWN_INDEXES = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_attempts_spawn_id ON attempts(attempt_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_spawn_since ON attempts(started_at) WHERE attempt_id IS NOT NULL;
+"""
+
+ATTEMPTS_TABLE = f"""
+CREATE TABLE IF NOT EXISTS attempts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    key          TEXT REFERENCES items(key),
+    n            INTEGER NOT NULL,
+    harness      TEXT,
+    model        TEXT,
+    combo        TEXT,
+    class        TEXT,
+    started_at   TEXT,
+    ended_at     TEXT,
+    exit_class   TEXT NOT NULL CHECK (exit_class IN ({_in(EXIT_CLASSES)})),
+    tokens_in    INTEGER,
+    tokens_out   INTEGER,
+    cost         REAL,
+    run_id       TEXT,
+    workflow_id  TEXT,
+    log_ref      TEXT,
+{''.join(f'    {name} {decl},' + chr(10) for name, decl in ATTEMPT_SPAWN_COLUMNS)}    UNIQUE (key, n)
+);
+"""
+
+ATTEMPTS_GUARDS = """
+CREATE INDEX IF NOT EXISTS idx_attempts_key ON attempts(key);
+CREATE TRIGGER IF NOT EXISTS trg_attempts_append_only_update
+BEFORE UPDATE ON attempts
+BEGIN SELECT RAISE(ABORT, 'attempts are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS trg_attempts_append_only_delete
+BEFORE DELETE ON attempts
+BEGIN SELECT RAISE(ABORT, 'attempts are append-only'); END;
+"""
+
 DESIGN3_DDL = f"""
 CREATE TABLE IF NOT EXISTS cards (
     key             TEXT PRIMARY KEY REFERENCES items(key),
@@ -98,32 +144,8 @@ CREATE TABLE IF NOT EXISTS cards (
     level_reason    TEXT
 );
 
-CREATE TABLE IF NOT EXISTS attempts (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    key          TEXT NOT NULL REFERENCES items(key),
-    n            INTEGER NOT NULL,
-    harness      TEXT,
-    model        TEXT,
-    combo        TEXT,
-    class        TEXT,
-    started_at   TEXT,
-    ended_at     TEXT,
-    exit_class   TEXT NOT NULL CHECK (exit_class IN ({_in(EXIT_CLASSES)})),
-    tokens_in    INTEGER,
-    tokens_out   INTEGER,
-    cost         REAL,
-    run_id       TEXT,
-    workflow_id  TEXT,
-    log_ref      TEXT,
-    UNIQUE (key, n)
-);
-CREATE INDEX IF NOT EXISTS idx_attempts_key ON attempts(key);
-CREATE TRIGGER IF NOT EXISTS trg_attempts_append_only_update
-BEFORE UPDATE ON attempts
-BEGIN SELECT RAISE(ABORT, 'attempts are append-only'); END;
-CREATE TRIGGER IF NOT EXISTS trg_attempts_append_only_delete
-BEFORE DELETE ON attempts
-BEGIN SELECT RAISE(ABORT, 'attempts are append-only'); END;
+{ATTEMPTS_TABLE}
+{ATTEMPTS_GUARDS}
 
 CREATE TABLE IF NOT EXISTS decisions (
     id      TEXT PRIMARY KEY,

@@ -131,6 +131,9 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
+    if let Some(name @ ("project-spawn-attempt" | "validate-attempt-route")) = verb.as_deref() {
+        return crate::attempt_outcome::execute(name, rest, out);
+    }
     if verb.as_deref() == Some("steps") {
         // The plan arrives on stdin; the exit code is the plan's, not a usage error's.
         if !rest.is_empty() {

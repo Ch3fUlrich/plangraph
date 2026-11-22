@@ -9,6 +9,13 @@ from .brief import creation_error
 from .credential_guard import mask_all
 
 
+def cmd_attempts(args, session):
+    from .cli_verbs import read
+
+    return read(session, "attempts", {"since": args.since}, lambda values: "\n".join(
+        f"{row['attempt_id']} {row['item']} {row['role']} {row['served_model']}" for row in values))
+
+
 def cmd_close_merged(args, session):
     from .cli_verbs import SLOW_TIMEOUT, RefusedCli, Unreachable, _refuse
     body = {"key": args.key, "decision_id": args.decision_id, "families": args.families,
