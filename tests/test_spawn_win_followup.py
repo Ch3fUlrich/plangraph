@@ -253,9 +253,11 @@ def assert_hydrogen_wire(proc, launches, prompt, probe=False):
     envelope = {"event": "user", "message": {"role": "user", "content": content}}
     assert wire == (json.dumps(envelope, ensure_ascii=False) + "\n").encode()
     sentence = "Answer in plain text in this reply only; do not create a plan file"
-    assert sentence + "." in content.splitlines()[0]
+    serialized_content = json.loads(wire)["message"]["content"]
+    assert serialized_content.count(sentence) == 1
+    assert sentence + "." in serialized_content.splitlines()[0]
     if probe:
-        assert sentence + " or any other file." in content
+        assert "Do not create a plan or any other file." in serialized_content
 
 
 def test_hydrogen_review_completes_with_the_result_reply(hydrogen_review):
