@@ -143,11 +143,7 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
         .unwrap();
     let _guard = ChildGuard { child };
     let mut client = McpClient::connect(&socket);
-    client
-        .stream
-        .get_mut()
-        .set_read_timeout(Some(std::time::Duration::from_secs(45)))
-        .unwrap();
+    client.set_response_timeout(std::time::Duration::from_secs(45));
     client.initialize();
     let mut request = json!({"name":"plangraph_agent_spawn", "arguments":{
         "role":"review", "writer_families":["openai"], "prompt":"review",
