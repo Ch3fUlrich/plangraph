@@ -84,7 +84,7 @@ def test_local_rust_toolchain_is_an_exact_release():
 def test_shared_installer_reads_pin_without_a_version_override(tmp_path):
     action = yaml.safe_load((ROOT / ".github/actions/setup-rust/action.yml").read_text())
     assert set(action["inputs"]) == {"components", "targets"}
-    parse, install = action["runs"]["steps"]
+    parse, install, cache = action["runs"]["steps"]
     assert parse["id"] == "pin"
     assert parse["shell"] == "bash"
     assert parse["working-directory"] == "${{ github.workspace }}"
@@ -103,6 +103,8 @@ def test_shared_installer_reads_pin_without_a_version_override(tmp_path):
         "components": "${{ inputs.components }}",
         "targets": "${{ inputs.targets }}",
     }
+    assert cache["working-directory"] == "${{ github.workspace }}"
+    assert "--cargo-cache-env \"$GITHUB_ENV\"" in cache["run"]
 
 
 @pytest.mark.parametrize("toolchain", ["stable", "nightly", "1.0.0"])

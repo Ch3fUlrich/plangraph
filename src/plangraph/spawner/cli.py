@@ -229,6 +229,9 @@ def main(argv=None):
     p.add_argument('--timeout', type=float)
     for verb in ('result', 'status', 'cancel'):
         commands.add_parser(verb).add_argument('run_id')
+    p = commands.add_parser('steer', help='queue a native writer message read from standard input')
+    p.add_argument('run_id')
+    p.add_argument('--host', help='configured target host when the run has no local receipt')
     args = parser.parse_args(argv)
     if args.verb == 'quota-result':
         from .env_redact import harness_limit_line
@@ -509,6 +512,9 @@ raise SystemExit(code)
             result = harness_report(service.ps()['runs'], hours=args.hours)
         elif args.verb == 'cancel':
             result = asyncio.run(service.cancel(args.run_id))
+        elif args.verb == 'steer':
+            from .remote_ps import steer_run
+            result = steer_run(service, args.run_id, sys.stdin.read(16385), args.host)
         elif args.verb == 'wait':
             result = asyncio.run(service.wait(args.run_id, timeout=args.timeout))
         else:

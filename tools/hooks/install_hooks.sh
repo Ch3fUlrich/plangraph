@@ -72,7 +72,9 @@ case ${1:-} in
         # Git invokes the Rust executable directly; pre-push stays checkout-owned.
         git_root=$(CDPATH= cd -- "$SELF_DIR/../.." && pwd -P)
         : "${CARGO_TARGET_DIR:?set the shared host CARGO_TARGET_DIR before installing Git hooks}"
-        cargo build --manifest-path "$git_root/rust/Cargo.toml" -p pg-hook --bin commit-msg
+        PYTHONPATH="$git_root/src${PYTHONPATH:+:$PYTHONPATH}" \
+            python3 -m plangraph.spawner.host_ready --cargo-run \
+            build --manifest-path "$git_root/rust/Cargo.toml" -p pg-hook --bin commit-msg
         "$CARGO_TARGET_DIR/debug/commit-msg" --install "$git_root"
         exit 0
         ;;

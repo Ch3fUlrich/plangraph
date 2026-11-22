@@ -149,7 +149,7 @@ pub(crate) fn open_record(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(file)
 }
 
-fn read_record_file(path: &Path) -> Result<Value, ToolError> {
+pub(crate) fn read_record_file(path: &Path) -> Result<Value, ToolError> {
     let invalid = || ToolError::Value("invalid run record".into());
     let read = || -> std::io::Result<Vec<u8>> {
         let metadata = std::fs::symlink_metadata(path)?;

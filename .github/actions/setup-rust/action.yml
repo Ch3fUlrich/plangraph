@@ -22,3 +22,15 @@ runs:
         toolchain: ${{ steps.pin.outputs.toolchain }}
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
+    - name: Configure host compiler cache
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: |
+        if command -v python3 >/dev/null 2>&1; then
+          PYTHONPATH="$PWD/src" python3 -m plangraph.spawner.host_ready --cargo-cache-env "$GITHUB_ENV"
+        elif command -v python >/dev/null 2>&1; then
+          PYTHONPATH="$PWD/src" python -m plangraph.spawner.host_ready --cargo-cache-env "$GITHUB_ENV"
+        else
+          echo "::warning::Python unavailable; Cargo will build without a compiler cache"
+          printf '%s\n' 'RUSTC_WRAPPER=' 'CARGO_INCREMENTAL=0' >> "$GITHUB_ENV"
+        fi

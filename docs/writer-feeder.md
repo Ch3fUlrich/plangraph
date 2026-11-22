@@ -125,7 +125,16 @@ policy `[host_aliases]` mappings resolve host names; explicit policy aliases win
 A facts host inconsistent with registry `self` or `PLANGRAPH_HOST_NAME` refuses;
 active writers with no host refuse instead of silently counting zero.
 
-`--facts PATH` defaults to `~/.config/plangraph/feeder-facts.json`. Supply current
+`--live-facts` is the feeder service's Linux and WSL mode. It samples available
+memory, one-minute load, effective CPU count, and disk space on the run-state
+and existing Cargo target filesystems. It uses the spawner host identity from
+`PLANGRAPH_HOST_NAME` or the host registry. A launch needs one CPU of headroom
+and enough available memory for the per-run estimate above the configured
+`ram_floor_bytes`. Every decision with an available sample, including an idle
+tick, records its capacity and current writer count in the event log.
+
+`--facts PATH` defaults to `~/.config/plangraph/feeder-facts.json` when live facts
+are disabled. Supply current
 host measurements through your host facts collector at least every two minutes
 (write by atomic replacement):
 
@@ -179,6 +188,11 @@ halting the host; known terminal receipts are pruned only during live ticks.
 Dry-run never prunes or writes receipts. Retain launch directories while their
 runs are active.
 
-No service is installed or started by this change. Dry-run against the live
-keeper is read-only; installing the timer requires deploying the binary, files,
-feeder credentials and a fresh facts collector first.
+Dry-run against the live keeper is read-only. After the scoped rollout GO,
+deploy the CLI, policy, and feeder credentials to each approved Linux or WSL
+checkout. In that checkout, install the user units with
+`install -Dm644 deploy/systemd/pg-feeder.service ~/.config/systemd/user/pg-feeder.service`
+and
+`install -Dm644 deploy/systemd/pg-feeder.timer ~/.config/systemd/user/pg-feeder.timer`,
+then run `systemctl --user daemon-reload` and
+`systemctl --user enable --now pg-feeder.timer`.

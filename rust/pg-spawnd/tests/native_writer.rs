@@ -186,15 +186,27 @@ if 'hold marker' in prompt:
     time.sleep(30)
     sys.exit(0)
 if 'resume' in sys.argv:
-    # Fix turns only follow a driver-run review that requested changes.
     assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
-    assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
+    if 'external fix' in prompt:
+        import os
+        record = json.loads((pathlib.Path.cwd().parent/'record.json').read_text())
+        assert os.environ['PATH'] == record['tool_path']
+        assert 'sandbox_mode="danger-full-access"' in sys.argv
+    else:
+        assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
+        expected = not pathlib.Path('fix.txt').exists()
+        assert ('drop the fixture scope' in prompt) == expected, prompt
     # The fix turn commits its fix: a turn that leaves HEAD unchanged is resumed on its items.
     with open('fix.txt', 'a') as fix: fix.write('fixed after review\n')
     subprocess.run(['git','add','fix.txt'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fix'], check=True, stdout=subprocess.DEVNULL)
 else:
     import os
+    if 'reject marker' in prompt:
+        run = pathlib.Path.cwd().parent
+        queued = subprocess.run([os.environ['NATIVE_BINARY'], 'steer-local', run.name,
+            '--state', str(run.parent.parent)], input='drop the fixture scope', text=True, capture_output=True)
+        assert json.loads(queued.stdout)['steered'], (queued.stdout, queued.stderr)
     pathlib.Path('writer-path').write_text(os.environ['PATH'])
     pathlib.Path('writer.txt').write_text('written on selected host\n')
     subprocess.run(['git','add','writer.txt','writer-path'], check=True)
@@ -319,6 +331,20 @@ async def check():
     assert pathlib.Path(record['cwd']).is_dir(), record
     # A remote ref that is absent must never resolve the local-only branch.
     subprocess = __import__('subprocess')
+    prompt_file = root/'external-fix.md'
+    prompt_file.write_text('brief marker external fix')
+    resumed = subprocess.run([os.environ['NATIVE_BINARY'], 'resume', run['run_id'],
+        '--state', str(root/'state'), '--prompt-file', str(prompt_file)], capture_output=True, text=True)
+    assert resumed.returncode == 0, resumed.stderr
+    fixed = service.result(run['run_id'])
+    assert fixed['status'] == 'completed' and fixed['final_head'] != record['final_head'], fixed
+    for field in ('run_id', 'session_id', 'cwd', 'tool_path', 'review_dir'):
+        assert fixed[field] == record[field], (field, fixed)
+    assert fixed['review']['head'] == fixed['final_head'], fixed
+    assert fixed['review']['run_id'] != record['review']['run_id'], fixed
+    ledger = pathlib.Path(fixed['cwd']).parent/'ledger.jsonl'
+    rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+    assert len(rows) == 2 and rows[0]['tokens'] == rows[1]['tokens'] == 1234, rows
     assert not pathlib.Path(record['cwd']).is_relative_to(pathlib.Path(card['repo'])), record
     assert subprocess.check_output(['git','-C',card['repo'],'status','--porcelain'], text=True) == ''
     subprocess.run(['git','-C',card['repo'],'branch','local-only'], check=True)
@@ -344,6 +370,12 @@ async def check():
             assert final['exit_code'] == 3 and final['review']['verdict'] == 'REQUEST_CHANGES', final
             assert final['round_stop'] == 'no_progress' and final['review_rounds'] == 3, final
             assert final['resumes'] == 2 and final['session_id'] == 'fixture-session', final
+            messages = final['steer_messages']
+            assert len(messages) == 1 and messages[0]['message'] == 'drop the fixture scope', messages
+            assert messages[0]['delivered_at'], messages
+            denied = subprocess.run([os.environ['NATIVE_BINARY'], 'steer-local', final['run_id'],
+                '--state', str(root/'state')], input='too late', text=True, capture_output=True)
+            assert json.loads(denied.stdout)['error'] == 'native writer is finished', denied.stdout
         elif status == 'failed':
             assert final['result'] == 'BLOCKED' and final['exit_code'] == 9, final
         else:
@@ -388,8 +420,8 @@ with patch('asyncio.create_subprocess_exec', side_effect=different_supervisor_pa
         if !path.exists() {
             continue;
         }
-        let row: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        let ledger = fs::read_to_string(path).unwrap();
+        let row: serde_json::Value = serde_json::from_str(ledger.lines().next().unwrap()).unwrap();
         if row["exit_code"] == 0 {
             // One counted CLI execution per completed run logs 1,234.
             assert_eq!(row["tokens"], 1234);

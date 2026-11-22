@@ -8,6 +8,6 @@ Type=oneshot
 KillMode=process
 WorkingDirectory=%h/code/plangraph
 EnvironmentFile=-%h/.config/plangraph/plangraph.env
-ExecStart=%h/.local/bin/plangraph feed --once --facts %h/.config/plangraph/feeder-facts.json
+ExecStart=%h/.local/bin/plangraph feed --once --live-facts
 TimeoutStartSec=110
 UMask=0077

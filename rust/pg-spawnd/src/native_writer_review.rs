@@ -343,6 +343,12 @@ impl Host {
         verdict["path"] = json!(path);
         verdict["leg"] = chosen["id"].clone();
         verdict["harness"] = chosen["harness"].clone();
+        if verdict["verdict"] == "ACCEPT" {
+            verdict["accepted_at"] = record["ended"].as_f64().map_or_else(
+                || json!(chrono::Utc::now().to_rfc3339()),
+                |ended| json!(ended),
+            );
+        }
         Ok(verdict)
     }
 }

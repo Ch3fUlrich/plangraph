@@ -159,11 +159,19 @@
   "name": "plangraph_agent_status"
  },
  {
-  "description": "Send steering instructions or context to an active job",
+  "description": "Send steering instructions to an active job or native writer",
   "inputSchema": {
    "properties": {
     "job_id": {
      "description": "Target job ID",
+     "type": "string"
+    },
+    "run_id": {
+     "description": "Target native run ID",
+     "type": "string"
+    },
+    "host": {
+     "description": "Configured native run host",
      "type": "string"
     },
     "message": {
@@ -171,10 +179,8 @@
      "type": "string"
     }
    },
-   "required": [
-    "job_id",
-    "message"
-   ],
+   "required": ["message"],
+   "anyOf": [{"required": ["job_id"]}, {"required": ["run_id"]}],
    "type": "object"
   },
   "name": "plangraph_agent_steer"

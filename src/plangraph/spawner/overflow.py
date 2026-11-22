@@ -534,11 +534,19 @@ async def native_spawn(self, card, options):
         communication = asyncio.create_task(process.communicate())
         try:
             _, error = await asyncio.shield(communication)
-            final = self.result(record['run_id'])
-            if final.get('status') == 'running':
-                final.update(status='failed', exit_code=process.returncode or 6,
-                             reason=error.decode(errors='replace')[-4096:], ended=time.time())
-            self._save(final)
+            import fcntl
+            with (directory / 'writer-supervisor.lock').open('ab') as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    return
+                final = self.result(record['run_id'])
+                if final.get('resume_number'):
+                    return
+                if final.get('status') == 'running':
+                    final.update(status='failed', exit_code=process.returncode or 6,
+                                 reason=error.decode(errors='replace')[-4096:], ended=time.time())
+                self._save(final)
         except asyncio.CancelledError:
             # Give the driver time to cancel and reap its linked review before killing it.
             (directory / 'cancelled').touch()

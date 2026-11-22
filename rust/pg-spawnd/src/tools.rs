@@ -91,6 +91,19 @@ pub(crate) fn dispatch(
     runs: Option<&crate::runs::Runs>,
 ) -> Result<CallToolResult, McpError> {
     let name = request.name.as_ref();
+    if name == "plangraph_agent_steer" {
+        if let Some(args) = request
+            .arguments
+            .as_ref()
+            .filter(|args| args.contains_key("run_id"))
+        {
+            let reply = crate::native_steer::mcp(state, args)
+                .map_err(crate::errors::ToolError::into_error_data)?;
+            return Ok(CallToolResult::success(vec![ContentBlock::text(
+                reply.to_string(),
+            )]));
+        }
+    }
     if matches!(
         name,
         "plangraph_agent_cancel" | "plangraph_agent_steer" | "plangraph_agent_status"
@@ -280,6 +293,27 @@ fn python_repr(value: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_steer_mcp_queues_for_a_running_run_by_run_id() {
+        let state = tempfile::tempdir().unwrap();
+        let run = state.path().join("runs/run-fixture");
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(
+            run.join("record.json"),
+            r#"{"run_id":"run-fixture","run_kind":"native-codex","status":"running","host":"fixture"}"#,
+        )
+        .unwrap();
+        let request = serde_json::from_value(serde_json::json!({
+            "name":"plangraph_agent_steer",
+            "arguments":{"run_id":"run-fixture","message":"remove the sample item"}
+        }))
+        .unwrap();
+        assert!(dispatch(&request, state.path(), "fixture", None).is_ok());
+        assert!(std::fs::read_to_string(run.join("steer.json"))
+            .unwrap()
+            .contains("remove the sample item"));
+    }
 
     #[test]
     fn job_tools_require_registry() {

@@ -3,6 +3,8 @@ use crate::writer_control::STOPPED;
 use serde_json::{json, Value};
 #[path = "native_writer_stage.rs"]
 mod stage;
+#[path = "native_writer_timing.rs"]
+mod timing;
 /// Batch writer driver (R-batch-01..04, 06): one writer session, fast checks per head,
 /// an other-family review run on the exact head, fixes in the same session.
 pub(crate) trait Driver {
@@ -24,11 +26,14 @@ pub(crate) trait Driver {
     fn review(&mut self, head: &str, previous: Option<&Value>) -> Result<Value, String>;
     /// Final gates on the accepted head, the commit-trailer gate included.
     fn gates(&mut self) -> Result<(), String>;
-    /// Push the accepted head once; returns the pushed ref, or None when no push is configured.
+    /// Push the accepted head; returns the pushed ref, or None when no push is configured.
     fn push(&mut self, _head: &str) -> Result<Option<String>, String> {
         Ok(None)
     }
     fn save(&mut self, record: &Value) -> Result<(), String>;
+    fn pending_steer(&self, _record: &Value) -> Result<Vec<crate::native_steer::Message>, String> {
+        Ok(Vec::new())
+    }
     /// Skill text from origin/main of the run checkout; absent when unreadable.
     fn skill(&mut self, _name: &str) -> Result<String, String> {
         Err("skill unavailable".into())
@@ -40,6 +45,8 @@ const REVIEW_DEFERRED: &str = "deferred_to_batch_seat";
 pub(crate) const REVIEW_CLEANUP_UNCONFIRMED: &str = "review_cleanup_unconfirmed";
 /// Fast-check fix turns per head before the run fails.
 const FAST_CHECK_FIXES: usize = 2;
+/// A refused push can trigger two fix turns, subject to the overall review cap.
+const PUSH_FIXES: usize = 2;
 /// Resumes after turns that left no commit beyond the base before the run fails.
 const NO_COMMIT_RESUMES: usize = 2;
 /// Stop rule after a REQUEST_CHANGES round, given the confirmed HIGH+MED count of every
@@ -64,6 +71,24 @@ pub(crate) fn run(driver: &mut impl Driver, mut record: Value, brief: &str) -> V
     });
     record["review_rounds"] = json!(0);
     let result = lifecycle(driver, &mut record, brief);
+    finish(driver, record, result)
+}
+
+pub(crate) fn run_resume(
+    driver: &mut impl Driver,
+    mut record: Value,
+    session: &str,
+    prompt: &str,
+) -> Value {
+    let result = writer_attempt(driver, &mut record, prompt, Some(session));
+    finish(driver, record, result)
+}
+
+fn finish(
+    driver: &mut impl Driver,
+    mut record: Value,
+    result: Result<i32, (i32, String)>,
+) -> Value {
     let (mut exit, mut reason) = match result {
         Ok(code) => (code, None),
         Err((code, why)) => (code, Some(why)),
@@ -148,7 +173,12 @@ fn lifecycle(
             Some(text) => format!(
                 "{prompt}\nOpen findings of the last review on this worktree; fix them:\n{text}\n"
             ),
-            None => prompt.clone(),
+            None => match latest_push_failure(record) {
+                Some(failure) => {
+                    format!("{prompt}\nUnresolved push failure on this worktree:\n{failure}\n")
+                }
+                None => prompt.clone(),
+            },
         };
         match writer_attempt(driver, record, &launch, saved_session.take().as_deref()) {
             Err((_, error)) if error == STOPPED => return Err((10, error)),
@@ -174,20 +204,54 @@ fn lifecycle(
     }
     unreachable!()
 }
+fn latest_push_failure(record: &Value) -> Option<&str> {
+    let failure = record["push_failures"].as_array()?.last()?;
+    (record["review"]["head"] == failure["head"])
+        .then(|| failure["output"].as_str())
+        .flatten()
+}
+
+fn round_cap(record: &Value) -> bool {
+    record["review_rounds"].as_u64().unwrap_or(0) >= crate::round_progress::MAX_ROUNDS
+}
+
+fn push_failure(record: &mut Value, head: &str, failure: &str) -> usize {
+    let history = record
+        .as_object_mut()
+        .unwrap()
+        .entry("push_failures")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .unwrap();
+    history.push(json!({
+        "head":head, "output":failure, "at":chrono::Utc::now().to_rfc3339()
+    }));
+    history.len()
+}
+
 fn resume(
     driver: &mut impl Driver,
     record: &mut Value,
     session: &str,
     prompt: &str,
 ) -> Result<(), (i32, String)> {
+    let messages = driver.pending_steer(record).map_err(|e| (7, e))?;
+    let prompt = if messages.is_empty() {
+        prompt.to_owned()
+    } else {
+        let steer = messages
+            .iter()
+            .map(|entry| entry.message.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        format!("Parent steering messages for this run:\n\n{steer}\n\n{prompt}")
+    };
     record["resumes"] = json!(record["resumes"].as_u64().unwrap_or(0) + 1);
-    driver.save(record).map_err(|e| (6, e))?;
-    let started = stage::now();
-    let result = driver.execute(Some(session), prompt);
-    if let Ok(head) = driver.head() {
-        stage::record(record, "writing", &head, started);
+    timing::execute_turn(driver, record, Some(session), &prompt)?;
+    if !messages.is_empty() {
+        crate::native_steer::delivered(record, &messages);
+        driver.save(record).map_err(|e| (6, e))?;
     }
-    result.map_err(|e| (6, e))?;
     Ok(())
 }
 /// One review round on `head`: refused without the fast-checks stamp; a run without a
@@ -249,17 +313,16 @@ fn writer_attempt(
 ) -> Result<i32, (i32, String)> {
     // HEAD before the turn: a relaunch keeps the commits of the earlier attempts.
     let mut turn_start = driver.head().map_err(|e| (6, e))?;
-    let started = stage::now();
-    let executed = driver.execute(saved_session, prompt);
-    if let Ok(head) = driver.head() {
-        stage::record(record, "writing", &head, started);
-    }
-    let session = executed.map_err(|e| (6, e))?;
-    if saved_session.is_some() {
+    let session = if let Some(session) = saved_session {
+        resume(driver, record, session, prompt)?;
         record.as_object_mut().unwrap().remove("landing_resume");
-    }
-    record["session_id"] = json!(session);
-    record["resumes"] = json!(0);
+        session.to_owned()
+    } else {
+        let session = timing::execute_turn(driver, record, None, prompt)?;
+        record["session_id"] = json!(session);
+        record["resumes"] = json!(0);
+        session
+    };
     let mut fixes = 0;
     let mut idle = 0;
     loop {
@@ -323,16 +386,44 @@ fn writer_attempt(
         }
         record["reviews"].as_array_mut().unwrap().push(summary);
         if record["review"]["verdict"] == "ACCEPT" {
+            if !driver.pending_steer(record).map_err(|e| (7, e))?.is_empty() {
+                if round_cap(record) || session.is_empty() {
+                    return Err((7, "steer pending after the final review round".into()));
+                }
+                resume(driver, record, &session, "Apply the parent steer to this package, commit any required changes and end your turn.")?;
+                if driver.head().map_err(|e| (7, e))? != head {
+                    continue;
+                }
+            }
             final_gates(driver, &head)?;
-            // One push per package: only the accepted, gated head leaves the host.
             let started = stage::now();
             let pushed = driver.push(&head);
             if !matches!(pushed, Ok(None)) {
                 stage::record(record, "push", &head, started);
             }
-            record["pushed"] = json!(pushed.map_err(|e| (7, e))?);
-            record["status_line"] = json!("DONE");
-            return Ok(0);
+            match pushed {
+                Ok(target) => {
+                    record["pushed"] = json!(target);
+                    record["status_line"] = json!("DONE");
+                    return Ok(0);
+                }
+                Err(failure) => {
+                    let failures = push_failure(record, &head, &failure);
+                    if failures > PUSH_FIXES || round_cap(record) || session.is_empty() {
+                        return Err((7, format!("push failed on {head}: {failure}")));
+                    }
+                    resume(driver, record, &session, &format!(
+                        "The push of your accepted head {head} was refused:\n{failure}\nFix the cause, commit and end your turn; keep this session."
+                    ))?;
+                    if driver.head().map_err(|e| (7, e))? == head {
+                        return Err((
+                            7,
+                            format!("no_commit: push fix left HEAD at {head}: {failure}"),
+                        ));
+                    }
+                    continue;
+                }
+            }
         }
         let text = record["review"]["text"].as_str().unwrap_or("").to_owned();
         if record["round_counts"].as_array().is_none() {
@@ -348,7 +439,9 @@ fn writer_attempt(
             .iter()
             .filter_map(Value::as_u64)
             .collect();
-        if let Some(reason) = round_stop(&counts) {
+        if let Some(reason) =
+            round_stop(&counts).or_else(|| round_cap(record).then_some("round_cap"))
+        {
             record["round_stop"] = json!(reason);
             return Ok(3);
         }

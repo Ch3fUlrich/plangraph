@@ -1,7 +1,8 @@
 //! Timer-driven activity boundaries. Selection/admission/briefs are pure;
 //! spawn is an effectful activity behind `Launch` (including compensating release).
 mod adapters;
-mod quota;
+mod capacity;
+pub(crate) mod quota;
 mod runtime;
 mod selection;
 mod sources;
@@ -43,6 +44,7 @@ pub struct Policy {
     pub host_aliases: BTreeMap<String, String>,
     pub quota_max_age_seconds: i64,
     pub ram_per_run_bytes: u64,
+    pub ram_floor_bytes: u64,
     pub disk_floor_bytes: u64,
     pub quota_floor_percent: f64,
     pub facts_max_age_seconds: i64,
@@ -55,6 +57,7 @@ impl Default for Policy {
             host_aliases: BTreeMap::new(),
             quota_max_age_seconds: 10_800,
             ram_per_run_bytes: 4_000_000_000,
+            ram_floor_bytes: 3_000_000_000,
             disk_floor_bytes: 10_000_000_000,
             quota_floor_percent: 10.0,
             facts_max_age_seconds: 300,

@@ -186,7 +186,7 @@ fn apply_facts(
 pub(super) fn facts(
     env: &Env,
     repo: &Path,
-    path: &Path,
+    f: HostFacts,
     runs: &[Run],
     home: &Path,
     p: &Policy,

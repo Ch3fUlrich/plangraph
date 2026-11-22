@@ -3,6 +3,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,7 @@ from .private_io import atomic_write_private
 
 HOST_TIMEOUT = 120
 MAX_AGE = 600
+_sccache_missing_warned = False
 
 
 def shared_cargo_target():
@@ -27,7 +29,40 @@ def shared_cargo_target():
 
 
 def cargo_child_env(env):
-    return dict(env, CARGO_TARGET_DIR=str(shared_cargo_target()), CARGO_INCREMENTAL="0")
+    return dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(shared_cargo_target()))
+
+
+def _cargo_cache_env(env):
+    global _sccache_missing_warned
+    result = dict(env, CARGO_INCREMENTAL="0")
+    home = Path.home()
+    search = env.get('PATH', os.defpath)
+    inherited = env.get('RUSTC_WRAPPER')
+    named = env.get('PLANGRAPH_SCCACHE') or os.environ.get('PLANGRAPH_SCCACHE')
+    inherited_sccache = inherited and Path(inherited).name.lower() in ('sccache', 'sccache.exe')
+    if named:
+        wrapper = shutil.which(named, path=search)
+    else:
+        wrapper = ((shutil.which(inherited, path=search) if inherited_sccache else None)
+                   or shutil.which(str(home / '.local/bin/sccache'))
+                   or shutil.which('sccache', path=search))
+    if inherited and not inherited_sccache and (
+            not wrapper or Path(inherited).absolute() != Path(wrapper).absolute()):
+        result.pop('SCCACHE_DIR', None)
+        return result
+    if wrapper:
+        cap = (env.get('PLANGRAPH_SCCACHE_CACHE_SIZE') or os.environ.get('PLANGRAPH_SCCACHE_CACHE_SIZE')
+               or env.get('SCCACHE_CACHE_SIZE') or '20G')
+        result.update(RUSTC_WRAPPER=str(Path(wrapper).absolute()),
+                      SCCACHE_DIR=str(home / '.cache/plangraph/sccache'),
+                      SCCACHE_CACHE_SIZE=cap)
+    else:
+        result.pop('RUSTC_WRAPPER', None)
+        result.pop('SCCACHE_DIR', None)
+        if not _sccache_missing_warned:
+            _sccache_missing_warned = True
+            logging.warning('sccache unavailable; Cargo will build without a compiler cache')
+    return result
 
 
 def disk_free_gb(path):
@@ -639,7 +674,22 @@ def main(argv=None):
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--test-tools', metavar='REPO')
     parser.add_argument('--unit')
+    parser.add_argument('--cargo-run', nargs=argparse.REMAINDER, metavar='CARGO_ARG')
+    parser.add_argument('--cargo-cache-env', type=Path, metavar='GITHUB_ENV')
     args = parser.parse_args(argv)
+    if args.cargo_cache_env is not None:
+        env = _cargo_cache_env(os.environ)
+        keys = ('RUSTC_WRAPPER', 'SCCACHE_DIR', 'SCCACHE_CACHE_SIZE', 'CARGO_INCREMENTAL')
+        lines = {key: env.get(key, '') for key in keys}
+        if any('\n' in value or '\r' in value for value in lines.values()):
+            parser.error('Cargo cache environment contains a line break')
+        with args.cargo_cache_env.open('a', encoding='utf-8') as output:
+            output.writelines(f'{key}={value}\n' for key, value in lines.items())
+        return 0
+    if args.cargo_run is not None:
+        if not args.cargo_run:
+            parser.error('--cargo-run requires Cargo arguments')
+        return subprocess.call(['cargo', *args.cargo_run], env=_cargo_cache_env(os.environ))
     if args.test_tools:
         print(json.dumps(pre_push_report(args.test_tools, args.unit)))
         return 0

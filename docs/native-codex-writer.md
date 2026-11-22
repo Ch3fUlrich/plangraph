@@ -53,8 +53,13 @@ the delta from the previous head. The HIGH+MED count of each round goes to
 `MAX_ROUNDS` (exit 3 with `round_stop` `round_cap`, `no_progress` or
 `slow_progress`; `no_session` when Codex
 reported no session ID to resume). ACCEPT runs the same
-gates on the clean final head, then pushes it once to the card's optional
-`push_ref` (`refs/heads/...`, no force) and records `status_line: DONE`.
+gates on the clean final head, then pushes to the card's optional
+`push_ref` (`refs/heads/...`, no force). A refused push records the head and
+gate output in `push_failures` and gives the same session up to two fix turns
+within the overall review cap. A fix must commit a new head and pass fast
+checks and review before the next push. An unchanged head ends the run with
+the original gate output. A successful push records
+`status_line: DONE`. Exhaustion keeps the gate output in the failed run record.
 The review seat follows the current spawner route. A card can pin a seat with
 `review_leg` and an audited `review_override_reason` of at least ten characters.
 The review record includes the selected leg and its harness. Before each
@@ -73,6 +78,24 @@ changes at the round stop, 4 no verdict, 5 base or card refusal (stale or unpush
 7 final gate failure, 8 start disk refusal. Worktrees and logs remain for recovery.
 Exit 9 reports `result: BLOCKED` when writer relaunches are exhausted or their
 disk/base preparation fails.
+
+Run `pg-spawnd resume RUN_ID --prompt-file PATH` on the writer's host for an
+external fix round. Use `--state PATH` when the run has a custom state root.
+The run must have ended and its worktree must still match its recorded head.
+The command reuses the recorded Codex session, tool PATH, worktree and review
+directory. It runs the same gates and exact-head review before publishing the
+new result. The record keeps the previous outcome in `resume_from` and the
+ledger appends a row for the fix round's usage.
+
+Queue a scope change with `plangraph_agent_steer` using `run_id` and
+`message`, or pipe the message into
+`python3 -m plangraph.spawner.cli steer RUN_ID`. Both routes can take an
+explicit configured host when the parent lacks a local receipt. The worker
+prepends queued messages to its next Codex resume and records their delivery
+times in `steer_messages`. The receipt reports queue acceptance immediately.
+
+Native records include each Codex turn's start and end in `writer_turns` and
+the review's `accepted_at` timestamp for the throughput collector.
 
 The live Rust supervisor persists a `manifest` in the run record before launching
 Codex: name (run ID), host, worktree, original brief, effort and `try_count`.
@@ -128,7 +151,7 @@ covers the native writer path.
 ## Health check
 
 After a spawner move, each target must answer `pg-spawnd health --json` with exit 0;
-`pg-spawnd` has no `--version` verb (advertised verbs: `probe`, `serve`, `shim`, `health`, `agents-view`, `ledger-report`).
+`pg-spawnd` has no `--version` verb (advertised verbs include `probe`, `serve`, `shim`, `health`, `agents-view`, `ledger-report`, and `resume`).
 Route listings never show `native-codex`: it is a card `run_kind` that spawn sends past routing
 (`src/plangraph/spawner/cli.py`); native dry runs are refused (`src/plangraph/spawner/overflow.py`).
 Check routing with a review dry run from a fresh `python3 -m plangraph.spawner.cli` process.
@@ -136,7 +159,9 @@ Make the first native-codex run after a move a small canary; check its run recor
 
 ## Writer statistics ledger
 
-Each terminal native run writes one immutable row in `runs/<run-id>/ledger.jsonl`.
+Each terminal native writer attempt writes an immutable row in
+`runs/<run-id>/ledger.jsonl`. The first row describes the initial run.
+Explicit fix rounds append rows tagged with their `resume_number`.
 Repeated saves of the same row are idempotent; differing rows are refused. Atomic
 private writes and the existing nonblocking lock prevent partial or duplicate rows.
 A failure is printed and retained as `ledger_error` in `record.json`.

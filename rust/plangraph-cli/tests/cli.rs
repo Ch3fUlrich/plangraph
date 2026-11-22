@@ -32,6 +32,24 @@ fn setup_cli_uses_only_the_selected_temporary_home() {
     assert!(values.contains("PG_LEASE_S=7200"));
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn setup_sccache_plans_the_pinned_executable_without_writing_home() {
+    let root = tempfile::tempdir().unwrap();
+    let args = ["setup", "apply", "--component", "sccache", "--dry-run"];
+    let output = cli(root.path(), &args);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "sccache .local/bin/sccache installed manifest\n"
+    );
+    assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
 #[test]
 fn env_override_and_userprofile_fallback_refuse_credentials_without_echoing_them() {
     let root = tempfile::tempdir().unwrap();
