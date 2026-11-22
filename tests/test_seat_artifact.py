@@ -28,7 +28,7 @@ def completed(model='synthetic/gpt-5'):
     job = SimpleNamespace(job_id='job-final', status='completed', exit_code=0,
         served_model=model, response_finish_reason='stop',
         prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
-        stdout='VERDICT: PASS\nTEST-GAMING: no - searched synthetic diff: 0 hits')
+        stdout='FILES READ: src/lib.rs\nVERDICT: PASS\nTEST-GAMING: no - searched synthetic diff: 0 hits')
     record = dict(run_id='run-synthetic', job_id=job.job_id, role='review',
         ended=10, status='completed', exit_code=0, stdout_tail='VERDICT: FIX')
     return record, job
