@@ -1,6 +1,6 @@
 //! Outcome probe: run before retrying an attempt to see what it left behind.
 
-use crate::check::run_check;
+use crate::check::{run_check, CheckResult};
 use crate::git::{check_rev, git, GitError};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -41,10 +41,19 @@ pub fn probe(
     timeout: Duration,
     tail_n: usize,
 ) -> Result<ProbeOutcome, ProbeError> {
+    probe_with_check(dir, base, || run_check(check_cmd, dir, timeout, tail_n))
+}
+
+/// Run the supplied check only when the attempt left commits beyond its base.
+pub fn probe_with_check(
+    dir: &Path,
+    base: &str,
+    check: impl FnOnce() -> std::io::Result<CheckResult>,
+) -> Result<ProbeOutcome, ProbeError> {
     if commits_beyond(dir, base)? == 0 {
         return Ok(ProbeOutcome::Nothing);
     }
-    let r = run_check(check_cmd, dir, timeout, tail_n)?;
+    let r = check()?;
     Ok(if r.passed() {
         ProbeOutcome::AlreadyDone
     } else {

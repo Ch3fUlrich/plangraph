@@ -1,11 +1,24 @@
 use pg_worker_core::config::Config;
 use std::collections::BTreeSet;
 use std::sync::{Mutex, OnceLock};
+use temporalio_common::protos::temporal::api::failure::v1::{Failure, failure::FailureInfo};
 use temporalio_sdk::activities::ActivityError;
 
+const NOT_ALLOWLISTED: &str = "card_not_allowlisted";
+const NOT_CLAIMABLE: &str = "card_not_claimable";
+const OVERLAP: &str = "card_attempt_overlap";
+
+pub(crate) fn is_admission_refusal(failure: Option<&Failure>) -> bool {
+    std::iter::successors(failure, |node| node.cause.as_deref()).any(|node| {
+        matches!(&node.failure_info, Some(FailureInfo::ApplicationFailureInfo(info))
+            if matches!(info.r#type.as_str(), NOT_ALLOWLISTED | NOT_CLAIMABLE | OVERLAP))
+    })
+}
+
 fn refusal(kind: &str, key: &str) -> ActivityError {
+    let message = crate::output_redact::history_text(&format!("{kind}: {key}"));
     ActivityError::application(
-        temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!("{kind}: {key}"))
+        temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!(message))
             .type_name(kind.to_owned())
             .non_retryable(true)
             .build(),
@@ -23,9 +36,9 @@ pub enum AdmissionReason {
 impl AdmissionReason {
     fn kind(&self) -> &'static str {
         match self {
-            Self::NotAllowlisted(_) => "card_not_allowlisted",
-            Self::NotClaimable(_) => "card_not_claimable",
-            Self::Overlap(_) => "card_attempt_overlap",
+            Self::NotAllowlisted(_) => NOT_ALLOWLISTED,
+            Self::NotClaimable(_) => NOT_CLAIMABLE,
+            Self::Overlap(_) => OVERLAP,
         }
     }
 }
@@ -42,8 +55,9 @@ pub(crate) fn attempt_error(error: EntryError) -> ActivityError {
     {
         refusal(reason.kind(), &reason.to_string())
     } else {
+        let message = crate::output_redact::history_text(&error.to_string());
         ActivityError::application(
-            temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!("{error}")).build(),
+            temporalio_sdk::ApplicationFailure::builder(anyhow::anyhow!(message)).build(),
         )
     }
 }

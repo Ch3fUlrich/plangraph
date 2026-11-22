@@ -315,13 +315,21 @@ pub(crate) fn map_merge(o: MergeOutcome, main_head: String) -> MergeResult {
 pub(crate) fn do_probe(cfg: &Config, input: &ProbeInput) -> ProbeResult {
     let id = AttemptId::new(input.card.clone(), input.n);
     let dir = Path::new(&input.workroot).join(id.dir_name());
-    let outcome = probe::probe(
-        &dir,
-        &input.base_sha,
-        &input.check_cmd,
-        cfg.start_to_close,
-        cfg.check_tail_lines,
-    );
+    let outcome = (|| {
+        let _owner = crate::card_admit::enter(cfg, &input.card).map_err(std::io::Error::other)?;
+        probe::probe_with_check(&dir, &input.base_sha, || {
+            let jail = crate::harness::JailConfig::from_env().map_err(std::io::Error::other)?;
+            let tmp = tempfile::tempdir()?;
+            pg_worker_core::check::run_check_scoped(
+                &input.check_cmd,
+                &dir,
+                cfg.start_to_close,
+                cfg.check_tail_lines,
+                jail.as_ref().map(|j| (j.bin.as_path(), &j.limits, tmp.path())),
+                &|| false,
+            )
+        })
+    })();
     map_probe(outcome, id.branch())
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -106,3 +106,25 @@ fn admission_and_no_claim_are_refusals() {
     assert!(allow(&cfg, "unlisted").is_err());
     assert!(claimed(None, "listed").is_err());
 }
+
+#[test]
+fn pilot_attempt_failure_masks_git_diagnostics() {
+    let value = "a9b8".repeat(10);
+    let diagnostic = std::io::Error::other(format!("git failed with {value}"));
+    let failure = attempt_error(crate::attempt::AttemptError::Io(diagnostic).into());
+    let ActivityError::Application(failure) = failure else {
+        panic!("expected a serialized application failure");
+    };
+    use temporalio_common::data_converters::{
+        ActivitySerializationContext, DefaultFailureConverter, FailureConverter, PayloadConverter,
+        SerializationContextData,
+    };
+    use temporalio_common::error::OutgoingActivityError;
+    let wire = DefaultFailureConverter::default().to_failure(
+        OutgoingActivityError::Application(failure).into(),
+        &PayloadConverter::default(),
+        &SerializationContextData::Activity(ActivitySerializationContext::new()),
+    );
+    assert!(!wire.message.contains(&value));
+    assert!(wire.message.contains("[REDACTED]"));
+}

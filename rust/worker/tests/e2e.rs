@@ -1409,7 +1409,8 @@ async fn a_check_that_never_passes_stops_the_card() {
             return;
         };
         let card = "e2e-check-fail";
-        let claim = env.claim(card, &["out.txt"], "exit 1");
+        let check = "printf '%s\\n%1100000s\\n%s\\n%s\\n' '-----BEGIN TEST PRIVATE KEY-----' fake 'synthetic-fragment' '-----END TEST PRIVATE KEY-----'; echo retained; exit 1";
+        let claim = env.claim(card, &["out.txt"], check);
         let id = format!("e2e-check-fail-{}", unique());
         let handle = env.start(&id, claim).await;
 
@@ -1423,7 +1424,56 @@ async fn a_check_that_never_passes_stops_the_card() {
         );
         // A parked card: the park packet and its alarm both carry the card's
         // final attempt, with workflow id and run id.
+        let reports = env.keeper.attempts();
+        let packets = env.keeper.parked();
+        assert!(!reports.is_empty());
+        assert!(!packets.is_empty());
+        for tail in reports.iter().map(|r| &r.check_tail).chain(packets.iter().map(|p| &p.check_tail)) {
+            assert!(!tail.contains("synthetic-fragment"));
+            assert!(tail.contains("[REDACTED]"));
+            assert!(tail.contains("retained"));
+        }
         assert_execs_name_the_attempts(&env, out.attempts);
+        env.stop();
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admission_refusal_ends_workflow_without_report_or_probe() {
+    in_local(async {
+        let ci = std::env::var("CI").ok();
+        let Some(addr) = temporal_addr_of(ci.as_deref(), std::env::var("PG_TEMPORAL_ADDR").ok())
+        else {
+            return;
+        };
+        let env = Env::with_allowlist(
+            &addr,
+            "admission-refusal",
+            "exit 99",
+            true,
+            Some(Default::default()),
+        )
+        .await;
+        let id = format!("e2e-denied-{}", unique());
+        let claim = env.claim("e2e-denied", &["out.txt"], "true");
+        let handle = env.start(&id, claim).await;
+        let result = tokio::time::timeout(
+            RESULT_TIMEOUT,
+            handle.get_result(WorkflowGetResultOptions::default()),
+        )
+        .await
+        .expect("admission refusal must terminate the workflow");
+        assert!(result.is_err());
+        let history = handle
+            .fetch_history(WorkflowFetchHistoryOptions::default())
+            .to_json()
+            .await
+            .expect("fetch workflow history");
+        let history = String::from_utf8(history).unwrap();
+        assert!(history.contains("card_not_allowlisted"));
+        assert!(!history.contains("CardActivities::probe"));
+        assert!(env.keeper.attempts().is_empty());
         env.stop();
     })
     .await;

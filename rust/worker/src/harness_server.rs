@@ -88,7 +88,7 @@ pub(super) fn run_opencode_server(
             // Password announcements and all other stdout are discarded.
         }
     });
-    let tail = Arc::new(Mutex::new(Vec::new()));
+    let tail = Arc::new(Mutex::new((Vec::new(), false)));
     let dest = tail.clone();
     let errors = std::thread::spawn(move || {
         let mut buf = [0; 1024];
@@ -96,7 +96,8 @@ pub(super) fn run_opencode_server(
             if n == 0 {
                 break;
             }
-            let mut tail = dest.lock().unwrap();
+            let mut capture = dest.lock().unwrap();
+            let (tail, overflowed) = &mut *capture;
             tail.extend_from_slice(&buf[..n]);
             for line in tail.split_inclusive(|b| *b == b'\n') {
                 if line.last() == Some(&b'\n')
@@ -106,6 +107,7 @@ pub(super) fn run_opencode_server(
                 }
             }
             if tail.len() > 65536 {
+                *overflowed = true;
                 let excess = tail.len() - 65536;
                 tail.drain(..excess);
             }
@@ -132,15 +134,19 @@ pub(super) fn run_opencode_server(
         cmd.args(["-m", run.model, "--", run.prompt])
             .current_dir(run.workdir)
             .stdin(Stdio::null());
-        supervise_with_cancel(confined_command(cmd, h, run, home, jail)?, opts, cancelled)
+        supervise_with_complete_output(confined_command(cmd, h, run, home, jail)?, opts, cancelled)
     } else {
         drop(server);
         let _ = reader.join();
         let _ = errors.join();
-        let raw = tail.lock().unwrap();
-        let safe =
-            String::from_utf8_lossy(&raw).replace(&password, pg_worker_core::redact::REDACTED);
-        let last = pg_worker_core::redact::redacted_tail(&safe, 1, 1024);
+        let capture = tail.lock().unwrap();
+        let last = if capture.1 {
+            "[autoos:overlong startup output withheld]".to_owned()
+        } else {
+            let safe = String::from_utf8_lossy(&capture.0)
+                .replace(&password, pg_worker_core::redact::REDACTED);
+            pg_worker_core::redact::redacted_tail(&safe, 1, 1024)
+        };
         return Ok(Supervised {
             code: Some(1),
             signal: None,
@@ -227,6 +233,35 @@ mod tests {
         assert!(output.starts_with("opencode server startup failed:"));
         assert!(!output.contains("sentinel-startup-secret"));
         assert!(output.contains(pg_worker_core::redact::REDACTED));
+    }
+
+    #[test]
+    fn pilot_startup_stderr_does_not_expose_a_truncated_key_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = crate::testutil::write_script(
+            dir.path(),
+            "oc-cut",
+            "#!/bin/sh\nprintf '%s\\n%70000s\\n%s\\n' '-----BEGIN TEST PRIVATE KEY-----' fake 'synthetic-startup-fragment' >&2\nexit 1\n",
+        );
+        let home = tempfile::tempdir().unwrap();
+        let r = retry_fake_server_spawn(|| {
+            run_harness(
+                &Opencode {
+                    bin: bin.to_string_lossy().into_owned(),
+                },
+                &HarnessRun {
+                    workdir: dir.path(),
+                    model: "fixture",
+                    prompt: "p",
+                },
+                home.path(),
+                &Opts::default(),
+                &|| false,
+                None,
+            )
+        })
+        .unwrap();
+        assert!(!String::from_utf8_lossy(&r.output).contains("synthetic-startup-fragment"));
     }
 
     #[test]

@@ -73,6 +73,16 @@ pub(super) struct Env {
 
 impl Env {
     pub(super) async fn new(addr: &str, name: &str, script: &str, start: bool) -> Env {
+        Self::with_allowlist(addr, name, script, start, None).await
+    }
+
+    pub(super) async fn with_allowlist(
+        addr: &str,
+        name: &str,
+        script: &str,
+        start: bool,
+        allowlist: Option<std::collections::BTreeSet<String>>,
+    ) -> Env {
         let repo = tempfile::tempdir().expect("repo tempdir");
         let repo_path = repo.path().to_path_buf();
         let base_sha = init_repo(&repo_path);
@@ -94,13 +104,16 @@ impl Env {
         // harness prints every second so the 30 s stall watchdog does not fire
         // either. The workflow keeps its own `Config::default()` for the retry
         // policy, so tests must not lean on workflow-side timeouts to finish.
-        let cfg = Config {
+        let mut cfg = Config {
             heartbeat: Duration::from_millis(200),
             heartbeat_timeout: Duration::from_secs(30),
             start_to_close: Duration::from_secs(300),
             stall: Duration::from_secs(30),
             ..Config::allow_all_for_tests()
         };
+        if let Some(allowlist) = allowlist {
+            cfg.card_allowlist = Some(allowlist);
+        }
         // `Deps` wants a trait object; name the coercion explicitly so the
         // concrete `Arc<StubKeeper>` widens to `Arc<dyn Keeper>` here.
         let dyn_keeper: Arc<dyn Keeper> = keeper.clone();

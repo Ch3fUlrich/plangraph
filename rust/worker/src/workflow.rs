@@ -219,12 +219,14 @@ impl Card {
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
                     return Ok(cancelled(n));
                 }
+                Err(e)
+                    if crate::card_admit::is_admission_refusal(e.failure())
+                        && ctx.patched("attempt-admission-terminal-v1") =>
+                {
+                    return Err(e.into());
+                }
                 Err(e) => {
-                    // The worker never returned a result. A heartbeat timeout means
-                    // it is hung (a stall); a start-to-close or schedule-to-close
-                    // timeout means it ran past its budget (a timeout); any other
-                    // timeout kind stays a stall; a non-timeout is a crash. What
-                    // follows is the budget's call.
+                    // Heartbeat loss is a stall; elapsed run budgets are timeouts.
                     let exit_class = match e.as_timeout().map(|t| t.timeout_type()) {
                         Some(TimeoutType::Heartbeat) => ExitClass::Stall,
                         Some(TimeoutType::StartToClose) | Some(TimeoutType::ScheduleToClose) => {
@@ -242,8 +244,6 @@ impl Card {
                         branch: AttemptId::new(input.claim.card.clone(), n).branch(),
                         head: String::new(),
                         output_tail: String::new(),
-                        // The projector records a missing field as absent; a
-                        // synthetic attempt has no provider metadata of its own.
                         harness: None,
                         model: None,
                         combo: None,

@@ -171,6 +171,20 @@
     }
 
     #[test]
+    fn pilot_probe_admission_prevents_check_in_existing_worktree() {
+        let (r, base) = repo();
+        let root = tempfile::tempdir().unwrap();
+        let id = AttemptId::new("c1", 1);
+        let wt = worktree::create(r.path(), &base, &root.path().join(id.dir_name()), &id).unwrap();
+        write(&wt.path, "done.txt", "x");
+        commit_all(&wt.path, "work");
+        let input = probe_input(r.path(), root.path(), 1, &base, "touch check-ran");
+        let denied = Config { card_allowlist: Some(Default::default()), ..tiny() };
+        assert_eq!(do_probe(&denied, &input).outcome, "error");
+        assert!(!wt.path.join("check-ran").exists());
+    }
+
+    #[test]
     fn do_probe_reports_error_for_a_bad_base() {
         let (r, base) = repo();
         let root = tempfile::tempdir().unwrap();
