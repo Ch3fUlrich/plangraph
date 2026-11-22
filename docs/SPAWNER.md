@@ -637,7 +637,7 @@ older databases. D-5903 enables Hydrogen high for implement after Sol and medium
 Both inherit the agy Claude capability bounds and remain unwitnessed: AGY emits no served-model telemetry.
 Historical records remain readable; the retired benchmark model row exists only
 for benchmark foreign keys and never appears in the model list.
-Native Codex writer and review worker placement: [run contract](native-codex-writer.md). Admission refuses missing cargo/git/codex with `tool_missing`; records retain the caller PATH and resolved tools, and the writer and final gates reuse that PATH.
+Native Codex writer and review worker placement: [run contract](native-codex-writer.md). The host registry determines whether a placed review can run on the receiving worker. Admission refuses missing cargo/git/codex with `tool_missing`; records retain the caller PATH and resolved tools, and the writer and final gates reuse that PATH.
 
 Native agy CLI reviews (D-6054) use a disposable `git clone --shared` at the
 stamped HEAD with origin removed. Commands are pre-approved inside that checkout

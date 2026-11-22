@@ -434,7 +434,7 @@ class SpawnService(SeatSpawnMixin):
                     if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
                     if lease is not None:
                         worktree = review_launch
-                        writer_env = {'CARGO_TARGET_DIR': record['review_target']}
+                        writer_env = dict(writer_env, CARGO_TARGET_DIR=record['review_target'])
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                         allow_shas=await asyncio.to_thread(allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card),

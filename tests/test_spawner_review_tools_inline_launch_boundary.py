@@ -222,6 +222,8 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
     async def admit(*args, **kwargs):
         return True
     monkeypatch.setattr('plangraph.spawner.service.admit_base', admit)
+    monkeypatch.setattr('plangraph.spawner.service.writer_launch',
+                        lambda prompt, *_: (prompt, {'FIXTURE_HARNESS_ENV': 'keep'}))
     monkeypatch.setattr(service, '_annotate_spawn', lambda *args: None)
     async def prompt(*args, **kwargs):
         return 'fixture'
@@ -234,6 +236,7 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         checkout = Path(options.get('cwd', record['cwd']))
         assert checkout != receiver
         assert (checkout / 'source').read_text() == 'head'
+        assert options['extra_env']['FIXTURE_HARNESS_ENV'] == 'keep'
         target = Path(options['extra_env']['CARGO_TARGET_DIR'])
         assert checkout.parent == target.parent
         assert checkout.parent.is_relative_to(service.state)

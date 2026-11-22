@@ -426,3 +426,25 @@ def test_build_review_requires_worker_with_disk_and_ram(orchestration):
     assert record['status'] == 'refused'
     assert 'disk_low' in record['reason'] and 'memory:' in record['reason']
     remote.assert_not_called()
+
+
+@pytest.mark.parametrize('local,admitted', [('host-b', True), ('host-a', False)])
+def test_placed_build_review_uses_registry_host_role(orchestration, monkeypatch, local, admitted):
+    service, rows, remote, path, _ = orchestration
+    config = json.loads(path.read_text())
+    config['hosts'][local] = {'orchestration_only': True}
+    path.write_text(json.dumps(config))
+    rows.clear()
+    monkeypatch.setenv('PLANGRAPH_HOST_NAME', local)
+    monkeypatch.setenv('PLANGRAPH_PLACED_HOST', local)
+    options = {'role': 'review'}
+    card = {'review_workspace': True,
+            'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
+    record = service.admit_spawn(options, card=card)
+    if admitted:
+        assert record is None
+        assert options['_placement']['host'] == local
+    else:
+        assert record['status'] == 'refused'
+        assert 'requires a registered worker host' in record['reason']
+    remote.assert_not_called()

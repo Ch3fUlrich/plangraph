@@ -243,7 +243,6 @@ def admit(service, options, *, card=None, preview=False):
     config = overflow.placement_config(registry, role)
     local, remote_first = overflow.placement_policy(registry, config)
     review_workspace = role == 'review' and (card or {}).get('review_workspace') is True
-    local_worker = bool(overflow.host_config(registry, local)) and not remote_first
     native = (card or {}).get('run_kind') == 'native-codex'
     placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
     explicit_cwd = options.get('cwd') is not None or 'cwd' in (card or {})
@@ -255,6 +254,8 @@ def admit(service, options, *, card=None, preview=False):
     if placed:
         config['hosts'] = {}
         remote_first = False
+    local_host = overflow.host_config(registry, local)
+    local_worker = bool(local_host) and local_host.get('orchestration_only') is not True
     if preview and not (remote_first or compare_local):
         return None
     role_mb, floor = overflow.local_limits(registry, role)
@@ -321,7 +322,7 @@ def admit(service, options, *, card=None, preview=False):
             decision = overflow.decide(memory, role_mb, floor, rows, public,
                                        remote_first=remote_first, local_refusal=health,
                                        host_order=tuple(config.get('hosts', {})), compare_local=compare_local,
-                                       local_fallback=overflow.host_config(registry, local).get('placement_fallback', False))
+                                       local_fallback=local_host.get('placement_fallback', False))
             if benchmark_local and decision.reason == 'local_fallback_no_remote':
                 decision = overflow.Decision(None, 'local_benchmark_database')
             if options.get('benchmark') is not None and decision.host is not None:

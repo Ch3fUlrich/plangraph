@@ -65,8 +65,9 @@ fn overflow_review_bundle_materializes_unpublished_commits_on_receiver() {
         .env("PYTHONPATH", root.join("src"))
         .args(["-c", r#"
 from pathlib import Path
-import subprocess, tempfile
-from plangraph.spawner.overflow import stage_review_diff
+import os, shlex, shutil, subprocess, sys, tempfile
+from unittest.mock import patch
+from plangraph.spawner.overflow import remote_spawn
 from plangraph.spawner.prompt_input import checkout_env
 
 def git(repo, *args):
@@ -75,20 +76,60 @@ def git(repo, *args):
         '-c', 'commit.gpgsign=false', *args], text=True, env=checkout_env()).strip()
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
-    source, target = root / 'source', root / 'target'
+    source, target, origin = (root / name for name in ('source', 'target', 'origin'))
     git(root, 'init', '-q', '-b', 'main', str(source))
     git(source, 'commit', '--allow-empty', '-qm', 'public base')
     public = git(source, 'rev-parse', 'HEAD')
     git(source, 'update-ref', 'refs/remotes/origin/main', public)
-    git(root, 'clone', '-q', '--no-local', str(source), str(target))
+    git(root, 'clone', '-q', '--bare', '--no-local', str(source), str(origin))
+    git(root, 'clone', '-q', '--no-local', str(origin), str(target))
     git(source, 'commit', '--allow-empty', '-qm', 'earlier unpushed review')
     base = git(source, 'rev-parse', 'HEAD')
     (source / 'change.txt').write_text('reviewed exactly')
     git(source, 'add', 'change.txt')
     git(source, 'commit', '-qm', 'unpushed head')
     head = git(source, 'rev-parse', 'HEAD')
-    [bundle] = stage_review_diff({'repo': str(source), 'base': base, 'head': head}, root)
-    git(target, 'fetch', '--no-write-fetch-head', '--no-tags', '--', str(bundle), 'refs/review/head')
+    absent = subprocess.run(['git', '-C', target, 'cat-file', '-e', head],
+                            env=checkout_env(), capture_output=True)
+    assert absent.returncode != 0
+    folder = root / 'bin'
+    folder.mkdir()
+    launch = folder / 'python3'
+    launch.write_text('#!' + sys.executable + '\n' + """
+from pathlib import Path
+import json, os, sys, tempfile
+from plangraph.spawner.prompt_input import checkout_review
+
+args = sys.argv
+diff = json.loads(Path(args[args.index('--card') + 1][1:]).read_text())['diff_ref']
+assert Path(diff['repo']) == Path.cwd()
+with tempfile.TemporaryDirectory() as directory:
+    checkout = Path(directory) / 'checkout'
+    head = checkout_review(diff, checkout)
+    assert (checkout / 'change.txt').read_text() == 'reviewed exactly'
+print(json.dumps({'run_id':'run-fixture', 'status':'completed', 'head_sha':head,
+                  'host':os.environ['PLANGRAPH_PLACED_HOST']}))
+""")
+    launch.chmod(0o700)
+    run = subprocess.run
+    def transport(argv, **options):
+        if argv[0] == 'ssh':
+            env = dict(os.environ, PATH=str(folder) + os.pathsep + os.environ['PATH'])
+            return run(['/bin/sh', '-c', argv[-1]], env=env, **options)
+        if argv[0] == 'scp':
+            destination, = shlex.split(argv[-1].split(':', 1)[1])
+            for path in argv[2:-1]:
+                shutil.copy(path, destination)
+            return subprocess.CompletedProcess(argv, 0)
+        return run(argv, **options)
+
+    host = {'ssh': 'fixture', 'registry': True, 'repo': str(target),
+            'public_repo_ids': {'plangraph': str(source)}, 'repos': {'plangraph': str(target)},
+            'spawner_src': str(Path.cwd() / 'src')}
+    card = {'review_workspace': True, 'diff_ref': {'repo': str(source), 'base': base, 'head': head}}
+    with patch('subprocess.run', side_effect=transport):
+        receipt = remote_spawn('worker', host, card, 'fixture', ['--role', 'review'])
+    assert receipt == {'run_id':'run-fixture', 'status':'completed', 'head_sha':head, 'host':'worker'}, receipt
     assert git(target, 'merge-base', base, head) == base
     assert git(target, 'show', head + ':change.txt') == 'reviewed exactly'
     assert git(target, 'rev-parse', 'HEAD') == public
