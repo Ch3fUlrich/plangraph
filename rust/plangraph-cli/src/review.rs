@@ -205,6 +205,7 @@ fn build_base_prompt(
         }
     }
     lines.push(String::new());
+    lines.push("List the repository paths you opened on a FILES READ: line.".to_owned());
     lines.push(format!(
         "End your reply with these three exact trailing lines (substituting yes if tests are gamed and REQUEST_CHANGES if fixes are needed):\nHEAD: {head_sha}\nTEST-GAMING: no\nVERDICT: PASS"
     ));
@@ -331,7 +332,9 @@ fn evaluate_seat_record(
         .to_owned();
 
     let text = extract_seat_text(&record, run_dir.as_deref());
-    let verdict = parse_verdict_text(&text);
+    let verdict = parse_verdict_text(&text).filter(|verdict| {
+        *verdict != SeatVerdict::Pass || pg_worker_core::review_split::has_files_read(&text)
+    });
     let mut test_gaming = parse_test_gaming_text(&text);
     if test_gaming == TestGaming::Missing {
         if record["test_gaming"] == json!(false) || record["test_gaming"] == json!("no") {

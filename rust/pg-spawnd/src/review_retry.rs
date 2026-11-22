@@ -37,26 +37,55 @@ pub(crate) fn hook_with_group(
         {
             record.set("reason", json!(reason));
         }
+        let weak = quota.is_none()
+            && status == Status::Completed
+            && record.get("role").and_then(Value::as_str) == Some("review")
+            && weak_acceptance(record);
+        let status = if weak {
+            record.set("verdict", json!("no_verdict"));
+            record.set("review_status", json!("no_verdict"));
+            record.set("reason", json!("no_verdict: files_read_missing"));
+            record.set("exit_code", json!(6));
+            Status::Failed
+        } else {
+            status
+        };
         runs::finish_with_allowlist(record, status, &leg, attempt, &allow_shas);
-        if quota.is_none()
-            || crate::cli_review::binding_completed(record)
-            || status == Status::Cancelled
-            || record.path().with_file_name("cancelled").exists()
-            || record.get("survivors").is_some()
-            || args.get("no_fallthrough") == Some(&json!(true))
-            || status == Status::DryRun
-        {
-            return None;
-        }
-        match next(record, args, &leg, attempt, group) {
-            Ok(next) => next,
-            Err(error) => {
-                record.set("error", json!(error.into_error_data().message));
-                None
+        let may_retry = (quota.is_some() || weak)
+            && !crate::cli_review::binding_completed(record)
+            && status != Status::Cancelled
+            && !record.path().with_file_name("cancelled").exists()
+            && record.get("survivors").is_none()
+            && args.get("no_fallthrough") != Some(&json!(true))
+            && status != Status::DryRun;
+        if may_retry {
+            match next(record, args, &leg, attempt, group) {
+                Ok(Some(next)) => return Some(next),
+                Ok(None) => {}
+                Err(error) => record.set("error", json!(error.into_error_data().message)),
             }
         }
+        if weak && !record.path().with_file_name("cancelled").exists() {
+            let _ = record.transition(Status::Failed, pg_worker_core::run::finalize::now());
+        }
+        None
     })
 }
+fn weak_acceptance(record: &RunRecord) -> bool {
+    use pg_worker_core::review_split::{has_files_read, parse_verdict_text, SeatVerdict};
+    let Some(state) = record
+        .path()
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+    else {
+        return false;
+    };
+    crate::review_artifacts::review_text(state, &record.to_value()).is_ok_and(|text| {
+        parse_verdict_text(&text) == Some(SeatVerdict::Pass) && !has_files_read(&text)
+    })
+}
+
 fn next(
     record: &mut RunRecord,
     args: Args,
@@ -239,6 +268,7 @@ fn advance(
         "finish_reason",
         "completion",
         "review_binding_error",
+        "review_status",
     ] {
         record.set(key, Value::Null);
     }

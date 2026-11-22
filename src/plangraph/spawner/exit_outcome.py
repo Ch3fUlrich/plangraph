@@ -202,6 +202,17 @@ def tool_call_only(job, record):
     return True
 
 
+def review_no_verdict(text, finish=None):
+    """Explain why a structurally successful review answer cannot count."""
+    from plangraph.review.verdict import has_files_read, judge
+    verdict = judge(text, finish).verdict
+    if verdict is None:
+        return 'no_verdict'
+    if verdict == 'pass' and not has_files_read(text):
+        return 'no_verdict: files_read_missing'
+    return None
+
+
 def fallthrough_reason(service, chosen, job, record):
     if any(e.get('event') == 'disk_run_stopped' for e in getattr(job, 'events', ())):
         refusal_record(record, job)
@@ -271,6 +282,9 @@ def fallthrough_reason(service, chosen, job, record):
             and not getattr(job, 'survivors', ())
             and job.status in ('failed', 'skipped', 'limited')):
         return 'provider_stop'
+    if (not reason and record.get('role') == 'review' and job.status == 'completed'
+            and job.exit_code == 0 and not stop):
+        return review_no_verdict(job.stdout, getattr(job, 'response_finish_reason', None))
     # Review/seat failures exhaust the existing route, not the whole run.
     # Ordinary failures carry diagnostics, not booking/notification evidence.
     return reason or (failure_reason(job, harness=getattr(chosen, 'harness', None)) if record.get('role') == 'review'
@@ -338,15 +352,18 @@ def terminal_reason(record, job=None):
         if AGY_MISSING_RESULT in stderr.splitlines():
             record.update(reason='no_verdict', review_status='no_verdict', review_reason=AGY_MISSING_RESULT)
             return
+    if (record.get('role') == 'review' and record.get('status') == 'failed'
+            and (last_reason or '').startswith('no_verdict')):
+        record.update(reason=last_reason, review_status='no_verdict')
+        return
     if (record.get('role') == 'review' and record.get('status') == 'completed'
             and record.get('exit_code') in (None, 0)):
-        from plangraph.review.verdict import judge
         # Base dispatch has no job here: use only the final attempt, never the
         # combined stdout tail (an earlier leg's verdict cannot bless this one).
         attempts = [a for a in record.get('attempts') or () if a.get('status') != 'skipped']
         text = job.stdout if job is not None else (attempts[-1].get('stdout_tail', '') if attempts else '')
-        if judge(text, getattr(job, 'response_finish_reason', None)).verdict is None:
-            record.update(status='failed', reason='no_verdict')
+        if missing := review_no_verdict(text, getattr(job, 'response_finish_reason', None)):
+            record.update(status='failed', reason=missing, review_status='no_verdict')
             return
     ended_ok = record.get('exit_code') in (None, 0) and record.get('status') in ('completed', 'dry_run')
     if reason in ('harness_limit', 'tool_call_only'):

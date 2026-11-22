@@ -65,12 +65,11 @@ def _indent_columns(line: str) -> int:
     return col
 
 
-def _scan_verdict(text: str) -> tuple[str | None, bool]:
+def _unquoted_lines(text: str):
     lines = (text or "").splitlines()
     # r3: VERDICT lines inside ``` fences or starting with ">" (quoted template
     # echoes) never decide; the last remaining line keeps the last-line rule.
     fence = None
-    match = None
     for raw in lines:
         if fence is not None:
             close = _FENCE_CLOSE_RE.match(raw)
@@ -83,8 +82,27 @@ def _scan_verdict(text: str) -> tuple[str | None, bool]:
             continue
         if raw.lstrip().startswith(">"):
             continue
-        found = _VERDICT_LINE.match(raw)
-        if found:
+        yield raw
+
+
+_FILE_PATH = re.compile(r"(?:[\w.-]+/)+[\w.-]+|[\w-]+\.[\w.-]+|[\w.-]+:[1-9][0-9]*")
+
+
+def has_files_read(text: str) -> bool:
+    """Check the last unquoted FILES READ declaration for a path."""
+    files = ''
+    for raw in _unquoted_lines(text):
+        key, _, value = raw.strip().partition(':')
+        if key.upper() == 'FILES READ':
+            files = value.strip()
+    return (not re.match(r"^(?:none(?:$|[\s(])|(?:inline diff|diff only)(?:$|[\s(])|diff$)", files, re.I)
+            and bool(_FILE_PATH.search(files)))
+
+
+def _scan_verdict(text: str) -> tuple[str | None, bool]:
+    match = None
+    for raw in _unquoted_lines(text):
+        if found := _VERDICT_LINE.match(raw):
             match = found
     if match is not None:
         stripped = match.group(1).strip().lstrip('*_`')

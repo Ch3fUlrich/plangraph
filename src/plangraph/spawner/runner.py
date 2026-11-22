@@ -330,6 +330,7 @@ class SpawnerRunner:
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
             from .opencode_isolation import close_config_layers, review_credential_reason
+            from plangraph.planner.route_policy import opencode_repository_review
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
                 # D-2905 (1): the per-job dir is also the spawner-owned store, read only after child exit
@@ -345,15 +346,22 @@ class SpawnerRunner:
                              if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
                     del child_env[name]
-                # D-2905 (1): deny every tool for the review seat, then record
-                # the spawner's own check of the FINAL env value.
+                # Start with the isolated seat policy; expose the review commands explicitly.
                 try:
                     cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                     if not isinstance(cfg, dict):
                         raise ValueError('not an object')
-                    cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
+                    permission = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
+                    if chosen is not None and opencode_repository_review(leg):
+                        permission.update(read='allow', glob='allow', grep='allow', list='allow')
+                        permission['bash'] = {'*': 'deny', **dict.fromkeys((
+                            'git diff *', 'git show *', 'git status *', 'git log *',
+                            'git rev-parse *', 'cargo test *', 'pytest *',
+                            'python -m pytest *', 'python3 -m pytest *',
+                        ), 'allow')}
+                    cfg['permission'] = permission
                     cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
-                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg)
                 except (ValueError, TypeError):
                     pass  # unparseable config cannot be proven denied below
             if render_reason is None and (is_mimo_id(model_or_combo) or role == 'review' and reasoning_cap):
@@ -373,7 +381,7 @@ class SpawnerRunner:
                 cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                 from .gateway_witness import tag_session
                 tag_session(cfg, job_id)
-                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg)
             except (ValueError, TypeError, AttributeError):
                 pass  # An unparseable config cannot supply a session-tag witness.
         else:

@@ -332,3 +332,27 @@ def test_real_models_probe(tmp_path):
         finally:
             shutil.rmtree(job)
     assert not job.exists()
+
+
+@pytest.mark.parametrize('leg_id', ['opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash'])
+def test_tools_review_launch_preserves_checkout_and_enables_read_and_tests(tmp_path, monkeypatch, leg_id):
+    from plangraph.planner.legs import DEFAULT_LEGS
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == leg_id)
+    source = tmp_path / 'source.db'
+    source_store(source)
+    monkeypatch.setenv(GO_AUTH_DB_ENV, str(source))
+    from plangraph.spawner.launch_spec import _LaunchOwned
+    runner = SpawnerRunner(default_cwd=str(tmp_path))
+    runner._child_envs = _LaunchOwned()
+    checkout = tmp_path / 'checkout'
+    checkout.mkdir()
+    job = asyncio.run(runner.spawn('Review the change.', model_or_combo=leg.model, chosen=leg,
+                                   role='review', cwd=str(checkout), dry_run=True, prepare_launch=True))
+    env = runner._child_envs[job.job_id]
+    cfg = json.loads(env['OPENCODE_CONFIG_CONTENT'])
+    assert Path(job.cwd) == checkout
+    assert cfg['permission']['read'] == 'allow'
+    assert cfg['permission']['bash']['cargo test *'] == 'allow'
+    assert cfg['permission']['edit'] == 'deny'
+    assert cfg['permission']['external_directory'] == 'deny'
+    assert cfg['mcp'] == {} and cfg['plugin'] == []

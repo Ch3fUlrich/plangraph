@@ -143,12 +143,13 @@ def test_native_review_route_requires_repository_tools():
                       leg_reader=lambda *_args, **_kwargs: {"state": "available", "evidence": None},
                       catalog_rows=())
     assert plan.first_leg.id == "agy-gemini-4-hydrogen-high"
-    assert all(leg.harness != "opencode" and leg.tool_mode == "tools" for leg in plan.legs)
-    reasons = {row["leg"]: row["reason"] for row in plan.skipped}
-    assert reasons["opencode-go-deepseek-v4-flash"] == "repository_review_tools_unavailable"
+    assert all(leg.tool_mode == "tools" for leg in plan.legs)
+    assert {leg.id for leg in plan.legs if leg.harness == "opencode"} == {
+        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",
+    }
 
 
-def test_native_review_cli_preview_reports_empty_route_with_causes(tmp_path, monkeypatch, capsys):
+def test_native_review_cli_preview_retains_opencode_repository_legs(tmp_path, monkeypatch, capsys):
     import json
 
     from plangraph.planner import legs
@@ -160,7 +161,8 @@ def test_native_review_cli_preview_reports_empty_route_with_causes(tmp_path, mon
     assert main(["--state", str(tmp_path), "route", "--role", "review", "--writer-family", "gpt",
                  "--json", "--card", json.dumps(card)]) == 0
     plan = json.loads(capsys.readouterr().out)
-    assert plan["legs"] == []
+    assert {leg["id"] for leg in plan["legs"]} == {
+        "opencode-go-deepseek-v4-flash", "opencode-go-glm-5.3-flash",
+    }
     reasons = {row["leg"]: row["reason"] for row in plan["skipped"]}
     assert reasons["agy-gemini-4-hydrogen-high"] == "client_missing"
-    assert reasons["opencode-go-deepseek-v4-flash"] == "repository_review_tools_unavailable"

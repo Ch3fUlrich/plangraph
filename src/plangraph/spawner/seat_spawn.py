@@ -393,9 +393,10 @@ INLINE_DIFF_HARNESSES = frozenset({'opencode'})
 
 
 def _needs_inline_diff(leg, card):
+    from plangraph.planner.route_policy import opencode_repository_review
     return (getattr(leg, 'tool_mode', 'tools') == 'inline-only'
             or (getattr(leg, 'harness', None) in INLINE_DIFF_HARNESSES
-                and card.get('diff_ref') is not None))
+                and card.get('diff_ref') is not None and not opencode_repository_review(leg)))
 
 
 def annotate_review_warning(record):
@@ -645,7 +646,7 @@ class SeatSpawnMixin:
         ``pack`` is the spawn's one ``context_pack.annotate`` result (D-3649); without it the pack is built here.
         ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
         inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3).
-        OpenCode tools-mode reviews inline a diff when supplied, but also support non-diff reviews."""
+        Go tools-mode review seats read the checkout directly."""
         if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
             from . import context_pack
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)

@@ -27,7 +27,7 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
         .unwrap();
         let quota = "RESOURCE_EXHAUSTED (code 429): Individual quota reached";
         let bad = json!({"argv":["/bin/sh","-c",format!("printf '%s' '{quota}' >&2; {ending}")],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
-        let good = json!({"argv":["/bin/sh","-c","printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-sonnet-5-5\"}' '{\"type\":\"result\",\"is_error\":false,\"result\":\"VERDICT: PASS\"}'"],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
+        let good = json!({"argv":["/bin/sh","-c","printf '%s\\n' '{\"type\":\"system\",\"subtype\":\"init\",\"model\":\"claude-sonnet-5-5\"}' '{\"type\":\"result\",\"is_error\":false,\"result\":\"FILES READ: src/lib.rs\\nVERDICT: PASS\"}'"],"cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review","warnings":null,"events":null});
         std::fs::write(f.state.path().join("launch"), format!("#!/bin/sh\nrequest=$(cat)\nprintf '%s' \"$request\" | python3 -c 'import json,sys; assert json.load(sys.stdin)[\"writer_families\"] == [\"openai\"]' || exit 3\ncase \"$request\" in *gemini-4-hydrogen*) printf '%s' '{bad}';; *gpt-6.2-sol*|*unavailable*) exit 1;; *) printf '%s' '{good}';; esac\n").replace(&format!("'{bad}'"), &shell_quote(&bad.to_string())).replace(&format!("'{good}'"), &shell_quote(&good.to_string()))).unwrap();
         let mut r = payload(f.call("spawn", json!({"prompt":"review","card":{"x":1},"role":"review","writer_families":["openai"],"wait_seconds":0,"no_fallthrough":no_fallthrough})));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
@@ -85,7 +85,7 @@ fn review_quota_falls_through_without_waiting_and_names_served_model() {
             let seat = std::path::Path::new(r["seat_dir"].as_str().unwrap());
             assert_eq!(
                 std::fs::read_to_string(seat.join("review.txt")).unwrap(),
-                "VERDICT: PASS"
+                "FILES READ: src/lib.rs\nVERDICT: PASS"
             );
             let run = seat.parent().unwrap();
             assert!(std::fs::read_to_string(run.join("live-attempt-1.log"))
@@ -178,4 +178,46 @@ with TemporaryDirectory() as tmp:
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+#[test]
+fn review_diff_only_accept_consumes_an_attempt() {
+    let mut f = Fixture::new("exit 1", json!("review"), &[]);
+    let first =
+        json!({"id":"first","harness":"claude","model":"claude-first","family":"anthropic"});
+    let next = json!({"id":"next","harness":"claude","model":"claude-other","family":"google"});
+    let plan = json!({"first_leg":first,"legs":[first,next],"skipped":[]});
+    std::fs::write(
+        f.state.path().join("route"),
+        format!(
+            "#!/bin/sh\nprintf '%s' {}\n",
+            shell_quote(&plan.to_string())
+        ),
+    )
+    .unwrap();
+    let launch = |text: &str| {
+        let frame = json!({"type":"result","is_error":false,"result":text});
+        json!({"argv":["/bin/sh","-c",format!("printf '%s\\n' {}", shell_quote(&frame.to_string()))],
+               "cwd":f.state.path(),"env":{},"prompt":"review","stdin":"review"})
+    };
+    let bad = launch("FILES READ: diff only\nVERDICT: ACCEPT");
+    let good = launch("FILES READ: src/lib.rs\nVERDICT: ACCEPT");
+    std::fs::write(
+        f.state.path().join("launch"),
+        format!(
+            "#!/bin/sh\nrequest=$(cat)\ncase \"$request\" in *claude-first*) printf '%s' {};; *) printf '%s' {};; esac\n",
+            shell_quote(&bad.to_string()),
+            shell_quote(&good.to_string())
+        ),
+    )
+    .unwrap();
+    let result = payload(f.call(
+        "spawn",
+        json!({"prompt":"review","card":{"x":1},"role":"review","writer_families":["openai"],"wait_seconds":10}),
+    ));
+    assert_eq!(
+        result["attempts"][0]["skip_reason"],
+        "no_verdict: files_read_missing"
+    );
+    assert_eq!(result["chosen_leg"], next);
 }
