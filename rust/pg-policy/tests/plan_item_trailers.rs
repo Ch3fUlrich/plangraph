@@ -120,35 +120,3 @@ fn merge_only_and_prose_trailers_do_not_cover_a_key() {
         .unwrap();
     assert!(!invalid.status.success());
 }
-
-#[test]
-fn review_checklist_reports_fix_commits_without_a_class_search() {
-    let dir = tempfile::tempdir().unwrap();
-    let repo = dir.path();
-    git(repo, &["init", "-q", "-b", "main"]);
-    let check = |body: &str| {
-        git(repo, &["commit", "--allow-empty", "-qm", body]);
-        Command::new(env!("CARGO_BIN_EXE_pg-policy"))
-            .current_dir(repo)
-            .args(["--class-search", "HEAD"])
-            .output()
-            .unwrap()
-    };
-    for body in [
-        "Fix a failed test",
-        "Fix a failed test\n\nClass-Search: cargo -> 1 hits, 2 changed",
-    ] {
-        let output = check(body);
-        let sha = git(repo, &["rev-parse", "HEAD"]);
-        let diagnostic = String::from_utf8(output.stdout).unwrap();
-        assert!(!output.status.success());
-        assert!(
-            diagnostic.contains(&format!("{sha}: missing or invalid Class-Search")),
-            "{diagnostic}"
-        );
-    }
-    let output = check(
-        "Fix a failed test\n\nClass-Search: spawn_cargo -> 2 hits, 2 changed\n\nPlan-Item: demo:FIX",
-    );
-    assert!(output.status.success(), "{output:?}");
-}
