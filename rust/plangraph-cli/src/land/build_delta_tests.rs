@@ -52,7 +52,20 @@ fn train_verify_exports_replay_delta_for_review() {
         "--delta-out".into(),
         delta.to_str().unwrap().into(),
     ];
-    assert_eq!(super::super::cli::run(dir.path(), &args), 0);
+    let python = || {
+        let mut command = crate::base_fresh::python_command(None);
+        command.args([
+            "-I",
+            "-c",
+            r#"
+import json, sys
+families = {"gpt-6.2-sol": "openai"}
+print(json.dumps({text: families.get(text) for text in json.load(sys.stdin)}))
+"#,
+        ]);
+        command
+    };
+    super::super::cli::run_inner(dir.path(), &args, &python).unwrap();
     let bytes = std::fs::read(&delta).expect("verified delta should be exported");
     let packet: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(packet["artifact"]["base"], m.base);
@@ -62,10 +75,8 @@ fn train_verify_exports_replay_delta_for_review() {
         serde_json::json!([m.base, a])
     );
     assert_eq!(packet["artifact"]["merges"][0]["clean"], true);
-    assert!(packet
-        .get("writer_families")
-        .is_none_or(|families| families == &serde_json::json!([])));
-    assert_eq!(super::super::cli::run(dir.path(), &args), 0);
+    assert_eq!(packet["excluded"], serde_json::json!([]));
+    super::super::cli::run_inner(dir.path(), &args, &python).unwrap();
     assert_eq!(std::fs::read(delta).unwrap(), bytes);
 }
 

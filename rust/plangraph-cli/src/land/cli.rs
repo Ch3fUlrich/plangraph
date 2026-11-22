@@ -6,6 +6,7 @@ use super::main_state::State;
 use super::resolve::{self, Adopted, Append, Outcome, Refusal};
 use super::train::{check_freeze, require_open_main, BuildOpen, Freeze, Manifest, PartIn};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const USAGE: &str = "usage:\n  plangraph land-train build --repo DIR --base SHA --name NAME --parts FILE --grant-digest D --snapshot-position N [--attributes FILE] [--cap N] [--resolution-log FILE] [--protected PREFIXES] [--out DIR] [--branch NAME]\n  plangraph land-train push --repo DIR --branch land/train-NAME\n  plangraph land-train verify|review|admit --repo DIR --manifest FILE --parts FILE --open FILE --freeze FILE --result FILE [--resolution-log FILE] [--protected PREFIXES] [--delta-out FILE]\n  review requires --item KEY; admit requires --item KEY --review-run ID\n\
 parts FILE: JSON array of {pr, head, parent: {pr, head} | null, receipt: {run_id, head}} in selection order (the registrar's READY entries)\n\
@@ -137,7 +138,8 @@ fn read<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, String> {
 }
 
 pub fn run(home: &Path, args: &[String]) -> i32 {
-    match run_inner(home, args) {
+    let python = || crate::base_fresh::python_command(None);
+    match run_inner(home, args, &python) {
         Ok(lines) => {
             lines.iter().for_each(|l| println!("{l}"));
             0
@@ -153,7 +155,11 @@ pub fn run(home: &Path, args: &[String]) -> i32 {
     }
 }
 
-fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
+pub(super) fn run_inner(
+    home: &Path,
+    args: &[String],
+    python: &dyn Fn() -> Command,
+) -> Result<Vec<String>, String> {
     let (cmd, rest) = args.split_first().ok_or(USAGE)?;
     let mut flags = std::collections::BTreeMap::new();
     let mut it = rest.iter();
@@ -256,22 +262,16 @@ fn run_inner(home: &Path, args: &[String]) -> Result<Vec<String>, String> {
                 manifest.build
             )];
             if flags.contains_key("delta-out") || cmd != "verify" {
-                let python = || crate::base_fresh::python_command(None);
-                let packet = super::delta::ReviewPacket::new(&delta, &repo, &manifest, &python)?;
+                let packet = super::delta::ReviewPacket::new(&delta, &repo, &manifest, python)?;
                 if cmd == "admit" {
                     let config = std::env::var_os("XDG_CONFIG_HOME")
                         .map(PathBuf::from)
                         .unwrap_or_else(|| home.join(".config"))
                         .join("plangraph/keeper.json");
-                    packet.require_review(
-                        &config,
-                        &need("item")?,
-                        &need("review-run")?,
-                        &python,
-                    )?;
+                    packet.require_review(&config, &need("item")?, &need("review-run")?, python)?;
                 }
                 if cmd == "review" {
-                    let run_id = packet.dispatch(&repo, &need("item")?, &python)?;
+                    let run_id = packet.dispatch(&repo, &need("item")?, python)?;
                     lines.push(format!("train delta review run {run_id}"));
                 }
                 if let Some(path) = flags.get("delta-out") {
