@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["og-memory", "pg-ctx", "pg-hook", "pg-jail", "pg-keeper-backup", "pg-mainff", "pg-mcp", "pg-policy", "pg-probe", "pg-reap", "pg-receipts", "pg-repo-sync", "pg-seat-evidence", "pg-spawnd", "pg-usage", "plangraph-cli", "worker-core"]
+members = ["og-memory", "pg-ctx", "pg-hook", "pg-jail", "pg-launch-recovery-model", "pg-keeper-backup", "pg-mainff", "pg-mcp", "pg-policy", "pg-probe", "pg-reap", "pg-receipts", "pg-repo-sync", "pg-seat-evidence", "pg-session-admission-model", "pg-spawnd", "pg-usage", "plangraph-cli", "worker-core"]
 exclude = ["spikes"]
 
 # Tests and local builds: dependencies are built once and cached, so they get

@@ -1,0 +1,210 @@
+{
+  "version": 1,
+  "attempt": 7,
+  "root": 3,
+  "files": ["head middle tail", "second"],
+  "scenarios": [
+    {
+      "name": "r5_only_exact_bootstrap_and_right_caller_can_admit",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"err":"scope"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"work"}},"expect":{"err":"tool"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":8}}}},"expect":{"err":"tool"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":5,"process":13,"generation":0},"gate":"healthy"}},"expect":{"err":"identity"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":9,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"err":"identity"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":5,"process":13,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"err":"identity"}}
+      ]
+    },
+    {
+      "name": "r5_delivery_interrupted_before_publication",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"err":"delivery"}},
+        {"event":{"publish":{"verified_generation":0}},"expect":{"err":"delivery"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"work"}},"expect":{"err":"tool"}}
+      ]
+    },
+    {
+      "name": "r6_partial_and_r7_missing_middle_with_tail",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":false}}}},"expect":{"err":"tool"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":0,"call":8,"returned":"head","guidance_enabled":true}},"expect":{"ok":"ignored_read"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":9,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":0,"call":9,"returned":"head tail","guidance_enabled":true}},"expect":{"ok":"ignored_read"}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"err":"delivery"}},
+        {"event":{"publish":{"verified_generation":0}},"expect":{"err":"delivery"}}
+      ]
+    },
+    {
+      "name": "r6_unpublished_external_work_is_denied",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"external_work"}},"expect":{"err":"tool"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":0,"call":8,"returned":"head middle tail","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":1,"call":9,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":1,"call":9,"returned":"second","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"external_work"}},"expect":{"err":"tool"}},
+        {"event":"fail_ended","expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"external_work"}},"expect":{"err":"phase"}}
+      ]
+    },
+    {
+      "name": "r7_wrapper_error_paths_fail_closed",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":0,"call":8,"returned":"head middle tail","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":1,"call":9,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":1,"call":9,"returned":"second","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"malformed","tool":"external_work"}},"expect":{"err":"gate"}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"malformed"}},"expect":{"err":"gate"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"state_error","tool":"external_work"}},"expect":{"err":"gate"}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"state_error"}},"expect":{"err":"gate"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"lock_error","tool":"external_work"}},"expect":{"err":"gate"}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"lock_error"}},"expect":{"err":"gate"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"hook_failure","tool":"external_work"}},"expect":{"err":"gate"}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"hook_failure"}},"expect":{"err":"gate"}},
+        {"event":{"publish":{"verified_generation":0}},"expect":{"err":"delivery"}}
+      ]
+    },
+    {
+      "name": "r8_clear_between_file_reads_invalidates_old_marks",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":0,"call":8,"returned":"head middle tail","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":1,"call":9,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"advance_conversation":{"job":4,"generation":1}},"expect":{"ok":"applied"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":1,"call":9,"returned":"second","guidance_enabled":true}},"expect":{"err":"identity"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","file":1,"call":9,"returned":"second","guidance_enabled":true}},"expect":{"err":"delivery"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","tool":{"read":{"file":1,"call":9,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","file":1,"call":9,"returned":"second","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy"}},"expect":{"err":"delivery"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","file":0,"call":8,"returned":"head middle tail","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"publish":{"verified_generation":1}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","tool":"work"}},"expect":{"ok":"work_allowed"}}
+      ]
+    },
+    {
+      "name": "admission_r1_clear_after_receipt_before_publication",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":0,"call":8,"returned":"head middle tail","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":1,"call":9,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":1,"call":9,"returned":"second","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"received":{"attempt":7}}}},"expect":{"ok":"receipt_allowed"}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"publish":{"verified_generation":null}},"expect":{"err":"delivery"}},
+        {"event":{"advance_conversation":{"job":4,"generation":1}},"expect":{"ok":"applied"}},
+        {"event":{"publish":{"verified_generation":0}},"expect":{"err":"delivery"}},
+        {"event":{"publish":{"verified_generation":1}},"expect":{"err":"delivery"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","file":0,"call":8,"returned":"head middle tail","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","tool":{"read":{"file":1,"call":9,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy","file":1,"call":9,"returned":"second","guidance_enabled":true}},"expect":{"ok":{"marked":{"guidance":true}}}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":1},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"publish":{"verified_generation":1}},"expect":{"ok":"applied"}}
+      ]
+    },
+    {
+      "name": "admission_r1_matching_row_without_launch_proof",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"observe_scope":{"job":5,"process":13}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":5,"process":13,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"err":"identity"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":5,"process":13,"generation":0},"gate":"healthy"}},"expect":{"err":"identity"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"err":"scope"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":13,"generation":0},"gate":"healthy"}},"expect":{"err":"identity"}}
+      ]
+    },
+    {
+      "name": "admission_r1_ready_and_guidance_override",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":0,"call":8,"returned":"head middle tail","guidance_enabled":false}},"expect":{"ok":{"marked":{"guidance":false}}}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":1,"call":9,"whole":true}}}},"expect":{"ok":"task_read"}},
+        {"event":{"post_read":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","file":1,"call":9,"returned":"second","guidance_enabled":false}},"expect":{"ok":{"marked":{"guidance":false}}}},
+        {"event":{"receipt":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"publish":{"verified_generation":0}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"work"}},"expect":{"ok":"work_allowed"}},
+        {"event":{"ready":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0}}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"work"}},"expect":{"err":"ready"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"ready_or_status"}},"expect":{"ok":"ready_or_status"}}
+      ]
+    },
+    {
+      "name": "admission_r1_scope_attach_replays_after_hook_dies",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"work"}},"expect":{"err":"tool"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"work"}},"expect":{"err":"tool"}}
+      ]
+    },
+    {
+      "name": "late_session_cannot_claim_revoked_or_failed_attempt",
+      "steps": [
+        {"event":"accept","expect":{"ok":"applied"}},
+        {"event":"take_start","expect":{"ok":"applied"}},
+        {"event":{"bind_launched_job":{"job":4,"process":12}},"expect":{"ok":"applied"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"admit":{"attempt":7}}}},"expect":{"ok":"bootstrap"}},
+        {"event":"revoke","expect":{"ok":"applied"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"err":"phase"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":{"read":{"file":0,"call":8,"whole":true}}}},"expect":{"err":"phase"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"work"}},"expect":{"err":"phase"}},
+        {"event":"fail_unclaimed","expect":{"ok":"applied"}},
+        {"event":{"admit":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy"}},"expect":{"err":"phase"}},
+        {"event":{"pre_tool":{"caller":{"attempt":7,"root":3,"job":4,"process":12,"generation":0},"gate":"healthy","tool":"work"}},"expect":{"err":"phase"}}
+      ]
+    }
+  ]
+}
