@@ -6,7 +6,6 @@ Shares the real throw-away repository and decisions-log fixtures of
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -288,69 +287,3 @@ def test_a_decisions_source_without_a_file_is_still_read(w):
         defn("GEN-LOWS", description="per D-10"), defn("GOAL", ["GEN-LOWS"], kind="goal")])
     w.store.ctx["decisions"] = Source()
     assert w.store.show(w.p("reader"), "demo:GEN-LOWS")["newer_decisions"] == ["D-12"]
-
-
-@pytest.mark.parametrize("pr_project", ["demo", "data"])
-def test_open_pull_trailers_block_ready_and_all_claims_until_close(
-        w, repo, tmp_path, monkeypatch, pr_project):
-    import subprocess
-
-    from plangraph.keeper import context_sources
-    from plangraph.keeper.evidence_git import GitAdapter
-
-    key, = seed(w, [("A", [])])
-    data = tmp_path / "data"
-    _git(tmp_path, "clone", "-q", str(repo), str(data))
-    _git(data, "config", "user.email", "t@example.invalid")
-    _git(data, "config", "user.name", "t")
-    paths = {"demo": str(repo), "data": str(data)}
-    carrying = paths[pr_project]
-    _git(carrying, "checkout", "-qb", "train/fixture")
-    head = _commit(Path(carrying), "work",
-                   f"work\n\nPlan-Item: {key}")
-    _git(carrying, "checkout", "-q", "main")
-    for name, path in paths.items():
-        if name == "data":
-            _git(path, "remote", "remove", "origin")
-        _git(path, "remote", "add", "origin", f"https://github.com/example/{name}")
-        _git(path, "update-ref", "refs/remotes/origin/main", "main")
-    adapter = GitAdapter(paths)
-    w.store.ctx["git"] = adapter
-    real_git, real_run = adapter._run, subprocess.run
-    opened = True
-    available = True
-
-    def git(path, args, **kwargs):
-        return _Proc(0) if args[0] == "fetch" else real_git(path, args, **kwargs)
-
-    def run(args, **kwargs):
-        if args[:3] == ["gh", "pr", "list"]:
-            if not available and kwargs["cwd"] == carrying:
-                return _Proc(1)
-            return _Proc(0, json.dumps([
-                {"number": 1100, "headRefOid": head, "headRefName": "train/fixture"}
-            ] if kwargs["cwd"] == carrying and opened else []))
-        return real_run(args, **kwargs)
-
-    monkeypatch.setattr(adapter, "_run", git)
-    monkeypatch.setattr(subprocess, "run", run)
-    l1 = w.p("l1main")
-    ready = w.store.ready_data(l1)
-    assert key not in [row["key"] for row in ready["items"]]
-    row, = [row for row in ready["in_progress"] if row["key"] == key]
-    assert (row["state"], row["prs"]) == ("in_review", [1100])
-    with pytest.raises(Refused, match="carried by #1100"):
-        w.store.claim(l1, key, force_stale="approved retry")
-    with pytest.raises(Refused, match="carried by #1100"):
-        w.store.worker_claim_lease(w.p("system"), key)
-    assert w.store._item(key)["state"] == "open"
-
-    available = False
-    with pytest.raises(Refused, match="carried by #1100"):
-        w.store.claim(l1, key)
-    available = True
-    opened = False
-    context_sources.work_index(adapter, pr_project, fresh=True)
-    ready = w.store.ready_data(l1)
-    assert key in [row["key"] for row in ready["items"]]
-    assert w.store.claim(l1, key)["epoch"] == 1

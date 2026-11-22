@@ -191,3 +191,154 @@ class KeeperSink:
         request['verdict_binding'] = binding
 
 
+def deliver_verdict(directory, record, keeper):
+    """Never let optional verdict delivery interrupt completion persistence."""
+    if record.get('role') != 'review' or (Path(directory) / 'verdict.delivered').exists():
+        return
+    try:
+        _deliver_verdict(directory, record, keeper)
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning('verdict delivery deferred: %s', type(exc).__name__)
+
+
+def _verdict_outcome(directory, status, reason):
+    journal = directory / 'verdict.json'
+    previous = json.loads(journal.read_text()) if journal.exists() else {}
+    if previous.get('status') in ('skipped', 'delivered'):
+        atomic_write_private(directory / 'verdict.delivered', 'terminal\n')
+        return
+    attempts = previous.get('attempts', 0) + 1
+    if status == 'retry' and attempts >= 3 and not (directory / 'verdict.payload.json').exists():
+        status, reason = 'skipped', 'retry limit reached: ' + reason
+    atomic_write_private(journal, json.dumps(dict(status=status, reason=reason, attempts=attempts)) + '\n')
+    if status in ('skipped', 'delivered'):
+        atomic_write_private(directory / 'verdict.delivered', status + '\n')
+
+
+def _deliver_verdict(directory, record, keeper):
+    """Independent, locked verdict outbox; refusal is auditable, I/O is retried."""
+    if record.get('role') != 'review':
+        return
+    import contextlib
+    import io
+    import sys
+    tools = Path(__file__).resolve().parents[3] / 'tools'
+    if str(tools) not in sys.path:
+        sys.path.insert(0, str(tools))
+    from .item_key import valid_item
+    directory = Path(directory)
+    marker = directory / 'verdict.delivered'
+    journal = directory / 'verdict.json'
+    with inbox_lock(journal):
+        if marker.exists():
+            return
+        def outcome(status, reason):
+            _verdict_outcome(directory, status, reason)
+        verifier_started = False
+        try:
+            import seat_verdict as seat
+            if journal.exists() and json.loads(journal.read_text()).get('status') in ('skipped', 'delivered'):
+                atomic_write_private(marker, 'terminal\n')
+                return
+            saved = (directory / 'verdict.payload.json').is_file()
+            if journal.exists() and json.loads(journal.read_text()).get('status') == 'sending' and not saved:
+                seat.mark_verdict_recovery(directory, 'legacy sending entry has no bound payload')
+                outcome('skipped', 'ambiguous send, not retried')
+                return
+            key = record.get('item_key')
+            if not valid_item(key):
+                outcome('skipped', 'missing item key')
+                return
+            if (directory / 'evidence.json').exists() and not record.get('head_sha'):
+                outcome('skipped', 'forward delivery requires record-derived evidence')
+                return
+            if saved:
+                token_dir = os.environ.get('PG_REVIEWER_TOKEN_DIR')
+                if not keeper or not keeper.url or not token_dir:
+                    outcome('retry', 'keeper verdict transport not configured')
+                    return
+                rc = seat.send_saved_verdict(directory, key, keeper.url, Path(token_dir))
+                outcome('delivered' if rc == 0 else 'retry' if rc == seat.EXIT_IO else 'skipped',
+                        'stored verdict delivery exit ' + str(rc))
+                return
+            evidence, text = seat.evidence_from_record(directory)
+            head = evidence.get('head_sha')
+            if not isinstance(head, str) or len(head) != 40 or any(c not in '0123456789abcdefABCDEF' for c in head):
+                raise ValueError('missing or invalid record head_sha')
+            family = seat.model_family(evidence.get('served_model'))
+            from plangraph.review.family import writer_key
+            writers = sorted({writer_key(w) for w in record.get('given_writer_families') or []})
+            if not family or not writers or family in writers or any(w not in seat.KNOWN_FAMILIES for w in writers):
+                outcome('skipped', 'unwitnessed family or invalid/overlapping writer families')
+                return
+            if seat.parse_verdict(text)[0] is None:
+                outcome('skipped', 'no parseable VERDICT line')
+                return
+            token_dir = os.environ.get('PG_REVIEWER_TOKEN_DIR')
+            if not keeper or not keeper.url or not token_dir:
+                outcome('retry', 'keeper verdict transport not configured')
+                return
+            item = keeper.item(key)
+            rows = item.get('evidence', [])
+            if not isinstance(rows, list) or any(not isinstance(row, dict) or
+                    (row.get('verified') and row.get('kind') == 'commit+ci' and
+                     not isinstance(row.get('ref'), dict)) for row in rows):
+                raise ValueError('malformed item evidence')
+            heads = [row.get('ref', {}).get('commit') for row in rows
+                     if row.get('verified') and row.get('kind') == 'commit+ci']
+            if item.get('key') != key or evidence['head_sha'] not in heads:
+                outcome('skipped', 'missing or ambiguous item evidenced head')
+                return
+            if evidence['head_sha'] != heads[-1]:
+                outcome('skipped', 'superseded head')
+                return
+            output = io.StringIO()
+            atomic_write_private(journal, json.dumps(dict(status='sending',
+                attempts=json.loads(journal.read_text()).get('attempts', 0) if journal.exists() else 0)) + '\n')
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+                verifier_started = True
+                rc = seat.main(['--key', key, '--seat-dir', str(directory),
+                    '--writer-family', ','.join(writers), '--head', evidence['head_sha'],
+                    '--token-dir', token_dir, '--url', keeper.url])
+            if rc == 0:
+                outcome('delivered', 'keeper acknowledged')
+            else:
+                outcome('retry' if rc == seat.EXIT_IO else 'skipped', 'seat verifier exit ' + str(rc))
+        except ValueError as exc:
+            outcome('skipped', str(exc))
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning('verdict delivery deferred: %s', type(exc).__name__)
+            outcome('retry' if not verifier_started or (directory / 'verdict.payload.json').is_file() else 'skipped', type(exc).__name__)
+
+
+def completion_event(record, cwd):
+    from .runner import redact
+    from .prompt_input import checkout_env
+    try:
+        head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=cwd,
+                                       text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL,
+                                       env=checkout_env(), timeout=10).strip()
+    except (OSError, subprocess.SubprocessError):
+        head = None
+    rc = record.get('exit_code')
+    return redact(dict(event_id=record['run_id'] + ':completion', run_id=record['run_id'],
+        idempotency_key=record['run_id'] + ':' + record['status'],
+        event='DONE' if rc == 0 else 'FAILED', rc=rc, head_sha=head,
+        reason=record.get('reason'),
+        **({'watchdog': record['watchdog']} if 'watchdog' in record else {}),
+        parent_session=os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
+        item=record.get('item') or os.environ.get('PLANGRAPH_SPAWN_ITEM'),
+        take_cmd=f'git cherry-pick {head}' if head else 'git log --oneline',
+        discard_cmd=f'plangraph-spawn result {record["run_id"]} # discard: do not cherry-pick'))
+
+
+def leg_refused_event(record, leg, reason):
+    """One notify line per refused leg attempt (D-3605 a): run id, leg, reason."""
+    from .runner import redact
+    return redact(dict(event_id='%s:leg_refused:%s' % (record['run_id'], leg),
+        idempotency_key='%s:leg_refused:%s' % (record['run_id'], leg),
+        event='LEG_REFUSED', run_id=record['run_id'], leg=leg, reason=reason,
+        parent_session=os.environ.get('PLANGRAPH_SPAWN_PARENT_SESSION'),
+        item=record.get('item') or os.environ.get('PLANGRAPH_SPAWN_ITEM')))

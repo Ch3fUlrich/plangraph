@@ -43,7 +43,6 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -267,26 +266,6 @@ def append_inbox(parent: str, record: dict) -> None:
         os.close(fd)
 
 
-def lesson_fix_status(status, line, cwd):
-    """Report an open lesson failure when a selected fix lacks its search record."""
-    commit = os.environ.get("PG_LESSON_FIX_COMMIT")
-    if not commit or status not in ("DONE", "MERGE-READY"):
-        return status, line
-    binary = os.environ.get("PG_POLICY_BIN") or "pg-policy"
-    if re.fullmatch(r"[0-9a-f]{40}", commit):
-        try:
-            result = subprocess.run([binary, "--class-search", commit], cwd=cwd,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                    timeout=3, check=False)
-            if result.returncode == 0:
-                return status, line
-            if result.returncode == 1:
-                return "FAIL", "FAIL LESSON-TO-GATE Class-Search missing or invalid on fix commit"
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            pass
-    return "FAIL", "FAIL LESSON-TO-GATE unable to verify Class-Search on fix commit"
-
-
 def run_hook() -> int:
     """The Stop path: stdin -> status line -> one inbox append + the seen marker.
 
@@ -319,8 +298,6 @@ def run_hook() -> int:
             seen = None
         if seen == turn.encode("utf-8"):
             return 0
-        cwd = payload.get("cwd")
-        status, line = lesson_fix_status(status, line, cwd if isinstance(cwd, str) else None)
         append_inbox(parent, {
             "ts": int(time.time()),
             "from": name,

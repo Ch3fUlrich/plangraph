@@ -183,9 +183,6 @@ class ReadMixin:
             "depends_on": deps,
             "unblocks": unblocks, "evidence": evidence,
         }
-        incidents = self._incidents_by_key(key).get(key)
-        if incidents:
-            info["incidents"] = incidents
         # RT-P1-JEV-SHADOW: the Jev shadow rows, only when the card has any, so
         # a card without them keeps its exact previous show output (the keys are
         # optional in the frozen Show schema).

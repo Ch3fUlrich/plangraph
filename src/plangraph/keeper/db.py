@@ -20,7 +20,7 @@ from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .schema_guards import RECEIPTS_DDL
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
-from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, INCIDENTS_DDL, JEV_DDL,
+from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, JEV_DDL,
                      LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
                      LOCKS_DDL, METRICS_DDL, OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL,
                      SCHEMA, TRIGGERS)
@@ -190,3 +190,141 @@ def _split_statements(
     return statements
 
 
+def _upgrade(conn):
+    """Install missing schema objects and import historical receipts idempotently."""
+    for table, column, ddl in _ADDED_COLUMNS:
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        # A pre-design-3 database has no cards yet; its CREATE below adds defaults.
+        if have and column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    conn.executescript(ALIASES_DDL)
+    conn.executescript(RUN_TOKENS_DDL)
+    conn.executescript(OUTBOX_DDL)
+    receipts = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='op_receipts'").fetchone()
+    if receipts is None:
+        conn.executescript("BEGIN IMMEDIATE;\n" + RECEIPTS_DDL + "\nCOMMIT;")
+    conn.executescript(DESIGN3_DDL)
+    conn.executescript(METRICS_DDL)
+    conn.executescript(LOCKS_DDL)
+    conn.executescript(JEV_DDL)
+    conn.executescript(ALERTS_DDL)
+    conn.executescript(PLACEMENT_RULES_DDL)
+    conn.executescript(GRANTS_DDL)
+    conn.executescript(EVENT_AUDIENCE_DDL)
+    conn.executescript(LANDING_STAGES_DDL)
+    conn.executescript(LANDING_TRAINS_DDL)
+    conn.executescript(LANDING_JOBS_DDL)
+    from .messages_schema import SQLITE
+    conn.executescript(SQLITE)
+    # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)
+    # for the TABLES, and a REPAIR for the guard triggers: ``CREATE TRIGGER IF
+    # NOT EXISTS`` would keep a weakened or outdated body. Drop + create run in
+    # one BEGIN IMMEDIATE transaction (no executescript) so guards are never absent
+    # between them (D-2458).
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        triggers = tuple(
+            re.findall(r"CREATE\s+TRIGGER\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)", OVERSIGHT_DDL)
+        ) or _OVERSIGHT_TRIGGERS
+        for trigger in triggers:
+            conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        for stmt in _split_statements(OVERSIGHT_DDL, disallow=("PRAGMA", "VACUUM")):
+            conn.execute(stmt)
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    conn.executescript(PROJECTOR_SQLITE)
+    _upgrade_lock_triggers(conn)
+
+
+def open_db(path, *, create: bool = False,
+            busy_timeout: int = _DEFAULT_BUSY_MS, backend=None, dsn=None, schema=None):
+    """Open the keeper DB and lock it down.
+
+    ``create=True`` installs the schema first, then applies the authorizer (the
+    schema's own CREATE statements must not be denied).  ``create=False``
+    verifies the schema exists and applies the authorizer immediately.
+
+    With the Postgres backend *path* only names the keeper (it derives the schema
+    name unless *schema* is given); the connection is a ``db_pg.PgConnection``.
+    """
+    if select_backend(backend) == "postgres":
+        from . import db_pg
+        return db_pg.open_pg(path, create=create, busy_timeout=busy_timeout,
+                             dsn=_pg_dsn(dsn), schema=_pg_schema(schema))
+    path = Path(path)
+    if create:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    # ``check_same_thread=False`` because the threaded API owns one connection
+    # behind one lock; all access is serialised there, never concurrent.
+    conn = sqlite3.connect(str(path), timeout=busy_timeout / 1000.0,
+                           isolation_level=None, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA recursive_triggers=ON")
+    conn.execute(f"PRAGMA busy_timeout={int(busy_timeout)}")
+    conn.execute("PRAGMA trusted_schema=OFF")
+    conn.execute("PRAGMA journal_mode=WAL")
+    if create:
+        conn.executescript(SCHEMA + PROJECTOR_SQLITE)
+    else:
+        present = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='items'"
+        ).fetchone()
+        if present is None:
+            conn.close()
+            raise RuntimeError(
+                f"{path} is not a keeper database (schema missing); "
+                "create it with open_db(..., create=True)")
+        _upgrade(conn)
+    # Defensive mode hardens shadow tables and blocks several bypasses; enable
+    # it after setup (it must not interfere with the CREATE statements above)
+    # and before the authorizer, which then covers the rest.
+    _enable_defensive(conn)
+    conn.set_authorizer(_authorizer)
+    return conn
+
+
+class KeeperLock:
+    """Holds the singleton flock until ``release`` (or the context exits)."""
+
+    def __init__(self, fileobj):
+        self._file = fileobj
+
+    def release(self):
+        if self._file is not None:
+            try:
+                fcntl.flock(self._file, fcntl.LOCK_UN)
+            finally:
+                self._file.close()
+                self._file = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
+def lock_keeper(path, *, blocking: bool = False, backend=None, dsn=None, schema=None):
+    """Take the exclusive keeper lock for ``path`` or raise ``KeeperLocked``.
+
+    The lock lives on ``<path>.lock`` so it survives checkpointing of the DB.
+    On Postgres it is a session advisory lock on a dedicated connection.
+    """
+    if select_backend(backend) == "postgres":
+        from . import db_pg
+        return db_pg.lock_pg(path, blocking=blocking, dsn=_pg_dsn(dsn),
+                             schema=_pg_schema(schema))
+    lock_path = str(path) + ".lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    fileobj = os.fdopen(fd, "w")
+    flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+    try:
+        fcntl.flock(fileobj, flags)
+    except OSError as exc:
+        fileobj.close()
+        raise KeeperLocked(f"keeper already locked: {lock_path}") from exc
+    return KeeperLock(fileobj)

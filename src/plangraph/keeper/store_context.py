@@ -250,14 +250,6 @@ class ContextMixin:
         return ensure_cap(brief)
 
     # -------------------------------------------------------------- ready
-    def _work_indexes(self, projects, *, fresh=False):
-        git = self._adapter("git")
-        scan = getattr(git, "scan_projects", None)
-        names = {*projects, *(scan() if scan is not None else ())}
-        return {name: (src.work_index(git, name, fresh=True) if fresh
-                       else src.work_index_cached(git, name))
-                for name in sorted(names)}
-
     def _ready_items(self, project=None, n=10, owner=None, agent=False):
         """Candidate rows with shared claim facts and presentation status."""
         items = self._all_items()
@@ -265,9 +257,8 @@ class ContextMixin:
         rows = [dict(row) for row in
                 views.ready(items, project=project, owner=owner, agent=agent)]
         inputs, activity = self._inputs(index), self._last_activity_map()
-        indexes = self._work_indexes({r["project"] for r in rows}) if rows else {}
-        unknown_pr_sources = [name for name, entry in indexes.items()
-                              if entry and entry.get("prs_unverified")]
+        indexes = {p: src.work_index_cached(self._adapter("git"), p)
+                   for p in {r["project"] for r in rows}}
         for row in rows:
             ctx = self._task_context(row, index, inputs=inputs,
                                      activity=activity, git=False)
@@ -285,24 +276,16 @@ class ContextMixin:
                     "reason": "work index built "
                               f"{work_index['built_age_s']}s ago, refresh running"}
             ctx["work_exists"] = src.indexed_work(work_index, row["key"])
-            prs = src.indexed_open_pulls(indexes, row["key"], row["project"])
-            if prs:
-                ctx["work_exists"]["prs"] = prs
             ctx["stale"] = self._stale_reason(row, ctx)
             row["context"] = ctx
             facts = self._claim_staleness(ctx)
-            if prs:
-                row["prs"] = prs
-                row["state"] = "in_review"
-                row["ready_status"] = "in_progress"
-            elif facts:
+            if facts:
                 row["reason"] = " | ".join(facts)
                 row["ready_status"] = "needs_reconcile"
-            elif row.get("work_index") or unknown_pr_sources:
-                if not row.get("work_index"):
-                    row["work_index"] = {
-                        "project": row["project"], "status": "stale", "age_seconds": None,
-                        "reason": "open PR inventory unavailable: " + ", ".join(unknown_pr_sources)}
+            elif ctx["work_exists"].get("prs"):
+                row["prs"] = ctx["work_exists"]["prs"]
+                row["ready_status"] = "in_progress"
+            elif row.get("work_index"):
                 row["ready_status"] = "unknown"
             else:
                 row["ready_status"] = "ready"
@@ -347,21 +330,9 @@ class ContextMixin:
                           f"force_stale reason is over {FORCE_STALE_MAX} chars")
         return value.strip()
 
-    def _claim_guard(self, item, reason, *, stale_checks=True):
+    def _claim_guard(self, item, reason):
         """Refuse a stale claim with the facts, or return the override record."""
         reason = self._force_stale_reason(reason)
-        project = item["project"]
-        indexes = self._work_indexes({project}, fresh=True)
-        prs = src.indexed_open_pulls(indexes, item["key"], project, allow_cached=True)
-        if prs:
-            raise Refused("bad_state", f"{item['key']} carried by "
-                          + ", ".join(f"#{number}" for number in prs))
-        unknown = [name for name, entry in indexes.items()
-                   if entry and entry.get("prs_unverified")]
-        if unknown:
-            raise Refused("bad_state", "open PR inventory unavailable: " + ", ".join(unknown))
-        if not stale_checks:
-            return None
         index = self._item_neighborhood(item)
         try:
             inputs = self._inputs(index, fresh=True)
@@ -369,7 +340,8 @@ class ContextMixin:
             path = getattr(self._adapter("decisions"), "_path", None)
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
         ctx = self._task_context(item, index, inputs=inputs, git=False)
-        work_index = indexes[project]
+        gitad = self._adapter("git")
+        work_index = src.work_index(gitad, item["project"], fresh=True)
         ctx["work_exists"] = src.indexed_work(work_index, item["key"])
         facts = self._claim_staleness(ctx)
         if work_index is not None and work_index.get("stale"):

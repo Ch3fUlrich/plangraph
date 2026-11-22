@@ -35,7 +35,6 @@ HANDLERS = {
     "heartbeat": cli_verbs.cmd_heartbeat,
     "release": cli_verbs.cmd_release,
     "evidence": cli_verbs.cmd_evidence,
-    "incident": cli_verbs.cmd_incident,
     "submit": cli_verbs.cmd_submit,
     "verdict": cli_verbs.cmd_verdict,
     "cancel": cli_verbs.cmd_cancel,
@@ -134,10 +133,6 @@ def _add_writes(sub):
         parser = _p(sub, name)
         parser.add_argument("key")
 
-    incident = _p(sub, "incident", help="append an incident to a live item")
-    incident.add_argument("key")
-    incident.add_argument("--text", required=True)
-    incident.add_argument("--evidence")
     evidence = _p(sub, "evidence", help="attach evidence")
     evidence.add_argument("key")
     evidence.add_argument("--kind", required=True)

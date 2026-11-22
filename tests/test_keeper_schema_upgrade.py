@@ -108,7 +108,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
 
 
 def test_schema_version_is_sixteen():
-    assert schema.SCHEMA_VERSION == 22
+    assert schema.SCHEMA_VERSION == 21
 
 
 def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path):
@@ -141,7 +141,7 @@ def test_v15_db_upgrades_to_v16_creates_envelope_tables_and_keeps_chain(tmp_path
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 22
+    assert schema.SCHEMA_VERSION == 21
     assert "message_nonces" in tables(conn)
     assert "message_envelopes" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
@@ -181,7 +181,7 @@ def test_v14_db_upgrades_to_v15_creates_messages_and_keeps_chain(tmp_path):
     raw.close()
 
     conn = kdb.open_db(path, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 22
+    assert schema.SCHEMA_VERSION == 21
     assert "messages" in tables(conn)
     triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     assert {"trg_messages_no_update", "trg_messages_no_delete"} <= triggers
@@ -217,7 +217,7 @@ def test_real_v12_missing_exec_columns_upgrades_with_rows_and_chain(tmp_path):
     conn = kdb.open_db(path, backend="sqlite")
     # Keeper versions are code-level SCHEMA_VERSION, not PRAGMA user_version:
     # production upgrades detect missing columns without reading/writing the pragma.
-    assert schema.SCHEMA_VERSION == 22
+    assert schema.SCHEMA_VERSION == 21
     row = dict(Store(conn, clock=Clock())._item("demo:A"))
     for column in ("exec_workflow_id", "exec_run_id", "exec_attempt"):
         assert column in row and row.pop(column) is None
@@ -381,7 +381,7 @@ OVERSIGHT_TABLES = {"oversight_tokens", "oversight_ops"}
 
 def test_fresh_sqlite_db_is_v16_with_oversight_and_bus_tables(tmp_path):
     conn = kdb.open_db(tmp_path / "fresh.db", create=True, backend="sqlite")
-    assert schema.SCHEMA_VERSION == 22
+    assert schema.SCHEMA_VERSION == 21
     assert (BUS_TABLES | OVERSIGHT_TABLES) <= tables(conn)
     conn.close()
 
@@ -632,48 +632,3 @@ def test_split_statements_refuses_pragma_and_vacuum_in_transaction(tmp_path, mon
     monkeypatch.setattr(kdb, "OVERSIGHT_DDL", "VACUUM;")
     with pytest.raises(ValueError, match="disallowed statement in transaction: VACUUM"):
         kdb.open_db(path, create=False)
-
-
-@needs_pg
-def test_pg_incident_index_upgrade_preserves_existing_keeper(tmp_path, monkeypatch):
-    import uuid
-
-    import psycopg
-
-    from plangraph.keeper import db_pg, schema_pg
-
-    name = "t_schemaup_" + uuid.uuid4().hex[:12]
-    path = tmp_path / "pg-incidents.db"
-    with psycopg.connect(PG_DSN, autocommit=True) as raw:
-        try:
-            with monkeypatch.context() as old:
-                incident = next(step.version for step in schema_pg.MIGRATIONS
-                                if "idx_events_incidents" in step.sql)
-                old.setattr(schema_pg, "MIGRATIONS", schema_pg.MIGRATIONS[:incident - 1])
-                conn = kdb.open_db(path, create=True, backend="postgres",
-                                   dsn=PG_DSN, schema=name)
-            try:
-                token = auth.add_principal(conn, "router", "router", [])
-                owner = auth.authenticate(conn, token)
-                store = Store(conn, clock=Clock())
-                store.create_items(owner, [defn("A"), defn("GOAL", ["A"], kind="goal")])
-                history = keeper_events.read_events(conn)
-                assert conn.execute("SELECT to_regclass('idx_events_incidents')").fetchone()[0] is None
-            finally:
-                conn.close()
-            assert db_pg.migrate(raw, name) == list(range(incident, schema_pg.LATEST + 1))
-            assert db_pg.migrate(raw, name) == []
-            conn = kdb.open_db(path, backend="postgres", dsn=PG_DSN, schema=name)
-            try:
-                assert conn.execute("SELECT to_regclass('idx_events_incidents')").fetchone()[0]
-                assert keeper_events.read_events(conn) == history
-                store = Store(conn, clock=Clock())
-                owner = auth.authenticate(conn, token)
-                report = store.incident(owner, "demo:A", "after upgrade")
-                assert store.show(owner, "demo:A")["incidents"] == [
-                    {field: report[field] for field in ("text", "at", "author")}]
-                assert store.verify_integrity() == []
-            finally:
-                conn.close()
-        finally:
-            raw.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')

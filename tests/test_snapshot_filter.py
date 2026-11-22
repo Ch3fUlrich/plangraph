@@ -21,14 +21,7 @@ def w(tmp_path):
 def test_legacy_bytes_constant_queries(w):
     store, now = w.store, w.clock()
     assert json.dumps(store._snapshot(now)) == json.dumps(_legacy_snapshot(store, now))
-    first = store._snapshot(now)["items"][0]
-    assert set(FIELDS) - {"incidents"} == set(first)
-    store.incident(w.p("router"), first["key"], "snapshot report")
-    reported = store._snapshot(now)["items"][0]
-    assert set(FIELDS) == set(reported)
-    filtered = store._snapshot(now, fields="incidents")["items"][0]
-    assert filtered == {"key": first["key"], "incidents": reported["incidents"]}
-    assert [entry["text"] for entry in filtered["incidents"]] == ["snapshot report"]
+    assert set(FIELDS) == set(store._snapshot(now)["items"][0])
     original = store.conn
     store.conn = counter = _Counting(original)
     try:

@@ -36,7 +36,6 @@ Use grep for text that is not a symbol.
    D-id; fixes inside existing Python files stay allowed.
 3. Stay inside the item's files. One implementation per capability: extend what exists,
    add no second copy.
-   For a failing test or review finding, commit a regression test for the whole class and record the search in the commit body as `Class-Search: <pattern> -> <n> hits, <m> changed`.
 4. Before the commit: apply `cargo fmt`, run the seconds-fast checks and the tests you
    changed. Build and test only the crates you touched (`-p <crate>`), into the cargo
    target your environment sets; never set `CARGO_TARGET_DIR` or `--target-dir`

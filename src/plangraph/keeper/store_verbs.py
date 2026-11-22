@@ -141,13 +141,11 @@ class VerbsMixin:
         force_stale = self._force_stale_reason(force_stale)
         override = None
         first = self._item(key)
-        checked = first is not None and first["state"] == "open" and self._ready(first)
-        if checked:
+        if first is not None and first["state"] == "open" and self._ready(first) \
+                and principal.role in ("l1", "worker"):
             # The slow repo/decision reads run before the write lock.
-            stale_checks = principal.role in ("l1", "worker")
-            if stale_checks:
-                self._require_project(principal, first["project"])
-            override = self._claim_guard(first, force_stale, stale_checks=stale_checks)
+            self._require_project(principal, first["project"])
+            override = self._claim_guard(first, force_stale)
         with self._write():
             item = self._item(key)
             if item is None:
@@ -167,8 +165,6 @@ class VerbsMixin:
                     raise Refused("bad_state", f"{key} is {item['state']}, not open"
                                   + (f" ({facts})" if facts else ""))
                 raise Refused("bad_state", f"{key} has unfinished dependencies: {facts}")
-            if not checked:
-                raise Refused("conflict", f"{key} became ready during claim; retry")
             epoch = item["epoch"] + 1
             lease = self._iso(now + lease_seconds)
             payload = {

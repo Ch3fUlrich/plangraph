@@ -82,8 +82,7 @@ def local_show(items, key, aliases=None) -> dict:
             "corrects": item.get("corrects"), "fixes": item.get("fixes"),
             "fixed_by": sorted(o["key"] for o in items if o.get("fixes") == key),
             "depends_on": deps,
-            "unblocks": unblocks, "evidence": item.get("evidence") or [],
-            "incidents": item.get("incidents") or []}
+            "unblocks": unblocks, "evidence": item.get("evidence") or []}
 
 
 def local_alerts(items, project) -> dict:
