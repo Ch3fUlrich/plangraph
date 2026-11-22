@@ -54,6 +54,10 @@ RUST_INPUTS: tuple[str, ...] = (
     "tools/liveness_watchdog.py",
     "src/plangraph/keeper/errors.py",
     "src/plangraph/planner/routing.py",
+    "src/plangraph/planner/benchmarks.py",
+    "src/plangraph/planner/route_policy.py",
+    "src/plangraph/routing_support/catalog_db.py",
+    "src/plangraph/routing_support/clients.py",
     "src/plangraph/planner/measured_down.py",
     # D-6054: native/agy quota isolation regressions exercise these boundaries.
     "src/plangraph/planner/provider_stop.py",
@@ -83,6 +87,7 @@ RUST_INPUTS: tuple[str, ...] = (
     "docs/spawner-reliability.md",
     "docs/workspace-resolver.md",
     "skills/review/SKILL.md",  # Native writer review composition fixture.
+    "tools/hooks/install_hooks.sh",  # The lesson Stop hook tests its installer.
     "tools/seat_record.py",  # Native review seat binding fixture.
     "tools/merge_batch_build.py",  # Landing journal and merge-policy fixtures.
     "tools/pgtest.py",  # Process and database helpers loaded by the preflight fixtures.
