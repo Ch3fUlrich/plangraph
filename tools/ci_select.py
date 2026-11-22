@@ -34,7 +34,10 @@ KNOWN_PREFIXES: tuple[str, ...] = (
 )
 
 # The standalone Temporal worker job also runs the probe admission guard tests.
-RUST_WORKER_INPUTS: tuple[str, ...] = ("tools/probe_admission_policy_guard.py",)
+RUST_WORKER_INPUTS: tuple[str, ...] = (
+    "tools/probe_admission_policy_guard.py",
+    "rust/test_support/python.rs",
+)
 
 # D-5294: Rust tests also compile/read repository inputs outside rust/.
 # Keep these before the docs-only shortcut; tests/test_ci_select_rust_inputs.py

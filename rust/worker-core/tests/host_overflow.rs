@@ -17,6 +17,7 @@ fn hosts() -> Vec<Candidate> {
                 sandbox: WRITER_SANDBOX.into(),
                 checked_at: 100,
                 errors: vec![],
+                sandbox_status: pg_worker_core::host_readiness::SandboxStatus::from_probe(Ok(())),
             }),
             sample: Some(Sample {
                 host: id.into(),

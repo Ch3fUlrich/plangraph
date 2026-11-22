@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 mod review_support;
 use review_support::*;
 use serde_json::Value;
@@ -179,7 +183,7 @@ fn writer_families_extracted_from_trailers_and_fallback() {
 
     // Verify merge_batch_land.py check_approval accepts the generated approval file.
     let tools_dir = repo_root().join("tools");
-    let py = Command::new("python3")
+    let py = test_python::command()
         .args([
             "-c",
             &format!(

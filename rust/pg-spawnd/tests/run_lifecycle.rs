@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::{json, Value};
 use std::io::Write;
 use std::path::Path;
@@ -79,7 +83,7 @@ fn legacy_spawner_publishes_and_replays_backlog_after_host_recovers() {
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))
     .unwrap();
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = test_python::command()
         .env("PYTHONPATH", repo.join("src"))
         .env("PATH", path)
         .arg("-c")

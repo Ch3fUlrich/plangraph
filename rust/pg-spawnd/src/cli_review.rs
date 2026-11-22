@@ -126,7 +126,6 @@ pub(crate) fn prepare(
         return Err(parameter("CLI review requires fast-checks stamp for HEAD"));
     }
     let dispatch = Dispatch::new(&launch.cwd, head, reference)?;
-    let head = &dispatch.head;
     let old = launch
         .prompt
         .as_deref()
@@ -143,14 +142,7 @@ pub(crate) fn prepare(
     } else {
         ""
     };
-    let range = dispatch
-        .binding
-        .as_ref()
-        .map_or_else(String::new, |binding| {
-            let base = binding["base_sha"].as_str().unwrap();
-        format!(" Review the full diff using `git --no-replace-objects diff --no-ext-diff --no-textconv {base} {head} --`.")
-        });
-    let prompt = format!("{access}Read-only repository review of HEAD {head}.{range} Open callers and tests; never edit. Do not run background commands; wait for every command to finish before deciding. Name at least one reviewed path from the diff or a file:line in your review. End with exactly VERDICT: PASS or VERDICT: FAIL, then TEST_GAMING: no or TEST_GAMING: yes. Report findings before the verdict.\n\n{old}");
+    let prompt = dispatch.prompt(launch, leg, access, old)?;
     if launch.stdin.as_deref() == Some(old) {
         launch.stdin = Some(prompt.clone());
     } else {

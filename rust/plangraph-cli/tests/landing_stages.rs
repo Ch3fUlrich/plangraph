@@ -1,7 +1,11 @@
 #![cfg(unix)]
 
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::{json, Value};
-use std::{path::Path, process::Command};
+use std::path::Path;
 
 #[test]
 fn keeper_stage_rows_survive_retry_and_upgrade_in_timeline_order() {
@@ -70,7 +74,7 @@ query = sql.joinpath("landing_stage_list.sql").read_text(encoding="utf-8")
 result = source.execute(query, ("example/repo", "train-1"))
 print(json.dumps([tuple(row) for row in result]))
 "#;
-    let output = Command::new("python3")
+    let output = test_python::command()
         .env("PYTHONPATH", repo.join("src"))
         .arg("-c")
         .arg(fixture)

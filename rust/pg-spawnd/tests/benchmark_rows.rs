@@ -1,11 +1,14 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::path::Path;
-use std::process::Command;
 
 #[test]
 fn benchmark_rows_keep_effort_harness_provenance_and_missing_values() {
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let state = tempfile::tempdir().unwrap();
-    let output = Command::new("python3")
+    let output = test_python::command()
         .current_dir(&repo)
         .env("PYTHONPATH", repo.join("src"))
         .env("PLANGRAPH_CATALOG_DB", state.path().join("catalog.sqlite"))

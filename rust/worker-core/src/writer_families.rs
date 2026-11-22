@@ -334,3 +334,14 @@ fn read_commit_families(
 #[cfg(test)]
 #[path = "writer_families_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+use crate::test_python;
+
+#[cfg(test)]
+#[test]
+fn family_table_uses_the_checkout_without_inherited_python_settings() {
+    let texts = BTreeSet::from(["gpt-6.2-sol".to_owned()]);
+    let families = resolve_families(&texts, &test_python::command).unwrap();
+    assert_eq!(families["gpt-6.2-sol"].as_deref(), Some("openai"));
+}

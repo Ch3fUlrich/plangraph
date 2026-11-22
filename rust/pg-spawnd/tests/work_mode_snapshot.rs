@@ -1,6 +1,9 @@
 //! Exercise the real CLI serialization boundary consumed by the Rust resolver.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use serde_json::Value;
-use std::process::Command;
 
 #[test]
 fn writer_snapshot_preserves_catalog_score_and_planner_quota_filter() {
@@ -19,7 +22,7 @@ rows = [dict(id=strong.model, aa_intelligence=60), dict(id=weak.model, aa_intell
 with patch.object(cli, 'SpawnService', return_value=service), patch('plangraph.planner.legs.DEFAULT_LEGS', [strong, weak]), patch('plangraph.routing_support.resolver.get_catalog_models', return_value=rows):
     cli.main(['route', '--role', 'review', '--exclude-family', 'openai', '--card', '{"estimate_tokens":100}', '--writer-snapshot', '--json'])
 "#;
-    let output = Command::new("python3")
+    let output = test_python::command()
         .args(["-c", script])
         .current_dir(&root)
         .env("PYTHONPATH", root.join("src"))

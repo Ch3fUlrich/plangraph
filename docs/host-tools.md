@@ -199,19 +199,26 @@ no timer or live-host action is installed by this slice.
 Run `pg-host-readiness --project PATH --registry FILE --state DIR` on each
 candidate. The registry's `self` entry sets the recorded host. The default
 sandbox is `workspace-write`, matching the native Codex writer. The tool
-checks configuration trust, login, CLI version, and sandbox startup and commit
-in a temporary linked Git worktree with both Git directories named as writable
+checks configuration trust, login, CLI version, and sandbox startup in a
+temporary directory. After startup succeeds, it checks commit access in a
+temporary linked Git worktree with both Git directories named as writable
 roots. The probes make no model call. Use `--scratch-root` for a
 filesystem matching the intended worktree. Hooks and plugins whose trust cannot
 be established cause a failed check.
 
-The tool prints `READY` on success and `MISSING` with the check failure on exit
+In text mode the tool prints `READY` on success and `MISSING` with the check failure on exit
 1. It writes both results to
 `DIR/package-readiness/HOST/workspace-write.json`. Make each host's latest
 record available under the placement command's state directory. `pg-package-host`
 placement refuses missing, failed, future-dated, and older-than-120-second
 package-readiness records and records for a different host or sandbox. Remote capacity samples come from the
 same state directory's `fleet/HOST.ndjson` history.
+
+The structured `--json` report and the saved record include `sandbox_ok` and
+`sandbox_error`. Native placement excludes hosts with a failed probe and verifies
+startup again on the selected host before creating a worktree. A startup
+failure reports `sandbox_unavailable` with the probe diagnostic. The operator
+can then review the bwrap AppArmor profile or the user namespace sysctl.
 
 ### Three-host writer and review rollout
 
@@ -246,3 +253,34 @@ and selected hosts, then attach a 24-hour sample showing work on all three
 hosts. Review requests send their exact base and head as a `diff_ref`.
 Unpublished commits in approved public repositories are transferred in a
 temporary Git bundle, so testing this path requires no push.
+
+### Fleet worker liveness and maintenance
+
+Run `pg-spawnd worker-liveness --deliver` from the
+placement coordinator once per minute. It probes SSH and Tailscale for the
+worker and workstation SSH entries in the fleet registry. Set
+`PG_TAILSCALE_PEER` in a host's registry `env` if its Tailscale address
+differs from the SSH hostname. The SSH result governs placement because
+launch uses SSH. The recorded Tailscale result helps diagnose a link failure.
+
+After two misses the worker is refused and `pg alerts` lists an open
+finding with the affected run IDs. The probe combines the coordinator's
+placed run records with the last available remote inventory. Recovery clears
+the finding and records which runs to check. Placement continues to apply its
+regular readiness checks after recovery.
+
+An operator or router with coordinator state access can use
+`pg-spawnd worker-maintenance HOST END_UNIX_SECONDS` to block placement
+immediately. Misses during that window are recorded for host health without
+paging routing. A successful probe at or after the end clears the placement
+hold. A host that still fails remains unavailable. An inventory-only host
+needs an active worker configuration before it can receive placement.
+
+The versioned `pg-worker-liveness` service and timer use a coordinator
+`worker-liveness.env` with
+`PLANGRAPH_SPAWN_STATE`, `PG_URL`, `PG_TOKEN_FILE` and
+`PG_HOST_LINK_SENDER`. Use a Keeper system or router principal and place
+both updated binaries on the service PATH. The liveness command delivers
+through the host-link watchdog outbox and retries pending events. Events
+with a permanent payload refusal move to `watchdog/rejected`. Use one
+coordinator timer for the fleet to avoid redundant SSH monitors.

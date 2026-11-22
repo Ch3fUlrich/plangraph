@@ -39,6 +39,12 @@ def test_rust_worker_change():
     assert res["full"] is False
 
 
+def test_shared_rust_python_helper_selects_both_workspaces():
+    res = select(["rust/test_support/python.rs"])
+    assert res["rust"] and res["rust-worker"] and res["pytest"]
+    assert not res["full"]
+
+
 def test_rust_spikes_change():
     res = select(["rust/spikes/a.rs"])
     assert res["rust-spike"] is True

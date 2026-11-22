@@ -1,5 +1,6 @@
 //! Codex turn transport and private follow-up briefs on the writer host.
 use super::Host;
+use pg_worker_core::host_readiness::{bwrap_start_failure, sandbox_unavailable};
 use serde_json::Value;
 use std::{
     fs,
@@ -68,34 +69,53 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
     }
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let result = (|| {
-        loop {
+        let status = loop {
             if host.free()? < 2 {
                 return Err("disk_low: under 2 GB stop floor".into());
             }
             if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-                if !status.success() {
-                    return Err(format!("codex failed: {status}"));
-                }
-                break;
+                break status;
             }
             std::thread::sleep(Duration::from_secs(1));
-        }
+        };
         let mut log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
         log.seek(SeekFrom::Start(log_start))
             .map_err(|e| e.to_string())?;
         let mut completed = false;
+        let mut working_shell = false;
+        let mut sandbox_error = None;
         let mut thread_id = session.map(str::to_owned);
         for line in BufReader::new(log).lines() {
             let line = line.map_err(|e| e.to_string())?;
             let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                if let Some(error) = bwrap_start_failure(&line) {
+                    sandbox_error = Some(sandbox_unavailable(error));
+                }
                 continue;
             };
+            let item = &event["item"];
+            if event["type"] == "item.completed" && item["type"] == "command_execution" {
+                if item["exit_code"].as_i64() == Some(0) {
+                    working_shell = true;
+                } else if let Some(error) = item["aggregated_output"]
+                    .as_str()
+                    .and_then(bwrap_start_failure)
+                {
+                    sandbox_error = Some(sandbox_unavailable(error));
+                }
+            }
             if event["type"] == "turn.completed" {
                 completed = true;
             }
             if event["type"] == "thread.started" {
                 thread_id = event["thread_id"].as_str().map(str::to_owned);
             }
+        }
+        if let Some(error) = sandbox_error.filter(|_| !working_shell) {
+            return Err(error);
+        }
+        if !status.success() {
+            return Err(format!("codex failed: {status}"));
         }
         if !completed {
             return Err("codex ended without a result line".into());

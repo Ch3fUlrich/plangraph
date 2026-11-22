@@ -1,5 +1,9 @@
 //! Black-box fixtures for the fleet launcher CLI.
 #[cfg(target_os = "linux")]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/dry_run.rs"]
 mod dry_run;
 #[cfg(target_os = "linux")]

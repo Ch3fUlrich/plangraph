@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from . import timing
 from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
 __all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "trailer_entries", "plan_items", "valid_ref",
@@ -256,7 +257,7 @@ class GitAdapter:
             cwd=repo,
             capture_output=True,
             text=True,
-            timeout=self._timeout if timeout is None else float(timeout),
+            timeout=timing.io_timeout(self._timeout if timeout is None else float(timeout)),
             check=False,
         )
 

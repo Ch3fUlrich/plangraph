@@ -1,11 +1,14 @@
 #![cfg(unix)]
 
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use pg_worker_core::host_link::{observe, observe_ssh};
 use serde_json::{json, Value};
 use std::{
     fs,
     io::Write,
-    path::Path,
     process::{Command, Stdio},
 };
 
@@ -49,8 +52,7 @@ fn blocked_peer_alert_reaches_keeper_through_the_watchdog_bridge() {
         }
     }
 
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let result = Command::new("python3")
+    let result = test_python::command()
         .args([
             "-c",
             r#"
@@ -102,7 +104,6 @@ finally:
         .arg(state)
         .arg(&event)
         .arg(env!("CARGO_BIN_EXE_plangraph"))
-        .env("PYTHONPATH", repo.join("src"))
         .output()
         .unwrap();
     assert!(result.status.success(), "{result:?}");
@@ -145,4 +146,73 @@ fn unrelated_watchdog_event_is_forwarded_unchanged_and_propagates_failure() {
             assert!(String::from_utf8_lossy(&result.stderr).contains("watchdog fallback failed"));
         }
     }
+}
+
+#[test]
+fn worker_outage_and_clear_reach_keeper_alerts_with_run_ids() {
+    let state = tempfile::tempdir().unwrap();
+    let result = test_python::command()
+        .args([
+            "-c",
+            r#"
+import json, os, subprocess, sys, threading
+from pathlib import Path
+from plangraph.keeper import api, auth, config, db
+from plangraph.keeper.store import Store
+
+root = Path(sys.argv[1])
+connection = db.open_db(root / "keeper.db", create=True, backend="sqlite")
+system_token = auth.add_principal(connection, "system", "system", [])
+store = Store(connection)
+conf = root / "keeper.json"
+conf.write_text(json.dumps({"db": str(root / "keeper.db"), "bind": "127.0.0.1:0"}))
+conf.chmod(0o600)
+token = root / "token"
+token.write_text(system_token)
+server = api.make_server(store, config.load_config(conf), port=0)
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+principal = auth.authenticate(connection, system_token)
+event = root / "event.json"
+env = dict(os.environ, PG_URL=f"http://127.0.0.1:{server.server_address[1]}",
+           PG_TOKEN_FILE=str(token), PG_HOST_LINK_SENDER="system")
+def send(status, mid, observed, until=None, recipient="routing"):
+    event.write_text(json.dumps({
+        "kind": "alert", "rule": "worker-host-" + status, "item_key": "plangraph:LESSON",
+        "recipient": recipient, "host": "fixture-worker", "event_id": mid * 64,
+        "down_since": 60, "observed_at": observed,
+        "maintenance_until": until, "unknown_run_ids": ["run-example"],
+    }))
+    subprocess.run([sys.argv[2], "host-link-deliver", str(event)], env=env, check=True)
+def findings():
+    return store.alerts(principal, project="plangraph")["findings"]
+try:
+    send("maintenance", "a", 120, 180, "host-health")
+    assert not findings()
+    send("unreachable", "b", 180, 180)
+    send("unreachable", "b", 180, 180)
+    assert len(findings()) == 1
+    alert = json.loads(findings()[0]["msg"])
+    assert alert["unknown_run_ids"] == ["run-example"]
+    assert alert["maintenance_until"] == 180
+    send("recovered", "c", 240, 180)
+    send("unreachable", "d", 180, 180)
+    assert not findings()
+    messages = store.messages(principal)
+    clear = next(row for row in messages if row["msg_id"] == "c" * 64)
+    assert clear["body"]["worker_host"]["unknown_run_ids"] == ["run-example"]
+    rows = connection.execute("SELECT action FROM alert_log ORDER BY id").fetchall()
+    assert [row["action"] for row in rows] == ["alert_raised", "alert_cleared"]
+finally:
+    server.shutdown()
+    server.server_close()
+    thread.join(5)
+    connection.close()
+"#,
+        ])
+        .arg(state.path())
+        .arg(env!("CARGO_BIN_EXE_plangraph"))
+        .output()
+        .unwrap();
+    assert!(result.status.success(), "{result:?}");
 }

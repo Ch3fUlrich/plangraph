@@ -1,7 +1,7 @@
 //! One foreground host-scheduler tick; delivery uses the existing watchdog bridge.
 use pg_worker_core::{
     host_command::{capture, output, ssh},
-    host_link::{observe, observe_ssh, ssh_down_since},
+    host_link::{observe, observe_ssh, probe_peer, probe_ssh, ssh_down_since},
 };
 use serde_json::{json, Value};
 use std::{
@@ -10,23 +10,6 @@ use std::{
     process::Command,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-fn probe(peer: &str) -> io::Result<bool> {
-    match output(
-        Command::new("tailscale").args([
-            "ping",
-            "--c=1",
-            "--timeout=5s",
-            "--until-direct=false",
-            peer,
-        ]),
-        Duration::from_secs(10),
-    ) {
-        Ok(_) => Ok(true),
-        Err(e) if e.kind() == io::ErrorKind::Other => Ok(false),
-        Err(e) => Err(e),
-    }
-}
 
 fn peer_state(peer: &str) -> Option<Value> {
     let bytes = output(
@@ -77,14 +60,7 @@ fn ssh_tick(
     destination: &str,
     peer: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let reachable = match capture(ssh(destination)?.arg("exit 0"), Duration::from_secs(7)) {
-        Ok(result) => match result.status.code() {
-            Some(code) => code != 255,
-            None => return Err("SSH probe was interrupted".into()),
-        },
-        Err(err) if err.kind() == io::ErrorKind::TimedOut => false,
-        Err(err) => return Err(err.into()),
-    };
+    let reachable = probe_ssh(destination)?;
     let now = unix_seconds()?;
     let mut evidence = Value::Null;
     if let Some(since) = observe_ssh(root, destination, now, reachable, || {
@@ -175,7 +151,7 @@ fn execute() -> Result<i32, Box<dyn std::error::Error>> {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b".:-".contains(&b)) =>
         {
-            let reachable = probe(peer)?;
+            let reachable = probe_peer(peer)?;
             let queued = observe(Path::new(root), host, peer, unix_seconds()?, reachable)?;
             println!("host-link reachable={reachable} alert_queued={queued}");
             Ok(0)

@@ -1,10 +1,12 @@
-use std::process::Command;
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
 
 #[test]
 fn preflight_overrides_private_target_and_holds_shared_lease() {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let tmp = tempfile::tempdir().unwrap();
-    let output = Command::new(if cfg!(windows) { "python" } else { "python3" })
+    let output = test_python::command()
         .current_dir(&repo)
         .env("PYTHONPATH", repo.join("src"))
         .env("PLANGRAPH_CARGO_TARGET_DIR", tmp.path().join("shared"))

@@ -6,7 +6,87 @@ use sha2::{Digest, Sha256};
 use std::{
     fs, io,
     path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
 };
+
+/// File delivery reports this exit code for a permanent Keeper payload refusal.
+pub const WORKER_ALERT_REFUSED_EXIT: i32 = 3;
+
+pub fn probe_peer(peer: &str) -> io::Result<bool> {
+    if peer.is_empty()
+        || peer.starts_with('-')
+        || !peer
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+    {
+        return Err(io::Error::other("invalid Tailscale peer"));
+    }
+    match crate::host_command::capture(
+        Command::new("tailscale").args([
+            "ping",
+            "--c=1",
+            "--timeout=5s",
+            "--until-direct=false",
+            peer,
+        ]),
+        Duration::from_secs(7),
+    ) {
+        Ok(output) => Ok(output.status.success()),
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn probe_ssh(destination: &str) -> io::Result<bool> {
+    use crate::host_command::{capture, ssh};
+    match capture(ssh(destination)?.arg("exit 0"), Duration::from_secs(7)) {
+        Ok(result) => result
+            .status
+            .code()
+            .map(|code| code != 255)
+            .ok_or_else(|| io::Error::other("SSH probe was interrupted")),
+        Err(error) if error.kind() == io::ErrorKind::TimedOut => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_outbox(root: &Path, filename: &str, event: &Value) -> io::Result<()> {
+    atomic_write_private(
+        &root.join("watchdog/outbox").join(filename),
+        &serde_json::to_vec(event)?,
+    )
+}
+
+pub(crate) fn enqueue_worker_alert(root: &Path, event: &Value) -> io::Result<()> {
+    let host = event["host"]
+        .as_str()
+        .filter(|host| crate::fleet_series::valid_host(host))
+        .ok_or_else(|| io::Error::other("invalid worker alert host"))?;
+    let now = event["observed_at"]
+        .as_u64()
+        .ok_or_else(|| io::Error::other("invalid worker alert time"))?;
+    let sequence = event["sequence"]
+        .as_u64()
+        .ok_or_else(|| io::Error::other("invalid worker alert sequence"))?;
+    let id = format!("{:x}", Sha256::digest(serde_json::to_vec(event)?));
+    let mut event = event.clone();
+    event["event_id"] = json!(id);
+    write_outbox(
+        root,
+        &format!("{now:020}-worker-host-{host}-{sequence:020}-{id}.json"),
+        &event,
+    )
+}
+
+pub fn worker_alert_filename(name: &str) -> bool {
+    name.as_bytes()
+        .get(..20)
+        .is_some_and(|head| head.iter().all(u8::is_ascii_digit))
+        && name
+            .get(20..)
+            .is_some_and(|tail| tail.starts_with("-worker-host-") && tail.ends_with(".json"))
+}
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -68,12 +148,10 @@ impl<'a> Link<'a> {
         event["down_since"] = json!(since);
         event["observed_at"] = json!(self.state.last_observed);
         event["event_id"] = json!(event_id);
-        atomic_write_private(
-            &self
-                .root
-                .join("watchdog/outbox")
-                .join(format!("{since:020}-{rule}-{event_id}.json")),
-            &serde_json::to_vec(&event)?,
+        write_outbox(
+            self.root,
+            &format!("{since:020}-{rule}-{event_id}.json"),
+            &event,
         )
     }
 

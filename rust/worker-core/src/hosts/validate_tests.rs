@@ -45,12 +45,14 @@ fn class_required_and_schema_agree() {
         .contains(&json!("class")));
     assert_eq!(
         host["properties"]["class"]["enum"],
-        json!(["worker", "restricted"])
+        json!(["worker", "restricted", "workstation", "server"])
     );
     assert_eq!(host["properties"]["class"]["default"], "worker");
     for (label, class) in [
         ("worker", HostClass::Worker),
         ("restricted", HostClass::Restricted),
+        ("workstation", HostClass::Workstation),
+        ("server", HostClass::Server),
     ] {
         let mut doc = fixture();
         doc["hosts"][0]["class"] = json!(label);
@@ -66,6 +68,27 @@ fn unknown_class_refused() {
     let mut doc = fixture();
     doc["hosts"][0]["class"] = json!("unknown");
     assert!(matches!(parse(&doc), Err(HostsError::Parse(_))));
+}
+
+#[test]
+fn inventory_only_host_accepts_zero_caps_and_no_worker_state() {
+    let mut doc = fixture();
+    doc["self"] = json!("observer.example");
+    let host = &mut doc["hosts"][0];
+    host["id"] = json!("observer.example");
+    host["class"] = json!("server");
+    host["caps"] =
+        json!({"max_runs":0,"max_writers":0,"max_seats":0,"max_sessions":0,"mem_floor_mb":0});
+    host["state_dir"] = json!("");
+    host["session_mb"] = json!(0);
+    host["warmup"] = json!({"warmup_s":0,"ramp_mb":{"implement":512}});
+    host["repos"]["plangraph"] = json!({
+        "root":"/fixture/src","worktrees_root":"/fixture/trees","remote":"origin",
+        "python":"python3","import_roots":[],"cache_env":{}
+    });
+    assert!(parse(&doc).unwrap().self_host().inventory_only());
+    doc["hosts"][0]["class"] = json!("worker");
+    assert!(parse(&doc).is_err());
 }
 
 #[test]

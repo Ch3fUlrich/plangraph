@@ -190,6 +190,14 @@ impl Sandbox {
         }
     }
 
+    pub fn python_command(&self) -> Command {
+        let mut cmd = Command::new("/usr/bin/timeout");
+        self.isolate(&mut cmd);
+        cmd.args(["--kill-after=2s", "30s"])
+            .arg(super::test_python::command().get_program());
+        cmd
+    }
+
     pub fn isolate(&self, cmd: &mut Command) {
         cmd.current_dir(self.dir.path())
             .env_clear()

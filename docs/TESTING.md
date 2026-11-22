@@ -8,6 +8,13 @@ python3 tools/affected_tests.py --base origin/main --local --files-only --run
 ```
 
 Affected PR CI runs the selector without the local flags.
+
+For a train resolution, set `--base` to the start of the fix range and use
+`--local --files-only --run -n 2`. Run the push checks with
+`python3 tools/preflight.py --base <range-base> --head HEAD --lane`.
+The Bash guard rejects full-tree pytest on `land/*` and `lane/*` worktrees.
+For an operator-approved exception, supply its D-id in
+`PLANGRAPH_FULL_PYTEST_D_ID` in the hook's environment.
 The base must exist locally. The tool diffs the merge base against the working tree,
 including staged, unstaged and untracked files. JSON output explains the plan;
 without `--run` it only prints the plan. Invalid refs fail rather than selecting nothing.

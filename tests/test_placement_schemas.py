@@ -20,9 +20,10 @@ def test_class_fixture_and_optional_schema_agree():
     host_schema = SCHEMA["$defs"]["hostEntry"]
     assert "class" in host_schema["properties"]
     assert "class" not in host_schema["required"]
-    assert host_schema["properties"]["class"]["enum"] == ["worker", "restricted"]
+    assert host_schema["properties"]["class"]["enum"] == [
+        "worker", "restricted", "workstation", "server"]
     assert all("class" in host for host in EXAMPLE["hosts"])
-    for label in ["worker", "restricted", None]:
+    for label in ["worker", "restricted", "workstation", "server", None]:
         doc = copy.deepcopy(EXAMPLE)
         if label is None:
             del doc["hosts"][0]["class"]

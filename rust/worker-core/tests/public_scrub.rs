@@ -1,4 +1,8 @@
 //! Contract for the legacy fast-check entry point and the shared public scanner.
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::{
     fs,
     io::Write,
@@ -36,7 +40,7 @@ fn commit(repo: &Path) {
 
 fn legacy_scan(repo: &Path) -> std::process::Output {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    Command::new("python3")
+    test_python::command()
         .arg(root.join("tools/preflight_private_scrub.py"))
         .args(["--base", "HEAD~1", "--head", "HEAD", "--words", "words"])
         .current_dir(repo)
@@ -155,7 +159,7 @@ fn committed_scrub_checks_private_words_in_gitlink_paths() {
         .unwrap();
     let head = String::from_utf8(head.stdout).unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut hook = Command::new("python3")
+    let mut hook = test_python::command()
         .arg(root.join("tools/hooks/pre-push"))
         .arg("origin")
         .current_dir(repo.path())

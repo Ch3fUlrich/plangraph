@@ -1,6 +1,7 @@
 use super::{
     records::ledger,
     sandbox::{Launcher, Sandbox},
+    test_python,
 };
 use std::{
     ffi::CString,
@@ -47,7 +48,7 @@ pub fn check_counter(launcher: &Launcher, fixture: bool) {
     let seed = s.direct_launch("seed", true).output().unwrap();
     assert!(seed.status.success(), "{}", s.normalize(&seed.stderr));
     let (mut peer, ready) = if fixture {
-        let mut command = std::process::Command::new("/usr/bin/python3");
+        let mut command = test_python::command();
         s.isolate(&mut command);
         command.args(["-c", PYTHON_COUNTER]);
         (command, s.path("python-ready"))

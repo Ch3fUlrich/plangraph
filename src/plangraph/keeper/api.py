@@ -473,11 +473,23 @@ class KeeperHandler(BaseHTTPRequestHandler):
         if name == "set_priority":
             return store.set_priority(principal, self._need(body, "key"),
                                       self._int(body.get("n", body.get("priority")), "n"))
-        if name == "claim":
+        if name in ("claim", "claim_batch"):
             lease = body.get("lease_s", body.get("lease"))
-            return store.claim(principal, self._need(body, "key"),
-                               lease_s=None if lease is None else self._int(lease, "lease_s"),
+            lease = None if lease is None else self._int(lease, "lease_s")
+            if name == "claim_batch":
+                keys = self._need(body, "keys")
+                if isinstance(keys, list) and len(keys) <= 200:
+                    keys = [store.resolve_key(key) if isinstance(key, str) else key for key in keys]
+                return store.claim_batch(principal, keys, lease_s=lease, force_stale=body.get("force_stale"))
+            return store.claim(principal, self._need(body, "key"), lease_s=lease,
                                force_stale=body.get("force_stale"))
+        if name == "heartbeat_batch":
+            claims = self._need(body, "claims")
+            if isinstance(claims, list) and len(claims) <= 200:
+                claims = [dict(row, key=store.resolve_key(row["key"]))
+                          if isinstance(row, dict) and isinstance(row.get("key"), str) else row
+                          for row in claims]
+            return store.heartbeat_batch(principal, claims)
         if name == "delegate":
             return store.delegate(principal, self._need(body, "key"),
                                   self._need(body, "worker", "worker_principal"))
@@ -581,6 +593,7 @@ class KeeperHTTPServer(ThreadingHTTPServer):
     """One ``Store`` guarded by one lock, plus a system principal for reaps."""
 
     daemon_threads = True
+    request_queue_size = 32
     allow_reuse_address = True
 
     def __init__(self, address, store, config, system=None):

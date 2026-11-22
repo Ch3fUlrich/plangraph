@@ -79,6 +79,16 @@ def test_selection(tmp_path, changed, expected):
     assert selector().select_tests(tmp_path, changed)["tests"] == expected
 
 
+@pytest.mark.parametrize('changed', ['rust/crate/tests/fixture.rs', 'tests/test_fixture.py'])
+def test_ci_selects_subprocess_guard_for_both_test_languages(tmp_path, changed):
+    guard = 'tests/test_spawner_import_guard.py'
+    for relative in (guard, changed):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    assert guard in selector().select_tests(tmp_path, [changed])['tests']
+
+
 def test_browser_tests_never_selected(tmp_path):
     # D-2821: tests/browser runs in its own CI job; an explicit path would collect it in pytest.
     for name, text in {"src/pkg/__init__.py": "", "src/pkg/core.py": "VALUE = 1",

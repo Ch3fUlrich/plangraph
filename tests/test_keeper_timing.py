@@ -9,6 +9,7 @@ import pytest
 
 from keeper_util import Clock, World, seed
 from plangraph.keeper import anchor, api, snapshot_io, snapshot_writer, timing
+from plangraph.keeper.errors import Refused
 
 PATTERN = re.compile(
     r"keeper: (request|writer|reaper|snapshot|changelog)_timing kind=(read|write|other)"
@@ -312,3 +313,50 @@ def test_emit_control_valid_values_write_and_none_parts_do_not(meter):
     assert out.getvalue() == ""
     timing._emit("writer_timing", "other", 1, 1, {})
     assert "writer_timing" in lines(out)[0]
+
+
+@pytest.mark.parametrize("error_type", [None, RuntimeError, TimeoutError])
+def test_claim_authority_shares_only_inflight_lookup(monkeypatch, error_type):
+    from concurrent.futures import ThreadPoolExecutor
+
+    started, joined, finish = (threading.Event() for _ in range(3))
+    key = ("work", object())
+    value = object()
+    error = error_type("authority lookup failed") if error_type else None
+    original_timeout = timing.io_timeout
+
+    def lookup():
+        started.set()
+        assert finish.wait(5)
+        if error is not None:
+            raise error
+        return value
+
+    def next_lookup():
+        pytest.fail("follower ran a second authority lookup")
+
+    def follower_timeout(seconds):
+        joined.set()
+        return original_timeout(seconds)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        leader = pool.submit(timing.share_inflight, key, lookup)
+        try:
+            assert started.wait(5)
+            with timing.io_budget(0), pytest.raises(
+                    Refused, match="claim authority refresh exceeded its deadline"):
+                timing.share_inflight(key, next_lookup)
+            assert not leader.done()
+            monkeypatch.setattr(timing, "io_timeout", follower_timeout)
+            follower = pool.submit(timing.share_inflight, key, next_lookup)
+            assert joined.wait(5)
+        finally:
+            finish.set()
+        for result in (leader, follower):
+            if error is None:
+                assert result.result(timeout=5) is value
+            else:
+                assert result.exception(timeout=5) is error
+
+    fresh = object()
+    assert timing.share_inflight(key, lambda: fresh) is fresh

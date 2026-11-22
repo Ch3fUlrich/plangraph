@@ -1,10 +1,12 @@
+use crate::test_python;
+
 use super::*;
 
 const LEDGER: &str = "CHANGELOG.md";
 
 fn assert_python_parity(f: &Fixture, passes: bool) {
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/check_changelog_docs.py");
-    let python = std::process::Command::new("python3")
+    let python = test_python::command()
         .arg(script)
         .args(["--cwd", f.tree.to_str().unwrap(), "--base"])
         .arg(f.ws.base_sha.as_ref().unwrap())
@@ -242,7 +244,7 @@ fn parity_release_fold_commit_passes() {
     f.ws.base_sha = Some(git(&f.tree, &["rev-parse", "HEAD"]).unwrap());
     f.ws.revision_sha = f.ws.base_sha.clone();
     let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tools/changelog_fold.py");
-    assert!(std::process::Command::new("python3")
+    assert!(test_python::command()
         .arg(script)
         .current_dir(&f.tree)
         .status()

@@ -2,25 +2,31 @@
 import os
 from pathlib import Path
 import subprocess
-import sys
 import runpy
 
 import pytest
 
+from _split_ci_environment import python_test_env
+
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
-    monkeypatch.setenv('PYTHONPATH', str(Path(__file__).resolve().parents[1] / 'src'))
     remote = tmp_path / 'remote.git'
     subprocess.run(['git', 'init', '--bare', str(remote)], check=True, capture_output=True)
     monkeypatch.setenv('PLANGRAPH_ARTIFACT_REMOTE', str(remote))
     def run(*args, code=0):
-        p = subprocess.run([sys.executable, '-m', 'plangraph.fleet_artifact', *map(str, args)], capture_output=True)
-        assert p.returncode == code, p.stderr
-        assert b'document-sentinel' not in p.stdout + p.stderr
-        return p.stdout.decode().strip()
+        result = invoke(*args)
+        assert result.returncode == code, result.stderr
+        assert b'document-sentinel' not in result.stdout + result.stderr
+        return result.stdout.decode().strip()
     run('init', '--confirm-private')
     return tmp_path, remote, run
+
+
+def invoke(*args):
+    python, env = python_test_env()
+    return subprocess.run([python, '-m', 'plangraph.fleet_artifact', *map(str, args)],
+                          capture_output=True, env=env)
 
 
 @pytest.mark.parametrize('data', [b'document-sentinel\r\nnext\r\n', b'\xff\xfe\n', b'document-sentinel', b'', b'\0\r\n\x80', 'multilingual: é漢字\n'.encode()])
@@ -60,7 +66,7 @@ def test_failures(store, monkeypatch):
     source.write_bytes(b'x' * (5 * 1024 * 1024 + 1))
     run('put', source, code=6)
     source.write_text('safe\n' + 'gh' + 'p_' + 'examplevalue')
-    stderr = subprocess.run([sys.executable, '-m', 'plangraph.fleet_artifact', 'put', str(source)], capture_output=True).stderr
+    stderr = invoke('put', source).stderr
     assert b'lines 2' in stderr
     assert b'ghp_examplevalue' not in stderr
     run('put', source, code=7)
@@ -98,7 +104,7 @@ def test_secret_line_boundaries(store, separator):
     data = b'a' + separator + b'ghp_' + b'A' * 20
     source.write_bytes(data)
     before = subprocess.check_output(['git', '--git-dir', str(remote), 'show-ref'])
-    p = subprocess.run([sys.executable, '-m', 'plangraph.fleet_artifact', 'put', str(source)], capture_output=True)
+    p = invoke('put', source)
     assert p.returncode == 7 and p.stdout == b''
     assert p.stderr == b'fleet-artifact: secret shape on lines 1\n'
     assert data.count(b'\n') == 0

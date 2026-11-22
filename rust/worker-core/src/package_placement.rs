@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -34,6 +34,7 @@ pub struct Policy {
     /// Free space and floor in MB, keyed by host. Fleet placement requires both.
     pub disk_space: BTreeMap<String, (u64, u64)>,
     pub require_disk_capacity: bool,
+    pub worker_host_state: Option<PathBuf>,
 }
 impl Default for Policy {
     fn default() -> Self {
@@ -49,6 +50,7 @@ impl Default for Policy {
             allow_fallback: true,
             disk_space: BTreeMap::new(),
             require_disk_capacity: false,
+            worker_host_state: None,
         }
     }
 }
@@ -106,6 +108,13 @@ pub struct Choice {
 }
 
 pub fn refusal(candidate: &Candidate, policy: &Policy, now: u64) -> Option<String> {
+    if let Some(reason) = policy
+        .worker_host_state
+        .as_ref()
+        .and_then(|state| crate::worker_host::placement_refusal(state, &candidate.id))
+    {
+        return Some(reason.into());
+    }
     let (floor, reservation) = policy
         .host_limits
         .get(&candidate.id)
@@ -119,14 +128,11 @@ pub fn refusal(candidate: &Candidate, policy: &Policy, now: u64) -> Option<Strin
         "role not permitted on fallback host"
     } else if !fleet_series::valid_host(&candidate.id) {
         "invalid host id"
-    } else if let Some(reason) = candidate
-        .readiness
-        .as_ref()
-        .map_or(Some("missing readiness"), |record| {
-            record.refusal(&candidate.id, WRITER_SANDBOX, now)
-        })
-    {
-        reason
+    } else if let Some(reason) = candidate.readiness.as_ref().map_or_else(
+        || Some("missing readiness".into()),
+        |record| record.refusal(&candidate.id, WRITER_SANDBOX, now),
+    ) {
+        return Some(reason);
     } else if let Some(row) = &candidate.sample {
         if row.host != candidate.id {
             "sample identity mismatch"

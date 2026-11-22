@@ -116,6 +116,8 @@ def test_anchored_read_call_pins():
             {"store_read.py", "store_changelog.py"},
         r'^\s*(?:rows = decision_book\(|return \{"book": src\.decision_book\()':
             {"context_sources.py", "store_context.py"},
+        r"^\s*lambda: src\.decision_book\(adapter, fresh=True\),$":
+            {"store_context.py"},
     }
     for pattern, expected in patterns.items():
         hits = {p.name for p in root.glob("*.py")
@@ -123,7 +125,7 @@ def test_anchored_read_call_pins():
         assert hits == expected
     source = '\n'.join(p.read_text() for p in root.glob("*.py"))
     calls = re.findall(r"\b(?:context_sources|src)\.(decision_texts|decision_book)\(", source)
-    assert sorted(calls) == ["decision_book", "decision_texts", "decision_texts"]
+    assert sorted(calls) == ["decision_book", "decision_book", "decision_texts", "decision_texts"]
 
 
 @pytest.mark.parametrize("path_kind", ["none", "text_only", "unreadable", "row", "canonical",

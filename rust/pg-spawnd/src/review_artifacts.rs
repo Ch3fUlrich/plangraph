@@ -74,8 +74,35 @@ pub(crate) fn review_text(state: &Path, record: &Value) -> Result<String, Eviden
         return diagnostic(&text);
     }
     match pg_worker_core::review_split::extract_review_text_from_live_log(&text) {
-        Some(result) if !result.is_empty() && (!agy || !result.trim().is_empty()) => Ok(result),
+        Some(result) if !result.is_empty() && (!agy || !result.trim().is_empty()) => {
+            Ok(with_sandbox_test_status(record, result))
+        }
         _ => diagnostic(&text),
+    }
+}
+
+pub(crate) fn with_sandbox_test_status(record: &Value, review: String) -> String {
+    let Some(events) = record["events"].as_array() else {
+        return review;
+    };
+    // A quota fallthrough appends a new launch spec to the same run record.
+    let Some(job) = events
+        .iter()
+        .rfind(|event| event["event"] == "launch_spec")
+        .and_then(|event| event["python_job_id"].as_str())
+    else {
+        return review;
+    };
+    let host = events
+        .iter()
+        .find(|event| event["event"] == "sandbox_unavailable" && event["python_job_id"] == job)
+        .and_then(|event| event["host"].as_str());
+    match host {
+        Some(host) => crate::review_test_evidence::set_tests_line(
+            review,
+            &format!("TESTS: none: sandbox unavailable on {host}"),
+        ),
+        None => review,
     }
 }
 /// A native ACCEPT needs a reported repository read and cannot disavow tool access.

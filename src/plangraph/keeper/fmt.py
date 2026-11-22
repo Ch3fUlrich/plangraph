@@ -45,6 +45,11 @@ def ready_text(items, project=None, n=10, unblocks=None, owner=None, agent=False
     return views.brief(items, project=project, n=n, ub=unblocks, owner=owner, agent=agent)
 
 
+def _base_text(row: dict) -> str:
+    base = row.get("base_sha")
+    return f" | base {base}" if base else ""
+
+
 def ready_context_rows(rows, ub) -> str:
     """:func:`views.brief_rows` plus each row's TASK-CONTEXT-GUARD ``context``
     (last 3 D-ids, ``STALE: why``) appended to the row's own line, so a parser
@@ -65,9 +70,7 @@ def ready_context_rows(rows, ub) -> str:
             line += " | NEEDS_RECONCILE: " + row["reason"]
         elif row.get("ready_status") == "in_progress":
             line += " | IN_PROGRESS: " + ", ".join(f"PR #{p}" for p in row["prs"])
-        if row.get("base_sha"):
-            line += f" | base {row['base_sha']}"
-        out.append(line)
+        out.append(line + _base_text(row))
     return "\n".join(out)
 
 
@@ -364,6 +367,11 @@ def flags_text(flags) -> str:
 def result_text(verb: str, result) -> str:
     """The smallest useful line for a write verb's result."""
     if isinstance(result, dict):
+        if verb in ("claim_batch", "heartbeat_batch"):
+            return "\n".join(
+                f"{row['key']} refused {row['error']}: {row['msg']}" if "error" in row
+                else f"{row['key']} epoch {row['epoch']} lease {row['lease_until']}" + _base_text(row)
+                for row in result["results"])
         if "created" in result:
             text = f"created {len(result['created'])} items"
             for refusal in result.get("refused") or []:
@@ -374,7 +382,7 @@ def result_text(verb: str, result) -> str:
         if verb == "claim":
             return (f"{result.get('key')} claimed epoch {result.get('epoch')} "
                     f"lease {result.get('lease_until')}"
-                    + (f" | base {result['base_sha']}" if result.get("base_sha") else ""))
+                    + _base_text(result))
         if verb == "verdict":
             if result.get("state") == "done":
                 return "done (2/2)"

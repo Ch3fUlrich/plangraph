@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 mod adapter;
 mod agent_view;
 mod agent_view_projection;
@@ -76,6 +80,7 @@ mod transport_unix;
 #[cfg(windows)]
 mod transport_windows;
 mod work_mode_config;
+mod worker_liveness;
 mod writer_control;
 mod writer_ledger;
 

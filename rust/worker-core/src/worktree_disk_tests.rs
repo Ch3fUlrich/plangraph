@@ -1,3 +1,5 @@
+use crate::test_python;
+
 use super::*;
 
 #[cfg(target_os = "linux")]
@@ -55,7 +57,7 @@ fn rust_directory_link_does_not_delete_external_target() {
 fn parallel_writers_are_stopped_at_shared_cap_and_idle_cache_is_reclaimed() {
     let root = tempfile::tempdir().unwrap();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new("python3")
+    let output = test_python::command()
         .args([
             "-c",
             r#"
@@ -181,7 +183,7 @@ fn disk_test_writer_process() {
 #[test]
 fn runtime_disk_stop_uses_absolute_two_gb_and_fails_closed() {
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new("python3")
+    let output = test_python::command()
         .args([
             "-c",
             r#"
@@ -223,7 +225,7 @@ fn disk_bridge(script: &str) -> serde_json::Value {
 fn disk_bridge_with(arg: &str, script: &str) -> serde_json::Value {
     let root = tempfile::tempdir().unwrap();
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let output = std::process::Command::new("python3")
+    let output = test_python::command()
         .args(["-c", script])
         .arg(root.path())
         .arg(arg)

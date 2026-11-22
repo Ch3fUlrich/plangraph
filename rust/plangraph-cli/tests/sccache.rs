@@ -1,6 +1,10 @@
 #![cfg(unix)]
 
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
+use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
 #[test]
 fn sccache_environment_uses_one_host_cache_and_falls_back_when_missing() {
@@ -11,7 +15,7 @@ fn sccache_environment_uses_one_host_cache_and_falls_back_when_missing() {
     fs::write(&cache, "fixture").unwrap();
     fs::set_permissions(&cache, fs::Permissions::from_mode(0o755)).unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
-    let output = Command::new("python3")
+    let output = test_python::command()
         .env("PYTHONPATH", source)
         .env("HOME", home.path())
         .env_remove("RUSTC_WRAPPER")

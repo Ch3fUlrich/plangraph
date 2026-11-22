@@ -1,8 +1,11 @@
 //! Exercise the shared commit gate with real Git merge and non-merge commits.
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use pg_worker_core::git_test_support;
 use std::{
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Output,
 };
 use tempfile::TempDir;
 
@@ -65,7 +68,7 @@ impl Fixture {
 
     fn gate(&self, head: &str) -> Output {
         let gate = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/ci_commit_gate.py");
-        let mut command = Command::new(if cfg!(windows) { "python" } else { "python3" });
+        let mut command = test_python::command();
         git_test_support::configure(&mut command, self.dir.path());
         command
             .arg(gate)

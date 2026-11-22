@@ -7,6 +7,7 @@ import json
 import math
 import os
 import re
+import shlex
 import signal
 from pathlib import Path
 import shutil
@@ -194,8 +195,8 @@ def selected_count(partial):
 
 
 def lane_rust_commands(commands):
-    """The lane keeps only the seconds-fast Rust check: formatting. Clippy and cargo test run in CI."""
-    return [command for command in commands if command[:2] == ["cargo", "fmt"]]
+    """Check formatting and lints on a lane push; CI runs the Rust tests."""
+    return [command for command in commands if command[0] == "cargo" and command[1] in ("fmt", "clippy")]
 
 
 def with_no_fail_fast(command):
@@ -585,7 +586,7 @@ def _main(argv, root, cleanup):
     parser.add_argument("--scrub-base", help="scrub range start when affected tests use a nearer base")
     parser.add_argument("--fast", action="store_true")
     parser.add_argument("--lane", action="store_true",
-                        help="push-gate mode: seconds-fast checks (scrub, policy, skill lint, cargo fmt) and no test")
+                        help="push-gate mode: scrub, policy, skill lint, cargo fmt and clippy; skip affected tests")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--keep-going", action="store_true", help="default behaviour")
     mode.add_argument("--fail-fast", action="store_true")
@@ -639,8 +640,9 @@ def _main(argv, root, cleanup):
                    "--root", str(root), "--files-only", "--local", "--parts-union", "--run")
     if importlib.util.find_spec("xdist") is not None:
         tests += ["--workers", str(affected_workers())]
+    size_options = ["--doc-headroom"] if args.lane else []
     families = [("scrub", scrubs),
-                ("policy", [python("check_file_size.py", "--head", args.head), python("check_new_code_lang.py", "--head", args.head),
+                ("policy", [python("check_file_size.py", "--head", args.head, *size_options), python("check_new_code_lang.py", "--head", args.head),
                             python("check_changelog_docs.py", "--head", args.head),
                             python("ci_commit_gate.py", "check", "--base", policy_base,
                                    "--head", args.head),
@@ -656,12 +658,13 @@ def _main(argv, root, cleanup):
         elif not stopped:
             try:
                 if commands is None:
-                    commands = rust_commands(root, args.base, args.head, env)
+                    rust_base = (args.scrub_base or args.base) if args.lane else args.base
+                    commands = rust_commands(root, rust_base, args.head, env)
                     if args.lane:
                         commands = lane_rust_commands(commands)
                 family_env = policy_env if family == "policy" else env
                 if family == 'rust':
-                    rust_env = rust_target_env(env, cleanup)
+                    rust_env = env if args.lane else rust_target_env(env, cleanup)
                     print(f"rust CARGO_TARGET_DIR: {rust_env.get('CARGO_TARGET_DIR', root / 'rust/target')}", flush=True)
                     family_env = {key: value for key, value in rust_env.items()
                                   if not key.upper().startswith('GIT_')}
@@ -692,8 +695,10 @@ def _main(argv, root, cleanup):
                         command_env.setdefault("PG_JAIL", "off")
                         command_env.setdefault("PG_TEST_ALLOW_UNJAILED", "1")
                     command = with_no_fail_fast(command)
+                    if args.lane and family == "rust":
+                        print(f"rust: running {shlex.join(command)}", flush=True)
                     code, output = invoke(command, cwd, command_env)
-                    if (code and family == "rust"
+                    if (code and family == "rust" and not args.lane
                             and command_env["CARGO_TARGET_DIR"] == env["CARGO_TARGET_DIR"]
                             and rust_compile_failure(command, output)):
                         try:

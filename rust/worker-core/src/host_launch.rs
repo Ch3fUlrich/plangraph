@@ -74,6 +74,11 @@ fn launch_inner(
     request: &Value,
     state: Option<&Path>,
 ) -> Launch {
+    if let Some(reason) =
+        state.and_then(|state| crate::worker_host::placement_refusal(state, &host.id))
+    {
+        return Launch::Refused(reason.into());
+    }
     let mut cmd = if registry
         .resolve(&registry.self_host)
         .is_some_and(|local| local.id == host.id)

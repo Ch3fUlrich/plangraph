@@ -1,4 +1,8 @@
 #![cfg(unix)]
+#[cfg(test)]
+#[path = "../../test_support/python.rs"]
+mod test_python;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -57,7 +61,7 @@ fn installing_and_removing_a_lane_preserves_other_worktrees_hooks() {
         Some(1)
     );
     for checkout in [root, lane.path()] {
-        let push_install = Command::new("python3")
+        let push_install = test_python::command()
             .arg(source.join("tools/check_push_gate.py"))
             .arg("--install")
             .arg(checkout)
@@ -106,7 +110,7 @@ fn installing_and_removing_a_lane_preserves_other_worktrees_hooks() {
     )
     .status
     .success());
-    let push_install = Command::new("python3")
+    let push_install = test_python::command()
         .arg(source.join("tools/check_push_gate.py"))
         .arg("--install")
         .arg(lane.path())

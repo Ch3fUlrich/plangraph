@@ -235,7 +235,7 @@ def measure(root, allowed, head=None):
     return measured, binaries
 
 
-def limit_violations(measured, counts):
+def limit_violations(measured, counts, *, doc_headroom=0):
     """The refusal lines for files over their cap (the limit, or their entry)."""
     problems = []
     for path in sorted(measured):
@@ -252,6 +252,7 @@ def limit_violations(measured, counts):
                 "FAIL %s: %d lines > %d - split it by responsibility, or add "
                 "a reasoned %s entry" % (path, lines, LIMIT, ALLOW_NAME))
     for path, cap in sorted(DOC_CAPS.items()):
+        cap -= doc_headroom
         if measured.get(path, 0) > cap:
             problems.append(
                 "FAIL %s: %d lines > doc cap %d - move a self-contained section "
@@ -318,7 +319,10 @@ def main(argv=None):
                          "lower counts - never raise, never add"
                           % BASELINE_NAME)
     ap.add_argument("--head", help="measure this revision instead of the checkout")
+    ap.add_argument("--doc-headroom", action="store_true",
+                    help="enforce the headroom reserved by the prompt checks")
     args = ap.parse_args(argv)
+    doc_headroom = DOC_HEADROOM if args.doc_headroom else 0
 
     if args.head and args.update_baseline:
         ap.error("--head cannot be combined with --update-baseline")
@@ -372,9 +376,9 @@ def main(argv=None):
         # any write: --update-baseline lowers counts, it must never launder
         # an entry a hand-edit added or raised. A refusal writes nothing.
         problems = ratchet_violations(counts, ref_counts, ref_origin)
-        problems += limit_violations(measured, counts)
+        problems += limit_violations(measured, counts, doc_headroom=doc_headroom)
     else:
-        problems = limit_violations(measured, counts)
+        problems = limit_violations(measured, counts, doc_headroom=doc_headroom)
         problems += ratchet_violations(counts, ref_counts, ref_origin)
     errors = allow_errors + base_errors + ref_errors
     for line in problems + errors:

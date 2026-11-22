@@ -305,7 +305,10 @@ pub(super) fn validate_host(h: &HostEntry, is_self: bool) -> Result<(), HostsErr
             )));
         }
     }
-    check_path(h, "-", "state_dir", &h.state_dir, is_self, None)?;
+    let inventory_only = h.inventory_only();
+    if !(inventory_only && h.state_dir.is_empty()) {
+        check_path(h, "-", "state_dir", &h.state_dir, is_self, None)?;
+    }
     for (repo_id, repo) in &h.repos {
         if !valid_repo_id(repo_id) {
             return Err(HostsError::NumbersShape(v(
@@ -332,7 +335,11 @@ pub(super) fn validate_host(h: &HostEntry, is_self: bool) -> Result<(), HostsErr
             is_self,
             None,
         )?;
-        if let Some(py) = &repo.python {
+        if let Some(py) = repo
+            .python
+            .as_ref()
+            .filter(|py| !inventory_only || abs_for(h.os, py))
+        {
             check_path(h, repo_id, "python", py, is_self, Some(repo))?;
         }
         for imp in &repo.import_roots {
@@ -377,7 +384,11 @@ pub(super) fn validate_host(h: &HostEntry, is_self: bool) -> Result<(), HostsErr
         )));
     }
     for (ok, field, msg) in [
-        (c.max_runs >= 1, "max_runs", "must be >= 1"),
+        (
+            inventory_only || c.max_runs >= 1,
+            "max_runs",
+            "must be >= 1",
+        ),
         (
             c.max_writers <= c.max_runs,
             "max_writers",
@@ -388,15 +399,26 @@ pub(super) fn validate_host(h: &HostEntry, is_self: bool) -> Result<(), HostsErr
             "max_seats",
             "must be <= max_runs",
         ),
-        (h.warmup.warmup_s > 0, "warmup_s", "must be > 0"),
-        (h.session_mb > 0, "session_mb", "must be > 0"),
+        (
+            inventory_only || h.warmup.warmup_s > 0,
+            "warmup_s",
+            "must be > 0",
+        ),
+        (
+            inventory_only || h.session_mb > 0,
+            "session_mb",
+            "must be > 0",
+        ),
     ] {
         if !ok {
             return Err(HostsError::NumbersShape(v(&h.id, "-", field, msg)));
         }
     }
     for key in h.warmup.ramp_mb.keys() {
-        if key != "session" && !h.roles.iter().any(|r| ROLE_KEYS[*r as usize] == key) {
+        if key != "session"
+            && !(inventory_only && ROLE_KEYS.contains(&key.as_str()))
+            && !h.roles.iter().any(|r| ROLE_KEYS[*r as usize] == key)
+        {
             return Err(HostsError::NumbersShape(v(
                 &h.id,
                 "-",

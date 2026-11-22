@@ -1,10 +1,6 @@
 use super::sandbox::{install_pinned_file, Launcher, Sandbox, PROMPT, SID};
 use serde_json::{json, Value};
-use std::{
-    fs,
-    path::Path,
-    process::{Command, Output},
-};
+use std::{fs, path::Path, process::Output};
 
 const OLD: &str = "11111111-1111-1111-1111-111111111111";
 
@@ -136,14 +132,13 @@ pub fn check(checkout: &Path) {
 }
 
 fn recycle(s: &Sandbox, rust: bool) -> Output {
-    let mut cmd = Command::new("/usr/bin/timeout");
-    s.isolate(&mut cmd);
     let candidate = if rust {
         env!("CARGO_BIN_EXE_pg-spawnd")
     } else {
         ""
     };
-    cmd.args(["--kill-after=2s", "30s", "/usr/bin/python3", "-c", RECYCLE])
+    s.python_command()
+        .args(["-c", RECYCLE])
         .arg(s.path("router/bin/ctx-watchdog"))
         .arg(candidate)
         .env("AUTOOS_CTX_STATE", s.path("guard"))

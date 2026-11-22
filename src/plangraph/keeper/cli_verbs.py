@@ -236,7 +236,11 @@ def write(session, verb, body, renderer=None) -> int:
         else:
             result = session.call("POST", verb, body=body)
         status = _emit(session, result, renderer or (lambda r: fmt.result_text(verb, r)))
-        return EXIT_REFUSED if isinstance(result, dict) and result.get("refused") else status
+        if isinstance(result, dict) and (result.get("refused") or (
+                verb in ("claim_batch", "heartbeat_batch")
+                and any("error" in row for row in result["results"]))):
+            return EXIT_REFUSED
+        return status
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:
@@ -479,6 +483,23 @@ def cmd_claim(args, session):
     if args.lease:
         body["lease_s"] = parse_duration(args.lease)
     return write(session, "claim", body, lambda r: fmt.result_text("claim", r))
+
+
+def cmd_claim_batch(args, session):
+    body = {"keys": args.keys}
+    if args.lease:
+        body["lease_s"] = parse_duration(args.lease)
+    if args.force_stale is not None:
+        body["force_stale"] = args.force_stale
+    return write(session, "claim_batch", body)
+
+
+def cmd_heartbeat_batch(args, session):
+    try:
+        claims = [{"key": key, "epoch": int(epoch)} for key, epoch in args.claims]
+    except ValueError:
+        return _refuse(RefusedCli("validation", "epoch must be an integer"))
+    return write(session, "heartbeat_batch", {"claims": claims})
 
 
 def cmd_delegate(args, session):
