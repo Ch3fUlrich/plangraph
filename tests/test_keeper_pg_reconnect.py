@@ -612,13 +612,13 @@ def test_s2_fatal_from_handler_sets_stop(tmp_path):
     doors.server.on_fatal = stopped.set
     try:
         status, body = doors.http("reader", "GET", "/v1/whoami")
+        assert status == 503
+        assert body == {"error": "unavailable", "msg": "keeper database unavailable"}
+        assert stopped.wait(timeout=5), "fatal handler did not signal keeper stop"
+        assert getattr(doors.server, "fatal_reason", None) == "postgres connection lost"
     finally:
         doors.close()
         w.close()
-    assert status == 503
-    assert body == {"error": "unavailable", "msg": "keeper database unavailable"}
-    assert getattr(doors.server, "fatal_reason", None) == "postgres connection lost"
-    assert stopped.is_set()
 
 
 def test_s2_health_503_when_fatal_conn_healthy(tmp_path):

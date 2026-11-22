@@ -37,7 +37,6 @@ fn writer_command_is_workspace_write_and_never_danger_full_access() {
         push_ref: None,
         reviews_started: 0,
         review_override: None,
-        turn_timeout: Duration::from_secs(60),
         review_cli: vec!["false".into()],
         python_src: None,
     };

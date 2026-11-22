@@ -61,24 +61,32 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         .map_err(|e| e.to_string())?;
     input.rewind().map_err(|e| e.to_string())?;
     command.stdin(Stdio::from(input));
-    let opts = pg_worker_core::stall::Opts {
-        timeout: Some(host.turn_timeout),
-        grace: Duration::from_secs(1),
-        ..Default::default()
-    };
-    let mut disk_check = None;
-    let status = pg_worker_core::stall::supervise_redirected(command, &opts, || {
-        if disk_check
-            .is_none_or(|last: std::time::Instant| last.elapsed() >= Duration::from_secs(1))
-        {
-            disk_check = Some(std::time::Instant::now());
-            if host.free().map_err(std::io::Error::other)? < 2 {
-                return Err(std::io::Error::other("disk_low: under 2 GB stop floor"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command.spawn().map_err(|e| e.to_string())?;
+    let status: Result<_, String> = (|| {
+        loop {
+            if host.free()? < 2 {
+                return Err("disk_low: under 2 GB stop floor".into());
             }
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                return Ok(status);
+            }
+            std::thread::sleep(Duration::from_secs(1));
         }
-        Ok(host.cancelled())
-    })
-    .map_err(|e| e.to_string())?;
+    })();
+    if status.is_err() {
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(child.id() as i32, libc::SIGKILL);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let status: std::process::ExitStatus = status?;
     if !status.success() {
         return Err(format!("codex failed: {status}"));
     }

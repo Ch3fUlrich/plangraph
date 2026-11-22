@@ -5,10 +5,8 @@ import signal
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fake_pid import FAKE_PID
 
 from plangraph.spawner import leg_probe, proc_kill
 from plangraph.spawner.runner import SpawnerRunner
@@ -224,94 +222,4 @@ def test_unmocked_probe_exit_cleans_tree_and_dir(tmp_path, monkeypatch, exit_pat
             for job in runner.jobs.values():
                 await runner.cancel(job.job_id)
             await asyncio.gather(task, return_exceptions=True)
-    asyncio.run(run())
-
-
-def test_native_cancel_waits_for_the_drivers_record(tmp_path, monkeypatch):
-    from plangraph.spawner.cancel_recorded import cancel_recorded
-
-    async def run():
-        service = SpawnService(SpawnerRunner(), tmp_path)
-        record = dict(run_id='run-native', run_kind='native-codex', status='running', pid=FAKE_PID)
-        service._save(record)
-        marker = service._path(record['run_id']).with_name('cancelled')
-        kill = AsyncMock(return_value=[])
-        monkeypatch.setattr(service.runner, 'kill_recorded', kill)
-
-        async def driver():
-            while not marker.exists():
-                await asyncio.sleep(.01)
-            service._save(dict(record, status='cancelled', exit_code=130, reason='driver acknowledged'))
-
-        async with asyncio.timeout(2):
-            task = asyncio.create_task(driver())
-            try:
-                result = await cancel_recorded(service, record['run_id'])
-                assert result['reason'] == 'driver acknowledged'
-                assert result['exit_code'] == 130
-                kill.assert_not_awaited()
-            finally:
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-
-    asyncio.run(run())
-
-
-@pytest.mark.parametrize('survivors', [[], [FAKE_PID + 1]])
-def test_native_supervisor_gives_driver_grace_before_escalating(tmp_path, monkeypatch, survivors):
-    from plangraph import fleet_snapshot
-    from plangraph.spawner import host_ready, overflow
-
-    async def run():
-        communicated = asyncio.Event()
-        released = asyncio.Event()
-        lease = Mock()
-        kill = AsyncMock(return_value=survivors)
-        service = SpawnService(SpawnerRunner(), tmp_path)
-        monkeypatch.setattr(service.runner, 'kill_recorded', kill)
-        monkeypatch.setattr(fleet_snapshot, '_projection_binary', lambda: 'fixture')
-        monkeypatch.setattr(host_ready, 'cargo_lease', lambda: lease)
-        monkeypatch.setattr(proc_kill, 'root_identity', lambda pid: 10)
-
-        async def communicate():
-            communicated.set()
-            await released.wait()
-            return b'', b''
-
-        async def launch(binary, action, *args, **kwargs):
-            if action == 'native-tools':
-                return SimpleNamespace(communicate=AsyncMock(return_value=(b'{}', b'')), returncode=0)
-            assert action == 'native-writer'
-            return SimpleNamespace(pid=FAKE_PID, communicate=communicate)
-
-        monkeypatch.setattr(asyncio, 'create_subprocess_exec', launch)
-        record = await overflow.native_spawn(service, {'repo': str(tmp_path)}, {'wait_seconds': 0})
-        task = service.tasks[record['run_id']]
-        await communicated.wait()
-
-        async def grace(awaitable, timeout):
-            assert timeout == 20
-            assert service._path(record['run_id']).with_name('cancelled').exists()
-            kill.assert_not_awaited()
-            if survivors:
-                raise asyncio.TimeoutError
-            released.set()
-            return await awaitable
-
-        monkeypatch.setattr(asyncio, 'wait_for', grace)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        final = service.result(record['run_id'])
-        assert final['exit_code'] == 130
-        if survivors:
-            kill.assert_awaited_once_with(FAKE_PID, 10)
-            assert (final['status'], final['reason'], final['survivors']) == (
-                'failed', 'kill_incomplete', survivors)
-        else:
-            kill.assert_not_awaited()
-            assert final['status'] == 'cancelled'
-        lease.close.assert_called_once()
-
     asyncio.run(run())

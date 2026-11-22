@@ -1,4 +1,0 @@
-- Bound pytest and Rust libtest cases individually in CI and preflight. A timeout reports the case ID, emits diagnostics, and kills the running test and its children.
-- Give the spawner, worktree sweep, and Keeper CLI test builds their own deadline. After Cargo returns, the test resumes with its remaining time.
-- Reap adopted Temporal and MCP fixture children when checking that their PIDs exited.
-- Prepare the checkout-isolated AGY review CLI once, under a separate build deadline, before timing the review cases.

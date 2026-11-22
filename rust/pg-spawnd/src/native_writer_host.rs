@@ -64,7 +64,6 @@ struct Host {
     push_ref: Option<String>,
     reviews_started: usize,
     review_override: Option<(String, String)>,
-    turn_timeout: Duration,
     /// Spawner CLI argv prefix that starts review runs (`review_cli`).
     review_cli: Vec<String>,
     /// Checkout of trusted plangraph sources for the family table; None uses the installed
@@ -103,9 +102,6 @@ impl Host {
             }
         }
         command
-    }
-    fn cancelled(&self) -> bool {
-        self.record_path.with_file_name("cancelled").exists()
     }
     fn git(&self, args: &[&str]) -> Result<String, String> {
         output(self.command("git").arg("-C").arg(&self.cwd).args(args))
@@ -233,9 +229,6 @@ impl Host {
     }
 }
 impl Driver for Host {
-    fn cancelled(&self) -> bool {
-        Host::cancelled(self)
-    }
     fn disk_gb(&mut self) -> Result<u64, String> {
         self.free()
     }
@@ -402,9 +395,6 @@ mod base_tests;
 #[cfg(test)]
 #[path = "native_writer_host_review_tests.rs"]
 mod review_tests;
-#[cfg(test)]
-#[path = "native_writer_host_supervision_tests.rs"]
-mod supervision_tests;
 #[cfg(test)]
 #[path = "native_writer_host_tests.rs"]
 mod tests;

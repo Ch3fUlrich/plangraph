@@ -1,0 +1,1 @@
+- Await watchdog cleanup in the stdin timeout test before checking the kill, final drain, and exit code.

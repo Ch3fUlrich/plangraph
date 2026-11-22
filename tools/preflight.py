@@ -164,34 +164,11 @@ def run_test_process(command, **kwargs):
         return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
 
 
-def guarded_cargo_test(args):
-    """Build the checkout's runner into the inherited target and use it for cargo test."""
-    manifest = Path(__file__).resolve().parents[1] / 'rust/Cargo.toml'
-    build = subprocess.run(
-        ['cargo', 'build', '--manifest-path', str(manifest), '-p', 'pg-worker-core',
-         '--bin', 'pg-test-deadline', '--message-format=json-render-diagnostics'],
-        stdout=subprocess.PIPE, text=True,
-    )
-    runner, diagnostics = policy_artifact(build.stdout, binary='pg-test-deadline')
-    sys.stderr.write(diagnostics)
-    if build.returncode:
-        return build.returncode
-    if runner is None:
-        raise RuntimeError('cargo did not report the pg-test-deadline executable')
-    command = ['cargo', '--config', 'target."cfg(all())".runner=' + json.dumps([runner]),
-               'test', *args]
-    if os.name == 'posix':
-        os.execvp(command[0], command)
-    return subprocess.call(command)
-
-
 def run(command, cwd, env):
     timeout = check_timeout(command, cwd, env)
     try:
-        rust_test = command[:2] == ['cargo', 'test']
-        runner = run_test_process if rust_test or is_affected_step(command) else subprocess.run
-        argv = [sys.executable, __file__, '--cargo-test', *command[2:]] if rust_test else command
-        result = runner(argv, cwd=cwd, env=env, text=True,
+        runner = run_test_process if is_affected_step(command) else subprocess.run
+        result = runner(command, cwd=cwd, env=env, text=True,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 timeout=timeout)
         return result.returncode, result.stdout
@@ -495,8 +472,8 @@ def policy_build_command(root):
             '--manifest-path', str(manifest), '-p', 'pg-policy']
 
 
-def policy_artifact(output, binary='pg-policy'):
-    """Find the named Cargo-built executable and return the readable build output."""
+def policy_artifact(output):
+    """The pg-policy executable Cargo reports for this checkout, and the human-readable rest."""
     executable, text = None, []
     for line in output.splitlines():
         try:
@@ -508,7 +485,7 @@ def policy_artifact(output, binary='pg-policy'):
         elif message.get('reason') == 'compiler-message':
             text.append(message.get('message', {}).get('rendered', ''))
         elif (message.get('reason') == 'compiler-artifact' and message.get('executable')
-              and message.get('target', {}).get('name') == binary
+              and message.get('target', {}).get('name') == 'pg-policy'
               and 'bin' in message['target'].get('kind', [])):
             executable = message['executable']
     return executable, ''.join(line + '\n' for line in text if line)
@@ -774,4 +751,4 @@ def _main(argv, root, cleanup):
 
 
 if __name__ == "__main__":
-    sys.exit(guarded_cargo_test(sys.argv[2:]) if sys.argv[1:2] == ["--cargo-test"] else main())
+    sys.exit(main())

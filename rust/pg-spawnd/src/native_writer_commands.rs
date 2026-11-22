@@ -61,12 +61,6 @@ impl Host {
             push_ref: request["card"]["push_ref"].as_str().map(str::to_owned),
             reviews_started: 0,
             review_override: None,
-            turn_timeout: std::time::Duration::from_secs(
-                60 * request["card"]["max_min"]
-                    .as_u64()
-                    .filter(|minutes| (1..=1440).contains(minutes))
-                    .unwrap_or(60),
-            ),
             review_cli: super::review::review_cli()?,
             python_src: None,
         })

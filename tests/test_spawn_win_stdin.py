@@ -239,8 +239,7 @@ def test_timeout_path_with_stdin_kills_and_records_124(monkeypatch):
         async def fake_communicate(input=None):
             communicate_calls.append(input)
             if len(communicate_calls) == 1:
-                await asyncio.sleep(5.0)
-                return b"timed out stdout", b""
+                await asyncio.Future()  # The watchdog cancels the initial read.
             return b"post kill stdout", b""
 
         proc.communicate = fake_communicate
@@ -256,8 +255,10 @@ def test_timeout_path_with_stdin_kills_and_records_124(monkeypatch):
         job = await runner.spawn(
             prompt=prompt,
             model_or_combo="mimo/mimo-v2.6-flash",
-            wait_seconds=1.0,
+            wait_seconds=0,
         )
+        # The spawn wait can expire while the monitor is still cleaning up.
+        await runner._tasks[job.job_id]
 
         killer.assert_awaited_once_with(proc.pid)
 
