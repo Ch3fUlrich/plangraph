@@ -235,7 +235,11 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
     if root in procs and procs[root][4] != ident:
         return {}  # the root pid was reused by a foreign process
     found = {p for p in found if p != root or procs[p][4] == ident}
-    found = descendants({p: s for p, s in procs.items() if p != root}, found)
+    return _descendants(procs, found, {root})
+
+
+def _descendants(procs, found, excluded=()):
+    found = descendants({p: s for p, s in procs.items() if p not in excluded}, found)
     return {p: procs[p][4] for p in found if p in procs and procs[p][0] != 'Z'}
 
 
