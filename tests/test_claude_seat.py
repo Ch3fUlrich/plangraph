@@ -1,6 +1,8 @@
 """Hermetic argv contracts for the lean Claude review harness."""
 
 import json
+import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -93,15 +95,16 @@ def test_package_resource():
     assert "config/*.json" in packaging["tool"]["setuptools"]["package-data"]["plangraph"]
 
 
-def test_sonnet_keeps_worker_cargo_target(tmp_path):
+def test_sonnet_keeps_worker_cargo_target(tmp_path, monkeypatch):
     from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
-    from plangraph.routing_support.claude_seat import configure_review_tests
+    from plangraph.routing_support import claude_seat
 
+    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: True, raising=False)
     leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
     argv = claude_access_args("review")
     target = tmp_path / "target"
     env, run_dirs = {"CARGO_TARGET_DIR": str(target)}, {}
-    configure_review_tests(argv, env, leg, "review", run_dirs, "fixture",
+    claude_seat.configure_review_tests(argv, env, leg, "review", run_dirs, "fixture",
                            review_target=str(target))
 
     sandbox = json.loads(argv[argv.index("--settings") + 1])["sandbox"]
@@ -129,3 +132,58 @@ def test_default_review_modes():
     leg = next(leg for leg in DEFAULT_LEGS if leg.harness == "claude")
     cmd = build_command("p", leg.model, client="claude", role="review")
     assert cmd[cmd.index("--tools") + 1] == ""
+
+
+def test_sonnet_without_sandbox_is_read_only(tmp_path, monkeypatch):
+    from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
+    from plangraph.routing_support import claude_seat
+
+    monkeypatch.setattr(claude_seat, "sandbox_available", lambda _: False, raising=False)
+    monkeypatch.setattr(socket, "gethostname", lambda: "fixture-host")
+    leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
+    argv = claude_access_args("review")
+    env, run_dirs = {}, {}
+    event = claude_seat.configure_review_tests(argv, env, leg, "review", run_dirs, "fixture",
+                                               review_target=tmp_path / "target")
+    for flag in ("--allowedTools", "--tools"):
+        assert argv[argv.index(flag) + 1] == "Read,Grep,Glob"
+    assert argv[argv.index("--disallowedTools") + 1] == "Write,Edit,Bash,mcp__*"
+    assert argv[argv.index("--setting-sources") + 1] == ""
+    assert "--settings" not in argv
+    assert "--restricted" in argv
+    assert "TESTS: none: sandbox unavailable on fixture-host" in argv[-1]
+    assert event == {"event": "sandbox_unavailable", "host": "fixture-host", "python_job_id": "fixture"}
+    assert env == run_dirs == {}
+    assert not (tmp_path / "target").exists()
+
+
+@pytest.mark.parametrize("exit_code", [0, 1, None], ids=["pass", "fail", "timeout"])
+def test_sandbox_smoke_result_is_cached(tmp_path, monkeypatch, exit_code):
+    from plangraph.routing_support import claude_seat
+
+    monkeypatch.setattr(claude_seat.sys, "platform", "linux")
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    env = {"PATH": str(tmp_path)}
+    for name in ("bwrap", "socat"):
+        binary = tmp_path / name
+        binary.touch()
+        binary.chmod(0o700)
+    calls = []
+
+    def smoke(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["timeout"] > 0
+        assert kwargs["cwd"] == "/"
+        if exit_code is None:
+            raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
+        return subprocess.CompletedProcess(argv, exit_code)
+
+    monkeypatch.setattr(subprocess, "run", smoke)
+    assert claude_seat.sandbox_available(env) is (exit_code == 0)
+    assert claude_seat.sandbox_available(env) is (exit_code == 0)
+    assert len(calls) == 1
+    assert calls[0][0] == str(tmp_path / "bwrap")
+
+    (tmp_path / "socat").unlink()
+    assert claude_seat.sandbox_available(env) is False
+    assert len(calls) == 1

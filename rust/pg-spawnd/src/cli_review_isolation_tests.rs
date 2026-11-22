@@ -77,6 +77,30 @@ fn review_completion_requires_the_dispatched_diff() {
         .prompt
         .unwrap()
         .contains(&format!("--no-textconv {base} {head} --")));
+    let mut fallback = LaunchSpec {
+        argv: vec!["claude".into()],
+        cwd: repo.path().into(),
+        env: Default::default(),
+        stdin: Some("review".into()),
+        prompt: Some("review".into()),
+        warnings: None,
+        events: Some(vec![
+            json!({"event":"sandbox_unavailable","host":"fixture-host"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ]),
+    };
+    let sonnet = json!({"harness":"claude","model":"claude-sonnet-5-5-high"});
+    let read_only = prepare(args.as_object().unwrap(), &mut fallback, &sonnet)
+        .ok()
+        .flatten()
+        .unwrap();
+    assert_eq!(read_only.binding.as_ref(), Some(expected));
+    let prompt = fallback.prompt.as_deref().unwrap();
+    assert_eq!(fallback.stdin.as_deref(), Some(prompt));
+    assert!(prompt.contains("+change for review"), "{prompt}");
+    assert!(!prompt.contains("using `git"), "{prompt}");
     git(
         repo.path(),
         &["update-ref", "refs/heads/review-base", &head],
