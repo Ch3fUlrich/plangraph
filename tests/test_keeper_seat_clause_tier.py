@@ -303,6 +303,12 @@ def test_explicitly_superseded_rule_blocks_claim(world_like):
     ("done_criteria", "Receive one gpt-6.2-sol high review."),
     ("description", "Review by agy-gemini-4-hydrogen-high."),
     ("done_criteria", "Get a review from `omniroute/cx-gpt-6.2-sol`."),
+    ("done_criteria", "Approved by gpt-6.2-sol high."),
+    ("description", "Require gpt-6.2-sol approving the change."),
+    ("done_criteria", "Require a gpt-6.2-sol approver."),
+    ("description", "Use gpt-6.2-sol approvers."),
+    ("done_criteria", "Approvals from gpt-6.2-sol."),
+    ("description", "Signed off by gpt-6.2-sol."),
 ])
 def test_define_and_edit_refuse_named_review_seats(world_like, field, clause):
     fields = {field: clause}
@@ -313,7 +319,14 @@ def test_define_and_edit_refuse_named_review_seats(world_like, field, clause):
         world_like.store.edit_definition(world_like.p("router"), key, fields)
 
 
-def test_model_name_outside_review_clause_is_allowed(world_like):
-    _create(world_like,
-            description="Compare gpt-6.2-sol settings. A seat outside every writer family reviews the result.",
-            done_criteria="Review report records tests on gpt-6.2-sol.")
+@pytest.mark.parametrize("criteria", [
+    "Review report records tests on gpt-6.2-sol.",
+    "Review gpt-6.2-sol output.",
+    "Review of gpt-6.2-sol output.",
+    "Review of the model gpt-6.2-sol.",
+])
+def test_model_name_outside_review_clause_is_allowed(world_like, criteria):
+    key = _create(world_like,
+                  description="Compare gpt-6.2-sol settings. A seat outside every writer family reviews the result.",
+                  done_criteria=criteria)
+    world_like.store.edit_definition(world_like.p("router"), key, {"description": criteria})

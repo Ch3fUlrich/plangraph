@@ -69,10 +69,14 @@ def check_seat_clause_tier(done_criteria: str | None, tier: str) -> None:
 
 
 _REVIEW_FIELD_NAMES = ("done_criteria", "description")
-_REVIEW_ACTOR = r"review(?:s|ed|ing|er|ers)?|seats?|approv(?:e|es|al)|verdicts?|sign[- ]?off"
+_REVIEW_ACTOR = (
+    r"review(?:s|ed|ing|ers?)?|seats?|approv(?:e[ds]?|ers?|ing|als?)"
+    r"|verdicts?|sign(?:[- ]?|ed[- ])off")
 _MODEL_WORD = re.compile(r"[a-z0-9][a-z0-9._/-]*", re.IGNORECASE)
 _BEFORE_MODEL = re.compile(
-    rf"\b(?:{_REVIEW_ACTOR})(?:[ \t]+(?:seat|model|from|by|with|on|using|via|is|of|a|an|the)){{0,4}}"
+    rf"\b(?:{_REVIEW_ACTOR})[ \t]+"
+    r"(?:(?:by|from|with|via)(?:[ \t]+(?:a|an|the))?(?:[ \t]+(?:seat|model))?"
+    r"|(?:seats?|models?)(?:[ \t]+is)?)"
     r"(?:[ \t]+|[ \t]*[:=][ \t]*)[`*'\"]*$", re.IGNORECASE)
 _AFTER_MODEL = re.compile(
     rf"^[`*'\"]*(?:[ \t]+(?:low|medium|high|xhigh|max|ultra|independent|external))?"

@@ -334,6 +334,8 @@ Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads 
 `pg define` and `pg define --edit` refuse review clauses in `done_criteria`
 or `description` that pin a model or leg from the routing catalog. Ask for
 “a review seat outside every writer family” so the spawner can choose the seat.
+Phrases such as “approved by” name a reviewer. A request to review the
+output produced by a named model can still name that model.
 `pg check` lists existing nonterminal items with model pins as
 `NAMED-REVIEW-MODEL`. The JSON output includes `named_review_models`, and
 `--strict` exits 1 when it finds a pin.
