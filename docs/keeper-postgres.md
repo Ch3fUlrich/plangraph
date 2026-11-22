@@ -74,7 +74,7 @@ record wins. A new execution of that stage uses a new attempt number. The read
 query in `landing_stage_list.sql` returns the batch's stages in start-time order.
 
 Migration 19 installs the keeper landing journal. A configured lander writes the
-train's frozen manifest and landing mode before a PR merge or tested fast-forward.
+train's frozen manifest, landing mode and receipt inputs before a PR merge or tested fast-forward.
 `merge_batch.py settle` discovers unfinished trains and verifies the landed commit
 against main. For tested fast-forward, the exact tested head must be an ancestor
 of main. Settlement records the checked PR outcomes before advancing the cursor

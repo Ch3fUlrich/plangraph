@@ -589,34 +589,48 @@ def first_ready(repo, recs):
     return min(times) if times else None
 
 
-def write_landing(st, mode, merge, reruns, go_row):
-    """The landing receipt and the telemetry row of one landing, both naming the mode, then the check that the
-    row exists: a landing without its row fails the lander (the state stays, land again writes it)."""
-    repo = st["repo"]
-    st.setdefault("landed_at", iso_now())
-    row = {"repo": repo, "mode": mode, "train": st["name"], "pr": st["pr"], "parts": [r["pr"] for r in st["merged"]],
-           "landed_sha": merge, "first_ready_at": first_ready(repo, st["merged"]), "build_started_at": st.get("created"),
-           "go_at": (datetime.fromtimestamp(Path(go_row).stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
-                     if go_row and Path(go_row).is_file() else st.get("go_at") or st["landed_at"]),
-           "landed_at": st["landed_at"], "ci_reruns": len(reruns),
-           "fit_commits": sum(1 for r in st["merged"] if r["resolved"]), "left_out": len(st["skipped"])}
-    window = ci_window(repo, st["head"])
-    window.pop("ci_reruns", None)  # the lander counts the reruns it recorded on the pull request
+def landing_receipt_inputs(st, reruns, go_row):
+    """Freeze the receipt inputs that cannot be reconstructed from the train and GitHub."""
+    go_path = Path(go_row) if go_row else None
+    go_at = (datetime.fromtimestamp(go_path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+             if go_path and go_path.is_file() else st.get("go_at"))
+    return {"train": st["name"], "build_started_at": st.get("created"), "go_at": go_at,
+            "ci_reruns": len(reruns), "fit_commits": sum(bool(r["resolved"]) for r in st["merged"]),
+            "left_out": len(st["skipped"]), "plan_item": st.get("plan"),
+            "review_runs": {str(r["pr"]): r.get("review_runs") or {} for r in st["merged"]}}
+
+
+def write_landing_records(train, mode, merge, inputs):
+    """Write and verify the telemetry row, then write its receipt for the verified landing."""
+    repo, name = train["repo"], check_name(inputs["train"])
+    parts, landed_at = train["parts"], train["landed_at"]
+    row = {"repo": repo, "mode": mode, "train": name, "pr": train["pr"], "parts": [r["pr"] for r in parts],
+           "landed_sha": merge, "first_ready_at": first_ready(repo, parts), "build_started_at": inputs["build_started_at"],
+           "go_at": inputs["go_at"] or landed_at, "landed_at": landed_at, "ci_reruns": inputs["ci_reruns"],
+           "fit_commits": inputs["fit_commits"], "left_out": inputs["left_out"]}
+    window = ci_window(repo, train["head"])
+    window.pop("ci_reruns", None)  # use the reruns recorded when the train was admitted
     row.update(window)
-    receipt = {"plan_item": st.get("plan"), "review_runs": {str(r["pr"]): r.get("review_runs") or {} for r in st["merged"]}}
+    receipt = {key: inputs[key] for key in ("plan_item", "review_runs")}
     if mode == TESTED_FF:
         row["green_at"] = row.get("ci_ended_at")  # the green run is the run on the landed commit itself
     try:
         record_landing(row)
-        require_landing_row(repo, st["name"], merge, mode)
+        require_landing_row(repo, name, merge, mode)
         receipts = state_dir() / "receipts"
         receipts.mkdir(parents=True, exist_ok=True)
-        (receipts / f"{st['name']}-{merge}.json").write_text(json.dumps({**row, **receipt}, indent=2, sort_keys=True) + "\n",
-                                                             encoding="utf-8")
+        (receipts / f"{name}-{merge}.json").write_text(json.dumps({**row, **receipt}, indent=2, sort_keys=True) + "\n",
+                                                     encoding="utf-8")
     except (sqlite3.Error, OSError) as exc:
         raise MergeBatchError(f"landing telemetry row not written: {exc}") from None
+    print(f"landing receipt: mode={mode} train={name} sha={merge}", file=sys.stderr)
+
+
+def write_landing(st, mode, merge, reruns, go_row):
+    """Write the landing records from local state and save the timestamp for retries."""
+    st.setdefault("landed_at", iso_now())
+    write_landing_records(dict(st, parts=st["merged"]), mode, merge, landing_receipt_inputs(st, reruns, go_row))
     save_state(st)
-    print(f"landing receipt: mode={mode} train={st['name']} sha={merge}", file=sys.stderr)
 
 
 WINDOWS_HOST_ENV = "PLANGRAPH_WINDOWS_HOST"

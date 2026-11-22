@@ -47,8 +47,12 @@ mode or table refuses the land before any call to GitHub. No landing path was de
 
 Until the live proof of `tested-ff` on the real protection passed, `DEFAULT_LANDING_MODE` in
 `src/plangraph/settings.py` stays `train-pr-merge`; it becomes the recommended mode by changing that one constant.
-Interim rule: `landing.mode` is changed only while the lander is stopped and no batch or landing is open (mode
-changes in flight are not built); switching back needs no code change.
+A Keeper-backed landing keeps the mode recorded for its prepared head. Settlement
+writes its receipt and telemetry from the journal even when the original checkout
+has lost its local state. A legacy manifest uses the saved attempt's mode when
+its head matches. Tested fast-forward settlement waits at item closure until
+`PG_MERGE_CLOSE_REQUIRE_SEATS` is explicitly off. A prepared attempt whose PR
+closed before its head reached main is abandoned.
 
 The push run on main of a commit the land App authorized after its full run passed (`land-auth` status by the App's bot
 user, repository variable `LAND_CREATOR_ID`, and a `ci-full` status of the same run and attempt naming the commit's

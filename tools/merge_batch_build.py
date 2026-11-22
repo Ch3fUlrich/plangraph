@@ -20,7 +20,7 @@ from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_pa
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, TESTED_FF, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key)
+                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key, landing_receipt_inputs)
 
 
 def merge_trailers(st):
@@ -669,12 +669,14 @@ def landing_lease(repo):
 
 
 def read_verified_merge(train):
+    """Verify the frozen train on main, or report whether its PR is still pending."""
     repo, number, head = train["repo"], train["pr"], train["head"]
     main = f"refs/remotes/{REMOTE}/main"
-    if train["mode"] == TESTED_FF:
+    if train.get("mode") == TESTED_FF:
         git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
         if git("merge-base", "--is-ancestor", head, main, ok=(0, 1)).returncode:
-            return None, "pending"
+            pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", "state")
+            return None, "closed" if pr["state"] == "CLOSED" else "pending"
         if git("merge-base", "--is-ancestor", train["base"], head, ok=(0, 1)).returncode:
             raise MergeBatchError(f"train #{number} did not fast-forward the tested base")
         merge = head
@@ -701,9 +703,13 @@ def read_verified_merge(train):
 
 
 def prepare_train(st, lease, mode):
+    """Journal the exact train and receipt inputs before attempting to land it."""
+    attempt = frozen_landing(st)
+    inputs = landing_receipt_inputs(st, attempt.get("reruns", []), attempt.get("go_row"))
     parts = [dict(part, ref=st["prs"][str(part["pr"])]["ref"]) for part in st["merged"]]
     return landing_journal(st["repo"], "prepare", pr=st["pr"], base=st["base_head"],
-                           head=st["head"], parts=parts, mode=mode, batch_key=landing_batch_key(st), **lease)
+                           head=st["head"], parts=parts, mode=mode, receipt_inputs=inputs,
+                           batch_key=landing_batch_key(st), **lease)
 
 
 def settle(repo, recs, wait):

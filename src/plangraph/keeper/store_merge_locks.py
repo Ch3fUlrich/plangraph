@@ -1,6 +1,7 @@
 """Principal-bound merge lease locks."""
 import json
 import re
+from datetime import datetime, timezone
 from importlib.resources import files
 
 from plangraph.settings import LANDING_MODES
@@ -61,10 +62,37 @@ def _saved_manifest(row):
 
 def _landing_data(row):
     return {"repo": row["repo"], "pr": row["pr"], "base": row["base"],
-            "mode": "train-pr-merge", **_saved_manifest(row),
+            **_saved_manifest(row),
             "head": row["head"], "merge": row["merged"],
             "abandoned": bool(row["abandoned"]),
             "open_steps": list(_LAND_STEPS[row["cursor"]:]) if row["merged"] else []}
+
+
+def _receipt_inputs(value, parts):
+    """Validate the pre-landing metadata without accepting a local file path."""
+    if not isinstance(value, dict):
+        raise Refused("validation", "landing receipt inputs must be an object")
+    train = value.get("train")
+    if not isinstance(train, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,47}", train):
+        raise Refused("validation", "landing receipt requires a batch name")
+    inputs = {"train": train}
+    for key in ("build_started_at", "go_at", "plan_item"):
+        inputs[key] = _text(key, value.get(key), cap=256)
+    for key in ("ci_reruns", "fit_commits", "left_out"):
+        count = value.get(key)
+        if type(count) is not int or not 0 <= count < 2**63:
+            raise Refused("validation", f"invalid landing receipt {key}")
+        inputs[key] = count
+    reviews = value.get("review_runs")
+    if not isinstance(reviews, dict) or not {str(part["pr"]) for part in parts}.issuperset(reviews):
+        raise Refused("validation", "landing receipt reviews must name frozen parts")
+    inputs["review_runs"] = {}
+    for pr, runs in reviews.items():
+        if not isinstance(runs, dict):
+            raise Refused("validation", "landing receipt reviews must map item keys to runs")
+        inputs["review_runs"][pr] = {_text("item", key, required=True, cap=256):
+                                     _text("review run", run, required=True, cap=256) for key, run in runs.items()}
+    return inputs
 
 
 def _included_parts(value, parts):
@@ -153,6 +181,8 @@ class MergeLocksMixin:
                 manifest = {"parts": parts, "batch_key": batch}
                 if "mode" in body:
                     manifest["mode"] = mode
+                if "receipt_inputs" in body:
+                    manifest["receipt_inputs"] = _receipt_inputs(body["receipt_inputs"], parts)
                 frozen = (_land_sha(body.get("base")), _land_sha(body.get("head")),
                           json.dumps(manifest, separators=(",", ":")))
                 self.conn.execute("INSERT INTO landing_trains(repo,pr,base,head,manifest) VALUES(?,?,?,?,?)"
@@ -162,8 +192,8 @@ class MergeLocksMixin:
                                   (*identity, *frozen))
                 row = self.conn.execute(select, identity).fetchone()
                 data = _landing_data(row)
-                if ((row["base"], row["head"], data["parts"], data["batch_key"], data["mode"]) !=
-                        (*frozen[:2], parts, batch, mode) or row["abandoned"]):
+                if ((row["base"], row["head"], data["parts"], data["batch_key"], data.get("mode", "train-pr-merge"),
+                     data.get("receipt_inputs")) != (*frozen[:2], parts, batch, mode, manifest.get("receipt_inputs")) or row["abandoned"]):
                     raise Refused("conflict", "landing manifest differs from prepared train")
                 return data
             row = self.conn.execute(select, identity).fetchone()
@@ -187,6 +217,8 @@ class MergeLocksMixin:
                     manifest["included"] = included
                 if "mode" in manifest and "included" not in manifest:
                     raise Refused("conflict", "landing requires checked part outcomes")
+                if "receipt_inputs" in manifest and "landed_at" not in manifest:
+                    manifest["landed_at"] = datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds")
                 if row["merged"] is None or "included" in body:
                     self.conn.execute("UPDATE landing_trains SET merged=?,manifest=? WHERE repo=? AND pr=?",
                                       (merge, json.dumps(manifest, separators=(",", ":")), *identity))

@@ -74,6 +74,9 @@ if args == ['landing', 'journal']:
         main = subprocess.check_output(['git', 'ls-remote', 'origin', 'refs/heads/main'],
                                        text=True).split()[0]
         assert main == body['base'], 'the journal must be prepared before main moves'
+        if os.environ.get('LEGACY_LANDING'):
+            body.pop('mode')
+            body.pop('receipt_inputs', None)
     if body['action'] == 'landed' and os.environ.get('INTERRUPT_LANDING'):
         sys.exit('interrupted before saving the part outcomes')
     db = open_db(os.environ['JOURNAL_DB'], backend='sqlite')
@@ -154,10 +157,65 @@ def test_tested_ff_recovers_after_push_before_part_outcomes_are_saved(env, reque
     train = journal()["train"]
     assert train["merge"] == head and train["included"] == [1, 3]
     assert train["open_steps"] == [] and len(train["host_verification"]) == 3
+    (row,) = rows(env)
+    assert (row["mode"], row["train"], row["landed_sha"]) == ("tested-ff", "l1", head)
+    receipt = json.loads((env.state_file("l1").parent / "receipts" / f"l1-{head}.json").read_text())
+    assert receipt["mode"] == "tested-ff" and receipt["review_runs"]["1"]
     sweep = (env.tmp / "sweep").read_text().splitlines()
     assert {s for s in sweep if s.startswith("lane/")} == {
         f"{part['ref']}:{part['head']}" for part in train["parts"] if part["pr"] in (1, 3)
     }
+
+
+def test_tested_ff_settlement_waits_for_seat_acknowledgement(env, journal):
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    env.env["INTERRUPT_LANDING"] = "1"
+    assert "interrupted before saving" in land(env, approval).stderr
+    del env.env["INTERRUPT_LANDING"]
+    del env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"]
+
+    resumed = env.run("settle")
+    assert resumed.returncode == 1 and "PG_MERGE_CLOSE_REQUIRE_SEATS" in resumed.stderr, resumed.stderr
+    assert journal()["train"]["open_steps"] == ["close_parts", "host_sync", "cleanup"]
+
+    env.env["PG_MERGE_CLOSE_REQUIRE_SEATS"] = "off"
+    resumed = env.run("settle")
+    assert resumed.returncode == 0, resumed.stderr
+    assert journal()["train"]["open_steps"] == []
+
+
+def test_legacy_single_pr_settlement_uses_matching_saved_mode(env, journal):
+    approval = pushed(env, prs=(1,))
+    mode(env, "single-pr")
+    env.env.update(LEGACY_LANDING="1", INTERRUPT_LANDING="1")
+    interrupted = land(env, approval)
+    del env.env["INTERRUPT_LANDING"]
+    assert "interrupted before saving" in interrupted.stderr, interrupted.stderr
+    mode(env, "train-pr-merge")
+
+    resumed = env.run("settle")
+    assert resumed.returncode == 0, resumed.stderr
+    (row,) = rows(env)
+    receipt = json.loads((env.state_file("l1").parent / "receipts" / f"l1-{main_tip(env)}.json").read_text())
+    assert row["mode"] == receipt["mode"] == "single-pr"
+
+
+def test_tested_ff_settlement_abandons_a_closed_unlanded_pr(env, journal):
+    approval = pushed(env)
+    mode(env, "tested-ff")
+    base = main_tip(env)
+    hook = env.origin / "hooks" / "pre-receive"
+    hook.write_text("#!/bin/sh\nexit 1\n")
+    hook.chmod(0o755)
+    assert "refused" in land(env, approval).stderr
+    assert journal()["train"]["merge"] is None
+    assert env.run_gh("pr", "close", "100").returncode == 0
+
+    resumed = env.run("settle")
+    assert resumed.returncode == 0, resumed.stderr
+    assert journal()["train"]["abandoned"]
+    assert main_tip(env) == base and rows(env) == []
 
 
 def test_tested_ff_pushes_with_a_lease_on_the_tested_base(env):

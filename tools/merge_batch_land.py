@@ -14,12 +14,12 @@ from pathlib import Path
 from merge_batch_build import (
     check_landed_parts, cmd_consumed, exclude_consumed, frozen_landing, in_history, landing_journal, landing_lease, landing_mode_of,
     landing_report, main_tip, prepare_train, read_verified_merge, record_part_cost, record_stage,
-    require_tested_ff_evidence, run_timing_import, wait_marked_merged,
+    require_tested_ff_evidence, run_timing_import, seats_acknowledged, wait_marked_merged,
 )
 from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
                               TESTED_FF, REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
-                              batch_workflow_gate, part_review, run, write_landing,
+                              batch_workflow_gate, part_review, run, write_landing, write_landing_records,
                               cleanup_landed, close_merged_items, windows_commands, windows_gate, windows_needed, windows_report, windows_script)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
@@ -416,6 +416,7 @@ def _merge_subject(number, title, custom):
 
 
 def settle_train(train, lease, st=None, *, wait=0):
+    """Verify a pending landing, write its records, and resume the fenced settlement cursor."""
     repo, number = train["repo"], train["pr"]
     train = landing_journal(repo, "show", pr=number)["train"]
     if train["abandoned"] or (train["merge"] and not train["open_steps"]):
@@ -434,9 +435,14 @@ def settle_train(train, lease, st=None, *, wait=0):
                                 included=[part["pr"] for part in checked], **lease)
     if st is not None and st.get("head") != train["head"]:
         st = None
-    if st is not None:
-        attempt = frozen_landing(st)
-        write_landing(st, train["mode"], merge, attempt.get("reruns", []), attempt.get("go_row"))
+    attempt = frozen_landing(st) if st is not None else {}
+    mode = train.get("mode") or attempt.get("mode") or "train-pr-merge"
+    if "receipt_inputs" in train:
+        write_landing_records(train, mode, merge, train["receipt_inputs"])
+    elif st is not None:
+        write_landing(st, mode, merge, attempt.get("reruns", []), attempt.get("go_row"))
+    elif mode == TESTED_FF:
+        raise MergeBatchError(f"train #{number} is missing receipt inputs; restore its matching local state to settle")
     landed = [part for part in train["parts"] if part["pr"] in train["included"]]
     for step in train["open_steps"]:
         receipt = {}
@@ -444,6 +450,8 @@ def settle_train(train, lease, st=None, *, wait=0):
             for part in landed:
                 print(f"MERGED {part['pr']} {merge} {','.join(part['items']) or '-'}")
         elif step == "close_parts":
+            if mode == TESTED_FF and not seats_acknowledged():
+                raise MergeBatchError(f"train #{number} settlement requires PG_MERGE_CLOSE_REQUIRE_SEATS=off (or false, 0)")
             result = run(["plangraph", "merge-close"], timeout=330)
             sys.stderr.write(result.stdout + result.stderr)
         elif step == "host_sync":
@@ -570,7 +578,7 @@ def land_with_lease(args, lease, st, mode):
     if lease:
         if train is None:
             train = landing_journal(repo, "show", pr=number)["train"] or prepare_train(st, lease, mode)
-        if train["head"] != st["head"] or train["mode"] != mode:
+        if train["head"] != st["head"] or train.get("mode", mode) != mode:
             raise MergeBatchError("keeper landing journal names a different attempt")
         settle_train(train, lease, st, wait=args.wait)
         return 0
