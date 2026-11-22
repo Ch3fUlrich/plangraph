@@ -93,6 +93,9 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
     };
     let registry = registry()?;
     let host = registry.resolve(name).ok_or("unknown worker host")?;
+    if host.inventory_only() {
+        return Err("worker rejoin requires an active worker configuration".into());
+    }
     let local = host.id == registry.self_host().id;
     let state = crate::state::resolve_state(None, |key| env::var_os(key))?;
     let store = Store::new(&state, &host.id).map_err(|e| e.to_string())?;
@@ -114,7 +117,9 @@ pub(crate) fn execute(args: &[String], out: &mut dyn Write) -> Result<(), String
             let key = key.as_str().ok_or("invalid rejoin step")?;
             let mut args = vec![host.id.clone(), key.into()];
             if step == Step::Runs {
-                args.extend(active_run_ids(&state, &registry, &host.id));
+                let mut runs = store.unknown_runs().map_err(|error| error.to_string())?;
+                runs.extend(active_run_ids(&state, &registry, &host.id));
+                args.extend(runs);
             }
             let bytes = if local {
                 let mut bytes = Vec::new();
@@ -253,6 +258,9 @@ pub(crate) fn local_step(args: &[String], out: &mut dyn Write) -> Result<(), Str
     let host = registry.self_host();
     if &host.id != name {
         return Err("rejoin step reached a different host".into());
+    }
+    if host.inventory_only() {
+        return Err("worker rejoin requires an active worker configuration".into());
     }
     let step = serde_json::from_value::<Step>(json!(key)).map_err(|_| "invalid rejoin step")?;
     if (!runs.is_empty() && step != Step::Runs) || runs.iter().any(|id| !valid_run_id(id)) {

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run worker placement rejoin checks for %i
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/plangraph/worker-liveness.env
+ExecStart=%h/.local/bin/pg-spawnd rejoin %i
+TimeoutStartSec=2h
+UMask=0077
+NoNewPrivileges=true

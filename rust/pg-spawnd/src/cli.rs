@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|rejoin|resume|writer-stop|writer-resume|steer-local> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|worker-liveness|worker-maintenance|rejoin|resume|writer-stop|writer-resume|steer-local> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -154,6 +154,15 @@ pub(crate) fn execute(
     }
     if verb.as_deref() == Some("rejoin") {
         return crate::worker_rejoin::execute(&rest, out);
+    }
+    if verb.as_deref() == Some("worker-liveness") {
+        return crate::worker_liveness::execute(&rest, out);
+    }
+    if verb.as_deref() == Some("worker-maintenance") {
+        return crate::worker_liveness::maintenance(&rest, out);
+    }
+    if verb.as_deref() == Some("worker-active-runs") {
+        return crate::worker_liveness::inventory(&rest, out);
     }
     if verb.as_deref() == Some("rejoin-step") {
         return crate::worker_rejoin::local_step(&rest, out);

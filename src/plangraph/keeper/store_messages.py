@@ -8,6 +8,32 @@ from ..fleet_bus.contract import BODY_MAX, BusError, canonical_post, new_state
 from .errors import Refused
 
 _AGENT_TO_RE = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,62}[A-Za-z0-9])?$')
+_WORKER_HOST_FIELDS = {'host', 'status', 'observed_at', 'down_since',
+                       'unknown_run_ids', 'maintenance_until'}
+
+
+def _worker_host_event(body):
+    if not isinstance(body, dict) or 'worker_host' not in body:
+        return None
+    event = body['worker_host']
+    if not isinstance(event, dict) or set(event) != _WORKER_HOST_FIELDS:
+        raise Refused("validation", "invalid worker host event")
+    host, status = event['host'], event['status']
+    observed, since, until = (event[k] for k in ('observed_at', 'down_since', 'maintenance_until'))
+    runs = event['unknown_run_ids']
+    if (not isinstance(host, str) or not re.fullmatch(r'[a-z][a-z0-9.-]{0,31}', host)
+            or status not in ('unreachable', 'maintenance', 'recovered')
+            or type(observed) is not int or type(since) is not int
+            or not 0 <= since <= observed < 2**63
+            or (until is not None and (type(until) is not int or not 0 < until < 2**63))
+            or (status == 'unreachable' and until is not None and until > observed)
+            or (status == 'maintenance' and (until is None or until <= observed))
+            or not isinstance(runs, list)
+            or any(not isinstance(run, str) or not re.fullmatch(r'run-[a-zA-Z0-9]{1,64}', run)
+                   for run in runs)
+            or len(set(runs)) != len(runs)):
+        raise Refused("validation", "invalid worker host event")
+    return event
 
 
 class MessagesMixin:
@@ -49,6 +75,15 @@ class MessagesMixin:
 
             envelope = fields.get("envelope")
             msg_id = fields.get("msg_id")
+            host_event = _worker_host_event(row["body"])
+            if host_event is not None:
+                self._require_role(principal, "router", "system")
+                if not msg_id or envelope is not None:
+                    raise Refused("validation", "worker host event needs an unsigned message ID")
+                if (host_event["status"] == "maintenance" or
+                        (host_event["maintenance_until"] or 0) > host_event["observed_at"]):
+                    if row["to"] != "host-health":
+                        raise Refused("validation", "maintenance events use the host health recipient")
 
             if msg_id is not None:
                 if not isinstance(msg_id, str):
@@ -181,6 +216,8 @@ class MessagesMixin:
                             (envelope["nonce"], envelope["host"], int(now * 1000)),
                         )
 
+                    if host_event is not None:
+                        self._project_worker_host_event(host_event, now)
                     self._write_outbox_metadata(inserted)
 
             if is_conflict:
@@ -189,6 +226,30 @@ class MessagesMixin:
             return inserted
 
         return self._run(principal, "post_message", fields.get("key"), work)
+
+    def _project_worker_host_event(self, event, now):
+        """Update the paged finding in the same transaction as the bus receipt."""
+        from .store_support import iso
+
+        code = "worker_host_unreachable:" + event["host"]
+        prior = self._alert_row("finding", None, code)
+        if prior is not None:
+            previous = json.loads(prior["msg"])
+            if previous["observed_at"] > event["observed_at"]:
+                return
+        payload = json.dumps(event, sort_keys=True)
+        if event["status"] == "unreachable":
+            self._alerts_raise_finding(None, code, payload, now)
+        elif prior is None:
+            self.conn.execute(
+                "INSERT INTO alerts(kind,code,msg,first_seen,last_seen,state)"
+                " VALUES('finding',?,?,?,?,'resolved')", (code, payload, iso(now), iso(now)))
+        else:
+            self.conn.execute(
+                "UPDATE alerts SET state='resolved', msg=?, last_seen=? WHERE id=?",
+                (payload, iso(now), prior["id"]))
+            if prior["state"] == "open":
+                self._alert_telemetry("alert_cleared", None, code, now)
 
     def _write_outbox_metadata(self, inserted):
         try:

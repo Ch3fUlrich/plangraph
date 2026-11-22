@@ -11,6 +11,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "worker_host_liveness.rs"]
+mod liveness;
+pub use liveness::Observation;
+
 const REJOIN_AFTER_SECONDS: u64 = 10 * 60;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -54,6 +58,55 @@ struct State {
     episode: u64,
     maintenance_until: Option<u64>,
     rejoin: Option<Rejoin>,
+    #[serde(default)]
+    link: liveness::Link,
+}
+
+impl State {
+    fn advance(
+        &mut self,
+        now: u64,
+        reachable: bool,
+        maintenance_until: Option<u64>,
+    ) -> io::Result<()> {
+        if now < self.observed_at {
+            return Err(io::Error::other(
+                "worker host observation clock moved backwards",
+            ));
+        }
+        let maintenance = maintenance_until
+            .or(self.maintenance_until)
+            .filter(|until| *until > now);
+        if maintenance.is_some() && self.maintenance_until != maintenance {
+            self.episode = self.episode.saturating_add(1);
+        }
+        self.maintenance_until = maintenance;
+        if !reachable {
+            if self.outage_since.is_none() {
+                self.episode = self.episode.saturating_add(1);
+            }
+            self.outage_since.get_or_insert(now);
+            self.missed = self.missed.saturating_add(1);
+        }
+        let rejoin_required = maintenance.is_some()
+            || self.phase == Phase::Rejoining
+            || self
+                .outage_since
+                .is_some_and(|since| now.saturating_sub(since) > REJOIN_AFTER_SECONDS);
+        self.phase = if rejoin_required {
+            Phase::Rejoining
+        } else if reachable || self.missed < 2 {
+            Phase::Ready
+        } else {
+            Phase::Unreachable
+        };
+        if reachable {
+            self.outage_since = None;
+            self.missed = 0;
+        }
+        self.observed_at = now;
+        Ok(())
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -66,6 +119,8 @@ struct Rejoin {
 
 pub struct Store {
     path: PathBuf,
+    root: PathBuf,
+    host: String,
 }
 
 pub fn placement_refusal(root: &Path, host: &str) -> Option<&'static str> {
@@ -81,6 +136,8 @@ impl Store {
         }
         Ok(Self {
             path: root.join("worker-hosts").join(format!("{host}.json")),
+            root: root.into(),
+            host: host.into(),
         })
     }
 
@@ -127,42 +184,7 @@ impl Store {
     ) -> io::Result<Phase> {
         let _lock = self.lock("lock")?;
         let mut state = self.load()?;
-        if now < state.observed_at {
-            return Err(io::Error::other(
-                "worker host observation clock moved backwards",
-            ));
-        }
-        let maintenance = maintenance_until
-            .or(state.maintenance_until)
-            .filter(|until| *until > now);
-        if maintenance.is_some() && state.maintenance_until != maintenance {
-            state.episode = state.episode.saturating_add(1);
-        }
-        state.maintenance_until = maintenance;
-        if !reachable {
-            if state.outage_since.is_none() {
-                state.episode = state.episode.saturating_add(1);
-            }
-            state.outage_since.get_or_insert(now);
-            state.missed = state.missed.saturating_add(1);
-        }
-        let rejoin_required = maintenance.is_some()
-            || state.phase == Phase::Rejoining
-            || state
-                .outage_since
-                .is_some_and(|since| now.saturating_sub(since) > REJOIN_AFTER_SECONDS);
-        state.phase = if rejoin_required {
-            Phase::Rejoining
-        } else if reachable || state.missed < 2 {
-            Phase::Ready
-        } else {
-            Phase::Unreachable
-        };
-        if reachable {
-            state.outage_since = None;
-            state.missed = 0;
-        }
-        state.observed_at = now;
+        state.advance(now, reachable, maintenance_until)?;
         self.save(&state)?;
         Ok(state.phase)
     }
@@ -218,6 +240,8 @@ impl Store {
         });
         if ready {
             state.phase = Phase::Ready;
+            state.link.unknown_runs.clear();
+            state.link.maintenance_end = None;
         }
         self.save(&state)?;
         if ready {

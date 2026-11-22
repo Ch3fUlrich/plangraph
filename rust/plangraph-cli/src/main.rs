@@ -38,8 +38,8 @@ fn run() -> i32 {
     if args.first().map(String::as_str) == Some("install-router-liveness") {
         return router_liveness::run(&args[1..]);
     }
-    if args == ["host-link-deliver"] {
-        return plangraph_cli::host_link_bridge::cli();
+    if args.first().map(String::as_str) == Some("host-link-deliver") {
+        return plangraph_cli::host_link_bridge::cli(&args[1..]);
     }
     if args.first().map(String::as_str) == Some("land-timeline") {
         let home = std::env::var_os("HOME")
