@@ -617,9 +617,11 @@ paths are already built. A nested build needs a function-level
 `#[doc = "deadline-build: case=CASE"]` on the matching test or a
 `fixture=CASE` marker on a helper whose suite prepares it. When the deadline
 runner is present, the scan also checks its named case and preparation overrides.
-For a fix turn, the fleet Stop hook accepts `PG_LESSON_FIX_COMMIT` as the exact
-commit SHA and calls the prebuilt `pg-policy` from `PG_POLICY_BIN` or PATH.
-A missing or unverified Class-Search record is filed as a LESSON-TO-GATE failure.
+The fleet Stop hook reads the commit SHA from plan-order's `DONE JOB-fix SHA`
+report and verifies it against the checkout HEAD before calling the prebuilt
+`pg-policy` from `PG_POLICY_BIN` or PATH. Launchers can also select a fix by
+setting `PG_LESSON_FIX_COMMIT`. A missing or unverified Class-Search record
+is filed as a LESSON-TO-GATE failure.
 
 ## Fast local CI (D-6054)
 
