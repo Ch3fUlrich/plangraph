@@ -87,10 +87,8 @@ pub(crate) fn has_repository_evidence(text: &str, paths: &[String]) -> bool {
         ).unwrap())
         .is_match(text);
     !disavowed
-        && text
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("FILES READ:"))
-            .any(|files| crate::review_citation::names_file(files, paths))
+        && pg_worker_core::review_split::files_read_text(text)
+            .is_some_and(|files| crate::review_citation::names_file(&files, paths))
 }
 
 #[cfg(test)]
@@ -146,7 +144,7 @@ pub(crate) fn write_review_artifacts_with_allowlist(
         .rev()
         .find(|line| line.to_ascii_lowercase().contains("verdict"))
         == Some("VERDICT: PASS");
-    if !passing || !accepts {
+    if !passing || !accepts || !pg_worker_core::review_split::has_files_read(review) {
         evidence["verdict"] = json!("HALT");
     }
     for (name, bytes) in [

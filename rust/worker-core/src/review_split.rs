@@ -287,6 +287,37 @@ fn last_unquoted_key_tail(text: &str, keys: &[&str]) -> Option<String> {
     last_line
 }
 
+/// Return the last repository-read declaration outside quoted material.
+pub fn files_read_text(text: &str) -> Option<String> {
+    let files = last_unquoted_key_tail(text, &["FILES READ"])?;
+    let files = files.trim();
+    let lower = files.to_ascii_lowercase();
+    if files.is_empty()
+        || lower == "diff"
+        || ["none", "diff only", "inline diff"]
+            .into_iter()
+            .any(|marker| {
+                lower.strip_prefix(marker).is_some_and(|tail| {
+                    tail.is_empty() || tail.starts_with(|c: char| c.is_whitespace() || c == '(')
+                })
+            })
+    {
+        return None;
+    }
+    Some(files.to_owned())
+}
+
+/// Whether a review declares at least one repository path in FILES READ.
+pub fn has_files_read(text: &str) -> bool {
+    static PATH: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    files_read_text(text).is_some_and(|files| {
+        PATH.get_or_init(|| {
+            regex::Regex::new(r"(?:[\w.-]+/)+[\w.-]+|[\w-]+\.[\w.-]+|[\w.-]+:[1-9][0-9]*").unwrap()
+        })
+        .is_match(&files)
+    })
+}
+
 pub fn parse_verdict_text(text: &str) -> Option<SeatVerdict> {
     let tail = last_unquoted_key_tail(text, &["VERDICT"])?;
     let tail_trim = tail.trim();
@@ -465,6 +496,20 @@ mod tests {
                 vec!["beta/b1.rs".to_string(), "gamma/g1.rs".to_string()],
             ]
         );
+    }
+
+    #[test]
+    fn files_read_matches_review_evidence_contract() {
+        let cases: Vec<Value> =
+            serde_json::from_str(include_str!("../../../tests/fixtures/files_read.json")).unwrap();
+        for case in cases {
+            let text = case["text"].as_str().unwrap();
+            assert_eq!(
+                has_files_read(text),
+                case["has_files_read"].as_bool().unwrap(),
+                "{text:?}"
+            );
+        }
     }
 
     #[test]

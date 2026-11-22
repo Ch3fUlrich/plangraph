@@ -232,7 +232,7 @@ class SpawnerRunner:
             raise ValueError('launch preparation requires dry run')
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
         brief_sha256 = hashlib.sha256(prompt.encode()).hexdigest() if role == 'review' and prompt_record else None
-        from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
+        from .prompt_input import TOOLLESS_MODES, compose  # the role header and skill are fixed repository text, never redacted
         prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
                          tool_mode=getattr(leg, 'tool_mode', None))
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
@@ -330,7 +330,8 @@ class SpawnerRunner:
                     needs_gateway=GATEWAY_KEY_ENV in (child_env.get('OPENCODE_CONFIG_CONTENT') or ''))
             # D-2921 F1 / D-3236: every role (writers too) runs without the global, project and
             # Claude Code config layers -- a global `instructions` entry made a writer change nothing.
-            from .opencode_isolation import close_config_layers, review_credential_reason
+            from .opencode_isolation import apply_review_permissions, close_config_layers, review_credential_reason
+            from plangraph.planner.route_policy import opencode_repository_review
             oc_dir = self._ocdata_dirs[job_id] = close_config_layers(child_env)
             if role == 'review':
                 # D-2905 (1): the per-job dir is also the spawner-owned store, read only after child exit
@@ -346,17 +347,8 @@ class SpawnerRunner:
                              if str(n).startswith('OPENCODE_') and (n not in _REVIEW_OPENCODE_ENV_ALLOW
                                  or n == 'OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX')]:
                     del child_env[name]
-                # D-2905 (1): deny every tool for the review seat, then record
-                # the spawner's own check of the FINAL env value.
-                try:
-                    cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
-                    if not isinstance(cfg, dict):
-                        raise ValueError('not an object')
-                    cfg['permission'] = {tool: 'deny' for tool in ('*',) + _DENIED_TOOLS}
-                    cfg.update(mcp={}, plugin=[])   # D-2921 F1: drop every MCP server and plugin
-                    child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
-                except (ValueError, TypeError):
-                    pass  # unparseable config cannot be proven denied below
+                apply_review_permissions(child_env, _DENIED_TOOLS,
+                                         repository_tools=chosen is not None and opencode_repository_review(leg))
             if render_reason is None and (is_mimo_id(model_or_combo) or role == 'review' and reasoning_cap):
                 from .opencode_answer import cap_reasoning
                 from plangraph.routing_errors import SpawnRefused
@@ -374,7 +366,7 @@ class SpawnerRunner:
                 cfg = json.loads(child_env.get('OPENCODE_CONFIG_CONTENT') or '{}')
                 from .gateway_witness import tag_session
                 tag_session(cfg, job_id)
-                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg, sort_keys=True)
+                child_env['OPENCODE_CONFIG_CONTENT'] = json.dumps(cfg)
             except (ValueError, TypeError, AttributeError):
                 pass  # An unparseable config cannot supply a session-tag witness.
         else:
@@ -442,8 +434,13 @@ class SpawnerRunner:
             from .probe_cleanup import register
             self.jobs[job_id] = job; register(job_id)
             job.prompt_sha256 = hashlib.sha256(prompt.encode()).hexdigest()
-            from .run_watchdog import thresholds, edit_signature
+            from .run_watchdog import thresholds, edit_signature, inline_review_limits
+            job._inline_review = role == 'review' and (
+                getattr(leg, 'tool_mode', None) in TOOLLESS_MODES
+                or tools_event and tools_event['event'] == 'opencode_tools_denied')
             job._watchdog_limits = watchdog or thresholds(role=role)
+            if job._inline_review:
+                job._watchdog_limits = inline_review_limits(job._watchdog_limits, job.start_time)
             job._live_log = live_log
             job._watchdog_baseline = await asyncio.to_thread(edit_signature, work_dir) if role in ('implement', 'fix') else None
             if tools_event:
@@ -682,7 +679,9 @@ class SpawnerRunner:
             job.stderr = redact_output(env_redact.redact_env_values(stderr_text, env), allow_shas=allow_shas)
             job.exit_code = exit_code
             job.end_time = time.time()
-            if job.status not in ('stalled', 'timeout', 'cancelled'):
+            if any(event.get('event') == 'inline_review_no_verdict' for event in job.events):
+                job.status, job.exit_code = 'failed', 6
+            elif job.status not in ('stalled', 'timeout', 'cancelled'):
                 # Preserve the existing denied-review terminal verdict contract.
                 tails = [text.rstrip('\r\n').splitlines()
                          for text in (stdout_text, final_answer(stdout_text, allow_unfinished=True) or '')]

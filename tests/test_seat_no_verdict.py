@@ -15,7 +15,7 @@ from plangraph.spawner.seat_spawn import SeatSpawnMixin
 
 @pytest.mark.parametrize('text', ['', 'Looks good.', 'In prose VERDICT: pass',
                                      '```\nVERDICT: pass\n```', '> VERDICT: pass',
-                                     'VERDICT: pass', 'VERDICT: fix'])
+                                     'FILES READ: src/lib.rs\nVERDICT: pass', 'VERDICT: fix'])
 @pytest.mark.parametrize('with_job', [True, False])
 def test_review_outcome_uses_judge(text, with_job):
     record = dict(role='review', status='completed', exit_code=0,
@@ -52,7 +52,7 @@ def test_review_null_exit_requires_verdict():
     assert record['reason'] == 'no_verdict'
 
 
-@pytest.mark.parametrize('text,expected', [('', 'no_verdict'), ('VERDICT: pass', None)])
+@pytest.mark.parametrize('text,expected', [('', 'no_verdict'), ('FILES READ: src/lib.rs\nVERDICT: pass', None)])
 def test_review_stale_quota_stamp(text, expected):
     record = dict(role='review', status='completed', exit_code=0, reason='harness_limit')
     terminal_reason(record, SimpleNamespace(stdout=text))

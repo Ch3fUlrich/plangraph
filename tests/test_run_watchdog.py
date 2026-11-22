@@ -530,3 +530,48 @@ def test_empty_timeout_preserves_measured_review_widening(tmp_path, monkeypatch)
     monkeypatch.setenv('PLANGRAPH_SPAWN_P90_TABLE', str(path))
     monkeypatch.setenv('PLANGRAPH_SPAWN_RUN_TIMEOUT', '')
     assert thresholds({'card_class': 'large'}, role='review')['max_s'] == 7200
+
+
+def test_inline_review_wall_keeps_the_earlier_of_leg_and_run_deadlines():
+    from plangraph.spawner.run_watchdog import inline_review_limits
+    long = {'max_s': 1500, 'deadline': 1700, 'hard_max': True}
+    short = dict(long, deadline=600)
+    assert inline_review_limits(long, 300) == dict(long, deadline=900, inline_review_cap=True)
+    assert inline_review_limits(short, 300) == short
+
+
+@pytest.mark.parametrize('trigger,reason', [('tool_errors', 'inline_tool_errors'), ('cap', 'inline_timeout')])
+def test_inline_review_stop_allows_another_leg(tmp_path, monkeypatch, trigger, reason):
+    import json
+    from types import SimpleNamespace
+    from plangraph.spawner import run_watchdog as monitor
+    from plangraph.spawner.exit_outcome import fallthrough_reason
+
+    async def run():
+        runner, job = _job(tmp_path, {'max_min': 45})
+        job.role, job._inline_review = 'review', True
+        proc = SimpleNamespace(stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader(),
+                               pid=None, returncode=None)
+        if trigger == 'cap':
+            job._watchdog_limits = dict(job._watchdog_limits, inline_review_cap=True,
+                                        deadline=job.start_time)
+        else:
+            for n in range(3):
+                frame = dict(type='tool_use', part=dict(callID=str(n), tool='skill',
+                    state=dict(status='error', input={'name': str(n)}, error='not available')))
+                proc.stdout.feed_data((json.dumps(frame) + '\n').encode())
+
+        async def reap(*args):
+            proc.returncode = -15
+            proc.stdout.feed_eof()
+            proc.stderr.feed_eof()
+
+        monkeypatch.setattr(runner, '_reap_process', reap)
+        await asyncio.wait_for(monitor.collect(runner, 'j', proc), 5)
+        assert job.status == 'failed' and job.exit_code == 6
+        record = {'role': 'review'}
+        assert not monitor.terminal_record(record, job)
+        service, leg = SimpleNamespace(runner=runner), SimpleNamespace(harness='opencode')
+        assert fallthrough_reason(service, leg, job, record) == 'no_verdict: ' + reason
+
+    asyncio.run(run())

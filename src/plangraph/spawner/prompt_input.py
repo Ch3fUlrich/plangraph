@@ -111,14 +111,14 @@ def agent_key(harness: str | None, leg_id: str | None = None) -> str:
     return harness or 'opencode'
 
 
-INLINE_TOOL_MODE = 'inline-only'
+TOOLLESS_MODES = frozenset({'inline-only', 'prompt-only'})
 
 
 def header(harness: str | None, role: str, leg_id: str | None = None, tool_mode: str | None = None) -> str | None:
     key = _ROLE_KEY.get(role)
     if key is None:
         return None
-    if key == 'review' and tool_mode == INLINE_TOOL_MODE:
+    if key == 'review' and tool_mode in TOOLLESS_MODES:
         key = 'review_inline'  # a toolless seat is never told to run tests or open files
     table = _table()
     name = agent_key(harness, leg_id)
@@ -199,7 +199,7 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
     body = prompt[len(head):].lstrip('\n') if prompt.startswith(head) else prompt
     # A toolless inline seat gets the inline rules from its header only: the review skill below
     # it demands test runs and file reads, and origin/main may serve a skill older than the header.
-    inline_review = tool_mode == INLINE_TOOL_MODE and _ROLE_KEY.get(role) == 'review'
+    inline_review = tool_mode in TOOLLESS_MODES and _ROLE_KEY.get(role) == 'review'
     block = ''
     if _ROLE_KEY.get(role) == 'review':
         block, body = split_tools_block(body)

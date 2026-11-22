@@ -148,3 +148,10 @@ def test_golden_verdict_words():
 def test_go_keeps_pass_gates(tmp_path, finish, gaming, want):
     assert run(tmp_path, "go", "VERDICT: GO", finish_reason=finish,
                test_gaming=gaming, extra=("--dry-run",)) == want
+
+
+@pytest.mark.parametrize("case", json.loads((Path(__file__).parent / "fixtures" / "files_read.json").read_text()))
+def test_files_read_matches_review_evidence_contract(case):
+    from plangraph.review.verdict import has_files_read
+
+    assert has_files_read(case["text"]) is case["has_files_read"]

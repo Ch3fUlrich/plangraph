@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from html import unescape
 from typing import Any
 
 __all__ = [
@@ -65,12 +66,11 @@ def _indent_columns(line: str) -> int:
     return col
 
 
-def _scan_verdict(text: str) -> tuple[str | None, bool]:
+def _unquoted_lines(text: str):
     lines = (text or "").splitlines()
     # r3: VERDICT lines inside ``` fences or starting with ">" (quoted template
     # echoes) never decide; the last remaining line keeps the last-line rule.
     fence = None
-    match = None
     for raw in lines:
         if fence is not None:
             close = _FENCE_CLOSE_RE.match(raw)
@@ -83,8 +83,38 @@ def _scan_verdict(text: str) -> tuple[str | None, bool]:
             continue
         if raw.lstrip().startswith(">"):
             continue
-        found = _VERDICT_LINE.match(raw)
-        if found:
+        yield raw
+
+
+# Match the markdown decorations accepted by Rust's review_split::key_tail.
+_FILES_READ_LINE = re.compile(r"^[\s>#*_`-]*(?ai:files read)[*_`]*[ \t]*:[ \t*_`]*(.*)$")
+_FILE_PATH = re.compile(r"(?:[\w.-]+/)+[\w.-]+|[\w-]+\.[\w.-]+|[\w.-]+:[1-9][0-9]*")
+
+
+def has_files_read(text: str) -> bool:
+    """Check the last unquoted FILES READ declaration for a path."""
+    files = ''
+    for raw in _unquoted_lines(text):
+        if match := _FILES_READ_LINE.match(raw):
+            files = match.group(1).strip()
+    return (not re.match(r"^(?:none(?:$|[\s(])|(?:inline diff|diff only)(?:$|[\s(])|diff$)", files, re.I)
+            and bool(_FILE_PATH.search(files)))
+
+
+_TOOL_MARKUP = re.compile(
+    r"<\s*(?:[\w.-]+:)?(?:invoke_tool|invoke|parameter|function_calls?|tool_use|tool_calls?)\b"
+    r"|<\s*function\s*=", re.I)
+
+
+def has_tool_call_markup(text: str) -> bool:
+    """Detect serialized calls printed in the final answer."""
+    return bool(_TOOL_MARKUP.search(unescape(text)))
+
+
+def _scan_verdict(text: str) -> tuple[str | None, bool]:
+    match = None
+    for raw in _unquoted_lines(text):
+        if found := _VERDICT_LINE.match(raw):
             match = found
     if match is not None:
         stripped = match.group(1).strip().lstrip('*_`')

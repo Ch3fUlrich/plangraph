@@ -453,7 +453,16 @@ fn redacted_head_line_blocks_pass_and_seats_envelope_extracts_records() {
         String::from_utf8_lossy(&out_seats.stdout)
     );
     let body = fs::read_to_string(&approval_seats).unwrap();
+    assert!(body.contains(r#"harness=opencode files_read="src/lib.rs""#));
     assert!(body.contains(&format!("HEAD: {head_sha}\nVERDICT: PASS")));
+}
+
+#[test]
+fn diff_only_accept_does_not_write_approval() {
+    let (out, approval, _log, _tmp) =
+        review_with_mode("diff_only", &[("f.rs", b"pub fn f() {}\n")]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(!approval.exists());
 }
 
 fn review_with_mode(

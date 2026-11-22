@@ -40,6 +40,16 @@ def prepare_run(service, record, card):
     record['live_log'] = str(service._path(record['run_id']).parent / 'live.log')
     return thresholds(card, role=record.get('role')), record['live_log']
 
+def inline_review_limits(limits, started):
+    """An inline attempt can use up to ten minutes of the overall review budget."""
+    limit = limits['max_s']
+    deadline = min(limits.get('deadline', float('inf')),
+                   started + limit if limit is not None else float('inf'))
+    attempt_deadline = started + 600
+    return (dict(limits, deadline=attempt_deadline, inline_review_cap=True)
+            if attempt_deadline < deadline else limits)
+
+
 def is_activity(line):
     line = ANSI.sub('', line).strip()
     return bool(line and not HEADER.match(line))
@@ -60,10 +70,12 @@ class Watchdog:
         first_edit_s); once edited, or when the edit signal is unavailable, or for non-writers,
         max_s ends the run. Hard caps (including PLANGRAPH_SPAWN_RUN_TIMEOUT and the default
         review cap) are wall clocks, never extended. The opt-in first-edit stall is separate."""
-        if self.limits['max_s'] is None:
-            return float('inf')
+        limit = self.limits['max_s']
         if 'deadline' in self.limits:
-            return max(0, min(self.limits['max_s'], self.limits['deadline'] - self.start))
+            return max(0, min(limit if limit is not None else float('inf'),
+                              self.limits['deadline'] - self.start))
+        if limit is None:
+            return float('inf')
         if self.limits.get('hard_max'):
             return self.limits['max_s']
         return self.limits['max_s'] + (self.limits['first_edit_s']
@@ -231,7 +243,8 @@ async def collect(runner, job_id, proc):
         return redact_output(scrub(text), allow_shas=getattr(job, 'allow_shas', ()))
     gate = RefusalGate(refused, job, scrub_diagnostic)
     from .stall_probe import ToolLoop
-    tools, loop_found = ToolLoop(), asyncio.Event()
+    inline_review = getattr(job, '_inline_review', False)
+    tools, loop_found = ToolLoop(max_errors=3 if inline_review else None), asyncio.Event()
     stdout_at = job.start_time
     async def reader(stream, name):
         pending, tail = '', ''
@@ -411,7 +424,7 @@ async def collect(runner, job_id, proc):
             if loop_found.is_set() and job.status in ('cancelled', 'stalled', 'timeout'):
                 waiters = [task] if refused.is_set() else [task, refusal_wait]
             if loop_found.is_set() and job.status not in ('cancelled', 'stalled', 'timeout'):
-                event = dict(event='watchdog_stalled', rule='tool_loop')
+                event = dict(event='watchdog_stalled', rule=tools.stop_reason)
             else:
                 edit = (await asyncio.to_thread(edit_signature, job.cwd or runner.default_cwd)
                         if w.writer else None)
@@ -426,11 +439,17 @@ async def collect(runner, job_id, proc):
             except Exception:
                 logging.getLogger(__name__).exception('watchdog sample callback failed')
             if event:
-                job.status = 'timeout' if event['rule'] == 'max' else 'stalled'
+                inline_stop = (event['rule'] == 'inline_tool_errors'
+                               or event['rule'] == 'max' and limits.get('inline_review_cap'))
+                if inline_stop:
+                    reason = 'inline_timeout' if event['rule'] == 'max' else event['rule']
+                    event = dict(event='inline_review_no_verdict', reason=reason)
+                job.status = ('failed' if inline_stop else
+                              'timeout' if event['rule'] == 'max' else 'stalled')
                 job.exit_code = 124 if job.status == 'timeout' else 6
                 job.events.append(event)
                 job.events.extend([{'event': 'run_timeout'}] if job.status == 'timeout' else [])
-                logging.getLogger(__name__).info('%s %s rule=%s', job_id, job.status, event['rule'])
+                logging.getLogger(__name__).info('%s %s rule=%s', job_id, job.status, event.get('rule') or event['reason'])
                 await runner._reap_process(job_id, proc)
                 if job.survivors:   # kill_incomplete: never wait on a process we may not signal
                     return await cancel_and_close(task, proc, getattr(job, '_live_log', None)) or (b'', b'')   # V4: no transport leak on this early return

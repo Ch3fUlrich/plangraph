@@ -38,6 +38,8 @@ pub struct SeatOutcome {
     pub exit_code: i64,
     pub leg: String,
     pub family: String,
+    pub harness: String,
+    pub files_read: Option<String>,
     pub verdict: Option<SeatVerdict>,
     pub test_gaming: TestGaming,
     pub paths_summary: String,
@@ -205,6 +207,7 @@ fn build_base_prompt(
         }
     }
     lines.push(String::new());
+    lines.push("List the repository paths you opened on a FILES READ: line.".to_owned());
     lines.push(format!(
         "End your reply with these three exact trailing lines (substituting yes if tests are gamed and REQUEST_CHANGES if fixes are needed):\nHEAD: {head_sha}\nTEST-GAMING: no\nVERDICT: PASS"
     ));
@@ -330,8 +333,15 @@ fn evaluate_seat_record(
         .unwrap_or("unknown")
         .to_owned();
 
+    let harness = leg_val
+        .and_then(|leg| leg["harness"].as_str())
+        .unwrap_or("unknown")
+        .to_owned();
     let text = extract_seat_text(&record, run_dir.as_deref());
-    let verdict = parse_verdict_text(&text);
+    let files_read = pg_worker_core::review_split::files_read_text(&text);
+    let verdict = parse_verdict_text(&text).filter(|verdict| {
+        *verdict != SeatVerdict::Pass || pg_worker_core::review_split::has_files_read(&text)
+    });
     let mut test_gaming = parse_test_gaming_text(&text);
     if test_gaming == TestGaming::Missing {
         if record["test_gaming"] == json!(false) || record["test_gaming"] == json!("no") {
@@ -365,6 +375,8 @@ fn evaluate_seat_record(
         exit_code,
         leg,
         family,
+        harness,
+        files_read,
         verdict,
         test_gaming,
         paths_summary,
@@ -446,7 +458,7 @@ pub fn format_approval(
     for s in outcomes {
         let v_str = s.verdict.map(SeatVerdict::as_str).unwrap_or("MISSING");
         lines.push(format!(
-            "SEAT {}/{} run={} status={} exit={} leg={} family={} verdict={} test_gaming={} paths={}",
+            "SEAT {}/{} run={} status={} exit={} leg={} family={} verdict={} test_gaming={} harness={} files_read={:?} paths={}",
             s.index,
             s.total,
             s.run_id,
@@ -456,6 +468,8 @@ pub fn format_approval(
             s.family,
             v_str,
             s.test_gaming.as_str(),
+            s.harness,
+            s.files_read.as_deref().unwrap_or("none"),
             s.paths_summary
         ));
     }
@@ -635,7 +649,7 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
     for s in &outcomes {
         let v_str = s.verdict.map(SeatVerdict::as_str).unwrap_or("MISSING");
         println!(
-            "SEAT {}/{} run={} status={} leg={} family={} verdict={} test_gaming={} paths={}",
+            "SEAT {}/{} run={} status={} leg={} family={} verdict={} test_gaming={} harness={} files_read={:?} paths={}",
             s.index,
             s.total,
             s.run_id,
@@ -644,6 +658,8 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
             s.family,
             v_str,
             s.test_gaming.as_str(),
+            s.harness,
+            s.files_read.as_deref().unwrap_or("none"),
             s.paths_summary
         );
     }

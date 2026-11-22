@@ -68,3 +68,14 @@ def test_claude_bash_polling_remains_exempt():
                 {'type': 'tool_use', 'id': str(i), 'name': 'Bash', 'input': {'command': command}}]}}))
             assert not gate.feed(json.dumps({'type': 'user', 'message': {'content': [
                 {'type': 'tool_result', 'tool_use_id': str(i), 'content': 'unchanged'}]}}))
+
+
+def test_inline_review_stops_after_three_distinct_failed_tool_calls():
+    gate = ToolLoop(max_errors=3)
+    for i in range(3):
+        frame = json.dumps({'type': 'tool_use', 'part': {'callID': str(i), 'tool': 'skill',
+            'state': {'status': 'error', 'input': {'name': str(i)}, 'error': 'tool denied'}}})
+        assert gate.feed(frame) == (i == 2)
+        if i < 2:
+            assert not gate.feed(frame)
+    assert gate.stop_reason == 'inline_tool_errors'

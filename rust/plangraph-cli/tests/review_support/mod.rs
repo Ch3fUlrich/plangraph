@@ -146,30 +146,32 @@ if verb == "spawn":
 
     if (MODE == "split_fail_beta" and "beta/b.rs" in diff_ref.get("paths", [])
             or MODE == "fail_openai_group" and opts["writer_family"] == ["openai"]):
-        reply = f"Found issue in this group.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: REQUEST_CHANGES\n"
+        reply = f"Found issue in this group.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: REQUEST_CHANGES\n"
+    elif MODE == "diff_only":
+        reply = f"Looks fine.\nFILES READ: diff only\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: ACCEPT\n"
     elif MODE == "test_gaming_yes":
-        reply = f"Looks fine.\nHEAD: {{head_sha}}\nTEST-GAMING: yes\nVERDICT: PASS\n"
+        reply = f"Looks fine.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: yes\nVERDICT: PASS\n"
     elif MODE == "redacted_head":
-        reply = "Looks fine.\nHEAD: [REDACTED]\nTEST-GAMING: no\nVERDICT: PASS\n"
+        reply = "Looks fine.\nFILES READ: src/lib.rs\nHEAD: [REDACTED]\nTEST-GAMING: no\nVERDICT: PASS\n"
     elif MODE == "no_head":
-        reply = "Looks fine.\nTEST-GAMING: no\nVERDICT: PASS\n"
+        reply = "Looks fine.\nFILES READ: src/lib.rs\nTEST-GAMING: no\nVERDICT: PASS\n"
     elif MODE == "seats_envelope":
-        reply = f"Looks fine.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
+        reply = f"Looks fine.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
     elif MODE == "fenced_pass":
         reply = "\n".join([
             json.dumps({{"type": "step_start", "part": {{}}}}),
-            json.dumps({{"type": "text", "part": {{"text": f"Example block:\n```text\nVERDICT: REQUEST_CHANGES\n```\nVerified everything.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS"}}}}),
+            json.dumps({{"type": "text", "part": {{"text": f"Example block:\n```text\nVERDICT: REQUEST_CHANGES\n```\nVerified everything.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS"}}}}),
             json.dumps({{"type": "step_finish", "part": {{"reason": "stop"}}}}),
         ]) + "\n"
     else:
-        reply = f"All clear.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
+        reply = f"All clear.\nFILES READ: src/lib.rs\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
 
     live_log.write_text(reply, encoding="utf-8")
     rec = {{
         "run_id": run_id,
         "status": "completed",
         "exit_code": 0,
-        "chosen_leg": {{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY}},
+        "chosen_leg": {{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY, "harness": "opencode"}},
         "live_log": str(live_log),
         "stdout_tail": "" if MODE == "fenced_pass" else reply,
     }}

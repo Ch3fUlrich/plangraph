@@ -70,7 +70,7 @@ def replay(request, tmp_path, monkeypatch, recorded_plan):
     def run(*, succeed=None, role='review', no_fallthrough=False, duration=2,
              max_s=60, terminal=None, failures=None, limited=None, provider_stop=False,
              refusal_event=False, prepare_s=0, seat=False, include_skips=True,
-             dry_run=False, stop_status=429, refusal_reason=None, initial_s=0, stop_body='rate limited'):
+             dry_run=False, first_reply=None, stop_status=429, refusal_reason=None, initial_s=0, stop_body='rate limited'):
         if initial_s:
             from plangraph.spawner import run_watchdog
             original = run_watchdog.leg_limits
@@ -100,7 +100,7 @@ def replay(request, tmp_path, monkeypatch, recorded_plan):
                 assert any(a.get('leg', {}).get('id') == recorded_plan.legs[index - 1].id
                            for a in previous['attempts'] if isinstance(a.get('leg'), dict))
             budgets.append(Watchdog(kwargs['watchdog'], clock[0], None, writer=False).budget())
-            ok = chosen.id == succeed or dry_run
+            ok = chosen.id == succeed or dry_run or (index == 0 and first_reply is not None)
             stderr = '' if ok else ((failures or {}).get(chosen.id) or
                                       (FAILED['stderr_tail'] if index == 0 else
                                        'error: transport failed for ' + chosen.id))
@@ -111,8 +111,11 @@ def replay(request, tmp_path, monkeypatch, recorded_plan):
                       if refusal_event or terminal == 'model_refusal' else CAPTURE['events'] if index == 0 else [])
             if refusal_reason is not None:
                 record['reason'] = refusal_reason
+            reply = ('FILES READ: diff only\nVERDICT: REQUEST_CHANGES\n'
+                     if chosen.tool_mode in ('prompt-only', 'inline-only')
+                     else 'FILES READ: src/lib.rs\nVERDICT: pass\n')
             job = NS(job_id=chosen.id, status=status, exit_code=0 if ok else 1,
-                     stdout='VERDICT: pass\n' if ok else '', stderr=stderr,
+                     stdout=first_reply if index == 0 and first_reply is not None else reply if ok else '', stderr=stderr,
                      served_model=chosen.model, served_family=chosen.family,
                      served_witness_reason='fixture', events=events, survivors=[],
                      request_side_model=chosen.model, witness_kind='fixture', role=role)
@@ -417,3 +420,11 @@ def test_cancel_marker_prevents_next_leg_launch(replay, monkeypatch, phase):
     record = replay.run(include_skips=False, provider_stop='failed')
     assert record['status'] == record['reason'] == 'cancelled'
     assert len(replay.calls) == (0 if phase == 'first' else 1)
+
+
+@pytest.mark.parametrize('evidence', ['', 'FILES READ: diff only\n', 'FILES READ: none (inline diff only)\n'])
+def test_unwitnessed_accept_falls_through(replay, evidence):
+    record = replay.run(succeed='agy-opus-5.5', first_reply=evidence + 'VERDICT: ACCEPT\n')
+    assert replay.calls == ['agy-claude-opus', 'agy-opus-5.5']
+    assert attempts_by_leg(record)['agy-claude-opus']['skip_reason'] == 'no_verdict: files_read_missing'
+    assert record['chosen_leg']['id'] == 'agy-opus-5.5'

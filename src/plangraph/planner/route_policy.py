@@ -35,9 +35,17 @@ def review_priority(leg) -> int:
     return 2 if "haiku" in leg.model.lower() else 0 if leg.family == "mimo" else 1
 
 
+def opencode_repository_review(leg):
+    """OpenCode review seats with the bounded repository tool policy."""
+    return (getattr(leg, 'tool_mode', None) == 'tools'
+            and getattr(leg, 'harness', None) == 'opencode'
+            and getattr(leg, 'id', None) in {
+                'opencode-go-deepseek-v4-flash', 'opencode-go-glm-5.3-flash'})
+
+
 def has_repository_review_tools(leg):
-    """OpenCode review launches deny tools even for legs registered with tools."""
-    return leg.tool_mode == "tools" and leg.harness != "opencode"
+    """Identify review legs that can open files and run tests."""
+    return leg.tool_mode == "tools" and (leg.harness != "opencode" or opencode_repository_review(leg))
 
 
 def train_delta_document(card, role):

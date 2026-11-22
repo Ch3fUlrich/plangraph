@@ -64,14 +64,14 @@ Exact word-boundary 40-hex commit SHAs (either case) resolved from `card.diff_re
 ### Prompt delivery
 
 Prompts travel by stdin or file on every launch path (D-5233). The [spawner prompt rules](operations/spawner-prompt-rules.md)
-cover transport contracts, carrier validation, failures, fixer reports, and retry bounds. They also describe how native
-review prompts mark tool instructions and the review skill for inline composition.
+cover transport contracts, carrier validation, failures, fixer reports, and retry bounds. Tool-less review prompts use inline instructions.
+An explicit read request in a tool-less review or judge needs the requested material in the prompt or receives `toolless_needs_inline`. Context paths can remain as references.
 
 ### MiMo seat timeouts and reasoning-only output
 
-Review seats are hard-capped from their first output, and reasoning-only output exhaustion is
-handled without losing the verdict: see [MiMo seats](operations/spawner-mimo-seats.md)
-(MIMO-VERDICT-TIMEOUTS, MIMO-REASONING-OUTPUT-LIMIT); a review card with an empty diff fails once with `empty_diff` before any leg.
+The Python watchdog ends an inline attempt after ten minutes or three failed tool calls, allowing the next leg to run within the shared deadline.
+See [MiMo seats](operations/spawner-mimo-seats.md) for reasoning-only output retries (MIMO-VERDICT-TIMEOUTS, MIMO-REASONING-OUTPUT-LIMIT).
+A review card with an empty diff fails once with `empty_diff` before any leg.
 
 ### Writer result finalization
 Terminal saves dispatch review verdicts to the keeper:
@@ -179,7 +179,7 @@ session probe is skipped. Move the old value there, and replace a `pgrep -f` com
 substring (no longer matched under `pgrep -x --`) with a systemd unit name
 (`.service`/`.scope`/etc.), a `.pid` file path, or the exact process name (`comm`).
 A queued admission is rechecked for cancellation before placement, removed when a host accepts it, and finalized as failed if admission raises an exception.
-`--no-fallthrough` disables automatic advancement after a captured provider stop or failed review leg, retaining its quota reason. Review quota refusals advance in the same run immediately, including zero-exit CLI refusals; see [review quota fallthrough](review-quota-fallthrough.md).
+An acceptance needs a `FILES READ:` line naming an opened repository file. Missing file evidence advances to the next leg in the same run, as do quota refusals, including zero-exit CLI refusals. `--no-fallthrough` stops after the failed leg and retains its reason. See [review quota fallthrough](review-quota-fallthrough.md).
 Review/seat routes record each failed, limited or not-served attempt with its reason
 and try the next leg in the same run, failing only after route exhaustion. Ordinary
 failure diagnostics do not book cooldowns, mark legs down or emit LEG_REFUSED; only
