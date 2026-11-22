@@ -71,7 +71,7 @@ pub fn write_mock_spawner(dir: &Path, state_dir: &Path, log_path: &Path, mode: &
     let script = dir.join("mock_spawner.py");
     let body = format!(
         r#"#!/usr/bin/env python3
-import json, sys, uuid
+import json, sys, tempfile
 from pathlib import Path
 
 STATE = Path({state:?})
@@ -138,9 +138,8 @@ if verb == "route":
 if verb == "spawn":
     runs = STATE / "runs"
     runs.mkdir(parents=True, exist_ok=True)
-    run_id = "run-" + uuid.uuid4().hex
-    run_dir = runs / run_id
-    run_dir.mkdir()
+    run_dir = Path(tempfile.mkdtemp(prefix="run-test-", dir=runs))
+    run_id = run_dir.name
     diff_ref = card.get("diff_ref") or {{}}
     head_sha = diff_ref.get("head", "")
     live_log = run_dir / "live.log"
@@ -164,32 +163,6 @@ if verb == "spawn":
         ]) + "\n"
     else:
         reply = f"All clear.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: PASS\n"
-
-    if MODE in ("late", "late_mixed"):
-        input_path = run_dir / "terminal.json"
-        terminal = {{"run_id": run_id, "status": "completed", "exit_code": 0, "stdout_tail": reply}}
-        input_path.write_text(json.dumps(terminal))
-        started = __import__("time").time()
-        record = {{"run_id": run_id, "status": "running", "started": started, "expected_end": started + 120}}
-        (run_dir / "record.json").write_text(json.dumps(record))
-        worker = """
-import pathlib, sys, time
-run = pathlib.Path(sys.argv[1])
-deadline = time.monotonic() + 10
-while not (run / "release").exists() and time.monotonic() < deadline:
-    time.sleep(.02)
-(run / "terminal.json").replace(run / "record.json")
-"""
-        from subprocess import Popen, DEVNULL
-        Popen([sys.executable, "-c", worker, str(run_dir)], stdin=DEVNULL, stdout=DEVNULL, stderr=DEVNULL)
-        assert opts["wait"] == "0", opts
-        if MODE == "late_mixed":
-            assert opts["seats"], opts
-            failed = {{"run_id": "run-failed", "status": "failed", "exit_code": 7}}
-            print(json.dumps({{"seat_group": "seats-test", "seats": [record, failed]}}))
-        else:
-            print(json.dumps(record))
-        sys.exit(0)
 
     live_log.write_text(reply, encoding="utf-8")
     rec = {{

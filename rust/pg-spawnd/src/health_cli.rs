@@ -49,10 +49,13 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         std::env::var_os(k)
     })?;
     let evidence = crate::health_report_rows::read_rows(&state).map_err(|e| e.to_string())?;
-    let records = crate::records::list_runs(&state);
-    let mut result = crate::health_report::build_report(&records, &evidence, since, until)
-        .map_err(|e| e.to_string())?;
-    result["review_legs"] = crate::review_health::report(&state, &records, since, until);
+    let result = crate::health_report::build_report(
+        &crate::records::list_runs(&state),
+        &evidence,
+        since,
+        until,
+    )
+    .map_err(|e| e.to_string())?;
     if flags.contains_key("--baseline") {
         baseline(&state, since, until, &result)?;
     }

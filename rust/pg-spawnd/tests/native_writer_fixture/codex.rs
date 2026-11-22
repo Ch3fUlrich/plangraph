@@ -6,12 +6,8 @@ if 'resume' in sys.argv:
     assert brief.stat().st_mode & 0o777 == 0o600 and brief.parent == pathlib.Path.cwd().parent
     prompt = brief.read_text()
     original, heading, prompt = prompt.partition('\n\n# Follow-up\n\n')
-    if 'external fix' in prompt:
-        expected = 'brief marker'
-    elif 'client marker' in original:
-        expected = 'brief marker client marker'
-    else:
-        expected = 'brief marker reject marker\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n'
+    expected = ('brief marker' if 'external fix' in prompt else
+                'brief marker reject marker\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n')
     assert heading and original == expected, original
 if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in prompt:
     import os, signal
@@ -56,7 +52,7 @@ if 'resume' in sys.argv:
         assert 'sandbox_mode="workspace-write"' in sys.argv
     else:
         assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
-        expected = 'reject marker' in original and not pathlib.Path('fix.txt').exists()
+        expected = not pathlib.Path('fix.txt').exists()
         assert ('drop the fixture scope' in prompt) == expected, prompt
     # The fix turn commits its fix: a turn that leaves HEAD unchanged is resumed on its items.
     with open('fix.txt', 'a') as fix: fix.write('fixed after review\n')
@@ -64,15 +60,13 @@ if 'resume' in sys.argv:
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fix'], check=True, stdout=subprocess.DEVNULL)
 else:
     import os
-    markers = ('reject marker', 'client marker', 'late marker')
-    marker = next((value for value in markers if value in prompt), '')
-    if marker == 'reject marker':
+    if 'reject marker' in prompt:
         run = pathlib.Path.cwd().parent
         queued = subprocess.run(['fixture-spawnd', 'steer-local', run.name,
             '--state', str(run.parent.parent)], input='drop the fixture scope', text=True, capture_output=True)
         assert json.loads(queued.stdout)['steered'], (queued.stdout, queued.stderr)
     pathlib.Path('writer-path').write_text(os.environ['PATH'])
-    pathlib.Path('writer.txt').write_text('written on selected host' + (' ' + marker if marker else '') + '\n')
+    pathlib.Path('writer.txt').write_text('written on selected host\n')
     subprocess.run(['git','add','writer.txt','writer-path'], check=True)
     subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','writer'], check=True, stdout=subprocess.DEVNULL)
     print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}))

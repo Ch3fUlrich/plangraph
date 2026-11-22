@@ -501,31 +501,3 @@ fn auto_route_uses_writer_snapshot_for_every_role_and_manual_bypasses_it() {
         }
     }
 }
-
-#[test]
-fn review_route_demotes_a_leg_with_four_missing_verdicts() {
-    let plan = r#"{"legs":[{"id":"unreliable"},{"id":"healthy"}],"first_leg":{"id":"unreliable"}}"#;
-    let mut fixture = Fixture::new(plan, 0, "");
-    for attempt in 0..10 {
-        let id = format!("run-review{attempt}");
-        let dir = fixture.state.path().join("runs").join(&id);
-        std::fs::create_dir_all(&dir).unwrap();
-        let stdout = if attempt < 4 { "" } else { "VERDICT: PASS" };
-        std::fs::write(
-            dir.join("record.json"),
-            json!({"run_id":id,"role":"review","status":"completed","ended":attempt + 1,
-                "chosen_leg":{"id":"unreliable"},"stdout_tail":stdout})
-            .to_string(),
-        )
-        .unwrap();
-    }
-    let route = fixture.call(
-        "route",
-        json!({"card":{},"role":"review","writer_families":["gpt"]}),
-    );
-    let route: Value =
-        serde_json::from_str(route["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(route["first_leg"]["id"], "healthy");
-    assert_eq!(route["legs"][1]["id"], "unreliable");
-    assert_eq!(route["review_health_alerts"][0]["no_verdict"], 4);
-}

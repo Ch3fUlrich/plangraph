@@ -96,11 +96,6 @@ def build(request: dict) -> dict:
     leg = next((leg for leg in (*DEFAULT_LEGS, *EXPLICIT_LEGS) if leg.id == request['leg']['id']), None)
     if leg is None:
         raise LaunchRefused('unknown_leg', 'unknown leg id')
-    from plangraph.routing_support.clients import codex_review_client
-    codex, missing_client = (None, None) if request['dry_run'] else codex_review_client(
-        leg.harness, request['role'], request['run_id'])
-    if missing_client:
-        raise LaunchRefused('client_missing', missing_client)
     from plangraph.planner.route_policy import codex_leg_effort
     from .target import admit_leg, quota_paused
     if quota_paused(request['state'], request['role'], leg):
@@ -196,7 +191,7 @@ def build(request: dict) -> dict:
                 raise LaunchRefused('unavailable', reason)
             if admitted_by_render(leg.model):
                 events.append(dict(event='admitted_by_render', model=leg.model))
-            exe = codex or shutil.which(cmd[0], path=env.get('PATH')) or cmd[0]
+            exe = shutil.which(cmd[0], path=env.get('PATH')) or cmd[0]
             exe, reason = runner._resolve_launch(exe, cmd[1:], is_nt=runner._is_nt())
             if reason:
                 raise LaunchRefused('launch', reason)
@@ -282,10 +277,6 @@ def main(stdin, stdout, stderr) -> int:
         stderr.write(f'launch-spec failed: invalid request ({exc})\n')
         return 1
     except LaunchRefused as exc:
-        if exc.kind == 'client_missing':
-            from plangraph.routing_support.clients import CODEX_REVIEW_CLIENT_MISSING
-            stderr.write(runner.redact(str(exc.reason)).replace('\r', ' ').replace('\n', ' ')[:300] + '\n')
-            return CODEX_REVIEW_CLIENT_MISSING
         line = f'{exc.kind}: {runner.redact(str(exc.reason))}'
         stderr.write(line.replace('\r', ' ').replace('\n', ' ')[:300] + '\n')
         return 2

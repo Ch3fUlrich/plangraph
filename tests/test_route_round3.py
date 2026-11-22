@@ -12,18 +12,20 @@ pytestmark = pytest.mark.usefixtures("fixed_catalog_rows")
 
 
 def assert_review_seat_safety(estimate):
-    """Check the diff/no-diff seats and writer-family fence under the shipped policy."""
+    """Retain main's exact diff/no-diff seats and writer-family fence."""
     from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
     for diff in ({"diff_ref": {"repo": "/repo", "base": "HEAD~1", "head": "HEAD"}}, {}):
         review = plan_spawn({"estimate_tokens": estimate, **diff}, role="review",
                             writer_families=("gpt",), policy=load_route_policy(DEFAULT_POLICY_PATH), catalog_rows=())
         assert len({leg.family for leg in review.review_seats}) == 2
         assert all(leg.family != "gpt" for leg in review.review_seats)
-        # D-6550 starts with Hydrogen. Mimo Pro is parked for tool denial, and every
+        # D-6550 starts with Hydrogen. Mimo Pro needs diff metadata, and every
         # seat must fit its own request limit and contribute a distinct family.
         limit = {leg.id: leg.max_request_tokens for leg in DEFAULT_LEGS}
         fits = lambda leg_id: estimate * 100 <= USABLE_FRACTION_PCT * limit[leg_id]
         order = [("agy-gemini-4-hydrogen-high", "gemini")]
+        if diff:
+            order.append(("mimo-v2.6-pro", "mimo"))
         order.extend([("opencode-deepseek-v4.1-flash-free", "deepseek"),
                       ("opencode-go-deepseek-v4-flash", "deepseek"), ("opencode-go-glm-5.3-flash", "glm")])
         expected, families = [], set()

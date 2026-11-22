@@ -210,8 +210,6 @@ to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencod
 stays disabled because it is not served by `opencode models`.
 The five-head benchmark for Flint, Big Pickle and Beam was skipped in this lane.
 The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_risk_and_families`.
-The Rust route reports legs with more than three missing verdicts in their last
-ten completed reviews under `review_health_alerts` and puts them after healthier candidates.
 
 ## Automatic work mode (D-5952 / rule 3.41)
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import stat
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -80,33 +79,6 @@ def prepare_agy_review_home(env, role, model, owned_dirs, job_id):
 
 #: Harnesses whose prompts are delivered via stdin instead of argv (I9).
 STDIN_PROMPT_HARNESSES: tuple[str, ...] = ("opencode", "claude", "agy", "qodercli", "codex", "gemini", "qwen")
-
-
-CODEX_REVIEW_CLIENT_MISSING = 10
-
-
-def resolve_codex_client(env=None):
-    """Use the configured executable, the user install, then the process PATH."""
-    env = os.environ if env is None else env
-    configured = env.get("PLANGRAPH_CODEX_BIN")
-    if configured:
-        candidate = Path(configured).expanduser()
-        executable = shutil.which(str(candidate)) if candidate.is_absolute() else None
-        return executable, configured
-    home = env.get("HOME") or env.get("USERPROFILE")
-    if home:
-        local = Path(home) / ".local" / "bin" / ("codex.exe" if os.name == "nt" else "codex")
-        if local.is_absolute() and (executable := shutil.which(str(local))):
-            return executable, str(local)
-    return shutil.which("codex", path=env.get("PATH", os.defpath)), "PATH"
-
-
-def codex_review_client(harness, role, tag):
-    """Resolve the native executable or return its review-specific failure."""
-    if harness != "codex" or role != "review":
-        return None, None
-    executable, searched = resolve_codex_client()
-    return executable, None if executable else f"REVIEW {tag} FAIL client_missing {searched}"
 
 
 def codex_model(model):

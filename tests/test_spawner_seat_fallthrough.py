@@ -324,7 +324,7 @@ def test_review_without_numeric_cap_has_no_deadline(monkeypatch):
     record = dict(role='review', started=1000)
     assert leg_limits(record, limits) is limits and 'deadline' not in limits
     assert Watchdog(limits, 1000, None, writer=False).decide(100000, None, None, None) is None
-    assert record == dict(role='review', started=1000, expected_end=6400)
+    assert record == dict(role='review', started=1000)
 
 
 def test_empty_review_timeout_keeps_ordinary_maximum(monkeypatch):

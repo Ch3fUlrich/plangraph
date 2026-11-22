@@ -1,7 +1,7 @@
 //! Review rounds of the native writer: fast checks with a per-head stamp, then one
 //! spawner review run on the exact head, its verdict read from the run record.
 use super::{context, output, Host};
-use crate::{late_review, native_writer::Driver};
+use crate::native_writer::Driver;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
@@ -244,10 +244,6 @@ impl Host {
         previous: Option<&Value>,
     ) -> Result<Value, String> {
         let base = self.git(&["rev-parse", &format!("{}^{{commit}}", self.base_pin())])?;
-        let pending = self.reviews.join(format!("late-review-{head}.json"));
-        if let Some(result) = late_review::recover(&self.state, &pending, head)? {
-            return Ok(result);
-        }
         self.reviews_started += 1;
         let tag = format!("{}-{}", &head[..8.min(head.len())], self.reviews_started);
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
@@ -261,9 +257,7 @@ impl Host {
                 .arg(&clone),
         )?;
         let result = self.review_in(&clone, &tag, &origin, &base, head, previous);
-        if !pending.is_file() {
-            let _ = fs::remove_dir_all(&clone);
-        }
+        let _ = fs::remove_dir_all(&clone);
         result
     }
     fn review_in(
@@ -306,8 +300,7 @@ impl Host {
             &[super::WRITER_MODEL],
             &trusted_python,
         )?;
-        let max_min = 60;
-        let card = json!({"estimate_tokens":300000, "max_min":max_min, "stall_min":20,
+        let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
             "repository_review_required":true,
             "diff_ref":{"repo":self.repo, "base":review_diff_base(base, head, prev), "head":head}});
         if self.review_override.is_none() {
@@ -345,66 +338,28 @@ impl Host {
             .arg(clone)
             .arg("--prompt-file")
             .arg(&prompt_path)
-            .args(["--wait", &(max_min * 60).to_string(), "--json"])
+            .args(["--wait", "3300", "--json"])
             .current_dir(clone)
             .output()
             .map_err(|e| e.to_string())?;
-        let stderr = String::from_utf8_lossy(&printed.stderr);
-        let record = printed_record(&String::from_utf8_lossy(&printed.stdout));
-        if printed.status.code() == Some(10) {
-            let stderr_tail = record
-                .as_ref()
-                .and_then(|row| row["stderr_tail"].as_str())
-                .unwrap_or_default();
-            let diagnostic = stderr_tail.lines().chain(stderr.lines()).find(|line| {
-                line.strip_prefix("REVIEW ")
-                    .and_then(|line| line.split_once(" FAIL client_missing "))
-                    .is_some_and(|(tag, path)| {
-                        !tag.is_empty()
-                            && !tag.contains(char::is_whitespace)
-                            && !path.trim().is_empty()
-                    })
-            });
-            if let Some(line) = diagnostic {
-                return Ok(json!({"status":"client_missing","head":head,"reason":line}));
-            }
-            let detail = if stderr.trim().is_empty() {
-                stderr_tail.trim()
-            } else {
-                stderr.trim()
-            };
-            return Err(format!("review CLI failed with exit code 10: {detail}"));
-        }
         let record =
-            record.ok_or_else(|| format!("review run returned no record: {}", stderr.trim()))?;
+            printed_record(&String::from_utf8_lossy(&printed.stdout)).ok_or_else(|| {
+                format!(
+                    "review run returned no record: {}",
+                    String::from_utf8_lossy(&printed.stderr).trim()
+                )
+            })?;
         let chosen = &record["chosen_leg"];
         if let Some((leg, _)) = &self.review_override {
             if chosen["id"] != *leg {
                 return Err(format!("review leg differs from requested leg {leg}"));
             }
         }
-        let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
-        if late_review::live(&record) {
-            let started = record["started"]
-                .as_f64()
-                .unwrap_or_else(pg_worker_core::run::finalize::now);
-            let request = json!({"head":head,"run_id":record["run_id"],"checkout":clone,
-                "expected_end":started + f64::from(max_min * 60),"changed_paths":paths});
-            let pending = self.reviews.join(format!("late-review-{head}.json"));
-            late_review::save_pending(&pending, &request)?;
-            let mut result = late_review::pending_result(&request);
-            if let Err(error) = late_review::start(&self.state, &pending) {
-                result["reason"] = json!(format!(
-                    "{}; finisher launch failed: {error}",
-                    result["reason"].as_str().unwrap_or("review_running")
-                ));
-            }
-            return Ok(result);
-        }
         if record["status"] != "completed" {
             return Err(format!("review run incomplete: {}", record["reason"]));
         }
         let text = review_run_text(&self.state, &record)?;
+        let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
         let mut verdict = review_verdict(&text, head, &paths);
         let id = record["run_id"].as_str().unwrap_or("run-unknown");
         let path = self.reviews.join(format!("{tag}-{id}.txt"));
@@ -481,7 +436,7 @@ pub(super) fn printed_record(stdout: &str) -> Option<Value> {
 }
 /// Review text of a review run record: the rendered result of its live log, else the
 /// record's `stdout_tail` (OpenCode legs keep their answer text there).
-pub(crate) fn review_run_text(state: &Path, record: &Value) -> Result<String, String> {
+pub(super) fn review_run_text(state: &Path, record: &Value) -> Result<String, String> {
     if let Some(error) = record["review_binding_error"].as_str() {
         return Err(error.to_owned());
     }

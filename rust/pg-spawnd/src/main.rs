@@ -23,7 +23,6 @@ mod land_go;
 mod land_go_shell;
 #[cfg(test)]
 mod land_go_tests;
-mod late_review;
 mod launch;
 mod leg_ref;
 mod lifecycle_cli;
@@ -54,7 +53,6 @@ mod reconcile_watch;
 mod records;
 mod review_artifacts;
 mod review_citation;
-mod review_health;
 mod review_retry;
 mod review_split;
 mod role_header;
