@@ -58,6 +58,8 @@ skill text names the role in its first lines: follow that role's skill.
   decisions, rules and conventions in the Omnigraph graph.
 - `skills/mcp-servers-setup/SKILL.md`: when an MCP server is missing or misbehaves.
 - `skills/routing-registry/SKILL.md`: before you change a combo, provider, model or route.
+- `skills/router-core/SKILL.md`: at router start and before any router step on more than one item
+  (keeper plan batch, GO of a batch PR, grants for several lanes, grouped asks).
 
 Router skills use `router/config` in the router data checkout. It provides
 `ROUTER_HOME`, `ROUTING_SRC`, `ROUTER_SESSION_NAME`, `ROUTER_CARD`,

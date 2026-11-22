@@ -71,7 +71,7 @@ pub fn write_mock_spawner(dir: &Path, state_dir: &Path, log_path: &Path, mode: &
     let script = dir.join("mock_spawner.py");
     let body = format!(
         r#"#!/usr/bin/env python3
-import json, os, sys
+import json, sys, tempfile
 from pathlib import Path
 
 STATE = Path({state:?})
@@ -118,30 +118,35 @@ def parse_opts(items):
 opts = parse_opts(rest)
 card = json.loads(Path(opts["card"][1:]).read_text()) if opts.get("card", "").startswith("@") else {{}}
 
+# The seat family is the first preferred family outside the writer families it was asked to exclude.
+ORDER = ("google", "openai", "deepseek", "xiaomi") if MODE in ("family_order", "fenced_pass") else ("xiaomi",)
+SEAT_FAMILY = next(f for f in ORDER if f not in opts["writer_family"])
 with LOG.open("a", encoding="utf-8") as fh:
-    fh.write(json.dumps({{"verb": verb, "writer_families": opts["writer_family"], "diff_ref": card.get("diff_ref")}}) + "\n")
+    fh.write(json.dumps({{"verb": verb, "writer_families": opts["writer_family"], "seat_family": SEAT_FAMILY, "diff_ref": card.get("diff_ref")}}) + "\n")
 
 if verb == "route":
-    max_tok = 400 if MODE in ("split_pass", "split_fail_second", "single_too_big") else 200000
+    max_tok = 400 if MODE in ("split_pass", "split_fail_beta", "single_too_big") else 200000
     if MODE == "null_leg":
         print(json.dumps({{"first_leg": None, "legs": []}}))
         sys.exit(0)
     print(json.dumps({{
-        "first_leg": {{"id": "mimo-v2.6-pro", "family": "xiaomi", "harness": "opencode", "tool_mode": "inline-only", "max_request_tokens": max_tok}},
-        "legs": [{{"id": "mimo-v2.6-pro", "family": "xiaomi", "harness": "opencode", "tool_mode": "inline-only", "max_request_tokens": max_tok}}],
+        "first_leg": {{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY, "harness": "opencode", "tool_mode": "inline-only", "max_request_tokens": max_tok}},
+        "legs": [{{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY, "harness": "opencode", "tool_mode": "inline-only", "max_request_tokens": max_tok}}],
     }}))
     sys.exit(0)
 
 if verb == "spawn":
-    idx = sum(1 for line in LOG.read_text().splitlines() if '"verb": "spawn"' in line)
-    run_id = f"run-test-{{idx:04d}}"
-    run_dir = STATE / "runs" / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-    head_sha = (card.get("diff_ref") or {{}}).get("head", "")
+    runs = STATE / "runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    run_dir = Path(tempfile.mkdtemp(prefix="run-test-", dir=runs))
+    run_id = run_dir.name
+    diff_ref = card.get("diff_ref") or {{}}
+    head_sha = diff_ref.get("head", "")
     live_log = run_dir / "live.log"
 
-    if MODE == "split_fail_second" and idx == 2:
-        reply = f"Found issue in second group.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: REQUEST_CHANGES\n"
+    if (MODE == "split_fail_beta" and "beta/b.rs" in diff_ref.get("paths", [])
+            or MODE == "fail_openai_group" and opts["writer_family"] == ["openai"]):
+        reply = f"Found issue in this group.\nHEAD: {{head_sha}}\nTEST-GAMING: no\nVERDICT: REQUEST_CHANGES\n"
     elif MODE == "test_gaming_yes":
         reply = f"Looks fine.\nHEAD: {{head_sha}}\nTEST-GAMING: yes\nVERDICT: PASS\n"
     elif MODE == "redacted_head":
@@ -164,7 +169,7 @@ if verb == "spawn":
         "run_id": run_id,
         "status": "completed",
         "exit_code": 0,
-        "chosen_leg": {{"id": "mimo-v2.6-pro", "family": "xiaomi"}},
+        "chosen_leg": {{"id": "mimo-v2.6-pro", "family": SEAT_FAMILY}},
         "live_log": str(live_log),
         "stdout_tail": "" if MODE == "fenced_pass" else reply,
     }}

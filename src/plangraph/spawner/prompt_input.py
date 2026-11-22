@@ -2,6 +2,7 @@
 from importlib import resources
 from pathlib import Path
 import json
+import re
 import os
 import subprocess
 
@@ -110,10 +111,15 @@ def agent_key(harness: str | None, leg_id: str | None = None) -> str:
     return harness or 'opencode'
 
 
-def header(harness: str | None, role: str, leg_id: str | None = None) -> str | None:
+INLINE_TOOL_MODE = 'inline-only'
+
+
+def header(harness: str | None, role: str, leg_id: str | None = None, tool_mode: str | None = None) -> str | None:
     key = _ROLE_KEY.get(role)
     if key is None:
         return None
+    if key == 'review' and tool_mode == INLINE_TOOL_MODE:
+        key = 'review_inline'  # a toolless seat is never told to run tests or open files
     table = _table()
     name = agent_key(harness, leg_id)
     return table['roles'][key].format(agent=table['agents'].get(name, 'the ' + name + ' agent'))
@@ -155,14 +161,59 @@ def read_skill(name: str, cwd: str | None) -> str | None:
     return None
 
 
-def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id: str | None = None) -> str:
-    """header, role skill byte-identical, then the brief; neither is added twice."""
-    head = header(harness, role, leg_id)
+_REVIEW_SKILL_OPEN = '[review-skill]\n'
+_REVIEW_SKILL_CLOSE = '\n[/review-skill]\n\n'
+_LEADING_TOOLS_BLOCK = re.compile(r'\s*\[tools-only\](?P<text>.*?)\[/tools-only\]\s*', re.DOTALL)
+
+
+def split_tools_block(body: str) -> tuple[str, str]:
+    """``(block, rest)``: the ``[tools-only]`` block at the very start of a review prompt (file-read and
+    test-run instructions, where the native writer puts it) and the prompt after it. Marker text anywhere
+    else (item criteria, a quoted finding) belongs to the brief and is never touched."""
+    found = _LEADING_TOOLS_BLOCK.match(body)
+    return (body[:found.end()].strip(), body[found.end():]) if found else ('', body)
+
+
+def _tree_skill() -> str | None:
+    try:
+        return (_REPO_ROOT / 'skills' / 'review' / 'SKILL.md').read_bytes().decode('utf-8')
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _without_review_skill(body: str, cwd: str | None) -> str:
+    """Compatibility for standalone briefs that start with a complete, unframed skill."""
+    for text in (read_skill('review', cwd), _tree_skill()):
+        if text and body.startswith(text):
+            return body[len(text):].lstrip('\n')
+    return body
+
+
+def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id: str | None = None,
+            tool_mode: str | None = None) -> str:
+    """header (naming the leg's tool mode), role skill byte-identical, then the brief; neither is added twice."""
+    head = header(harness, role, leg_id, tool_mode)
     if head is None:
         return prompt
     body = prompt[len(head):].lstrip('\n') if prompt.startswith(head) else prompt
-    name = skill_name(role, body)
+    # A toolless inline seat gets the inline rules from its header only: the review skill below
+    # it demands test runs and file reads, and origin/main may serve a skill older than the header.
+    inline_review = tool_mode == INLINE_TOOL_MODE and _ROLE_KEY.get(role) == 'review'
+    block = ''
+    if _ROLE_KEY.get(role) == 'review':
+        block, body = split_tools_block(body)
+        if block and body.startswith(_REVIEW_SKILL_OPEN):
+            _, boundary, brief = body.partition(_REVIEW_SKILL_CLOSE)
+            if not boundary:
+                raise SpawnRefused('review_skill_boundary_missing')
+            native = brief if inline_review else block + '\n\n' + body
+            return head + '\n\n' + native
+    if inline_review:
+        body = _without_review_skill(body, cwd)
+    name = None if inline_review else skill_name(role, body)
     skill = read_skill(name, cwd) if name else None
     if skill and not body.startswith(skill):
         body = skill + '\n' + body
+    if block and not inline_review:
+        body = block + '\n\n' + body
     return head + '\n\n' + body

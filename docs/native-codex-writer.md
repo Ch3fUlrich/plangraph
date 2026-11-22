@@ -43,9 +43,14 @@ disk and RAM. The diff card transfers the exact commits to that worker, which
 owns the checkout and its Cargo target under one disposable run directory.
 The writer keeps its inherited target for preflight. The worker releases the
 directory at review teardown. `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
-`python3 -m plangraph.spawner.cli`. The review prompt starts with the versioned review brief (`render_brief`, review skill as its rules) whose item context carries the whole done criteria and invariants of the writer brief (feeder or batch layout), both SHAs, the public symbols the diff adds with their first callers, and the exact-head fast-check log (`<git-dir>/fast-checks/<head>.log`) and writer session log. The completed run's receipt binds the worker host and head. The last `VERDICT:`
-line must be canonical, a `HEAD:` line naming another head or an ACCEPT that names
-no changed file is `no_verdict`, retried twice, then the run ends BLOCKED with
+`python3 -m plangraph.spawner.cli`. The review prompt uses the versioned review
+brief and includes the writer's done criteria and invariants, both SHAs, changed
+public symbols and their first callers, and the exact-head fast-check log
+(`<git-dir>/fast-checks/<head>.log`) and writer session log. The completed run's
+receipt binds the worker host and head. The last `VERDICT:` line must be
+canonical. ACCEPT requires repository access and evidence in a `FILES READ:`
+line. A different `HEAD:` or weak ACCEPT is `no_verdict`, retried twice, then
+the run ends BLOCKED with
 exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.
 REQUEST_CHANGES resumes the same session with the review text; later rounds review
 the delta from the previous head. The HIGH+MED count of each round goes to
@@ -56,6 +61,13 @@ the delta from the previous head. The HIGH+MED count of each round goes to
 reported no session ID to resume). ACCEPT runs the same
 gates on the clean final head, then pushes it once to the card's optional
 `push_ref` (`refs/heads/...`, no force) and records `status_line: DONE`.
+The review seat follows the current spawner route. A card can pin a seat with
+`review_leg` and an audited `review_override_reason` of at least ten characters.
+The review record includes the selected leg and its harness. Before each
+automatic review attempt, the worker checks the host's route for repository-capable seats.
+An empty route records `review_status: deferred_to_batch_seat` and the per-leg
+`review_causes`, exits successfully after final gates, and leaves the head for
+the batch review. Once a seat is admitted, normal verdict retries apply.
 The card's `review_dir` selects a target-host directory; the default is
 `<worktree>/reviews`.
 

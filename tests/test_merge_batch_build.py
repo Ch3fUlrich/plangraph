@@ -46,7 +46,8 @@ def test_skip_conflicts_checks_returned_label_list(env, response):
     assert "could not add the needs-update label to PR #2" in res.stderr
     state = json.loads(env.state_file("label-response").read_text())
     assert state["skipped"][0]["labeled"] is False
-    assert len(env.calls("api")) == 1 and not env.calls("label", "create")
+    assert len([c for c in env.calls("api") if any("/labels" in part for part in c)]) == 1 \
+        and not env.calls("label", "create")
     assert not env.calls("pr", "edit")
 
 

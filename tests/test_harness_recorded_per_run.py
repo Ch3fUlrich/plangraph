@@ -74,11 +74,13 @@ def test_report_lists_failed_runs_of_24h_by_harness():
             run("c", "opencode", "failed", now - 3600, "ECONNREFUSED"),
             run("d", "opencode", "failed", now - 90000),            # older than 24 h
             {"run_id": "e", "status": "failed", "ended": now - 5},   # no harness recorded
-            run("f", "agy", "completed", now - 10, role="review", reason="no_verdict")]
+            run("f", "agy", "completed", now - 10, role="review", reason="no_verdict"),
+            dict(run("g", "codex", "completed", now - 10), run_kind="native-codex",
+                 exit_code=0, review_status="deferred_to_batch_seat")]
     report = hr.harness_report(runs, now=now, hours=24)
     assert report["failed"] == {"codex": ["a"], "opencode": ["c"], "unknown": ["e"]}
     assert report["no_verdict"] == {"agy": ["f"]}
-    assert report["runs"] == {"codex": 2, "opencode": 1, "unknown": 1, "agy": 1}
+    assert report["runs"] == {"codex": 3, "opencode": 1, "unknown": 1, "agy": 1}
 
 
 def test_cli_harness_report_lists_failed_runs_by_harness(tmp_path, capsys):

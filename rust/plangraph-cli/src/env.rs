@@ -61,3 +61,12 @@ pub fn load(
     values.extend(process);
     Ok(values)
 }
+pub(crate) fn default_path() -> Result<std::path::PathBuf, String> {
+    if let Some(path) = std::env::var_os("PLANGRAPH_ENV_FILE") {
+        return Ok(path.into());
+    }
+    let home = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .ok_or("home unavailable")?;
+    Ok(std::path::PathBuf::from(home).join(".config/plangraph/plangraph.env"))
+}

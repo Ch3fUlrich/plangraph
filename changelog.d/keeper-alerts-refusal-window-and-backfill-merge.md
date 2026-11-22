@@ -1,0 +1,1 @@
+- Keeper alerts: a refusal alert remembers each refusal's time, so refusals older than `alert_window_s` stop counting even while newer ones keep arriving (three refusals spaced three-quarters of a window apart count 2); the one-time backfill checks its marker in the write transaction and merges into the live row of the same alert identity instead of inserting a second one.

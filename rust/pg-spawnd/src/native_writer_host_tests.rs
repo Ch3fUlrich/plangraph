@@ -22,7 +22,7 @@ fn final_head_review_ignores_old_head_and_requires_last_canonical_verdict() {
     let verdict = review_verdict(&changes, &head, &paths);
     assert_eq!(verdict["verdict"], "REQUEST_CHANGES");
     assert_eq!(verdict["head"], head.as_str());
-    let accept = format!("src/lib.rs:3 checked\nHEAD: {head}\nVERDICT: ACCEPT\n");
+    let accept = format!("FILES READ: src/lib.rs:3\nHEAD: {head}\nVERDICT: ACCEPT\n");
     assert_eq!(review_verdict(&accept, &head, &paths)["verdict"], "ACCEPT");
 }
 
@@ -44,6 +44,7 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -85,6 +86,13 @@ fn terminal_writer_appends_ledger_with_log_tokens_once() {
         fs::read_to_string(dir.path().join("ledger.jsonl")).unwrap(),
         text
     );
+    let journal = dir.path().join("run-lifecycle");
+    fs::write(journal.join("published"), b"1").unwrap();
+    fs::write(&host.record_path, serde_json::to_vec(&running).unwrap()).unwrap();
+    let page = lifecycle::page(dir.path(), 1).unwrap();
+    assert_eq!(page["rows"][0]["status"], "failed");
+    let recovered: Value = serde_json::from_slice(&fs::read(&host.record_path).unwrap()).unwrap();
+    assert_eq!(recovered["ended"], 120);
 }
 
 #[test]
@@ -148,6 +156,7 @@ fn successful_writer_measures_committed_lines_items_and_json_usage() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -211,10 +220,22 @@ fn stored_accept_without_reviewed_file_is_no_verdict() {
 }
 
 #[test]
+fn accept_requires_a_file_read_and_rejects_claimed_toollessness() {
+    let paths = ["src/lib.rs".into()];
+    for review in [
+        "Reviewed only the inline diff for src/lib.rs.\nVERDICT: ACCEPT\n",
+        "I had no repository, shell, or test tool available.\nFILES READ: src/lib.rs\nVERDICT: ACCEPT\n",
+        "FILES READ: none\nReviewed src/lib.rs.\nVERDICT: ACCEPT\n",
+    ] {
+        assert_eq!(review_verdict(review, "head", &paths)["verdict"], "no_verdict");
+    }
+}
+
+#[test]
 fn stored_accept_with_changed_path_or_file_line_is_accepted() {
     let dir = tempfile::tempdir().unwrap();
     for citation in ["Reviewed src/lib.rs", "Reviewed Makefile:12"] {
-        let text = format!("{citation}\nFINDING none\nVERDICT: ACCEPT\n");
+        let text = format!("FILES READ: {citation}\nFINDING none\nVERDICT: ACCEPT\n");
         let _ = &dir;
         assert_eq!(
             review_verdict(&text, "aaaaaaaaaaaaaaaa", &["src/lib.rs".into()])["verdict"],
@@ -370,7 +391,9 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     // (Joined from parts: a fixture file, not a repository input of the CI selector.)
     let skill_dir = cwd.join("skills").join("review");
     fs::create_dir_all(&skill_dir).unwrap();
-    fs::write(skill_dir.join("SKILL.md"), "REVIEW-SKILL-FIXTURE-LINE\n").unwrap();
+    let skill = include_str!("../../../skills/review/SKILL.md");
+    let extended_skill = format!("{skill}\nRun a shell command to check the fixture.\n");
+    fs::write(skill_dir.join("SKILL.md"), &extended_skill).unwrap();
     // The writer's checkout carries a planted family table: it must never be imported.
     // (File names are assembled: they are fixtures, not Python inputs of the CI selector.)
     let py = |stem: &str| format!("{stem}.{}", "py");
@@ -384,19 +407,38 @@ fn host_stamps_fast_checks_and_reads_the_verdict_from_the_review_run_record() {
     )
     .unwrap();
     let state = dir.path().join("state");
+    fs::create_dir_all(state.join("runs/run-host")).unwrap();
     let cli = dir.path().join("review-cli.py");
     fs::write(
         &cli,
         r#"import json, pathlib, subprocess, sys
-argv = sys.argv[1:]
+sys.path.insert(0, sys.argv[1])
+from plangraph.spawner.prompt_input import compose, resolve_prompt
+argv = sys.argv[2:]
 value = lambda flag: argv[argv.index(flag) + 1]
 state, card = pathlib.Path(value('--state')), json.loads(value('--card'))
-assert argv[argv.index('--state') + 2] == 'spawn' and value('--role') == 'review'
+assert value('--role') == 'review' and card['repository_review_required']
+verb = argv[argv.index('--state') + 2]
+if verb == 'route':
+    if (state / 'no-review-seat').exists():
+        print(json.dumps({'legs': [], 'skipped': [
+            {'leg': 'agy-gemini-4-hydrogen-high', 'reason': 'limited'},
+            {'leg': 'mimo-v2.6-pro', 'reason': 'repository_review_tools_unavailable'}]}))
+    else:
+        print(json.dumps({'legs': [{'id':'agy-gemini-4-hydrogen-high'}], 'skipped': []}))
+    sys.exit(0)
+assert verb == 'spawn' and '--cwd' not in argv
 families = [argv[i + 1] for i, a in enumerate(argv) if a == '--writer-family']
 # The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
 assert sorted(families) == ['anthropic', 'google', 'openai'], families
 assert 'cwd' not in card
-prompt = pathlib.Path(value('--prompt-file')).read_text()
+prompt = resolve_prompt(None, value('--prompt-file'))
+assert prompt.startswith('[tools-only]'), prompt
+inline = compose(prompt, 'review', 'opencode', None, tool_mode='inline-only')
+assert 'Run a shell command to check the fixture.' not in inline, inline
+assert 'Item key: plangraph:HOST-TEST-ITEM' in inline, inline
+assert 'Done criteria: By test: first line\nsecond criteria line\n' in inline, inline
+assert 'Invariants named by the item: never push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading' in inline, inline
 head = card['diff_ref']['head']
 repo = pathlib.Path(card['diff_ref']['repo'])
 assert repo == pathlib.Path.cwd()
@@ -404,9 +446,15 @@ assert card['review_workspace'] is True
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'excluded from this review): anthropic, google, openai.' in prompt, prompt
-assert prompt.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
-skill, context = prompt.index('REVIEW-SKILL-FIXTURE-LINE'), prompt.index('=== ITEM CONTEXT')
-assert prompt.index('Rules:') < skill < context, prompt  # the review skill is a rule, ahead of the context
+body = prompt.split('[/review-skill]\n\n', 1)[1]
+assert inline.split('\n\n', 1)[1] == body, inline
+assert 'git diff ' not in inline and 'Open callers' not in inline and 'CARGO_TARGET_DIR' not in inline, inline
+assert body.startswith('Role: independent reviewer') and '=== ITEM CONTEXT' in prompt, prompt
+skill, context = prompt.index('Run a shell command to check the fixture.'), prompt.index('=== ITEM CONTEXT')
+assert skill < context, prompt
+tools = compose(prompt, 'review', 'opencode', None, tool_mode='tools')
+assert tools.split('\n\n', 1)[1] == prompt, tools
+assert compose(tools, 'review', 'opencode', None, tool_mode='tools') == tools
 assert 'Item key: plangraph:HOST-TEST-ITEM' in prompt, prompt
 assert 'Done criteria: By test: first line\nsecond criteria line\n' in prompt, prompt  # multi-line, whole
 assert 'Invariants named by the item: never push\n' in prompt, prompt
@@ -422,11 +470,11 @@ assert excerpt.endswith('/fast-checks/' + head + '.session.log') and 'cargo test
 assert '== ci_commit_gate.py (exit status: 0)' in pathlib.Path(log).read_text(), prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
 run = state / 'runs' / 'run-rv1'
-run.mkdir(parents=True)
-text = 'src/lib.rs:1 checked\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
+run.mkdir(parents=True, exist_ok=True)
+text = 'FILES READ: src/lib.rs:1\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type': 'result', 'is_error': False, 'result': text}) + '\n')
 print('banner line')
-print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-worker', 'head_sha': head, 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'mimo-v2.6-pro'}}, indent=2))
+print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-worker', 'head_sha': head, 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'agy-gemini-4-hydrogen-high', 'harness': 'agy', 'tool_mode': 'tools'}}, indent=2))
 "#,
     )
     .unwrap();
@@ -440,11 +488,19 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
         tool_path: std::env::var("PATH").unwrap(),
         effort: WRITER_EFFORT.into(),
         state: state.clone(),
-        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n"
+        brief: "the item brief\nPlan item: plangraph:HOST-TEST-ITEM\nTitle: t\n\nInvariants:\nnever push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading\n\nDone criteria:\nBy test: first line\nsecond criteria line\n\nFiles:\nsrc/lib.rs\n"
             .into(),
         push_ref: None,
         reviews_started: 0,
-        review_cli: vec!["python3".into(), cli.to_string_lossy().into_owned()],
+        review_override: None,
+        review_cli: vec![
+            "python3".into(),
+            cli.to_string_lossy().into_owned(),
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../src")
+                .to_string_lossy()
+                .into_owned(),
+        ],
         python_src: Some(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")),
     };
     assert!(!host.stamped(&head));
@@ -458,7 +514,6 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     assert!(host.gates().unwrap_err().starts_with("ci_commit_gate.py"));
     fs::remove_file(dir.path().join("gate-red")).unwrap();
     // The writer session log of the turns that produced this head (cargo runs included).
-    fs::create_dir_all(state.join("runs/run-host")).unwrap();
     fs::write(
         state.join("runs/run-host/native.log"),
         "cargo test: 3 passed\n",
@@ -475,13 +530,19 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     assert_eq!(review["verdict"], "ACCEPT", "{review}");
     assert_eq!(review["head"], head.as_str());
     assert_eq!(review["run_id"], "run-rv1");
-    assert_eq!(review["leg"], "mimo-v2.6-pro");
+    assert_eq!(review["leg"], "agy-gemini-4-hydrogen-high");
+    assert_eq!(review["harness"], "agy");
     assert_eq!(review["host"], "fixture-worker");
     assert!(Path::new(review["path"].as_str().unwrap()).is_file());
     assert!(!host
         .reviews
         .join(format!("checkout-{}-1", &head[..8]))
         .exists());
+    let unfamiliar_skill =
+        extended_skill.replace("name: review", "name: review\nversion: unfamiliar");
+    fs::write(skill_dir.join("SKILL.md"), unfamiliar_skill).unwrap();
+    let review = host.review(&head, None).unwrap();
+    assert_eq!(review["verdict"], "ACCEPT", "{review}");
     // OpenCode legs: no result frame in the live log, the answer is the stdout tail.
     let record = json!({"run_id":"run-rv2", "status":"completed",
         "stdout_tail":format!("HIGH src/lib.rs:1 - x\nHEAD: {head}\nVERDICT: REQUEST_CHANGES\n")});
@@ -490,8 +551,15 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
         review_verdict(&text, &head, &[])["verdict"],
         "REQUEST_CHANGES"
     );
+    fs::write(state.join("no-review-seat"), "").unwrap();
+    let previous = json!({"head":head, "text":"VERDICT: REQUEST_CHANGES"});
+    let deferred = host.review(&head, Some(&previous)).unwrap();
+    assert_eq!(deferred["status"], "deferred_to_batch_seat");
+    assert_eq!(deferred["causes"][0]["reason"], "limited");
+    assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
     // A spawner that prints no run record is an error, never a verdict.
     host.review_cli = vec!["true".into()];
+    host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
     assert!(host
         .review(&head, None)
         .unwrap_err()
@@ -568,6 +636,7 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -595,6 +664,23 @@ fn session_excerpt_is_per_head_and_absent_without_a_session_log() {
 #[cfg(unix)]
 #[test]
 fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_failed() {
+    const CHILD: &str = "PG_NATIVE_GATE_UMASK_FIXTURE";
+    if std::env::var_os(CHILD).is_none() {
+        // The mask is process-wide. Set it in a disposable test process so
+        // parallel tests retain their own inherited mask.
+        let test = std::thread::current();
+        let result = output(
+            Command::new("sh")
+                .args(["-c", "umask 002; exec \"$@\"", "native-gate-umask"])
+                .arg(std::env::current_exe().unwrap())
+                .args(["--exact", test.name().unwrap(), "--nocapture"])
+                .env(CHILD, "1"),
+        )
+        .unwrap();
+        assert!(result.contains("1 passed"), "{result}");
+        return;
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().join("worktree");
     fs::create_dir_all(cwd.join("tools")).unwrap();
@@ -614,7 +700,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     git(&["init", "-q", "-b", "main"]);
     fs::write(
         cwd.join("tools/ci_commit_gate.py"),
-        "import pathlib, sys\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
+        "import os, pathlib, sys\nprint('gate umask:', oct(os.umask(0o022)))\nsys.exit(1 if pathlib.Path('../gate-red').exists() else 0)\n",
     )
     .unwrap();
     git(&["add", "."]);
@@ -634,6 +720,7 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
         brief: "brief".into(),
         push_ref: None,
         reviews_started: 0,
+        review_override: None,
         review_cli: vec!["false".into()],
         python_src: None,
     };
@@ -650,6 +737,10 @@ fn session_excerpt_of_a_fixed_head_omits_the_output_of_the_head_whose_gate_faile
     git(&["commit", "-q", "--allow-empty", "-m", "C"]);
     let head_c = git(&["rev-parse", "HEAD"]);
     host.fast_checks(&head_c).unwrap();
+    let gate_log = host.stamp(&head_c).unwrap().with_extension("log");
+    assert!(fs::read_to_string(gate_log)
+        .unwrap()
+        .contains("gate umask: 0o22\n"));
     let excerpt = host.stamp(&head_c).unwrap().with_extension("session.log");
     assert_eq!(fs::read_to_string(excerpt).unwrap(), "cargo C passed\n");
 }

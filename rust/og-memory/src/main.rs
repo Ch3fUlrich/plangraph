@@ -17,10 +17,29 @@ fn configured_transport() -> Result<og_memory::http::Http, &'static str> {
 }
 fn main() {
     let args: Vec<_> = std::env::args().skip(1).collect();
+    if args == ["check-mcp-url"] {
+        if std::env::var("OMNIGRAPH_BASE_URL")
+            .is_ok_and(|base| og_memory::http::retired_mcp_url(&base))
+        {
+            eprintln!("RetiredOmnigraphMcpUrl");
+            std::process::exit(1);
+        }
+        return;
+    }
     let transport = configured_transport().unwrap_or_else(|reason| {
         eprintln!("{reason}");
         std::process::exit(1);
     });
+    if args == ["probe-access"] {
+        match transport.probe_access() {
+            Ok(()) => println!("HealthOk AuthenticatedReadOk plangraph HTTP 0.13"),
+            Err(reason) => {
+                eprintln!("{reason:?}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     let mut m = Memory::new(transport);
     let c = og_memory::http::capabilities();
     if args == ["mcp"] {

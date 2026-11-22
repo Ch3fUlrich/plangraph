@@ -421,7 +421,7 @@ def test_main_trailer_per_fixed_key_allows_close_merged_dry_run(w, doors, monkey
 
     w.store.ctx['git'] = FixtureGit()
     monkeypatch.setattr('plangraph.keeper.context_sources.plan_item_commits', w.real_plan_item_commits)
-    monkeypatch.setattr('plangraph.keeper.context_sources.open_lanes', lambda *a: [])
+    monkeypatch.setattr('plangraph.keeper.context_sources.open_lanes', lambda *a, **kw: [])
     w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
     w.decision_path.write_text(f'| D-5504 | demo | GO {head} |\n')
     args = ('close-merged', KEY, 'D-5504', '--from-open', '--family', 'google')

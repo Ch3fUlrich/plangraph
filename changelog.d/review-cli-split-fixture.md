@@ -1,0 +1,1 @@
+- Give each parallel review CLI fixture a unique run directory and choose failing seats by their assigned diff paths or writer family.

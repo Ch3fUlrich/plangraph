@@ -166,9 +166,9 @@ def test_host_skip_reason_names_a_missing_claude_binary(monkeypatch, tmp_path):
 
 
 def test_launch_plan_skips_the_haiku_leg_on_a_host_without_claude(monkeypatch, tmp_path):
-    plan = plan_spawn(CARD, role='review', writer_families=('mimo',),
+    plan = plan_spawn(dict(CARD, paths=['src/auth/session.rs']), role='review', writer_families=('mimo',),
                       leg_reader=lambda model, **kw: {'state': 'available', 'evidence': None})
-    # D-5966 replaces the former Haiku fallback with Sonnet high.
+    # Credential and authentication changes get Sonnet high under D-6550.
     only = replace(plan, legs=tuple(l for l in plan.legs if l.id == 'claude-sonnet-5-5-high'))
     assert [l.harness for l in only.legs] == ['claude']
     monkeypatch.setenv('PATH', str(tmp_path))

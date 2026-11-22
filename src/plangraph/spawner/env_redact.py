@@ -5,7 +5,8 @@ import re
 import subprocess
 from decimal import Decimal
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
-from .redact_tokens import redact_wide_assignments
+from .redact_tokens import redact_wide_assignments, redact_bearer_wrapped, open_wrapped_line_start
+from .redact_tokens import redact_diff_wrapped, is_computed
 
 
 def _redact_pem(text):
@@ -23,15 +24,69 @@ def _redact_pem(text):
     return ''.join((*out, text[copied:]))
 
 
+PEM_MARKER = re.compile(r'-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY')
+
+
+_MARKER_OPEN = re.compile(r'(-----(?:BEGIN|END) )([A-Z0-9 ]*)')
+_MARKER_START = re.compile(r'-----(?:B(?:E(?:G(?:I(?:N)?)?)?)?|E(?:N(?:D)?)?)?')
+
+
+def marker_carry(text):
+    """The tail of ``text`` to put before the next piece so no private-key marker is missed.
+
+    A marker is ``-----BEGIN|END `` plus any run of capitals, digits and blanks that
+    holds ``PRIVATE KEY``: only the opening and the last 12 characters of that run
+    can still complete one, so the carry stays short however long the run is."""
+    start = text.rfind('-----')
+    suffix = text[start:] if start >= 0 else ''
+    opened = _MARKER_OPEN.fullmatch(suffix)
+    if opened:
+        return opened[1] + opened[2][-12:]
+    if _MARKER_START.fullmatch(suffix):
+        return suffix
+    dashes = re.search(r'-{1,4}\Z', text)
+    return dashes[0] if dashes else ''
+
+
+class PrivateKeyScan:
+    """Feed lines in file order; True for a line inside or touching a private-key block.
+
+    An unterminated BEGIN runs to the end of the file, so a line far below its
+    marker is still reported. Excerpts must be judged on the whole file, never
+    on the cut text alone.
+    """
+    def __init__(self):
+        self.inside = False
+
+    def feed(self, line):
+        touched = self.inside
+        # An overlong line may carry the markers of the part that was cut off.
+        for marker in PEM_MARKER.finditer(line + getattr(line, 'dropped_markers', '')):
+            touched, self.inside = True, marker[1] == 'BEGIN'
+        return touched
+
+
+# The one credential-name pattern of the assignment rule and of the nested-assignment scan.
+_NAME = r'(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
 _ASSIGNMENT = re.compile(
-    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+    r'(?im)((?:["\x27])?\b' + _NAME +
     r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
     r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
 
 
-def _redact_assignments(text):
+# The name and separator of an assignment, without its value (group 1 is the separator).
+_ASSIGN_HEADER = re.compile(r'(?im)(?:["\x27])?\b' + _NAME + r'(?:["\x27])?\s*([=:])')
+
+
+def _computed(value):
+    return is_computed(value, _ASSIGN_HEADER)
+
+
+def _redact_assignments(text, source=False):
     def replace(m):
         value = m[0][len(m[1]):]
+        if source and _computed(value):
+            return m[0]
         return m[1] + (value[0] + '[REDACTED]' + value[-1]
                        if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
     return _ASSIGNMENT.sub(replace, text)
@@ -43,7 +98,7 @@ def redact(value):
 
 
 def redact_source(value):
-    """Spawner-read source only: skip credential-name assignments, nothing else."""
+    """Spawner-read source only: leave computed credential-name assignments readable."""
     return _redact(value, source=True)
 
 
@@ -154,12 +209,16 @@ def _redact(value, *, source):
             return [_redact(v, source=source) for v in value]
         if isinstance(value, str):
             value = _redact_pem(value)
-            value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
+            value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', redact_bearer_wrapped(value))
+            if source:
+                # Source masks wrapped tokens first, as before, so no name survives them.
+                value = redact_wrapped(value)
+            # Source keeps only computed expressions readable; literals are masked.
+            value = redact_wide_assignments(value, _ASSIGNMENT, _computed if source else None)
             if not source:
-                value = redact_wide_assignments(value, _ASSIGNMENT)
                 # P joins values behind shielded names, then main's order runs.
                 value = join_shielded_assignments(value, _ASSIGNMENT)
-                value = _redact_assignments(value)
+            value = _redact_assignments(value, source)
             value = redact_wrapped(value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
@@ -204,6 +263,11 @@ def _source_block(text):
     return _SourcePrompt(text, ((0, len(text)),))
 
 
+def _diff_block(text):
+    """Called only by the git-diff producer: wrapped tokens are joined across hunk markers."""
+    return _source_block(redact_diff_wrapped(text))
+
+
 def _redact_prompt(prompt, scrub):
     """Full strength outside exact producer spans, including imitated framing."""
     if type(prompt) is not _SourcePrompt:
@@ -236,6 +300,10 @@ class OutputLines:
             self.pending = self.pending[match.end():] if match else ''
             self.discarding = not bool(match)
         end = len(self.pending) if final else max(self.pending.rfind('\n'), self.pending.rfind('\r')) + 1
+        if not final:
+            # A wrapped credential may continue in a later read: keep its lines back.
+            held = open_wrapped_line_start(self.pending[:end])
+            end = end if held is None else held
         text, self.pending = self.pending[:end], self.pending[end:]
         if len(self.pending) > 65536:
             # An arbitrarily long credential cannot safely be partially emitted.

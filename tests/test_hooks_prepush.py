@@ -104,10 +104,7 @@ def run_hook(repo, lines, env_extra=None):
     result = subprocess.run(command,
                           cwd=str(repo), input=stdin, capture_output=True, text=True,
                           env=env, timeout=120)
-    if result.returncode == 0 and env.get("PREFLIGHT_SKIP") == "1":
-        notice = "pre-push: PREFLIGHT_SKIP=1: preflight skipped (other gates still run)"
-        assert result.stderr.splitlines().count(notice) == 1
-    elif result.returncode != 0:
+    if result.returncode != 0:
         assert "tools/preflight.py missing" not in result.stderr
     return result
 

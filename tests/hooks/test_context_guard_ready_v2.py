@@ -478,3 +478,14 @@ def test_pretooluse_malformed_json_with_marker_is_denied(ready):
             _assert_denied(run_script(hook, raw, env=env_no_sid, cwd=handoff.parent), handoff)
         proc = run_script(hook, partial_post, env=env, cwd=handoff.parent)
         assert (proc.returncode, proc.stdout, proc.stderr) == (0, "", "")
+
+
+def test_strict_guard_reports_corrupt_ready_state_as_an_outage(ready):
+    handoff, _, _, env, marker, _ = ready
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text("{broken")
+    strict = dict(env, PLANGRAPH_GUARD_FAIL_CLOSED="1")
+    for hook in (SCRIPT, HOOKS / "ctx_guard_session.py"):
+        proc = run_script(hook, _pretooluse_payload(), env=strict, cwd=handoff.parent)
+        assert proc.returncode == 1
+        assert proc.stdout == ""

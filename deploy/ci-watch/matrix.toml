@@ -1,0 +1,50 @@
+# Expected jobs of the `tests` workflow per runner tier, each with its suite (red-main design D2).
+# tier "fast" is the fast jobs a tested fast-forward tip runs on main (its full CI ran before it became the tip).
+# tier "self" is the self-hosted tier (four SQLite shards), "hosted" the fallback tier (three).
+# Rust test land::main_gh_tests keeps this equal to .github/workflows/tests.yml.
+[self]
+"Select suites for this change" = "select"
+"Public scrub: no private names or secrets" = "scrub"
+"File size limit (400 lines)" = "file-size"
+"New code is Rust" = "new-code-lang"
+"Changelog fragment and docs" = "changelog-docs"
+"Python tests, SQLite keeper (shard 1 of 4)" = "sqlite"
+"Python tests, SQLite keeper (shard 2 of 4)" = "sqlite"
+"Python tests, SQLite keeper (shard 3 of 4)" = "sqlite"
+"Python tests, SQLite keeper (shard 4 of 4)" = "sqlite"
+"Python tests, Postgres keeper: contract and storage (shard 1 of 3)" = "postgres"
+"Python tests, Postgres keeper: contract and storage (shard 2 of 3)" = "postgres"
+"Python tests, Postgres keeper: contract and storage (shard 3 of 3)" = "postgres"
+"UI tests in headless Chromium" = "browser"
+"Rust workspace on Linux: fmt, clippy, tests" = "rust"
+"Rust spawner and worker core tests on Windows" = "rust-windows"
+"Rust worker crate: fmt, clippy, tests" = "rust-worker"
+"Rust replay spike tests" = "rust-spike"
+"ci-gate" = "ci-gate"
+
+[hosted]
+"Select suites for this change" = "select"
+"Public scrub: no private names or secrets" = "scrub"
+"File size limit (400 lines)" = "file-size"
+"New code is Rust" = "new-code-lang"
+"Changelog fragment and docs" = "changelog-docs"
+"Python tests, SQLite keeper (shard 1 of 3)" = "sqlite"
+"Python tests, SQLite keeper (shard 2 of 3)" = "sqlite"
+"Python tests, SQLite keeper (shard 3 of 3)" = "sqlite"
+"Python tests, Postgres keeper: contract and storage (shard 1 of 3)" = "postgres"
+"Python tests, Postgres keeper: contract and storage (shard 2 of 3)" = "postgres"
+"Python tests, Postgres keeper: contract and storage (shard 3 of 3)" = "postgres"
+"UI tests in headless Chromium" = "browser"
+"Rust workspace on Linux: fmt, clippy, tests" = "rust"
+"Rust spawner and worker core tests on Windows" = "rust-windows"
+"Rust worker crate: fmt, clippy, tests" = "rust-worker"
+"Rust replay spike tests" = "rust-spike"
+"ci-gate" = "ci-gate"
+
+[fast]
+"Select suites for this change" = "select"
+"Public scrub: no private names or secrets" = "scrub"
+"File size limit (400 lines)" = "file-size"
+"New code is Rust" = "new-code-lang"
+"Changelog fragment and docs" = "changelog-docs"
+"ci-gate" = "ci-gate"

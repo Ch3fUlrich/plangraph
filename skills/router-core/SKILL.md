@@ -1,6 +1,6 @@
 ---
 name: router-core
-description: Use at the start of every router session turn and whenever a message, report or operator order arrives. The router's operating checklist: what to do with each kind of input, the hard rules, and how to log. Load router-accept-record for seat records and router-launch for sessions.
+description: Use at the start of every router session turn and whenever a message, report or operator order arrives. The router's operating checklist: what to do with each kind of input, the hard rules, and how to log. Holds the batch-mode procedure (rule 3.58 (3)) for any step that touches more than one item: a keeper plan batch, the GO for a batch PR, grants for several lanes, a group of asks to plan-order. Load router-accept-record for seat records and router-launch for sessions.
 ---
 
 Source `router/config` in the router data checkout. Use `ROUTER_HOME` for paths
@@ -40,6 +40,36 @@ You route, judge and log. You never do project work. Rules in force: `DECISIONS.
 9. Speed and cost changes are proposed to the operator before a skill or rule changes; detection runs automatically every beat (OPERATOR D-5645).
 10. Batches (rule 3.56 (1), D-6357): work goes to writers as batches of related items, one writer session and one worktree per batch, never one item per writer; the writer runs its own other-family review and fix loop (round cap 5) inside the session. A ruling, NEXT line or relaunch you send names the whole batch.
 11. Agent-neutral (rule 3.56 (4)): review and spawn steps name the role, never one agent: `review.sh` and `writer.sh` (plan-order bin, spawner route picks the leg; long term `plangraph review`, plangraph:REVIEW-CMD, and plangraph:BATCH-PORT-WRITER-DRIVER). A rule or brief that names agy-review.sh or codex-writer.sh is stale.
+
+## Batch mode
+
+Work in batches whenever more than one item is involved. One command each, one D-id each, one
+reply that lists what was applied and what was refused.
+
+1. **Keeper plan batch.** `python3 tools/apply_batch.py BATCH.yaml --dry-run` checks every
+   entry and lists every refused entry (`op N name key: error ...`), then states
+   `refused K of M entries; nothing applied`. `--dry-run --preview` asks the keeper itself. The live run is
+   atomic (one `apply_ops`): one refused entry means nothing applied, and the reply names the
+   entry. Run it as the router principal with one D-id for the whole file; reply with the
+   applied and refused entries, never "refused" alone. Fix the file and run it again.
+   Do not split a batch to get around one entry.
+2. **GO for a batch PR.** Write the input (D-id, project, PR number, batch head, one part per
+   writer branch: name, head, CI state, review file, writer family, reviewer family) and run
+   `plangraph router go-row INPUT.json`. It refuses, naming the part, when a head is not 40
+   hex, CI is not green, a family is missing, the reviewer family is the writer's, or the
+   review file is missing, names another head than the part's, or does not end in
+   `VERDICT: ACCEPT`. It prints the one GO row in the decisions-log columns (`| ID | project |
+   decision | by | why |`, the GO and its `GO-HEAD` in the decision cell, the per-part evidence table in
+   the why cell); add that row to the decisions file in one commit.
+3. **Grants for several lanes.** `plangraph router grant-rows INPUT.json OUT` writes one decisions-log row per
+   grant (lane, grantee, scope; the input names the project) under one D-id into one row file; the grants land in one
+   decision PR. A lane listed twice refuses the file.
+4. **Asks to plan-order.** Related asks go as one group: `plangraph router ask-group INPUT.json`
+   prints one numbered message (`ASK-GROUP <to> | <topic> | N item(s)`, one line per item).
+   Send it as one message, not N.
+
+Single items stay single: this section is for two or more. Read each command's refusal as the
+answer; never edit its output to pass.
 
 ## Logging (after every decision)
 1. Row in `docs/decisions-log.md` (newest first): id, project, decision, by, why/evidence.

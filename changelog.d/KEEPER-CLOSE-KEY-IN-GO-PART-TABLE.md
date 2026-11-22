@@ -1,0 +1,1 @@
+- **KEEPER-CLOSE-KEY-IN-GO-PART-TABLE:** `close-merged` accepts a key that a GO row's key list omits when a part head the row names (inside its GO-HEAD) holds a commit with the key's exact `Plan-Item` trailer; the close evidence records the part as `go_part`, and a key in no named part still refuses.

@@ -1,95 +1,78 @@
-"""M2B-OUTBOX client: queue run-token writes while the keeper is down, replay later.
-
-``PG_OUTBOX`` names the run's outbox file (JSONL, created 0600; only run-token
-sessions should set it).  A ``heartbeat`` / ``add_evidence`` / ``submit`` /
-``verdict`` that finds the keeper unreachable is appended with a fresh 32-hex id;
-``pg replay`` posts the queue (in order, ≤ 100 per call) with the same token and
-keeps only the entries the keeper did not answer.  The keeper re-checks every entry
-exactly like a live call and answers a repeated id ``duplicate`` (never re-run), so
-a tampered or replayed file can only cause what the token holder could do anyway.
-The token itself is never written to the outbox.
-"""
+"""Keeper CLI adapter for the native durable run queue."""
 from __future__ import annotations
 
 import json
 import os
-import secrets
+import subprocess
 import sys
-import time
 
-__all__ = ["QUEUE_VERBS", "EXIT_QUEUED", "on_unreachable", "cmd_replay", "add_parser"]
-
-QUEUE_VERBS = frozenset({"heartbeat", "add_evidence", "submit", "verdict"})
+QUEUE_VERBS = frozenset({"heartbeat", "add_evidence", "submit"})
 EXIT_QUEUED = 4
-_BATCH = 100
 
 
-def _path():
-    return os.environ.get("PG_OUTBOX") or ""
+def _native(args, body=None):
+    from .cli_verbs import Unreachable
 
-
-def on_unreachable(verb, body, exc, *, exit_unreachable=3) -> int:
-    """Queue *verb* when an outbox is configured; else the plain unreachable exit."""
-    path = _path()
-    if not path or verb not in QUEUE_VERBS:
-        print(f"keeper unreachable: {exc}", file=sys.stderr)
-        return exit_unreachable
-    entry = {"id": secrets.token_hex(16), "verb": verb, "body": body,
-             "queued_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "a", encoding="utf-8") as handle:
-        handle.write(json.dumps(entry, sort_keys=True) + "\n")
-    print(f"keeper unreachable: queued {verb} in the outbox ({entry['id']})", file=sys.stderr)
-    return EXIT_QUEUED
-
-
-def _read(path):
-    entries = []
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd, encoding="utf-8") as handle:
-        for line in handle:
-            line = line.strip()
-            if line:
-                try:
-                    entry = json.loads(line)
-                except ValueError:
-                    continue            # a damaged line is dropped, never sent
-                if isinstance(entry, dict):
-                    entries.append(entry)
-    return entries
-
-
-def cmd_replay(args, session) -> int:
-    from .cli_verbs import EXIT_OK, EXIT_UNREACHABLE, RefusedCli, Unreachable
-    path = _path()
-    if not path or not os.path.exists(path):
-        print("no outbox (PG_OUTBOX unset or empty)", file=sys.stderr)
-        return EXIT_OK
-    entries, answered, results = _read(path), set(), []
     try:
-        for start in range(0, len(entries), _BATCH):
-            chunk = entries[start:start + _BATCH]
-            out = session.call("POST", "replay", body={"entries": chunk})
-            for res in out.get("results") or []:
-                answered.add(res.get("id"))
-                results.append(res)
-    except Unreachable as exc:
-        print(f"keeper still unreachable: {exc}", file=sys.stderr)
-        return EXIT_UNREACHABLE
+        result = subprocess.run(
+            ["plangraph", "keeper-outbox", *args],
+            input=None if body is None else json.dumps(body),
+            text=True, capture_output=True, check=False)
+    except OSError as exc:
+        raise Unreachable(f"cannot start the native keeper outbox: {exc}") from exc
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    if result.returncode:
+        return result.returncode, None
+    try:
+        return 0, json.loads(result.stdout)
+    except ValueError as exc:
+        raise Unreachable("native keeper outbox returned malformed output") from exc
+
+
+def write(session, verb, body):
+    """Send the explicit receipt verbs through the same queue as replay."""
+    from .cli_verbs import RefusedCli
+
+    code, outcome = _native(["write", session.url, verb], body)
+    if code:
+        return code, None
+    result = outcome.get("first") if outcome.get("result") == "duplicate" else outcome.get("result")
+    if result != "ok":
+        raise RefusedCli(result, outcome.get("msg", ""))
+    return 0, outcome["reply"]
+
+
+def on_unreachable(exc, *, exit_unreachable=3):
+    print(f"keeper unreachable: {exc}", file=sys.stderr)
+    return exit_unreachable
+
+
+def cmd_replay(args, session):
+    from .cli_verbs import EXIT_REFUSED, EXIT_UNREACHABLE, RefusedCli, Unreachable
+
+    try:
+        if args.resolve_entry:
+            if not args.decision or not os.environ.get("PG_OUTBOX"):
+                raise RefusedCli("resolution requires --decision and the run's PG_OUTBOX")
+            actor = session.call("GET", "whoami")
+            if actor.get("role") != "router":
+                raise RefusedCli("only the router may resolve a queued dependency")
+            code, _ = _native(["resolve", args.resolve_entry, args.decision])
+            return code
+        code, outcomes = _native(["replay", session.url])
+        for outcome in outcomes or []:
+            print(f"{outcome['id']} {outcome['result']}")
+        return code
     except RefusedCli as exc:
-        print(f"replay refused: {exc}", file=sys.stderr)
-        return 2
-    finally:
-        left = [e for e in entries if e.get("id") not in answered]
-        tmp = f"{path}.{secrets.token_hex(8)}.tmp"     # fresh name, never an existing link
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.writelines(json.dumps(e, sort_keys=True) + "\n" for e in left)
-        os.replace(tmp, path)
-    for res in results:
-        print(f"{res.get('id')} {res.get('result')}")
-    return EXIT_OK
+        print(exc, file=sys.stderr)
+        return EXIT_REFUSED
+    except Unreachable as exc:
+        print(exc, file=sys.stderr)
+        return EXIT_UNREACHABLE
 
 
 def add_parser(sub, make):
-    make(sub, "replay", help="M2B: deliver the offline outbox (PG_OUTBOX) with the run token")
+    parser = make(sub, "replay", help="deliver the run's durable keeper writes in order")
+    parser.add_argument("--resolve-entry", metavar="INVOCATION")
+    parser.add_argument("--decision", metavar="D-ID")

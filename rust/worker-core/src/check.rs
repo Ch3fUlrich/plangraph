@@ -95,14 +95,12 @@ pub fn run_check_scoped(
     let opts = Opts {
         timeout: Some(timeout),
         grace: Duration::from_secs(2),
+        redact_discarded: true,
         ..Opts::default()
     };
     let r = supervise_with_cancel(c, &opts, cancelled)?;
-    let tail = redact::redacted_tail(
-        &String::from_utf8_lossy(&r.output),
-        tail_n,
-        redact::MAX_TAIL_BYTES,
-    );
+    let raw = String::from_utf8_lossy(&r.output);
+    let tail = redact::redacted_tail(&raw, tail_n, redact::MAX_TAIL_BYTES);
     Ok(CheckResult {
         exit_code: r.code,
         signal: r.signal,

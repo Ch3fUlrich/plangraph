@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,18 +77,39 @@ def test_finished_dependency_must_be_on_main(repository):
     assert Path(merged['path']).is_dir()
 
 
-def test_concurrent_creates_hold_exact_shared_lock(repository, monkeypatch):
+@pytest.mark.parametrize('delay_at', ['git-add', 'path-choice'])
+def test_concurrent_creates_hold_exact_shared_lock(repository, monkeypatch, delay_at):
     _, repo, root = repository
     run = subprocess.run
     entered, release, second_started = threading.Event(), threading.Event(), threading.Event()
     creates = []
+
+    def pause_first():
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(10)
+
+    if delay_at == 'path-choice':
+        allocate = git_guard.uuid.uuid4
+
+        def delayed_uuid():
+            uid = allocate()
+            pause_first()
+            return uid
+
+        monkeypatch.setattr(git_guard, 'uuid', SimpleNamespace(uuid4=delayed_uuid))
+
     def observed(args, **kwargs):
         if 'worktree' in args and 'add' in args:
             creates.append(args)
-            if len(creates) == 1:
-                entered.set()
-                assert release.wait(10)
-        return run(args, **kwargs)
+            if delay_at == 'git-add':
+                pause_first()
+        try:
+            return run(args, **kwargs)
+        except subprocess.CalledProcessError as error:
+            if args[3] == 'fetch':
+                pytest.fail(f'fixture fetch failed: {error.stderr}')
+            raise
     monkeypatch.setattr(git_guard.subprocess, 'run', observed)
     def second():
         second_started.set()
@@ -103,7 +125,7 @@ def test_concurrent_creates_hold_exact_shared_lock(repository, monkeypatch):
                 with (root / '.lock').open('rb') as lock:
                     with pytest.raises(BlockingIOError):
                         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            assert len(creates) == 1
+            assert len(creates) == (1 if delay_at == 'git-add' else 0)
         finally:
             release.set()
         assert one.result()['path'] != two.result()['path']

@@ -1,0 +1,1 @@
+- Native Codex cards can pin a review leg with an audited reason. Native reviews require repository tools and a file-read citation for acceptance, and report the served review leg and harness.

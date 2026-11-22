@@ -13,17 +13,24 @@ PG_SPAWND_MISSING = 'pg-spawnd binary missing (build the release helper)'
 
 
 def _projection_binary():
+    """Resolve the pg-spawnd executable shared by projection and native launch."""
     import shutil
 
-    release = Path(__file__).resolve().parents[2] / 'rust/target/release'
-    for name in ('pg-spawnd', 'pg-spawnd.exe'):
-        binary = release / name
-        if binary.is_file():
-            return str(binary)
     binary = shutil.which('pg-spawnd')
-    if binary is None:
-        raise RuntimeError(PG_SPAWND_MISSING)
-    return binary
+    if binary is not None:
+        return binary
+
+    # Non-login service units may omit the host-sync install directory from PATH.
+    installed = Path.home() / '.local/bin'
+    release = Path(__file__).resolve().parents[2] / 'rust/target/release'
+    candidates = [directory / name for directory in (installed, release)
+                  for name in ('pg-spawnd', 'pg-spawnd.exe')]
+    for binary in candidates:
+        if binary.is_file() and os.access(binary, os.X_OK):
+            return str(binary)
+    path = os.pathsep.join(os.get_exec_path())
+    tried = ', '.join(map(str, candidates))
+    raise RuntimeError(f'{PG_SPAWND_MISSING}: tried pg-spawnd on PATH ({path}), {tried}')
 
 
 def build_fleet(registry, samples=None, runs=None):

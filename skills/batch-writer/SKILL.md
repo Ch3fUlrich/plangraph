@@ -80,10 +80,22 @@ Use grep for text that is not a symbol.
 - Never sleep, poll or wait for a quota or a person. If you cannot continue (rate limit,
   missing access, refused tool), write `BLOCKED <reason>` to STATUS_FILE and end.
 
+## Learn as you go
+
+- When something fails, stalls or surprises you (a wrong assumption, a tool that lied, a gate
+  that blocked valid work, a check that passed wrong work), report one line to your
+  orchestrator in the same turn: `LESSON <what happened> <evidence: run id, file:line, command output>`.
+- The orchestrator defines an `LE-*` keeper item the same beat: what happened with evidence,
+  the cause, the change in code that prevents it, a done check. A prompt line or a memory note
+  is never the fix.
+- Before you start work in an area, read the open and done `LE-*` items that name its files.
+- A lesson that happens twice raises the priority of its item.
+
 ## End
 
 STATUS_FILE: one line per item, `DONE <key> <sha>` or `SKIPPED <key> <reason>`, any
-BLOCKED line, then the line `<NAME> DONE`. Your last three lines, exactly:
+`LESSON <what happened> <evidence: run id, file:line, command output>` line (written the turn it
+happens), any BLOCKED line, then the line `<NAME> DONE`. Your last three lines, exactly:
 
 ```
 HEAD: <full 40-character sha>

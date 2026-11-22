@@ -412,7 +412,7 @@ def test_build_review_requires_worker_with_disk_and_ram(orchestration):
     registry.write_text(json.dumps(data))
     rows['host-b'].update(disk_free_gb=4)
     rows['host-c'] = dict(rows['host-b'], ssh='host-c', disk_free_gb=30)
-    card = {'review_workspace': True,
+    card = {'review_workspace': True, 'repository_review_required': True,
             'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
     options = {'role': 'review', 'prompt': 'review the exact head'}
     record = service.admit_spawn(options, card=card)
@@ -438,7 +438,7 @@ def test_placed_build_review_uses_registry_host_role(orchestration, monkeypatch,
     monkeypatch.setenv('PLANGRAPH_HOST_NAME', local)
     monkeypatch.setenv('PLANGRAPH_PLACED_HOST', local)
     options = {'role': 'review'}
-    card = {'review_workspace': True,
+    card = {'review_workspace': True, 'repository_review_required': True,
             'diff_ref': {'repo': config['public_repos'][0], 'base': 'main', 'head': 'topic'}}
     record = service.admit_spawn(options, card=card)
     if admitted:

@@ -29,30 +29,68 @@ ctx = dict(item_key='plangraph:FIXTURE', done_criteria='fixture completes',
            invariants='preserve ordering', base_sha='a' * 40, head_sha='b' * 40,
            public_symbols='api::run', callers='cli::main', test_output_paths='artifacts/unit.txt')
 judge = build_judge_prompt('F1', 'diff', {}, {}, context=ctx)
-print(json.dumps([assemble(['correctness'], [('diff', 'body')], context=ctx),
-                  *assemble_all(['check'], {'one.rs': 'body'}, context=ctx),
-                  *assemble_diff(['check'], '', context=ctx),
-                  *assemble_diff(['check'], 'diff --git a/one.rs b/one.rs\n--- a/one.rs\n+++ b/one.rs\n@@ -1 +1 @@\n-old\n+new\n', context=ctx),
-                  judge, judge.with_tool_mode('tools')]))
+print(json.dumps({
+    'inline-review': [
+        assemble(['correctness'], [('diff', 'body')], context=ctx),
+        *assemble_all(['check'], {'one.rs': 'body'}, context=ctx),
+        *assemble_diff(['check'], '', context=ctx),
+        *assemble_diff(['check'], 'diff --git a/one.rs b/one.rs\n--- a/one.rs\n+++ b/one.rs\n@@ -1 +1 @@\n-old\n+new\n', context=ctx),
+    ],
+    'prompt-only-judge': [judge],
+    'inline-only-judge': [judge.with_tool_mode('inline-only')],
+    'tools-judge': [judge.with_tool_mode('tools')],
+}))
 "#,
     );
-    for prompt in prompts.as_array().unwrap() {
-        let text = prompt.as_str().unwrap();
-        for field in [
-            "Item key: plangraph:FIXTURE",
-            "Done criteria: fixture completes",
-            "Invariants named by the item: preserve ordering",
-            &format!("Exact base SHA: {}", "a".repeat(40)),
-            &format!("Exact head SHA: {}", "b".repeat(40)),
-            "Changed public symbols: api::run",
-            "Callers of changed public symbols: cli::main",
-            "Affected test output (paths): artifacts/unit.txt",
-            "The reviewer may read the repository",
-        ] {
-            assert!(text.contains(field), "missing {field}: {text}");
+    let context_fields = [
+        "Item key: plangraph:FIXTURE",
+        "Done criteria: fixture completes",
+        "Invariants named by the item: preserve ordering",
+        &format!("Exact base SHA: {}", "a".repeat(40)),
+        &format!("Exact head SHA: {}", "b".repeat(40)),
+        "Changed public symbols: api::run",
+        "Callers of changed public symbols: cli::main",
+        "Affected test output (paths): artifacts/unit.txt",
+    ];
+    for (mode, capability) in [
+        (
+            "inline-review",
+            "You have NO tools and no repository access.",
+        ),
+        (
+            "prompt-only-judge",
+            "Cut files are unavailable; judge only supplied evidence. No tools are available.",
+        ),
+        (
+            "inline-only-judge",
+            "Read only the spawner-inlined diff. No tools are available.",
+        ),
+        (
+            "tools-judge",
+            "You may Read/Grep/Glob for cut files; deleted files may remain unavailable.",
+        ),
+    ] {
+        for prompt in prompts[mode].as_array().unwrap() {
+            let text = prompt.as_str().unwrap();
+            let (rules, context) = text.split_once("=== ITEM CONTEXT").unwrap();
+            assert!(
+                rules.contains(capability),
+                "{mode} missing {capability}: {text}"
+            );
+            if mode != "tools-judge" {
+                assert!(!rules.contains("Read/Grep/Glob"), "{mode}: {rules}");
+                assert!(
+                    !rules.contains("The reviewer may read the repository"),
+                    "{mode}: {rules}"
+                );
+                assert!(!rules.contains("CARGO_TARGET_DIR"), "{mode}: {rules}");
+            }
+            for field in context_fields {
+                assert!(context.contains(field), "{mode} missing {field}: {text}");
+            }
+            assert!(!context.contains("=== ITEM CONTEXT"));
+            assert!(!text.contains("Read files and run tests"));
         }
-        assert_eq!(text.matches("=== ITEM CONTEXT").count(), 1);
-        assert!(!text.contains("Read files and run tests"));
     }
 }
 

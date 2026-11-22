@@ -10,24 +10,34 @@ Every UPDATE trigger tests **both** the old and the new key: a statement that
 moves a row *onto* a locked key is as forbidden as one that moves it off.
 """
 from __future__ import annotations
+
+from importlib.resources import files
+
 from .schema_guards import (
     _LOCKED, TRIGGERS, ALIASES_DDL, RUN_TOKENS_DDL, OUTBOX_DDL, OVERSIGHT_DDL,
 )
+from .schema_guards import RECEIPTS_DDL
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
 from .messages_schema import SQLITE as MESSAGES_DDL
 
 __all__ = ["SCHEMA_VERSION", "OVERSIGHT_SCHEMA_VERSION", "SCHEMA", "ALIASES_DDL",
            "TABLES", "TRIGGERS",
            "EVENT_TYPES", "ROLES", "RUN_TOKENS_DDL", "OUTBOX_DDL", "DESIGN3_DDL",
-           "METRICS_DDL", "LOCKS_DDL", "GRANTS_DDL", "JEV_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
+           "METRICS_DDL", "LOCKS_DDL", "GRANTS_DDL", "JEV_DDL", "ALERTS_DDL", "OVERSIGHT_DDL", "STATES", "EXIT_CLASSES",
            "JEV_KINDS", "JEV_STATUSES", "WINDOW_CLASSES", "RISK_TAGS"]
 
 #: Code-level schema version.  Fence (build-L1 #164 vs RT-P1-BUS): main's
 #: oversight step reached main first and keeps v14 (``OVERSIGHT_SCHEMA_VERSION``,
 #: installed presence-based); the bus steps renumber after it: v15 durable
-#: messages, v16 message nonces/envelopes, v17 placement rules.  Every step past v12 installs
-#: presence-based in ``db._upgrade``; nothing keys off this number at runtime.
-SCHEMA_VERSION = 17
+#: messages, v16 message nonces/envelopes, v17 placement rules, v18 write receipts,
+#: v19 landing stages, v20 landing settlement, v21 Actions job timings.
+#: Every step past v12 installs presence-based in ``db._upgrade``; nothing keys off
+#: this number at runtime.
+SCHEMA_VERSION = 21
+
+LANDING_STAGES_DDL = files(__package__).joinpath("landing_stages.sql").read_text(encoding="utf-8")
+LANDING_TRAINS_DDL = files(__package__).joinpath("landing_trains.sql").read_text(encoding="utf-8")
+LANDING_JOBS_DDL = files(__package__).joinpath("landing_ci_jobs.sql").read_text(encoding="utf-8")
 
 #: RT-OVERSIGHT-KEEPER-SCOPE: the schema step this feature adds on top of main's
 #: v13 -- the v13 -> v14 step: ``OVERSIGHT_DDL`` (SQLite) alone, mirrored by
@@ -66,6 +76,7 @@ EVENT_TYPES = (
     "waiver_set", "legacy_state_set", "run_recorded", "answered",
     "token_minted", "outage_recorded", "review_withdrawn", "item_reopened",
     "kind_set", "state_set", "exec_owner_changed", "oversight_token_minted",
+    "apply_granted", "apply_revoked", "question_asked", "question_resolved",
 )
 
 def _in(values):
@@ -245,6 +256,37 @@ CREATE TABLE IF NOT EXISTS apply_grants (
 );
 """
 
+#: KEEPER-ALERTS-TABLE-ON-RAISE-CLEAR: the alerts a keeper currently holds, written
+#: when an alert is raised or cleared (``store_alerts``) so the ``alerts`` verb never
+#: scans ``audit_log``.  ``kind`` finding: one row per (key, code); kind refusal: one
+#: row per key, ``n`` counts its refusals inside the window (an alert from 2).
+#: ``alert_log`` is the telemetry: one row per raise (``alert_raised``), clear
+#: (``alert_cleared``) and backfill, kept out of ``audit_log`` whose contract is one
+#: row per call.  ``schema_pg`` Migration 17 is the logical twin; ``IF NOT EXISTS`` so
+#: ``db._upgrade`` installs it on an older database.
+ALERTS_DDL = """
+CREATE TABLE IF NOT EXISTS alerts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT NOT NULL CHECK (kind IN ('finding','refusal')),
+    key        TEXT,
+    code       TEXT,
+    msg        TEXT,
+    first_seen TEXT,
+    last_seen  TEXT,
+    n          INTEGER NOT NULL DEFAULT 1,
+    state      TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','resolved'))
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_key ON alerts(key);
+CREATE TABLE IF NOT EXISTS alert_log (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts     TEXT,
+    action TEXT NOT NULL,
+    key    TEXT,
+    code   TEXT,
+    msg    TEXT
+);
+"""
+
 TABLES = """
 CREATE TABLE principals (
     name         TEXT PRIMARY KEY,
@@ -358,6 +400,15 @@ CREATE TABLE audit_findings (
 );
 """
 
-SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + MESSAGES_DDL
+EVENT_AUDIENCE_DDL = """
+CREATE TABLE IF NOT EXISTS event_audience (
+    seq BIGINT NOT NULL REFERENCES events(seq),
+    recipient TEXT NOT NULL,
+    project TEXT,
+    PRIMARY KEY (seq, recipient)
+);
+"""
+
+SCHEMA = (TABLES + TRIGGERS + ALIASES_DDL + RUN_TOKENS_DDL + OUTBOX_DDL + RECEIPTS_DDL + MESSAGES_DDL
           + DESIGN3_DDL + METRICS_DDL + LOCKS_DDL + JEV_DDL + OVERSIGHT_DDL + PLACEMENT_RULES_DDL
-          + GRANTS_DDL)
+          + GRANTS_DDL + ALERTS_DDL + LANDING_STAGES_DDL + LANDING_TRAINS_DDL + LANDING_JOBS_DDL + EVENT_AUDIENCE_DDL)

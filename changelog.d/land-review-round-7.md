@@ -1,0 +1,1 @@
+A batch-failure delivery command's deadline derives from its claim's timestamp (what is left of the claim less a margin), and a launch that would come after that deadline is skipped and left for the next pass.

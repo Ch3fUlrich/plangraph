@@ -6,7 +6,7 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 ## Modules
 | file | content |
 |---|---|
-| `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` = 13 (main's pinned code-level version), `OVERSIGHT_SCHEMA_VERSION` = 14 (v14 = the oversight `OVERSIGHT_DDL` appended after main's `JEV_DDL`, installed by `db._upgrade`: tables/indexes presence-based, the four oversight **guard triggers dropped and re-created on every open** so a weakened body cannot survive — SQLite's open path; Postgres installs the same guards once in Migration 8, GAP: no per-open repair there, D-2458); main's #140 exec ownership columns (`items.exec_workflow_id/exec_run_id/exec_attempt/exec_principal/exec_retired_runs`, also `db._upgrade`) stay in the `items` DDL at main's v13 shape, PG Migration 7 |
+| `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` = 20 ([landing storage and settlement](keeper-postgres.md#schema-and-migrations)), `OVERSIGHT_SCHEMA_VERSION` = 14 (v14 = the oversight `OVERSIGHT_DDL` appended after main's `JEV_DDL`, installed by `db._upgrade`: tables/indexes presence-based, the four oversight **guard triggers dropped and re-created on every open** so a weakened body cannot survive — SQLite's open path; Postgres installs the same guards once in Migration 8, GAP: no per-open repair there, D-2458); main's #140 exec ownership columns (`items.exec_workflow_id/exec_run_id/exec_attempt/exec_principal/exec_retired_runs`, also `db._upgrade`) stay in the `items` DDL at main's v13 shape, PG Migration 7 |
 | `db.py` | `open_db(path, *, create=False) -> sqlite3.Connection`: the ONLY way the keeper opens the DB. Sets `foreign_keys=ON`, `recursive_triggers=ON`, WAL, `busy_timeout`, `trusted_schema=OFF`, and `set_authorizer` denying DDL (`CREATE/DROP/ALTER`, `DROP TRIGGER`), `PRAGMA writable_schema`, `ATTACH`, `load_extension` after the schema is installed. Schema install uses a separate `create=True` path. Singleton `flock` helper `lock_keeper(path)`.  Optional Postgres backend (`backend: postgres`, `dsn`/`PG_DSN`): see `docs/keeper-postgres.md`. |
 | `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events, unknown=None) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold + one `unknown_event_type` problem per event `type` outside `EVENT_TYPES`) |
 | `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token, *, now=None) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`, `spawner`, `oversight`, `phase-worker`, `sweep`. `add_oversight_principal(conn, name, projects)` provisions the revocable row (no token); a `pgo1_` token authenticates as `OversightPrincipal` **and is refused there once `expires_at` has passed** (the TTL is checked at authentication, judged by `now` or by wall time (`time.time()`); dispatch resolves the principals table first, so a prefixless token whose bytes start `pgo1_` or `pgh1_` (the host-sample namespace) still resolves as itself, and `add_principal` re-rolls any draw that would). `add_principal` refuses `role="oversight"`. `sweep` is an unscoped read-only role (`whoami`, `snapshot`, `show` only; all writes and unrelated reads return `403 forbidden`). |
@@ -21,6 +21,9 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 | `mcp.py` | stdio MCP server (hand-written JSON-RPC 2.0: `initialize`, `tools/list`, `tools/call`; no SDK), same verbs, calls the API; unchanged by the [Rust schema-only slice](keeper/mcp-rust.md) |
 
 Keeper startup warns once when `repos.decisions` is missing; new devstack configs require `PLANGRAPH_DECISIONS_REPO` and emit its checkout path with ref `origin/main`, while existing valid configs are reused if it is unset and explicit updates preserve unrelated settings (see [install config](RUNBOOK.md#1-init-and-config)). The daemon publishes [loaded-code identity for guarded main fast-forwards](keeper/main-fast-forward.md) beside its DB anchor, and removes it on clean shutdown. Critical-path stall alerts notify owners and routing without mutating keeper state; see [configuration and delivery semantics](keeper/crit-path-stall.md). [Repository mirrors](repo-mirror.md) are a standalone `pg-ctx` Rust slice; keeper mirror wiring and scheduling/timers are later slices, not daemon startup.
+
+Backlog consumers can run `merge_batch.py consumed --repo OWNER/NAME --pr N --head SHA`.
+The keeper matches the exact folded head in a verified landed train.
 
 ## Tables (all in one SQLite file)
 `principals(name PK, role, projects json, family, token_sha256, active)` ·
@@ -289,8 +292,10 @@ the trailer, claim-window and CI checks a migrated item can no longer satisfy.  
 it a weaker proof, so it is attachable **only by the router through
 `add_evidence_router`**; a claimant or delegate naming kind `commit` is refused `forbidden`
 and stores nothing.  Unknown project (no `repos` entry), missing repo and any git error all
-fail closed as unverified. Merged task context names the oldest later merge on the target ref’s first-parent chain containing the commit: nested batch parts name the batch PR, and PR branches refreshed from main retain their landing PR. Failed git walks leave the merge unknown.
+fail closed as unverified. Merged task context names the introducing merge on the target ref’s first-parent chain. Nested batch parts name the batch PR, and PR branches refreshed from main retain their landing PR. A two-parent landing commit that carries its own `Plan-Item` trailers supplies merge evidence even at the tip. The keeper takes the PR number from the subject’s final `(#N)` when present and binds the PR head to the second parent. Failed git walks leave the merge unknown.
 Origin-main `decision_ref` closes need no batch file; exactly `[decision]` evidence and tier `none` are required for every item kind; stored reviewed decision-only items close through review, while create/edit requires tier `none` and router authorization for a new decision-only declaration (also on an existing `none` item); router imports preserve stored reviewed decision-only definitions with a warning count, and unrelated edits preserve them; see [decision-close proof, usage and refusals](keeper/keeper-decision-close.md), also covering router-only `close_merged` for merged reviews and dry-run `--from-open` closes on head-bound GO decisions (D-5504/D-5506): timestamped (`(HH:MMZ)` or `(HH:MxZ)`, optionally `~` before HH and/or `, date -u` before `)`) `GO #PR ... GO-HEAD <sha40>` rows (including punctuated/backticked PR numbers) and recorded cross-writer-family seats (D-5529), with automatic backfill from cited witnessed mirrored reviews when families are omitted and opt-in historical `--waive-seats` requiring OPERATOR authority with a whole-token `Waives-seats:` list and rule 3.37 cutoff (default 2026-11-13 UTC), with auth/secrets cards always requiring two non-Anthropic families and refusing seat waivers; waived evidence records review tier, risk tags and the decision id overriding the seat rule, and invalid stored card tags refuse by name. Quota-refused attempts before a passing witnessed substitute count as one review on the head (D-5924; [details](review-quota-fallthrough.md)).
+
+A merged GO row's key list is frozen evidence: `close-merged` also accepts a key whose exact `Plan-Item` commits lie in a part head the row names inside its GO-HEAD, and records that head as `go_part` (details: `docs/keeper/keeper-decision-close.md`).
 
 A merge into main closes its items with no router call (`close_merged_auto`, role `system` or `router`; the Rust job `plangraph merge-close` calls it every 10 minutes from `deploy/systemd/pg-merge-close.timer`, and the batch land step calls the same job). It reads the default ref once per repository and takes every open, claimed or in-review item a `Plan-Item` trailer names (a `Plan-Item-Part` trailer names none), proves the merge with the same rules as `close_merged` (merged PR head or direct commit, no open lane, `Merge-Repo:` honoured) but needs no GO row, no `--from-open` and no decision id, and records `commit` evidence `{source: merge-close}`, clears claim, delegate and lease with the closing `review_passed {released: true}` and sets `done`. The keeper setting `require_seats` in `keeper.json` (default off; the job environment `PG_MERGE_CLOSE_REQUIRE_SEATS` or a request field `require_seats` overrides it for that call) decides the witnessed seat proof that `close_merged` without `--family` and this close ask; tier `none` needs none. With the setting off a missing, unavailable or unwitnessed seat does not refuse: the close proceeds on the merge evidence and stores the flag `seats_missing` (`{run_ids, reason}`) in the `review_passed` event and the close evidence, the reply carries `flags` (on the `closed` or `would_close` row of the key, not in `listed`; `plangraph merge-close` prints it as a last `FLAGGED seats_missing: <run ids>` column), and `close-merged` prints `FLAGGED` instead of `NO-WITNESS`; an auth/secrets card and every other refusal stay refusals. The reply lists `closed`, `would_close` (`apply: false`), `listed` (every merged key it refused, with `code: reason`; a key closed with a flag is not in it; an auth/secrets card is always listed and left to the router) and `merged_not_done`; `plangraph merge-close --count` prints that number alone.
 
@@ -300,7 +305,7 @@ The writer families a seat may not share (`close_merged`, the automatic merge cl
 
 A landed batch closes its part items and its batch item in one step: the batch merge commit carries one `Plan-Item` trailer per part item and the batch item, and one `Review-Run: <project:ID> <run-id> <part head>` line per keeper-bound part review. `close_merged` and the automatic merge close read those lines of the merge that landed the item's head: a part head counts as the seat head when it is reachable from that merge's second parent (outside its first-parent history) and a commit of its range carries the item's `Plan-Item` trailer; a merged head without a citation, or one the cited parts do not cover (another commit of the item in the same batch), keeps needing its own seat, and the cited record is still verified by the witness adapter (served model, exact part head, passing verdict, binds this item), so a part without a recorded seat run still refuses `NO-WITNESS`. A merge commit on the first-parent chain that carries the trailer itself is its own introducing merge (its head is its second parent), also after later merges.
 
-`close_merged` binds a GO row to the PR it names before the trailer search: a row that starts with `GO` (or one numbered ruling of a `RULINGS` row) naming one PR (`#N`, `PR N`) and one full `GO-HEAD` is accepted when that PR merged on the default branch with exactly that head and the row names the item; an item names the repository of its merge with a `Merge-Repo: <project>` line in its description or note. A refusal names the head the row asked for and the merged heads it found. `close-merged <key> <D-W> --waive-seats <D-W>` (the same id twice) accepts the OPERATOR row `D-W` itself as the decision, no GO row and no per-commit PR number: the row starts with `Waiver: merged-without-witnesses`, lists the key in `Waives-seats:`, every `Plan-Item` commit of the item is on the default branch with its merge (or direct commit) dated before the row's cutoff (rule 3.37, default 2026-11-13) and no open lane remains; it is a dry run (`would_close`) until `--apply`, and the evidence keeps the waiver id, the merged heads and the PR numbers (null for a direct commit). `close_merged` reads the decisions log once per phase from a snapshot: a strict (authorization) parse is served only from a strict read, never from a best-effort fallback. The introducing merge is found by walking the whole first-parent chain of main (no merge-count window). Per merged head the dated GO row wins over an undated one, and a scanned row replaces the supplied decision id only when it is a later one. The locked phase recomputes the seat waiver from a fresh snapshot and refuses `conflict: merged_seat_waiver_changed` when it differs from the pre-lock read.
+`close_merged` binds a GO row to the PR it names before the trailer search: a row that starts with `GO` (or one numbered ruling of a `RULINGS` row) naming one PR (`#N`, `PR N`) and one full `GO-HEAD` is accepted when that PR merged on the default branch with exactly that head and the row names the item; the PR number of a merge-commit subject is its trailing `(#N)` (the form `merge_batch land` writes), else its first `#N`; when the subject carries no `#N`, `close_merged` also takes the PR number from the GO row of the `D-id` when that row names `PR N` and a head `H` introduced on the merge's second parent (an ancestor of the merge commit); an item names the repository of its merge with a `Merge-Repo: <project>` line in its description or note. A refusal names the head the row asked for and the merged heads it found. `close-merged <key> <D-W> --waive-seats <D-W>` (the same id twice) accepts the OPERATOR row `D-W` itself as the decision, no GO row and no per-commit PR number: the row starts with `Waiver: merged-without-witnesses`, lists the key in `Waives-seats:`, every `Plan-Item` commit of the item is on the default branch with its merge (or direct commit) dated before the row's cutoff (rule 3.37, default 2026-11-13) and no open lane remains; it is a dry run (`would_close`) until `--apply`, and the evidence keeps the waiver id, the merged heads and the PR numbers (null for a direct commit). `close_merged` reads the decisions log once per phase from a snapshot: a strict (authorization) parse is served only from a strict read, never from a best-effort fallback. The introducing merge is found by walking the whole first-parent chain of main (no merge-count window). Per merged head the dated GO row wins over an undated one, and a scanned row replaces the supplied decision id only when it is a later one. The locked phase recomputes the seat waiver from a fresh snapshot and refuses `conflict: merged_seat_waiver_changed` when it differs from the pre-lock read. An item whose merged work (each Plan-Item commit's own diff against its first parent plus what the merge that brought it in landed, so an untagged follow-up commit of the same PR counts) touches `deploy/systemd` (`.service`/`.timer`/`.socket`/`.path`) or adds a host binary (an added `rust/<crate>/src/main.rs` or `src/bin/*.rs`; editing or deleting an existing one does not) is not closed (by `close_merged`, and by the automatic merge close in preview and apply, which lists the item as `deploy_pending`; the merge a `Merge-Repo:` line names counts like a Plan-Item merge, read at the commit that landed on the default branch, so a squash merge counts; the close pins the Plan-Item history, merge proofs and deploy diffs to one default commit. The automatic close warms deploy diffs, including the named merge, outside the request lock. An unrelated first-parent fast-forward preserves the scan. A rewritten ref or new tagged work requires a fresh scan. A frozen run lists `evidence_unverified: deploy_scan_not_warm` when its snapshot is missing or stale, and `deploy_scan_unreadable` when the scan failed, including a failed history read. The write transaction checks the live ref again and refuses `conflict: merged_on_default_changed` if it can no longer validate the scan) until every host named in its `Deploy-Hosts: a, b` line has a verified `deploy` evidence (`host`, `unit`, `is_active`: `active`, or `installed` for `bin:<name>`; the router may attach it to open items): `close_merged` otherwise leaves the item open, answers `closed: false, reason: deploy_pending` with the missing `host:unit` pairs and lists the item in `alerts` as a `deploy_pending` finding.
 The router may add `Merge-Repo: <project> <commit SHA or #PR>` to an open or
 in-review item's note. Keeper verifies the named merge on the configured
 repository's default branch and binds it to the item's GO row. The close audit
@@ -316,12 +321,16 @@ A router can send `dry_run: true` to `POST /v1/close_merged` as a deploy probe.
 A permitted probe returns `{"dry_run": true, "route": "close_merged"}` with
 zero item, audit, evidence, or event writes.
 `POST /v1/<verb>` JSON body → JSON; `GET /v1/{ready,show,blocked,waves,critical_path,percent,alerts,digest,snapshot,whoami,health}` plus
-`GET /v1/audit-meta?project=&stale_days=` (router/L1 only, and `GET /v1/changelog?since=`);
+`GET /v1/audit-meta?project=&stale_days=` (router/L1 only), `GET /v1/changelog?since=` and the [principal-scoped event replay route](contract/keeper-contract-v1-routes.md#get-v1events).
+The shadow collector also reads `GET /v1/messages?since=SEQ` for bus messages and
+`GET /v1/hosts` for current host levels.
+An automatic merge close records the terminal verdict for the claimant and
+delegate whose claim it released.
 `Authorization: Bearer <token>` (health is open). Errors: `{"error": code, "msg": …}` with 4xx. Compact text responses where the verb is
 meant for agents (`ready`, `show`, `alerts`) via `?fmt=text` (default text for CLI). The server also runs the reaper every 60 s and rewrites
 `plan.snapshot.json` (path from config) after every committed write. Config file (JSON, mode 600 checked): db path, snapshot path, `merge_scan` (optional list of `repos` projects the merged-on-default scan reads; default every repo; `plangraph merge-close --repos` prints the scanned repositories), repos
 {project: path} or {project: {path, ref, non_pr: true}}: the router-owned boolean `non_pr: true` opts into merge-commit-on-target-ref proof instead of a hosted PR association (for non-PR repositories); direct pushes remain refused, green CI is required (`ci: none` cannot use this proof), and principal, trailer, time and floor guards remain. Also runs_dir, decisions_file, ci per project (plus `forgejo_url` + `forgejo_token_file`
-for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), `review_overdue_s` (14400), `alert_window_s` (604800; `alerts` lists findings and repeated refusals only for open, claimed or in_review items and only inside this window; the JSON `history` holds the counts left out, no row is deleted), each a JSON integer from 1 to 315360000 seconds. Applied to the daemon's Store at start; restart to change. Secret config values are never printed.
+for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), `review_overdue_s` (14400), `alert_window_s` (604800; `alerts` lists findings and repeated refusals only for open, claimed or in_review items and only inside this window; the JSON `history` holds the counts left out, no row is deleted; the `alerts` table holds them, written when an alert is raised or cleared with one `alert_raised` / `alert_cleared` telemetry row in `alert_log`, so the call never scans `audit_log`; a refusal row remembers each refusal's time, so one older than the window stops counting on its own (at most 256 are kept per key); the daemon runs a one-time idempotent backfill from history at start, its marker and rows in one transaction, merging into an alert row the table already holds for the same key and code instead of adding a second one), each a JSON integer from 1 to 315360000 seconds. Applied to the daemon's Store at start; restart to change. Secret config values are never printed.
 
 ## CLI `pg`
 `pg ready [--project P] [--all] [-n 10]`, `show KEY`, `claim KEY [--lease 2h]`, `delegate KEY WORKER`, `heartbeat KEY`, `release KEY`,
@@ -412,8 +421,8 @@ Readers on other hosts get only the `.pub` file and `snapshot_pubkey` in their c
 
 Other hosts never run a keeper: they keep a verified LOCAL COPY of the signed snapshot, pulled before
 and after every update and every 5 minutes (`deploy/systemd/pg-snapshot-pull.{service,timer}`).
-Writes still go to the keeper through the host's existing channel; a run token's writes queue in the
-outbox while the keeper is unreachable (M2B-OUTBOX).
+Writes still go to the keeper through the host's existing channel. Run-token heartbeat, evidence,
+and submit writes use the [durable outbox](#run-token-write-receipts).
 
 - Keeper side: `python3 -m plangraph.keeper.snapshot_serve --config keeper.json` is the forced
   command of a `restrict` authorized_keys line (one pull key per host). It prints one JSON line
@@ -487,7 +496,7 @@ md-sync reads it from the end of a QUESTIONS.md "Exact step" cell:
 (`*` = default, `;` separates; an option whose id is not the slug of its label is written `label {id}`
 with `id = [a-z0-9][a-z0-9-]{0,39}`, e.g. `Keep the Shelfmark lane {keep} = stays`; a malformed block,
 including a malformed `{...}`, stays plain text). Rows whose ID cell is not exactly one id are
-listed in the md-sync status file under `unmatched`.
+listed in the md-sync status file under `unmatched`. In the decisions log, `Closes:` and `Waives:` match whole keys after stripping surrounding prose punctuation. Quoted keyword examples and prose after a list supply no keys. For a router row with a `Closes:` keyword and no valid key, md-sync reports the invalid row once per decisions log using `plangraph/md-sync-seen.sqlite` under `$XDG_STATE_HOME` (default `~/.local/state`).
 QUESTIONS.md row format `| Prio | ID | Kind | Parent | why | step | where |` (Kind/Parent header-declared, either
 order, either absent; Kind is `TASK` / `ANSWER` / `DECISION`, where `DECISION` parses to kind `decision`,
 wait `answer`); the step cell may end `[Parent: <key>] Options: a = consequence; *b {custom}; c. Deadline: YYYY-MM-DD`
@@ -639,6 +648,39 @@ The keeper writes no backups itself; operators leave ad-hoc copies (`backup-pre-
 - Opt-in keeper hook (default off), in `keeper.json`: `"backup_prune": {"enabled": false, "dir": "<path>", "keep": 10, "daily_days": 7, "interval_s": 21600}`. When `enabled`, the daemon prunes (apply) once after startup and then every `interval_s` on a daemon thread that stops on shutdown; errors go to stderr and never stop the keeper. `enabled` without `dir` is a config error. If startup fails before the shutdown thread exists, `daemon.run()` independently attempts to stop the reaper and close the socket under `suppress(Exception)`, preserving the original startup error even if cleanup raises.
 - Alternative to the hook: run `pg admin prune-backups --dir DIR --apply` from a Semaphore playbook or cron job.
 
+## Run-token write receipts
+
+The `pg` CLI uses the native `plangraph` client for run-token heartbeat, evidence, and submit
+writes. The client saves a fresh invocation ID and one file per write before sending. Set
+`PG_OUTBOX` to the run's original JSONL path to use the adjacent `.d` directory and import
+its entries in order. With no override, the client uses its local state directory and a queue
+bound to the run credential.
+
+`pg replay` resumes the same queue with the original run credential. The keeper authenticates
+before reading request bodies. A verified revoked run credential only permits exact receipt
+readback on the receipt routes. The keeper commits the mutation and its result together, so the
+same invocation can recover the result after a lost reply
+even if a submit revoked its token. A submit carries its source review round and waits for
+earlier evidence in the same claim to be verified, superseded by later verified evidence of
+the same kind, or explicitly resolved. An imported entry with no historical
+outcome stays queued for routing recovery. A router can record a disposition with
+`pg replay --resolve-entry INVOCATION --decision D-ID` using the run's `PG_OUTBOX`.
+
+For rollout, apply Postgres Migration 15 (`keeper write receipts`) with `pg admin migrate`,
+restart the keeper, and deploy the matching native `plangraph` client. The migration imports
+known legacy outcomes. SQLite installs the same receipt store when the keeper opens the database.
+
+### Seat verdict receipts
+
+The spawner registers the item, claim epoch, review round, verified head, and seat run before
+launch. The reviewer binds its boolean verdict and reason once. Direct delivery and replay
+both check the admission and the payload inside the verdict transaction. The original
+reviewer run token can read its settled verdict through direct delivery or replay after
+revocation. Every entry in such a replay batch must already be settled for that token.
+Outside run-token replay, only reviewer principals may submit an all-verdict replay batch.
+A new round requires a new seat binding even when the head SHA is unchanged. The keeper stores these records in
+`op_receipts` alongside run-token write receipts.
+
 ## Placement rules migration-gates
 Migration 11 requires operator GO naming the reviewed SHA and scope, verified
 backup and disposable-schema rehearsal before application through the migrate role.
@@ -653,6 +695,11 @@ Mandatory ephemeral PostgreSQL CI must pass before merge; storage is not closure
 Rule 3.26: merged-close backfill may count a passing spawner cli_reported review
 record bound to the merged head, with consistent attempt provenance. Auth/secrets
 cards cannot use these low-trust seats; their existing two-seat gate remains.
+When reading a diff-bound seat, the keeper requires the dispatch and completion
+bindings to agree on `base_sha`, `head_sha`, and `diff_sha256`. The bound head
+must also match the completion and the requested head. A caller that supplies
+an expected `review_binding` requires an exact match, so a legacy head-only
+record can count only when the caller has requested head-based evidence.
 
 [Per-item checkpoint and status notes](checkpoints/). Add new notes there, one file per item, rather than appending here.
 

@@ -40,9 +40,14 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import time
 
+from . import context_sources
 from .errors import Refused
+from .evidence import deploy_hosts, deploy_missing, deploy_targets
 from .evidence_repo import repo_key
+from .evidence_types import valid_commit_ref
+from .store_runs import _WARM_S
 
 #: ``<path>@<64 lowercase hex>``; the path may itself contain ``@``.
 _BATCH_REF_RE = re.compile(r"\A(?P<path>.+)@(?P<sha>[0-9a-f]{64})\Z",
@@ -393,3 +398,167 @@ class CloseMixin:
                           "batch_ref": batch_ref, "sha256": sha}, now)
             return {"key": key, "state": "done",
                     "decision_ids": decision_ids, "sha256": sha}
+
+    # --- what a merged item shipped (LE-MERGED-UNIT-NEVER-DEPLOYED), read by the merged GO close
+    def _merged_heads(self, item, all_work=False):
+        """Heads of the merges that introduced the item's Plan-Item commits."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        head = item.get("_close_head")
+        options = {"head": head} if head is not None else {}
+        try:
+            commits = context_sources.plan_item_commits(
+                git, project, item["key"], fetch=False,
+                **({"limit": None} if all_work else {}), **options)
+        except Exception:  # noqa: BLE001 - an unreadable git proof never authorizes
+            commits = None
+        heads = set()
+        # A trailer-bearing commit may be inside a multi-commit PR, or a later
+        # direct follow-up. Bind to the introducing merge's second parent only.
+        for commit in commits or ():
+            sha = commit.get("sha")
+            if not valid_commit_ref(sha):
+                continue
+            try:
+                repo, ref = git.repo_path(project), head or git.repo_ref(project)
+                merge = git.merge_commit_of(repo, sha, ref)
+                if not merge or not valid_commit_ref(merge[0]):
+                    continue
+                proc = git._run(repo, ["show", "-s", "--format=%P",
+                                       "--end-of-options", merge[0]])
+                parents = proc.stdout.strip().split() if proc.returncode == 0 else []
+                if len(parents) == 2 and all(valid_commit_ref(p) for p in parents):
+                    heads.add(parents[1])
+            except Exception:  # noqa: BLE001 - an unknown merge never authorizes
+                continue
+        return heads
+
+    def _pin_close(self, item):
+        """Capture the default commit after any refresh, before reading close evidence."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        try:
+            head = git.ref_commit(git.repo_path(project), git.repo_ref(project))
+        except Exception:
+            raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
+        return dict(item, _close_head=head)
+
+    def _deploy_changes(self, item):
+        """Tagged commits and landed diffs at the same default commit as the merge proofs."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        repo, head = git.repo_path(project), item["_close_head"]
+        commits = context_sources.plan_item_commits(
+            git, project, item["key"], fetch=False, limit=None, head=head)
+        if commits is None:
+            raise RuntimeError("commit history unreadable")
+        tagged = frozenset(commit["sha"] for commit in commits)
+        named = self._named_merge_proof(item)
+        landed = tagged | {named["landed"]} if named else tagged
+        changes = {change for sha in landed for change in git.deploy_changes(repo, sha, head)}
+        return (head, tagged), changes
+
+    def _deploy_pending(self, item, changes):
+        """``host:unit`` pairs a merged item ships but has no verified ``deploy`` proof for."""
+        targets = deploy_targets(changes)
+        if not targets:
+            return []
+        return deploy_missing(targets, deploy_hosts(item), self._evidence(item["key"]))
+
+    @staticmethod
+    def _merge_text(item):
+        return f"{item.get('description') or ''}\n{item.get('note') or ''}"
+
+    def _snapshot_deploy(self, key, project):
+        """Scan one candidate's deploy changes outside the request lock; ``warm_merge_scan`` calls it.
+
+        The answer (``None`` when anything could not be read) is what the frozen automatic close
+        consumes, so it asks git and the forge nothing under the lock.
+        """
+        item = self.__dict__.get("_deploy_inputs", {}).get(key)
+        if item is None:
+            return
+        try:
+            hinted, revision = self._merge_repository(item)
+            if (hinted != item["project"] or revision is not None) and hinted != project:
+                return
+            tagged = self._pin_close(dict(item, _merge_project=project))
+            token, changes = self._deploy_changes(tagged)
+        except Exception:  # noqa: BLE001 - recorded as unreadable
+            token, changes = None, None
+        self.__dict__.setdefault("_deploy_warm", {})[key] = {
+            "at": time.monotonic(), "text": self._merge_text(item), "token": token, "project": project,
+            "changes": changes}
+
+    def _deploy_scan_current(self, item, token):
+        """Keep a scan across first-parent extensions that add no work for this item."""
+        git, project = self._adapter("git"), self._merge_project(item)
+        pinned, tagged = token
+        try:
+            repo, ref = git.repo_path(project), git.repo_ref(project)
+            current = git.ref_commit(repo, ref)
+            if current != pinned:
+                # A second-parent ancestor can have different introducing merges.
+                if not git._on_first_parent_chain(repo, pinned, current):
+                    return False
+                commits = context_sources.plan_item_commits(
+                    git, project, item["key"], fetch=False, limit=None, head=current)
+                if commits is None or frozenset(c["sha"] for c in commits) != tagged:
+                    return False
+            return git.ref_commit(repo, ref) == current
+        except Exception:  # noqa: BLE001 - an unreadable ref cannot confirm a scan
+            return False
+
+    def _auto_deploy_scan(self, item):
+        """Use the outside-lock deploy snapshot for a frozen automatic close."""
+        if self.__dict__.get("_frozen_lanes"):
+            hit = self.__dict__.get("_deploy_warm", {}).get(item["key"])
+            if (hit is None or time.monotonic() - hit["at"] >= _WARM_S
+                    or hit["text"] != self._merge_text(item)):
+                raise Refused("evidence_unverified", "deploy_scan_not_warm")
+            if hit["changes"] is None:
+                raise Refused("evidence_unverified", "deploy_scan_unreadable")
+            if hit["project"] != self._merge_project(item) or not self._deploy_scan_current(item, hit["token"]):
+                raise Refused("evidence_unverified", "deploy_scan_not_warm")
+            return hit["token"], hit["changes"]
+        project = self._merge_project(item)
+        if not self._warm(project) and not self._refresh_merged_default_ref(self._adapter("git"), project):
+            raise Refused("evidence_unverified", "merged_default_ref_refresh_failed")
+        _, token, changes = self._read_current_deploy_scan(item)
+        return token, changes
+
+    def _manual_deploy_scan(self, item, *, complete_history):
+        """Refresh the default when required before pinning the manual close's scan."""
+        git = self._adapter("git")
+        project, revision = self._merge_repository(item)
+        if not callable(getattr(git, "ref_commit", None)):
+            return item, None, ()
+        if revision or (complete_history and not self._warm(project)):
+            if not self._refresh_merged_default_ref(git, project):
+                detail = (f"merge_repo_default_refresh_failed: {project}" if revision
+                          else "merged_default_ref_refresh_failed")
+                raise Refused("evidence_unverified", detail)
+            item.pop("_close_head", None)
+        return self._read_current_deploy_scan(item)
+
+    def _read_current_deploy_scan(self, item):
+        """Retry an incompatible ref change before taking the database write lock."""
+        for attempt in range(2):
+            pinned = self._pin_close(item) if attempt or "_close_head" not in item else item
+            try:
+                token, changes = self._deploy_changes(pinned)
+            except Refused:
+                raise
+            except Exception:
+                raise Refused("evidence_unverified", "deploy_scan_unreadable") from None
+            if self._deploy_scan_current(pinned, token):
+                return pinned, token, changes
+        raise Refused("conflict", "merged_on_default_changed")
+
+    def _deploy_pending_result(self, item, pending, now):
+        """Leave the item open: record the reason as an alert and report it."""
+        msg = "deploy_pending: " + ", ".join(pending)
+        with self._write():
+            if self._has_finding(item["key"], "deploy_pending"):
+                self._alerts_raise_finding(item["key"], "deploy_pending", msg, now)
+            else:
+                self._finding(item["key"], "deploy_pending", msg, now)
+        return {"key": item["key"], "state": item["state"], "closed": False,
+                "reason": "deploy_pending", "missing": pending}

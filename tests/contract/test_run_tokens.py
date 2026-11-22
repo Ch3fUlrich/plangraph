@@ -77,7 +77,10 @@ def test_writer_run_token_lifecycle(kp):
     got = ok(kp.post("add_evidence", None, {"key": key, "epoch": epoch, "kind": "decision",
                                             "ref": {"id": "D-1"}}, token=token), "Evidence")
     assert got["verified"] is True
-    ok(kp.post("submit", None, {"key": key, "epoch": epoch}, token=token), "Submit")
+    submit = {"key": key, "epoch": epoch}
+    err(kp.post("submit", None, submit, token=token), 400, "validation")
+    context = ok(kp.get(f"/v1/write_context?key={key}", token=token))
+    ok(kp.post("submit", None, {**submit, "source_round": context["source_round"]}, token=token), "Submit")
     # submit revokes the writer token
     err(kp.post("heartbeat", None, {"key": key, "epoch": epoch}, token=token), 401, "forbidden")
 
@@ -108,9 +111,16 @@ def test_replay_requires_a_run_token_and_is_idempotent(kp):
                {"id": uuid.uuid4().hex, "verb": "claim", "body": {"key": key}},
                {"id": "not-an-id", "verb": "heartbeat", "body": {}}]
     out = ok(kp.post("replay", None, {"entries": entries}, token=token), "Replay")
-    assert [r["result"] for r in out["results"]] == ["ok", "forbidden", "validation"]
+    assert [r["result"] for r in out["results"]] == ["forbidden", "validation"]
+    assert out["recovery"] == [{"id": entry_id, "result": "recovery_required"}]
+    fresh = {**entries[0], "id": uuid.uuid4().hex}
+    applied = ok(kp.post("write_receipt", None, fresh, token=token))
+    assert applied["id"] == fresh["id"] and applied["result"] == "ok"
     again = ok(kp.post("replay", None, {"entries": entries[:1]}, token=token), "Replay")
-    assert again["results"] == [{"id": entry_id, "result": "duplicate", "first": "ok"}]
+    assert again == {"results": [], "recovery": out["recovery"]}
+    delivered = ok(kp.post("replay", None, {"entries": [fresh]}, token=token), "Replay")
+    assert delivered == {"results": [{**applied, "result": "duplicate", "first": "ok"}],
+                         "recovery": []}
 
 
 def test_replayed_verdict_ok_must_be_a_json_boolean(kp):
@@ -124,7 +134,9 @@ def test_replayed_verdict_ok_must_be_a_json_boolean(kp):
     assert [r["result"] for r in out["results"]] == ["validation"]
     assert show(kp, key)["state"] == "in_review"
     out = ok(kp.post("replay", None, {"entries": [entry(True)]}, token=token), "Replay")
-    assert [r["result"] for r in out["results"]] == ["ok"]
+    assert [r["result"] for r in out["results"]] == ["forbidden"]
+    assert show(kp, key)["state"] == "in_review"
+    ok(kp.post("verdict", None, entry(True)["body"], token=token), "Verdict")
     assert show(kp, key)["state"] == "done"
 
 

@@ -4,7 +4,15 @@
 # Only the container-side path below is fixed: plan-cdn.html is bind-mounted as a single file, so the
 # render unit must overwrite it in place (`cat "$T" > file`, see deploy/systemd/plangraph-render.service),
 # never `mv` — a rename swaps the inode and this mount keeps exposing the old file.
+#
+# The page embeds the keeper snapshot, which docs/PUBLIC.md classifies as private: /plan is never served
+# anonymously. Authentication is mandatory below; replace the auth_basic pair by the site's own policy
+# (e.g. auth_request to the SSO endpoint) if there is one, but never remove the requirement.
 location = /plan {
+    # Anonymous requests get 401. The user file is created on the web host (htpasswd), outside this repository.
+    auth_basic "plangraph";
+    auth_basic_user_file /etc/nginx/plan-page.htpasswd;
+
     alias /srv/plan/plan-cdn.html;
     default_type text/html;
 

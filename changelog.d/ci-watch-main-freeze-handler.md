@@ -1,0 +1,1 @@
+`plangraph ci-watch --main-freeze` clears a red main by a fixed recovery table with a persisted budget per run, one reconciled action per ref and alerts naming the party that is due; a failing head of a batch with a recorded owner goes to that batch's own writer (and escalates to plan-order after 15 minutes) instead of an unassigned fix lane.

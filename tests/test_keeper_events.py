@@ -77,3 +77,32 @@ def test_missing_cache_row_detected(tmp_path):
     assert any(p["code"] == "cache_missing" and p["key"] == "demo:GOAL"
                for p in problems)
     world.close()
+
+
+def test_releasing_review_pass_reaches_claimant_and_delegate(tmp_path):
+    world = World(tmp_path)
+    try:
+        (key,) = seed(world, [("A", [])])
+        store = world.store
+        claimant = world.p("workerA")
+        delegate = world.p("workerB")
+        epoch = store.claim(claimant, key)["epoch"]
+        store.delegate(claimant, key, delegate)
+        store.add_evidence(claimant, key, epoch, "decision", {"id": "D-1"})
+        store.submit(claimant, key, epoch)
+        cursor = world.conn.execute("SELECT MAX(seq) FROM events").fetchone()[0]
+
+        with store._write():
+            store._pass(world.p("reviewer"), key, "merge close", store._item(key),
+                        world.clock(), reviews_passed=1, release=True)
+
+        item = store._item(key)
+        assert (item["state"], item["claimed_by"], item["delegate"]) == ("done", None, None)
+        for principal in (claimant, delegate):
+            rows = store.event_page(principal, cursor, 100)["rows"]
+            assert [(row["key"], row["type"], row["payload"]["released"])
+                    for row in rows] == [(key, "review_passed", True)]
+        assert store.event_page(world.p("workerC"), cursor, 100)["rows"] == []
+        assert store.verify_integrity() == []
+    finally:
+        world.close()

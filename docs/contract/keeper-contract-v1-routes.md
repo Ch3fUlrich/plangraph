@@ -19,6 +19,19 @@ Open. `200 {"status":"ok"}` [Health].
 ### `GET /v1/whoami`
 Any role. `200 {name, role, projects[], family|null}` [WhoAmI].
 
+### `GET /v1/write_context`
+Active writer run token. Query `key=K` defaults to the item bound to the token.
+`200 {key, epoch, source_round}` gives the claim and round to include in a submit.
+
+### `GET /v1/events`
+JSON page `{rows, next_cursor, more}` of the event log. Pass `since` (exclusive
+sequence, default 0) and `limit` (scanned sequences, 1–500, default 100). Each
+visible row includes its sequence, timestamp, actor, role, model, key, type and
+payload. Resume at `next_cursor` even for an empty page. `more` describes the
+committed snapshot at the time of the request. Recipient membership is captured
+when an event is written, and the token must still have project access. Events
+from before the audience migration lack recipient membership.
+
 ### `GET /v1/ready`
 Any role. Query: `n` (default 10), `all` (any value: no limit), `project`,
 `owner`, `mine` (`1`/`true`: items whose `owner` is the caller), `agent`
@@ -162,16 +175,20 @@ unverified row is still `200`. `400 bad_state` unless `claimed`.
 Router. `{key, kind, ref}`; item must be `claimed` or `in_review`. [Evidence].
 
 ### `POST /v1/submit`
-Claimant, delegate or writer run token. `{key, epoch}`.
+Claimant, delegate or writer run token. `{key, epoch[, source_round]}`. A writer
+run token must supply the source round, available from `write_context`. A stale
+round is `409 round_stale`.
 `200 {key, epoch, round, state:"in_review"}` [Submit]. Errors:
 `400 evidence_missing|evidence_unverified|bad_state`.
 
 ### `POST /v1/verdict`
-Reviewer (or reviewer run token). `{key, ok: true|false[, reason]}` - `ok` must
-be a JSON boolean. `200 {key, state, reviews_passed}` [Verdict]: `state` is
+Reviewer (or reviewer run token). `{key, ok: true|false[, reason, binding]}`.
+`ok` must be a JSON boolean. A seat must supply its admission binding and
+first bind its decision through `bind_seat_verdict`.
+`200 {key, state, reviews_passed}` [Verdict]. The state is
 `done`, `in_review` (first `high` verdict), `claimed` (changes requested) or
 `open` (second consecutive change request). Errors: `400 bad_state|
-family_unknown|evidence_*`, `409 same_principal|same_family|conflict`.
+family_unknown|evidence_*`, `409 same_principal|same_family|conflict|round_stale`.
 
 ### `POST /v1/cancel`
 Router, or l1 of the project (`409 conflict` while an active item depends on
@@ -233,12 +250,51 @@ Router, or l1 of the project. `{key, role:"writer"|"reviewer", run_id}`.
 `200 {key, role, run_id, epoch, expires_at, token}` [MintToken]; the token is
 shown once. Errors: `400 bad_state|evidence_unverified|validation`.
 
+### `POST /v1/admit_seat_verdict`
+Router or spawner scoped to the project. Body and `200` reply are the binding
+`{key, epoch, round, head, seat_run}`. The item must be in review at that
+epoch and round, and `head` must be its current verified commit. A seat run
+can repeat the same admission.
+
+### `POST /v1/bind_seat_verdict`
+Reviewer or reviewer run token. `{key, ok, reason, binding}` pins the boolean
+decision and reason to the admitted seat before delivery. A reviewer run
+token must match `binding.seat_run`. `200 {binding}`. A different payload
+for an already bound seat is `409 conflict`.
+
+### `POST /v1/write_receipt`
+`{id, verb, body[, legacy]}`, where `id` is a 32-character lowercase hex
+invocation ID assigned before the first send. An active writer run token
+can execute `heartbeat`, `add_evidence` or `submit`. The submit body must
+include `source_round`. The keeper stores the mutation and outcome in one
+transaction. A reviewer or reviewer run token can deliver a bound seat
+verdict with `verb: "verdict"` and the same body as on the direct verdict route.
+
+A successful write or settled seat verdict returns `200 {id, result:"ok", reply}`.
+A recorded refusal has `result` set to its refusal code and includes `msg`.
+Repeating an invocation with a stored writer outcome returns
+`{id, result:"duplicate", first[, reply, msg, legacy]}` with its original result
+code in `first`. Legacy receipts carry `legacy:true` and only the historical code.
+A request marked `legacy:true` with no known outcome returns
+`{id, result:"recovery_required"}`. A revoked run token can recover its own
+stored writer receipt or exact settled seat verdict.
+
 ### `POST /v1/replay`
-A run token only (`403` otherwise). `{entries:[{id (32 hex), verb, body}]}`,
-1..100 entries; verbs `heartbeat`, `add_evidence`, `submit` (writer token) or
-`verdict` (reviewer token), executed in order with the same checks as live
-calls. `200 {results:[{id, result}]}` [Replay]; `result` is `ok`, a refusal
-code, or `duplicate` (with `first`) when the `id` was already seen.
+A run token, or a reviewer principal submitting an all-verdict batch.
+`{entries:[{id, verb, body[, legacy]}]}` takes 1–100 entries with the same ID
+and body format as `write_receipt`. For writer verbs this route looks up
+stored outcomes only. An unknown historical invocation requires recovery
+and performs no write. Send fresh writer invocations through `write_receipt`.
+
+An active reviewer can deliver a previously bound seat verdict through
+this route. A revoked reviewer run token can use replay only when every entry
+matches a settled verdict for that token. A missing binding is refused.
+
+`200 {results, recovery}` [Replay]. Results contain `{id, result}` and may
+include `reply` for a verdict or a stored writer reply, `first` for a duplicate,
+or `legacy:true` for a historical receipt. Invalid entries carry a refusal
+code and may have a null `id`. Unknown historical writer requests appear in
+`recovery` as `{id, result:"recovery_required"}`.
 
 ### `POST /v1/withdraw_review`
 Router. `{key, decision_id: "D-<n>"}` for an `in_review` item whose evidence

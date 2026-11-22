@@ -270,3 +270,54 @@ def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkey
         assert git('rev-parse', 'HEAD') == base
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("case", ["admitted", "missing-cwd", "refused", "down", "dry-run"])
+def test_seat_admission_at_launch_boundary(launch_leg_case, monkeypatch, case):
+    import asyncio
+    import json
+    from urllib.error import HTTPError, URLError
+
+    from plangraph.routing_errors import SpawnRefused
+    from plangraph.spawner.notify import KeeperSink
+
+    seat, record, chosen, jobs, calls = launch_leg_case
+    jobs[0].events = []
+    record["item_key"] = "demo:A"
+    if case != "missing-cwd":
+        record["cwd"] = seat.runner.default_cwd
+    binding = {"key": "demo:A", "epoch": 1, "round": 2, "head": "a" * 40, "seat_run": record["run_id"]}
+    admissions = []
+    monkeypatch.setenv("PG_URL", "http://keeper.invalid")
+    monkeypatch.setenv("PG_TOKEN_FILE", "fixture-token")
+
+    def admit(self, pending, cwd):
+        admissions.append(cwd)
+        assert not seat._path(pending["run_id"]).exists() and not calls
+        if case == "refused":
+            raise HTTPError(self.url, 409, "stale", {}, None)
+        if case == "down":
+            raise URLError("unreachable")
+        pending["request"] = {"verdict_binding": binding}
+
+    spawn = seat.runner.spawn
+
+    async def inspect_launch(**options):
+        path = seat._path(record["run_id"])
+        if case == "dry-run":
+            assert not path.exists()
+        else:
+            assert json.loads(path.read_text())["request"]["verdict_binding"] == binding
+        return await spawn(**options)
+
+    monkeypatch.setattr(KeeperSink, "admit_seat_verdict", admit)
+    seat.runner.spawn = inspect_launch
+    launch = seat._launch_leg(record, chosen, prompt_record=None, dry_run=case == "dry-run")
+    if case in ("refused", "down"):
+        with pytest.raises(SpawnRefused, match="seat admission failed"):
+            asyncio.run(launch)
+        assert not calls and not seat._path(record["run_id"]).exists()
+    else:
+        assert asyncio.run(launch) is jobs[0]
+        assert len(calls) == 1
+    assert admissions == ([] if case == "dry-run" else [seat.runner.default_cwd])

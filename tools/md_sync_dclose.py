@@ -23,7 +23,7 @@ close_on_decision):
 * a plain key (no sha) on a code item is never closed, only listed in_review;
 * a mixed row like 'Closes: A@good B@zzz' closes A and drops B (the keeper
   parser drops B; no invalid-token line is printed unless the whole row yields
-  no token);
+  no token, and md-sync reports that row once per decisions log);
 * the row regexes duplicated from the keeper and parser are intentional.
 
 The router's Models trailer of each planning decision row is copied into the

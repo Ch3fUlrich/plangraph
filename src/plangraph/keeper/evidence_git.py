@@ -24,7 +24,7 @@ from typing import Any, Callable, Mapping
 from .evidence_repo import repo_key
 from .evidence_types import Result, valid_commit_ref
 __all__ = ["GitAdapter", "LegacyCommitVerifier", "parse_trailers", "trailer_lines", "trailer_entries", "plan_items", "valid_ref",
-           "resolve_commit"]
+           "resolve_commit", "is_first_parent_merge"]
 
 _REF_RE = re.compile(r"^[A-Za-z0-9._/-]+\Z")
 _SHA_ARG_RE = re.compile(r"^[0-9a-fA-F]{7,64}\Z")
@@ -35,6 +35,29 @@ def _stdout(proc: subprocess.CompletedProcess) -> str:
     """Subprocess stdout as text (never assume the subprocess layer's str)."""
     out = proc.stdout
     return out if isinstance(out, str) else out.decode("utf-8", "replace")
+
+
+def is_first_parent_merge(git: GitAdapter, repo: str, sha: str, ref: str) -> bool | None:
+    """Whether *sha* is itself a merge on *ref*'s first-parent chain, or unknown."""
+    if not valid_commit_ref(sha) or not valid_ref(ref):
+        return None
+    try:
+        parents = git._run(repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha])
+        if parents.returncode != 0:
+            return None
+        fields = _stdout(parents).strip().partition("\n")[0].split()
+        if not fields:
+            return None
+        if len(fields) < 3:
+            return False
+        chain = git._run(repo, ["rev-list", "--first-parent", "--merges", "--reverse",
+                                "--end-of-options", f"{sha}^..{ref}"])
+        if chain.returncode != 0:
+            return None
+        merges = _stdout(chain).strip().splitlines()
+        return bool(merges and merges[0].strip().lower() == sha.lower())
+    except Exception:
+        return None
 
 
 def valid_ref(ref: Any) -> bool:
@@ -366,45 +389,12 @@ class GitAdapter:
         if not valid_commit_ref(sha) or not valid_ref(ref):
             return None
         try:
-            # Check if sha is itself a merge commit (2+ parents).
-            proc_parents = self._run(
-                repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", sha]
-            )
-            if proc_parents.returncode != 0:
+            own_merge = is_first_parent_merge(self, repo, sha, ref)
+            if own_merge is None:
                 return None
-            out_parents = _stdout(proc_parents)
-            lines_parents = [ln.strip() for ln in out_parents.splitlines() if ln.strip()]
-            if not lines_parents:
-                return None
-            tokens = lines_parents[0].split()
-            is_merge = len(tokens) >= 3
-
-            m_sha: str | None = None
-            if is_merge:
-                proc_rev = self._run(
-                    repo,
-                    [
-                        "rev-list",
-                        "--first-parent",
-                        "--merges",
-                        "--reverse",
-                        "--end-of-options",
-                        f"{sha}^..{ref}",
-                    ],
-                )
-                if proc_rev.returncode != 0:
-                    # A failed lookup of a merge sha fails closed right here:
-                    # the proc_fp path below answers a different question and
-                    # must never be reached through an error.
-                    return None
-                out_rev = _stdout(proc_rev)
-                rev_lines = [ln.strip().lower() for ln in out_rev.splitlines() if ln.strip()]
-                if rev_lines:
-                    first_line = rev_lines[0]
-                    if valid_commit_ref(first_line) and first_line == sha.lower():
-                        m_sha = first_line
-
-            if m_sha is None:
+            if own_merge:
+                m_sha = sha.lower()
+            else:
                 proc_fp = self._run(
                     repo,
                     [
@@ -494,6 +484,79 @@ class GitAdapter:
         if proc.returncode != 0:
             raise RuntimeError("cannot read commit paths")
         return [path for path in proc.stdout.split("\0") if path]
+
+    def _name_status(self, repo: str, args: list[str]) -> list[tuple[str, str]]:
+        proc = self._run(repo, ["diff-tree", "--no-commit-id", "--name-status",
+                                "--no-renames", "-r", "-z", *args])
+        if proc.returncode != 0:
+            raise RuntimeError("cannot read commit changes")
+        fields = proc.stdout.split("\0")
+        return [(fields[i][:1], fields[i + 1]) for i in range(0, len(fields) - 1, 2)
+                if fields[i] and fields[i + 1]]
+
+    def ref_commit(self, repo: str, ref: str) -> str:
+        """The commit *ref* names now; raises when git cannot say."""
+        if not valid_ref(ref):
+            raise ValueError("invalid ref")
+        proc = self._run(repo, ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"])
+        sha = proc.stdout.strip() if proc.returncode == 0 else ""
+        if not valid_commit_ref(sha):
+            raise RuntimeError("cannot read the ref")
+        return sha
+
+    def _on_first_parent_chain(self, repo: str, sha: str, ref: str) -> bool:
+        """True when *sha* is on *ref*'s first-parent chain; raises when git cannot say."""
+        if not valid_ref(ref):
+            raise ValueError("invalid ref")
+        listing = self._run(repo, ["rev-list", "--first-parent", "--end-of-options", f"{sha}..{ref}"])
+        if listing.returncode != 0:
+            raise RuntimeError("cannot read the first-parent chain")
+        commits = listing.stdout.split()
+        if not commits:  # *ref* is *sha* or behind it
+            head = self._run(repo, ["rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}"])
+            if head.returncode != 0:
+                raise RuntimeError("cannot read the ref")
+            return head.stdout.strip() == sha
+        parents = self._run(repo, ["rev-list", "--parents", "-n", "1", "--end-of-options", commits[-1]])
+        if parents.returncode != 0:
+            raise RuntimeError("cannot read the oldest chain commit")
+        tokens = parents.stdout.split()
+        return len(tokens) > 1 and tokens[1] == sha
+
+    def deploy_changes(self, repo: str, sha: str, ref: str) -> list[tuple[str, str]]:
+        """``(status, path)`` pairs the work of *sha* landed on *ref*.
+
+        The commit's own diff plus, when a merge on *ref* brought it in, the diff of
+        that merge against its first parent: an untagged follow-up commit of the same
+        PR counts as landed work. Raises on any unreadable diff.
+        """
+        if not valid_commit_ref(sha):
+            raise ValueError("invalid commit")
+        # A merge commit is read against its first parent only: against the second one every
+        # file the default branch gained since the PR branched would look added.
+        parents = self._run(repo, ["rev-list", "--parents", "-n", "1",
+                                   "--end-of-options", sha])
+        tokens = parents.stdout.split() if parents.returncode == 0 else []
+        if not tokens or not all(valid_commit_ref(t) for t in tokens):
+            raise RuntimeError("cannot read commit parents")
+        changes = self._name_status(
+            repo, ["--end-of-options", tokens[1], sha] if len(tokens) > 1
+            else ["--root", "--end-of-options", sha])
+        merge = self.merge_commit_of(repo, sha, ref)
+        if merge is None and not self._on_first_parent_chain(repo, sha, ref):
+            # ``None`` also answers a failed history read: only a commit that is itself on the
+            # first-parent chain (a direct or squash commit) has no merge to look for.
+            raise RuntimeError("cannot read the merge that brought the commit in")
+        if merge and valid_commit_ref(merge[0]):
+            proc = self._run(repo, ["rev-list", "--parents", "-n", "1",
+                                    "--end-of-options", merge[0]])
+            if proc.returncode != 0:
+                raise RuntimeError("cannot read merge parents")
+            tokens = proc.stdout.split()
+            if len(tokens) == 3 and all(valid_commit_ref(t) for t in tokens):
+                changes += self._name_status(
+                    repo, ["--end-of-options", tokens[1], tokens[0]])
+        return changes
 
     def changelog_only_edit(self, repo: str, sha: str) -> bool:
         """Prove a non-merge addition/modification of the root changelog."""

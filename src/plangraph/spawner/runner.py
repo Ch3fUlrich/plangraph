@@ -25,12 +25,7 @@ from pathlib import Path
 from os.path import abspath as _abspath  # tests stub runner.os (test_w36_regressions)
 from typing import Any, Mapping, Sequence
 
-from plangraph.spawner.clients import (
-    STDIN_PROMPT_HARNESSES,
-    build_child_env,
-    build_command,
-    build_routing_envelope_headers,
-)
+from plangraph.spawner.clients import STDIN_PROMPT_HARNESSES, build_child_env, build_command, build_routing_envelope_headers
 from plangraph.spawner.claude_env import claude_child_env, with_agent_shell
 from plangraph.spawner.claude_stream import final_text, last_stop_reason, render_review_output
 from plangraph.spawner.resolver import detect_model_family
@@ -237,7 +232,8 @@ class SpawnerRunner:
             raise ValueError('launch preparation requires dry run')
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
         from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
-        prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None)
+        prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
+                         getattr(leg, 'tool_mode', None))
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
@@ -383,6 +379,9 @@ class SpawnerRunner:
                 pass  # An unparseable config cannot supply a session-tag witness.
         else:
             child_env.pop('OPENCODE_CONFIG_CONTENT', None)
+            if cmd[0] == 'agy' and (prepare_launch or not dry_run):
+                from plangraph.routing_support.clients import prepare_agy_review_home
+                render_reason = prepare_agy_review_home(child_env, role, model_or_combo, self._ocdata_dirs, job_id)
         if render_reason is None:
             self._child_envs[job_id] = child_env
 

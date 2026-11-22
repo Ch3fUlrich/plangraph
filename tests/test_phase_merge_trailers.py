@@ -51,6 +51,9 @@ def test_finish_passes_sorted_deduplicated_card_trailers(tmp_path):
         def ci_green(self, head):
             return True
 
+        def main_refusal(self):
+            return None
+
         def merge_pr(self, number, head, *, commit_message=None):
             self.message = commit_message
             return {"number": number, "url": "u", "state": "merged"}

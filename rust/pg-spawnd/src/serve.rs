@@ -64,8 +64,10 @@ pub(crate) fn run(
     state: std::path::PathBuf,
     mut cfg: SupervisorCfg,
 ) -> Result<(), String> {
+    pg_worker_core::run::lifecycle::recover(&state).map_err(|error| error.to_string())?;
     cfg.run.state_dir = state.clone();
     let _recovery = crate::reconcile_serve::configured(&state)?;
+    crate::round_replan_ports::start(state.clone());
     let host = cfg.run.host.clone();
     let supervisor = Arc::new(Supervisor::new(cfg).map_err(|e| e.to_string())?);
     let path = crate::transport_unix::resolve_socket_path(socket.as_deref())?;
@@ -105,8 +107,10 @@ pub(crate) fn run(
     state: std::path::PathBuf,
     mut cfg: SupervisorCfg,
 ) -> Result<(), String> {
+    pg_worker_core::run::lifecycle::recover(&state).map_err(|error| error.to_string())?;
     cfg.run.state_dir = state.clone();
     let _recovery = crate::reconcile_serve::configured(&state)?;
+    crate::round_replan_ports::start(state.clone());
     let host = cfg.run.host.clone();
     let supervisor = Arc::new(Supervisor::new(cfg).map_err(|e| e.to_string())?);
     if socket.is_some() {

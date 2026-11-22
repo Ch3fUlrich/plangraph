@@ -90,11 +90,7 @@ fn waiting_spawn_does_not_block_second_connection() {
     let f = Fixture::new("/bin/sleep 2.5", Value::Null, &[]);
     let socket = f.state.path().join("socket");
     let mut waiter = common::McpClient::connect(&socket);
-    waiter
-        .stream
-        .get_mut()
-        .set_read_timeout(Some(std::time::Duration::from_secs(4)))
-        .unwrap();
+    waiter.set_response_timeout(std::time::Duration::from_secs(4));
     waiter.initialize();
     let thread = std::thread::spawn(move || {
         waiter.request(

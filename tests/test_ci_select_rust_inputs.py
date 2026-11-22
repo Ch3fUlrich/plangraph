@@ -153,6 +153,11 @@ def test_non_rust_inputs_preserve_other_job_selection(path, expected):
     assert {job for job, selected in ci_select.select([path]).items() if selected} == expected
 
 
+@pytest.mark.parametrize("path", ["tools/merge_batch_build.py", "tools/pgtest.py"])
+def test_indirect_rust_tool_inputs_select_rust_on_their_own(path):
+    assert ci_select.select([path])["rust"], path
+
+
 @pytest.mark.parametrize("path, expected", [
     (".docs-map", {"rust"}),
     ("rust-toolchain.toml", set(ci_select.SUITES) | {"full"}),

@@ -155,10 +155,11 @@ def test_a1_stray_closing_bracket(pre_a1):
     text = 'API_' + 'KEY=[REDACTED]]'
     assert pre_a1.redact(text) == redact(text) == redact_output(text) == 'API_' + 'KEY=' + MASK
     # MY_SECRET's value stays readable in pre-A1 Python (not an OLD name);
-    # A1 now masks it, including the stray bracket, unlike the unchanged source mode.
+    # A1 now masks it, including the stray bracket; D-6517: source mode masks it too,
+    # since a stray bracket after a mask is no computed expression.
     wider = NAME + '=[REDACTED]]'
-    assert pre_a1.redact(wider) == redact_source(wider) == wider
-    assert redact(wider) == redact_output(wider) == NAME + '=' + MASK
+    assert pre_a1.redact(wider) == pre_a1.redact_source(wider) == wider
+    assert redact(wider) == redact_output(wider) == redact_source(wider) == NAME + '=' + MASK
 
 
 @pytest.mark.parametrize('row', TABLE, ids=lambda r: r['id'])

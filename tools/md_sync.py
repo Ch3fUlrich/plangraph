@@ -25,10 +25,13 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import sys
 import tempfile
 import time
+from contextlib import closing
 from datetime import datetime, timezone
+from pathlib import Path
 
 import yaml
 
@@ -176,6 +179,25 @@ def _apply_error(log):
     return "apply failed"
 
 
+def _unseen_invalid_rows(path, rows, err):
+    """Claim each invalid-row diagnostic once across runs of this decisions log."""
+    rows = list(dict.fromkeys(rows))
+    if not rows:
+        return rows
+    source = hashlib.sha256(os.fsencode(os.path.normcase(os.path.realpath(path)))).hexdigest()
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "plangraph"
+    try:
+        state.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(state / "md-sync-seen.sqlite")) as db, db:
+            db.execute("CREATE TABLE IF NOT EXISTS invalid_closes "
+                       "(source TEXT, decision_id TEXT, PRIMARY KEY (source, decision_id))")
+            return [row for row in rows if db.execute(
+                "INSERT OR IGNORE INTO invalid_closes VALUES (?, ?)", (source, row)).rowcount]
+    except (OSError, sqlite3.Error):
+        err.write("warning: md-sync could not record previously reported invalid Closes rows\n")
+        return rows
+
+
 def report(plan, out, dry):
     for n, op in enumerate(plan.ops, 1):
         out.write(f"plan {n} {op['op']} {op_key(op)}\n")
@@ -301,6 +323,7 @@ def main(argv=None, out=None, err=None):
         except mplan.PlanError as exc:
             out.write(f"error: {exc}\n")
             return stop(1, f"error: {exc}")
+        plan.invalid_tokens = _unseen_invalid_rows(opts.decisions, plan.invalid_tokens, err)
         fill_status(status, plan)
         report(plan, out, not opts.apply)
         rc = 1 if plan.refused else 0

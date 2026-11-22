@@ -292,15 +292,19 @@ def test_notify_real_lock_blocks_backfill_then_forward_posts_once(backfill_case,
     def hold_forward_lock(path):
         paths.append(path)
         with real_lock(path):
-            assert sr.backfill(args, sv.main) == 0
-            sender.assert_not_called()
-            assert not (run / "verdict.json").exists()
+            if path.name == "verdict.json":
+                assert sr.backfill(args, sv.main) == 0
+                sender.assert_not_called()
+                assert not (run / "verdict.json").exists()
             yield
     monkeypatch.setattr(notify, "inbox_lock", hold_forward_lock)
     notify.deliver_verdict(run, data, keeper)
-    assert paths == [run / "verdict.json"]
+    assert paths == [run / "verdict.json", run / "verdict.payload.json"]
     assert sr.backfill(args, sv.main) == 0
     sender.assert_called_once()
+    sent = sender.call_args.args[2]
+    assert sent["binding"] == data["request"]["verdict_binding"]
+    assert json.loads((run / "verdict.payload.json").read_text())["payload"] == sent
 
 
 def test_git_fixture_has_missing_executable_skip():

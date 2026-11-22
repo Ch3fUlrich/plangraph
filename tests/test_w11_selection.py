@@ -113,7 +113,9 @@ def test_default_database_cli_mcp(tmp_path, monkeypatch, capsys):
     for result in (cli, mcp):
         assert result['first_leg']['id'] == LEAD_WRITER
         assert result['p_source'] == 'benchmark'
-        assert all(c['p_source'] == ('prior' if c.get('reason', '').startswith('disabled:') or c.get('reason') == 'codex_available'
-                                           else 'measured')
-                   and (c['u_core'] is None if c['p_source'] == 'prior' else isinstance(c['u_core'], float))
-                   for c in result['candidates'])
+        for candidate in result['candidates']:
+            reason = candidate.get('reason', '')
+            unmeasured = reason.startswith('disabled:') or reason == 'claude_requires_gpt_and_hydrogen_limits'
+            assert candidate['p_source'] == ('prior' if unmeasured else 'measured')
+            score = candidate['u_core']
+            assert score is None if unmeasured else isinstance(score, float)
