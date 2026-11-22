@@ -4,11 +4,13 @@ import os
 import threading
 import urllib.error
 import urllib.request
+from dataclasses import replace
 
 import pytest
 
-from keeper_util import World, seed
-from plangraph.keeper import api, config
+from keeper_util import World, defn, seed, to_done
+from plangraph.keeper import api, auth, config, snapshot_io
+from plangraph.keeper.cli_verbs import Session, Unreachable
 
 
 @pytest.fixture
@@ -43,7 +45,7 @@ def srv(w, tmp_path):
     thread.join(timeout=5)
 
 
-def call(srv, path, *, method="GET", body=None, token=None, raw=False):
+def call(srv, path, *, method="GET", body=None, token=None, raw=False, idempotency_key=None):
     url = srv.base_url + path
     data = None
     if body is not None:
@@ -53,6 +55,8 @@ def call(srv, path, *, method="GET", body=None, token=None, raw=False):
     req = urllib.request.Request(url, data=data, method=method)
     if token:
         req.add_header("Authorization", f"Bearer {token}")
+    if idempotency_key is not None:
+        req.add_header("Idempotency-Key", idempotency_key)
     if data is not None:
         req.add_header("Content-Type", "application/json")
     try:
@@ -142,6 +146,147 @@ def test_the_token_principal_is_used_not_the_body(srv, w):
                           token=w.tok("workerA"))
     assert status == 403
     assert jbody(raw)["error"] == "forbidden"
+
+
+@pytest.mark.parametrize("verb,actor,fields,different_fields,event", [
+    ("set_priority", "router", {"n": 7}, {"n": 8}, "priority_set"),
+    ("claim", "workerA", {"lease_s": 600}, {"lease_s": 1200}, "claimed"),
+], ids=["priority", "claim"])
+def test_retry_after_timeout_replays_committed_write(srv, w, monkeypatch, verb, actor,
+                                                     fields, different_fields, event):
+    session = Session(url=srv.base_url)
+    monkeypatch.setattr(session, "token", lambda: w.tok(actor))
+    entered, release = threading.Event(), threading.Event()
+    send = api.KeeperHandler._json
+    replies = []
+
+    def delayed_response(handler, status, payload):
+        if status == 200 and not entered.is_set():
+            replies.append(payload)
+            entered.set()
+            assert release.wait(5)
+        return send(handler, status, payload)
+
+    monkeypatch.setattr(api.KeeperHandler, "_json", delayed_response)
+    body = {"key": "demo:A", **fields}
+    request_key = f"retry-{verb}"
+    expected = ({"key": "demo:A", "epoch": 1, "lease_until": w.store._iso(w.store.now() + 600)}
+                if verb == "claim" else {"key": "demo:A", "priority": 7})
+    try:
+        with pytest.raises(Unreachable, match="timed out"):
+            session.call("POST", verb, body=body, timeout=.25, idempotency_key=request_key)
+        assert entered.is_set()
+    finally:
+        release.set()
+    first, = replies
+    assert first == expected
+    assert session.call("POST", verb, body=body, idempotency_key=request_key) == first
+    status, _, response = call(
+        srv, f"/v1/{verb}", method="POST", body={**body, **different_fields},
+        token=w.tok(actor), idempotency_key=request_key)
+    assert status == 409
+    assert jbody(response)["error"] == "conflict"
+    assert "idempotency key" in jbody(response)["msg"]
+    rows = w.conn.execute("SELECT COUNT(*) FROM events WHERE type=? AND key=?",
+                          (event, "demo:A")).fetchone()
+    assert rows[0] == 1
+    if verb == "claim":
+        item = w.store._item("demo:A")
+        assert (item["state"], item["claimed_by"], item["epoch"], item["lease_until"]) == (
+            "claimed", actor, first["epoch"], first["lease_until"])
+
+
+def test_claim_retry_replays_receipt_after_project_grants_change(srv, w, monkeypatch):
+    token = w.tok("workerA")
+    body = {"key": "demo:A", "lease_s": 600}
+    status, _, first = call(srv, "/v1/claim", method="POST", body=body, token=token,
+                            idempotency_key="same-claim")
+    assert status == 200
+    assert jbody(first)["epoch"] == 1
+
+    authenticate = auth.authenticate
+
+    def authenticate_with_new_grants(conn, bearer):
+        return replace(authenticate(conn, bearer), projects=["other"])
+
+    monkeypatch.setattr(auth, "authenticate", authenticate_with_new_grants)
+
+    status, _, replayed = call(srv, "/v1/claim", method="POST", body=body, token=token,
+                               idempotency_key="same-claim")
+    assert status == 200, replayed
+    assert jbody(replayed) == jbody(first)
+
+    status, _, refused = call(srv, "/v1/claim", method="POST", body=body, token=token,
+                              idempotency_key="new-claim")
+    assert status == 403
+    assert jbody(refused)["error"] == "forbidden"
+    with srv.lock:
+        claims = w.conn.execute("SELECT COUNT(*) FROM events WHERE type='claimed' AND key=?",
+                                ("demo:A",)).fetchone()[0]
+    assert claims == 1
+
+
+def test_slow_snapshot_publication_does_not_block_reads(srv, w, monkeypatch):
+    started, release = threading.Event(), threading.Event()
+    atomic_write = snapshot_io._atomic_write
+
+    def slow_write(path, body):
+        started.set()
+        assert release.wait(5)
+        atomic_write(path, body)
+
+    monkeypatch.setattr(snapshot_io, "_atomic_write", slow_write)
+    replies = []
+    writer = threading.Thread(target=lambda: replies.append(call(
+        srv, "/v1/set_priority", method="POST", body={"key": "demo:A", "n": 7},
+        token=w.tok("router"))))
+    writer.start()
+    reader = Session(url=srv.base_url)
+    monkeypatch.setattr(reader, "token", lambda: w.tok("reader"))
+    try:
+        assert started.wait(3)
+        assert reader.call("GET", "show", {"key": "demo:A"}, timeout=.25)["priority"] == 7
+    finally:
+        release.set()
+        writer.join(5)
+    assert replies[0][0] == 200
+
+
+@pytest.mark.parametrize("brief", [None, 1])
+def test_show_loads_only_the_item_neighborhood(srv, w, monkeypatch, brief):
+    router = w.p("router")
+    description = "Why: Verify the dependency.\nHow: Run the fixture."
+    w.store.edit_definition(router, "demo:B", {"description": f"Full context.\n{description}"})
+    to_done(w, "demo:A")
+    to_done(w, "demo:B")
+    w.store.create_items(router, [
+        defn("FIX-A", corrects="demo:A"),
+        defn("FIX-B", corrects="demo:B"),
+        defn("REPAIRS", ["FIX-A", "FIX-B"], kind="goal"),
+    ])
+    session = Session(url=srv.base_url)
+    monkeypatch.setattr(session, "token", lambda: w.tok("reader"))
+
+    def full_plan():
+        raise AssertionError("show loaded the full plan")
+
+    monkeypatch.setattr(w.store, "_all_items", full_plan)
+    result = session.call("GET", "show", {"key": "demo:B", "brief": brief})
+    assert result["depends_on"] == [{"key": "demo:A", "state": "done"}]
+    assert result["key"] == "demo:B"
+    assert result["title"] == "title B"
+    assert result["state"] == "done"
+    assert result["done_criteria"] == "criteria"
+    if brief:
+        assert result["description"] == description
+        assert "unblocks" not in result and "evidence" not in result
+    else:
+        assert result["description"] == f"Full context.\n{description}"
+        assert result["unblocks"] == ["demo:GOAL"]
+        assert result["corrected_by"] == ["demo:FIX-B"]
+        assert result["dep_states"] == [
+            {"key": "demo:A", "state": "done", "reason": "corrected by demo:FIX-A"},
+        ]
 
 
 def test_oversize_body_is_413(srv, w):

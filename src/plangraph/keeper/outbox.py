@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 
 QUEUE_VERBS = frozenset({"heartbeat", "add_evidence", "submit"})
 EXIT_QUEUED = 4
@@ -41,6 +42,20 @@ def write(session, verb, body):
     if result != "ok":
         raise RefusedCli(result, outcome.get("msg", ""))
     return 0, outcome["reply"]
+
+
+def queue_http_heartbeat(verb, body, request_key):
+    """Write a keyed HTTP heartbeat in the legacy format the native queue imports."""
+    path = os.environ.get("PG_OUTBOX")
+    if verb != "heartbeat" or not path:
+        return False
+    entry = {"id": uuid.uuid4().hex, "verb": verb, "body": body,
+             "idempotency_key": request_key}
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry) + "\n")
+    print(f"keeper unreachable: queued {verb} in the outbox ({entry['id']})", file=sys.stderr)
+    return True
 
 
 def on_unreachable(exc, *, exit_unreachable=3):

@@ -16,6 +16,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from pathlib import Path
 
 from .. import views
@@ -49,6 +50,10 @@ class RefusedCli(Exception):
 
 class Unreachable(Exception):
     """The keeper could not be reached (connection error or 5xx)."""
+
+    def __init__(self, message, *, idempotency_key=None):
+        super().__init__(message)
+        self.idempotency_key = idempotency_key
 
 
 class MissingKeeperURL(RefusedCli):
@@ -112,7 +117,17 @@ class Session:
         return self._token
 
     # ---------------------------------------------------------------- HTTP
-    def call(self, method, verb, params=None, body=None, timeout=None):
+    def call(self, method, verb, params=None, body=None, timeout=None, *, idempotency_key=None):
+        if method == "POST":
+            from .api_routes import RETRYABLE_WRITES, check_write_key
+            from .errors import Refused
+            if verb in RETRYABLE_WRITES:
+                if idempotency_key is None:
+                    idempotency_key = os.environ.get("PG_IDEMPOTENCY_KEY") or uuid.uuid4().hex
+                try:
+                    check_write_key(idempotency_key)
+                except Refused as exc:
+                    raise RefusedCli(exc.code, exc.msg) from None
         query = dict(params or {})
         query.setdefault("fmt", "json")
         query = {k: v for k, v in query.items() if v is not None}
@@ -120,6 +135,8 @@ class Session:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         request = urllib.request.Request(url, data=data, method=method)
         request.add_header("Authorization", f"Bearer {self.token()}")
+        if idempotency_key is not None:
+            request.add_header("Idempotency-Key", idempotency_key)
         if data is not None:
             request.add_header("Content-Type", "application/json")
         try:
@@ -128,12 +145,13 @@ class Session:
         except urllib.error.HTTPError as exc:
             code, msg = _parse_error(exc.read(), exc.code)
             if exc.code >= 500:
-                raise Unreachable(msg or f"server error {exc.code}") from None
+                raise Unreachable(msg or f"server error {exc.code}",
+                                  idempotency_key=idempotency_key) from None
             raise RefusedCli(code, msg) from None
         except (urllib.error.URLError, http.client.HTTPException,
                 TimeoutError, OSError) as exc:
             reason = getattr(exc, "reason", exc)
-            raise Unreachable(str(reason)) from None
+            raise Unreachable(str(reason), idempotency_key=idempotency_key) from None
         try:
             return json.loads(raw.decode("utf-8"))
         except ValueError:
@@ -222,6 +240,10 @@ def write(session, verb, body, renderer=None) -> int:
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:
+        if exc.idempotency_key and outbox.queue_http_heartbeat(verb, body, exc.idempotency_key):
+            return outbox.EXIT_QUEUED
+        if exc.idempotency_key:
+            exc = Unreachable(f"{exc}; outcome unknown, repeat with PG_IDEMPOTENCY_KEY={exc.idempotency_key}")
         return outbox.on_unreachable(exc, exit_unreachable=EXIT_UNREACHABLE)
 
 

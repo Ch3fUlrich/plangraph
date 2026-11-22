@@ -342,6 +342,8 @@ for `forgejo:` values), bind, and `default_lease` (7200), `lease_warn_s` (900), 
 Env `PG_URL`, `PG_TOKEN_FILE` (path of a mode-600 file; never pass a token on argv). Default output = the smallest useful text; `--json` for full.
 Exit codes: 0 ok, 2 refused (stderr `code: msg`), 3 unreachable (CLI then reads the local `plan.snapshot.json` read-only for read verbs and says so).
 
+If `claim`, `heartbeat`, or `priority` gives an unknown outcome, repeat the same request with the printed `PG_IDEMPOTENCY_KEY` and the same credential. The keeper replies from the receipt written in the mutation's transaction. Run-token heartbeat outbox entries carry that key. The journal's `request_timing` records include `verb`, `wait_ms`, `hold_ms`, `query_ms`, `snapshot_write_ms`, and `total_ms`. Every `show`, `heartbeat`, and `set_priority` request contributes a latency sample. Snapshot builds read the store under its lock, then encode, sign, and publish outside that lock. A review-overdue finding moves to alert history when the item leaves its review round.
+
 ## Tests (minimum; write first)
 state machine: every allowed edge + every disallowed edge refused · claim race: 3 threads → exactly one winner · stale epoch refused ·
 lease reaper · attack suite at store level: edit/delete/reopen/re-point a DONE item, `corrects` pointing at non-done, evidence/event/edge

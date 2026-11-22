@@ -31,7 +31,7 @@ import json
 import time
 
 from .. import views
-from . import context_sources as src
+from . import context_sources as src, timing
 from .brief import ensure_cap
 from .errors import Refused
 
@@ -168,9 +168,10 @@ class ContextMixin:
 
     def _work(self, item, fetch, fresh_lanes=False):
         gitad = self._adapter("git")
-        commits = src.plan_item_commits(gitad, item["project"], item["key"], fetch=fetch)
-        closed = []
-        lanes = src.open_lanes(gitad, item["project"], item["key"], fresh_lanes, closed=closed)
+        with timing.outside_request_lock():
+            commits = src.plan_item_commits(gitad, item["project"], item["key"], fetch=fetch)
+            closed = []
+            lanes = src.open_lanes(gitad, item["project"], item["key"], fresh_lanes, closed=closed)
         return {"commits": commits, "lanes": lanes,
                 **({"closed_pr_lanes": closed} if closed else {})}
 
@@ -330,7 +331,7 @@ class ContextMixin:
     def _claim_guard(self, item, reason):
         """Refuse a stale claim with the facts, or return the override record."""
         reason = self._force_stale_reason(reason)
-        index = {it["key"]: it for it in self._all_items()}
+        index = self._item_neighborhood(item)
         try:
             inputs = self._inputs(index, fresh=True)
         except src.DecisionsUnreadable:

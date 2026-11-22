@@ -18,6 +18,8 @@ struct Entry {
     #[serde(default, skip_serializing_if = "is_false")]
     legacy: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    idempotency_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     outcome: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resolved_by: Option<String>,
@@ -86,6 +88,7 @@ impl Queue {
             verb: verb.to_owned(),
             body,
             legacy: false,
+            idempotency_key: None,
             outcome: None,
             resolved_by: None,
         };
@@ -118,6 +121,7 @@ impl Queue {
                 verb: "unreadable".into(),
                 body: Value::Null,
                 legacy: true,
+                idempotency_key: None,
                 outcome: None,
                 resolved_by: None,
             });

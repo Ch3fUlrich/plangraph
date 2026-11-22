@@ -15,7 +15,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from plangraph.keeper import outage
+from plangraph.keeper import outage, outbox
+from plangraph.keeper.cli_verbs import Session, write
 from plangraph.keeper.auth import Principal
 from plangraph.keeper.db_errors import INTEGRITY
 from plangraph.keeper.errors import Refused
@@ -59,6 +60,57 @@ def test_replay_runs_in_order_and_dedupes(w):
     assert results(again) == ["duplicate"] * 3 and again["results"][2]["first"] == "ok"
     assert events(w, "submitted") == before                        # never re-run
     assert verify_integrity(w.conn) == []
+
+
+def test_heartbeat_outbox_keeps_the_original_write_key(w, tmp_path, monkeypatch):
+    epoch, _, principal = claimed_with_token(w)
+    path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("PG_OUTBOX", str(path))
+    session = Session(url="http://127.0.0.1:1")
+    monkeypatch.setattr(session, "token", lambda: "test-token")
+
+    def lost_reply(request, *, timeout):
+        body = json.loads(request.data)
+        key = request.get_header("Idempotency-key")
+        assert request.get_method() == "POST" and key
+        w.store.retry_http_write(principal, None, key, "heartbeat", "", body,
+                                 lambda: w.store.heartbeat(principal, body["key"], body["epoch"]))
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("urllib.request.urlopen", lost_reply)
+    body = {"key": "demo:A", "epoch": epoch}
+    assert write(session, "heartbeat", body) == outbox.EXIT_QUEUED
+    lease = w.store._item("demo:A")["lease_until"]
+    w.clock.advance(60)
+    assert results(w.store.replay(principal, [json.loads(path.read_text())])) == ["ok"]
+    assert w.store._item("demo:A")["lease_until"] == lease
+
+
+@pytest.mark.parametrize("verb,fields", [("claim", {"lease_s": 600}), ("set_priority", {"n": 7})])
+@pytest.mark.parametrize("outbox_enabled", [False, True])
+def test_unqueued_writes_print_the_key_sent_to_keeper(verb, fields, outbox_enabled,
+                                                     tmp_path, monkeypatch, capsys):
+    path = tmp_path / "outbox.jsonl"
+    monkeypatch.delenv("PG_OUTBOX", raising=False)
+    monkeypatch.delenv("PG_IDEMPOTENCY_KEY", raising=False)
+    if outbox_enabled:
+        monkeypatch.setenv("PG_OUTBOX", str(path))
+    session = Session(url="http://127.0.0.1:1")
+    monkeypatch.setattr(session, "token", lambda: "test-token")
+    sent_keys = []
+
+    def lost_reply(request, *, timeout):
+        sent_keys.append(request.get_header("Idempotency-key"))
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr("urllib.request.urlopen", lost_reply)
+    assert write(session, verb, {"key": "demo:A", **fields}) == 3
+    key, = sent_keys
+    assert key
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert f"outcome unknown, repeat with PG_IDEMPOTENCY_KEY={key}\n" in captured.err
+    assert not path.exists()
 
 
 def test_reordered_stale_and_revoked_entries_are_refused(w):

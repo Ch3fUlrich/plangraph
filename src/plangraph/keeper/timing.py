@@ -7,21 +7,29 @@ import time
 
 clock = time.monotonic
 THRESHOLD_MS = 250
+_LATENCY_VERBS = frozenset({"show", "heartbeat", "set_priority"})
 _parts = ContextVar("keeper_timing_parts", default=None)
-_request_lock = ContextVar("keeper_request_lock", default=None)
+_request_timer = ContextVar("keeper_request_timer", default=None)
 
 
 @contextmanager
 def outside_request_lock():
     """Suspend the HTTP request lock for IO that never accesses the store."""
-    lock = _request_lock.get()
-    if lock is not None:
-        lock.release()
+    timer = _request_timer.get()
+    if timer is None:
+        yield
+        return
+    token = _request_timer.set(None)
+    timer.release()
     try:
         yield
     finally:
-        if lock is not None:
-            lock.acquire()
+        try:
+            timer.acquire()
+        finally:
+            _request_timer.reset(token)
+
+
 _fields = ("build_ms", "encode_ms", "sign_ms", "write_ms", "tick_ms", "record_ms", "submit_ms")
 _events = {"request_timing", "writer_timing", "reaper_timing", "snapshot_timing",
            "changelog_timing"}
@@ -74,12 +82,19 @@ def _emit(event, kind, wait, hold, parts):
         values = (wait, hold, *(parts.get(field, 0) for field in _fields))
         if any(type(value) is not int or value < 0 for value in values):
             return  # a failed clock sample leaves None and its line is dropped here
-        if (event in {"snapshot_timing", "changelog_timing", "reaper_timing"}
+        verb = getattr(parts, "verb", None)
+        if verb not in _LATENCY_VERBS and (event in {"snapshot_timing", "changelog_timing", "reaper_timing"}
                 or event == "request_timing" and kind in {"read", "write"}) and wait + hold < THRESHOLD_MS:
             return
         names = ("wait_ms", "hold_ms", *_fields)
         line = f"keeper: {event} kind={kind} " + " ".join(
             f"{name}={value}" for name, value in zip(names, values))
+        if verb:
+            query = parts.get("query_ms", 0)
+            if type(query) is not int or query < 0:
+                return
+            line += (f" verb={verb} total_ms={parts.total_ms} query_ms={query}"
+                     f" snapshot_write_ms={parts.get('write_ms', 0)}")
         if getattr(parts, "pending", None) is not None:
             parts.pending.append(line)
         else:
@@ -91,29 +106,45 @@ def _emit(event, kind, wait, hold, parts):
 class RequestTimer:
     """Own the lock: wait starts at acquire, hold ends before release."""
 
-    def __init__(self, lock, kind="other", event="request_timing"):
+    def __init__(self, lock, kind="other", event="request_timing", *, verb=None):
         self.lock, self.kind, self.event = lock, kind, event
+        self.verb = verb
+
+    def acquire(self):
+        start = _sample()
+        self.lock.acquire()
+        self.held = _sample()
+        elapsed = _ms(start, self.held)
+        self.wait_ms = None if elapsed is None or self.wait_ms is None else self.wait_ms + elapsed
+
+    def release(self):
+        end = _sample()
+        self.lock.release()
+        elapsed = _ms(self.held, end)
+        self.hold_ms = None if elapsed is None or self.hold_ms is None else self.hold_ms + elapsed
+        return end
 
     def __enter__(self):
         self.start = _sample()
-        self.lock.acquire()
-        self.lock_token = _request_lock.set(self.lock)
-        self.held = _sample()
+        self.wait_ms = self.hold_ms = 0
+        self.acquire()
+        self.lock_token = _request_timer.set(self)
         self.parts = _Parts()
+        self.parts.verb = self.verb
         self.parts.pending = []
         self.token = _context(self.parts)
         return self
 
     def __exit__(self, *exc):
-        _request_lock.reset(self.lock_token)
-        end = _sample()
+        _request_timer.reset(self.lock_token)
         try:
-            self.lock.release()
+            end = self.release()
+            self.parts.total_ms = _ms(self.start, end)
         finally:
             try:
-                if self.token is not None and None not in (self.start, self.held, end):
-                    _emit(self.event, self.kind, _ms(self.start, self.held),
-                          _ms(self.held, end), self.parts)
+                if self.token is not None and None not in (self.wait_ms, self.hold_ms,
+                                                           getattr(self.parts, "total_ms", None)):
+                    _emit(self.event, self.kind, self.wait_ms, self.hold_ms, self.parts)
                 else:
                     self.parts.pending.clear()
             except Exception:

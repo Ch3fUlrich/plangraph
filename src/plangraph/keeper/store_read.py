@@ -142,7 +142,7 @@ class ReadMixin:
 
     def _show(self, key):
         item = self._get_or_refuse(key)
-        index = {it["key"]: it for it in self._all_items()}
+        index = self._item_neighborhood(item)
         deps = [{"key": dep, "state": index.get(dep, {}).get("state")}
                 for dep in item["depends_on"]]
         unblocks = sorted(
@@ -196,7 +196,7 @@ class ReadMixin:
     def _brief(self, key):
         """The short task brief: identity, state, requirements, latest note."""
         item = self._get_or_refuse(key)
-        index = {it["key"]: it for it in self._all_items()}
+        index = self._item_neighborhood(item)
         deps = [{"key": dep, "state": index.get(dep, {}).get("state")}
                 for dep in item.get("depends_on") or []]
         return self._brief_context(_build_brief(item, deps), item, index)
@@ -330,7 +330,7 @@ class ReadMixin:
         Reads only the ``alerts`` table (written when an alert is raised or
         cleared).  A row counts when it is open, its item is open, claimed or
         in_review and it was seen inside ``alert_window_s``; a refusal row is an
-        alert from its second refusal.  Nothing is deleted from the database.
+        alert from its second refusal.  Overdue alerts resolve when their review round ends. Nothing is deleted from the database.
         """
         state = {it["key"]: it["state"] for it in scope}
         cutoff = now - self.alert_window_s

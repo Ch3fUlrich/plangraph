@@ -735,7 +735,7 @@ class CreateMixin:
         self._checked_priority(n)
         with self._write():
             self._apply_priority(principal, key, n, now)
-        return {"key": key, "priority": int(n)}
+            return self._finish_retryable_write(principal, {"key": key, "priority": int(n)})
 
     @staticmethod
     def _checked_priority(n):

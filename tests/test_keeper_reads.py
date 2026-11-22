@@ -380,6 +380,25 @@ def test_alerts_reads_the_refusals_inside_the_window_not_the_stored_count(w):
     assert w.store.alerts(w.p("reader"))["history"]["refusal_keys"] == 1
 
 
+def test_alerts_keep_overdue_finding_in_history_after_review_changes(w):
+    key = "demo:A"
+    epoch = to_in_review(w, key)
+    w.clock.advance(w.store.review_overdue_s + 1)
+    w.store.reap(w.p("system"))
+    alerts = w.store.alerts(w.p("reader"))
+    assert alerts["review_overdue"] == [key]
+    assert [row["code"] for row in alerts["findings"]] == ["review_overdue"]
+
+    w.store.verdict(w.p("reviewer"), key, False, "needs changes")
+    alerts = w.store.alerts(w.p("reader"))
+    assert not alerts["findings"] and alerts["history"]["findings"] == 1
+
+    w.clock.advance(1)
+    w.store.submit(w.p("l1main"), key, epoch)
+    alerts = w.store.alerts(w.p("reader"))
+    assert not alerts["findings"] and alerts["history"]["findings"] == 1
+
+
 # ------------------------------------------------------------------ digest
 
 def test_digest_router_only(w):
