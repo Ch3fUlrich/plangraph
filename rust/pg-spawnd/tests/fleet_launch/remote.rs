@@ -364,6 +364,7 @@ fn deliver(s: &Sandbox, encoded: &str, payload: &Value) -> Output {
             encoded,
         ])
         .env("HOME", s.path("target"))
+        .env("FLEET_MEMINFO", s.path("memory-fixture-hop"))
         .env("ROUTING_STATE_DIR", s.path("target/.local/state/routing"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
