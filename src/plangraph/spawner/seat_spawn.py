@@ -271,10 +271,12 @@ def admit(service, options, *, card=None, preview=False):
     repo = Path(named or getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     movable = not named  # A run with no checkout named anywhere may be placed on any work drive.
     from .host_ready import local_disk_admission
-    if review_workspace and not local_worker:
-        selected, disk = None, 'review workspace requires a registered worker host'
-    else:
-        selected, disk = local_disk_admission(repo, service, role, movable=movable)
+    def disk_admission():
+        if review_workspace and not local_worker:
+            return None, 'review workspace requires a registered worker host'
+        return local_disk_admission(repo, service, role, movable=movable)
+
+    selected, disk = disk_admission()
 
     def use_local():
         if selected is not None:
@@ -356,7 +358,7 @@ def admit(service, options, *, card=None, preview=False):
                     if time.time() < queued['queued_until']:
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
                         _, memory = resources(service)
-                        selected, disk = local_disk_admission(repo, service, role, movable=movable)
+                        selected, disk = disk_admission()
                         health = disk or local_readiness_refusal()
                         rows = load_rows()
                         if not disk and not overflow.memory_refusal(memory, role_mb, floor):
