@@ -82,8 +82,9 @@ reviews, CI and the final PLAN block. It refuses absent/stale ACCEPT evidence,
 non-green or missing CI, and workflow edits whose touching commits lack a
 `Gate-Edit: D-<id>` trailer, including edits introduced by merge resolution (a main-into-lane merge that resolves a workflow conflict carries the trailer in its own message: the commit gate refuses it at push and in CI, and `build` refuses a PR head with such a merge before it builds). The batch key is explicit; part Plan-Items do not
 stand in for the batch's PLAN key. After land reports included parts as merged,
-cleanup invokes `pg-worktree-sweep --apply --delete-remote` with exact saved
-SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
+cleanup invokes `pg-worktree-sweep --apply --delete-remote --include-merged` with exact
+saved SHAs, worktree paths and branches for landed parts. The same pass checks
+other idle worktrees under the scanned roots for local removal. Configure
 `PG_PINS` and `PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"`; authority failures
 protect host state and cleanup errors never fail land. See [pg-reap](docs/pg-reap.md)
 for idle thresholds, run records, restore TSVs and remote SHA leases.

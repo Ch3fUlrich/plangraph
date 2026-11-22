@@ -440,7 +440,7 @@ def close_merged_items():
 
 
 def cleanup_landed(st, landed):
-    """Best effort cleanup with exact state SHAs; all sweep protections still apply."""
+    """Sweep idle local trees and retain exact state SHAs for landed targets."""
     try:
         repo = git("rev-parse", "--show-toplevel").stdout.strip()
         trees = worktrees()
@@ -451,9 +451,15 @@ def cleanup_landed(st, landed):
                 if name == branch or (not name and git("rev-parse", "HEAD", cwd=path).stdout.strip() == rec["head"]):
                     targets.append((path, name, rec["head"]))
         pins = os.environ.get("PG_PINS", str(Path.home() / ".config/plangraph/pins.json"))
-        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--delete-remote"]
+        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--delete-remote", "--include-merged"]
+        roots = dict.fromkeys(Path(path).parent for path, _, _ in targets)
+        for key in ("PG_WORKTREES", "PG_CLAUDE_WORKTREES", "PG_RUNS", "PG_RUN_WORKTREES"):
+            if os.environ.get(key):
+                roots[Path(os.environ[key])] = None
+        for root in roots:
+            argv.extend(["--root", str(root)])
         for path, branch, sha in targets:
-            argv.extend(["--root", str(Path(path).parent), "--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
+            argv.extend(["--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
         for rec in landed:
             branch = st["prs"][str(rec["pr"])]["ref"]
             argv.extend(["--remote-target", f"{branch}:{rec['head']}"])
