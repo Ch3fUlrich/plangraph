@@ -59,9 +59,9 @@ ALLOWED = [
 
 
 @cases(ALLOWED)
-def test_allowed(guard, name, cmd, needle):
+def test_allowed(guard, name, cmd, needle, tmp_path):
     assert guard.check(cmd) is None, name
-    r = run_bash(cmd)
+    r = run_bash(cmd, cwd=tmp_path)
     assert r.returncode == 0, (name, r.stderr)
     assert r.stderr == b""
 
