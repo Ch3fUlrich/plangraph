@@ -80,6 +80,8 @@ RUST_INPUTS: tuple[str, ...] = (
     "docs/workspace-resolver.md",
     "skills/review/SKILL.md",  # Native writer review composition fixture.
     "tools/seat_record.py",  # Native review seat binding fixture.
+    "tools/merge_batch_build.py",  # Landing journal and merge-policy fixtures.
+    "tools/pgtest.py",  # Process and database helpers loaded by the preflight fixtures.
     "skills/router-core/SKILL.md",
     "changelog.d/FLEET-WINDOW-CATALOG.md",
     "changelog.d/PLACEMENT-RULES-AUDIT.md",
