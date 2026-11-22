@@ -63,8 +63,10 @@ def journal(env):
     binary = env.stubs / "plangraph"
     binary.write_text("""#!/usr/bin/env python3
 import json, os, subprocess, sys
+from pathlib import Path
 from plangraph.keeper.auth import Principal
 from plangraph.keeper.db import open_db
+from plangraph.keeper.evidence_spawner import SpawnerRecordAdapter
 from plangraph.keeper.store import Store
 
 args = sys.argv[1:]
@@ -75,12 +77,15 @@ if args == ['landing', 'journal']:
                                        text=True).split()[0]
         assert main == body['base'], 'the journal must be prepared before main moves'
         if os.environ.get('LEGACY_LANDING'):
-            body.pop('mode')
+            body.pop('mode', None)
             body.pop('receipt_inputs', None)
     if body['action'] == 'landed' and os.environ.get('INTERRUPT_LANDING'):
         sys.exit('interrupted before saving the part outcomes')
     db = open_db(os.environ['JOURNAL_DB'], backend='sqlite')
-    print(json.dumps(Store(db).land(Principal('lander', 'router', []), body)))
+    cfg = Path.home() / '.config/plangraph/keeper.json'
+    mirror = json.loads(cfg.read_text()).get('spawner_records_dir') if cfg.is_file() else None
+    store = Store(db, ctx={'spawner_records': SpawnerRecordAdapter(mirror)})
+    print(json.dumps(store.land(Principal('lander', 'router', []), body)))
     db.close()
 elif args[:2] == ['landing', 'verify-hosts']:
     head = args[-1]

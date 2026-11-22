@@ -159,7 +159,7 @@ def test_route_and_refusal(tmp_path, capsys):
     plan = json.loads(capsys.readouterr().out)
     assert plan['first_leg']['model'] == 'omniroute/cx-gpt-6.2-sol-medium'
     assert plan['first_leg']['effort'] == 'medium'
-    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement', 'agy_quota_states'}
+    assert set(plan) == {'legs', 'first_leg', 'skipped', 'p_source', 'review_seats', 'reasons', 'error', 'gaps', 'candidates', 'placement', 'agy_quota_states', 'effort', 'static_v0'}
     assert plan['placement'] == {'host': None, 'reason': 'placement_not_evaluated', 'free_mb': None}
     assert main(['--state', str(tmp_path), 'spawn', 'task']) == 2
     assert 'spawn by card' in capsys.readouterr().err
