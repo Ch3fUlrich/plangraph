@@ -38,11 +38,12 @@ with tempfile.TemporaryDirectory() as directory:
     run = dict(run_id='run-review', role='review', status='running')
     with patch.dict(os.environ, HOME=directory, USERPROFILE=directory, XDG_CONFIG_HOME=str(config.parent),
                     PLANGRAPH_HOST_NAME='local'), patch.object(seat_spawn, 'resources', return_value=(0, 30000)), (
-            patch.object(host_ready, 'local_disk_refusal', return_value=None)), (
+            patch.object(host_ready, 'local_disk_admission', return_value=(None, None))) as disk, (
             patch.object(overflow, 'remote_spawn', return_value=run)) as spawn:
         service = SpawnService(state=root / 'state')
         card = {'diff_ref': {'repo': checkout, 'base': 'abc', 'head': 'def'}}
         record = service.admit_spawn({'role': 'review', 'prompt': 'fixture'}, card=card)
+        disk.assert_called_once_with(pathlib.Path(checkout).resolve(), service, 'review', movable=False)
         host, route, sent, *_ = spawn.call_args.args
         assert host == 'windows-hop' and route['wsl_distro'] == 'Ubuntu', spawn.call_args
         assert sent == card and 'cwd' not in sent, sent
