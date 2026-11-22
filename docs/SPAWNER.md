@@ -260,8 +260,8 @@ attempts with provider stop details, job id, pid, and stdout tail.
 These records are the only source for `--review-of`; unknown ids refuse. Supervisors start in their own systemd user scope (`cli.scope_argv`; `PLANGRAPH_SUPERVISOR_SCOPE=0` opts out) so a caller's handoff does not end the run, and record `supervisor_pid`; a gone supervisor whose record holds the child's exit keeps that real exit instead of `orphaned`; a route refusal keeps its skip list in `skipped`, not `error`. Linux supervisors record their process start-time token; non-Linux supervisor startup skips the `/proc` import and lookup. POSIX orphan checks attempt the `/proc` lookup when a recorded start-time token is present, even on non-Linux hosts. A reused supervisor pid ends the run as `orphaned` before signaling; matching or unreadable start-time evidence retains the POSIX missing-process check (permission denied means alive). Windows orphan checks return before importing process-stat helpers or signaling.
 
 On terminal save the supervisor publishes a completion per run to
-`inbox/parent.jsonl` and the authenticated live keeper HTTP sink. Events
-include stable `event_id`, DONE/FAILED, run_id, rc, head_sha, take_cmd and
+`inbox/parent.jsonl` and the authenticated Keeper sink. Native cards with `parent_session` use that session's inbox. Events
+include stable `event_id`, DONE/FAILED/REFUSED, run_id, rc, head_sha, take_cmd and
 discard_cmd. `PLANGRAPH_SPAWN_PARENT_SESSION` and `PLANGRAPH_SPAWN_ITEM` identify
 the destination session and keeper item. The private parent inbox does not by
 itself inject a message into an agent session. Terminal run records are the
