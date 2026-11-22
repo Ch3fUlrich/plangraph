@@ -93,7 +93,6 @@ fn redact_inner(text: &str, assignments: bool, allow_shas: &BTreeSet<String>) ->
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
-    let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
     let out = if assignments {
         let out = super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5]);
         let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
@@ -102,6 +101,7 @@ fn redact_inner(text: &str, assignments: bool, allow_shas: &BTreeSet<String>) ->
         out
     };
     let out = super::redact_wrapped::redact_wrapped(&out);
+    let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
     let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();

@@ -213,9 +213,8 @@ class LiveLog:
                 pass
 
 async def collect(runner, job_id, proc):
-    from .runner import redact
     from .reap import cancel_and_close
-    from .env_redact import early_refusal, harness_limit_line, redact_env_values, OutputLines
+    from .env_redact import early_refusal, harness_limit_line, redact_env_values, redact_output, OutputLines
     job = runner.jobs[job_id]
     env = runner._child_envs.get(job_id, os.environ)
     limits = getattr(job, '_watchdog_limits', None) or thresholds()
@@ -225,8 +224,8 @@ async def collect(runner, job_id, proc):
     refused = asyncio.Event()
     seen = {'n': 0, 'r': 0}   # activity lines run-wide (stdout + stderr): the first REFUSAL_MAX_LINES lines and REFUSAL_MAX_FRAMES frames may speak a refusal
     def scrub(text):
-        return redact(redact_env_values(text, env))
-    gate = RefusalGate(refused, job, scrub)
+        return redact_env_values(text, env)
+    gate = RefusalGate(refused, job, lambda text: redact_output(scrub(text)))
     from .stall_probe import ToolLoop
     tools, loop_found = ToolLoop(), asyncio.Event()
     stdout_at = job.start_time

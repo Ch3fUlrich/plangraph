@@ -22,6 +22,7 @@ SPECS = (
     TokenSpec(r'xox[abprs]-', r'[A-Za-z0-9_-]', 10, False),
     TokenSpec(r'AKIA', r'[0-9A-Z]', 16, True),
     TokenSpec(r'AIza', r'[0-9A-Za-z_-]', 30, False),
+    TokenSpec(r'[sr]k_(?:live|test)_', r'[A-Za-z0-9]', 20, False),
 )
 
 
@@ -58,7 +59,7 @@ def redact_wrapped(text):
     return ''.join((*out, text[copied:]))
 
 
-def _wrapped_spans(text):
+def _wrapped_spans(text, *, unfinished=False):
     """Consume contiguous bodies across LF/CRLF, exactly like redact_wrapped.rs.
 
     Before the floor a continuation may end mid-line. After it, only whole
@@ -87,6 +88,9 @@ def _wrapped_spans(text):
                 next_start = end + 1
             else:
                 break
+            if unfinished and next_start == len(text):
+                yield match.start(), end
+                return
             next_run = body.match(text, next_start)
             if count >= spec.floor:
                 line_end = next_run.end() if next_run else next_start
@@ -98,9 +102,24 @@ def _wrapped_spans(text):
             if not next_run:
                 break
             end, wrapped = next_start, True
-        if wrapped and count >= spec.floor:
+        if not unfinished and wrapped and count >= spec.floor:
             yield match.start(), end
             copied = end
+
+
+def pending_wrapped_line(text):
+    """Start of the line whose prefixed body can still join the next read."""
+    span = next(_wrapped_spans(text, unfinished=True), None)
+    if span is None:
+        return len(text)
+    def line_start(offset):
+        return max(text.rfind('\n', 0, offset), text.rfind('\r', 0, offset)) + 1
+
+    boundary = line_start(span[0])
+    for start, end in reversed(list(_wrapped_spans(text))):
+        if start < boundary < end:
+            boundary = line_start(start)
+    return boundary
 
 
 _NAME_KEYWORD = re.compile(r'token|secret|password|passwd|api_?key|access_?key|private_?key|credential')

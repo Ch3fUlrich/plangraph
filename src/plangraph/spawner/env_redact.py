@@ -5,7 +5,7 @@ import re
 import subprocess
 from decimal import Decimal
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
-from .redact_tokens import redact_wide_assignments
+from .redact_tokens import redact_wide_assignments, pending_wrapped_line
 
 
 def _redact_pem(text):
@@ -154,13 +154,13 @@ def _redact(value, *, source):
             return [_redact(v, source=source) for v in value]
         if isinstance(value, str):
             value = _redact_pem(value)
-            value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', value)
             if not source:
                 value = redact_wide_assignments(value, _ASSIGNMENT)
                 # P joins values behind shielded names, then main's order runs.
                 value = join_shielded_assignments(value, _ASSIGNMENT)
                 value = _redact_assignments(value)
             value = redact_wrapped(value)
+            value = re.sub(r'(?i)Bearer\s+(?:\[REDACTED\]|[^\s"\x27]+)', 'Bearer [REDACTED]', value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
@@ -226,26 +226,46 @@ def _redact_prompt(prompt, scrub):
 
 class OutputLines:
     """Child streams only: hold incomplete lines and scrub before logs/tail cuts."""
-    def __init__(self, scrub, allow_shas=()):
+    def __init__(self, scrub, allow_shas=(), *, keep_overlong=False):
+        self.keep_overlong, self.withheld = keep_overlong, False
         self.scrub, self.allow_shas, self.pending, self.discarding = scrub, frozenset(allow_shas), '', False
 
     def feed(self, text, final=False):
+        if self.withheld:
+            return ''
         self.pending += text
         if self.discarding:
             match = re.search(r'[\r\n]', self.pending)
             self.pending = self.pending[match.end():] if match else ''
             self.discarding = not bool(match)
-        end = len(self.pending) if final else max(self.pending.rfind('\n'), self.pending.rfind('\r')) + 1
-        text, self.pending = self.pending[:end], self.pending[end:]
+        end = len(self.pending)
+        if not final:
+            # A trailing CR can become CRLF in the next read.
+            scan = self.pending[:-1] if self.pending.endswith('\r') else self.pending
+            end = max(scan.rfind('\n'), scan.rfind('\r')) + 1
+            safe_end = pending_wrapped_line(self.pending[:end])
+        else:
+            safe_end = end
+        text, self.pending = self.pending[:safe_end], self.pending[safe_end:]
         if len(self.pending) > 65536:
-            # An arbitrarily long credential cannot safely be partially emitted.
-            text += '[autoos:overlong line withheld]\n'
-            self.pending, self.discarding = '', True
+            if safe_end < end or pending_wrapped_line(self.pending + '\n') <= len(self.pending):
+                # The context cannot be dropped while a continuation is unresolved.
+                self.pending, self.withheld = '', True
+                text += '[autoos:overlong credential output withheld]\n'
+            elif self.keep_overlong:
+                safe = self.clean(self.pending)
+                text = self.clean(text) + safe[:-4096] + ' [truncated chunk]\n'
+                self.pending = safe[-4096:]
+                return text
+            else:
+                text += '[autoos:overlong line withheld]\n'
+                self.pending, self.discarding = '', True
         if not text:
             return ''
+        return self.clean(text)
+
+    def clean(self, text):
         try:
-            # run_watchdog's callback removes env values; broad output-only
-            # rules belong here, not in its shared prompt/record scrubber.
             return redact_output(self.scrub(text), allow_shas=self.allow_shas)
         except Exception:
             return '[autoos:redaction failed; output withheld]\n'

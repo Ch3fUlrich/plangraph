@@ -59,6 +59,12 @@ pub(crate) const SPECS: &[TokenSpec] = &[
         floor: 30,
         exact: false,
     },
+    TokenSpec {
+        prefix: "[sr]k_(?:live|test)_",
+        body: "[A-Za-z0-9]",
+        floor: 20,
+        exact: false,
+    },
 ];
 
 pub(crate) fn pattern() -> String {

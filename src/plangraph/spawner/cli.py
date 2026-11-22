@@ -28,36 +28,23 @@ def _wait_runs(service, result, wait):
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
-    from .env_redact import redact_env_values
+    from .env_redact import OutputLines, redact_env_values
     from plangraph.routing_support.host_keys import redaction_env
     import codecs
+
     decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
-    # The parent env never holds a file key; compute the redaction env (parent
-    # plus resolvable host keys) once, not per chunk (D-2759).
     redact_base = redaction_env(os.environ)
-    def clean(data):
-        if isinstance(data, bytes):
-            data = data.decode('utf-8')
-        return redact_output(redact_env_values(data, redact_base)).encode()
-    pending = b''
+    lines = OutputLines(lambda text: redact_env_values(text, redact_base), keep_overlong=True)
     for chunk in chunks:
-        pending += decoder.decode(chunk).encode('utf-8')
-        observe(len(pending))
-        while b'\n' in pending:
-            line, pending = pending.split(b'\n', 1)
-            write(clean(line + b'\n'))
-        if len(pending) >= 65536:
-            # Redact before choosing the boundary, so a known secret spanning
-            # that boundary cannot leave either half in the output.
-            safe = clean(pending)
-            boundary = len(safe) - 4096
-            while boundary > 0 and safe[boundary] & 0xc0 == 0x80:
-                boundary -= 1
-            write(safe[:boundary] + b' [truncated chunk]\n')
-            pending = safe[boundary:]
-    pending += decoder.decode(b'', final=True).encode('utf-8')
-    if pending:
-        write(clean(pending.decode('utf-8')))
+        decoded = decoder.decode(chunk)
+        observe(len(lines.pending) + len(chunk))
+        safe = lines.feed(decoded)
+        if safe:
+            write(safe.encode())
+    safe = lines.feed(decoder.decode(b'', final=True), final=True)
+    if safe:
+        write(safe.encode())
+
 
 def _rotate_log(path):
     """Move the full log to `path.1` (best effort) and empty `path`, which stays present throughout."""

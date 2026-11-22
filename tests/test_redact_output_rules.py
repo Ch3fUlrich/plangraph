@@ -30,10 +30,10 @@ SECRETS = [token(*family) for family in FAMILIES]
 SECRETS.append('ey' + 'JAb1Ab1Ab' + '.Cd2Cd2Cd' + '.Ef3Ef3Ef')
 
 
-async def collect(text, tmp_path, monkeypatch, *, monitor=False, env=None):
+async def collect(text, tmp_path, monkeypatch, *, monitor=False, env=None, chunks=None, refusal=False):
     """Real child stream collector (and optionally the final runner monitor)."""
     child = runner.SpawnerRunner(default_cwd=str(tmp_path))
-    job = runner.JobInfo('j', 'running', '', 'synthetic', role='review',
+    job = runner.JobInfo('j', 'running', '', 'synthetic', role='implement' if refusal else 'review',
                          command=['synthetic-child'], cwd=str(tmp_path))
     job._live_log = tmp_path / 'live.log'
     job._watchdog_baseline = None
@@ -41,20 +41,27 @@ async def collect(text, tmp_path, monkeypatch, *, monitor=False, env=None):
     child.jobs['j'] = job
     child._child_envs['j'] = env or {}
     streams = [asyncio.StreamReader(), asyncio.StreamReader()]
-    for stream in streams:
-        stream.feed_data(text.encode())
-        stream.feed_eof()
-    proc = SimpleNamespace(stdout=streams[0], stderr=streams[1], returncode=0)
-    if monitor:
+    async def feed():
+        for part in chunks or [text]:
+            for stream in streams:
+                stream.feed_data(part.encode())
+            await asyncio.sleep(0)
+        for stream in streams:
+            stream.feed_eof()
+    feeder = asyncio.create_task(feed())
+    proc = SimpleNamespace(stdout=streams[0], stderr=streams[1], returncode=int(refusal))
+    if monitor or refusal:
         async def noop(*args):
             pass
         monkeypatch.setattr(child, '_reap_process', noop)
+    if monitor:
         monkeypatch.setattr(child, '_check_git_config_guard', lambda *args: None)
         monkeypatch.setattr(runner, 'witness_native', noop)
         await child._monitor_process('j', proc, 'synthetic')
         assert job.status == 'completed'
     else:
         await run_watchdog.collect(child, 'j', proc)
+    await feeder
     return child, job
 
 
@@ -228,3 +235,25 @@ def test_cli_stream_doctor_and_env_value_results_use_output_rules(monkeypatch):
     cli._drain_chunks([text[:10].encode(), text[10:].encode()], written.append)
     assert b''.join(written) == b'[REDACTED] [autoos:redacted]\n'
     assert doctor.clean(text) == '[REDACTED] [autoos:redacted]'
+
+
+@pytest.mark.parametrize('separate', [False, True])
+def test_wrapped_token_in_child_streams(monkeypatch, tmp_path, separate):
+    first, second = 'gh' + 'p_' + 'A9' * 6, 'B8' * 7
+    text = first + '\r\n' + second + '\r\n'
+    chunks = [first + '\r', '\n' + second + '\r\n'] if separate else [text]
+    written = []
+    cli._drain_chunks((part.encode() for part in chunks), written.append)
+    _, job = asyncio.run(collect(text, tmp_path, monkeypatch, chunks=chunks))
+    for output in (b''.join(written).decode(), job.stdout, job.stderr,
+                   (tmp_path / 'live.log').read_text()):
+        assert not any(part in output for part in (first, second))
+        assert '[REDACTED]' in output
+
+
+def test_dispatch_refusal_event_uses_output_redaction(monkeypatch, tmp_path):
+    value = 'ab12' * 10
+    _, job = asyncio.run(collect('Error: quota exceeded ' + value + '\n', tmp_path, monkeypatch, refusal=True))
+    event = next(event for event in job.events if event['event'] == 'dispatch_refused')
+    assert value not in event['reason']
+    assert '[REDACTED]' in event['reason']
