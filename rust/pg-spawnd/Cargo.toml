@@ -44,6 +44,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_SystemServices",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+base64 = "0.22"
+fancy-regex = "0.16"
+
 [[test]]
 name = "fleet_launch_parity"
 harness = false

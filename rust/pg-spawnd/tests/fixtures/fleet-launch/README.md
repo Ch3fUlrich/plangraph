@@ -6,17 +6,27 @@ Run on Linux from the repository root:
 cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test fleet_launch_parity
 ```
 
-The ordinary Rust CI test step discovers this target. The target finds the
+The ordinary Rust CI test step runs these fixtures against `pg-spawnd session`
+on Linux. The target also finds the
 annex revision (`2b5a8c90725e2fdf4d5d5671c3e4589f5e03a5bf`) in a checkout
-under `~/code` and stages its launcher and policy in a temporary directory.
-The data worktree is read-only and can be on any revision. Runners without a
-checkout containing the pin print a skip reason. To run against a replacement,
+under `~/code` and stages its launcher and policy to compare both implementations
+against the same fixtures. The data worktree is read-only and can be on any
+revision. Without the pin, the Rust fixtures run with the included synthetic
+policy and settings. To run against a replacement,
 set `PLANGRAPH_FLEET_LAUNCH` to
 the executable path. It must accept the same CLI and state environment. The test for
 editing the Python launcher’s bundled admission policy runs only against the staged
 pin, where test settings can be installed inside the disposable directory.
-Destination replay uses the reference checkout’s directory name to match the
-Python sender’s installation layout.
+Destination replay uses the installation path in the captured receiver.
+
+The Rust CLI takes the five fleet launcher positionals and the same flags after
+`pg-spawnd session`. Set `PLANGRAPH_FLEET_OPS` to use a specific directory for its
+policy, default MCP config, style and lean settings. By default it reads
+`$ROUTER_HOME/ops`, the installed router’s ops next to its bin directory, or
+`./ops` when started in the router directory. The forwarded receiver uses the
+same installation path relative to the destination home. Set
+`PLANGRAPH_FLEET_REMOTE_ROUTER` if the caller’s ops directory is outside that layout.
+These fixtures use temporary state and fake peers for every launch.
 
 The harness isolates HOME, state, cwd, and PATH. Rust peers stand in for Claude, SSH,
 and Windows memory probes. A destination test delivers the captured envelope to a
@@ -37,7 +47,7 @@ Rust target invokes that test.
 | 2 | `dry-run.json`, numbered name, guard and boolean flags. `records::check` covers metadata, parent and saved-session options. |
 | 3 | `refusals.json`, bad context guard. |
 | 4 | `dry-run.json`, numbered writer. |
-| 5 | `refusals.json`, L2 refusal. Data test `test_fleet_launch_refused_roles.py` covers malformed policy. |
+| 5 | `refusals.json`, L2 refusal. `check_role_patterns` covers malformed patterns, lookbehind and an unreadable policy. |
 | 6 | `records::check_respawn`, selected saved snapshot supplies the cap and metadata. |
 | 7 | `refusals.json`, path-like respawn session. |
 | 8 | `refusals.json`, unknown and disabled hosts. `remote::check_mirror` pins to the named remote. |
@@ -47,18 +57,18 @@ Rust target invokes that test.
 | 12 | `remote::check` and `check_selection_errors`, below-floor and empty-admission refusals. |
 | 13 | `remote::check_selection_errors`, pool order, unknown memory and missing floor. |
 | 14 | `remote::check`, worker headroom and last-resort rule. |
-| 15 | `remote::check`, stubbed remote meminfo. Data test `test_fleet_launch_mem.py` covers the procfs-only local read and timeout. |
-| 16 | `remote::check`, Windows-side reading drives selection and refusal. Data test `test_workstation_slice_a.py` covers local WSL interop. |
+| 15 | `remote::check` and `check_local_memory`, stubbed remote meminfo and real local procfs with an ignored override. `subprocess_capture_times_out_without_waiting_for_exit` checks the timeout path. |
+| 16 | `remote::check` and `check_local_memory`, Windows-side reading over SSH and through local WSL interop. |
 | 17 | `remote::check_selection_errors`, missing and negative floors. Shipped fleet floors are site policy. |
 | 18 | `remote::check` and `refusals.json`, alternate host table, edge flags and local identity. Hostname aliases are site policy. |
-| 19 | Data test `test_fleet_launch_hosts.py` calls the fallback selector directly. Its helper API and fallback diagnostics are outside the launcher CLI. |
-| 20 | `remote::check`, single-line SSH envelope and exact dry-run payload. `check_mirror` covers the forwarded counter for a real launch. |
+| 19 | `legacy_fallback_prefers_the_next_enabled_host_and_can_warn_and_keep_local` checks the fallback helper’s order and exact diagnostics. |
+| 20 | `remote::check`, single-line SSH envelope and exact dry-run payload. Destination replay compares the encoded receiver with the pin. `check_mirror` covers the forwarded counter for a real launch. |
 | 21 | `remote::check_destination`, captured payload stages prompt/MCP, forwards the number and returns the remote record. Respawn without a spec refuses. |
 | 22 | `remote::check_mirror`, preparation error returns uncertainty and never invokes SSH. Transport timeout is covered in data test `test_fleet_launch_hosts.py`. |
 | 23 | `remote::check_mirror`, output passthrough, remote record removal from stdout, local host attribution, snapshot and child list. `records::check_respawn` covers the deferred record target. |
 | 24 | `remote::check_destination` and `records::check`, child never inherits the forwarding marker. |
 | 25 | `dry-run.json` and `records::check_respawn`, default, role and explicit caps. Data test `test_fleet_launch_caps.py` covers invalid policy and cap provenance. |
-| 26 | `records::check`, attended window in the guard and launch records. The lease reader is exercised by data test `test_fleet_launch_caps.py`. |
+| 26 | `records::check`, attended window in the guard and launch records. `future_attended_lease_is_deleted_and_window_is_bounded` checks lease validity and cleanup. |
 | 27 | `refusals::check_enforcement` and `ledger.json`, required metadata and result shape. Path confinement is a data test in `test_fleet_launch_admission.py`. |
 | 28 | `refusals::check_enforcement`, exact real and preview admission messages. Data test `test_fleet_launch_admission.py` covers malformed caps and legacy respawn warnings. |
 | 29 | `refusals::check_enforcement`, status 2, refused ledger row and no dry-run writes. |

@@ -2,11 +2,18 @@ use super::sandbox::SID;
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process;
-
 pub fn invoke(name: &str, args: Vec<String>) -> bool {
+    if name == "fleet-launch" {
+        let error = process::Command::new(env!("CARGO_BIN_EXE_pg-spawnd"))
+            .arg("session")
+            .args(args)
+            .exec();
+        panic!("starting Rust destination: {error}");
+    }
     if !matches!(name, "claude" | "ssh" | "powershell.exe") {
         return false;
     }
@@ -31,6 +38,7 @@ pub fn invoke(name: &str, args: Vec<String>) -> bool {
                     "window": env_value("CLAUDE_CODE_AUTO_COMPACT_WINDOW"),
                     "forwarded": env_value("FLEET_FORWARDED"),
                     "defer": env_value("FLEET_DEFER_RECORD"),
+                    "path": env_value("PATH"),
                 }),
             );
             print!(
@@ -43,7 +51,10 @@ pub fn invoke(name: &str, args: Vec<String>) -> bool {
                 process::exit(read("child.rc").trim().parse().unwrap());
             }
         }
-        "powershell.exe" => print!("{}", read("windows-kb")),
+        "powershell.exe" => {
+            fs::write(root.join("interop"), "").unwrap();
+            print!("{}", read("windows-kb"));
+        }
         "ssh" => {
             let command = args.last().unwrap();
             if command.contains("Get-CimInstance") {
@@ -57,8 +68,13 @@ pub fn invoke(name: &str, args: Vec<String>) -> bool {
                     "unexpected ssh command: {args:?}"
                 );
                 assert!(!command.contains('\n'), "ssh command exceeds one line");
-                let payload: Value = serde_json::from_reader(io::stdin().lock()).unwrap();
-                write("ssh.json", json!({"argv": args, "payload": payload}));
+                let mut wire = String::new();
+                io::stdin().lock().read_to_string(&mut wire).unwrap();
+                let payload: Value = serde_json::from_str(&wire).unwrap();
+                write(
+                    "ssh.json",
+                    json!({"argv": args, "payload": payload, "wire": wire}),
+                );
                 print!("{}", read("ssh.stdout"));
                 if root.join("ssh.stderr").exists() {
                     eprint!("{}", read("ssh.stderr"));
