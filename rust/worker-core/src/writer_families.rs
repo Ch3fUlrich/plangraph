@@ -31,10 +31,6 @@ pub fn python_command(src_root: Option<&Path>) -> Command {
     cmd
 }
 
-fn log_bytes(repo: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
-    git_bytes(repo, args).map_err(|e| e.to_string())
-}
-
 /// Run `code` with `python`, feeding `payload` on stdin; returns stdout. `what` names the
 /// helper in refusals.
 fn run_python(
@@ -171,7 +167,9 @@ pub fn commit_families(
     python: &dyn Fn() -> Command,
 ) -> Result<RangeFamilies, String> {
     let range = format!("{base_sha}..{head_sha}");
-    let attribution = read_commit_families(repo, &[&range], leg_models, python)?;
+    let attribution = read_commit_families(&[&range], leg_models, python, &|args| {
+        git_bytes(repo, args).map_err(|e| e.to_string())
+    })?;
     if attribution.per_commit.is_empty() {
         return Err(format!(
             "refused: no commits found in {}..{}",
@@ -194,36 +192,37 @@ pub fn commit_families(
     Ok(attribution)
 }
 
-/// Attribute just the named commits. Mechanical merges may have no writer family.
+/// Attribute the named commits through the caller's replay Git reader.
+/// Mechanical merges may have no writer family.
 pub fn delta_commit_families(
-    repo: &Path,
     commits: &[String],
     python: &dyn Fn() -> Command,
+    read_log: &dyn Fn(&[&str]) -> Result<Vec<u8>, String>,
 ) -> Result<RangeFamilies, String> {
     if commits.is_empty()
         || commits
             .iter()
             .any(|sha| sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
     {
-        return Err("refused: train delta must name full merge commit SHAs".into());
+        return Err("refused: train delta must name full commit SHAs".into());
     }
     let mut revs = vec!["--no-walk"];
     revs.extend(commits.iter().map(String::as_str));
     revs.push("--");
-    read_commit_families(repo, &revs, &[], python)
+    read_commit_families(&revs, &[], python, read_log)
 }
 
 fn read_commit_families(
-    repo: &Path,
     revs: &[&str],
     leg_models: &[&str],
     python: &dyn Fn() -> Command,
+    read_log: &dyn Fn(&[&str]) -> Result<Vec<u8>, String>,
 ) -> Result<RangeFamilies, String> {
     // Merge commits are read too: their Writer trailers name who resolved the merge.
     let format = "--format=%H%n%P%n%an%n%ae%n%(trailers:separator=%x0a)";
     let mut args = vec!["log", "-z", format];
     args.extend_from_slice(revs);
-    let raw = log_bytes(repo, &args)?;
+    let raw = read_log(&args)?;
     if raw.is_empty() {
         return Ok(RangeFamilies {
             per_commit: Vec::new(),

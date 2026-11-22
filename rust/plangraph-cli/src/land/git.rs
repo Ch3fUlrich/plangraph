@@ -64,6 +64,12 @@ pub fn run(dir: &Path, attributes: Option<&Path>, args: &[&str]) -> Result<Outpu
 
 /// stdout of a git command that must succeed.
 pub fn out(dir: &Path, args: &[&str]) -> Result<String, String> {
+    Ok(String::from_utf8_lossy(&bytes(dir, args)?)
+        .trim()
+        .to_owned())
+}
+
+pub(super) fn bytes(dir: &Path, args: &[&str]) -> Result<Vec<u8>, String> {
     let o = run(dir, None, args)?;
     if !o.status.success() {
         return Err(format!(
@@ -71,7 +77,7 @@ pub fn out(dir: &Path, args: &[&str]) -> Result<String, String> {
             String::from_utf8_lossy(&o.stderr).trim()
         ));
     }
-    Ok(String::from_utf8_lossy(&o.stdout).trim().to_owned())
+    Ok(o.stdout)
 }
 
 pub fn is_ancestor(dir: &Path, old: &str, new: &str) -> Result<bool, String> {

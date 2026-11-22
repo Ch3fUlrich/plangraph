@@ -88,8 +88,12 @@ impl<'a> ReviewPacket<'a> {
         manifest: &super::train::Manifest,
         python: &dyn Fn() -> std::process::Command,
     ) -> Result<Self, String> {
-        let families =
-            pg_worker_core::writer_families::delta_commit_families(repo, &manifest.merges, python)?;
+        let read_log = |args: &[&str]| super::git::bytes(repo, args);
+        let families = pg_worker_core::writer_families::delta_commit_families(
+            &manifest.merges,
+            python,
+            &read_log,
+        )?;
         let mut excluded = BTreeSet::new();
         for (commit, writers) in families.per_commit {
             if manifest.resolution.iter().any(|r| r.commit == commit) && writers.is_empty() {
@@ -103,8 +107,9 @@ impl<'a> ReviewPacket<'a> {
                 .iter()
                 .map(|fix| fix.commit.clone())
                 .collect();
-            let families =
-                pg_worker_core::writer_families::delta_commit_families(repo, &commits, python)?;
+            let families = pg_worker_core::writer_families::delta_commit_families(
+                &commits, python, &read_log,
+            )?;
             for (commit, writers) in families.per_commit {
                 if writers.is_empty() {
                     return Err(format!("resolution author family unavailable for {commit}"));

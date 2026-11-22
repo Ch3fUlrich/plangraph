@@ -48,7 +48,8 @@ parents, actual tree and replay tree. For an adopted resolution it includes the 
 tree to the committed tree. Each standalone resolution carries its commit and first parent, patch,
 and Writer and Harness attribution. `land-train review` takes the same proof inputs and `--item KEY`. It dispatches
 the canonical artifact as a witnessed document review from a clean checkout of the train head.
-Only authors of the train delta are excluded. A mechanical merge can have an empty exclusion set.
+Only authors of the train delta are excluded. Replay and writer attribution read the same pinned
+Git objects with replacement refs disabled. A mechanical merge can have an empty exclusion set.
 `land-train admit --item KEY --review-run ID` repeats the proof and
 requires a passing gateway-witnessed review in the keeper mirror. The serving attempt must be from
 outside the delta's writer families, and the run must match the exact train head and artifact prompt.

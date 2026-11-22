@@ -134,6 +134,25 @@ fn train_delta_binds_standalone_resolution_to_its_patch_and_writer() {
     );
     assert_eq!(packet["excluded"], serde_json::json!(["openai"]));
     assert!(packet["prompt"].as_str().unwrap().contains("+resolved"));
+
+    // Both a regular merge and a standalone resolution use the pinned replay objects.
+    for (commit, parents) in [
+        (&merge, vec![manifest.base.as_str(), head.as_str()]),
+        (&resolution, vec![merge.as_str()]),
+    ] {
+        let tree = g(fx.path(), &["rev-parse", &format!("{commit}^{{tree}}")]);
+        let mut args = vec!["commit-tree", &tree];
+        for parent in parents {
+            args.extend(["-p", parent]);
+        }
+        args.extend(["-m", "replacement\n\nWriter: gemini-4-hydrogen-high"]);
+        let replacement = g(fx.path(), &args);
+        g(fx.path(), &["replace", commit, &replacement]);
+    }
+    let delta = verify_manifest_with(fx.path(), &manifest, &parts, &[], &[]).unwrap();
+    let with_replacements =
+        super::super::delta::ReviewPacket::new(&delta, fx.path(), &manifest, &python).unwrap();
+    assert_eq!(serde_json::to_value(with_replacements).unwrap(), packet);
 }
 
 #[cfg(unix)]
