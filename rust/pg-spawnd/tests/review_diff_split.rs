@@ -518,5 +518,12 @@ fn unfetched_empty_registry_range_is_refused_before_routing() {
     assert_eq!(f.git(&["cat-file", "-t", &head]), "commit");
     assert!(!f.state.path().join("routed").exists());
     let runs = f.state.path().join("runs");
-    assert!(!runs.exists() || runs.read_dir().unwrap().next().is_none());
+    let entries: Vec<_> = runs.read_dir().unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(entries.len(), 1, "one audit record for the refused request");
+    let record: Value =
+        serde_json::from_slice(&std::fs::read(entries[0].path().join("record.json")).unwrap())
+            .unwrap();
+    assert_eq!(record["status"], "refused", "{record}");
+    assert_eq!(record["reason"], "empty_diff", "{record}");
+    assert_eq!(record["legs"], json!([]), "{record}");
 }
