@@ -32,7 +32,7 @@ import time
 
 from .. import views
 from . import context_sources as src
-from .brief import ensure_cap
+from .brief import ensure_cap, superseded_contract
 from .errors import Refused
 
 __all__ = ["ContextMixin", "STALE_DAYS", "READY_GIT_LIMIT", "FORCE_STALE_MAX"]
@@ -210,11 +210,13 @@ class ContextMixin:
             "work_exists": (self._work(item, fetch, fresh_lanes) if git
                             else {"commits": None, "lanes": None}),
         }
+        if contract := superseded_contract(item):
+            ctx["superseded_contract"] = contract
         ctx["stale"] = self._stale_reason(item, ctx)
         return ctx
 
     def _stale_reason(self, item, ctx):
-        why = []
+        why = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
         last = ctx.get("last_activity") or {}
         at = self._parse_iso(last.get("at")) if last.get("at") else None
         if at is not None and item.get("state") not in views.TERMINAL:
@@ -353,7 +355,7 @@ class ContextMixin:
     @staticmethod
     def _claim_staleness(ctx):
         """Shared refusal facts for claim and ready; informational age is separate."""
-        facts = []
+        facts = [ctx["superseded_contract"]] if ctx.get("superseded_contract") else []
         commits = ctx["work_exists"]["commits"]
         lanes = ctx["work_exists"]["lanes"]
         if commits and not (isinstance(lanes, list) and lanes):

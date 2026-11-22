@@ -14,7 +14,7 @@ import re
 
 from ..views import cancelled_gate_dependencies
 from .auth import validate_family
-from .brief import creation_error
+from .brief import creation_error, superseded_contract
 from .errors import Refused
 from .credential_guard import guard
 from .item_fixes import check_fix_limit
@@ -673,12 +673,16 @@ class CreateMixin:
                 self._apply_priority(principal, key, prio, now)
             else:
                 self._raise_for_incidents(principal, item, edit_fields, now)
+        if "description" in edit_fields and superseded_contract(me):
+            dropped.extend([
+                "Superseded plan contract, update title and done_criteria together with description.",
+                f"title: {me.get('title') or ''}",
+                f"done_criteria: {me.get('done_criteria') or ''}",
+            ])
         result = {"key": key}
         if bump_epoch:
             result["epoch"] = new_epoch
         if dropped:
-            # Only when something was actually dropped: every caller (the HTTP
-            # door, the CLI, apply_ops' results) keeps reading ``{"key": ...}``.
             result["warnings"] = dropped
         return result
 

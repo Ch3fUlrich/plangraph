@@ -249,3 +249,32 @@ def test_edit_missing_legacy_tier_defaults_to_standard(world_like, monkeypatch):
                                         {"done_criteria": "2 seats"})
     assert exc.value.code == "validation"
     assert "review_tier is 'standard'" in exc.value.msg
+
+
+def test_description_edit_reports_the_superseded_contract(world_like):
+    world = world_like
+    router = world.p("router")
+    world.store.create_items(router, [
+        defn("GOAL", ["R9"], kind="goal"),
+        defn("R9", title="Launch per spawn plan v6.4",
+             done_criteria="Verify the host counters in spawn plan v6.4"),
+    ])
+    key = "demo:R9"
+    result = world.store.edit_definition(router, key, {
+        "description": "Use one counter per spawn plan v9.",
+    })
+    assert result["warnings"] == [
+        "Superseded plan contract, update title and done_criteria together with description.",
+        "title: Launch per spawn plan v6.4",
+        "done_criteria: Verify the host counters in spawn plan v6.4",
+    ]
+    from plangraph.keeper.fmt import result_text
+    assert "title: Launch per spawn plan v6.4" in result_text("edit_definition", result)
+    assert "mixed plan versions" in world.store.show(router, key, brief=True)["stale"]
+    corrected = world.store.edit_definition(router, key, {
+        "description": "Use one counter per spawn plan v9.",
+        "title": "Launch per spawn plan v9",
+        "done_criteria": "Verify one counter as specified in spawn plan v9",
+    })
+    assert "warnings" not in corrected
+    assert "stale" not in world.store.show(router, key, brief=True)
