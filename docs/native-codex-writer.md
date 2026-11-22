@@ -44,7 +44,8 @@ at the head; `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
 (`review_artifacts::review_text`), never from a file name: the last `VERDICT:`
 line must be canonical. ACCEPT requires repository access and evidence in a
 `FILES READ:` line. The review record sets `tested` from the reviewer's standalone
-`TESTS:` report. An absent report or `TESTS: none:` gives `tested: false`.
+`TESTS:` report. A successful run exposes `review_test_status` as `reported` or
+`untested` in its terminal record. An absent report or `TESTS: none:` is untested.
 The Sonnet seat runs its scoped Bash commands in a read-only review checkout
 with disposable writable build and test scratch space. A different `HEAD:` or weak ACCEPT is `no_verdict`,
 retried twice, then the run ends BLOCKED with
@@ -154,8 +155,9 @@ watchdogs never sample that PID locally. Cancel is forwarded to the target by ru
 ID. A failed SSH cancel leaves the last known run status intact with a query error.
 Set `parent_session` on the card to receive terminal results in that session's
 inbox on the supervising host. A refused launch also raises a Keeper finding
-when the run is linked to an item. Transient native disk and cache refusals are
-rechecked during the admission window before the supervisor returns a refusal.
+when the run is linked to an item. Native admission rechecks transient disk and
+cache limits during its admission window (120 seconds by default). A refusal
+after that window ends the attempt. The caller must submit a new launch.
 
 The Rust MCP bridge delegates native launch, result refresh and cancellation to
 the same Python owner. Remote receipts refresh before returning a result; cancel

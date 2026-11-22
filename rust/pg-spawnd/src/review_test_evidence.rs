@@ -1,30 +1,3 @@
-#[cfg(test)]
-mod tests {
-    use super::reported;
-
-    #[test]
-    fn only_a_standalone_nonempty_tests_line_reports_tests() {
-        for text in [
-            "VERDICT: ACCEPT\n",
-            "TESTS: none: Bash denied\n",
-            "TESTS: NONE\n",
-            "TESTS:   \n",
-            "> TESTS: pytest fixture.py — passed\n",
-            "```text\nTESTS: cargo test -p fixture — passed\n```\n",
-            "~~~~text\n~~~\nTESTS: cargo test -p fixture — passed\n~~~~\n",
-            "    TESTS: pytest fixture.py — passed\n",
-            "TESTS: pytest fixture.py — passed\nTESTS: none: denied\n",
-        ] {
-            assert_eq!(reported(text), None, "{text}");
-        }
-        assert_eq!(
-            reported(
-                "FILES READ: lib.rs\nTESTS: cargo test -p fixture — 1 passed\nVERDICT: ACCEPT"
-            ),
-            Some("cargo test -p fixture — 1 passed")
-        );
-    }
-}
 /// Return the last standalone test report, ignoring Markdown examples.
 pub(crate) fn tests_line(text: &str) -> Option<&str> {
     let mut fence: Option<(u8, usize)> = None;
@@ -59,4 +32,32 @@ pub(crate) fn reported(text: &str) -> Option<&str> {
         let first = report.split(|c: char| c == ':' || c.is_whitespace()).next();
         !report.is_empty() && !first.is_some_and(|word| word.eq_ignore_ascii_case("none"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reported;
+
+    #[test]
+    fn only_a_standalone_nonempty_tests_line_reports_tests() {
+        for text in [
+            "VERDICT: ACCEPT\n",
+            "TESTS: none: Bash denied\n",
+            "TESTS: NONE\n",
+            "TESTS:   \n",
+            "> TESTS: pytest fixture.py — passed\n",
+            "```text\nTESTS: cargo test -p fixture — passed\n```\n",
+            "~~~~text\n~~~\nTESTS: cargo test -p fixture — passed\n~~~~\n",
+            "    TESTS: pytest fixture.py — passed\n",
+            "TESTS: pytest fixture.py — passed\nTESTS: none: denied\n",
+        ] {
+            assert_eq!(reported(text), None, "{text}");
+        }
+        assert_eq!(
+            reported(
+                "FILES READ: lib.rs\nTESTS: cargo test -p fixture — 1 passed\nVERDICT: ACCEPT"
+            ),
+            Some("cargo test -p fixture — 1 passed")
+        );
+    }
 }

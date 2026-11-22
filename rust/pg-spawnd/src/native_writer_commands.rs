@@ -257,6 +257,7 @@ fn reopen(state: &Path, id: &str, prompt_path: &Path) -> Result<Value, String> {
         "round_stop",
         "round_counts",
         "status_line",
+        "review_test_status",
         "push_failures",
         "pushed",
         "ledger_error",

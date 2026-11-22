@@ -345,7 +345,7 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
 }
 
 #[test]
-fn batch89_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind() {
+fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind() {
     let dir = tempfile::tempdir().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     // CI may have no fetchable default branch in its detached source checkout.

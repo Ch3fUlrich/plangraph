@@ -106,6 +106,13 @@ fn finish(
         "failed"
     });
     record["reason"] = json!(reason);
+    if exit == 0 && record["status_line"] == "DONE" && record["review"]["verdict"] == "ACCEPT" {
+        record["review_test_status"] = json!(if record["review"]["tested"] == true {
+            "reported"
+        } else {
+            "untested"
+        });
+    }
     if matches!(exit, 4 | 9) {
         record["result"] = json!("BLOCKED");
     }

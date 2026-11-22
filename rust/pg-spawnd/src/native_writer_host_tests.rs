@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn batch89_review_tests_evidence_distinguishes_untested_accepts() {
+fn review_tests_evidence_distinguishes_untested_accepts() {
     let head = "b".repeat(40);
     let paths = ["src/lib.rs".to_owned()];
     for (evidence, expected) in [

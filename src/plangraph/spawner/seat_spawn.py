@@ -342,7 +342,7 @@ def admit(service, options, *, card=None, preview=False):
                         disk = check_disk()
                         health = disk or local_readiness_refusal()
                         rows = load_rows()
-                        if not health and not overflow.memory_refusal(memory, role_mb, floor):
+                        if not (health if native else disk) and not overflow.memory_refusal(memory, role_mb, floor):
                             taken = _close_queue(service, queued)
                             if taken is not None:
                                 return taken

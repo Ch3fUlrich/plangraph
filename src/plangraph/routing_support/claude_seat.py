@@ -70,4 +70,6 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id):
         ("--disallowedTools", REVIEW_DENIED + ",Bash(git push *)"),
     ]:
         argv[argv.index(flag) + 1] = value
-    argv.extend(["--restricted", "--settings", json.dumps(settings)])
+    argv.extend(["--restricted", "--settings", json.dumps(settings), "--append-system-prompt",
+                 "Use one allowed Bash command at a time with unquoted arguments. For searches, "
+                 "use single-word patterns. If no test ran, write TESTS: none: followed by the reason."])
