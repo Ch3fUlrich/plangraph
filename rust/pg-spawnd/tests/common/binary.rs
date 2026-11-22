@@ -6,15 +6,6 @@ use std::{
     sync::OnceLock,
 };
 
-#[test]
-fn prepare_spawnd_cli() {
-    // The deadline runner discovers this test even when a case filter hides it.
-    println!(
-        "\npg-test-fixture: {}",
-        serde_json::to_string(spawnd()).unwrap()
-    );
-}
-
 pub(crate) fn spawnd() -> &'static str {
     static BINARY: OnceLock<String> = OnceLock::new();
     BINARY.get_or_init(|| {
@@ -36,15 +27,6 @@ pub(crate) fn spawnd() -> &'static str {
             }
         });
         resolve(&checkout, target.as_deref(), |target| {
-            let path = binary_path(target, "pg-spawnd");
-            if let Some(prepared) = std::env::var_os("PG_TEST_PREBUILT_SPAWND") {
-                assert!(
-                    prepared == path.as_os_str() && path.is_file(),
-                    "expected the prepared checkout CLI at {}",
-                    path.display()
-                );
-                return path.to_str().unwrap().to_owned();
-            }
             build(&manifest, target, "pg-spawnd")
         })
     })
@@ -111,11 +93,10 @@ pub(crate) fn build(manifest: &Path, target: &Path, name: &str) -> String {
         "CLI build failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    binary_path(target, name).to_str().unwrap().to_owned()
-}
-
-fn binary_path(target: &Path, name: &str) -> PathBuf {
     target
         .join("debug")
         .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
+        .to_str()
+        .unwrap()
+        .to_owned()
 }

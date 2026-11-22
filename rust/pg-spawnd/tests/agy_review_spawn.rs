@@ -31,6 +31,15 @@ fn payload(reply: &Value) -> Value {
     .unwrap()
 }
 #[test]
+fn prepare_spawnd_cli() {
+    // The deadline runner executes this once before starting the review cases.
+    println!(
+        "\npg-test-fixture: {}",
+        serde_json::to_string(binary::spawnd()).unwrap()
+    );
+}
+
+#[test]
 fn review_kind_spawns_a_stamped_repository_review_and_records_it() {
     run_review(false, false, "on");
 }
@@ -130,7 +139,9 @@ fn run_review(retry: bool, sonnet: bool, mode: &str) {
     };
     executable(&launch, &launch_text);
     let socket = state.path().join("socket");
-    let child = Command::new(binary::spawnd())
+    let spawnd =
+        std::env::var_os("PG_TEST_PREBUILT_SPAWND").unwrap_or_else(|| binary::spawnd().into());
+    let child = Command::new(spawnd)
         .args(["serve", "--no-scope", "--socket"])
         .arg(&socket)
         .arg("--state")
