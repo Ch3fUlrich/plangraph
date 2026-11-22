@@ -277,3 +277,19 @@ fn resolve_cargo_target_trims_an_over_cap_idle_slot_before_leasing() {
     assert!(!idle.join("debug/blob").exists());
     assert_eq!(lease.path, primary);
 }
+
+#[test]
+fn jail_binary_uses_the_built_helper_without_a_target_override() {
+    let root = std::env::temp_dir();
+    // Fast checks supply the resolved build target. Cover both Cargo's default
+    // workspace layout and a configured cache with the same helper lookup.
+    let suffix = format!("debug/pg-jail{}", std::env::consts::EXE_SUFFIX);
+    assert_eq!(
+        jail_binary(&root.join("rust/target")),
+        root.join("rust/target").join(&suffix)
+    );
+    assert_eq!(
+        jail_binary(&root.join("cache")),
+        root.join("cache").join(suffix)
+    );
+}
