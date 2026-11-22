@@ -9,6 +9,7 @@ Maps risk bands to:
 """
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -244,3 +245,106 @@ def evaluate_risk(
         critical_paths=crit_paths,
         high_risk_paths=hr_paths,
     )
+
+
+DOCS_EXTENSIONS = frozenset((".md", ".txt", ".rst", ".adoc", ".png", ".jpg", ".svg", ".drawio"))
+
+def normalize_measurement_path(path: str) -> str:
+    """Normalize path with forward slashes and strip leading/trailing whitespace."""
+    return str(path).strip().replace("\\", "/")
+
+
+def is_doc_file(path: str) -> bool:
+    """Whether a path represents documentation or non-executable text assets."""
+    p = normalize_measurement_path(path)
+    if p.startswith("docs/") or "/docs/" in p or p.startswith("references/") or "/references/" in p:
+        return True
+    base = p.rsplit("/", 1)[-1]
+    if base.upper() in ("README.MD", "LICENSE", "CHANGELOG.MD", "CONTRIBUTING.MD", "AGENTS.MD", "GEMINI.MD", "CLAUDE.MD"):
+        return True
+    ext = os.path.splitext(base)[1].lower()
+    return ext in DOCS_EXTENSIONS
+
+
+def is_docs_only(paths: Sequence[str]) -> bool:
+    """True if all paths are documentation or non-executable text assets."""
+    if not paths:
+        return True
+    return all(is_doc_file(p) for p in paths)
+
+
+def is_test_file(path: str) -> bool:
+    """Whether path is a test file by directory location or naming convention."""
+    p = normalize_measurement_path(path)
+    if p.startswith("tests/") or "/tests/" in p:
+        return True
+    base = p.rsplit("/", 1)[-1]
+    if (base.startswith("test_") and base.endswith(".py")) or base.endswith("_test.py"):
+        return True
+    if base.endswith(".Tests.ps1") or base.endswith(".test.ts") or base.endswith(".spec.ts"):
+        return True
+    return False
+
+
+def classify_bucket(
+    file_count: int,
+    line_count: int,
+    modules: int = 1,
+    fanout: int = 0,
+    docs_only: bool = False,
+) -> tuple[str, bool]:
+    """Classify complexity bucket into S0..S4 and determine whether decomposition is required.
+
+    Returns:
+        (bucket_name, should_decompose)
+    """
+    if docs_only and fanout == 0:
+        return "S0", False
+
+    # S0: trivial / docs-only / <= 1 file, <= 20 lines, fanout == 0
+    if file_count <= 1 and line_count <= 20 and fanout == 0:
+        return "S0", False
+
+    # S4: large cross-cutting architectural change (> 12 files or fanout > 12)
+    if file_count > 12 or fanout > 12:
+        return "S4", True
+
+    # S1: small single-module change (<= 2 files, <= 80 lines, fanout <= 2)
+    if file_count <= 2 and line_count <= 80 and fanout <= 2:
+        return "S1", False
+
+    # S2: standard implementation (<= 5 files, <= 250 lines, fanout <= 5)
+    if file_count <= 5 and line_count <= 250 and fanout <= 5:
+        return "S2", False
+
+    # S3: multi-module feature/refactor (<= 12 files or fanout <= 12)
+    if file_count <= 12 and fanout <= 12:
+        return "S3", False
+
+    return "S4", True
+
+
+def estimate_lines(file_count: int) -> int:
+    return 20 * file_count
+
+
+@dataclass
+class TaskShape:
+    files: list[str]
+    fanout: int
+    has_tests: bool
+    is_docs_only: bool
+    bucket: str
+    should_decompose: bool
+
+
+def measure_card_shape(paths, *, fanout=None, has_tests=None) -> TaskShape:
+    """Classify declared card facts without probing a checkout."""
+    files = [normalize_measurement_path(path) for path in paths] if paths else []
+    fanout = max(0, int(fanout)) if fanout is not None else 0
+    docs_only = bool(files) and is_docs_only(files)
+    coverage = bool(has_tests) if has_tests is not None else (
+        not files or docs_only or any(is_test_file(path) for path in files))
+    bucket, decompose = classify_bucket(len(files), estimate_lines(len(files)),
+                                        fanout=fanout, docs_only=docs_only)
+    return TaskShape(files, fanout, coverage, docs_only, bucket, decompose)

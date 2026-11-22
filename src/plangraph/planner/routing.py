@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, asdict, field, replace
 from plangraph.routing_support.liveness import read_leg_model, unavailable
+from plangraph.routing_support.risk import evaluate_risk, measure_card_shape
 import json
 import os
 from pathlib import Path
@@ -88,13 +89,11 @@ def effort_profiles() -> dict:
 
 
 def _effort_measure(card):
-    from plangraph.spawner.measure import measure
-
     paths = card.get("paths", card.get("write_set", ()))
     has_tests = card.get("has_tests")
     if has_tests is None and (card.get("check_cmd") or card.get("smoke_checks")):
         has_tests = True
-    return measure(paths=paths, fanout=card.get("fanout"), has_tests=has_tests)
+    return measure_card_shape(paths, fanout=card.get("fanout"), has_tests=has_tests)
 
 
 def task_class(card, *, measurement=None) -> str:
@@ -108,8 +107,6 @@ def task_class(card, *, measurement=None) -> str:
 
 def rule_level(card) -> dict:
     """Compute the routing profile from card facts without changing routing order."""
-    from plangraph.routing_support.risk import evaluate_risk
-
     measured = _effort_measure(card)
     table = effort_profiles()
     bands = tuple(table["risk_floors"])
