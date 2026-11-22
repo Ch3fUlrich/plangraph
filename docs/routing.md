@@ -189,9 +189,9 @@ GPT implement and review legs default to medium effort (D-6397); elevated
 effort requires matching `card.effort` and an operator `card.effort_decision`
 of the form `D-<number>`. Native Codex package sessions pass
 `model_reasoning_effort=medium` by default. Other families keep their own effort.
-Spawn admission budgets 55% of the selected leg's configured context rather
-than the coarse window label. Sol and Astra have a 1,000,000-token configured
-context, including Sol effort variants and native package sessions.
+A 1M spawn route uses the declared request bound of a leg that supports that class.
+Sol and Astra declare 1,000,000 tokens, including effort variants and native sessions.
+Smaller spawn routes use 55% of declared leg context. Legs without a bound and keeper budgets use the 55% class share.
 Review routes under D-6550 prefer `agy-gemini-4-hydrogen-high` and then
 `gpt-6.2-sol-medium` in Codex. The Mimo, OpenCode and Neon legs remain
 available in their configured order, and the Argon review legs stay last. A review run that ends without a VERDICT line is

@@ -1,0 +1,1 @@
+- Allowed native Codex on Linux data disks under /mnt and kept the WSL Windows-drive check.

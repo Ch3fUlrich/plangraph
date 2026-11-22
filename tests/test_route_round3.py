@@ -111,3 +111,22 @@ def test_each_role_falls_through_failed_and_limited():
 @pytest.mark.parametrize("estimate", [100000, 110000, 110001, 300000])
 def test_review_seats_follow_each_legs_request_limit(estimate):
     assert_review_seat_safety(estimate)
+
+
+def test_spawn_uses_declared_request_bound_for_a_1m_leg():
+    from plangraph.planner.route_policy import RoutePolicy
+    from plangraph.planner.routing import RouteError, route_card
+
+    codex = next(leg for leg in DEFAULT_LEGS if leg.id == "cx-gpt-6.2-sol-medium")
+    plan = plan_spawn({"estimate_tokens": 700000}, role="implement", policy=RoutePolicy(),
+                      leg_reader=lambda *_args, **_scope: {"state": "ok", "evidence": None},
+                      catalog_rows=())
+    assert plan.legs[0].id == codex.id, plan.reasons
+    assert route_card({"estimate_tokens": 1000000}, legs=(codex,), role="implement").window_class == "1m"
+    with pytest.raises(RouteError, match="max_request_tokens 1000000"):
+        route_card({"estimate_tokens": 1100000}, legs=(codex,), role="implement")
+
+    implicit = replace(codex, max_request_tokens=None)
+    assert route_card({"estimate_tokens": 576716}, legs=(implicit,), role="implement").first_leg == implicit
+    with pytest.raises(RouteError, match="55%.*576716"):
+        route_card({"estimate_tokens": 576717}, legs=(implicit,), role="implement")

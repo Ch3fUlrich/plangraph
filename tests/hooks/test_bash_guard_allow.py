@@ -85,3 +85,15 @@ def test_fleet_launch_marker_still_denies_live_substitution(guard, monkeypatch):
     reason = guard.check('claude --bg "$(id)"')
     assert reason is not None
     assert "double-quoted" in reason
+
+
+def test_pgrep_one_shot_and_non_self_matching_patterns_are_allowed(guard):
+    for command in (
+        'pgrep -f "pytest tests/test_example"',
+        'while pgrep -x pytest; do sleep 5; done',
+        "while pgrep -f 'py''test'; do sleep 5; done",
+        'while pgrep -f "[p]ytest tests/test_example"; do sleep 5; done',
+        'while pgrep -f "^pytest tests/test_example$"; do sleep 5; done',
+        'echo "while pgrep -f pytest; do sleep 5; done"',
+    ):
+        assert guard.check(command) is None, command

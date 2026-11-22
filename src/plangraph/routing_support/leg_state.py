@@ -228,16 +228,18 @@ class LegStateStore:
         except sqlite3.Error:
             return None
 
-    def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None):
+    def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None, *, harness=None):
         if not leg or not caller or not line.strip():
             raise LegStateError('requires leg, quota line and caller')
         # An elapsed cooldown permits neither a fallback booking nor a reset-less limit.
         if _elapsed_cooldown({}, line):
             return
-        leg = quota_key(leg)
+        is_agy_harness = harness in (None, 'agy')
+        leg = quota_key(leg) if is_agy_harness else leg
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
-        if reset is not None and leg.startswith(('agy:', 'agy/')) and 'individual quota reached' in line.lower():
+        if (reset is not None and is_agy_harness and leg.startswith(('agy:', 'agy/'))
+                and 'individual quota reached' in line.lower()):
             leg, combo = 'agy:account-wide', None
         if reset is None and down_s is not None:
             # D-3605 (a): no provider reset time; _down_seconds is capped, so
@@ -248,9 +250,10 @@ class LegStateStore:
                        (leg, account, combo, 429, _redact(line),
                         None if reset is None else reset - now, reset, now, caller, 'harness-stderr'))
 
-    def leg_status(self, leg, now=None, account=None, combo=None):
-        leg = quota_key(leg)
-        agy = isinstance(leg, str) and leg.startswith("agy:")
+    def leg_status(self, leg, now=None, account=None, combo=None, *, harness=None):
+        is_agy_harness = harness in (None, "agy")
+        leg = quota_key(leg) if is_agy_harness else leg
+        agy = is_agy_harness and isinstance(leg, str) and leg.startswith("agy:")
         ttl = RESET_CAP_S if agy else EVIDENCE_TTL_S
         keys = [leg]
         if agy:
@@ -262,15 +265,15 @@ class LegStateStore:
         try:  # Read-only: no database creation or expiry mutation.
             with sqlite3.connect(self.path.as_uri() + "?mode=ro", uri=True) as db:
                 db.row_factory = sqlite3.Row
-                if leg.startswith(('agy:', 'agy/')):
+                if is_agy_harness and leg.startswith(('agy:', 'agy/')):
                     pool = db.execute(
                         "SELECT * FROM leg_events WHERE leg_key='agy:account-wide' "
-                        "AND (account IS NULL OR account IS ?) AND ts<=? AND reset_at>? "
+                        "AND account IS ? AND ts<=? AND reset_at>? "
                         "ORDER BY reset_at DESC,id DESC LIMIT 1", (account, now, now)).fetchone()
                     if pool is not None:
                         return {"state": "limited", "evidence": dict(
                             {k: pool[k] for k in ('status', 'body_excerpt', 'reset_at', 'ts', 'caller')},
-                            event_id=pool['id'], quota_scope='account')}
+                            event_id=pool['id'], quota_scope='account', harness='agy', account=pool['account'])}
                 rows = db.execute(
                     "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
                     (*keys, account, combo, now))
@@ -361,12 +364,12 @@ def record_probe_pass(leg, caller, now=None, account=None, combo=None):
     return _default_store().record_probe_pass(leg, caller, now, account, combo)
 
 
-def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, down_s=None):
-    return _default_store().record_harness_limit(leg, line, caller, now, account, combo, down_s)
+def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, down_s=None, *, harness=None):
+    return _default_store().record_harness_limit(leg, line, caller, now, account, combo, down_s, harness=harness)
 
 
-def leg_status(leg, now=None, account=None, combo=None):
-    return _default_store().leg_status(leg, now, account, combo)
+def leg_status(leg, now=None, account=None, combo=None, *, harness=None):
+    return _default_store().leg_status(leg, now, account, combo, harness=harness)
 
 
 def record_probe_fail(leg, reason, caller, now=None, down_s=None, account=None, combo=None, *, serving=False, stderr_excerpt=''):

@@ -1,0 +1,1 @@
+- Refused Bash wait loops whose full-command pgrep pattern matches the waiting shell itself.
