@@ -100,7 +100,9 @@ pub enum Merged {
         tree: String,
         commit: String,
     },
-    Conflict,
+    Conflict {
+        tree: String,
+    },
 }
 
 /// Merges `head` into the detached checkout at `dir` with `--no-ff`; on conflict the merge is aborted.
@@ -123,12 +125,9 @@ pub fn merge(
         let tree = out(dir, &["rev-parse", "HEAD^{tree}"])?;
         return Ok(Merged::Clean { tree, commit });
     }
-    let _ = run(dir, attributes, &["merge", "--abort"]);
-    if String::from_utf8_lossy(&o.stdout).contains("CONFLICT")
-        || String::from_utf8_lossy(&o.stderr).contains("CONFLICT")
-        || o.status.code() == Some(1)
-    {
-        return Ok(Merged::Conflict);
+    if let Ok(tree) = out(dir, &["rev-parse", "--verify", "AUTO_MERGE^{tree}"]) {
+        out(dir, &["merge", "--abort"])?;
+        return Ok(Merged::Conflict { tree });
     }
     Err(format!(
         "git merge failed: {}",

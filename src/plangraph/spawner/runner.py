@@ -231,6 +231,7 @@ class SpawnerRunner:
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
+        brief_sha256 = hashlib.sha256(prompt.encode()).hexdigest() if role == 'review' and prompt_record else None
         from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
         prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
                          getattr(leg, 'tool_mode', None))
@@ -239,7 +240,8 @@ class SpawnerRunner:
             path, record, save = prompt_record
             if not dry_run:  # REMOVE-AT-R10
                 atomic_write_private(path, prompt)
-            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant)
+            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant,
+                          **({'review_brief_sha256': brief_sha256} if brief_sha256 is not None else {}))
             if not dry_run:  # REMOVE-AT-R10
                 save(record)
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')

@@ -87,7 +87,7 @@ class SpawnerRecordAdapter:
             raise ValueError("record exceeds size limit")
 
     def review_seats(self, item, head, decision_text, *, allow_cli_reported=False, allow_empty=False,
-                     require_diff_head=False, require_explicit_accept=False):
+                     require_diff_head=False, require_explicit_accept=False, train_delta=None):
         """Read cited mirrored review witnesses, never infer a served model."""
         from ..review.family import model_family
         ids = json.loads(item.get("run_ids") or "[]")
@@ -146,6 +146,16 @@ class SpawnerRecordAdapter:
             cli = record.get("witness_kind") == "cli_reported"
             serving = next((a for a in reversed(attempts or []) if isinstance(a, dict)
                             and a.get('status') != 'skipped'), {}) if isinstance(attempts, list) else {}
+            if train_delta is not None:
+                prompt, excluded = train_delta
+                witness = "response-side-gateway-call-log"
+                if (record.get("witness_kind") != witness or serving.get("witness_kind") != witness
+                        or serving.get("status") != "completed" or serving.get("served_model") != model):
+                    raise ValueError(f"{run_id}: train delta needs an authenticated serving attempt")
+                if record.get("review_brief_sha256") != prompt:
+                    raise ValueError(f"{run_id}: train delta prompt binding mismatch")
+                if family in excluded:
+                    raise ValueError(f"{run_id}: reviewer family wrote part of the train delta")
             if (cli and (not allow_cli_reported or record.get("head_sha") != (completion or {}).get("head_sha")
                          or record.get("verdict") != "pass" or record.get("test_gaming") is not False
                          or not _one_serving_attempt(attempts, model)

@@ -788,3 +788,6 @@ fn the_open_record_freeze_manifest_and_result_must_belong_to_one_build_base_and_
 
 #[path = "build_receipt_tests.rs"]
 mod receipt_tests;
+
+#[path = "build_delta_tests.rs"]
+mod delta_tests;

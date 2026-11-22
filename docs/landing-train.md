@@ -43,6 +43,14 @@ Adopted resolutions come from the replay of `--resolution-log`, bound to the bui
 snapshot order. `plangraph land-train verify` repeats the proof with `--manifest`, `--parts` (the selection the verifier
 recomputed), `--open`, `--freeze` and `--result`.
 
+`verify --delta-out FILE` exports a replay artifact with the frozen base, train head, policy and each merge's
+parents, actual tree and replay tree. For an adopted resolution it includes the diff from Git's conflict
+tree to the committed tree. `land-train review` takes the same proof inputs and `--item KEY`. It dispatches
+the canonical artifact from a clean checkout of the train head on the witness-capable review route,
+excluding authors of the merge delta. `land-train admit --item KEY --review-run ID` repeats the proof and
+requires a passing gateway-witnessed review in the keeper mirror. The serving attempt must be from
+outside the delta's writer families, and the run must match the exact train head and artifact prompt.
+
 ## A red train
 
 `land::split` (rust/plangraph-cli/src/land/split.rs) plans the retries of a red train; every retry is a new frozen
