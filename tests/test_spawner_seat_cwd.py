@@ -412,6 +412,8 @@ def test_named_cwd_posts_witnessed_seat_with_artifacts(service, checkouts, tmp_p
     directory = service._path(record['run_id']).parent
     assert (directory / 'evidence.json').exists(), (record['status'], record.get('error'), record.get('stdout_tail'))
     assert record['head_sha'] == record['completion']['head_sha'] == head
+    binding = seat_verdict.read_record_identity(directory, 'demo:CWD')['binding']
+    assert binding == dict(key='demo:CWD', epoch=1, round=1, head=head, seat_run=record['run_id'])
 
     token_dir = tmp_path / 'tokens'
     token_dir.mkdir()

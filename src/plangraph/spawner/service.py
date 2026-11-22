@@ -129,10 +129,14 @@ class SpawnService(SeatSpawnMixin):
             return value
         write_stderr_log(self._stderr_captures.setdefault(record['run_id'], {}), getattr(self.runner, 'jobs', {}), record, self._path(record['run_id']).with_name('stderr.log'), clean)
         host, item_key = record.get('host'), record.get('item_key')
+        binding = (record.get('request') or {}).get('verdict_binding')
+        bound_item = item_key if isinstance(binding, dict) and binding.get('key') == item_key else None
         if record.get('ended') is not None:
             terminal_reason(record, job)
         record.update(clean(record))
         if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
+        if bound_item is not None:
+            record['request']['verdict_binding']['key'] = bound_item
         if host is not None:
             record['host'] = host   # top-level run host is an identifier (D-2960); nested 'host' keys stay redacted
         clean_attempts(record, clean)
@@ -150,7 +154,12 @@ class SpawnService(SeatSpawnMixin):
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
         path = self._path(record['run_id'])
-        payload = json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2)
+        persisted = redact(record)
+        if 'item_key' in record:
+            persisted['item_key'] = item_key
+        if bound_item is not None:
+            persisted['request']['verdict_binding']['key'] = bound_item
+        payload = json.dumps(persisted, indent=2)
         with inbox_lock(path):
             if isinstance(record.get('plan'), dict) and not record.get('pid'):
                 try:
