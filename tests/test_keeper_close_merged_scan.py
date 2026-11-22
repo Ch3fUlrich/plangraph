@@ -342,7 +342,7 @@ def _git(repo, *args, date="2026-11-01T12:00:00Z"):
                           capture_output=True, text=True).stdout.strip()
 
 
-def merged_repo(path, parts):
+def merged_repo(path, parts, *, unit=None):
     """A repository whose main has one merged PR per ``(pr, key, date)``; ``pr`` None = direct commit.
 
     Returns the PR head per number (``None`` keyed by the direct commit's sha list).
@@ -358,6 +358,11 @@ def merged_repo(path, parts):
             heads.setdefault(None, []).append(_git(path, "rev-parse", "HEAD"))
             continue
         _git(path, "checkout", "-q", "-b", f"pr{pr}")
+        if unit is not None:
+            target = path / "deploy" / "systemd" / unit
+            target.parent.mkdir(parents=True)
+            target.write_text("[Service]\nExecStart=/bin/true\n")
+            _git(path, "add", str(target))
         _git(path, "commit", "-q", "--allow-empty", "-m", message, date=date)
         heads[pr] = _git(path, "rev-parse", "HEAD")
         _git(path, "checkout", "-q", "main")
@@ -467,7 +472,7 @@ def test_item_naming_its_merge_repository_is_verified_there(w, monkeypatch, tmp_
         w.store.close_merged(w.p("router"), "demo:H", "D-5504", ["google", "deepseek"])
 
 
-@pytest.mark.parametrize("evidence", ["trailer", "merge-subject", "wrong-pr", "wrong-project", "duplicate-head"])
+@pytest.mark.parametrize("evidence", ["trailer", "merge-subject", "deploy-pending", "wrong-pr", "wrong-project", "duplicate-head"])
 @pytest.mark.parametrize("state", ["open", "in_review"])
 def test_close_merged_reads_the_data_default_only_with_a_note(w, monkeypatch, tmp_path, evidence, state):
     from plangraph.keeper import context_sources
@@ -477,7 +482,8 @@ def test_close_merged_reads_the_data_default_only_with_a_note(w, monkeypatch, tm
     data_project = "fixture-secondary"
     merged_repo(primary, [])
     key = "demo:A"
-    heads = merged_repo(data, [(165, key if evidence == "trailer" else None, "2026-11-01T12:00:00Z")])
+    heads = merged_repo(data, [(165, key if evidence == "trailer" else None, "2026-11-01T12:00:00Z")],
+                        unit="fixture.service" if evidence == "deploy-pending" else None)
     w.store.ctx["git"] = GitAdapter({"demo": str(primary), data_project: str(data)})
     monkeypatch.setattr(context_sources, "plan_item_commits", w.real_plan_item_commits)
     monkeypatch.setattr(context_sources, "open_lanes", lambda *a, **kw: [])
@@ -501,6 +507,10 @@ def test_close_merged_reads_the_data_default_only_with_a_note(w, monkeypatch, tm
     if evidence in ("wrong-pr", "wrong-project", "duplicate-head"):
         with pytest.raises(Refused, match="merged_on_default_missing"):
             close()
+        assert w.store._item(key)["state"] == state
+    elif evidence == "deploy-pending":
+        result = close()
+        assert result["reason"] == "deploy_pending" and result["missing"] == ["(hosts unnamed)"]
         assert w.store._item(key)["state"] == state
     else:
         assert close()["state"] == "done"
