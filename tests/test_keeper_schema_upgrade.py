@@ -107,7 +107,7 @@ def test_upgraded_database_keeps_its_chain_and_works(tmp_path):
     conn.close()
 
 
-def test_schema_version_is_eighteen():
+def test_schema_version_is_sixteen():
     assert schema.SCHEMA_VERSION == 18
 
 
