@@ -61,3 +61,17 @@ and ignored, untracked rust/target directories in registered worktrees under
 shared targets, pinned/live paths, active builds, process cwds, foreign ownership,
 leases and symlinks prevent deletion. Worktree source dirtiness alone does not
 protect ignored build artifacts in this narrower cleanup.
+
+## Dell data-drive handoff (D-5122)
+
+`SKIPPED plangraph:DELL-DATA-DRIVE` in batch84-disk. The fleet host policy and
+`dell_writer.remote.sh` live outside the Plangraph checkout used for this batch.
+The batch review directory holds the skip reason in `STATUS` and the
+repository-only follow-up `DELL-DATA-DRIVE-POLICY` in `slices.json`.
+
+The follow-up covers registry and launcher paths for worktrees, writer and seat
+scratch, Cargo, pip, npm and uv caches, run records, and the OpenCode archive.
+It also covers the `/mnt/data` entry in the D-5118 disk check and a per-path
+backup and rollback mapping. Deployment evidence includes the backup inventory,
+one probe that shows the resolved paths, and ten runs with disk usage readings
+for `/` and `/tmp` before and after.
