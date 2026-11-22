@@ -174,6 +174,15 @@ Verdict delivery uses the same resolver to forward canonical writer families.
 
 ## Route order and family admission (D-6310 / rule 3.53)
 
+Benchmark ranking resolves the catalog's preferred observation against the
+model, reasoning effort and harness of each leg. Legacy benchmark databases
+remain readable. The catalog query exposes source, imputation and staleness for
+each observation. See [benchmark observations](spawner-benchmarks.md#benchmark-observations-by-effort-and-harness).
+When a leg leaves effort unspecified, a legacy catalog row can supply the
+catalog's default effort for the same model and a compatible harness.
+Route candidates label utility backed by a catalog row as `p_source: measured`.
+The catalog observation carries its own `imputed` field and provenance.
+
 D-6310 retires `gpt-6.1-sol` (and `gemini-4-argon` for implement; D-6366 serves it as the first review leg), lists `opencode` as a provider,
 removes the `deepseek` and `glm` family bans, and leaves no `opencode-go` leg disabled.
 Implementation routes prioritize `cx-gpt-6.2-sol-medium` (with `cx-gpt-6.2-sol-{low,medium,high,xhigh,max}`
@@ -199,6 +208,8 @@ recorded `failed` with reason `no_verdict`. The reviewer's family differs from t
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
 stays disabled because it is not served by `opencode models`.
+The five-head benchmark for Flint, Big Pickle and Beam was skipped in this lane.
+The existing HIGH-review exclusion is covered by `test_d6310_route_orders_low_risk_and_families`.
 
 ## Automatic work mode (D-5952 / rule 3.41)
 

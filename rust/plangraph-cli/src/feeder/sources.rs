@@ -1,4 +1,4 @@
-use super::adapters::{output, python, Env, Keeper, Transport};
+use super::adapters::{output, python, quota_snapshots, Env, Keeper, Transport};
 use super::*;
 use std::fs;
 use std::path::Path;
@@ -194,9 +194,7 @@ pub(super) fn facts(
 ) -> Result<HostFacts, String> {
     let f: HostFacts =
         serde_json::from_value(read_json(path)?).map_err(|_| "invalid host facts")?;
-    let mut cmd = python(env, repo);
-    cmd.args(["-c","import json; from plangraph.routing_support.quota_snapshots import fetch_snapshot_rows; print(json.dumps(fetch_snapshot_rows()))"]);
-    let rows = output(cmd).ok();
+    let rows = quota_snapshots(env, repo).ok();
     apply_facts(
         f,
         runs,

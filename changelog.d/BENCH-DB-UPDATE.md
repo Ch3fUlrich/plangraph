@@ -1,0 +1,1 @@
+SKIPPED plangraph:BENCH-DB-UPDATE. D-5173 requires sourced rows for every active leg and effort. Muse Amber has no verified catalog identity or publisher record. The frozen benchmark contract continues to check all spawnable legs and requires an explicit allowance for unresolved source or coverage gaps.

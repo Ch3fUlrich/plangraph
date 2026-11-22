@@ -30,6 +30,9 @@ def default_db_path() -> Path:
 DEFAULT_DB_PATH: Path = default_db_path()
 
 SCHEMA_PATH: Path = Path(__file__).parent / "catalog_schema.sql"
+BENCHMARK_BACKUPS = (
+    ('benchmark_measurements', 'model_id, effort, harness, origin'),
+)
 
 
 class CatalogDB:
@@ -73,28 +76,16 @@ class CatalogDB:
     def init_and_seed(self) -> None:
         """Initialize schema and seed catalog tables idempotently."""
         schema_sql = SCHEMA_PATH.read_text(encoding="utf-8")
-        self.conn.executescript(schema_sql)
+        with self.conn:
+            self.conn.executescript('BEGIN IMMEDIATE;\n' + schema_sql + '\nCOMMIT;')
         registry_columns.migrate(self.conn)
 
-        # 1. Quota pools
         self._insert_records("catalog_quota_pools", SEED_QUOTA_POOLS)
-
-        # 2. Providers
         self._insert_records("catalog_providers", SEED_PROVIDERS)
-
-        # 3. Clients
         self._insert_records("catalog_clients", SEED_CLIENTS)
-
-        # 4. Models
         self._insert_records("catalog_models", SEED_MODELS)
-
-        # 5. Benchmarks
         self._insert_records("catalog_benchmarks", SEED_BENCHMARKS)
-
-        # 6. Routes
         self._insert_records("catalog_routes", SEED_ROUTES)
-
-        # 7. Route legs
         self._insert_records("catalog_route_legs", SEED_ROUTE_LEGS)
 
         registry_columns.derive(self.conn)
@@ -157,6 +148,8 @@ class CatalogDB:
         d['active'] = d.get('status') == 'active'
         d["id"] = d["model_id"]
         d["context_window"] = d["context_tokens"]
+        from plangraph.planner.benchmarks import benchmark_cells
+        d["benchmark_rows"] = (benchmark_cells(self.conn, model_id) or {}).get(model_id, [])
         combos_rows = self.conn.execute(
             "SELECT route_id FROM catalog_route_legs WHERE model_id = ? ORDER BY route_id ASC",
             (model_id,),
@@ -250,12 +243,15 @@ class CatalogDB:
         combos_by_model: dict[str, list[str]] = {}
         for lr in leg_rows:
             combos_by_model.setdefault(lr["model_id"], []).append(lr["route_id"])
+        from plangraph.planner.benchmarks import benchmark_cells
+        by_model = benchmark_cells(self.conn) or {}
 
         for r in rows:
             r['active'] = r.get('status') == 'active'
             r["id"] = r["model_id"]
             r["context_window"] = r["context_tokens"]
             r["combos"] = combos_by_model.get(r["model_id"], [])
+            r["benchmark_rows"] = by_model.get(r["model_id"], [])
 
         # Ensure Python-side sorting is strictly in sync with TIER_RUNG
         rows.sort(
@@ -345,6 +341,9 @@ class CatalogDB:
             ("routes", "SELECT * FROM catalog_routes ORDER BY route_id ASC"),
             ("route_legs", "SELECT * FROM catalog_route_legs ORDER BY route_id ASC, position ASC"),
         ]
+        present = {row[0] for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        tables.extend((key, f'SELECT * FROM catalog_{key} ORDER BY {order}')
+                      for key, order in BENCHMARK_BACKUPS if f'catalog_{key}' in present)
 
         payload: dict[str, Any] = {}
         for key, query in tables:
@@ -415,6 +414,7 @@ class CatalogDB:
             ("routes", "catalog_routes"),
             ("route_legs", "catalog_route_legs"),
         ]
+        table_order.extend((key, f'catalog_{key}') for key, _ in BENCHMARK_BACKUPS)
 
         for payload_key, table_name in table_order:
             records = payload.get(payload_key, [])

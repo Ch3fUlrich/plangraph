@@ -1,7 +1,39 @@
+use super::adapters::{quota_snapshots, Env};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 fn field<'a>(r: &'a Value, names: &[&str]) -> Option<&'a Value> {
     names.iter().find_map(|n| r.get(n).filter(|v| !v.is_null()))
+}
+fn identity(row: &Value) -> Option<(&str, &str)> {
+    let name = row["provider"].as_str()?;
+    let (provider, suffix) = name.split_once(':').unwrap_or((name, ""));
+    let account = field(row, &["connection_id", "connectionId"])
+        .and_then(Value::as_str)
+        .unwrap_or(suffix);
+    Some((provider, account))
+}
+fn observed(row: &Value) -> Option<&Value> {
+    field(row, &["created_at", "createdAt", "timestamp"])
+}
+fn window(row: &Value) -> Option<&str> {
+    field(row, &["window_key", "windowKey"]).and_then(Value::as_str)
+}
+fn remaining_percent(row: &Value) -> Option<f64> {
+    if field(row, &["is_exhausted", "isExhausted"])
+        .is_some_and(|v| v == true || v == 1 || v == "1" || v == "true")
+    {
+        return Some(0.0);
+    }
+    field(
+        row,
+        &[
+            "remaining_percentage",
+            "remainingPercentage",
+            "remainingPct",
+        ],
+    )
+    .and_then(Value::as_f64)
+    .filter(|q| (0.0..=100.0).contains(q))
 }
 fn stamp(v: &Value) -> Option<i64> {
     if let Some(n) = v.as_f64() {
@@ -27,44 +59,28 @@ pub(super) fn remaining(rows: &Value, now: i64, max_age: i64) -> Option<f64> {
     let mut latest: BTreeMap<(String, String), (i64, Option<f64>)> = BTreeMap::new();
     let mut invalid = BTreeSet::new();
     for r in rows.as_array()? {
-        let Some(name) = r["provider"].as_str() else {
+        let Some((provider, account)) = identity(r) else {
             continue;
         };
-        let (provider, suffix) = name.split_once(':').unwrap_or((name, ""));
         if provider != "codex" {
             continue;
         }
-        let account = field(r, &["connection_id", "connectionId"])
-            .and_then(Value::as_str)
-            .unwrap_or(suffix)
-            .to_string();
-        let Some(window) = field(r, &["window_key", "windowKey"]).and_then(Value::as_str) else {
-            invalid.insert(account);
+        let Some(window) = window(r) else {
+            invalid.insert(account.to_owned());
             continue;
         };
-        let Some(at) = field(r, &["created_at", "createdAt", "timestamp"]).and_then(stamp) else {
-            invalid.insert(account);
+        let Some(at) = observed(r).and_then(stamp) else {
+            invalid.insert(account.to_owned());
             continue;
         };
-        let exhausted = field(r, &["is_exhausted", "isExhausted"])
-            .is_some_and(|v| v == true || v == 1 || v == "1" || v == "true");
         let q = if at > now || now.saturating_sub(at) > max_age {
             None
-        } else if exhausted {
-            Some(0.0)
         } else {
-            field(
-                r,
-                &[
-                    "remaining_percentage",
-                    "remainingPercentage",
-                    "remainingPct",
-                ],
-            )
-            .and_then(Value::as_f64)
-            .filter(|q| q.is_finite() && (0.0..=100.0).contains(q))
+            remaining_percent(r)
         };
-        let value = latest.entry((account, window.into())).or_insert((at, q));
+        let value = latest
+            .entry((account.into(), window.into()))
+            .or_insert((at, q));
         if at >= value.0 {
             *value = (at, q);
         }
@@ -81,6 +97,68 @@ pub(super) fn remaining(rows: &Value, now: i64, max_age: i64) -> Option<f64> {
         .filter(|(a, _)| !invalid.contains(a))
         .filter_map(|(_, q)| q)
         .reduce(f64::max)
+}
+
+/// Print the most recent available observation for each provider, account and window.
+pub fn run_status(env: &Env, args: &[String]) -> i32 {
+    let mut effective = env.clone();
+    match args {
+        [] => {}
+        [flag, path] if flag == "--db" && !path.is_empty() => {
+            effective.insert("QUOTA_SNAPSHOT_DB".into(), path.clone());
+        }
+        _ => {
+            eprintln!("usage: plangraph quota [--db PATH]");
+            return 2;
+        }
+    }
+    let result = std::env::current_dir()
+        .ok()
+        .and_then(|repo| quota_snapshots(&effective, &repo).ok());
+    let mut latest = BTreeMap::new();
+    for row in result
+        .as_ref()
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some((provider, account)) = identity(row) else {
+            continue;
+        };
+        let Some(window) = window(row) else { continue };
+        let Some(observed) = observed(row) else {
+            continue;
+        };
+        let Some(at) = stamp(observed) else { continue };
+        if [provider, account, window]
+            .iter()
+            .any(|s| s.chars().any(char::is_control))
+        {
+            continue;
+        }
+        let entry = latest
+            .entry((provider, account, window))
+            .or_insert((at, row, observed));
+        if at >= entry.0 {
+            *entry = (at, row, observed);
+        }
+    }
+    if latest.is_empty() {
+        println!("quota unknown");
+    } else {
+        println!("provider\taccount\twindow\tused / limit\tobserved at");
+        for ((provider, account, window), (_, row, observed)) in latest {
+            let usage = remaining_percent(row).map_or_else(
+                || "unknown".into(),
+                |left| {
+                    let used = format!("{:.1}", 100.0 - left);
+                    format!("{}% / 100%", used.trim_end_matches(".0"))
+                },
+            );
+            println!("{provider}\t{account}\t{window}\t{usage}\t{observed}");
+        }
+    }
+    0
 }
 
 #[cfg(test)]

@@ -147,6 +147,10 @@ python tools/affected_tests.py --base origin/main --run -n auto  # writers / PR 
 python -m pytest -q -n auto tests            # main merge + nightly full suite
 ```
 
+`cargo test --manifest-path rust/Cargo.toml -p pg-spawnd --test benchmark_rows`
+checks the catalog schema and strict route admission. Both the schema and the
+legacy provenance fixture select Rust CI checks.
+
 The selector follows static Python module launches (`-m`) and calls through
 `tools/*.sh`, including imports in shell Python heredocs. Deleted Python modules
 use the base revision’s importer graph; unresolved importers select the full suite,

@@ -32,11 +32,47 @@ BENCHMARK_COLUMNS = {
 }
 
 
+def benchmark_cells(conn, model_id=None):
+    """Preferred observation of each model, effort and harness in a current catalog."""
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='view' AND name='catalog_benchmark_rows'").fetchone() is None:
+        return None
+    query = 'SELECT * FROM catalog_benchmark_rows'
+    params = ()
+    if model_id is not None:
+        query += ' WHERE model_id = ?'
+        params = (model_id,)
+    result = {}
+    for row in conn.execute(query + ' ORDER BY model_id, effort, harness', params):
+        result.setdefault(row['model_id'], []).append(dict(row))
+    return result
+
+
+def _utility_row(cell):
+    row = dict(cell, aa_intelligence=cell['score'])
+    if row.get('cost_per_task_usd') is None:
+        row.pop('cost_per_task_usd', None)
+    return row
+
+
+def benchmark_for_leg(rows, leg):
+    qualified = leg.model if '/' in leg.model else f'{leg.harness}/{leg.model}'
+    row = rows.get(leg.model, rows.get(qualified, rows.get(leg.id)))
+    if row is None or 'benchmark_rows' not in row:
+        return row
+    cells = row['benchmark_rows']
+    effort = leg.effort or ''
+    exact = next((cell for cell in cells if cell['effort'] == effort and cell['harness'] == leg.harness), None)
+    if exact is None:
+        exact = next((cell for cell in cells if cell['legacy'] and
+                      (leg.effort is None or cell['effort'] == effort) and
+                      cell['harness'] in ('', leg.harness)), None)
+    return _utility_row(exact) if exact is not None and exact['score'] is not None else None
+
+
 def benchmark_rows_from_db(path):
     """Return (model-id rows, errors) without creating or modifying a database.
 
-    Prefer the catalog table when both supported tables exist. Duplicate model rows
-    are counted in ``benchmark_row_count``; the first row supplies ranking metrics.
+    Prefer the current catalog view. Older databases expose raw benchmark tables.
     """
     try:
         uri = Path(path).expanduser().resolve().as_uri() + "?mode=ro"
@@ -48,7 +84,16 @@ def benchmark_rows_from_db(path):
             if table is None:
                 return {}, [f"{path}: missing benchmark table (catalog_benchmarks or model_benchmarks)"]
             result = {}
-            for raw in conn.execute(f'SELECT * FROM "{table}"'):
+            cells = benchmark_cells(conn)
+            if cells is not None:
+                for model, values in cells.items():
+                    first = next((row for row in values if row['legacy']), values[0])
+                    result[model] = dict(_utility_row(first), benchmark_rows=values,
+                                         benchmark_row_count=len(values))
+                raw_rows = ()
+            else:
+                raw_rows = conn.execute(f'SELECT * FROM "{table}"')
+            for raw in raw_rows:
                 row = dict(raw)
                 for original, canonical in BENCHMARK_COLUMNS[table].items():
                     if original in row and canonical not in row:
