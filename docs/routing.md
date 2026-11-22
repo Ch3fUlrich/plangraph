@@ -147,6 +147,8 @@ model-named combos and clean routes that have no remaining servable legs.
 
 D-5903 round 3 explicitly retains the Hydrogen tools review seat for cards without `diff_ref`, including when Mimo/OpenCode/Muse seats are unavailable. Like other agy tools seats it reviews the selected checkout (explicit `cwd`, otherwise the runner default); a no-diff card does not request an automatic checkout of another revision. Hydrogen reviews use read-only plan mode.
 
+[Train delta review](landing-train.md) routes its replay brief as a witnessed document. The gateway witness gate filters the existing route, and only merge-delta writer families are excluded. Ordinary checkout reviews retain their writer-family and diff requirements.
+
 The shipped provider config and the pending benchmark inventory use the same `omniroute/deepseek-v4.1-flash` identity; the pending row explicitly records missing measurements. Historical fallthrough replay projects the legacy alias onto this registered identity.
 
 Reviews (rule 3.50, D-6028) start on mimo-v2.6-pro, then mimo-v2.6-flash (both inline-only, so

@@ -171,15 +171,64 @@ pub fn commit_families(
     python: &dyn Fn() -> Command,
 ) -> Result<RangeFamilies, String> {
     let range = format!("{base_sha}..{head_sha}");
-    // Merge commits are read too: their Writer trailers name who resolved the merge.
-    let format = "--format=%H%n%P%n%an%n%ae%n%(trailers:separator=%x0a)";
-    let raw = log_bytes(repo, &["log", "-z", format, &range])?;
-    if raw.is_empty() {
+    let attribution = read_commit_families(repo, &[&range], leg_models, python)?;
+    if attribution.per_commit.is_empty() {
         return Err(format!(
             "refused: no commits found in {}..{}",
             short(base_sha),
             short(head_sha)
         ));
+    }
+    if attribution.models.is_empty()
+        && attribution
+            .per_commit
+            .iter()
+            .all(|(_, families)| families.is_empty())
+    {
+        return Err(format!(
+            "refused: could not determine any writer family from trailers/authors in {}..{}",
+            short(base_sha),
+            short(head_sha)
+        ));
+    }
+    Ok(attribution)
+}
+
+/// Attribute just the named commits. Mechanical merges may have no writer family.
+pub fn delta_commit_families(
+    repo: &Path,
+    commits: &[String],
+    python: &dyn Fn() -> Command,
+) -> Result<RangeFamilies, String> {
+    if commits.is_empty()
+        || commits
+            .iter()
+            .any(|sha| sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err("refused: train delta must name full merge commit SHAs".into());
+    }
+    let mut revs = vec!["--no-walk"];
+    revs.extend(commits.iter().map(String::as_str));
+    revs.push("--");
+    read_commit_families(repo, &revs, &[], python)
+}
+
+fn read_commit_families(
+    repo: &Path,
+    revs: &[&str],
+    leg_models: &[&str],
+    python: &dyn Fn() -> Command,
+) -> Result<RangeFamilies, String> {
+    // Merge commits are read too: their Writer trailers name who resolved the merge.
+    let format = "--format=%H%n%P%n%an%n%ae%n%(trailers:separator=%x0a)";
+    let mut args = vec!["log", "-z", format];
+    args.extend_from_slice(revs);
+    let raw = log_bytes(repo, &args)?;
+    if raw.is_empty() {
+        return Ok(RangeFamilies {
+            per_commit: Vec::new(),
+            models: BTreeSet::new(),
+        });
     }
 
     let mut commits = Vec::new();
@@ -277,13 +326,6 @@ pub fn commit_families(
             }
         }
         per_commit.push((c.sha.clone(), families));
-    }
-    if models.is_empty() && per_commit.iter().all(|(_, families)| families.is_empty()) {
-        return Err(format!(
-            "refused: could not determine any writer family from trailers/authors in {}..{}",
-            short(base_sha),
-            short(head_sha)
-        ));
     }
     Ok(RangeFamilies { per_commit, models })
 }

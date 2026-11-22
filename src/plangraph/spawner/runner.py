@@ -231,6 +231,7 @@ class SpawnerRunner:
         if prepare_launch and not dry_run:  # REMOVE-AT-R10
             raise ValueError('launch preparation requires dry run')
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
+        brief_sha256 = hashlib.sha256(prompt.encode()).hexdigest() if role == 'review' and prompt_record else None
         from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
         prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
                          tool_mode=getattr(leg, 'tool_mode', None))
@@ -239,7 +240,8 @@ class SpawnerRunner:
             path, record, save = prompt_record
             if not dry_run:  # REMOVE-AT-R10
                 atomic_write_private(path, prompt)
-            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant)
+            record.update(prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(), wake_variant=wake_variant,
+                          **({'review_brief_sha256': brief_sha256} if brief_sha256 is not None else {}))
             if not dry_run:  # REMOVE-AT-R10
                 save(record)
         timeout = os.environ.get('PLANGRAPH_SPAWN_RUN_TIMEOUT')
@@ -316,10 +318,8 @@ class SpawnerRunner:
             except ValueError:
                 title_at = len(cmd)  # no positional exists on that path
             cmd[title_at:title_at] = ['--title', f'plangraph-{job_id}']
-            from .opencode_overlay import overlay_env
-            child_env = overlay_env(child_env)
-            from plangraph.routing_support.opencode_render import render_gateway_providers
-            render_reason = render_gateway_providers(child_env, model_or_combo)
+            from .opencode_overlay import prepare_gateway_env
+            child_env, render_reason = prepare_gateway_env(child_env, model_or_combo)
             if render_reason is None:
                 # Overlay only copies an env name through when the parent already
                 # holds it; hand the child the host keys from the AutoOS keys file
@@ -1080,7 +1080,7 @@ def spawn_service(*args, **kwargs):
                             served_witness_reason=job.served_witness_reason,
                             request_side_model=job.request_side_model, witness_kind=job.witness_kind,
                             skip_reason=reason or ('provider_stop' if stop else None), provider_response=stop,
-                            stdout_tail=job.stdout, stderr_tail=job.stderr))
+                            stdout_tail=job.stdout, stderr_tail=job.stderr, finish_reason=getattr(job, 'response_finish_reason', None)))
                         if stop and not unavailable and job.status != 'cancelled':
                             notify_leg_refused(self, record, chosen, reason or 'provider_stop')
                         if job.status in ('completed', 'dry_run', 'terminated_after_answer') and not unavailable and not stop:

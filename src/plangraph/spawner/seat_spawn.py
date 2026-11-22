@@ -518,7 +518,8 @@ class SeatSpawnMixin:
             from plangraph.review.family import FamilyError, writer_headers
             try:
                 options['headers'] = dict(options.get('headers') or {},
-                    **writer_headers(record.get('given_writer_families') or []))
+                    **writer_headers(record.get('given_writer_families') or [],
+                                     allow_empty=record.get('review_document') == 'train_delta'))
             except FamilyError as exc:
                 raise SpawnRefused(str(exc)) from None
             if record.get('item_key') and not options.get('dry_run'):
@@ -647,6 +648,9 @@ class SeatSpawnMixin:
         ``document_review`` allows explicit ``--leg`` document reviews and dry-run planning; live routed
         inline-only review legs need the card's diff and refuse without ``diff_ref`` (r3).
         OpenCode tools-mode reviews inline a diff when supplied, but also support non-diff reviews."""
+        from plangraph.planner.route_policy import train_delta_document
+        if train_delta_document(card, role):
+            return prompt
         if getattr(leg, 'tool_mode', 'tools') == 'inline-only':
             from . import context_pack
             prompt = context_pack.pack_prompt(prompt, card, getattr(self.runner, 'default_cwd', None) or os.getcwd(), pack)

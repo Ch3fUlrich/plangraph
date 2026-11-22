@@ -144,7 +144,7 @@ def test_mixed_gate_retains_all_capable_legs(monkeypatch):
     env = {'OMNIROUTE_BASE_URL': 'https://gateway.invalid/v1',
            'OPENCODE_CONFIG_CONTENT': json.dumps({'provider': {'mimo': {
                'options': {'baseURL': 'https://gateway.invalid/v1'}}}})}
-    monkeypatch.setattr(gw, 'review_child_env', lambda: env)
+    monkeypatch.setattr(gw, 'review_child_env', lambda _model: env)
     direct, mimo, gateway = [SimpleNamespace(id=p, model=p + '/model', disabled=None)
                              for p in ('direct', 'mimo', 'omniroute')]
     legs = (direct, mimo, gateway)

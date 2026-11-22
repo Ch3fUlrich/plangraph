@@ -85,6 +85,10 @@ fn part(pr: u64, head: &str, parent: Option<(u64, &str)>) -> PartIn {
             pr,
             head: head.into(),
         }),
+        receipt: PartReceipt {
+            run_id: format!("run-{pr}"),
+            head: head.into(),
+        },
     }
 }
 
@@ -181,6 +185,7 @@ fn dropping_a_parent_drops_its_child_and_the_child_cannot_bring_the_parents_comm
             head: p.clone(),
         }),
         own: Own::of(&[]),
+        receipt: parts[2].receipt.clone(),
     });
     cheat.merges.push(m.train_sha.clone());
     let err = verify_manifest(fx.path(), &cheat, &parts).unwrap_err();
@@ -780,3 +785,9 @@ fn the_open_record_freeze_manifest_and_result_must_belong_to_one_build_base_and_
     other_result.build = "b9".into();
     assert!(bind_artifacts(&open, &freeze, &m, &other_result).is_err());
 }
+
+#[path = "build_receipt_tests.rs"]
+mod receipt_tests;
+
+#[path = "build_delta_tests.rs"]
+mod delta_tests;

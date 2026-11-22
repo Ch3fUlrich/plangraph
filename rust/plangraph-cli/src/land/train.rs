@@ -19,6 +19,28 @@ pub struct PartIn {
     pub pr: u64,
     pub head: String,
     pub parent: Option<Parent>,
+    pub receipt: PartReceipt,
+}
+
+/// Reference to the passing seat checked by the READY registrar for this part.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartReceipt {
+    pub run_id: String,
+    pub head: String,
+}
+
+impl PartIn {
+    pub(super) fn check_receipt(&self) -> Result<(), String> {
+        if self.receipt.head != self.head
+            || !pg_worker_core::run::record::valid_run_id(&self.receipt.run_id)
+        {
+            return Err(format!(
+                "receipt: part #{} head {} differs from receipt head {} or the run ID is invalid",
+                self.pr, self.head, self.receipt.head
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// The digest and count of the commits of `diff_base..head`.
@@ -50,6 +72,7 @@ pub struct Part {
     pub head: String,
     pub parent: Option<Parent>,
     pub own: Own,
+    pub receipt: PartReceipt,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

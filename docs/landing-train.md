@@ -13,7 +13,9 @@
   train base. A part left out takes its descendants with it. A stack above the cap enters as a prefix; the rest is left out as
   `cap`, a failed merge as `conflict`, a part below a left-out part as `descendant`. Conflicts are not resolved here.
 - **Manifest** (`build.rs`): base, parts in stack order with their own-commit digest, dependency graph, Git version, the merge
-  attributes used, the merge commit of each part, every READY head left out with its reason. Merges run in a private shared
+  attributes used, the merge commit and review receipt of each part, every READY head left out with its reason. The READY
+  snapshot names the previously checked seat as `receipt: {run_id, head}`. The builder requires its exact part head and
+  replay checks that the manifest carries the receipt from the independently supplied READY snapshot. Merges run in a private shared
   clone with no user, system or repository configuration and no `info/attributes`; attributes come only from the recorded file.
 - **Verification** (`verify_manifest`, `verify_result`): the registered head and parent of every part, the whole first-parent
   chain (one merge per part with exactly the two expected parents), a clean replay of every merge under the recorded inputs, and
@@ -40,6 +42,15 @@ is the `--base`; it writes the build record (`<name>.open.json`: policy version,
 Adopted resolutions come from the replay of `--resolution-log`, bound to the build and to the part's position in the
 snapshot order. `plangraph land-train verify` repeats the proof with `--manifest`, `--parts` (the selection the verifier
 recomputed), `--open`, `--freeze` and `--result`.
+
+`verify --delta-out FILE` exports a replay artifact with the frozen base, train head, policy and each merge's
+parents, actual tree and replay tree. For an adopted resolution it includes the diff from Git's conflict
+tree to the committed tree. `land-train review` takes the same proof inputs and `--item KEY`. It dispatches
+the canonical artifact as a witnessed document review from a clean checkout of the train head.
+Only authors of the merge delta are excluded. A mechanical merge can have an empty exclusion set.
+`land-train admit --item KEY --review-run ID` repeats the proof and
+requires a passing gateway-witnessed review in the keeper mirror. The serving attempt must be from
+outside the delta's writer families, and the run must match the exact train head and artifact prompt.
 
 ## A red train
 
