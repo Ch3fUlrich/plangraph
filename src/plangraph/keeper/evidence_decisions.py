@@ -60,6 +60,45 @@ _KEY_TOKEN_RE = re.compile(r"[^:@/\s,]+:[^:@/\s,]+\Z")
 _CLOSES_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}\Z")
 
 
+# Row 40 "supersedes / corrects / withdraws / replaces D-12" retires D-12.
+_SUPERSEDES_RE = re.compile(
+    r"(?i)\b(?:supersedes|corrects|withdraws|replaces)\s+D-0*(\d+)\b")
+# Row 12 whose DECISION cell opens with "WITHDRAWN by D-40" / "superseded by
+# D-40" retires itself; the same phrase later in a cell may be about anything.
+_OWN_RETIRED_RE = re.compile(
+    r"(?i)^\W{0,3}(?:superseded|withdrawn|replaced|corrected)\s+by\s+D-0*(\d+)\b")
+
+
+def _did_num(did):
+    try:
+        return int(str(did).split("-", 1)[1])
+    except (IndexError, ValueError):
+        return -1
+
+
+def superseded_map(rows):
+    """``{"D-old": "D-new"}``: decisions a later row retires.
+
+    Row ``D-new`` says ``supersedes|corrects|withdraws|replaces D-old``, or
+    row ``D-old``'s DECISION cell opens with ``WITHDRAWN|superseded by D-new``.
+    Only the DECISION cell (3rd column) is read.
+    """
+    out = {}
+    for did, lines in rows.items():
+        own = _did_num(did)
+        for line in lines:
+            cell = _decision_cell(line)
+            match = _OWN_RETIRED_RE.match(cell)
+            if match and int(match.group(1)) > own:
+                out.setdefault(did, f"D-{int(match.group(1))}")
+            for found in _SUPERSEDES_RE.finditer(cell):
+                old = f"D-{int(found.group(1))}"
+                newest = out.get(old)
+                if _did_num(old) < own and (newest is None or _did_num(newest) < own):
+                    out[old] = did
+    return out
+
+
 class DecisionsFetchFailed(OSError):
     """The decisions repository could not fetch origin/main."""
 

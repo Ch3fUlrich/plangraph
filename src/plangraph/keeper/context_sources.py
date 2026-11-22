@@ -24,7 +24,7 @@ import time
 from urllib.parse import urlsplit
 
 from .errors import Refused
-from .evidence_decisions import DecisionsAdapter, _decision_cell
+from .evidence_decisions import DecisionsAdapter, _decision_cell, _did_num, superseded_map
 from .evidence_git import REVERT_GREP, delivery_revert, is_first_parent_merge, plan_items, valid_ref
 from .evidence_types import valid_commit_ref
 
@@ -42,13 +42,6 @@ MERGE_REPO_LINE = re.compile(
     r"[ \t]*Merge-Repo:[ \t]*([A-Za-z0-9_.-]+)"
     r"(?:[ \t]+([a-fA-F0-9]{40}|#[1-9][0-9]*))?[ \t]*")
 _DID_RE = re.compile(r"(?<![\w-])[Dd]-0*(\d{1,6})(?!\d)")
-# Row 40 "supersedes / corrects / withdraws / replaces D-12" retires D-12.
-_SUPERSEDES_RE = re.compile(
-    r"(?i)\b(?:supersedes|corrects|withdraws|replaces)\s+D-0*(\d+)\b")
-# Row 12 whose DECISION cell opens with "WITHDRAWN by D-40" / "superseded by
-# D-40" retires itself; the same phrase later in a cell may be about anything.
-_OWN_RETIRED_RE = re.compile(
-    r"(?i)^\W{0,3}(?:superseded|withdrawn|replaced|corrected)\s+by\s+D-0*(\d+)\b")
 
 
 def decision_ids(*texts) -> list:
@@ -58,13 +51,6 @@ def decision_ids(*texts) -> list:
         if isinstance(text, str):
             found.update(int(n) for n in _DID_RE.findall(text))
     return [f"D-{n}" for n in sorted(found)]
-
-
-def _did_num(did):
-    try:
-        return int(str(did).split("-", 1)[1])
-    except (IndexError, ValueError):
-        return -1
 
 
 def subject_pr(subject):
@@ -793,26 +779,3 @@ def decisions_naming(book, key):
     if "-" in bare and len(bare) >= 6:
         hits |= book["index"].get(bare, set())
     return sorted(hits, key=_did_num)
-
-
-def superseded_map(rows):
-    """``{"D-old": "D-new"}``: decisions a later row retires.
-
-    Row ``D-new`` says ``supersedes|corrects|withdraws|replaces D-old``, or
-    row ``D-old``'s DECISION cell opens with ``WITHDRAWN|superseded by D-new``.
-    Only the DECISION cell (3rd column) is read.
-    """
-    out = {}
-    for did, lines in rows.items():
-        own = _did_num(did)
-        for line in lines:
-            cell = _decision_cell(line)
-            match = _OWN_RETIRED_RE.match(cell)
-            if match and int(match.group(1)) > own:
-                out.setdefault(did, f"D-{int(match.group(1))}")
-            for found in _SUPERSEDES_RE.finditer(cell):
-                old = f"D-{int(found.group(1))}"
-                newest = out.get(old)
-                if _did_num(old) < own and (newest is None or _did_num(newest) < own):
-                    out[old] = did
-    return out

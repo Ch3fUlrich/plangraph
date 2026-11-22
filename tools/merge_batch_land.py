@@ -20,7 +20,7 @@ from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_con
                               TESTED_FF, REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
                               batch_workflow_gate, keeper_migration, part_review, run, write_landing, write_landing_records,
-                              cleanup_landed, close_merged_items)
+                              cleanup_landed, close_merged_items, active_train, go_key_block, part_items, train_keys)
 from merge_batch_plan import windows_commands, windows_gate, windows_needed, windows_report, windows_script
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
@@ -68,42 +68,6 @@ PASS_LINES = ("VERDICT: PASS", "VERDICT: pass")
 
 def cell(text):
     return str(text).replace("|", "\\|").replace("\n", " ").strip()
-
-
-def active_train(st, head):
-    """The part table at this exact head, with skipped and reverted parts removed."""
-    from plangraph.keeper.evidence_git import REVERT_GREP, delivery_revert
-
-    base = st.get("base_head")
-    if not base:
-        raise MergeBatchError("batch has no saved base head for train evidence; rebuild the batch")
-    skipped = {rec["pr"] for rec in st.get("skipped", [])}
-    dropped = set()
-    log = git("log", "--first-parent", "-E", "-i", "--grep", REVERT_GREP, "--format=%B%x1d",
-              f"{base}..{head}", cwd=st["worktree"])
-    for message in log.stdout.split("\x1d"):
-        revert = delivery_revert(message.lstrip("\n"))
-        if revert is None:
-            continue
-        target, keys = revert
-        for part in st["merged"]:
-            part_target = target and (part["merge"].startswith(target) or part["head"].startswith(target))
-            if part_target or keys.intersection(part["items"]):
-                dropped.add(part["pr"])
-    return dict(st, merged=[rec for rec in st["merged"] if rec["pr"] not in skipped | dropped],
-                dropped=[rec for rec in st["merged"] if rec["pr"] in dropped])
-
-
-def train_keys(st):
-    keys = {key for rec in st["merged"] for key in part_items(st, rec, require_keys=False)}
-    batch = st.get("plan")
-    if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
-        keys.add(batch)
-    return sorted(keys)
-
-
-def go_key_block(st):
-    return "GO-KEYS [" + ",".join(train_keys(st)) + "]"
 
 
 def render_body(st):
@@ -716,19 +680,6 @@ def cmd_status(args):
         print(f"{orphan['name']}  orphan  no state file, but a build left its PR-head refs ({orphan['branch']}, "
               f"worktree {orphan['worktree']}): merge_batch.py abort --name {orphan['name']}")
     return 0
-
-
-def part_items(st, rec, *, require_keys=True):
-    wt, merge, head = st["worktree"], rec["merge"], rec["head"]
-    if git("rev-parse", f"{merge}^2", cwd=wt).stdout.strip() != head:
-        raise MergeBatchError(f"part #{rec['pr']} merge does not bind its head")
-    from plangraph.keeper.evidence_git import plan_items  # the keeper's reading of a commit's trailers
-
-    messages = git("log", "--format=%B%x1d", f"{merge}^1..{head}", cwd=wt).stdout.split("\x1d")
-    keys = {key for message in messages for key in plan_items(message)}
-    if (require_keys and not keys) or any(not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", key) for key in keys):
-        raise MergeBatchError(f"part #{rec['pr']} needs a Plan-Item for its keeper-bound review")
-    return keys
 
 
 def part_seat(run_id, key, head):
