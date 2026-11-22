@@ -173,13 +173,19 @@ def test_pg_hook_repository_inputs_are_explicitly_selected(path, expected):
 
 
 def test_pg_hook_runs_in_windows_job():
-    # Keep the regression name while enforcing the D-5579 Unix-only rollback.
+    # D-5579 still controls the CI job and the original hook suite.
     workflow = yaml.safe_load((ROOT / ".github/workflows/tests.yml").read_text())
     steps = workflow["jobs"]["rust-windows"]["steps"]
     assert all("pg-hook" not in step.get("run", "") for step in steps)
     assert "slice 1 is Unix-only" in (ROOT / "docs/rust-hooks.md").read_text()
-    for source in (ROOT / "rust/pg-hook/tests").glob("*.rs"):
-        assert source.read_text().startswith("#![cfg(unix)]\n"), source
+    portable = {"lesson_gate.rs", "message_time.rs"}
+    sources = {source.name: source for source in (ROOT / "rust/pg-hook/tests").glob("*.rs")}
+    assert portable <= sources.keys()
+    for name, source in sources.items():
+        unix_only = source.read_text(encoding="utf-8").startswith("#![cfg(unix)]\n")
+        assert unix_only == (name not in portable), source
+    lesson_gate = sources["lesson_gate.rs"].read_text(encoding="utf-8")
+    assert '#[cfg(unix)]\n#[test]\nfn session_installer_builds_copies_and_checksums_the_hook' in lesson_gate
     for name in ("lib.rs", "main.rs"):
         source = (ROOT / "rust/pg-hook/src" / name).read_text()
         assert "#[cfg(all(test, unix))]\nmod tests" in source
