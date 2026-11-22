@@ -96,33 +96,35 @@ class KeeperRefused(Exception):
 _TRANSIENT_REFUSALS = frozenset({401, 403, 408, 425, 429})
 
 
-def refusal_is_final(directory, refusal):
+def refusal_is_final(directory, refusal, *, journal_name='keeper.refused'):
     """Whether a refused delivery is never sent again.
 
     A conflict (HTTP 409: the item no longer takes this record, e.g. it is done)
     is final at once; any other 4xx that is not transient is final when the same
-    status repeats for this run (the first one is remembered in ``keeper.refused``).
+    status repeats for this delivery (the first one is remembered in its journal).
     """
     if refusal.status == 409:
         return True
     if refusal.status in _TRANSIENT_REFUSALS:
         return False
-    seen = Path(directory) / 'keeper.refused'
+    seen = Path(directory) / journal_name
     if seen.exists() and seen.read_text(encoding='utf-8').strip() == str(refusal.status):
         return True
     atomic_write_private(seen, f'{refusal.status}\n')
     return False
 
 
-def settle_refusal(marker, recipient, refusal):
+def settle_refusal(marker, recipient, refusal, *, final_statuses=()):
     """Mark a final refusal as delivered-as-refused (never resent); log a retryable one."""
     import logging
     log = logging.getLogger(__name__)
-    if refusal_is_final(Path(marker).parent, refusal):
+    marker = Path(marker)
+    if refusal.status in final_statuses or refusal_is_final(
+            marker.parent, refusal, journal_name=marker.with_suffix('.refused').name):
         atomic_write_private(marker, f'refused: HTTP {refusal.status}\n')
-        log.warning('completion delivery to %s refused (HTTP %s): not retried', recipient, refusal.status)
+        log.warning('delivery to %s refused (HTTP %s): not retried', recipient, refusal.status)
     else:
-        log.warning('completion delivery to %s refused (HTTP %s): will retry', recipient, refusal.status)
+        log.warning('delivery to %s refused (HTTP %s): will retry', recipient, refusal.status)
 
 
 class KeeperSink:
@@ -143,7 +145,10 @@ class KeeperSink:
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
         payload = {'key': event['item'], 'run': {
             'run_id': event['run_id'], 'phase': 'finished', 'rc': event['rc']}}
-        request = urllib.request.Request(self.url.rstrip('/') + '/v1/record_run',
+        self._post("record_run", payload, token)
+
+    def _post(self, verb, payload, token):
+        request = urllib.request.Request(self.url.rstrip('/') + '/v1/' + verb,
             data=json.dumps(payload).encode(), method='POST',
             headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
         opener = urllib.request.build_opener(_NoRedirectHandler())
@@ -156,6 +161,10 @@ class KeeperSink:
             if 400 <= exc.code < 500:
                 raise KeeperRefused(exc.code) from None
             raise
+
+    def spawn_attempt(self, attempt):
+        token = Path(self.token_file).read_text(encoding="utf-8").strip()
+        self._post("record_spawn_attempt", attempt, token)
 
     def item(self, key):
         from urllib.parse import urlencode
@@ -189,6 +198,47 @@ class KeeperSink:
             if json.load(response) != binding:
                 raise ValueError('keeper did not acknowledge seat admission')
         request['verdict_binding'] = binding
+
+
+def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
+    """Deliver terminal snapshots idempotently and retain undelivered records."""
+    import re
+    from plangraph.fleet_snapshot import _projection_binary
+
+    keeper = keeper if keeper is not None else KeeperSink()
+    if not keeper.url or not keeper.token_file:
+        return []
+    pending = []
+    for run in runs:
+        run_id = run.get("run_id", "")
+        if (run.get("attempt_capture") != 1 or not run.get("ended")
+                or run.get("status") in ("queued", "running", "queue_claimed")
+                or not re.fullmatch(r"run-[A-Za-z0-9-]+", run_id)):
+            continue
+        marker = Path(state) / "runs" / run_id / "attempt.delivered"
+        if not marker.exists():
+            pending.append((run, marker))
+    findings = []
+    for run, marker in sorted(pending, key=lambda pair: pair[0]["ended"])[:limit]:
+        try:
+            result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
+                                    input=json.dumps(run, allow_nan=False), text=True,
+                                    encoding="utf-8", errors="replace", capture_output=True, timeout=5, check=True)
+            attempt = json.loads(result.stdout)
+            if attempt is not None:
+                try:
+                    keeper.spawn_attempt(attempt)
+                except KeeperRefused as refusal:
+                    settle_refusal(marker, f"keeper (attempt {run['run_id']})",
+                                   refusal, final_statuses=(400, 422))
+                    raise
+            atomic_write_private(marker, "delivered\n" if attempt is not None else "not_launched\n")
+        except (OSError, ValueError, RuntimeError, KeeperRefused, subprocess.SubprocessError) as exc:
+            findings.append(dict(rule="spawn-attempt-delivery", run_id=run["run_id"],
+                                 reason=type(exc).__name__))
+            if isinstance(exc, (OSError, subprocess.TimeoutExpired)):
+                break
+    return findings
 
 
 def deliver_verdict(directory, record, keeper):

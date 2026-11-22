@@ -138,6 +138,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("host") {
         return crate::host_tools::execute(&rest, out);
     }
+    if let Some(name @ ("project-spawn-attempt" | "validate-attempt-route")) = verb.as_deref() {
+        return crate::attempt_outcome::execute(name, rest, out);
+    }
     if verb.as_deref() == Some("steps") {
         // The plan arrives on stdin; the exit code is the plan's, not a usage error's.
         if !rest.is_empty() {
