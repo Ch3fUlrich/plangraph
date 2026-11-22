@@ -511,7 +511,8 @@ class WaiverMixin:
             backfill = families is None and waiver is None
             witnessed, seats, flags = ([], [], None) if waiver is not None else self._seats_or_flag(
                 item, decision_id, head, now, prs, families, backfill, required)
-            if token is not None and not waiver_only and self._merge_project(item) != item["project"]:
+            project, revision = self._merge_repository(item)
+            if token is not None and not waiver_only and project != item["project"] and revision is None:
                 changes |= self._merged_go_deploy_changes(item, head)
             pending = self._deploy_pending(item, changes)
             if token is not None and not self._deploy_scan_current(item, token):
