@@ -1,6 +1,7 @@
-# plangraph systemd units (user units)
+# plangraph systemd units
 
-All units are user units (`systemctl --user`), not system units.
+Use `systemctl --user` for the user units below. The WSL cache guard uses
+a root system service and timer.
 
 ## 1. Files
 
@@ -22,6 +23,7 @@ All units are user units (`systemctl --user`), not system units.
 | plangraph-review-probe.service + .timer | probe every routed review leg (`REVIEW_ORDER`) with a tiny OK prompt every 15 min (23 min maximum per run), booking down legs that fail and emitting a one-time `missing_manage_key` alert via `pg-spawnd check-manage-key` | spawner host |
 | plangraph-render.service | one tick: follow the gated head, render the static page, check the stamp | render host |
 | plangraph-render.timer | timer driving plangraph-render.service every 5 min | render host |
+| pg-wsl-cache-guard.service + .timer | sample Windows free physical memory every three minutes and reclaim WSL page cache below the configured floor | WSL worker, system units |
 | render.env.example | environment template for plangraph-render.service (paths, not secrets) | render host |
 | plangraph-render.service.d/kg.conf.example | drop-in example: knowledge-graph sidecar endpoints | render host |
 | plangraph-render.service.d/live-tree.conf.example | drop-in example: override the live tree location | render host |

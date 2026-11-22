@@ -1,5 +1,7 @@
 //! WSL defaults that affect attempt confinement.
 
+pub const CACHE_GUARD_FLOOR_MB: u64 = 20_480;
+
 fn strip_comment(line: &str) -> &str {
     let end = line.find(['#', ';']).unwrap_or(line.len());
     &line[..end]

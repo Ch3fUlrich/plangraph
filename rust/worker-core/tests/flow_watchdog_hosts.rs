@@ -29,6 +29,18 @@ fn disk_usage_is_strictly_above_85_on_either_filesystem() {
 }
 
 #[test]
+fn hot_work_disks_raise_one_host_alarm() {
+    let result = active(serde_json::json!({"host":"fixture","tmp_used_percent":86,
+        "root_used_percent":0,"work_used_percent":[90,99],"checkout_head":"a",
+        "origin_main_head":"a","behind_commits":0,"age_hours":100}));
+    assert_eq!(result.matches("host-disk").count(), 1, "{result}");
+    let result = active(serde_json::json!({"host":"fixture","tmp_used_percent":0,
+        "root_used_percent":0,"work_used_percent":[85,85.1],"checkout_head":"a",
+        "origin_main_head":"a","behind_commits":0,"age_hours":100}));
+    assert_eq!(result.matches("host-disk").count(), 1, "{result}");
+}
+
+#[test]
 fn checkout_alerts_by_commit_count_or_age_only_when_behind() {
     for (head, commits, age, fires) in [
         ("a", 10, 24.0, false),

@@ -18,6 +18,8 @@ from typing import Mapping
 CLAUDE_ENV_ALLOW = frozenset({
     # identity, shell and working directory (PWD: D-3505, the project dir comes from $PWD)
     'HOME', 'USER', 'LOGNAME', 'SHELL', 'PATH', 'PWD', 'TERM', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL',
+    'RUSTC_WRAPPER', 'SCCACHE_CACHE_SIZE', 'SCCACHE_DIR', 'CARGO_HOME',
+    'PIP_CACHE_DIR', 'NPM_CONFIG_CACHE', 'UV_CACHE_DIR',
     # locale and time zone
     'LANG', 'LANGUAGE', 'TZ',
     # scratch space

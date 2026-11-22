@@ -9,6 +9,8 @@ receiving spawner also checks live disk before launching.
 
 Every harness child, including writers and fixers, receives `CARGO_TARGET_DIR`
 from `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`).
+Spawned builds also use host-configured cache variables. See the sccache
+settings in [Worker disk rollout](worker-disks.md).
 Caller and per-worktree target overrides are replaced; children also receive
 `CARGO_INCREMENTAL=0`. The cache cap is
 `PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB). Over-cap busy hosts refuse a building role with
@@ -41,7 +43,8 @@ is held. The lock file stays in place after release.
 Hygiene resolves `PLANGRAPH_CARGO_TARGET_DIR` with the same home expansion and
 absolute-path rules as `host_ready.shared_cargo_target`, defaulting to
 `~/.cache/plangraph/cargo-target`; it also checks `~/.cache/pg-target-po`.
-Its alarm and cleanup defaults are 5 GiB and 10 GB (decimal) respectively.
+Its alarm triggers at 75% used or under 5 GiB free. Cleanup starts at 80% used
+or under 10 GB (decimal) free.
 `pg-disk-hygiene` reclaims ignored `target`, `rust/target`, `node_modules`, and
 nested `__pycache__` / `.pytest_cache` directories in eligible idle worktrees.
 Other ignored data, tracked cache files, dirty trees and protection records
@@ -53,9 +56,8 @@ Cargo command. Native Codex launches pin the same target; briefs forbid private
 targets. Continuous cap sampling in these two paths and exact-head fast-check
 stamps remain open.
 
-Hygiene additionally reclaims Cargo-marked private targets under /tmp (two levels)
-and ignored, untracked rust/target directories in registered worktrees under
---root after 30 minutes without writes. This cleanup runs without disk pressure;
-shared targets, pinned/live paths, active builds, process cwds, foreign ownership,
-leases and symlinks prevent deletion. Worktree source dirtiness alone does not
-protect ignored build artifacts in this narrower cleanup.
+Worktree cache cleanup requires a clean worktree idle for over 24 hours.
+Hygiene also reclaims Cargo-marked private targets up to two levels under the
+host scratch directory and /tmp after 30 minutes without writes. Scratch
+cleanup runs without disk pressure. Shared targets, pinned/live paths, active
+builds, process cwds, foreign ownership, leases and symlinks prevent deletion.

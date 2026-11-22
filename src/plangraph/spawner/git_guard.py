@@ -261,11 +261,17 @@ async def prepare_worktree(service, record, card, enabled, *, continuation=False
         return {}
     import asyncio
     from plangraph.settings import _policy_data
+    from .host_ready import worktree_disk_root
     repo = repo or selected_checkout(service, record)
     record.setdefault('selected_cwd', str(repo))
     config = _policy_data(repo) or {}
-    root = config.get('worktree_root') or service.state / 'worktrees'
     previous = record.get('run_worktree')
+    try:
+        root = (Path(previous['path']).parent if previous else await asyncio.to_thread(worktree_disk_root)
+                or config.get('worktree_root') or service.state / 'worktrees')
+    except (OSError, TypeError, ValueError, subprocess.TimeoutExpired) as error:
+        raise SpawnRefused('disk_low: work mount unavailable' if not str(error).startswith('disk_low:')
+                           else str(error)) from None
     branch = previous['branch'] if previous else card.get('lane_branch') or 'lane/' + record['run_id']
     continuation = continuation or bool(previous) or bool(card.get('continuation'))
     creation = asyncio.create_task(asyncio.to_thread(create, root, repo, branch, continuation,

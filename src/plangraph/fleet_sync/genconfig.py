@@ -11,6 +11,11 @@ def config_dir():
     return Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'plangraph'
 
 
+def work_mounts(host):
+    value = host.get('env', {}).get('PLANGRAPH_WORK_MOUNTS')
+    return value.split(':') if value else []
+
+
 def generate(registry):
     ps, overflow = [], {}
     local_name = registry.get('self', '').lower()
@@ -52,6 +57,8 @@ def generate(registry):
                     placement_fallback=host.get('placement_fallback', False),
                     repos={key: entry['root'] for key, entry in repos.items() if key in public_ids},
                     session_unit=host.get('env', {}).get('PG_SESSION_UNIT'), registry=True)
+            if mounts := work_mounts(host):
+                overflow[name]['work_mounts'] = mounts
     return {'ps-hosts.json': {'hosts': ps}, 'overflow-hosts.json': {
         'hosts': overflow, 'public_repos': list(public.values()), **(
             {'public_repo_ids': public} if public else {})}}

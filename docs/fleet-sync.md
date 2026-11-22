@@ -110,6 +110,8 @@ the supplied decision reference, not an independent verification of router appro
 
 Set `repos.plangraph.live_dir` to an absolute `<live_root>/current`, outside
 an absolute `worktrees_root`; local paths are resolved to reject symlink overlaps.
+Set `env.PLANGRAPH_WORK_MOUNTS` to colon-separated mount paths for Linux worker
+disks that readiness should check alongside the checkout filesystem.
 Generated consumer configs continue to use that path. Releases
 are detached clones at `<live_root>/releases/<sha>`, independent of worktree cleanup.
 Configure `health_checks` with three argv arrays: `doctor` (spawner doctor),

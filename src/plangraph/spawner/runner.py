@@ -300,7 +300,7 @@ class SpawnerRunner:
         if cmd[0] == 'claude':   # D-3605: subscription login only; D-3649: an allowlisted env, never a scrubbed copy
             child_env = with_agent_shell(claude_child_env(child_env))
         from .host_ready import cargo_child_env
-        child_env = cargo_child_env(child_env)
+        child_env = cargo_child_env(child_env, pin_configured=True)
         render_reason = None
         tools_event = None
         if cmd[0] == 'opencode':

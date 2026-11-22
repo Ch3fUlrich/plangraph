@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Write;
 
 pub(crate) const USAGE: &str =
-    "Usage: pg-spawnd <probe|serve|shim|steps|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local> [args]";
+    "Usage: pg-spawnd <probe|serve|shim|steps|host|health|agents-view|ledger-report|check-manage-key|check-install|resume|writer-stop|writer-resume|steer-local> [args]";
 
 /// `--help`/`-h` print usage and exit 0 only as the CLI's first argument or a
 /// verb's first argument; anywhere else they are unknown flags and fail. As a
@@ -131,6 +131,9 @@ pub(crate) fn execute(
     }
     let verb = first;
     let rest: Vec<String> = args.collect();
+    if verb.as_deref() == Some("host") {
+        return crate::host_tools::execute(&rest, out);
+    }
     if verb.as_deref() == Some("steps") {
         // The plan arrives on stdin; the exit code is the plan's, not a usage error's.
         if !rest.is_empty() {

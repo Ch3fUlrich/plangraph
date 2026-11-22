@@ -36,10 +36,7 @@ impl Host {
             .nth(3)
             .ok_or("record_path has no state root")?
             .to_owned();
-        let cwd = record_path
-            .parent()
-            .ok_or("record directory missing")?
-            .join("worktree");
+        let cwd = PathBuf::from(record["cwd"].as_str().ok_or("worktree path missing")?);
         let reviews = record["review_dir"]
             .as_str()
             .or_else(|| request["card"]["review_dir"].as_str())
@@ -104,7 +101,24 @@ pub(crate) fn execute(args: Vec<String>) -> Result<(), String> {
             .ok_or("record_path missing")?,
     );
     let _owner = crate::writer_control::supervisor_guard(&record_path)?;
-    let record = request["record"].clone();
+    let mut record = request["record"].clone();
+    let directory = record_path.parent().ok_or("record directory missing")?;
+    let id = record["run_id"].as_str().filter(|id| valid_run_id(id)).ok_or("invalid run id")?;
+    let default = directory.join("worktree");
+    let cwd = match pg_worker_core::work_disks::worktree_disk() {
+        Ok(Some((root, _))) => root.join(id),
+        Ok(None) => default,
+        Err(error) => {
+            record["cwd"] = json!(default);
+            record["status"] = json!("refused");
+            record["exit_code"] = json!(8);
+            record["reason"] = json!(error.to_string());
+            return pg_worker_core::run::record_io::atomic_write_private(
+                &record_path, record.to_string().as_bytes(),
+            ).map_err(|error| error.to_string());
+        }
+    };
+    record["cwd"] = json!(cwd);
     execute_request(&request, record)
 }
 

@@ -23,10 +23,13 @@ from registry_route_util import CARD, live_policy  # noqa: F401
 
 #: The policy restated literally.  Widening claude_env.CLAUDE_ENV_ALLOW has to change this list too.
 POLICY = (
-    'APPDATA', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL', 'CLAUDE_CODE_SHELL', 'CLAUDE_CONFIG_DIR', 'COMSPEC', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'HTTPS_PROXY', 'HTTP_PROXY',
-    'LANG', 'LANGUAGE', 'LOCALAPPDATA', 'LOGNAME', 'NODE_EXTRA_CA_CERTS', 'NO_PROXY', 'PATH', 'PATHEXT',
-    'PROGRAMDATA', 'PWD', 'SHELL', 'SSL_CERT_DIR', 'SSL_CERT_FILE', 'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP',
-    'TERM', 'TMP', 'TMPDIR', 'TZ', 'USER', 'USERNAME', 'USERPROFILE', 'WINDIR',
+    'APPDATA', 'CARGO_HOME', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL', 'CLAUDE_CODE_SHELL',
+    'CLAUDE_CONFIG_DIR', 'COMSPEC', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'HTTPS_PROXY', 'HTTP_PROXY',
+    'LANG', 'LANGUAGE', 'LOCALAPPDATA', 'LOGNAME', 'NODE_EXTRA_CA_CERTS', 'NO_PROXY',
+    'NPM_CONFIG_CACHE', 'PATH', 'PATHEXT', 'PIP_CACHE_DIR', 'PROGRAMDATA', 'PWD',
+    'RUSTC_WRAPPER', 'SCCACHE_CACHE_SIZE', 'SCCACHE_DIR', 'SHELL', 'SSL_CERT_DIR', 'SSL_CERT_FILE',
+    'SYSTEMDRIVE', 'SYSTEMROOT', 'TEMP', 'TERM', 'TMP', 'TMPDIR', 'TZ', 'USER', 'USERNAME',
+    'USERPROFILE', 'UV_CACHE_DIR', 'WINDIR',
 )
 PREFIXES = ('LC_', 'XDG_')
 
@@ -127,10 +130,14 @@ def drive_spawn(monkeypatch, tmp_path, *, extra_env=None, path_dirs=(), system_p
 
 
 def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path):
+    monkeypatch.setenv('RUSTC_WRAPPER', 'sccache')
+    monkeypatch.setenv('SCCACHE_CACHE_SIZE', '12G')
     env, _ = drive_spawn(monkeypatch, tmp_path, path_dirs=[fake_binary(tmp_path / 'bin', 'claude')],
                          extra_env={'SMUGGLED_BY_CALLER': 'v', 'XDG_DATA_HOME': '/d'})
     assert env is not None
     check_env(env)
+    configured_cache_reaches_child = env.get('RUSTC_WRAPPER') == 'sccache' and env.get('SCCACHE_CACHE_SIZE') == '12G'
+    assert configured_cache_reaches_child
     expected = {name for name in os.environ if policy_allows(name)} | {'PWD', 'XDG_DATA_HOME', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL'}
     if sys.platform != 'win32':  # the runner pins the agent shell even when the parent has none
         expected.add('CLAUDE_CODE_SHELL')

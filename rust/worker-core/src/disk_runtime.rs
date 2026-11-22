@@ -2,9 +2,27 @@
 use crate::disk_hygiene::{Guards, Report};
 use std::{fs, io, path::Path};
 
+#[derive(Clone, Copy, Debug)]
+pub struct DiskSpace {
+    pub free: u64,
+    pub total: u64,
+}
+
+impl DiskSpace {
+    pub fn meets_floor(self, min_bytes: u64, min_percent: u8) -> bool {
+        self.total > 0
+            && self.free >= min_bytes
+            && u128::from(self.free) * 100 >= u128::from(self.total) * u128::from(min_percent)
+    }
+}
+
+pub fn disk_usage(path: &Path) -> io::Result<u64> {
+    Ok(disk_space(path)?.free)
+}
+
 /// No subprocess (in particular no unbounded df invocation).
 #[cfg(unix)]
-pub fn disk_usage(path: &Path) -> io::Result<u64> {
+pub fn disk_space(path: &Path) -> io::Result<DiskSpace> {
     use std::os::unix::ffi::OsStrExt;
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
     let mut stat = std::mem::MaybeUninit::<libc::statvfs>::uninit();
@@ -14,13 +32,14 @@ pub fn disk_usage(path: &Path) -> io::Result<u64> {
     }
     // SAFETY: successful statvfs initialized stat.
     let stat = unsafe { stat.assume_init() };
-    Ok(
-        ((stat.f_bavail as u128).saturating_mul(stat.f_frsize as u128)).min(u64::MAX as u128)
-            as u64,
-    )
+    let bytes = |blocks| ((blocks as u128) * (stat.f_frsize as u128)).min(u64::MAX as u128) as u64;
+    Ok(DiskSpace {
+        free: bytes(stat.f_bavail),
+        total: bytes(stat.f_blocks),
+    })
 }
 #[cfg(not(unix))]
-pub fn disk_usage(_: &Path) -> io::Result<u64> {
+pub fn disk_space(_: &Path) -> io::Result<DiskSpace> {
     Err(io::Error::other("disk hygiene requires a Unix host"))
 }
 
@@ -46,8 +65,8 @@ fn scan_processes(root: &Path) -> io::Result<(Vec<std::path::PathBuf>, bool)> {
         match fs::read_to_string(path.join("comm")) {
             Ok(name) => {
                 building |= [
-                    "cargo", "rustc", "rustdoc", "sccache", "cc", "gcc", "clang", "ld", "npm",
-                    "make", "cmake", "ninja",
+                    "cargo", "rustc", "rustdoc", "cc", "gcc", "clang", "ld", "npm", "make",
+                    "cmake", "ninja",
                 ]
                 .contains(&name.trim())
             }

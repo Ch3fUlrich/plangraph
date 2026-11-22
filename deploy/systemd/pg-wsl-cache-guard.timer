@@ -1,0 +1,8 @@
+[Unit]
+Description=Check Windows memory from WSL every three minutes
+
+[Timer]
+OnCalendar=*-*-* *:00/3:00
+
+[Install]
+WantedBy=timers.target
