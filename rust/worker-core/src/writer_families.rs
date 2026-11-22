@@ -8,6 +8,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+type GitLogReader<'a> = dyn Fn(&[&str]) -> Result<Vec<u8>, String> + 'a;
+
 /// Python interpreter command shared by every adapter to the Python helpers.
 /// `src_root` (a checkout holding `src/plangraph`) is put on `PYTHONPATH` when it exists.
 pub fn python_command(src_root: Option<&Path>) -> Command {
@@ -197,7 +199,7 @@ pub fn commit_families(
 pub fn delta_commit_families(
     commits: &[String],
     python: &dyn Fn() -> Command,
-    read_log: &dyn Fn(&[&str]) -> Result<Vec<u8>, String>,
+    read_log: &GitLogReader<'_>,
 ) -> Result<RangeFamilies, String> {
     if commits.is_empty()
         || commits
@@ -216,7 +218,7 @@ fn read_commit_families(
     revs: &[&str],
     leg_models: &[&str],
     python: &dyn Fn() -> Command,
-    read_log: &dyn Fn(&[&str]) -> Result<Vec<u8>, String>,
+    read_log: &GitLogReader<'_>,
 ) -> Result<RangeFamilies, String> {
     // Merge commits are read too: their Writer trailers name who resolved the merge.
     let format = "--format=%H%n%P%n%an%n%ae%n%(trailers:separator=%x0a)";
