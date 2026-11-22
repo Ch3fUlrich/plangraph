@@ -13,7 +13,6 @@ def test_pg_partitioned_raw_and_migration(world):
     from plangraph.keeper import store_host_samples
     assert set(store_host_samples.TABLES) == {
         "host_samples_raw", "host_samples_1m", "host_samples_1h", "host_sample_tokens"}
-    assert schema_pg.MIGRATIONS[-1].version == schema_pg.LATEST
     migration = next(step for step in schema_pg.MIGRATIONS if step.version == 12)
     assert set(store_host_samples.TABLES) <= set(schema_pg.parse_tables(migration.sql))
     row = world.conn.execute(

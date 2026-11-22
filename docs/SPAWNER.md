@@ -256,7 +256,7 @@ model-family admission; it never contacts a gateway or reads management keys.
 
 Private `runs/<run_id>/record.json` contains card hash, role, complete plan,
 chosen leg, served model/family with witness kind (a structured claude `system/init` model is a native witness; a mismatch with the requested leg sets `served_model_mismatch`), writer family, status, started/ended timestamps,
-attempts with provider stop details, job id, pid, and stdout tail.
+attempts with provider stop details, job id, pid, and stdout tail. The watchdog publishes terminal spawn outcomes to keeper attempts.
 These records are the only source for `--review-of`; unknown ids refuse. Supervisors start in their own systemd user scope (`cli.scope_argv`; `PLANGRAPH_SUPERVISOR_SCOPE=0` opts out) so a caller's handoff does not end the run, and record `supervisor_pid`; a gone supervisor whose record holds the child's exit keeps that real exit instead of `orphaned`; a route refusal keeps its skip list in `skipped`, not `error`. Linux supervisors record their process start-time token; non-Linux supervisor startup skips the `/proc` import and lookup. POSIX orphan checks attempt the `/proc` lookup when a recorded start-time token is present, even on non-Linux hosts. A reused supervisor pid ends the run as `orphaned` before signaling; matching or unreadable start-time evidence retains the POSIX missing-process check (permission denied means alive). Windows orphan checks return before importing process-stat helpers or signaling.
 
 On terminal save the supervisor publishes a completion per run to

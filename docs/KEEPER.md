@@ -6,7 +6,7 @@ Builds on docs/SPEC.md (item shape, views) and docs/PROPOSAL.md §3. Python 3.12
 ## Modules
 | file | content |
 |---|---|
-| `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` = 20 ([landing storage and settlement](keeper-postgres.md#schema-and-migrations)), `OVERSIGHT_SCHEMA_VERSION` = 14 (v14 = the oversight `OVERSIGHT_DDL` appended after main's `JEV_DDL`, installed by `db._upgrade`: tables/indexes presence-based, the four oversight **guard triggers dropped and re-created on every open** so a weakened body cannot survive — SQLite's open path; Postgres installs the same guards once in Migration 8, GAP: no per-open repair there, D-2458); main's #140 exec ownership columns (`items.exec_workflow_id/exec_run_id/exec_attempt/exec_principal/exec_retired_runs`, also `db._upgrade`) stay in the `items` DDL at main's v13 shape, PG Migration 7 |
+| `schema.py` | DDL + triggers as SQL strings; `SCHEMA_VERSION` = 23 ([landing storage and settlement](keeper-postgres.md#schema-and-migrations)), `OVERSIGHT_SCHEMA_VERSION` = 14 (v14 = the oversight `OVERSIGHT_DDL` appended after main's `JEV_DDL`, installed by `db._upgrade`: tables/indexes presence-based, the four oversight **guard triggers dropped and re-created on every open** so a weakened body cannot survive — SQLite's open path; Postgres installs the same guards once in Migration 8, GAP: no per-open repair there, D-2458); main's #140 exec ownership columns (`items.exec_workflow_id/exec_run_id/exec_attempt/exec_principal/exec_retired_runs`, also `db._upgrade`) stay in the `items` DDL at main's v13 shape, PG Migration 7 |
 | `db.py` | `open_db(path, *, create=False) -> sqlite3.Connection`: the ONLY way the keeper opens the DB. Sets `foreign_keys=ON`, `recursive_triggers=ON`, WAL, `busy_timeout`, `trusted_schema=OFF`, and `set_authorizer` denying DDL (`CREATE/DROP/ALTER`, `DROP TRIGGER`), `PRAGMA writable_schema`, `ATTACH`, `load_extension` after the schema is installed. Schema install uses a separate `create=True` path. Singleton `flock` helper `lock_keeper(path)`.  Optional Postgres backend (`backend: postgres`, `dsn`/`PG_DSN`): see `docs/keeper-postgres.md`. |
 | `events.py` | event append with hash chain (`hash = sha256(prev_hash + canonical_json(event))`), `fold(events, unknown=None) -> state`, `verify_chain(conn) -> list[problem]`, `verify_integrity(conn)` (cache `items.state/epoch/claimed_by` equals fold + one `unknown_event_type` problem per event `type` outside `EVENT_TYPES`) |
 | `auth.py` | principals + tokens: `add_principal(conn, name, role, projects, family=None) -> token` (shown once; only sha256 stored), `authenticate(conn, token, *, now=None) -> Principal`, `revoke`. Roles: `router`, `l1`, `worker`, `reviewer`, `system`, `reader`, `spawner`, `oversight`, `phase-worker`, `sweep`. `add_oversight_principal(conn, name, projects)` provisions the revocable row (no token); a `pgo1_` token authenticates as `OversightPrincipal` **and is refused there once `expires_at` has passed** (the TTL is checked at authentication, judged by `now` or by wall time (`time.time()`); dispatch resolves the principals table first, so a prefixless token whose bytes start `pgo1_` or `pgh1_` (the host-sample namespace) still resolves as itself, and `add_principal` re-rolls any draw that would). `add_principal` refuses `role="oversight"`. `sweep` is an unscoped read-only role (`whoami`, `snapshot`, `show` only; all writes and unrelated reads return `403 forbidden`). |
@@ -799,3 +799,14 @@ and was not claimed since; `priority KEY <same value>` re-confirms and restarts 
 change is a `priority_set` event with `was` and `reason`. `digest` carries `priority_levels` (open
 items per level) and `level10_warning` when level 10 holds more open items than lanes closed in
 the last 7 days.
+
+Keeper cards retain the computed effort level and reason when written. A
+planner may supply an assigned level, and the keeper logs any attempt to
+lower it below the computed level.
+
+`pg attempts --since 1d --json` reads terminal spawn rows from keeper storage.
+A spawn without a keeper card has a null `card_key`. The display item preserves
+the supplied item key and uses `adhoc` when the spawn has no item key. The migration
+preserves foreign keys and legacy attempt rows.
+Spawn delivery retries through the watchdog, and the keeper deduplicates by
+spawn ID. An unwitnessed serving model and unknown usage remain explicit.

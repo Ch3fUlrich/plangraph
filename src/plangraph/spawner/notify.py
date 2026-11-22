@@ -143,7 +143,10 @@ class KeeperSink:
         token = Path(self.token_file).read_text(encoding='utf-8').strip()
         payload = {'key': event['item'], 'run': {
             'run_id': event['run_id'], 'phase': 'finished', 'rc': event['rc']}}
-        request = urllib.request.Request(self.url.rstrip('/') + '/v1/record_run',
+        self._post("record_run", payload, token)
+
+    def _post(self, verb, payload, token):
+        request = urllib.request.Request(self.url.rstrip('/') + '/v1/' + verb,
             data=json.dumps(payload).encode(), method='POST',
             headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
         opener = urllib.request.build_opener(_NoRedirectHandler())
@@ -156,6 +159,10 @@ class KeeperSink:
             if 400 <= exc.code < 500:
                 raise KeeperRefused(exc.code) from None
             raise
+
+    def spawn_attempt(self, attempt):
+        token = Path(self.token_file).read_text(encoding="utf-8").strip()
+        self._post("record_spawn_attempt", attempt, token)
 
     def item(self, key):
         from urllib.parse import urlencode
@@ -189,6 +196,43 @@ class KeeperSink:
             if json.load(response) != binding:
                 raise ValueError('keeper did not acknowledge seat admission')
         request['verdict_binding'] = binding
+
+
+def retry_spawn_attempts(state, runs, *, keeper=None, limit=25):
+    """Deliver terminal snapshots idempotently and retain undelivered records."""
+    import re
+    import subprocess
+    from plangraph.fleet_snapshot import _projection_binary
+
+    keeper = keeper if keeper is not None else KeeperSink()
+    if not keeper.url or not keeper.token_file:
+        return []
+    pending = []
+    for run in runs:
+        run_id = run.get("run_id", "")
+        if (run.get("attempt_capture") != 1 or not run.get("ended")
+                or run.get("status") in ("queued", "running", "queue_claimed")
+                or not re.fullmatch(r"run-[A-Za-z0-9-]+", run_id)):
+            continue
+        marker = Path(state) / "runs" / run_id / "attempt.delivered"
+        if not marker.exists():
+            pending.append((run, marker))
+    findings = []
+    for run, marker in sorted(pending, key=lambda pair: pair[0]["ended"])[:limit]:
+        try:
+            result = subprocess.run([_projection_binary(), "project-spawn-attempt"],
+                                    input=json.dumps(run, allow_nan=False), text=True,
+                                    capture_output=True, timeout=5, check=True)
+            attempt = json.loads(result.stdout)
+            if attempt is not None:
+                keeper.spawn_attempt(attempt)
+            atomic_write_private(marker, "delivered\n" if attempt is not None else "not_launched\n")
+        except (OSError, ValueError, RuntimeError, KeeperRefused, subprocess.SubprocessError) as exc:
+            findings.append(dict(rule="spawn-attempt-delivery", run_id=run["run_id"],
+                                 reason=type(exc).__name__))
+            if isinstance(exc, (OSError, subprocess.TimeoutExpired)):
+                break
+    return findings
 
 
 def deliver_verdict(directory, record, keeper):
