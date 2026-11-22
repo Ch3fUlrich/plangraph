@@ -230,7 +230,7 @@ class FakeSession:
 
 def close_args():
     return SimpleNamespace(key="demo:H", decision_id="D-5504", families=None, from_open=False,
-                           apply=False, waive_seats="D-6000")
+                           apply=True, waive_seats="D-6000")
 
 
 def test_client_timeout_after_a_committed_close_reads_back_and_exits_zero(capsys):
@@ -256,6 +256,16 @@ def test_from_open_apply_timeout_after_a_committed_close_reads_back_and_exits_ze
 def test_client_timeout_without_a_commit_exits_non_zero(capsys):
     from plangraph.keeper.cli_output_verbs import cmd_close_merged
     assert cmd_close_merged(close_args(), FakeSession("in_review")) == 3
+    assert "keeper unreachable" in capsys.readouterr().err
+
+
+def test_client_timeout_on_dry_run_does_not_read_back_or_report_a_close(capsys):
+    from plangraph.keeper.cli_output_verbs import cmd_close_merged
+    args = close_args()
+    args.apply = False
+    session = FakeSession("done")
+    assert cmd_close_merged(args, session) == 3
+    assert [call[0] for call in session.calls] == ["POST"]
     assert "keeper unreachable" in capsys.readouterr().err
 
 

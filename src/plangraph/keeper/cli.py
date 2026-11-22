@@ -176,7 +176,7 @@ def _add_writes(sub):
     merged.add_argument("key")
     merged.add_argument("decision_id", metavar="D-NNN")
     merged.add_argument("--from-open", action="store_true", help="router: inspect open/claimed merged work; TSV dry-run")
-    merged.add_argument("--apply", action="store_true", help="apply --from-open, or the operator waiver row used as the decision (--waive-seats D-W with the same id), after all checks")
+    merged.add_argument("--apply", action="store_true", help="close the item after all checks (default: preview the transition)")
     merged.add_argument("--waive-seats", metavar="D-NNNN", help="historical missing-witness waiver; requires operator-class authority")
     merged.add_argument("--family", dest="families", action="append",
                         help="recorded seat family; omit to backfill cited witnessed reviews")

@@ -12,7 +12,9 @@ from .credential_guard import mask_all
 def cmd_close_merged(args, session):
     from .cli_verbs import SLOW_TIMEOUT, RefusedCli, Unreachable, _refuse
     body = {"key": args.key, "decision_id": args.decision_id, "families": args.families,
-            "from_open": args.from_open, "apply": args.apply, "waive_seats": args.waive_seats}
+            "apply": args.apply, "dry_run": not args.apply, "waive_seats": args.waive_seats}
+    if args.from_open:
+        body["from_open"] = True
     if args.families is None:
         body.pop("families")  # omission requests automatic recovery
     if not args.from_open:
@@ -24,7 +26,9 @@ def cmd_close_merged(args, session):
         if result.get("flags"):
             classification = "FLAGGED"
         prs = ",".join(f"#{p['pr']}@{p['head']}" for p in result.get("prs", []))
-        print(f"{args.key}\t{classification}\tmerged PRs with GO and seats {prs}")
+        transition = (f"{result['state']} -> {result['next_state']}; "
+                      if result.get("would_close") else "")
+        print(f"{args.key}\t{classification}\t{transition}merged PRs with GO and seats {prs}")
         return 0
     except RefusedCli as exc:
         reason = str(exc).replace("\t", " ").replace("\n", " ")
@@ -67,7 +71,7 @@ def _close_merged_with_read_back(session, key, body):
     except RefusedCli as exc:
         return _refuse(exc)
     except Unreachable as exc:
-        if _read_back_state(session, key) != "done":
+        if body["dry_run"] or _read_back_state(session, key) != "done":
             return outbox.on_unreachable("close_merged", body, exc, exit_unreachable=EXIT_UNREACHABLE)
         note = _read_back_note(exc)
         print(note, file=sys.stderr)

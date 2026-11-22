@@ -1,0 +1,1 @@
+- `pg close-merged` previews the transition from open, claimed or in review by default. Closing the item requires `--apply`.

@@ -373,8 +373,12 @@ def result_text(verb: str, result) -> str:
             return f"{result.get('key')} {result.get('state')}"
         if verb == "whoami":
             return whoami_text(result)
-        if verb == "close_merged" and result.get("flags"):
-            return f"{result.get('key')} {result.get('state')} {flags_text(result['flags'])}"
+        if verb == "close_merged":
+            flags = f" {flags_text(result['flags'])}" if result.get("flags") else ""
+            if result.get("would_close"):
+                return f"{result['key']} would close ({result['state']} -> {result['next_state']}){flags}"
+            if flags:
+                return f"{result['key']} {result['state']}{flags}"
         if "state" in result:
             return f"{result.get('key')} {result.get('state')}"
         if "key" in result:

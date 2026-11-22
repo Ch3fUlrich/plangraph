@@ -132,10 +132,10 @@ impl Landing for Shell {
     fn close_merged_dry_run(&self, key: &str, decision: &str) -> Result<String, String> {
         let (program, args) = self.keeper_cmd.split_first().ok_or("no keeper command")?;
         let mut args: Vec<&str> = args.iter().map(String::as_str).collect();
-        args.extend(["close-merged", key, decision, "--from-open"]);
+        args.extend(["close-merged", key, decision]);
         let out = run(program, &args, None)?;
         out.lines()
-            .nth(1)
+            .next()
             .map(str::to_string)
             .ok_or_else(|| "no result line".to_string())
     }

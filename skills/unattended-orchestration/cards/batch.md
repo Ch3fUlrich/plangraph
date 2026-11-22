@@ -87,7 +87,7 @@ R-batch-14: Every writer commit fixing or implementing keeper items carries one
   --item-text PART.txt`; CI reads the PR title/body from the GitHub event.
   Coverage policy: `rust/pg-policy/src/plan_items.rs`, called by `tools/ci_commit_gate.py`.
   (why: parent-only trailers prevent close-merged proof; source: D-6054)
-R-batch-15: Before plan-order sends DONE, run `pg close-merged KEY GO-D-ID --from-open`
-  without `--apply` for every item being reported DONE. Require WOULD-CLOSE; on
-  refusal report the key and exact refusal reason, keep it open, and do not claim DONE.
+R-batch-15: Before plan-order sends DONE, run `pg close-merged KEY GO-D-ID`
+  without `--apply` for every item being reported DONE. Require a proposed transition
+  to done. On refusal report the key and exact refusal reason.
   (why: merged fixes need verifiable keeper evidence; source: D-6054)

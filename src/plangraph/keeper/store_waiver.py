@@ -513,11 +513,10 @@ class WaiverMixin:
     def _close_merged(self, principal, key, decision_id, families, now, from_open=False, apply=False,
                       waive_seats=None, dry_run=False, require_seats=None):
         self._require_role(principal, "router")
-        if any(type(value) is not bool for value in (from_open, apply, dry_run)):
-            raise Refused("validation", "from_open, apply and dry_run must be booleans")
+        if (from_open is not None and type(from_open) is not bool
+                or any(type(value) is not bool for value in (apply, dry_run))):
+            raise Refused("validation", "from_open must be a boolean when supplied; apply and dry_run must be booleans")
         required = self._seats_required(require_seats)
-        if dry_run:
-            return {"dry_run": True, "route": "close_merged"}
         if not isinstance(key, str) or not key.strip():
             raise Refused("validation", "key must be a nonblank string")
         if families is not None and waive_seats is not None:
@@ -525,6 +524,8 @@ class WaiverMixin:
         if families is not None and not isinstance(families, list):
             raise Refused("validation", "families must be a list")
         item = self._get_or_refuse(key)
+        if from_open is None:
+            from_open = item["state"] in ("open", "claimed")
         self._merged_review_state(item, from_open)  # DONE is bad_state, not locked
         self._assert_unlocked(item)
         item = self._with_merge_repo(item)
@@ -542,8 +543,9 @@ class WaiverMixin:
             backfill = families is None and waiver is None
             witnessed, seats, flags = ([], [], None) if waiver is not None else self._seats_or_flag(
                 item, decision_id, head, now, prs, families, backfill, required)
-            if (from_open or waiver_only) and not apply:
-                return {"key": key, "state": item["state"], "would_close": True, "prs": prs, **self._flags_of(flags)}
+            if dry_run or ((from_open or waiver_only) and not apply):
+                return {"key": key, "state": item["state"], "next_state": "done",
+                        "would_close": True, "prs": prs, **self._flags_of(flags)}
         with self._write(), self._decisions_snapshot(item, now):  # a fresh read under the lock
             fresh = self._get_or_refuse(key)
             self._merged_review_state(fresh, from_open)

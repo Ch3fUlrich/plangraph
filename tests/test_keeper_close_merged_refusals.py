@@ -376,7 +376,7 @@ def test_off_does_not_flag_away_an_unknown_writer(w, source):
 
 def test_cli_prints_flagged_for_a_close_with_a_missing_seat(w, doors):
     w.store.require_seats = False
-    code, out, err = doors.pg("router", "close-merged", KEY, "D-5504")
+    code, out, err = doors.pg("router", "close-merged", KEY, "D-5504", "--apply")
     assert code == 0, err
     assert f"{KEY} done FLAGGED seats_missing" in out and "NO-WITNESS" not in out
 
@@ -393,7 +393,8 @@ def test_cli_from_open_class_is_flagged_not_no_witness(w, doors, monkeypatch):
     assert code == 2 and f"{KEY}\tNO-WITNESS\t" in out
 
 
-def test_main_trailer_per_fixed_key_allows_close_merged_dry_run(w, doors, monkeypatch, tmp_path):
+@pytest.mark.parametrize("state", ["open", "claimed"])
+def test_main_trailer_per_fixed_key_allows_close_merged_dry_run(w, doors, monkeypatch, tmp_path, state):
     import subprocess
     from plangraph.keeper.evidence_git import GitAdapter
 
@@ -422,7 +423,7 @@ def test_main_trailer_per_fixed_key_allows_close_merged_dry_run(w, doors, monkey
     w.store.ctx['git'] = FixtureGit()
     monkeypatch.setattr('plangraph.keeper.context_sources.plan_item_commits', w.real_plan_item_commits)
     monkeypatch.setattr('plangraph.keeper.context_sources.open_lanes', lambda *a: [])
-    w.conn.execute("UPDATE items SET state='open' WHERE key=?", (KEY,))
+    w.conn.execute("UPDATE items SET state=? WHERE key=?", (state, KEY))
     w.decision_path.write_text(f'| D-5504 | demo | GO {head} |\n')
     args = ('close-merged', KEY, 'D-5504', '--from-open', '--family', 'google')
     code, out, err = doors.pg('router', *args)
@@ -435,4 +436,8 @@ def test_main_trailer_per_fixed_key_allows_close_merged_dry_run(w, doors, monkey
     w.decision_path.write_text(f'| D-5504 | demo | GO {head} |\n')
     code, out, err = doors.pg('router', *args)
     assert code == 0 and f'{KEY}\tWOULD-CLOSE\t' in out, (out, err)
-    assert w.store._item(KEY)['state'] == 'open'
+    before, counts = w.store._item(KEY), _counts(w)
+    code, out, err = doors.pg('router', 'close-merged', KEY, 'D-5504', '--family', 'google')
+    assert code == 0 and f'{KEY} would close ({state} -> done)' in out, (out, err)
+    assert w.store._item(KEY) == before and before['state'] == state
+    assert _counts(w) == counts
