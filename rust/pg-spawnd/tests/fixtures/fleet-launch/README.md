@@ -72,25 +72,25 @@ Rust target invokes that test.
 | 27 | `refusals::check_enforcement` and `ledger.json`, required metadata and result shape. Path confinement is a data test in `test_fleet_launch_admission.py`. |
 | 28 | `refusals::check_enforcement`, exact real and preview admission messages. Data test `test_fleet_launch_admission.py` covers malformed caps and legacy respawn warnings. |
 | 29 | `refusals::check_enforcement`, status 2, refused ledger row and no dry-run writes. |
-| 30 | `records::ledger`, exact row keys, values, numeric timestamp and file mode. Data test `test_fleet_launch_admission.py` covers concurrent and unsafe paths. |
+| 30 | `records::ledger` and `check_private_ledgers`, exact row shape, private file and directory modes, symlinked state root, traversal refusal and FIFO rejection. |
 | 31 | `records::check` and `refusals`, started, starting, failed, refused and unavailable ledger. |
 | 32 | `refusals::check`, missing cwd. |
 | 33 | `refusals::check`, missing prompt, refusal ledger and no child. `records::check` verifies prompt is the last argv element. |
 | 34 | `refusals.json`, explicit missing MCP. `dry-run.txt` verifies an absolute path supplied through `FLEET_MCP_CONFIG`. |
 | 35 | `dry-run.txt`, pinned style length, and `records::check`, prompt placement. |
-| 36 | `refusals::check_io_failures`, an independently held role lock refuses the launch before counter allocation. |
-| 37 | `records::check_respawn` and `check_id_resolution`, incremental and supplied positive sequence; `dry-run.txt` uses zero with no write. |
+| 36 | `refusals::check_io_failures` and `records::check_respawn`, an independently held lock blocks a hand launch before allocation and permits a watchdog-delegated launch. |
+| 37 | `records::check_respawn` and `check_id_resolution`, incremental and supplied positive sequence. The interruption suite also contends Python and Rust children on one counter across 9,999. |
 | 38 | `remote::check_mirror` and `check_destination`, the caller’s sequence is used on the destination. |
-| 39 | `dry-run.txt`, caps file with the pinned lean profile. Data test `test_fleet_launch_names.py` covers the already-pinned profile branch. |
+| 39 | `dry-run.txt` and `check_pinned_profile`, generated caps and direct use of an already-pinned lean profile. |
 | 40 | `records::check`, persisted handoff/hard settings and both compaction variables. |
 | 41 | `refusals::check_io_failures`, obstructed settings directory, exact error and failed ledger row. |
 | 42 | `dry-run.txt` plus matrix-specific stderr and no writes. |
 | 43 | `dry-run.txt`, complete command, redaction and routing exemption. |
-| 44 | `records::check` and `check_respawn`, working directory, role/window and deferred-record env removed. Data test `test_fleet_launch_names.py` covers PATH additions. |
+| 44 | `records::check` and `check_respawn`, working directory, role/window, tool PATH ordering and deferred-record env removal. |
 | 45 | `records::check` and `refusals::check_io_failures`, reservation shape and refusal before child on reserve failure. |
 | 46 | `refusals::check_child_failures`, missing executable, child exit passthrough, and recovery to fallback ledger. |
 | 47 | `records::check` and `check_id_resolution`, whole output including final started/unknown line. |
-| 48 | `records::check_id_resolution`, full and short IDs, foreign cwd excluded, unknown ID. Data test `test_fleet_launch_parent.py` covers elapsed-time and name fallback. |
+| 48 | `records::check_id_resolution`, full and short IDs, foreign cwd excluded, fresh name fallback, and an unresolved ID after a malformed listing. |
 | 49 | `launch-record.json` and `records::check`, complete record and snapshot. |
 | 50 | `records::check_respawn`, pending record and new snapshot, published role record untouched. |
 | 51 | `records::check` and `check_respawn`, parent normalization, append and deferred suppression. |
@@ -129,6 +129,16 @@ Rust target invokes that test.
 | 84 | Deployment notes require matching remote installations and shared paths, which are host prerequisites. The simulated destination verifies the prompt and MCP transfer with synthetic files. |
 
 ## Companion inventories
+
+Amendment 1 section 3 runs against the pinned Python launcher and Rust in
+temporary state. The harness kills each launcher before Claude returns and while
+it resolves the ID. It checks exit signals, captured output, ledger rows and
+absent launch records. Remote fixtures cover a failed transport, an unavailable
+SSH executable and a zero exit with an unresolved ID. The timeout unit test
+exercises the same bounded transport at a short deadline. The pinned watchdog
+consumes the output of both launchers and exercises the ten-minute rule and
+adoption of a younger session. The fixture redirects only its launch subprocess
+so the watchdog can keep its existing Python identity import.
 
 The session tools have a distinct MCP interface and on-disk format. These
 plangraph tests exercise that contract through the current tool dispatcher or

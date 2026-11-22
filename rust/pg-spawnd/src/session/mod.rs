@@ -20,7 +20,7 @@ use regex::Regex;
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::{
-    io::{self, Write},
+    io::{self, BufWriter, IsTerminal, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::LazyLock,
@@ -109,7 +109,14 @@ impl Request {
 
 /// Run one session launch with fleet policy and settings from the supplied ops directory.
 pub fn run(args: Vec<String>, ops: &Path) -> i32 {
-    let mut out = io::stdout().lock();
+    let stdout = io::stdout().lock();
+    // A caller with a pipe observes the same output on interruption as it does
+    // with the Python launcher, including when no final started line was sent.
+    let mut out: Box<dyn Write> = if stdout.is_terminal() || var("PYTHONUNBUFFERED").is_some() {
+        Box::new(stdout)
+    } else {
+        Box::new(BufWriter::new(stdout))
+    };
     let result = launch(args, &Paths::new(ops), &mut out);
     let flushed = out.flush();
     match result.and_then(|code| flushed.map(|()| code)) {

@@ -1,7 +1,9 @@
 use super::sandbox::{Launcher, Sandbox, PROMPT, SID};
 use serde_json::{json, Value};
-use std::fs;
+use std::fs::{self, File};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn ledger(s: &Sandbox, name: &str) -> Vec<Value> {
     let path = s.path(&format!("state/fleet-launch-{name}.jsonl"));
@@ -24,6 +26,13 @@ fn without_timestamp(mut record: Value) -> Value {
 
 pub fn check(launcher: &Launcher) {
     let s = Sandbox::new(launcher);
+    for dir in [
+        "home/.nvm/versions/node/v22/bin",
+        "home/.nvm/versions/node/v20/bin",
+        "home/.qoder/entry",
+    ] {
+        fs::create_dir_all(s.path(dir)).unwrap();
+    }
     let out = s
         .launch("review")
         .args([
@@ -68,6 +77,27 @@ pub fn check(launcher: &Launcher) {
     assert_eq!(child["role"], "review");
     assert_eq!(child["window"], "400000");
     assert_eq!(child["forwarded"], Value::Null);
+    let expected_path = format!(
+        "{}:{}:{}:{}:/usr/bin:/bin",
+        s.path("home/.nvm/versions/node/v22/bin").display(),
+        s.path("home/.nvm/versions/node/v20/bin").display(),
+        s.path("home/.qoder/entry").display(),
+        s.path("bin").display()
+    );
+    assert_eq!(child["path"], expected_path);
+    for path in [
+        "state/launch/review.json",
+        "state/launch/sessions/review-0001.json",
+        "state/launch-settings/caps-110000-170000.json",
+        "state/launch/children/parent.txt",
+        "state/role-locks/review.lock",
+    ] {
+        assert_eq!(
+            fs::metadata(s.path(path)).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "{path}"
+        );
+    }
     let settings = s.json("state/launch-settings/caps-110000-170000.json");
     for (key, value) in [
         ("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "400000"),
@@ -96,6 +126,12 @@ pub fn check(launcher: &Launcher) {
 }
 
 fn check_respawn(s: &Sandbox, original: Value) {
+    let watchdog_lock = File::open(s.path("state/role-locks/review.lock")).unwrap();
+    // SAFETY: the fixture holds the same live descriptor until the child exits.
+    assert_eq!(
+        unsafe { libc::flock(watchdog_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+        0
+    );
     let replacement_prompt = s.path("replacement");
     fs::write(&replacement_prompt, "Replacement prompt").unwrap();
     let out = s
@@ -113,6 +149,14 @@ fn check_respawn(s: &Sandbox, original: Value) {
         "",
     );
     assert_eq!(s.json("state/launch/review.json"), original);
+    assert_eq!(
+        fs::metadata(s.path("state/launch/review.pending.json"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
     let pending = s.json("state/launch/review.pending.json");
     assert_eq!(pending, s.json("state/launch/sessions/review-0002.json"));
     let mut expected = without_timestamp(original);
@@ -161,6 +205,35 @@ pub fn check_id_resolution(launcher: &Launcher) {
 
     let s = Sandbox::new(launcher);
     fs::write(s.path("child.stdout"), "backgrounded no-id\n").unwrap();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    s.write_json(
+        "agents.json",
+        json!([
+            {"name":"review-0001", "kind":"background", "cwd":s.path("work"),
+                "sessionId": "11111111-0000-0000-0000-000000000000", "startedAt":1},
+            {"name":"review-0001", "kind":"background", "cwd":s.path("work"),
+                "sessionId": SID, "startedAt":now},
+            {"name":"review-0002", "kind":"background", "cwd":s.path("work"),
+                "sessionId": "22222222-0000-0000-0000-000000000000", "startedAt":now + 1}
+        ]),
+    );
+    let out = s.launch("review").output().unwrap();
+    s.expect(
+        &out,
+        0,
+        &format!(
+            "backgrounded no-id\nfleet-launch: session review-0001\nfleet-launch: started {SID}\n"
+        ),
+        "",
+    );
+    assert_eq!(s.json("state/launch/review.json")["session_id"], SID);
+
+    let s = Sandbox::new(launcher);
+    fs::write(s.path("child.stdout"), "backgrounded no-id\n").unwrap();
+    fs::write(s.path("agents.json"), "unfinished JSON").unwrap();
     let out = s
         .launch("review")
         .args(["--oom-protect", "--ctx-guard", "1,2"])

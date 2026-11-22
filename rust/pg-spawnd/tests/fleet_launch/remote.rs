@@ -134,6 +134,65 @@ fn check_local_memory(launcher: &Launcher) {
     s.no_launch();
 }
 
+pub fn check_interruption(launcher: &Launcher) {
+    let s = Sandbox::new(launcher);
+    s.hosts(json!([{"name": REMOTE, "ssh": "fixture-hop", "memory_floor_gib": 0}]));
+    fs::write(s.path("memory-fixture-hop"), "MemAvailable: 1024 kB\n").unwrap();
+    fs::write(s.path("ssh-remove-after-probe"), "").unwrap();
+    std::os::unix::fs::symlink("/usr/bin/python3", s.path("bin/python3")).unwrap();
+    let out = s
+        .launch("review")
+        .args(["--host", REMOTE])
+        .env("PATH", s.path("bin"))
+        .output()
+        .unwrap();
+    s.expect(&out, 2, "", "fleet-launch: host fixture-remote launch uncertain; do not retry: [Errno 2] No such file or directory: 'ssh'\n");
+    assert!(!s.path("child.json").exists());
+    assert!(!s.path("ssh.json").exists());
+    assert!(!s.path("state/launch").exists());
+    assert_eq!(
+        fs::read_to_string(s.path("state/session-seq")).unwrap(),
+        "1"
+    );
+
+    let s = Sandbox::new(launcher);
+    placement(&s);
+    fs::write(s.path("ssh.stdout"), "remote output\n").unwrap();
+    fs::write(s.path("ssh.stderr"), "fixture transport failure\n").unwrap();
+    fs::write(s.path("ssh.rc"), "255").unwrap();
+    let out = s
+        .launch("writer")
+        .args(["--host", REMOTE])
+        .output()
+        .unwrap();
+    s.expect(&out, 255, "remote output\n", "fixture transport failure\n");
+    assert!(!s.path("child.json").exists());
+    assert!(!s.path("state/launch").exists());
+
+    fs::remove_file(s.path("ssh.rc")).unwrap();
+    fs::remove_file(s.path("ssh.stderr")).unwrap();
+    let record = json!({"name": "writer", "session_name": "writer-0002",
+        "seq": 2, "session_id": null, "job_id": null});
+    let unknown = "fleet-launch: started-unknown writer-0002\n";
+    fs::write(
+        s.path("ssh.stdout"),
+        format!("{unknown}FLEET_REMOTE_SPEC={record}\n"),
+    )
+    .unwrap();
+    let out = s
+        .launch("writer")
+        .args(["--host", REMOTE])
+        .output()
+        .unwrap();
+    s.expect(&out, 0, unknown, "");
+    let mut role = record;
+    role["host"] = json!(REMOTE);
+    assert_eq!(s.json("state/launch/writer.json"), role);
+    role["prompt_file"] = json!(s.path("prompt"));
+    assert_eq!(s.json("state/launch/sessions/writer-0002.json"), role);
+    assert!(!s.path("guard").exists());
+}
+
 fn check_mirror(s: &Sandbox) {
     fs::write(s.path("windows-kb"), "20971520\n").unwrap();
     let remote_spec = json!({

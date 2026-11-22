@@ -3,6 +3,9 @@
 #[path = "fleet_launch/dry_run.rs"]
 mod dry_run;
 #[cfg(target_os = "linux")]
+#[path = "fleet_launch/interrupted.rs"]
+mod interrupted;
+#[cfg(target_os = "linux")]
 #[path = "fleet_launch/peers.rs"]
 mod peers;
 #[cfg(target_os = "linux")]
@@ -17,6 +20,9 @@ mod remote;
 #[cfg(target_os = "linux")]
 #[path = "fleet_launch/sandbox.rs"]
 mod sandbox;
+#[cfg(target_os = "linux")]
+#[path = "fleet_launch/watchdog.rs"]
+mod watchdog;
 
 #[cfg(target_os = "linux")]
 fn main() {
@@ -38,6 +44,9 @@ fn main() {
         Some(sandbox::Launcher::Pinned(checkout)) => {
             check(&sandbox::Launcher::Pinned(checkout.clone()));
             check(&sandbox::Launcher::Rust(Some(checkout.clone())));
+            interrupted::check(&checkout);
+            watchdog::check(&checkout);
+            println!("fleet-launch interruption parity passed: interrupted starts, shared counter and watchdog recovery");
         }
         Some(sandbox::Launcher::Rust(_)) => unreachable!(),
         None => {

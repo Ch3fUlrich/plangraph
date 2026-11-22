@@ -218,6 +218,19 @@ impl Sandbox {
         cmd
     }
 
+    pub fn direct_launch(&self, role: &str, rust: bool) -> Command {
+        let mut cmd = if rust {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_pg-spawnd"));
+            command.arg("session");
+            command
+        } else {
+            Command::new(&self.launcher)
+        };
+        self.isolate(&mut cmd);
+        self.launch_args(&mut cmd, role);
+        cmd
+    }
+
     fn launch_args(&self, cmd: &mut Command, role: &str) {
         cmd.arg(role)
             .arg(self.path("work"))
