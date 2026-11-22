@@ -6,7 +6,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-
 def test_fixer_completion_contract():
     from plangraph.routing_support.fixer import render_fixer_brief
     text = render_fixer_brief([{'text': 'repair'}])
@@ -14,7 +13,6 @@ def test_fixer_completion_contract():
     for condition in ('fixed', 'refuted by a named test', 'not done:', 'reason'):
         assert condition in text
     assert 'TEST-SPEED-AFFECTED' not in text
-
 
 def test_fixer_terminal_report_gate(tmp_path):
     import asyncio
@@ -35,7 +33,6 @@ def test_fixer_terminal_report_gate(tmp_path):
             await service._continue_writer(record, output)
             assert record['continuation_reason'] == reason
     asyncio.run(probe())
-
 
 def test_no_unresolvable_keeper_instruction():
     # Main documents this exact token as jargon to avoid, not an instruction.
@@ -82,7 +79,6 @@ def test_tail_standing_question(mode):
         assert prompt.index(text.rstrip()) < prompt.index("=== ITEM CONTEXT")
         assert prompt.count('Does the change game tests') == 1
 
-
 def test_claude_skill_pointers():
     assert (ROOT / 'CLAUDE.md').read_text().strip() == '@AGENTS.md'
     text = (ROOT / 'AGENTS.md').read_text()
@@ -94,7 +90,6 @@ def test_claude_skill_pointers():
     assert len(text.splitlines()) <= 200
     assert not re.search(r'(?:[\w.-]+/)+[\w.-]*DECISIONS[\w.-]*', text, re.I)
 
-
 def test_no_missing_protocol_pointer():
     for folder in ('skills', 'docs'):
         for path in (ROOT / folder).rglob('*'):
@@ -102,14 +97,12 @@ def test_no_missing_protocol_pointer():
                 text = path.read_bytes().decode('utf-8', errors='replace')
                 assert 'docs/agent-protocol.md' not in text
 
-
 def test_protocol_scan_includes_untracked_files(tmp_path, monkeypatch):
     monkeypatch.setitem(globals(), 'ROOT', tmp_path)
     (tmp_path / 'docs').mkdir()
     (tmp_path / 'docs/untracked.md').write_text('docs/agent-protocol.md')
     with pytest.raises(AssertionError):
         test_no_missing_protocol_pointer()
-
 
 def test_skill_card_pointers():
     skill = ROOT / 'skills/unattended-orchestration/SKILL.md'
@@ -162,3 +155,10 @@ def test_spawner_size_and_prompt_rules_pointer():
                      'python3 tools/affected_tests.py --base origin/main --run',
                      'COMMIT before finishing'):
         assert contract in rules
+
+
+def test_review_seat_brief_requires_test_gaming_line():
+    from plangraph.review.prompt import render_brief
+
+    brief = render_brief("review", {"item_key": "demo:SEAT"})
+    assert "TEST-GAMING:" in brief.split("=== ITEM CONTEXT", 1)[0]

@@ -193,7 +193,7 @@ impl Host {
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head}, check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head}.\n")),
         }
-        prompt.push_str(&format!("Name each finding as file:line. List the repository files you opened in a FILES READ: line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
+        prompt.push_str(&format!("Name each finding as file:line. Include one TEST-GAMING: line using the seat's required format. List the repository files you opened in a FILES READ: line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
         prompt
     }
     /// One review run through the spawner, role review with every writer family of the range excluded,

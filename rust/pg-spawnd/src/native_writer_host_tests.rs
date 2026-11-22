@@ -456,6 +456,8 @@ assert skill < context, prompt
 tools = compose(prompt, 'review', 'opencode', None, tool_mode='tools')
 assert tools.split('\n\n', 1)[1] == prompt, tools
 assert compose(tools, 'review', 'opencode', None, tool_mode='tools') == tools
+assert prompt.index('Open callers') < prompt.index('[/tools-only]') < context, prompt
+assert 'TEST-GAMING:' in body.split('=== ITEM CONTEXT', 1)[0], prompt
 assert 'Item key: plangraph:HOST-TEST-ITEM' in prompt, prompt
 assert 'Done criteria: By test: first line\nsecond criteria line\n' in prompt, prompt  # multi-line, whole
 assert 'Invariants named by the item: never push\n' in prompt, prompt

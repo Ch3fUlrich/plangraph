@@ -164,3 +164,71 @@ fn ssh_host_without_ssh_target_routes_by_its_id() {
         Some("worker.example.invalid")
     );
 }
+
+#[test]
+fn fleet_placement_replays_preference_and_refusals() {
+    use pg_worker_core::hosts::Role;
+
+    let mut primary = host("primary", 12000, 1.0);
+    let mut station = host("station", 24000, 1.0);
+    station.workstation = true;
+    let fallback = host("fallback", 40000, 1.0);
+    for role in [Role::Implement, Role::Review] {
+        let mut policy = Policy::default().with_fleet_placement(
+            role,
+            "primary",
+            ["fallback".into()].into(),
+            &[Role::Orchestrate],
+            [
+                ("primary".into(), (6000, 5000)),
+                ("station".into(), (6000, 5000)),
+            ]
+            .into(),
+        );
+        let result = choose(
+            &[station.clone(), fallback.clone(), primary.clone()],
+            &policy,
+            100,
+        );
+        assert_eq!(result.host.as_deref(), Some("primary"));
+        assert_eq!(
+            result.refusals[0].reason,
+            "role not permitted on fallback host"
+        );
+
+        policy.disk_space.insert("primary".into(), (4999, 5000));
+        let result = choose(&[station.clone(), primary.clone()], &policy, 100);
+        assert_eq!(result.host.as_deref(), Some("station"));
+        assert_eq!(result.refusals[0].reason, "disk below floor");
+
+        policy.disk_space.insert("primary".into(), (5000, 5000));
+        primary.sample.as_mut().unwrap().mem_avail_mb = Some(5047);
+        let result = choose(&[station.clone(), primary.clone()], &policy, 100);
+        assert_eq!(result.host.as_deref(), Some("station"));
+        assert_eq!(
+            result.refusals[0].reason,
+            "memory below floor after reservation"
+        );
+        primary.sample.as_mut().unwrap().mem_avail_mb = Some(12000);
+    }
+
+    let policy = Policy::default().with_fleet_placement(
+        Role::Orchestrate,
+        "primary",
+        ["fallback".into()].into(),
+        &[Role::Orchestrate],
+        [
+            ("fallback".into(), (5000, 5000)),
+            ("station".into(), (5000, 5000)),
+        ]
+        .into(),
+    );
+    let result = choose(&[fallback.clone(), station.clone(), primary], &policy, 100);
+    assert_eq!(result.host.as_deref(), Some("station"));
+    assert_eq!(result.refusals[0].reason, "unknown disk capacity");
+
+    station.sample.as_mut().unwrap().cpu_load = Some(4.0);
+    let result = choose(&[station, fallback], &policy, 100);
+    assert_eq!(result.host.as_deref(), Some("fallback"));
+    assert_eq!(result.refusals[0].reason, "load gate");
+}

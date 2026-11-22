@@ -86,6 +86,11 @@ class SpawnService(SeatSpawnMixin):
         record.setdefault('host', os.environ.get('PLANGRAPH_HOST') or socket.gethostname())
         record.setdefault('served_model', 'unwitnessed')
         record.setdefault('served_family', 'unwitnessed')
+        job = getattr(self.runner, 'jobs', {}).get(record.get('job_id'))
+        if record.get('role') == 'review' and record.get('status') == 'completed':
+            finish = getattr(job, 'response_finish_reason', None)
+            if isinstance(finish, str) and finish and job.status == 'completed':
+                record['finish_reason'] = finish
         for target in [record, *record.get('attempts', [])]:
             if not target.get('served_model') or not target.get('served_family'):
                 target['served_model'] = target.get('served_model') or 'unwitnessed'
@@ -124,7 +129,7 @@ class SpawnService(SeatSpawnMixin):
         write_stderr_log(self._stderr_captures.setdefault(record['run_id'], {}), getattr(self.runner, 'jobs', {}), record, self._path(record['run_id']).with_name('stderr.log'), clean)
         host, item_key = record.get('host'), record.get('item_key')
         if record.get('ended') is not None:
-            terminal_reason(record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
+            terminal_reason(record, job)
         record.update(clean(record))
         if 'item_key' in record: record['item_key'] = item_key  # validated spawn identity, not a credential
         if host is not None:
@@ -156,7 +161,7 @@ class SpawnService(SeatSpawnMixin):
                     record.update(stored)
                     return False
             publish_run_record(self.state, path, payload)
-        publish(self._path(record['run_id']).parent, record, getattr(self.runner, 'jobs', {}).get(record.get('job_id')))
+        publish(path.parent, record, job)
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 

@@ -15,6 +15,7 @@ mod gitconfig_guard;
 mod health_cli;
 mod health_report;
 mod health_report_rows;
+mod install_check;
 mod jobs;
 mod land_go;
 mod land_go_shell;

@@ -233,7 +233,7 @@ class SpawnerRunner:
         prompt = _redact_prompt(prompt, redact)  # REMOVE-AT-R10
         from .prompt_input import compose  # the role header and skill are fixed repository text, never redacted
         prompt = compose(prompt, role, client, cwd, leg.id if leg is not None else None,
-                         getattr(leg, 'tool_mode', None))
+                         tool_mode=getattr(leg, 'tool_mode', None))
         if not prepare_launch and prompt_record is not None:  # REMOVE-AT-R10
             from .private_io import atomic_write_private
             path, record, save = prompt_record
@@ -871,14 +871,12 @@ def spawn_service(*args, **kwargs):
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
             if not retry and super()._save(record) is False:
                 return
-            changed = False
-            if terminal:
-                if 'completion' not in record:
-                    record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
-                    if record.get('status') == 'needs_input':
-                        record['completion'].update(event='NEEDS_INPUT', question=record['question'])
-                    changed = True
-            if changed:
+            if terminal and 'completion' not in record:
+                record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
+                if record.get('role') == 'review' and record['completion'].get('head_sha'):
+                    record.setdefault('head_sha', record['completion']['head_sha'])
+                if record.get('status') == 'needs_input':
+                    record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                 super()._save(record)
             if terminal:
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)

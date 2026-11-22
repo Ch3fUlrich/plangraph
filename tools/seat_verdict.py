@@ -216,7 +216,7 @@ def read_record_identity(seat_dir, key=None):
         raise ValueError("cannot read record identity")
     if key is not None and "item_key" in record and record["item_key"] != key:
         raise ValueError("record item_key does not match --key")
-    identity = {"item_key": record["item_key"]} if "item_key" in record else {}
+    identity = {field: record[field] for field in ("item_key", "head_sha") if field in record}
     request = record.get("request")
     if isinstance(request, dict) and "verdict_binding" in request:
         identity["binding"] = request["verdict_binding"]
@@ -277,12 +277,15 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     if not args.dry_run and args.url and (args.seat_dir / "verdict.payload.json").is_file():
         return send_saved_verdict(args.seat_dir, args.key, args.url, args.token_dir)
     writer_families = parse_writer_families(args.writer_family)
-    from_record = not (args.seat_dir / "evidence.json").exists() and (args.seat_dir / "record.json").exists()
+    paired = (args.seat_dir / "evidence.json").exists()
+    from_record = (not paired or args.head) and (args.seat_dir / "record.json").exists()
     if from_record:
         deadline = clock() + record_wait
         while True:
             try:
                 identity = read_record_identity(args.seat_dir, args.key)
+                if paired and not identity.get("head_sha"):
+                    raise ValueError("--head only for record seats bound to a checkout head")
                 evidence, text = evidence_from_record(args.seat_dir, cli_writer_families=writer_families)
                 break
             except ValueError as exc:
