@@ -242,33 +242,69 @@ fn gather(
         .collect()
 }
 fn configured_hosts(config: &Path) -> Vec<Value> {
+    hosts_with(config, remote)
+}
+/// The scheduled `--local` run cannot reach other hosts: it lists each configured host as
+/// unknown instead of dropping it from the stored inventory.
+fn local_run_hosts(config: &Path) -> Vec<Value> {
+    hosts_with(config, |host, _, _| unavailable(host, "not_collected"))
+}
+fn hosts_with(
+    config: &Path,
+    run: impl Fn(&str, &Value, Duration) -> Value + Send + Sync + 'static,
+) -> Vec<Value> {
     match read(config) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
         Err(_) => vec![unavailable("unknown", "source_unreadable")],
         Ok(config) => match config["hosts"].as_object() {
-            Some(entries) => gather(entries, Duration::from_secs(20), remote),
+            Some(entries) => gather(entries, Duration::from_secs(20), run),
             None => vec![unavailable("unknown", "config_unreadable")],
         },
     }
+}
+fn scrub_words(home: &Path) -> PathBuf {
+    std::env::var_os("PLANGRAPH_SCRUB_WORDS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config/plangraph/scrub-words.txt"))
+}
+/// Publication step: the stored inventory is projected and masked again with the *current*
+/// private-word list and the secret redactor, so an older file never bypasses either.
+fn publish(home: &Path, words: &Path, out: &mut dyn Write) -> Result<(), String> {
+    let stored =
+        read(&home.join(".local/state/plangraph/agents-view.json")).map_err(|e| e.to_string())?;
+    if !stored["hosts"].is_array() {
+        return Err("stored inventory has no hosts array".into());
+    }
+    let mut view = project_view(&stored);
+    super::agent_view_projection::mask_words(&mut view, words);
+    writeln!(out, "{view}").map_err(|e| e.to_string())
 }
 pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), String> {
     if args.first().is_some_and(|s| s == "--help" || s == "-h") {
         return writeln!(
             out,
-            "Usage: pg-spawnd agents-view [--json] [--write] [--local]"
+            "Usage: pg-spawnd agents-view [--json] [--write] [--local] | --publish"
         )
         .map_err(|e| e.to_string());
     }
     let mut seen = std::collections::HashSet::new();
     for arg in &args {
-        if !["--json", "--write", "--local"].contains(&arg.as_str()) || !seen.insert(arg.as_str()) {
+        if !["--json", "--write", "--local", "--publish"].contains(&arg.as_str())
+            || !seen.insert(arg.as_str())
+        {
             return Err("unknown or duplicate flag".into());
         }
+    }
+    if seen.contains("--publish") && args.len() > 1 {
+        return Err("--publish takes no other flag".into());
     }
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .ok_or("missing home")?;
+    if seen.contains("--publish") {
+        return publish(&home, &scrub_words(&home), out);
+    }
     let state = crate::state::resolve_state(None, |key| std::env::var_os(key))?;
     let host = std::env::var("HOSTNAME")
         .or_else(|_| fs::read_to_string("/etc/hostname").map(|s| s.trim().to_owned()))
@@ -284,6 +320,8 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         .unwrap_or_else(|| home.join(".config/plangraph/overflow-hosts.json"));
     if !seen.contains("--local") {
         hosts.extend(configured_hosts(&config));
+    } else if seen.contains("--write") {
+        hosts.extend(local_run_hosts(&config));
     }
     // ISO UTC without an additional clock dependency (milliseconds are unnecessary).
     let secs = now as u64;
@@ -324,10 +362,7 @@ pub(crate) fn execute(args: Vec<String>, out: &mut dyn Write) -> Result<(), Stri
         secs % 60
     );
     let mut data = json!({"generated_at":stamp,"hosts":hosts});
-    let words = std::env::var_os("PLANGRAPH_SCRUB_WORDS")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home.join(".config/plangraph/scrub-words.txt"));
-    super::agent_view_projection::mask_words(&mut data, &words);
+    super::agent_view_projection::mask_words(&mut data, &scrub_words(&home));
     if seen.contains("--write") {
         fs::create_dir_all(home.join(".local/state/plangraph")).map_err(|e| e.to_string())?;
         pg_worker_core::run::record_io::atomic_write_private(

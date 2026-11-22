@@ -106,6 +106,7 @@ def test_adapter_default_off(boundary, tmp_path):
 def test_standalone_exact(monkeypatch):
     def run(argv, **kw):
         assert argv == ['opencode', 'models', '--standalone']
+        assert isinstance(kw.pop('env'), dict)  # filtered child environment
         assert kw == dict(capture_output=True, text=True, timeout=8, shell=False, check=True)
         return SimpleNamespace(stdout='sample\n')
     monkeypatch.setattr(subprocess, 'run', run)

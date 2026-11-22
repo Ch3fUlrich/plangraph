@@ -14,6 +14,9 @@ orchestrator reviews the result and sends findings back as a new brief. A brief 
 starts with `skills/batch-writer/SKILL.md` makes you a batch writer instead: that skill
 replaces this one, including its own rules on reviews.
 
+Use LSP for symbol navigation or `pg-ctx nav <symbol|path|key>` in Codex and agy.
+Use grep for text that is not a symbol.
+
 ## Do
 
 1. **Read the brief and every file it names** before editing. If the brief is unclear,

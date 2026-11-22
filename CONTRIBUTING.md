@@ -160,6 +160,7 @@ literals, manifest-relative reads and paths leaving `rust/`; new repository
 inputs must be added to `RUST_INPUTS`, not inline to the workflow. `rust/pg-spawnd/`
 and `rust/Cargo.*` also select `rust-worker`; its helper and tests share the cached target.
 Python files executed by Rust tests (for example `src/plangraph/catalog_data.py` and `src/plangraph/routing_errors.py` run by `rust/pg-spawnd/tests/mimo_output_cap.rs`) are listed in `ci_select.RUST_INPUTS` so changes to them select the Rust suite.
+The router liveness installation test selects Rust CI when its deployed config or watchdog changes.
 `ci_select.RUST_WORKER_INPUTS` lists inputs that also select the standalone
 Temporal worker job, including `tools/probe_admission_policy_guard.py`.
 Include paths passed through read helpers too: `pg-hook` reads `.docs-map`,

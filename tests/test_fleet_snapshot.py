@@ -245,3 +245,42 @@ def test_opaque_metadata_follows_rust_registry_indices(spawnd):
     assert [row['host_id'] for row in rows] == ['a', 'z']
     assert rows[0]['caps'] is second and rows[1]['caps'] is first
     assert all('registry_index' not in row for row in rows)
+
+
+def test_cargo_artifact_report_names_the_exact_binary():
+    import json
+    from _spawnd import artifact_executable
+    lines = [json.dumps(dict(reason='compiler-artifact', target=dict(name='pg-spawnd', kind=['lib']),
+                             executable=None)),
+             'not json',
+             json.dumps(dict(reason='compiler-artifact', target=dict(name='other', kind=['bin']),
+                             executable='/t/other')),
+             json.dumps(dict(reason='compiler-artifact', target=dict(name='pg-spawnd', kind=['bin']),
+                             executable='/per-run/debug/pg-spawnd'))]
+    assert artifact_executable(lines, 'pg-spawnd') == '/per-run/debug/pg-spawnd'
+    assert artifact_executable(lines[:3], 'pg-spawnd') is None
+
+
+def test_spawnd_build_ignores_shared_target_overrides():
+    from _spawnd import TREE_TARGET, spawnd_build_command, spawnd_build_env
+    env = spawnd_build_env({'CARGO_TARGET_DIR': '/shared', 'CARGO_BUILD_TARGET_DIR': '/shared',
+                            'PATH': '/bin'})
+    assert env == {'PATH': '/bin'}
+    command = spawnd_build_command(False)
+    assert command[command.index('--target-dir') + 1] == str(TREE_TARGET)
+    assert '--release' not in command and '--release' in spawnd_build_command(True)
+
+
+def test_spawnd_build_failure_fails_with_cargo_diagnostics(monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+    import _spawnd
+    monkeypatch.setattr(_spawnd, '_BUILT', {})
+    import json
+    # Cargo's --message-format=json puts the rendered error on stdout, not stderr.
+    stdout = json.dumps(dict(reason='compiler-message', message=dict(
+        level='error', rendered='error[E0432]: unresolved import `missing`\n --> src/main.rs:1:5\n')))
+    monkeypatch.setattr(subprocess, 'run', lambda *a, **kw: SimpleNamespace(
+        returncode=101, stdout=stdout + '\n{"reason":"build-finished","success":false}', stderr=''))
+    with pytest.raises(pytest.fail.Exception, match=r'(?s)E0432.*src/main\.rs:1:5'):
+        _spawnd.build_spawnd()

@@ -1,8 +1,12 @@
 //! Host-local outage state, publishing to the existing watchdog outbox.
 use crate::run::record_io::atomic_write_private;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs, io, path::Path};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -12,8 +16,103 @@ struct State {
     last_observed: u64,
 }
 
-fn write_private(path: &Path, value: &impl Serialize) -> io::Result<()> {
-    atomic_write_private(path, &serde_json::to_vec(value)?)
+struct Link<'a> {
+    root: &'a Path,
+    key: String,
+    state: State,
+}
+
+impl<'a> Link<'a> {
+    fn read(root: &'a Path, identity: &impl Serialize) -> io::Result<Self> {
+        let key = format!("{:x}", Sha256::digest(serde_json::to_vec(identity)?));
+        let mut link = Self {
+            root,
+            key,
+            state: State::default(),
+        };
+        match fs::read(link.path()) {
+            Ok(bytes) => link.state = serde_json::from_slice(&bytes)?,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => (),
+            Err(e) => return Err(e),
+        }
+        if link
+            .state
+            .down_since
+            .is_some_and(|since| since > link.state.last_observed)
+            || (link.state.alerted && link.state.down_since.is_none())
+        {
+            return Err(io::Error::other("invalid host-link state"));
+        }
+        Ok(link)
+    }
+
+    fn path(&self) -> PathBuf {
+        self.root
+            .join("watchdog/host-link")
+            .join(format!("{}.json", self.key))
+    }
+
+    fn enqueue(&self, rule: &str, since: u64, mut event: Value) -> io::Result<()> {
+        let namespace = if rule == "host-link-down" {
+            "host-link"
+        } else {
+            rule
+        };
+        let event_id = format!(
+            "{:x}",
+            Sha256::digest(format!("{namespace}:{}:{since}", self.key))
+        );
+        event["kind"] = json!("alert");
+        event["recipient"] = json!("routing");
+        event["rule"] = json!(rule);
+        event["down_since"] = json!(since);
+        event["observed_at"] = json!(self.state.last_observed);
+        event["event_id"] = json!(event_id);
+        atomic_write_private(
+            &self
+                .root
+                .join("watchdog/outbox")
+                .join(format!("{since:020}-{rule}-{event_id}.json")),
+            &serde_json::to_vec(&event)?,
+        )
+    }
+
+    fn observe(
+        &mut self,
+        now: u64,
+        reachable: bool,
+        due: impl FnOnce(u64) -> bool,
+        publish: impl FnOnce(&Self, u64, bool) -> io::Result<()>,
+        notify_recovery: bool,
+    ) -> io::Result<Option<u64>> {
+        if now < self.state.last_observed {
+            return Err(io::Error::other("host-link clock moved backwards"));
+        }
+        self.state.last_observed = now;
+        let mut transition = None;
+        if reachable {
+            if let Some(since) = self
+                .state
+                .down_since
+                .filter(|_| self.state.alerted && notify_recovery)
+            {
+                publish(self, since, true)?;
+                transition = Some(since);
+            }
+            self.state.down_since = None;
+            self.state.alerted = false;
+        } else {
+            let previous = self.state.down_since;
+            let since = *self.state.down_since.get_or_insert(now);
+            if previous.is_some() && !self.state.alerted && due(since) {
+                publish(self, since, false)?;
+                self.state.alerted = true;
+                transition = Some(since);
+            }
+        }
+        atomic_write_private(&self.path(), &serde_json::to_vec(&self.state)?)?;
+        Ok(transition)
+    }
 }
 
 /// Observe one completed probe. Call serially per host/peer, at least once a minute.
@@ -23,49 +122,62 @@ pub fn observe(root: &Path, host: &str, peer: &str, now: u64, reachable: bool) -
     if host.is_empty() || peer.is_empty() {
         return Err(io::Error::other("host and peer required"));
     }
-    let identity = serde_json::to_vec(&(host, peer))?;
-    let key = format!("{:x}", Sha256::digest(identity));
-    let path = root.join("watchdog/host-link").join(format!("{key}.json"));
-    let mut state: State = match fs::read(&path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => State::default(),
-        Err(e) => return Err(e),
-    };
-    if now < state.last_observed
-        || state
-            .down_since
-            .is_some_and(|since| since > state.last_observed)
-        || (state.alerted && state.down_since.is_none())
-    {
-        return Err(io::Error::other(
-            "invalid host-link state or clock moved backwards",
-        ));
-    }
-    state.last_observed = now;
-    let mut queued = false;
-    if reachable {
-        state.down_since = None;
-        state.alerted = false;
-    } else {
-        let since = *state.down_since.get_or_insert(now);
-        if now - since > 300 && !state.alerted {
-            let event_id = format!("{:x}", Sha256::digest(format!("host-link:{key}:{since}")));
-            let event = serde_json::json!({
-                "kind": "alert", "recipient": "routing", "rule": "host-link-down",
-                "host": host, "peer": peer, "down_since": since, "observed_at": now,
-                "event_id": event_id,
-                "item_key": "plangraph:LE-BUILD-HOSTS-UNREACHABLE-OVER-TAILSCALE"
-            });
-            write_private(
-                &root
-                    .join("watchdog/outbox")
-                    .join(format!("{event_id}.json")),
-                &event,
-            )?;
-            state.alerted = true;
-            queued = true;
-        }
-    }
-    write_private(&path, &state)?;
-    Ok(queued)
+    let mut link = Link::read(root, &(host, peer))?;
+    link.observe(
+        now,
+        reachable,
+        |since| now - since > 300,
+        |link, since, _| {
+            link.enqueue(
+                "host-link-down",
+                since,
+                json!({
+                    "host": host, "peer": peer,
+                    "item_key": "plangraph:LE-BUILD-HOSTS-UNREACHABLE-OVER-TAILSCALE"
+                }),
+            )
+        },
+        false,
+    )
+    .map(|transition| transition.is_some())
+}
+
+fn ssh_link<'a>(root: &'a Path, destination: &str) -> io::Result<Link<'a>> {
+    Link::read(root, &json!({"ssh": destination}))
+}
+
+/// Record a coordinator-side probe, with diagnostics collected on transition only.
+pub fn observe_ssh(
+    root: &Path,
+    destination: &str,
+    now: u64,
+    reachable: bool,
+    evidence: impl FnOnce() -> Value,
+) -> io::Result<Option<u64>> {
+    ssh_link(root, destination)?.observe(
+        now,
+        reachable,
+        |_| true,
+        |link, since, recovered| {
+            let mut event = evidence();
+            event["destination"] = json!(destination);
+            event["item_key"] = json!("plangraph:LE-CODING-VM-LOSES-WORKER-HOSTS-ON-IP-CHANGE");
+            link.enqueue(
+                if recovered {
+                    "host-ssh-recovered"
+                } else {
+                    "host-ssh-down"
+                },
+                since,
+                event,
+            )
+        },
+        true,
+    )
+}
+
+/// Return the first failure time of a confirmed outage on a configured SSH route.
+pub fn ssh_down_since(root: &Path, destination: &str) -> io::Result<Option<u64>> {
+    let state = ssh_link(root, destination)?.state;
+    Ok(state.down_since.filter(|_| state.alerted))
 }

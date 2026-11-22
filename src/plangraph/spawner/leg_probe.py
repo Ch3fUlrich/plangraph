@@ -401,8 +401,8 @@ async def before_launch(runner, leg, role, dry_run, budget=None, *, route_state_
     if booked := limit():
         return booked
     skip = admission()
-    if (skip or '').startswith('auth_refused:'):
-        return skip
+    if (skip or '').startswith('auth_refused:') or skip == 'not_listed':
+        return skip  # An unlisted model has nothing to run; a probe cannot admit it.
     snapshot_error = (skip or '').startswith('leg_state_snapshot_error:')
     if not snapshot_error and (not ttl or role not in ('implement', 'fix')):
         return skip

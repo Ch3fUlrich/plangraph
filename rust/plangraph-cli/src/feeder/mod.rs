@@ -82,21 +82,7 @@ pub struct Run {
 }
 impl Run {
     pub fn active(&self) -> bool {
-        !matches!(
-            self.status.as_str(),
-            "completed"
-                | "failed"
-                | "cancelled"
-                | "killed"
-                | "dry_run"
-                | "succeeded"
-                | "timeout"
-                | "timed_out"
-                | "stalled"
-                | "terminated_after_answer"
-                | "refused"
-                | "skipped"
-        )
+        !pg_worker_core::run::record::releases_ownership(&self.status)
     }
     pub fn diagnostic(&self) -> bool {
         self.run_id.is_empty()
