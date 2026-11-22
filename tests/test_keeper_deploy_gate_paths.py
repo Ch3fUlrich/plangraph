@@ -400,7 +400,8 @@ def test_manual_close_handles_a_fast_forward_after_its_diff(w, monkeypatch, tmp_
     assert w.store._item("demo:A")["state"] == "in_review"
 
 
-def test_train_deploy_gate_attributes_units_to_their_part(env):  # noqa: F811
+@pytest.mark.parametrize("subject", ["Landing train 9 (#57)", "batch train-9: #55 #56 (#57)"])
+def test_train_deploy_gate_attributes_units_to_their_part(env, subject):  # noqa: F811
     root = env.repo.root
     base = git(root, "rev-parse", "main")
     git(root, "checkout", "-q", "-b", "train")
@@ -417,7 +418,7 @@ def test_train_deploy_gate_attributes_units_to_their_part(env):  # noqa: F811
         git(root, "branch", "-D", branch)
     git(root, "checkout", "-q", "main")
     git(root, "merge", "-q", "--no-ff", "-m",
-        "Landing train 9 (#57)\n\nPlan-Item: demo:A\nPlan-Item: demo:B", "train")
+        f"{subject}\n\nPlan-Item: demo:A\nPlan-Item: demo:B\nPlan-Item: demo:BATCH", "train")
     git(root, "branch", "-D", "train")
 
     store = env.store
@@ -425,4 +426,7 @@ def test_train_deploy_gate_attributes_units_to_their_part(env):  # noqa: F811
     unit = dict(docs, key="demo:B")
     assert store._deploy_changes(docs)[1] == set()
     assert store._deploy_changes(unit)[1] == {("A", "deploy/systemd/train.service")}
+    assert store._deploy_changes(dict(docs, key="demo:BATCH"))[1] == {
+        ("A", "deploy/systemd/train.service"),
+    }
     assert [c["key"] for c in auto(env, require_seats=False)["closed"]] == ["demo:A"]

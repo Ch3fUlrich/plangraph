@@ -82,19 +82,23 @@ def active_train(st, head):
             continue
         target, keys = revert
         for part in st["merged"]:
-            if target:
-                removed = target == part["merge"] or target == part["head"]
-            else:
-                removed = bool(keys.intersection(part["items"]))
-            if removed:
+            part_target = target and (part["merge"].startswith(target) or part["head"].startswith(target))
+            if part_target or keys.intersection(part["items"]):
                 dropped.add(part["pr"])
     return dict(st, merged=[rec for rec in st["merged"] if rec["pr"] not in skipped | dropped],
                 dropped=[rec for rec in st["merged"] if rec["pr"] in dropped])
 
 
+def train_keys(st):
+    keys = {key for rec in st["merged"] for key in part_items(st, rec, require_keys=False)}
+    batch = st.get("plan")
+    if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
+        keys.add(batch)
+    return sorted(keys)
+
+
 def go_key_block(st):
-    keys = {key for rec in st["merged"] for key in rec["items"]}
-    return "GO-KEYS [" + ",".join(sorted(keys)) + "]"
+    return "GO-KEYS [" + ",".join(train_keys(st)) + "]"
 
 
 def render_body(st):
@@ -158,13 +162,14 @@ def cmd_push(args):
     workflow = Path(wt, ".github/workflows/tests.yml")
     if workflow.is_file():   # a red Windows run refuses the push before anything leaves the machine
         windows_gate(st, workflow.read_text(encoding="utf-8"))
+    body_text = render_body(active)
     git("push", REMOTE, f"refs/heads/{st['branch']}:refs/heads/{st['branch']}", cwd=wt)
     if keeper_landing_configured():
         record_stage(st["repo"], landing_batch_key(st), "push", head, started)
     title = f"batch {st['name']}: " + " ".join(f"#{rec['pr']}" for rec in active["merged"])
     with tempfile.TemporaryDirectory() as tmp:
         body = Path(tmp, "body.md")
-        body.write_text(render_body(active), encoding="utf-8")
+        body.write_text(body_text, encoding="utf-8")
         if st.get("pr"):
             if gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state")["state"] != "OPEN":
                 raise MergeBatchError(f"batch PR #{st['pr']} is not open any more: abort and build again")
@@ -552,13 +557,9 @@ def land_with_lease(args, lease, st):
 def merge_trailers(st):
     """The body of the batch merge commit: one Plan-Item trailer per item of every included part and
     the batch item, then one Review-Run line per keeper-bound part review (key, run id, part head)."""
-    keys = {key for rec in st["merged"] for key in part_items(st, rec)}
-    batch = st.get("plan")
-    if isinstance(batch, str) and re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", batch):
-        keys.add(batch)
     runs = [f"Review-Run: {key} {run} {rec['head']}" for rec in st["merged"]
             for key, run in sorted((rec.get("review_runs") or {}).items())]
-    return "\n".join([f"Plan-Item: {key}" for key in sorted(keys)] + runs)
+    return "\n".join([f"Plan-Item: {key}" for key in train_keys(st)] + runs)
 
 
 def cmd_status(args):
@@ -594,7 +595,7 @@ def cmd_status(args):
     return 0
 
 
-def part_items(st, rec):
+def part_items(st, rec, *, require_keys=True):
     wt, merge, head = st["worktree"], rec["merge"], rec["head"]
     if git("rev-parse", f"{merge}^2", cwd=wt).stdout.strip() != head:
         raise MergeBatchError(f"part #{rec['pr']} merge does not bind its head")
@@ -602,7 +603,7 @@ def part_items(st, rec):
 
     messages = git("log", "--format=%B%x1d", f"{merge}^1..{head}", cwd=wt).stdout.split("\x1d")
     keys = {key for message in messages for key in plan_items(message)}
-    if not keys or any(not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", key) for key in keys):
+    if (require_keys and not keys) or any(not re.fullmatch(r"[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+", key) for key in keys):
         raise MergeBatchError(f"part #{rec['pr']} needs a Plan-Item for its keeper-bound review")
     return keys
 

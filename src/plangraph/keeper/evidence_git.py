@@ -569,6 +569,9 @@ class GitAdapter:
                 found = True
         return changes, found
 
+    _TRAIN_MERGE_SUBJECT = re.compile(
+        r"Landing train [0-9]+\b|batch [A-Za-z0-9_-]+: (?:#[0-9]+ )+\(#[0-9]+\)$", re.I)
+
     def deploy_changes(self, repo: str, sha: str, ref: str, item_key=None) -> list[tuple[str, str]]:
         """``(status, path)`` pairs the work of *sha* landed on *ref*.
 
@@ -598,12 +601,12 @@ class GitAdapter:
             parents, _, subject = proc.stdout.partition("\n")
             landed = parents.split()
             if len(landed) == 2 and all(valid_commit_ref(p) for p in landed):
-                if item_key and re.match(r"Landing train [0-9]+\b", subject, re.I):
+                if item_key and self._TRAIN_MERGE_SUBJECT.match(subject):
                     changes, found = self._train_deploy_changes(
                         repo, *landed, {item_key, item_key.rsplit(":", 1)[-1]})
-                    if not found:
-                        raise RuntimeError("cannot attribute train work to a part")
-                    return changes
+                    if found:
+                        return changes
+                    # A key carried only by the aggregate merge keeps its whole-diff scan.
             else:
                 landed = []
         changes = self._name_status(
