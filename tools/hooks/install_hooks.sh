@@ -42,7 +42,13 @@
 # docs/turn-budget-hook.md for events and the missing-binary guard. This
 # Python-only copier does not ship it or register any hook.
 #
+# Optional Rust session guards are installed with --session-rust. Register
+# the Stop event with:
+#   sh -c 'test -x "$1" || exit 1; exec "$1" lesson-stop' _ DEST/pg-hook
+# See docs/lesson-stop.md for the ledger contract.
+#
 # Usage:
+#   tools/hooks/install_hooks.sh --session-rust # include the Rust session guards
 #   tools/hooks/install_hooks.sh --git          # build commit-msg; set checkout core.hooksPath
 #   tools/hooks/install_hooks.sh                 # into $HOME/.local/share/plangraph/hooks
 #   DEST=/elsewhere tools/hooks/install_hooks.sh # into /elsewhere
@@ -64,8 +70,10 @@ usage() {
     done < "$0"
 }
 
+session_rust=no
 case ${1:-} in
     '') ;;
+    --session-rust) session_rust=yes ;;
     --git)
         # Git invokes the Rust executable directly; pre-push stays checkout-owned.
         git_root=$(CDPATH= cd -- "$SELF_DIR/../.." && pwd -P)
@@ -199,6 +207,10 @@ refuse_inside "$SRC_ROOT" "the source checkout"
 refuse_inside "${AUTOOS_ROOT:-}" "the read-only AutoOS tree"
 refuse_inside "${HOME:+$HOME/code/AutoOS}" "the read-only AutoOS tree"
 
+if [ "$session_rust" = yes ]; then
+    : "${CARGO_TARGET_DIR:?set the shared host CARGO_TARGET_DIR before installing Rust hooks}"
+    cargo build --manifest-path "$SRC_ROOT/rust/Cargo.toml" -p pg-hook --bin pg-hook
+fi
 mkdir -p -- "$DEST"
 
 count=0
@@ -213,6 +225,12 @@ done
 if [ "$count" -eq 0 ]; then
     echo "install_hooks.sh: no .py hooks found in $SELF_DIR" >&2
     exit 1
+fi
+
+if [ "$session_rust" = yes ]; then
+    install -m 755 -- "$CARGO_TARGET_DIR/debug/pg-hook" "$DEST/pg-hook"
+    echo "$DEST/pg-hook"
+    set -- "$@" pg-hook
 fi
 
 # The manifest covers exactly the files this run shipped - never a stale file

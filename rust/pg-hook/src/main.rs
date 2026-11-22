@@ -1,3 +1,5 @@
+mod lesson_gate;
+
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::Command;
@@ -57,6 +59,12 @@ fn finish(
 fn main() {
     std::panic::set_hook(Box::new(|_| {})); // Shadow panics belong in JSONL, not Python stderr.
     let args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|arg| arg == "lesson-stop") {
+        std::process::exit(lesson_gate::run(
+            std::io::stdin().lock(),
+            &mut std::io::stderr(),
+        ));
+    }
     let fault = fault_target(&args);
     std::process::exit(finish(|| run(&args), fault, &mut std::io::stderr()));
 }
