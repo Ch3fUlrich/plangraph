@@ -1,1 +1,13 @@
-{"host": "fixture-remote", "argv": ["writer", "$ROOT/work", "sonnet", "high", "$ROOT/prompt", "--owner", "fixture", "--track", "parity", "--reason", "fixture", "--cap", "declared", "--handoff", "handoff.md", "--dry-run", "--host", "fixture-remote"], "spec": {}, "seq": null, "prompt": "Fixture prompt", "mcp": "{}\n"}
+{
+  "host": "fixture-remote",
+  "argv": [
+    "writer", "$ROOT/work", "sonnet", "high", "$ROOT/prompt",
+    "--owner", "fixture", "--track", "parity", "--reason", "fixture",
+    "--cap", "declared", "--handoff", "handoff.md",
+    "--dry-run", "--host", "fixture-remote"
+  ],
+  "spec": {},
+  "seq": null,
+  "prompt": "Fixture prompt",
+  "mcp": "{}\n"
+}

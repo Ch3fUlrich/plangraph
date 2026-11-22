@@ -1,1 +1,0 @@
-- Verify that the Rust session launcher shares the legacy counter and role locks, writes compatible launch records, and leaves the same state after interruption.
