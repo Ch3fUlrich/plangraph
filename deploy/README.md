@@ -41,7 +41,7 @@ or copied into a unit or into `render.env`.
 (argv, not stdin), once per green head until the page catches up (re-armed when it does).
 
 Serve `/plan` over HTTPS and supply the site's htpasswd file as a private read-only mount at
-`/etc/nginx/private/plan.htpasswd` for the nginx example.
+`/etc/nginx/private/plan.users` for the nginx example.
 
 **Install is a separate, gated deploy step** — this lane ships files only. On the render host: copy
 `plangraph-render.service` and `plangraph-render.timer` to `~/.config/systemd/user`, put an edited

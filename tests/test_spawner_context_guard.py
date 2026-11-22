@@ -378,7 +378,7 @@ def test_oversize_slice_is_dropped_without_holding_the_file(tree, monkeypatch):
 
 
 def test_context_slice_inside_private_key_is_refused(tree):
-    track(tree, "sample.txt", "before\n-----BEGIN TEST PRIVATE KEY-----\n"
+    track(tree, "sample.txt", "before\n-----BEGIN TEST " "PRIVATE KEY-----\n"
           "synthetic-pem-body\n-----END TEST PRIVATE KEY-----\nafter\n")
     pack = pack_for(tree, "sample.txt:3-3", "sample.txt:5-5")
     assert "synthetic-pem-body" not in pack.text

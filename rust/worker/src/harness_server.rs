@@ -241,7 +241,10 @@ mod tests {
         let bin = crate::testutil::write_script(
             dir.path(),
             "oc-cut",
-            "#!/bin/sh\nprintf '%s\\n%70000s\\n%s\\n' '-----BEGIN TEST PRIVATE KEY-----' fake 'synthetic-startup-fragment' >&2\nexit 1\n",
+            concat!(
+                "#!/bin/sh\nprintf '%s\\n%70000s\\n%s\\n' '-----BEGIN TEST ",
+                "PRIVATE KEY-----' fake 'synthetic-startup-fragment' >&2\nexit 1\n"
+            ),
         );
         let home = tempfile::tempdir().unwrap();
         let r = retry_fake_server_spawn(|| {

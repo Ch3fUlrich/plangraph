@@ -92,7 +92,7 @@ def _scrub_hunks(diff, repo, timeout):
         if hunk and any(keys is None or any(
             int(start) <= last and first < int(start) + int(count or 1)
             for first, last in keys
-        ) for keys, start, count in zip(ranges, hunk.groups()[::2], hunk.groups()[1::2])):
+        ) for keys, start, count in zip(ranges, hunk.group(1, 3), hunk.group(2, 4))):
             parts[index:index + 2] = ['[autoos:source hunk withheld]\n', '']
         else:
             parts[index + 1] = _scrub_hunk(parts[index + 1].splitlines(keepends=True))

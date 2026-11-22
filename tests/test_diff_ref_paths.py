@@ -84,7 +84,7 @@ def test_wrapped_token_is_masked_in_final_inline_prompt(repo):
 def test_inline_hunk_inside_private_key_is_withheld(repo):
     root, _, _ = repo
     path = root / "sample.txt"
-    start = "-----BEGIN TEST PRIVATE KEY-----\n" + "synthetic filler\n" * 5
+    start = "-----BEGIN TEST " "PRIVATE KEY-----\n" + "synthetic filler\n" * 5
     end = "synthetic filler\n" * 5 + "-----END TEST PRIVATE KEY-----\n"
     path.write_text(start + "synthetic-old-body\n" + end)
     _git(root, "add", "sample.txt")

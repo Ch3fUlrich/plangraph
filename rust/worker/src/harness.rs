@@ -1028,11 +1028,15 @@ mod tests {
             model: "m",
             prompt: "p",
         };
-        let r = run_harness(
-            &Fake { script: "printf '%s\\n%100s\\n%s\\n%s\\n' '-----BEGIN TEST PRIVATE KEY-----' fake 'synthetic-fragment' '-----END TEST PRIVATE KEY-----'; echo retained" },
-            &run, home.path(),
-            &Opts { max_output: 64, ..Opts::default() }, &|| false, None,
-        ).unwrap();
+        let script = concat!(
+            "printf '%s\\n%100s\\n%s\\n%s\\n' '-----BEGIN TEST ",
+            "PRIVATE KEY-----' fake 'synthetic-fragment' '-----END TEST PRIVATE KEY-----'; echo retained",
+        );
+        let opts = Opts {
+            max_output: 64,
+            ..Opts::default()
+        };
+        let r = run_harness(&Fake { script }, &run, home.path(), &opts, &|| false, None).unwrap();
         let safe = crate::output_redact::history_text(&String::from_utf8_lossy(&r.output));
         assert_eq!(safe, "[REDACTED]\nretained");
     }

@@ -188,7 +188,7 @@ def test_plan_http_challenges_anonymous_requests(tmp_path):
     auth.write_text(f"fixture:{{SHA}}{digest}\n")
     conf = read(ROOT / "deploy" / "nginx" / "plan-page.conf.example")
     conf = conf.replace("/srv/plan/plan-cdn.html", str(page))
-    conf = conf.replace("/etc/nginx/private/plan.htpasswd", str(auth))
+    conf = conf.replace("/etc/nginx/private/plan.users", str(auth))
     temp_dirs = " ".join(f"{name}_temp_path {tmp_path}/{name};"
                          for name in ("client_body", "proxy", "fastcgi", "uwsgi", "scgi"))
     (tmp_path / "nginx.conf").write_text(

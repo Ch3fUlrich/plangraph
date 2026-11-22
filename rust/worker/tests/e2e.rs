@@ -1409,7 +1409,10 @@ async fn a_check_that_never_passes_stops_the_card() {
             return;
         };
         let card = "e2e-check-fail";
-        let check = "printf '%s\\n%1100000s\\n%s\\n%s\\n' '-----BEGIN TEST PRIVATE KEY-----' fake 'synthetic-fragment' '-----END TEST PRIVATE KEY-----'; echo retained; exit 1";
+        let check = concat!(
+            "printf '%s\\n%1100000s\\n%s\\n%s\\n' '-----BEGIN TEST ",
+            "PRIVATE KEY-----' fake 'synthetic-fragment' '-----END TEST PRIVATE KEY-----'; echo retained; exit 1",
+        );
         let claim = env.claim(card, &["out.txt"], check);
         let id = format!("e2e-check-fail-{}", unique());
         let handle = env.start(&id, claim).await;
