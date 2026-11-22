@@ -2259,6 +2259,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pg-session-admission-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "pg-spawnd"
 version = "0.1.0"
 dependencies = [

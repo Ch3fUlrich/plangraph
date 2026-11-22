@@ -1,0 +1,1 @@
+- Add an executable Rust model and replay fixtures for session claims, whole-task delivery, and first-work authorization.
