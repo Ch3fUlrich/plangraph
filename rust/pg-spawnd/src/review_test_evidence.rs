@@ -29,8 +29,39 @@ pub(crate) fn tests_line(text: &str) -> Option<&str> {
 
 pub(crate) fn reported(text: &str) -> Option<&str> {
     tests_line(text).filter(|report| {
-        let first = report.split(|c: char| c == ':' || c.is_whitespace()).next();
-        !report.is_empty() && !first.is_some_and(|word| word.eq_ignore_ascii_case("none"))
+        let mut words = report
+            .split(|c: char| c == ':' || c.is_whitespace())
+            .filter(|word| !word.is_empty());
+        let mut first = words.next().map(str::to_ascii_lowercase);
+        if matches!(first.as_deref(), Some("i" | "we")) {
+            first = words.next().map(str::to_ascii_lowercase);
+        }
+        if matches!(first.as_deref(), Some("can" | "could" | "did"))
+            && words
+                .next()
+                .is_some_and(|word| word.eq_ignore_ascii_case("not"))
+        {
+            return false;
+        }
+        first.is_some_and(|word| {
+            !matches!(
+                word.as_str(),
+                "none"
+                    | "no"
+                    | "not"
+                    | "couldn't"
+                    | "couldn’t"
+                    | "cannot"
+                    | "can't"
+                    | "can’t"
+                    | "didn't"
+                    | "didn’t"
+                    | "unable"
+                    | "unavailable"
+                    | "skipped"
+                    | "untested"
+            )
+        })
     })
 }
 
@@ -44,6 +75,13 @@ mod tests {
             "VERDICT: ACCEPT\n",
             "TESTS: none: Bash denied\n",
             "TESTS: NONE\n",
+            "TESTS: not run (denied)\n",
+            "TESTS: could not run any tests\n",
+            "TESTS: I couldn't run any tests (Bash requires approval)\n",
+            "TESTS: We did not run pytest\n",
+            "TESTS: Unable to run pytest\n",
+            "TESTS: no tests executed\n",
+            "TESTS: Cannot run Cargo tests\n",
             "TESTS:   \n",
             "> TESTS: pytest fixture.py — passed\n",
             "```text\nTESTS: cargo test -p fixture — passed\n```\n",
@@ -58,6 +96,10 @@ mod tests {
                 "FILES READ: lib.rs\nTESTS: cargo test -p fixture — 1 passed\nVERDICT: ACCEPT"
             ),
             Some("cargo test -p fixture — 1 passed")
+        );
+        assert_eq!(
+            reported("TESTS: I ran pytest fixture.py — 1 failed"),
+            Some("I ran pytest fixture.py — 1 failed")
         );
     }
 }

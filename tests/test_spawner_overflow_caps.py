@@ -140,6 +140,17 @@ def test_native_disk_refusal_is_terminal_and_notifies_named_parent(tmp_path, mon
     keeper.deliver.assert_called_once_with('keeper', event)
 
 
+def test_native_spawn_cli_returns_nonzero_for_zero_exit_refusal(tmp_path, monkeypatch, capsys):
+    import io
+
+    receipt = dict(status='refused', exit_code=0, reason='cargo_target_cap: cache full')
+    child = Mock(stdin=io.StringIO(), stdout=io.StringIO(json.dumps(receipt) + '\n'))
+    monkeypatch.setattr(o.cli, '_start_supervisor', Mock(return_value=child))
+    card = json.dumps(dict(run_kind='native-codex', repo=str(tmp_path)))
+    assert o.cli.main(['--state', str(tmp_path), 'spawn', '--card', card, 'fixture']) == 1
+    assert json.loads(capsys.readouterr().out) == receipt
+
+
 def test_placed_native_writer_retries_a_cleared_cache_cap(tmp_path, monkeypatch):
     from plangraph.spawner import host_ready, seat_spawn
 
