@@ -70,8 +70,6 @@ _SIZE_MSG = (
 _PARSE_MSG = (
     "bash-guard: DENIED - could not parse this command (%s); the guard fails "
     "closed. Simplify the quoting or pass the text from a file.")
-
-
 # ─── unquoted heredoc scanner ───────────────────────────────────────────
 
 def _has_unescaped_heredoc_injection(text):
@@ -239,7 +237,7 @@ def _pgrep_matches_parent(args, command):
             break
         if flag == "--full":
             full = True
-        elif re.fullmatch(r"-[afcilnow]+", flag):
+        elif re.fullmatch(r"-[afcilnoqw]+", flag):
             full |= "f" in flag
         else:
             return False

@@ -39,5 +39,6 @@ pub(crate) fn alert(proc: &Path) -> io::Result<Option<Alert>> {
     Ok(Some(Alert {
         active: format!("deleted-cwd {host}"),
         message: format!("deleted-cwd {host} {count} processes"),
+        recipient: None,
     }))
 }

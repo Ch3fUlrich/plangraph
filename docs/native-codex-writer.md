@@ -46,7 +46,9 @@ line must be canonical. ACCEPT requires repository access and evidence in a
 `FILES READ:` line. A different `HEAD:` or weak ACCEPT is `no_verdict`,
 retried twice, then the run ends BLOCKED with
 exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.
-REQUEST_CHANGES resumes the same session with the review text; later rounds review
+REQUEST_CHANGES resumes the same session with a pointer to a private brief
+in the run directory. The file preserves the original brief byte for byte
+before the follow-up instructions and review text. Later rounds review
 the delta from the previous head. The HIGH+MED count of each round goes to
 `round_counts`; `native_writer::round_stop` applies the round progress rule of
 `round_progress.rs` to the round just finished and caps the run at that file's
@@ -69,6 +71,11 @@ An empty route records `review_status: deferred_to_batch_seat` and the per-leg
 the batch review. Once a seat is admitted, normal verdict retries apply.
 The card's `review_dir` selects a target-host directory; the default is
 `<worktree>/reviews`.
+
+When a native batch brief provides no status-file path, put one
+`SKIPPED <key> <reason>` line per skipped item in a commit body above its trailer
+paragraph. The review prompt includes these lines for items in the brief and
+the exact committed range. A later `Plan-Item` trailer clears an earlier skip.
 
 Run records retain host, pushed base ref and resolved SHA, worktree, session ID,
 final head, resume count, fast-check result, every review round, the last review

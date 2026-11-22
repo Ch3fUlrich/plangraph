@@ -244,7 +244,7 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
         return {"ok": True, "name": name, "session_id": sid}
 
     def _stop_record(self, rec, name):
-        """claude stop <short job id> - the one and only stop mechanism, never rm/kill.
+        """Stop the Claude job, then reap verified Linux session tools.
         One strict `claude agents` pre-poll (r7) resolves a null record id
         (newest non-finished background row of this name within 5 s of launch)
         and pre-checks it: a listed finished id is gone - stopped without
@@ -276,28 +276,22 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
                 self._write_record(name, {**rec, "state": "stopped", "stopped_ts": self._now()})
                 return None
         row = next((r for r in rows if r.get("sessionId") == sid), None)
+        tools = self._session_tools(sid)
         if row is not None and str(row.get("state") or "") in FINISHED_STATES:
-            # Listed and finished (r7): recovered without claude stop.
-            self._write_record(name, {**rec, "state": "stopped",
-                                      "stopped_ts": self._now(), "session_id": sid})
-            return sid
+            return self._record_stopped(rec, name, sid, tools)
         proc = self._run(self._claude_head() + ["stop", self._stop_token(row, sid)],
                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=STOP_TIMEOUT)
         if proc.returncode != 0:
             if row is None and not any(r.get("sessionId") == sid
                                        for r in self._agents_rows_strict()):
                 # Unlisted before and after: the session had already ended.
-                self._write_record(name, {**rec, "state": "stopped",
-                                          "stopped_ts": self._now(), "session_id": sid})
-                return sid
+                return self._record_stopped(rec, name, sid, tools)
             raise _refuse(f"stop failed: claude stop exited {proc.returncode}")
         row = next((r for r in self._agents_rows_strict()
                     if r.get("sessionId") == sid), None)
         if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
             raise _refuse(f"stop not confirmed: {sid} still {row.get('state')}")
-        self._write_record(name, {**rec, "state": "stopped",
-                                  "stopped_ts": self._now(), "session_id": sid})
-        return sid
+        return self._record_stopped(rec, name, sid, tools)
 
     def _ensure_stopped(self, rec, name):
         """The id behind a record, stopped and confirmed; returns the stopped
@@ -313,6 +307,8 @@ class Sessions(_ConfigMixin, _AgentsMixin, _NamesMixin, _StoreMixin):
                         if r.get("sessionId") == sid), None)
             if row is not None and str(row.get("state") or "") not in FINISHED_STATES:
                 return self._stop_record(rec, name)
+            if isinstance(sid, str) and SID_RE.fullmatch(sid):
+                self._finish_session_tools(sid, {})
         return sid
 
     def mark_ready(self, name, handoff, card=None):

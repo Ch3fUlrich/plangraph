@@ -68,6 +68,50 @@ def _scan(proc_root='/proc'):
     return out
 
 
+def descendants(procs, seeds):
+    found = set(seeds)
+    while True:
+        children = {pid for pid, entry in procs.items() if entry[1] in found} - found
+        if not children:
+            return found
+        found |= children
+
+
+def _libc_pidfd(name):
+    import ctypes
+    operation = getattr(ctypes.CDLL(None, use_errno=True), name, None)
+    if operation is None:
+        raise OSError(f'{name} is unavailable')
+
+    def checked(*args):
+        result = operation(*args)
+        if result < 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+        return result
+
+    return checked
+
+
+def kill_identities(members):
+    """Signal Linux PID/start-time pairs without a PID reuse window."""
+    import signal
+
+    open_pid = getattr(os, 'pidfd_open', None) or _libc_pidfd('pidfd_open')
+    send_signal = getattr(signal, 'pidfd_send_signal', None) or _libc_pidfd('pidfd_send_signal')
+
+    for pid, start in members.items():
+        try:
+            fd = open_pid(pid, 0)
+            try:
+                if alive(pid, start):
+                    send_signal(fd, signal.SIGKILL, None, 0)
+            finally:
+                os.close(fd)
+        except ProcessLookupError:
+            continue
+
+
 def group_alive(pgid):
     """True while any non-zombie member of the process group survives."""
     return any(s[0] != 'Z' and s[2] == pgid for s in _scan().values())
@@ -191,15 +235,8 @@ def snapshot(root, ident, *, platform=None, job_pids=None, proc_root='/proc', nt
     if root in procs and procs[root][4] != ident:
         return {}  # the root pid was reused by a foreign process
     found = {p for p in found if p != root or procs[p][4] == ident}
-    return _descendants(procs, found, {root})
-
-
-def _descendants(procs, found, excluded=()):
-    while True:
-        kids = {p for p, s in procs.items() if s[1] in found and p not in found and p not in excluded}
-        if not kids:
-            return {p: procs[p][4] for p in found if p in procs and procs[p][0] != 'Z'}
-        found.update(kids)
+    found = descendants({p: s for p, s in procs.items() if p != root}, found)
+    return {p: procs[p][4] for p in found if p in procs and procs[p][0] != 'Z'}
 
 
 def alive(pid, start, *, platform=None, proc_root='/proc'):

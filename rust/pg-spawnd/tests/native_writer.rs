@@ -2,6 +2,8 @@
 #![cfg(unix)]
 #[path = "common/binary.rs"]
 mod binary;
+#[path = "native_writer_fixture/codex.rs"]
+mod codex_fixture;
 use std::{fs, os::unix::fs::PermissionsExt, path::Path, process::Command};
 fn git(repo: &Path, args: &[&str]) -> String {
     let out = pg_worker_core::git_test_support::command(repo)
@@ -148,73 +150,7 @@ for tool in ('cargo', 'git', 'codex'):
     let bin = dir.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let codex = bin.join("codex");
-    fs::write(&codex, r#"#!/usr/bin/env python3
-import sys, pathlib, subprocess, json
-prompt = sys.stdin.read()
-if 'kill marker' in prompt or 'fail marker' in prompt or 'missing marker' in prompt:
-    import os, signal
-    attempts = pathlib.Path('attempts')
-    attempt = int(attempts.read_text()) + 1 if attempts.exists() else 1
-    attempts.write_text(str(attempt))
-    if 'fail marker' in prompt:
-        sys.exit(127)
-    if attempt == 1:
-        if 'missing marker' in prompt:
-            print(json.dumps({'type':'thread.started','thread_id':'incomplete-session'}))
-            sys.exit(0)
-        pathlib.Path('partial.txt').write_text('preserved writer work')
-        subprocess.run(['git','add','partial.txt'], check=True)
-        subprocess.run(['git','commit','-m','partial writer work'], check=True, stdout=subprocess.DEVNULL)
-        checkout = pathlib.Path(os.environ['FIXTURE_DIR'])/'checkout'
-        (checkout/'fresh.txt').write_text('new main base')
-        subprocess.run(['git','-C',str(checkout),'add','fresh.txt'], check=True)
-        subprocess.run(['git','-C',str(checkout),'-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fresh main'], check=True, stdout=subprocess.DEVNULL)
-        subprocess.run(['git','-C',str(checkout),'push','origin','main'], check=True, stdout=subprocess.DEVNULL)
-        print(json.dumps({'type':'thread.started','thread_id':'killed-session'}), flush=True)
-        os.kill(os.getpid(), signal.SIGKILL)
-    if 'kill marker' in prompt:
-        assert pathlib.Path('fresh.txt').read_text() == 'new main base'
-        assert pathlib.Path('partial.txt').read_text() == 'preserved writer work'
-
-assert 'brief marker' in prompt or 'requests changes' in prompt, prompt
-assert 'model_reasoning_effort=medium' in sys.argv
-assert sys.argv[sys.argv.index('-m') + 1] == 'gpt-6.2-sol'
-if 'hold marker' in prompt:
-    import os, time
-    child = subprocess.Popen(['sleep', '30'])
-    pathlib.Path('hold.pid').write_text(str(os.getpid()) + ' ' + str(child.pid))
-    time.sleep(30)
-    sys.exit(0)
-if 'resume' in sys.argv:
-    assert sys.argv[sys.argv.index('resume') + 1] == 'fixture-session'
-    if 'external fix' in prompt:
-        import os
-        record = json.loads((pathlib.Path.cwd().parent/'record.json').read_text())
-        assert os.environ['PATH'] == record['tool_path']
-        assert 'sandbox_mode="danger-full-access"' in sys.argv
-    else:
-        assert 'requests changes' in prompt and 'HIGH writer.txt:1' in prompt, prompt
-        expected = not pathlib.Path('fix.txt').exists()
-        assert ('drop the fixture scope' in prompt) == expected, prompt
-    # The fix turn commits its fix: a turn that leaves HEAD unchanged is resumed on its items.
-    with open('fix.txt', 'a') as fix: fix.write('fixed after review\n')
-    subprocess.run(['git','add','fix.txt'], check=True)
-    subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fix'], check=True, stdout=subprocess.DEVNULL)
-else:
-    import os
-    if 'reject marker' in prompt:
-        run = pathlib.Path.cwd().parent
-        queued = subprocess.run([os.environ['NATIVE_BINARY'], 'steer-local', run.name,
-            '--state', str(run.parent.parent)], input='drop the fixture scope', text=True, capture_output=True)
-        assert json.loads(queued.stdout)['steered'], (queued.stdout, queued.stderr)
-    pathlib.Path('writer-path').write_text(os.environ['PATH'])
-    pathlib.Path('writer.txt').write_text('written on selected host\n')
-    subprocess.run(['git','add','writer.txt','writer-path'], check=True)
-    subprocess.run(['git','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','writer'], check=True, stdout=subprocess.DEVNULL)
-    print(json.dumps({'type':'thread.started','thread_id':'fixture-session'}))
-print(json.dumps({'type':'turn.completed','usage':{'input_tokens':1000,'output_tokens':234}}))
-print('tokens used\n1,234')
-"#).unwrap();
+    fs::write(&codex, codex_fixture::CODEX).unwrap();
     fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
     // Stub spawner CLI: one review run per call, its verdict in the run's live.log.
     let review_cli = dir.join("review-cli.py");
@@ -358,13 +294,14 @@ async def check():
         assert exit_code == 0 or ref in record['reason'], record
     card['base_ref'] = 'refs/heads/main'
     for marker, tries, status in [('kill marker', 2, 'completed'), ('fail marker', 3, 'failed'), ('missing marker', 2, 'completed'), ('reject marker', 1, 'failed')]:
+        brief = 'brief marker ' + marker + ('\nWhy: fixture item\n# Run values\nNAME: fixture-batch\n' if marker == 'reject marker' else '')
         with patch('plangraph.fleet_snapshot._projection_binary', return_value=os.environ['NATIVE_BINARY']), patch.object(seat_spawn, 'resources', return_value=(0, 50000)):
-            retried = await admitted_spawn(service, dict(card=card, prompt='brief marker ' + marker))
+            retried = await admitted_spawn(service, dict(card=card, prompt=brief))
             await service.tasks[retried['run_id']]
         final = service.result(retried['run_id'])
         assert final['status'] == status, final
         assert final['manifest']['try_count'] == tries, final
-        assert final['manifest']['brief'] == 'brief marker ' + marker, final
+        assert final['manifest']['brief'] == brief, final
         assert final['manifest']['worktree'] == final['cwd'], final
         if marker == 'reject marker':
             assert final['exit_code'] == 3 and final['review']['verdict'] == 'REQUEST_CHANGES', final

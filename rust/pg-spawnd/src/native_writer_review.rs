@@ -7,6 +7,7 @@ use crate::native_writer::Driver;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -30,6 +31,34 @@ pub(super) fn review_diff_base<'a>(
 /// skill, then the versioned brief. The spawner drops the first two blocks for inline seats.
 pub(super) const TOOLS_ONLY_OPEN: &str = "[tools-only]";
 pub(super) const TOOLS_ONLY_CLOSE: &str = "[/tools-only]";
+
+/// Oldest-first Git records pair the commit body with its Plan-Item trailer values.
+fn skipped_items(brief: &str, log: &str) -> Vec<String> {
+    let keys = context::item_keys(brief);
+    let mut skipped = BTreeMap::new();
+    let mut records = log.split_terminator('\0');
+    while let (Some(body), Some(trailers)) = (records.next(), records.next()) {
+        for line in body.lines() {
+            let Some((key, reason)) = line
+                .strip_prefix("SKIPPED ")
+                .and_then(|s| s.split_once(' '))
+            else {
+                continue;
+            };
+            let reason = reason.trim();
+            if keys.binary_search_by(|item| item.as_str().cmp(key)).is_ok()
+                && !reason.is_empty()
+                && !reason.chars().any(char::is_control)
+            {
+                skipped.insert(key, format!("SKIPPED {key} {reason}"));
+            }
+        }
+        for key in trailers.lines() {
+            skipped.remove(key.trim());
+        }
+    }
+    skipped.into_values().collect()
+}
 
 impl Host {
     /// Fast-checks stamp of `head`, in the worktree's own git directory.
@@ -180,7 +209,7 @@ impl Host {
         families: &[String],
         versioned: &str,
         skill: &str,
-    ) -> String {
+    ) -> Result<String, String> {
         let diff_base = review_diff_base(base, head, previous);
         let skill_block = if skill.is_empty() {
             String::new()
@@ -188,13 +217,27 @@ impl Host {
             format!("[review-skill]\n{skill}\n[/review-skill]\n\n")
         };
         let mut prompt = format!("{TOOLS_ONLY_OPEN}Your working directory is a disposable checkout of the head under review (no push). Open callers, tests and docs to verify each finding; run read-only commands and the tests a finding depends on; never edit. Use the inherited shared CARGO_TARGET_DIR, the pytest checkout guard and the guarded Cargo runner (python3 tools/preflight.py --cargo-test with the relevant manifest and package). Wrap Unix test commands in timeout -k 10s with a wall limit. To read the review diff, use git diff {diff_base} {head}.{TOOLS_ONLY_CLOSE}\n\n{skill_block}{versioned}\n\nWriter brief (item keys and Done-when lines):\n{}\n\nWriter families of {base}..{head} (every one is excluded from this review): {}.\n", self.brief, families.join(", "));
+        let messages = self.git(&[
+            "log",
+            "--reverse",
+            "--topo-order",
+            "-z",
+            "--format=%B%x00%(trailers:key=Plan-Item,valueonly,unfold)",
+            &format!("{base}..{head}"),
+        ])?;
+        let skipped = skipped_items(&self.brief, &messages);
+        if !skipped.is_empty() {
+            prompt.push_str("Writer-reported skipped items from the committed range:\n");
+            prompt.push_str(&skipped.join("\n"));
+            prompt.push_str("\n\n");
+        }
         match previous {
             Some((prev, text)) if prev == head => prompt.push_str(&format!("This is a later round on the same head {head}: the previous review (its text follows) judged it and the writer answered its findings with evidence. Review the whole change {base}..{head} and check that every earlier HIGH and MED finding is fixed or refuted with evidence.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             Some((prev, text)) => prompt.push_str(&format!("This is a later round: the previous review judged head {prev} (its text follows). Review the delta {prev}..{head}, check that every earlier HIGH and MED finding is fixed or refuted with evidence, and judge the whole change {base}..{head} where the delta touches it.\n----- previous review -----\n{text}\n----- end of previous review -----\n")),
             None => prompt.push_str(&format!("The diff is base {base}..head {head}.\n")),
         }
         prompt.push_str(&format!("Name each finding as file:line. Include one TEST-GAMING: line using the seat's required format. List the repository files you opened in a FILES READ: line. End with the line HEAD: {head} and then the line VERDICT: ACCEPT or VERDICT: REQUEST_CHANGES.\n"));
-        prompt
+        Ok(prompt)
     }
     /// One review run through the spawner, role review with every writer family of the range excluded,
     /// in a disposable no-push clone at `head`; the verdict comes from that run's record.
@@ -276,7 +319,7 @@ impl Host {
         let context = self.brief_context(base, head);
         let versioned =
             pg_worker_core::writer_families::render_review_brief(&context, "", &trusted_python)?;
-        let prompt = self.review_prompt(base, head, prev, &families, &versioned, &skill);
+        let prompt = self.review_prompt(base, head, prev, &families, &versioned, &skill)?;
         let prompt_path = self.reviews.join(format!("review-{tag}.prompt.txt"));
         atomic_write_private(&prompt_path, prompt.as_bytes()).map_err(|e| e.to_string())?;
         if self.cancelled() {

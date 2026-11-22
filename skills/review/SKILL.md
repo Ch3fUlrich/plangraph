@@ -33,6 +33,8 @@ Use grep for text that is not a symbol.
    fails without the change; a test that cannot fail (asserts nothing, mocks the thing
    under test, takes the fallback path) is a finding. Check the test exercises the path
    production takes.
+   For each fails-at-base note, replay the quoted pytest node IDs at the pinned
+   base in the same scrubbed environment and compare the fresh output to the claim.
 3. **Codebase fit.** Duplication of an existing helper, a fact stated in two places
    instead of one source of truth, a file over the 400-line limit, a unit doing two
    jobs, style unlike its neighbours, a CHANGELOG or doc update missing.

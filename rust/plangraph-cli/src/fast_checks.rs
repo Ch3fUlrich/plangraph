@@ -1,5 +1,7 @@
 //! Bounded local projection of CI selection; the selector remains authoritative.
 use crate::fast_check_packages::packages;
+#[path = "fast_check_replay.rs"]
+mod replay;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -291,6 +293,7 @@ fn execute(args: &[String]) -> Result<()> {
         }
         return Ok(());
     }
+    replay::verify(&root, &base)?;
     // Git's diff guard does not report CRLF consistently across core.whitespace settings.
     for path in &paths {
         if path.ends_with(".rs") {
@@ -307,6 +310,11 @@ fn execute(args: &[String]) -> Result<()> {
     for step in steps {
         let tick = Instant::now();
         let mut command = Command::new(&step.args[0]);
+        if step.label.ends_with("/test")
+            || matches!(step.label.as_str(), "affected-tests" | "rust-test-env")
+        {
+            replay::scrub_test_env(&mut command);
+        }
         if step.label == "pg-worker/test" {
             command
                 .env("PG_JAIL", "off")

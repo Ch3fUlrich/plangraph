@@ -106,7 +106,7 @@ credential ID. This selection also applies to mixed legacy/v2 stores. A failed q
 See [doctor checks](operations/spawner-doctor.md). To check Omnigraph health and read the plangraph project hub, run `python3 -m plangraph.spawner.doctor --memory-probe` with `og-memory` on PATH, `OG_MEMORY_BASE_URL` set to the graph route, and `OG_MEMORY_TOKEN_FILE` set to a private token file. See [queue](operations/spawner-admission-queue.md) for session names and the admission window, and [land-go](operations/spawner-land-go.md) for landing a batch on a GO row.
 
 ## Spawn by card
-Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged.
+Fleet sessions disable Superpowers with launch-local `--settings` on Linux and Windows; attended argv and user config stay unchanged. See [session stop and Linux tool cleanup](spawner-sessions.md).
 
 CLI and overflow admission use the worker-core memory rule:
 `effective_free_mb - reservation_mb >= mem_floor_mb`, with MemAvailable as

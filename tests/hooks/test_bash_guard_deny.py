@@ -302,3 +302,23 @@ def test_pgrep_cannot_wait_on_its_own_command_line(name, cmd, needle):
     output = run_bash(cmd)
     assert output.returncode == 2, output.stderr
     assert needle in output.stderr.decode()
+
+
+def test_self_matching_pgrep_wait_loops():
+    from bash_guard_support import run_bash
+
+    for command in (
+        'while pgrep -f "pytest tests/test_keeper_close_merged" >/dev/null; do sleep 5; done',
+        "bash -c 'until ! /usr/bin/pgrep --full tools/affected_tests.py; do sleep 5; done'",
+    ):
+        result = run_bash(command)
+        assert result.returncode == 2, result.stderr
+        assert b"wait on the PID or unit" in result.stderr.lower()
+
+    for command in (
+        "pgrep -f fixture; sleep 5",
+        "while kill -0 $pid; do sleep 5; done; pgrep -f fixture",
+        "while pgrep -f '[f]ixture'; do sleep 5; done",
+        "while true; do pgrep -f fixture; sleep 5; done",
+    ):
+        assert run_bash(command).returncode == 0, command

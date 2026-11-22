@@ -666,6 +666,12 @@ the existing CI Temporal wrapper and require the Temporal CLI and protobuf tools
 Use a warm `CARGO_TARGET_DIR`; the profile does not install dependencies.
 Each step and the total report wall seconds; exceeding 300 seconds emits a
 warning and returns failure after checks, without interrupting or weakening them.
+Affected tests and base replays run with context, session and Python path
+overrides removed. To record a known base failure, use one `Fails-at-Base:`
+commit trailer per pytest node, with the pinned base SHA followed by the node
+ID. Fast checks print the replay command and its output from a disposable
+checkout. A passing or unreproduced base failure rejects the claim, and the
+affected tests must still pass on the proposed head.
 This is the cheap local projection of CI; hosted browser, Postgres and Windows
 runners remain CI responsibilities. A typical build host timing measurement is still
 required before claiming that host's five-minute done criterion.
@@ -697,6 +703,7 @@ denies:
   in the Bash tool's background mode.
 - Bare `pytest` / `cargo test` runs when host opt-in `pgtest-required` is present
   (see `docs/TESTING.md`).
+- Sleep loops with a literal `pgrep -f` condition that can match their own shell command line.
 
 ## Skill lint (`tools/skill-rules.py`)
 

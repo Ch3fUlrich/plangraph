@@ -24,6 +24,12 @@ Use grep for text that is not a symbol.
 1. Read the item (Why, How, Done when) and every file it names. If it is unclear or
    contradicts a rule: write `SKIPPED <key> <one sentence>` to STATUS_FILE and take the
    next item. Do not guess.
+   If a follow-up names a brief file, open it for the item text and Run values.
+   A worker with a Keeper reader token can read an item from a checkout with
+   `PYTHONPATH=src python3 -m plangraph.keeper.cli show KEY --json`, using the
+   host's `PG_URL` and `PG_TOKEN_FILE` settings. The same client lists ready
+   items with `ready --project PROJECT`. If the item text is unavailable, report
+   `BLOCKED` with the missing brief or item key.
 2. Test first: write the test, see it fail for the right reason, then make the smallest
    change that passes. New code is Rust with Rust tests; no new Python, shell or Node
    source file and no new line in `tools/new_code_allowlist.txt` without an operator
@@ -34,6 +40,9 @@ Use grep for text that is not a symbol.
    changed. Build and test only the crates you touched (`-p <crate>`), into the cargo
    target your environment sets; never set `CARGO_TARGET_DIR` or `--target-dir`
    yourself. Fix until green.
+   For a fails-at-base note, quote the replay command, full base SHA, failing
+   pytest node IDs and output from the scrubbed fast-check environment. Add a
+   `Fails-at-Base: <base-sha> <pytest-node-id>` trailer for each claimed failure.
 5. One commit per item. All trailers in one final paragraph, exactly as the Run values
    give them (one `Plan-Item` line per item key the commit fixes). A merge of main into
    your lane that resolves a conflict in `.github/workflows/*` or another gate file needs
