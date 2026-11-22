@@ -4,6 +4,7 @@ mod agent_view_projection;
 mod cli;
 mod cli_review;
 mod doctor_sources;
+mod effort_level;
 #[cfg(test)]
 mod error_tests;
 mod errors;

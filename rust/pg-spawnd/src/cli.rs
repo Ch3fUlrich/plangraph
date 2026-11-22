@@ -146,6 +146,9 @@ pub(crate) fn execute(
     if verb.as_deref() == Some("ledger-report") {
         return crate::writer_ledger::report(rest, out);
     }
+    if verb.as_deref() == Some("effort-level") {
+        return crate::effort_level::execute(rest, out);
+    }
     if verb.as_deref() == Some("native-writer") {
         return crate::native_writer_host::execute(rest);
     }

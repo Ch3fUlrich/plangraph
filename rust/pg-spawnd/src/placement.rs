@@ -136,7 +136,11 @@ pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
         argv.push("--writer-snapshot".into());
     }
     let text = crate::cli_review::select(args, run(state, argv, Duration::from_secs(30), false)?)?;
-    resolve_work_mode(mode, &text)
+    let resolved = resolve_work_mode(mode, &text)?;
+    let mut plan: Value = serde_json::from_str(&resolved)
+        .map_err(|_| ToolError::Internal("invalid resolved route".into()))?;
+    crate::effort_level::annotate_plan(&mut plan, &args["card"]).map_err(parameter)?;
+    Ok(plan.to_string())
 }
 
 fn resolve_work_mode(

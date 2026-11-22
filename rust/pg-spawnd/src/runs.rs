@@ -240,6 +240,9 @@ impl Runs {
             .into_iter()
             .map(Value::Object)
             .collect();
+        if plan["effort"]["lowered"].is_object() {
+            events.push(plan["effort"]["lowered"].clone());
+        }
         crate::records::annotate_item(&mut base, &args["card"], &mut events);
         if !dry && crate::gitconfig_guard::writer_role(role) {
             let dir = crate::gitconfig_guard::run_dir(state, run_id)
