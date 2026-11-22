@@ -230,7 +230,7 @@ def _shell_strings(words, k):
 
 # ─── per-command rules ────────────────────────────────────────────────
 
-def _pgrep_matches_parent(args):
+def _pgrep_matches_parent(args, command):
     """A literal full-command pattern also matches the shell carrying it."""
     full = False
     for word in args[:-1]:
@@ -246,10 +246,10 @@ def _pgrep_matches_parent(args):
     if not full or not args:
         return False
     pattern = args[-1].text
-    return bool(pattern) and not args[-1].live and not re.search(r"[\\^$*+?{}\[\]()|]", pattern)
+    return bool(pattern) and pattern in command and not args[-1].live and not re.search(r"[\\^$*+?{}\[\]()|]", pattern)
 
 
-def _check_simple(cmd, depth, placement_required, pending_loop):
+def _check_simple(cmd, depth, placement_required, pending_loop, command):
     pos = [w for w in cmd if not w.redir]
     i = lead(pos)
     loop_condition = pending_loop or any(w.text in ("while", "until") for w in pos[:i])
@@ -266,7 +266,7 @@ def _check_simple(cmd, depth, placement_required, pending_loop):
     for j in (range(i, len(pos)) if wrapped else (i,)):
         word = pos[j]
         name = _basename(word.text)
-        if loop_condition and name == "pgrep" and _pgrep_matches_parent(pos[j + 1:]):
+        if loop_condition and name == "pgrep" and _pgrep_matches_parent(pos[j + 1:], command):
             return _PGREP_WAIT_MSG
         if name in ("claude", "claude.exe") or (
                 word.live and "claude" in word.text and not _ENV_ASSIGN_RE.match(word.text)):
@@ -308,7 +308,7 @@ def check_command(command, depth=0, placement_required=None):
                 return _HEREDOC_MSG % (delim, delim)
         pending_loop = False
         for cmd in commands:
-            reason = _check_simple(cmd, depth, placement_required, pending_loop)
+            reason = _check_simple(cmd, depth, placement_required, pending_loop, command)
             if reason:
                 return reason
             pending_loop = (cmd[-1].plain and cmd[-1].text in ("while", "until")
