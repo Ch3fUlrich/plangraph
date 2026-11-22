@@ -391,7 +391,9 @@ class ContextMixin:
                 adapter = self._adapter("decisions")
                 with timing.outside_request_lock():
                     shared["book"] = timing.share_inflight(
-                        ("decisions", id(adapter)), lambda: src.decision_book(adapter, fresh=True))
+                        ("decisions", id(adapter)),
+                        lambda: src.decision_book(adapter, fresh=True),
+                    )
         except src.DecisionsUnreadable:
             path = getattr(self._adapter("decisions"), "_path", None)
             raise Refused("bad_state", f"cannot read decisions file: {path}") from None
