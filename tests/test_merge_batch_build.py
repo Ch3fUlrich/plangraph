@@ -15,6 +15,7 @@ a HIGH path built with standard PRs, a union merge that changed an old line with
 """
 import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -56,6 +57,64 @@ def wt_of(env, name):
 
 def read(env, name):
     return json.loads(env.state_file(name).read_text())
+
+
+def install_pre_push(env):
+    hook = env.repo / ".git/hooks/pre-push"
+    source = Path(__file__).resolve().parents[1] / "tools/hooks/pre-push"
+    hook.write_text("#!/usr/bin/env python3\nimport runpy\n"
+                    f"hook = runpy.run_path({str(source)!r})\n"
+                    "hook['main'].__globals__['hook_checkout_status'] = lambda: 0\n"
+                    "raise SystemExit(hook['main']())\n")
+    hook.chmod(0o755)
+
+
+@pytest.mark.parametrize("case", ["own", "train-pr", "train-head", "train-unrelated",
+                                  "train-wrong-pr", "train-fenced", "lane", "fork", "no-gh"])
+def test_open_pr_gate_uses_the_pushed_pr_and_its_train_plan(env, case):
+    branch = "lane/topic" if case in ("lane", "fork") else "land/train-fixture"
+    writer = "\n\nWriter: codex/test"
+    closed = env.branch_pr(1, {"closed": "closed\n"}, state="CLOSED", trailer=writer)
+    part = env.branch_pr(2, {"part": "part\n"}, trailer=writer)
+    other = env.branch_pr(3, {"other": "other\n"}, trailer=writer)
+    env.git("checkout", "-qb", branch)
+    env.git("merge", "-q", "--no-ff", "-m", "merge closed part", closed)
+    previous = env.git("rev-parse", "HEAD")
+    env.git("push", "-q", "origin", branch)
+    env.add_pr(100, branch, head=previous, cross=case == "fork")
+    if case == "train-head":
+        body = ("| Part | Head | Writer (harness) | Review | Keys |\n"
+                f"| --- | --- | --- | --- | --- |\n| part | {part[:8]} | writer | pass | item |")
+    else:
+        name = 3 if case == "train-wrong-pr" else 2
+        body = ("| Part | PR | Part head | Plan-Item keys | Writers | Part review (family) | Ancestor of train head |\n"
+                f"| --- | --- | --- | --- | --- | --- | --- |\n"
+                f"| part | #{name} | {part[:8]} | item | writer | pass | yes |")
+    if case == "train-fenced":
+        body = f"```text\n{body}\n```"
+    env.state["prs"]["100"]["body"] = body
+    env.save()
+    if case not in ("own", "fork"):
+        env.git("merge", "-q", "--no-ff", "-m", "merge recorded part", part)
+    if case == "train-unrelated":
+        env.git("merge", "-q", "--no-ff", "-m", "merge unrelated part", other)
+    env.git("commit", "-q", "--allow-empty", "-m", f"follow-up{writer}\nFolded-PR: #2 {part}")
+    install_pre_push(env)
+    if case == "no-gh":
+        (env.stubs / "gh").unlink()
+    result = subprocess.run(["git", "push", "origin", branch], cwd=env.repo, env=env.env,
+                            capture_output=True, text=True)
+    output = result.stdout + result.stderr
+    forbidden = {"train-unrelated": other, "train-wrong-pr": part,
+                 "train-fenced": part, "lane": part, "fork": closed}
+    if case in forbidden:
+        assert result.returncode != 0
+        assert f"open_pr_merged {forbidden[case]}" in output
+        if case == "train-unrelated":
+            assert f"open_pr_merged {part}" not in output
+    else:
+        assert result.returncode == 0, output
+        assert ("open PR merge check skipped (network/gh unavailable)" in result.stderr) == (case == "no-gh")
 
 
 def three(env):
