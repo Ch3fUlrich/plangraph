@@ -245,3 +245,35 @@ and selected hosts, then attach a 24-hour sample showing work on all three
 hosts. Review requests send their exact base and head as a `diff_ref`.
 Unpublished commits in approved public repositories are transferred in a
 temporary Git bundle, so testing this path requires no push.
+
+### Returning a worker to placement
+
+Run `pg-spawnd rejoin HOST` on the placement coordinator after its probe
+reports that the worker is reachable. The coordinator keeps the worker in
+`rejoining` until every check succeeds. Discover phase and check results in
+`STATE/worker-hosts/HOST.json`. All placement frontends on the coordinator
+must use the same spawner state directory.
+
+The worker must have the existing `plangraph-host-sync.service` installed.
+Configure it to preserve local changes on a branch and advance the Plangraph
+and hooks checkouts to main. Rejoin checks the checkout against live
+`origin/main`, resolves the effective Git hooks directory, and checks the
+installed spawner. In the worker's fleet registry entry, set these `env` keys
+to absolute paths:
+
+- `PG_REJOIN_BUILD_RECEIPT` points to an independent build receipt with
+  `main_sha` and `main_sha256` for the worker's platform.
+- `PG_REJOIN_SOURCE_STAMP` points to the installed binary's source SHA stamp.
+- `PG_REJOIN_RUN_RECONCILER` points to the host's run and claim reconciliation
+  command. It receives the canonical host ID and the coordinator's known run
+  IDs as arguments, with `PLANGRAPH_SPAWN_STATE` set to the worker's state.
+  It checks host-local records for additional affected runs and returns a JSON
+  object with `host` and `runs`. Each row has `run_id` and an `outcome` of
+  `collected`, `reattached`, or `released`. Only report release with proof
+  that the execution ended and the corresponding claim and lane were released.
+  An omitted or unresolved run leaves placement blocked.
+
+Retry after a failed check is repaired. The worktree sweep uses its existing
+Keeper claim protection. Rejoin also checks unit worktree references, the
+checkout, worktree and state disks, the registry RAM floor, and routed leg
+probes. Keep the ordinary readiness checks enabled.

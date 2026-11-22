@@ -243,6 +243,7 @@ def admit(service, options, *, card=None, preview=False):
     registry = overflow.registry_caps()
     config = overflow.placement_config(registry, role)
     local, remote_first = overflow.placement_policy(registry, config)
+    state = getattr(service, 'state', None)
     native = (card or {}).get('run_kind') == 'native-codex'
     placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
     repository_review = role == 'review' and (card or {}).get('repository_review_required') is True
@@ -263,7 +264,7 @@ def admit(service, options, *, card=None, preview=False):
                 (card or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     from .host_ready import local_disk_refusal
-    disk = local_disk_refusal(repo, service, role)
+    disk = overflow.worker_host_refusal(local, state) or local_disk_refusal(repo, service, role)
     if not (remote_first or compare_local) and not disk and not overflow.memory_refusal(memory, role_mb, floor):
         if native or placed:
             options['_placement'] = dict(host=local, reason=os.environ.get(
@@ -284,7 +285,7 @@ def admit(service, options, *, card=None, preview=False):
     if benchmark_local:
         public = False  # A local-only database makes every remote ineligible.
     def load_rows():
-        rows = overflow.ready_records(config, role)
+        rows = overflow.apply_worker_refusals(overflow.ready_records(config, role), state)
         if native:
             for row in rows.values():
                 if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
@@ -333,7 +334,7 @@ def admit(service, options, *, card=None, preview=False):
                     if time.time() < queued['queued_until']:
                         _sleep(min(admission_poll(), max(queued['queued_until'] - time.time(), 0)))
                         _, memory = resources(service)
-                        disk = local_disk_refusal(repo, service, role)
+                        disk = overflow.worker_host_refusal(local, state) or local_disk_refusal(repo, service, role)
                         health = disk or local_readiness_refusal()
                         rows = load_rows()
                         if not disk and not overflow.memory_refusal(memory, role_mb, floor):
@@ -355,6 +356,8 @@ def admit(service, options, *, card=None, preview=False):
             try:
                 if options.get('cwd') is not None or 'cwd' in (card or {}):
                     raise overflow.RemoteRefusal('explicit cwd cannot overflow to another checkout')
+                if refusal := overflow.worker_host_refusal(name, state):
+                    raise overflow.RemoteRefusal(refusal)
                 target = dict(config['hosts'][name], placement_reason=decision.reason,
                               public_repo_ids=config.get('public_repo_ids', {}))
                 result = overflow.remote_spawn(name, target, card or {},

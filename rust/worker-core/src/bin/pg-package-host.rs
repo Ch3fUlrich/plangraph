@@ -69,6 +69,7 @@ fn run() -> io::Result<u8> {
     )
     .map_err(io::Error::other)?;
     policy.apply_registry(&registry, role);
+    policy.worker_host_state = Some(state.clone());
     let mut hosts = package_placement::load_for_role(&registry, &state, now, role);
     if let Some(order) = order {
         let ids: Vec<_> = order.split(',').collect();
