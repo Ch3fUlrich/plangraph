@@ -87,7 +87,12 @@ fn seat_verdict_artifact_reports_test_evidence() {
         ("TESTS: none: shell denied\n", false),
         ("TESTS: cargo test -p fixture — passed\n", true),
     ] {
-        write_review_artifacts(state.path(), &record, &format!("{tests}VERDICT: PASS")).unwrap();
+        write_review_artifacts(
+            state.path(),
+            &record,
+            &format!("FILES READ: src/lib.rs\n{tests}VERDICT: PASS"),
+        )
+        .unwrap();
         let evidence: Value = serde_json::from_slice(
             &fs::read(state.path().join("runs/run-test/seat/evidence.json")).unwrap(),
         )

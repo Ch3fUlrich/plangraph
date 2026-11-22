@@ -80,7 +80,7 @@ pub(super) fn check_late_review_reuses_completed_run(host: &mut Host, head: &str
     let artifact = fs::read_to_string(pending.with_extension("txt")).unwrap();
     assert_eq!(
         artifact,
-        format!("HEAD: {head}\nFILES READ: src/lib.rs\nVERDICT: ACCEPT\n")
+        format!("HEAD: {head}\nTESTS: none: reviewer supplied no test result\nFILES READ: src/lib.rs\nVERDICT: ACCEPT\n")
     );
 }
 

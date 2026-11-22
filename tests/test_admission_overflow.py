@@ -573,9 +573,9 @@ def test_native_disk_refusal_is_terminal_and_notifies_named_parent(tmp_path, mon
     service = overflow.cli.SpawnService(state=state, keeper_sink=keeper)
     monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '0')
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
-    monkeypatch.setattr(o, 'placement_policy', lambda *args: ('fixture', False))
-    monkeypatch.setattr(o, 'placement_config', lambda *args: {'hosts': {}})
-    monkeypatch.setattr(o, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
     monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *args, **kwargs:
                         (None, 'cargo_target_cap: cache full'))
     card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:A',
@@ -592,7 +592,7 @@ def test_native_disk_refusal_is_terminal_and_notifies_named_parent(tmp_path, mon
 
 def test_native_spawn_cli_returns_nonzero_for_zero_exit_refusal(tmp_path, monkeypatch, capsys):
     receipt = dict(status='refused', exit_code=0, reason='cargo_target_cap: cache full')
-    child = Mock(stdin=ioverflow.StringIO(), stdout=ioverflow.StringIO(json.dumps(receipt) + '\n'))
+    child = Mock(stdin=io.StringIO(), stdout=io.StringIO(json.dumps(receipt) + '\n'))
     monkeypatch.setattr(overflow.cli, '_start_supervisor', Mock(return_value=child))
     card = json.dumps(dict(run_kind='native-codex', repo=str(tmp_path)))
     assert overflow.cli.main(['--state', str(tmp_path), 'spawn', '--card', card, 'fixture']) == 1
@@ -607,9 +607,9 @@ def test_placed_native_writer_retries_a_cleared_cache_cap(tmp_path, monkeypatch)
     monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '60')
     monkeypatch.setattr(seat_spawn, '_sleep', lambda _: None)
     monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
-    monkeypatch.setattr(o, 'placement_policy', lambda *args: ('fixture', False))
-    monkeypatch.setattr(o, 'placement_config', lambda *args: {'hosts': {}})
-    monkeypatch.setattr(o, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(overflow, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(overflow, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(overflow, 'ready_records', lambda *args: {})
     disk = Mock(side_effect=[(None, 'cargo_target_cap: cache full'), (None, None)])
     monkeypatch.setattr(host_ready, 'local_disk_admission', disk)
     options = {'role': 'implement'}
@@ -621,7 +621,6 @@ def test_placed_native_writer_retries_a_cleared_cache_cap(tmp_path, monkeypatch)
 
 
 def test_native_shared_cache_cap_scales_and_probes_symlink_target(tmp_path, monkeypatch):
-    from types import SimpleNamespace
     from plangraph.spawner import host_ready as h
 
     target = tmp_path / 'target'
