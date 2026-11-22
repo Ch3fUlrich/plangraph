@@ -304,7 +304,7 @@ mod tests {
         let mut expected = Vec::new();
         let roots = [path("first"), path("second")];
         for root in &roots {
-            fs::create_dir(&root).unwrap();
+            fs::create_dir(root).unwrap();
             let tree = root.join("lane");
             git(&["worktree", "add", "--detach", tree.to_str().unwrap()]);
             let target = tree.join("target");
