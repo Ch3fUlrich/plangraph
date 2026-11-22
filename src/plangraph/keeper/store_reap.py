@@ -48,6 +48,7 @@ class ReapMixin:
                                           "in review for over 4h", now)
                         overdue.append(item["key"])
             aged = self._age_priorities(principal, now)
+            self._alerts_expire(now)
         return {"expired": expired, "overdue": overdue, "priority_aged": aged}
 
     def _age_priorities(self, principal, now):

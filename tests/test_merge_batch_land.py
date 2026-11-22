@@ -129,6 +129,34 @@ def test_land_refuses_an_approval_for_an_older_head(env):
     assert land(env, approval).returncode == 0 and len(env.calls("pr", "merge")) == 1
 
 
+@pytest.mark.parametrize("state, row, word", [
+    ("red", None, "main_red"), ("pending", None, "main_pending"), ("unknown", None, "unknown"),
+    ("ref_not_forward_only", None, "ref_not_forward_only"),
+    ("pending", "EXCEPTION:main-red-fix", "main_pending"), ("unknown", "EXCEPTION:main-red-fix", "unknown")])
+def test_land_refuses_when_main_is_not_green_and_the_exception_passes_nothing_but_red(env, state, row, word):
+    approval = pushed(env)
+    env.state["main_state"] = state
+    env.save()
+    extra = ()
+    if row:
+        go = env.tmp / "go.txt"
+        go.write_text(f"GO D-1 {head_of(env)} {row}\n")
+        extra = ("--go-row", str(go))
+    res = land(env, approval, *extra)
+    assert res.returncode != 0 and word in res.stderr and not env.calls("pr", "merge")
+
+
+def test_land_on_a_red_main_merges_only_with_the_main_red_fix_row(env):
+    approval = pushed(env)
+    env.state["main_state"] = "red"
+    env.save()
+    go = env.tmp / "go.txt"
+    go.write_text(f"GO D-1 {head_of(env)} EXCEPTION:main-red-fix\n")
+    res = land(env, approval, "--go-row", str(go))
+    assert res.returncode == 0, res.stderr
+    assert len(env.calls("pr", "merge")) == 1
+
+
 def test_land_merges_closes_unmerged_and_reports(env):
     approval = pushed(env)
     env.state["no_auto_merge"] = [3]  # GitHub has not marked PR 3 merged
@@ -145,13 +173,35 @@ def test_land_merges_closes_unmerged_and_reports(env):
                                                                                "merged via batch PR #100")
     runs = [f"Review-Run: plangraph:ITEM-{k} run-part-{n}-0 {heads[n]}" for n, k in ((1, "A"), (2, "B"), (3, "C"))]
     assert env.calls("pr", "merge") == [["pr", "merge", "100", "--repo", "owner/proj", "--merge",
-                                         "--match-head-commit", head,
+                                         "--match-head-commit", head, "--subject", "batch l1: #1 #2 #3 (#100)",
                                          "--body", "\n".join(["Plan-Item: plangraph:ITEM-A", "Plan-Item: plangraph:ITEM-B",
                                                               "Plan-Item: plangraph:ITEM-C", *runs])]]
+    assert env.git("show", "-s", "--format=%s", merge, cwd=env.origin).endswith("(#100)")
     trailers = env.git("log", "-1", "--format=%(trailers:key=Plan-Item,valueonly)", merge, cwd=env.origin)
     assert trailers.split() == ["plangraph:ITEM-A", "plangraph:ITEM-B", "plangraph:ITEM-C"]
     assert env.calls("pr", "checks") == [["pr", "checks", "100", "--repo", "owner/proj", "--required"]]
     assert not env.state_file("l1").exists() and env.git("for-each-ref", "refs/merge-batch") == ""
+
+
+@pytest.mark.parametrize("subject,ok", [
+    ("Custom batch subject", False),
+    ("Custom batch #100", False),
+    ("Custom batch (#99)", False),
+    ("Custom batch (#100) trailing", False),
+    ("", False),
+    ("(#100)", False),
+    ("Custom batch (#100)", True),
+])
+def test_land_custom_subject_requires_pr_suffix(env, subject, ok):
+    approval = pushed(env, prs=(1, 2))
+    res = land(env, approval, "--subject", subject)
+    if ok:
+        assert res.returncode == 0, res.stderr
+        merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
+        assert env.git("show", "-s", "--format=%s", merge, cwd=env.origin) == subject
+    else:
+        assert res.returncode == 1 and "(#100)" in res.stderr and res.stdout == ""
+        assert not env.calls("pr", "merge") and env.state_file("l1").exists()
 
 
 def test_land_named_checks(env):
@@ -321,14 +371,18 @@ def test_plain_review_cannot_authorize_go_or_land(env):
     ("head_sha", "b" * 40), ("stdout_tail", "TEST_GAMING: no\n"),
     ("stdout_tail", "TEST_GAMING: no\nVERDICT: REQUEST_CHANGES\n"),
     ("stdout_tail", "TEST_GAMING: no\nVERDICT: FIX (LOW: typo)\n"),
+    ("file_mode", 0o660),
 ])
 def test_go_req_revalidates_the_keeper_bound_review(env, field, value):
     st = go_ready(env)
     run = next(iter(st["merged"][0]["review_runs"].values()))
     path = env.tmp / "mirror" / "fixture" / run / "record.json"
-    record = json.loads(path.read_text())
-    record[field] = value
-    path.write_text(json.dumps(record))
+    if field == "file_mode":
+        path.chmod(value)
+    else:
+        record = json.loads(path.read_text())
+        record[field] = value
+        path.write_text(json.dumps(record))
     result = env.run("go-req", "--name", "g1")
     assert result.returncode == 1 and "keeper-bound" in result.stderr
 
@@ -519,3 +573,11 @@ def test_land_names_the_batch_item_in_the_merge_commit(env):
     merge = env.git("rev-parse", "refs/heads/main", cwd=env.origin)
     trailers = env.git("log", "-1", "--format=%(trailers:key=Plan-Item,valueonly)", merge, cwd=env.origin)
     assert trailers.split() == ["plangraph:BATCH-1", "plangraph:ITEM-A", "plangraph:ITEM-B", "plangraph:ITEM-C"]
+
+
+def test_land_reads_main_last_right_before_the_merge_call():
+    """The admission read follows the rerun-comment work, so main turning red during it still stops the merge."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parents[1] / "tools" / "merge_batch_land.py").read_text(encoding="utf-8")
+    src = text[text.index("def cmd_land("):]
+    assert src.index("record_reruns(") < src.index("require_main_green(") < src.index('"pr", "merge"')

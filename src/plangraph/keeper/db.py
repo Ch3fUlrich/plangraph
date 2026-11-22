@@ -18,9 +18,12 @@ from pathlib import Path
 
 from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
+from .schema_guards import RECEIPTS_DDL
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
-from .schema import (ALIASES_DDL, DESIGN3_DDL, GRANTS_DDL, JEV_DDL, LOCKS_DDL, METRICS_DDL,
-                     OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL, SCHEMA, TRIGGERS)
+from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, JEV_DDL,
+                     LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
+                     LOCKS_DDL, METRICS_DDL, OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL,
+                     SCHEMA, TRIGGERS)
 
 __all__ = ["open_db", "lock_keeper", "KeeperLock", "select_backend"]
 
@@ -188,7 +191,7 @@ def _split_statements(
 
 
 def _upgrade(conn):
-    """Add any column/table/trigger an older database lacks; idempotent, DML-free."""
+    """Install missing schema objects and import historical receipts idempotently."""
     for table, column, ddl in _ADDED_COLUMNS:
         have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
         # A pre-design-3 database has no cards yet; its CREATE below adds defaults.
@@ -197,12 +200,20 @@ def _upgrade(conn):
     conn.executescript(ALIASES_DDL)
     conn.executescript(RUN_TOKENS_DDL)
     conn.executescript(OUTBOX_DDL)
+    receipts = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='op_receipts'").fetchone()
+    if receipts is None:
+        conn.executescript("BEGIN IMMEDIATE;\n" + RECEIPTS_DDL + "\nCOMMIT;")
     conn.executescript(DESIGN3_DDL)
     conn.executescript(METRICS_DDL)
     conn.executescript(LOCKS_DDL)
     conn.executescript(JEV_DDL)
+    conn.executescript(ALERTS_DDL)
     conn.executescript(PLACEMENT_RULES_DDL)
     conn.executescript(GRANTS_DDL)
+    conn.executescript(EVENT_AUDIENCE_DDL)
+    conn.executescript(LANDING_STAGES_DDL)
+    conn.executescript(LANDING_TRAINS_DDL)
+    conn.executescript(LANDING_JOBS_DDL)
     from .messages_schema import SQLITE
     conn.executescript(SQLITE)
     # Oversight tables and triggers: presence-based install (CREATE IF NOT EXISTS)

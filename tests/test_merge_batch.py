@@ -158,7 +158,8 @@ def test_plan_refuses_without_the_gate_file_even_with_high_paths(env, tmp_path):
     copy.mkdir()
     for path in (ROOT / "tools").glob("merge_batch*.py"):
         shutil.copy(path, copy)
-    shutil.copy(ROOT / "tools/preflight.py", copy)
+    for name in ("ci_select.py", "pgtest.py", "preflight.py"):
+        shutil.copy(ROOT / "tools" / name, copy)
     shutil.copytree(ROOT / "src/plangraph", tmp_path / "src/plangraph", ignore=shutil.ignore_patterns("__pycache__"))
     env.branch_pr(1, {"docs/a.md": "a\n"})
     ok = env.run("plan", "--prs", "1", "--high-path", "docs/*")
@@ -194,7 +195,8 @@ def test_build_stack_order_and_refusals(env):
     env.branch_pr(4, {"a.txt": "a\n"}, ref="lane/s4")
     env.branch_pr(5, {"b.txt": "b\n"}, base="lane/s4", ref="lane/s5")
     env.branch_pr(6, {"c.txt": "c\n"}, draft=True, labels=())
-    env.add_pr(7, "lane/p7", base="release")
+    env.git("push", "origin", "main:refs/heads/release")
+    env.branch_pr(7, {"release.txt": "release\n"}, base="release")
     assert "draft without the batch-ready label" in env.run("build", "--name", "r0", "--prs", "4,6").stderr
     assert "#7 -> 'release'" in env.run("build", "--name", "r0", "--prs", "4,7").stderr
     assert "bad batch name" in env.run("build", "--name", "../x", "--prs", "4").stderr
@@ -285,7 +287,7 @@ def test_skip_conflicts_labels_and_continues(env):
     assert env.git("status", "--porcelain", cwd=wt) == ""
     assert not Path(env.git("rev-parse", "--path-format=absolute", "--git-path", "MERGE_HEAD", cwd=wt)).exists()
     label = ["api", "--method", "POST", "repos/owner/proj/issues/2/labels", "-f", "labels[]=needs-update"]
-    assert env.calls("api") == [label, label]  # the first try finds no such label, the retry follows its creation
+    assert [c for c in env.calls("api") if "--method" in c] == [label, label]  # the first try finds no such label, the retry follows its creation
     assert env.calls("label", "create")[0][2] == "needs-update" and not env.calls("pr", "edit")
     assert {"name": "needs-update"} in env.load()["prs"]["2"]["labels"]
 

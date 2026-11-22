@@ -2,7 +2,9 @@
 //! spawn review seats via the spawner route, parse verdicts/test-gaming, and write land approvals.
 use crate::atomic;
 use crate::base_fresh::python_command;
-use crate::review_git::{measure_diff_files, resolve_and_check_fresh, writer_families};
+use crate::review_git::{
+    measure_diff_files, resolve_and_check_fresh, writer_groups, ResolvedRange, WriterGroup,
+};
 use pg_worker_core::review_split::{
     extract_review_text_from_live_log, group_banner, parse_head_line_text, parse_test_gaming_text,
     parse_verdict_text, plan_groups_from_measured, SeatVerdict, TestGaming,
@@ -179,10 +181,18 @@ fn build_base_prompt(
     head_sha: &str,
     item: Option<&str>,
     focus_text: Option<&str>,
+    group: Option<&WriterGroup>,
 ) -> String {
     let mut lines = vec![
         format!("Review the changes in {base_sha}..{head_sha} carefully for correctness, regressions, and test integrity."),
     ];
+    if let Some(group) = group {
+        lines.push(format!(
+            "You are the seat for the commits written by {}: {}. Your family differs from theirs; judge the whole range for regressions, and report the findings in these commits.",
+            group.families.join("+"),
+            group.commits.join(" ")
+        ));
+    }
     if let Some(key) = item {
         lines.push(format!("Plan item: {key}"));
     }
@@ -455,20 +465,17 @@ pub fn format_approval(
     lines.join("\n")
 }
 
-pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
-    let resolved = resolve_and_check_fresh(&args.repo, &args.base, &args.head, !args.no_fetch)?;
-    let families = writer_families(&resolved.repo_root, &resolved.base_sha, &resolved.head_sha)?;
-    let focus_text = if let Some(path) = &args.focus {
-        Some(
-            fs::read_to_string(path)
-                .map_err(|e| format!("failed to read --focus {}: {e}", path.display()))?,
-        )
-    } else {
-        None
-    };
-
-    let tmp = tempfile::tempdir().map_err(|e| format!("tempdir failed: {e}"))?;
-    let state_dir = resolve_state_dir(args.state.as_deref());
+/// One review pass: route and spawn the seats for `families`, split by path when the leg needs it.
+/// `group` names the commits this pass covers when the range has several writer families.
+fn review_group(
+    args: &ReviewArgs,
+    resolved: &ResolvedRange,
+    state_dir: Option<&Path>,
+    work: &Path,
+    focus_text: Option<&str>,
+    families: &[String],
+    group: Option<&WriterGroup>,
+) -> Result<Vec<SeatOutcome>, String> {
     let base_card = make_card(
         &resolved.repo_root,
         &resolved.base_sha,
@@ -476,19 +483,14 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
         args.item.as_deref(),
         None,
     );
-    let route_card_path = tmp.path().join("route-card.json");
+    let route_card_path = work.join("route-card.json");
     fs::write(
         &route_card_path,
         serde_json::to_string_pretty(&base_card).map_err(|e| format!("serialize card: {e}"))?,
     )
     .map_err(|e| format!("write route card: {e}"))?;
 
-    let route_json = run_route(
-        &resolved.repo_root,
-        state_dir.as_deref(),
-        &route_card_path,
-        &families,
-    )?;
+    let route_json = run_route(&resolved.repo_root, state_dir, &route_card_path, families)?;
     let first_leg = route_json
         .get("first_leg")
         .filter(|v| !v.is_null())
@@ -505,7 +507,8 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
         &resolved.base_sha,
         &resolved.head_sha,
         args.item.as_deref(),
-        focus_text.as_deref(),
+        focus_text,
+        group,
     );
     let measured = measure_diff_files(&resolved.repo_root, &resolved.base_sha, &resolved.head_sha)?;
     let tool_mode = first_leg["tool_mode"].as_str();
@@ -540,9 +543,9 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
                 (base_card.clone(), base_prompt.clone())
             };
             let repo_root = &resolved.repo_root;
-            let state_ref = state_dir.as_deref();
-            let work_dir = tmp.path();
-            let fams = &families;
+            let state_ref = state_dir;
+            let work_dir = work;
+            let fams = families;
             let expected_head = resolved.head_sha.as_str();
             handles.push(scope.spawn(move || {
                 spawn_one_seat(
@@ -573,6 +576,61 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
     .flatten()
     .collect();
     outcomes.sort_by_key(|o| o.index);
+    Ok(outcomes)
+}
+
+pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
+    let resolved = resolve_and_check_fresh(&args.repo, &args.base, &args.head, !args.no_fetch)?;
+    let groups = writer_groups(&resolved.repo_root, &resolved.base_sha, &resolved.head_sha)?;
+    let families: Vec<String> = groups
+        .iter()
+        .flat_map(|g| g.families.iter().cloned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let focus_text = if let Some(path) = &args.focus {
+        Some(
+            fs::read_to_string(path)
+                .map_err(|e| format!("failed to read --focus {}: {e}", path.display()))?,
+        )
+    } else {
+        None
+    };
+
+    let tmp = tempfile::tempdir().map_err(|e| format!("tempdir failed: {e}"))?;
+    let state_dir = resolve_state_dir(args.state.as_deref());
+    let mut outcomes: Vec<SeatOutcome> = Vec::new();
+    if groups.len() == 1 {
+        outcomes = review_group(
+            args,
+            &resolved,
+            state_dir.as_deref(),
+            tmp.path(),
+            focus_text.as_deref(),
+            &families,
+            None,
+        )?;
+    } else {
+        // Several writer families: one pass per group, its seat from outside that group's families.
+        for (n, group) in groups.iter().enumerate() {
+            let dir = tmp.path().join(format!("group-{}", n + 1));
+            fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+            outcomes.extend(review_group(
+                args,
+                &resolved,
+                state_dir.as_deref(),
+                &dir,
+                focus_text.as_deref(),
+                &group.families,
+                Some(group),
+            )?);
+        }
+        let total = outcomes.len();
+        for (n, seat) in outcomes.iter_mut().enumerate() {
+            seat.index = n + 1;
+            seat.total = total;
+        }
+    }
 
     for s in &outcomes {
         let v_str = s.verdict.map(SeatVerdict::as_str).unwrap_or("MISSING");
@@ -644,7 +702,7 @@ pub fn run(args: &[String]) -> i32 {
             println!("{}", usage());
             0
         }
-        Ok(Some(parsed)) => match execute(&parsed) {
+        Ok(Some(parsed)) => match timed_review(&parsed) {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("plangraph review: {err}");
@@ -655,5 +713,44 @@ pub fn run(args: &[String]) -> i32 {
             eprintln!("plangraph review: {err}");
             2
         }
+    }
+}
+
+fn timed_review(parsed: &ReviewArgs) -> Result<i32, String> {
+    let started = chrono::Utc::now().timestamp_millis();
+    let result = execute(parsed);
+    if let (Ok(repo), Some(batch), true) = (
+        std::env::var("PG_LANDING_REPO"),
+        parsed.item.as_deref(),
+        parsed.approval.is_some() && !parsed.dry_run,
+    ) {
+        let end = chrono::Utc::now().timestamp_millis().max(started);
+        let body = json!({"action":"stage", "repo":repo, "batch_key":batch,
+            "head":parsed.head, "stage":"delta_review", "attempt":started,
+            "started_at_ms":started, "ended_at_ms":end});
+        if crate::landing::deliver_from_env(body).is_err() {
+            eprintln!("delta review timing pending keeper delivery");
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_prompt_names_its_commits_and_a_plain_prompt_does_not() {
+        let group = WriterGroup {
+            families: vec!["google".into()],
+            commits: vec!["c1".into(), "c2".into()],
+        };
+        let named = build_base_prompt("base", "head", None, None, Some(&group));
+        assert!(
+            named.contains("commits written by google: c1 c2"),
+            "{named}"
+        );
+        let plain = build_base_prompt("base", "head", None, None, None);
+        assert!(!plain.contains("commits written by"), "{plain}");
     }
 }

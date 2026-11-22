@@ -1,0 +1,1 @@
+`plangraph land-timeline` records one row per stage from writer done to merge (start, end, host, result; CI per job from the GitHub job list) and reports the critical path and bottleneck stage per train and over the last N trains.

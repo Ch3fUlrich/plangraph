@@ -11,8 +11,8 @@ unchanged.
 `src/plangraph/fleet_snapshot.py` is now a thin caller of the private
 `pg-spawnd fleet-snapshot` subcommand (`rust/pg-spawnd/src/fleet_snapshot.rs`).
 `build_fleet(registry, samples=None, runs=None)` projects JSON inputs without probing.
-Infrastructure failures (including nonzero helper exits) raise a fixed `RuntimeError`
-without subprocess diagnostics; JSON registry validation errors remain `ValueError`.
+Infrastructure failures (including nonzero helper exits) raise `RuntimeError`
+without subprocess diagnostics. JSON registry validation errors remain `ValueError`.
 Both preserve the existing `load_fleet` snapshot fallback. Every registry host
 appears once, sorted by id, with `host_id`, `class`, `caps`, `sample`, `samples`
 and `running_agents`. The live loader reads the existing persisted `bus_hosts`
@@ -39,10 +39,11 @@ Old snapshots without `fleet` retain the unavailable message. The SQLite-to-
 snapshot-to-page integration test exercises this path. Registry aliases shared
 by different hosts (including canonical ids) are refused, never last-wins.
 Aliases must be a list or tuple of nonempty strings; other containers are refused.
-The helper lookup checks `rust/target/release/pg-spawnd`, then
-`rust/target/release/pg-spawnd.exe`, then `pg-spawnd` on PATH. A missing binary
-makes `build_fleet` fail closed with `RuntimeError` and the named reason
-`pg-spawnd binary missing (build the release helper)`. Tests that need the binary
+Fleet projection and native writer launch use the same lookup. It checks PATH,
+then `~/.local/bin` (the host-sync install directory), then `rust/target/release`.
+The explicit directories accept `pg-spawnd` and `pg-spawnd.exe`. A missing binary
+raises `RuntimeError` with `pg-spawnd binary missing (build the release helper)`
+and the searched locations. Tests that need the binary
 use one shared helper: when `CI` is set (as in GitHub Actions), they fail with
 that same reason; outside CI, they skip with that reason. This includes fleet
 bridge tests. The two pytest CI lanes already build the release helper using

@@ -43,8 +43,8 @@ def git_repo(tmp_path):
 
 
 class FakeGitHub:
-    def __init__(self, pr=None, ci=True, fail=None):
-        self.pr, self.ci, self.fail = pr, ci, fail
+    def __init__(self, pr=None, ci=True, fail=None, main=None):
+        self.pr, self.ci, self.fail, self.main = pr, ci, fail, main
         self.calls = []
 
     def _pr(self, number, state, head):
@@ -68,6 +68,10 @@ class FakeGitHub:
     def ci_green(self, head):
         self.calls.append(("ci_green", head))
         return self.ci
+
+    def main_refusal(self):
+        self.calls.append(("main_refusal",))
+        return self.main
 
     def merge_pr(self, number, head, *, commit_message=None):
         self.calls.append(("merge_pr", number, head))

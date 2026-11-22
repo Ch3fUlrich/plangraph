@@ -247,6 +247,39 @@ fn invalid_diff_ref_paths_are_refused_without_launching() {
 }
 
 #[test]
+fn mcp_response_waits_for_a_delayed_frame() {
+    use std::{io::Write, os::unix::net::UnixListener, thread, time::Duration};
+
+    let state = TempDir::new();
+    let socket = state.path().join("socket");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let server = thread::spawn(move || {
+        let (mut client, _) = listener.accept().unwrap();
+        client.write_all(b"{\"jsonrpc\":\"2.0\",").unwrap();
+        thread::sleep(Duration::from_millis(2100));
+        client.write_all(b"\"id\":1,\"result\":{}}\n").unwrap();
+    });
+
+    let mut client = McpClient::connect(&socket);
+    assert_eq!(client.recv(), json!({"jsonrpc":"2.0", "id":1, "result":{}}));
+    server.join().unwrap();
+}
+
+#[test]
+#[should_panic(expected = "MCP response deadline exceeded")]
+fn mcp_response_wait_stops_at_its_deadline() {
+    use std::{os::unix::net::UnixListener, time::Duration};
+
+    let state = TempDir::new();
+    let socket = state.path().join("socket");
+    let listener = UnixListener::bind(&socket).unwrap();
+    let mut client = McpClient::connect(&socket);
+    let (_silent_peer, _) = listener.accept().unwrap();
+    client.set_response_timeout(Duration::from_millis(50));
+    let _ = client.recv();
+}
+
+#[test]
 fn oversize_diff_splits_into_group_seats_covering_full_diff_and_fitting_limit() {
     let mut f = ReviewFixture::new(
         220, // 660 chars max per seat prompt

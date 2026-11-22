@@ -1,5 +1,5 @@
 {
-  "_source": "OPERATOR D-3198, D-2744/D-3084 (kimi never a seat), D-6310 (no deepseek or glm-5.3-flash family ban; agy implement/orchestrate/review enabled)",
+  "_source": "OPERATOR D-6550 (review priority and Claude quota guard), D-3198, D-2744/D-3084 (kimi never a seat), D-6310 (no deepseek or glm-5.3-flash family ban; agy implement/orchestrate/review enabled)",
   "banned_families": ["kimi"],
   "off_families": [],
   "review_allowed_families": [],

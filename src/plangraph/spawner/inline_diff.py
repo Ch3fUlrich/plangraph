@@ -9,94 +9,14 @@ from __future__ import annotations
 
 import re
 import subprocess
-from bisect import bisect_right
 
 from plangraph.planner.seats import _check_diff_ref
 from plangraph.routing_errors import SpawnRefused
 from plangraph.routing_support import background_process_options
-from .env_redact import _source_block, private_key_line
-from .redact_tokens import _wrapped_spans
+from .env_redact import _diff_block, PrivateKeyScan
 
 HEADER = "\n\n=== INLINE DIFF (base {base}, head {head}; this leg reads the change only from here) ===\n"
 FOOTER = "\n=== END INLINE DIFF ===\n"
-
-
-def _scrub_hunk(lines):
-    edits = [[] for _ in lines]
-    for excluded in ('-', '+'):
-        body, offsets, indices = [], [0], []
-        for index, line in enumerate(lines):
-            if line[:1] in (' ', '+', '-') and line[0] != excluded:
-                body.append(line[1:])
-                offsets.append(offsets[-1] + len(line) - 1)
-                indices.append(index)
-        for start, end in _wrapped_spans(''.join(body)):
-            first = bisect_right(offsets, start) - 1
-            for row in range(first, bisect_right(offsets, end - 1)):
-                left = max(start, offsets[row]) - offsets[row] + 1
-                index = indices[row]
-                right = min(end - offsets[row] + 1, len(lines[index].rstrip('\r\n')))
-                edits[index].append((left, right))
-    for index, spans in enumerate(edits):
-        if spans:
-            pieces, copied = [], 0
-            for left, right in sorted(spans):
-                if left >= copied:
-                    pieces.extend((lines[index][copied:left], '[REDACTED]'))
-                copied = max(copied, right)
-            lines[index] = ''.join((*pieces, lines[index][copied:]))
-    return ''.join(lines)
-
-
-_HUNK = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
-_INDEX = re.compile(r'(?m)^index ([0-9a-f]{40,64})\.\.([0-9a-f]{40,64})(?: |$)')
-
-
-def _private_key_ranges(repo, blob, timeout):
-    if not blob.strip('0'):
-        return ()
-    git = ['git', '-C', repo, 'cat-file']
-    try:
-        opts = dict(stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout,
-                    check=True, **background_process_options())
-        size = int(subprocess.run(git + ['-s', blob], **opts).stdout)
-        if not 0 <= size <= 8 * 1024 * 1024:
-            return None
-        data = subprocess.run(git + ['blob', blob], **opts).stdout
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    ranges, start, inside = [], None, False
-    for number, line in enumerate(data.decode('utf-8', 'replace').split('\n'), 1):
-        overlap, inside = private_key_line(line, inside)
-        if overlap and start is None:
-            start = number
-        if start is not None and not inside:
-            ranges.append((start, number))
-            start = None
-    if start is not None:
-        ranges.append((start, number))
-    return ranges
-
-
-def _scrub_hunks(diff, repo, timeout):
-    # Read immutable old and new blobs because a hunk can start inside a key.
-    parts = re.split(r'(?m)(^@@ .*?\n|^diff --git .*?\n)', diff)
-    ranges = ()
-    for index in range(1, len(parts), 2):
-        header = parts[index]
-        if header.startswith('diff --git'):
-            blobs = _INDEX.search(parts[index + 1])
-            ranges = [_private_key_ranges(repo, blob, timeout) for blob in blobs.groups()] if blobs else [None]
-            continue
-        hunk = _HUNK.match(header)
-        if hunk and any(keys is None or any(
-            int(start) <= last and first < int(start) + int(count or 1)
-            for first, last in keys
-        ) for keys, start, count in zip(ranges, hunk.group(1, 3), hunk.group(2, 4))):
-            parts[index:index + 2] = ['[autoos:source hunk withheld]\n', '']
-        else:
-            parts[index + 1] = _scrub_hunk(parts[index + 1].splitlines(keepends=True))
-    return ''.join(parts)
 
 
 class InlineDiffError(Exception):
@@ -105,6 +25,117 @@ class InlineDiffError(Exception):
     def __init__(self, message, *, chars=None, max_chars=None):
         super().__init__(message)
         self.chars, self.max_chars = chars, max_chars
+
+
+def changed_paths(diff_ref) -> tuple[str, ...]:
+    """Read the reviewed paths from the same merge-base range as the inline diff."""
+    _check_diff_ref(diff_ref)
+    try:
+        proc = subprocess.run(
+            _diff_command(diff_ref, "--name-only", "--no-renames", "-z"),
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=10, check=False, **background_process_options())
+    except (OSError, subprocess.TimeoutExpired):
+        return ()
+    return tuple(filter(None, (proc.stdout or "").split("\0"))) if proc.returncode == 0 else ()
+
+
+_HUNK = re.compile(r'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
+WITHHELD = "[REDACTED: hunk overlaps a private key block]\n"
+
+
+def _git_text(repo, *args, timeout):
+    proc = subprocess.run(["git", "-C", repo, *args], stdin=subprocess.DEVNULL, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False,
+                          **background_process_options())
+    return proc.stdout if proc.returncode == 0 and proc.stdout is not None else None
+
+
+def _key_lines(content):
+    """1-based numbers of the lines inside or touching a private-key block of ``content``."""
+    scan = PrivateKeyScan()
+    return {n for n, line in enumerate(content.split("\n"), 1) if scan.feed(line)}
+
+
+def _count(text):
+    return 1 if text is None else int(text)
+
+
+_INDEX = re.compile(r'^index ([0-9a-f]+)\.\.([0-9a-f]+)')
+
+
+def _withhold_key_hunks(diff, repo, timeout):
+    """The diff with the body of every hunk that overlaps a private-key block of either side replaced.
+
+    A hunk cut from the middle of a key shows base64 body lines without any marker, so the
+    blocks are found in the whole blob of each side, named by the ids of the diff's own
+    ``index`` line (file names may be quoted). A side that cannot be read withholds."""
+    out, cache, blobs, in_hunk, keep = [], {}, {}, False, True
+
+    def key_lines(blob):
+        if blob not in cache:
+            text = _git_text(repo, "cat-file", "blob", blob, timeout=timeout)
+            cache[blob] = None if text is None else _key_lines(text)
+        return cache[blob]
+
+    for line in diff.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            blobs, in_hunk, keep = {}, False, True
+        elif not in_hunk and _INDEX.match(line):
+            old, new = _INDEX.match(line).groups()
+            # An all-zero id is the absent side of an added or deleted file.
+            blobs = {"-": None if not old.strip("0") else old, "+": None if not new.strip("0") else new}
+        hunk = _HUNK.match(line)
+        if hunk:
+            in_hunk, keep, keyed = True, True, False
+            for mark, first, count in (("-", hunk[1], hunk[2]), ("+", hunk[3], hunk[4])):
+                if mark not in blobs:   # no index line: this side cannot be named
+                    keep, keyed = False, True
+                    continue
+                if blobs[mark] is None:
+                    continue
+                lines = key_lines(blobs[mark])
+                keyed = keyed or lines is None or bool(lines)
+                if lines is None or any(n in lines for n in range(int(first), int(first) + _count(count))):
+                    keep = False
+            # The heading after the second @@ is a copy of an earlier line of the file: a keyed file loses it.
+            head = line[:hunk.end()] + line[len(line.rstrip("\r\n")):] if keyed or not keep else line
+            out.append(head if keep else head + WITHHELD)
+        elif keep:
+            out.append(line)
+    return "".join(out)
+
+
+def _diff_command(diff_ref, *flags):
+    paths = tuple(diff_ref.get("paths") or ())
+    return ["git", "--literal-pathspecs", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
+            "--no-textconv", *flags, f"{diff_ref['base']}...{diff_ref['head']}", "--", *paths]
+
+
+def ensure_nonempty_diff(diff_ref, *, timeout: float = 60) -> None:
+    """Raise ``empty_diff`` when base...head changes nothing, so the card fails once before any leg.
+
+    A diff that cannot be read here (missing repo, unknown revision, timeout) is left to the
+    legs, which report their own cause."""
+    try:
+        _check_diff_ref(diff_ref)
+        proc = subprocess.run(_diff_command(diff_ref, "--quiet"), stdin=subprocess.DEVNULL,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace",
+                              timeout=timeout, check=False, **background_process_options())
+    except (SpawnRefused, OSError, subprocess.TimeoutExpired):
+        return
+    if proc.returncode == 0:
+        raise InlineDiffError(f"empty_diff: no change between base {diff_ref['base']} and head {diff_ref['head']}")
+
+
+def refuse_empty_diff(card, role, *, dry_run=False) -> None:
+    """The one card-level empty diff check of a review spawn: ``SpawnRefused('empty_diff: ...')``."""
+    if role != "review" or dry_run or (card or {}).get("diff_ref") is None:
+        return
+    try:
+        ensure_nonempty_diff(card["diff_ref"])
+    except InlineDiffError as exc:
+        raise SpawnRefused(str(exc)) from None
 
 
 def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float = 60,
@@ -121,11 +152,9 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     except SpawnRefused as exc:
         raise InlineDiffError(str(exc)) from None
     base, head = diff_ref["base"], diff_ref["head"]
-    paths = tuple(diff_ref.get("paths") or ())
     try:
         proc = subprocess.run(
-            ["git", "--literal-pathspecs", "-C", diff_ref["repo"], "diff", "--no-ext-diff", "--no-color",
-             "--no-textconv", "--full-index", f"{base}...{head}", "--", *paths],
+            _diff_command(diff_ref),
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout, check=False,
             **background_process_options())
@@ -140,4 +169,8 @@ def inline_diff_prompt(prompt: str, diff_ref, *, max_chars: int, timeout: float 
     if len(proc.stdout) > max_chars:
         raise InlineDiffError(f"prompt_too_large: diff too large for leg: {len(proc.stdout)} > {max_chars} chars",
                               chars=len(proc.stdout), max_chars=max_chars)
-    return prompt + HEADER.format(base=base, head=head) + _source_block(_scrub_hunks(proc.stdout, diff_ref["repo"], timeout)) + FOOTER
+    try:
+        shown = _withhold_key_hunks(proc.stdout, diff_ref["repo"], timeout) if "@@ -" in proc.stdout else proc.stdout
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise InlineDiffError(f"private key check failed: {type(exc).__name__}") from None
+    return prompt + HEADER.format(base=base, head=head) + _diff_block(shown) + FOOTER

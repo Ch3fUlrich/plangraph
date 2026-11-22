@@ -5,6 +5,8 @@ use std::{
     io::Write,
     process::{Command, Stdio},
 };
+#[path = "turn_budget_hook/settings_cases.rs"]
+mod settings_cases;
 #[path = "turn_budget_hook/storage_cases.rs"]
 mod storage_cases;
 

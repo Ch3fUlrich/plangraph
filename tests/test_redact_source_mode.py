@@ -42,9 +42,11 @@ def diff_prompt(monkeypatch, tmp_path, caller='review', pack=None, inline=False,
 
 
 def capture(monkeypatch, tmp_path, prompt, role='review'):
-    sent = []
+    sent, modes = [], []
     def dispatch(**kwargs):
+        from plangraph.spawner.target import resolve_target
         sent.append(kwargs['prompt'])
+        modes.append(getattr(resolve_target(kwargs['model_or_combo'])[1], 'tool_mode', None))
         raise RuntimeError('captured')
     monkeypatch.setattr(runner, 'build_command', dispatch)
     path = tmp_path / 'prompt.txt'
@@ -53,7 +55,7 @@ def capture(monkeypatch, tmp_path, prompt, role='review'):
             prompt_record=(path, {}, lambda record: None)))
     assert path.read_text() == sent[0]
     from plangraph.spawner.prompt_input import compose
-    prefix = compose('', role, None, None)  # role header and skill precede the caller text
+    prefix = compose('', role, None, None, tool_mode=modes[0])  # role header and skill precede the caller text
     assert sent[0].startswith(prefix)
     return sent[0][len(prefix):]
 
@@ -157,16 +159,22 @@ def test_source_mode_keeps_dict_key_and_env_value_scrubbing():
     assert env_redact.redact_env_values(env_redact.redact_source(value), {'API_KEY': value}) == '[autoos:redacted]'
 
 
-@pytest.mark.parametrize('value, computed', [
-    ('tuple(sorted((left, right)))', True), ('(scope, name)', True),
-    ('None', False), ('False', False), ('123', False), ('[]', False), ('{}', False),
-    ('arbitrary-value', False), ('factory("synthetic")', False),
-])
-def test_assignment_rule_stays_fail_closed_for_every_value_shape(value, computed):
+@pytest.mark.parametrize('value', ['tuple(sorted((left, right)))', '(scope, name)',
+                                  'None', 'False', '[]', '{}'])
+def test_assignment_rule_stays_fail_closed_for_every_value_shape(value):
     text = 'pair_' + 'key = ' + value
-    masked = 'pair_key = [REDACTED]'
-    assert env_redact.redact(text) == masked
-    assert env_redact.redact_source(text) == (text if computed else masked)
+    assert env_redact.redact(text) == 'pair_key = [REDACTED]'
+    assert env_redact.redact_source(text) == text
+
+
+@pytest.mark.parametrize('value', ['123', 'arbitrary-value', 'hunter2', '"hunter2"', "'hunter2'",
+                                  'os.environ["SERVICE"]', 'get_secret("x") or "hunter2"'])
+@pytest.mark.parametrize('name', ['PASSWORD', 'API_' + 'KEY', 'pair_' + 'key', 'MY_' + 'SECRET', 'TOKEN'])
+@pytest.mark.parametrize('separator', ['=', ' = ', ': '])
+def test_source_masks_literal_credential_assignments(name, separator, value):
+    text = name + separator + value
+    assert env_redact.redact_source(text) == env_redact.redact(text)
+    assert 'hunter2' not in env_redact.redact_source(text) and 'arbitrary' not in env_redact.redact_source(text)
 
 
 def test_direct_caller_prompt_keeps_full_strength(monkeypatch, tmp_path):
@@ -201,19 +209,187 @@ def test_source_scrub_failure_withholds_text(monkeypatch):
     assert 'redaction failed; output withheld' in env_redact.redact_source(CODE)
 
 
-def test_literal_credentials_masked_in_dispatched_source(monkeypatch, tmp_path):
-    literal = 'synthetic-' + 'fixture-password'
-    assignment = 'PASSWORD = "' + literal + '"'
-    (tmp_path / 'sample.py').write_text(assignment + '\n')
-    monkeypatch.setattr(context_pack, 'tracked', lambda root: frozenset({'sample.py'}))
-    pack = context_pack.build('', {'context': ['sample.py:1-1']}, tmp_path)
-    prompt = diff_prompt(monkeypatch, tmp_path, pack=pack, inline=True, extra=assignment)
+def _git(repo, *args):
+    import subprocess
+    subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+                    '-c', 'commit.gpgsign=false', '-C', str(repo), *args],
+                   check=True, capture_output=True, stdin=subprocess.DEVNULL)
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_wrapped_token_in_real_git_diff_is_masked_in_final_prompt(monkeypatch, tmp_path, newline):
+    first, second = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    (tmp_path / 'a.txt').write_bytes(b'context\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'one')
+    _git(tmp_path, 'checkout', '-q', '-b', 'topic')
+    (tmp_path / 'a.txt').write_bytes(('context\n' + first + newline + second + newline
+                                      + 'next retained\n').encode())
+    _git(tmp_path, 'commit', '-q', '-am', 'two')
+    ref = {'repo': str(tmp_path), 'base': 'main', 'head': 'topic'}
+    prompt = inline_diff.inline_diff_prompt('review', ref, max_chars=100000)
     out = capture(monkeypatch, tmp_path, prompt)
-    assert literal not in out
-    assert out.count('PASSWORD = "[REDACTED]"') == 2
+    assert first not in out and second not in out
+    assert '+[REDACTED]' in out and '+next retained' in out
 
 
-def test_bearer_placeholder_does_not_exempt_a_glued_value():
-    text = 'Bearer [REDACTED]' + 'Synthetic9'
-    for scrub in (env_redact.redact, env_redact.redact_source, env_redact.redact_output):
-        assert scrub(text) == 'Bearer [REDACTED]'
+@pytest.mark.parametrize('line', ['PASSWORD = "hunter2value"', 'API_' + 'KEY=hunter2value', 'MY_' + 'SECRET: hunter2value'])
+def test_literal_credential_masked_at_the_dispatch_boundary(monkeypatch, tmp_path, line):
+    out = capture(monkeypatch, tmp_path, diff_prompt(monkeypatch, tmp_path, extra=line))
+    assert 'hunter2value' not in out and '[REDACTED]' in out
+    for code_line in CODE.splitlines():   # computed assignments stay readable beside it
+        assert '+' + code_line in out
+    (tmp_path / 'sample.py').write_text(line + '\n')
+    monkeypatch.setattr(context_pack, 'tracked', lambda root: frozenset({'sample.py'}))
+    card = {'context': ['sample.py:1-1']}
+    pack = context_pack.build('', card, tmp_path)
+    packed = capture(monkeypatch, tmp_path, context_pack.pack_prompt('', card, tmp_path, pack))
+    assert 'hunter2value' not in pack.text + packed
+
+
+@pytest.mark.parametrize('complete', [True, False])
+def test_git_hunk_inside_a_private_key_block_is_withheld(monkeypatch, tmp_path, complete):
+    header = '-----BEGIN ' + 'TEST PRIVATE KEY-----'
+    footer = '-----END ' + 'TEST PRIVATE KEY-----'
+    body = ['synthetic-pem-%02d' % i for i in range(30)]
+    old = [header, *body] + ([footer] if complete else [])
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    (tmp_path / 'k.txt').write_text('\n'.join(['keep'] * 3 + old + ['tail']) + '\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'one')
+    _git(tmp_path, 'checkout', '-q', '-b', 'topic')
+    new = list(old)
+    new[20] = 'synthetic-pem-changed'   # a hunk far below the BEGIN marker
+    (tmp_path / 'k.txt').write_text('\n'.join(['keep'] * 3 + new + ['tail']) + '\n')
+    (tmp_path / 'plain.txt').write_text('plain-change\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'two')
+    ref = {'repo': str(tmp_path), 'base': 'main', 'head': 'topic'}
+    out = capture(monkeypatch, tmp_path, inline_diff.inline_diff_prompt('review', ref, max_chars=100000))
+    assert 'synthetic-pem' not in out and 'PRIVATE KEY' not in out
+    assert '+plain-change' in out and 'diff --git a/k.txt b/k.txt' in out
+
+
+def test_hunk_is_withheld_when_a_side_cannot_be_read(monkeypatch, tmp_path):
+    diff = 'diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@ section\n-old\n+new\n'
+    monkeypatch.setattr(inline_diff, '_git_text', lambda *args, **kw: None)
+    shown = inline_diff._withhold_key_hunks(diff.replace('--- a', 'index 1111111..2222222 100644\n--- a'), str(tmp_path), 5)
+    assert '-old' not in shown and '+new' not in shown and inline_diff.WITHHELD in shown
+    assert '@@ -1 +1 @@' in shown and 'section' not in shown
+
+
+def test_removed_credential_continued_by_a_context_line_is_masked_in_a_diff():
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    diff = ('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,3 +1,3 @@\n keep\n-' + first
+            + '\n+replacement words here\n ' + rest + '\n tail line\n')
+    out = redact_diff_wrapped(diff)
+    assert first not in out and rest not in out
+    assert '+replacement words here' in out and ' tail line' in out and '-[REDACTED]' in out
+
+
+def test_added_credential_continued_by_a_context_line_is_masked_in_a_diff():
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    diff = ('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,3 @@\n-old words here\n+' + first
+            + '\n ' + rest + '\n tail line\n')
+    out = redact_diff_wrapped(diff)
+    assert first not in out and rest not in out and '-old words here' in out
+
+
+def test_git_quoted_file_names_do_not_withhold_clean_hunks(monkeypatch, tmp_path):
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    name = 'café über.txt'
+    (tmp_path / name).write_text('one\ntwo\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'one')
+    _git(tmp_path, 'checkout', '-q', '-b', 'topic')
+    (tmp_path / name).write_text('one\nclean-change\n')
+    _git(tmp_path, 'commit', '-q', '-am', 'two')
+    ref = {'repo': str(tmp_path), 'base': 'main', 'head': 'topic'}
+    out = capture(monkeypatch, tmp_path, inline_diff.inline_diff_prompt('review', ref, max_chars=100000))
+    assert '+clean-change' in out and inline_diff.WITHHELD not in out
+
+
+def test_hunk_without_an_index_line_is_withheld(monkeypatch, tmp_path):
+    diff = 'diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-old\n+new\n'
+    monkeypatch.setattr(inline_diff, '_git_text', lambda *args, **kw: 'plain\n')
+    shown = inline_diff._withhold_key_hunks(diff, str(tmp_path), 5)
+    assert '+new' not in shown and inline_diff.WITHHELD in shown
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_masked_removal_keeps_its_line_ending_before_the_addition(newline):
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    diff = newline.join(['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1,3 +1,3 @@', ' keep',
+                         '-' + first, '+added words here', ' ' + rest, ' tail line', ''])
+    out = redact_diff_wrapped(diff)
+    assert out.split(newline) == ['diff --git a/x b/x', '--- a/x', '+++ b/x', '@@ -1,3 +1,3 @@', ' keep',
+                                  '-[REDACTED]', '+added words here', ' [REDACTED]', ' tail line', '']
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_masked_wrapped_removal_stays_one_line_and_the_addition_a_separate_one(newline):
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    first, rest = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+    diff = newline.join(['@@ -1,2 +1,1 @@', '-' + first, '-' + rest, '+added words here', ''])
+    assert redact_diff_wrapped(diff).split(newline) == ['@@ -1,2 +1,1 @@', '-[REDACTED]', '+added words here', '']
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_independently_masked_addition_after_a_masked_removal_keeps_its_marker(newline):
+    from plangraph.spawner.redact_tokens import redact_diff_wrapped
+    old, new = 'gh' + 'p_' + 'A9' * 10, 'gh' + 'p_' + 'B8' * 10
+    diff = newline.join(['@@ -1,4 +1,4 @@', '-' + old, '+' + new, ' A9A9', ' tail words', ''])
+    lines = redact_diff_wrapped(diff).split(newline)
+    assert lines[:3] == ['@@ -1,4 +1,4 @@', '-[REDACTED]', '+[REDACTED]']
+    assert 'A9' not in ''.join(lines) and 'B8' not in ''.join(lines) and ' tail words' in lines
+
+
+def test_real_git_diff_keeps_both_markers_of_two_masked_credentials(monkeypatch, tmp_path):
+    old, new = 'gh' + 'p_' + 'A9' * 10, 'gh' + 'p_' + 'B8' * 10
+    _git(tmp_path, 'init', '-q', '-b', 'main')
+    (tmp_path / 'a.txt').write_text('keep\n' + old + '\nA9A9\ntail words\n')
+    _git(tmp_path, 'add', '.')
+    _git(tmp_path, 'commit', '-q', '-m', 'one')
+    _git(tmp_path, 'checkout', '-q', '-b', 'topic')
+    (tmp_path / 'a.txt').write_text('keep\n' + new + '\nA9A9\ntail words\n')
+    _git(tmp_path, 'commit', '-q', '-am', 'two')
+    ref = {'repo': str(tmp_path), 'base': 'main', 'head': 'topic'}
+    out = capture(monkeypatch, tmp_path, inline_diff.inline_diff_prompt('review', ref, max_chars=100000))
+    assert old not in out and new not in out and 'A9A9' not in out
+    assert '\n-[REDACTED]\n+[REDACTED]\n' in out and '\n tail words\n' in out
+
+
+@pytest.mark.parametrize('value', ['f(a, PASSWORD=hunter2value)', 'g(x)[TOKEN: hunter2value]',
+                                  'f(a, MY_' + 'SECRET=hunter2value)', '(PASSWORD = hunter2value)'])
+def test_nested_credential_literal_in_a_computed_value_is_masked_in_source(value):
+    out = env_redact.redact_source('API_' + 'KEY = ' + value)
+    assert 'hunter2value' not in out and out == env_redact.redact('API_' + 'KEY = ' + value)
+
+
+@pytest.mark.parametrize('value', ['same(PASSWORD == other)', 'ok(TOKEN == secret_of(user), x)',
+                                  'eq(MY_' + 'SECRET == other)'])
+def test_equality_inside_a_computed_value_is_not_a_nested_assignment(value):
+    text = 'API_' + 'KEY = ' + value
+    assert env_redact.redact_source(text) == text
+    assert env_redact.redact(text) == 'API_KEY = [REDACTED]'
+
+
+@pytest.mark.parametrize('value', [
+    'f(a, PASSWORD := hunter2value)', 'f(PASSWORD := hunter2value)', 'f(MY_' + 'SECRET := hunter2value)',
+    'f(PASSWORD == other, SECRET=hunter2value)', 'f(a == b, TOKEN: hunter2value)',
+    'f(MY_' + 'SECRET == other, TOKEN=hunter2value)'])
+def test_walrus_and_a_later_assignment_after_an_equality_are_nested_assignments(value):
+    text = 'API_' + 'KEY = ' + value
+    assert 'hunter2value' not in env_redact.redact_source(text)
+
+
+@pytest.mark.parametrize('name', ['PASSWORD', 'API_' + 'KEY', 'pair_' + 'key', 'PG_DSN', 'TOKEN', 'SECRET', 'secret',
+                                  'MY_' + 'SECRET', 'KEYS', 'monkey', 'tokens', 'passwd', 'plain_name'])
+def test_header_scan_and_assignment_rule_share_one_name_pattern(name):
+    text = name + ' = value'
+    assert bool(env_redact._ASSIGNMENT.search(text)) == bool(env_redact._ASSIGN_HEADER.search(text))
+    assert env_redact._NAME in env_redact._ASSIGNMENT.pattern and env_redact._NAME in env_redact._ASSIGN_HEADER.pattern

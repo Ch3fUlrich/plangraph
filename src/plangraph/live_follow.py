@@ -1,7 +1,27 @@
-"""Follow CI-green main, gate the render, and audit the published page.
+"""Follow the CI-green head of main on the live host, then audit the page.
 
-GitHub credentials enter only the runner environment. Follow and audit report
-one JSON line per tick and leave the previous page in place on uncertainty.
+The live host runs ``python3 -m plangraph.live_follow follow`` before each
+render, ``... export`` as the render's gate (the checkout must be the recorded
+green head; the render imports an exported copy of that commit) and ``... check``
+after it. ``follow`` fast-forwards the live checkout
+to ``origin/<branch>`` only when GitHub CI has verified that head green; every
+doubt keeps the tree, and nothing here ever raises into the render unit —
+a broken gate must not blank a live page. ``check`` compares the published
+page's build stamp with the newest green sha and emits one alert line per
+green head once the grace window has passed, re-arming when the page catches
+up so a later regression can alert again.
+
+The token is only ever handed to :meth:`Runner.run` via ``env``; it never
+enters argv (world-readable in ``ps``), output, or the state file.
+
+Public API
+----------
+``follow(cfg, runner, now) -> dict`` / ``check(cfg, runner, now) -> dict``
+    The two steps; each returns a small result dict.
+``main(argv=None, env=None, runner=None, now=time.time) -> int``
+    CLI entry point, one JSON line on stdout.
+``Config`` / ``ConfigError`` / ``Runner``
+    Configuration, its parse error, and the injectable command runner.
 """
 
 from __future__ import annotations
@@ -10,8 +30,10 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from dataclasses import dataclass
@@ -30,7 +52,9 @@ __all__ = [
     "main",
     "page_stamp",
     "read_token",
+    "export_tree",
     "record_green",
+    "verified",
 ]
 
 
@@ -62,9 +86,6 @@ class Config:
             return value
 
         out = required("PLANGRAPH_OUT")
-        state = required("PLANGRAPH_STATE")
-        if Path(state).resolve().is_relative_to(Path(out).resolve()):
-            raise ConfigError("PLANGRAPH_STATE must be outside PLANGRAPH_OUT")
         alert = env.get("PLANGRAPH_ALERT_CMD")
         alert_cmd = None
         if alert:
@@ -93,7 +114,7 @@ class Config:
             repo=required("PLANGRAPH_REPO"),
             token_file=required("PLANGRAPH_GH_TOKEN_FILE"),
             out=out,
-            state=state,
+            state=_state_path(env, out),
             workflow_path=(
                 env.get("PLANGRAPH_CI_WORKFLOW_PATH")
                 or ".github/workflows/tests.yml"
@@ -101,6 +122,39 @@ class Config:
             alert_cmd=alert_cmd,
             grace_s=grace_s,
         )
+
+
+def _overlaps(a: str, b: str) -> bool:
+    """Whether two paths are the same or one contains the other (symlinks resolved)."""
+    ra, rb = os.path.realpath(a), os.path.realpath(b)
+    common = os.path.commonpath([ra, rb])
+    return common in (ra, rb)
+
+
+def _state_path(env: Mapping[str, str], out: str) -> str:
+    """The gate state file: PLANGRAPH_STATE, else a private per-user default.
+
+    The output directory is web-served; gate state in it (or reachable through a
+    symlink or ``..``) would be published, so such a path is a ConfigError.
+    """
+    state = env.get("PLANGRAPH_STATE")
+    if not state:
+        base = env.get("XDG_STATE_HOME")
+        home = env.get("HOME")
+        if not base and home:
+            base = os.path.join(home, ".local", "state")
+        if not base:
+            raise ConfigError("PLANGRAPH_STATE is not set and no state directory is known")
+        state = os.path.join(base, "plangraph", "live-follow.json")
+    real_out = os.path.realpath(out)
+    # The atomic save replaces the final entry itself, so a symlink at that entry
+    # is judged where it sits (resolved parent + name) as well as where it points.
+    entry = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(state))), os.path.basename(state))
+    if any(os.path.commonpath([p, real_out]) == real_out for p in (os.path.realpath(state), entry)):
+        raise ConfigError("PLANGRAPH_STATE must be outside PLANGRAPH_OUT (the web-served directory)")
+    if _overlaps(os.path.join(os.path.dirname(os.path.abspath(state)), "render-tree"), out):
+        raise ConfigError("PLANGRAPH_OUT must not overlap the render-tree directory beside PLANGRAPH_STATE")
+    return state
 
 
 class Runner:
@@ -187,13 +241,25 @@ def gh_api(runner, cfg: Config, endpoint: str) -> dict | None:
 
 
 def _workflow_file(path: object) -> str | None:
+    """The workflow file a run came from, minus any "@refs/..." suffix.
+
+    The API reports a PR run as ".github/workflows/tests.yml@refs/pull/7/merge";
+    the ref part is not part of the file's identity. None when the field is
+    absent or empty — a run we cannot identify is a run that does not count.
+    """
     if not isinstance(path, str) or not path:
         return None
     return path.split("@", 1)[0] or None
 
 
 def _counts_toward_gate(run: dict, cfg: Config, head_sha: str) -> bool:
-    """Check the workflow file, repository, and exact head SHA."""
+    """Whether this run is the pinned workflow of exactly this head in our repo.
+
+    A workflow *name* is not an identity: any other file, or a fork's copy of
+    the same workflow, can be named "tests". Pinning the file path and checking
+    the run's own head_sha and head_repository keeps a lookalike — including a
+    fork PR's run — from deciding the result.
+    """
     if run.get("head_sha") != head_sha:
         return False
     head_repo = run.get("head_repository")
@@ -202,23 +268,31 @@ def _counts_toward_gate(run: dict, cfg: Config, head_sha: str) -> bool:
     return _workflow_file(run.get("path")) == cfg.workflow_path
 
 
-def _pr_run(run: dict, number: int, branch: str) -> bool:
-    refs = run.get("pull_requests")
-    ref = run["path"].partition("@")[2]
-    if run.get("event") != "pull_request" or not isinstance(refs, list):
+def _bound_to_pr(run: dict, cfg: Config, number: object) -> bool:
+    """Whether the run belongs to pull request ``number`` into the target branch.
+
+    The workflow picks its suites from the PR's target and draft status, so a
+    run of another PR (or of the same head into another branch) proves nothing
+    about this merge. A run with no usable PR list does not count.
+    """
+    if not isinstance(number, int) or isinstance(number, bool):
         return False
-    if ref.startswith("refs/pull/"):
-        if ref != f"refs/pull/{number}/merge":
-            return False
-    elif len(refs) != 1:
-        return False
-    return any(isinstance(pr, dict) and pr.get("number") == number
-               and isinstance(pr.get("base"), dict) and pr["base"].get("ref") == branch
-               for pr in refs)
+    for entry in run.get("pull_requests") or []:
+        if not isinstance(entry, dict) or entry.get("number") != number:
+            continue
+        if (entry.get("base") or {}).get("ref") == cfg.branch:
+            return True
+    return False
 
 
-def _head_green(runner, cfg: Config, head_sha: str, pr_number: int | None = None) -> bool:
-    """True when the newest run of cfg.workflow_path on head_sha completed success."""
+def _head_green(
+    runner, cfg: Config, head_sha: str, pr_number: object = None, bound: bool = False
+) -> bool:
+    """True when the newest counting run of cfg.workflow_path on head_sha succeeded.
+
+    ``bound`` restricts the runs to those of pull request ``pr_number`` into the
+    target branch; a commit without a PR (``bound`` false) uses any run of the head.
+    """
     runs = gh_api(
         runner, cfg, f"repos/{cfg.repo}/actions/runs?head_sha={head_sha}&per_page=30"
     )
@@ -227,8 +301,9 @@ def _head_green(runner, cfg: Config, head_sha: str, pr_number: int | None = None
     entries = [
         r
         for r in runs.get("workflow_runs") or []
-        if isinstance(r, dict) and _counts_toward_gate(r, cfg, head_sha)
-        and (pr_number is None or _pr_run(r, pr_number, cfg.branch))
+        if isinstance(r, dict)
+        and _counts_toward_gate(r, cfg, head_sha)
+        and (not bound or _bound_to_pr(r, cfg, pr_number))
     ]
     if not entries:
         return False
@@ -247,8 +322,7 @@ def is_green(runner, cfg: Config, sha: str) -> bool:
         # A commit pushed without a PR must carry its own green run.
         return _head_green(runner, cfg, sha)
     dicts = [p for p in items if isinstance(p, dict)]
-    exact = [p for p in dicts if p.get("merge_commit_sha") == sha
-             and (p.get("base") or {}).get("ref") == cfg.branch]
+    exact = [p for p in dicts if p.get("merge_commit_sha") == sha]
     if exact:
         candidates = exact
     else:
@@ -264,12 +338,15 @@ def is_green(runner, cfg: Config, sha: str) -> bool:
         ]
     if not candidates:
         return False
-    for candidate in candidates:
-        head = (candidate.get("head") or {}).get("sha")
-        number = candidate.get("number")
-        if not head or type(number) is not int or not _head_green(runner, cfg, head, number):
-            return False
-    return True
+    heads = [(p.get("head") or {}).get("sha") for p in candidates]
+    if any(not h for h in heads):
+        # A candidate without a head sha cannot be verified: fail closed
+        # rather than falling back to the commit sha.
+        return False
+    return all(
+        _head_green(runner, cfg, h, p.get("number"), bound=True)
+        for h, p in zip(heads, candidates)
+    )
 
 
 def _result(action: str, reason: str, sha: str | None = None) -> dict:
@@ -388,6 +465,74 @@ def record_green(cfg: Config, sha: str, now=time.time) -> None:
     _save_state(cfg, state)
 
 
+def verified(cfg: Config, runner) -> dict:
+    """Whether the live checkout is exactly the head the gate recorded as green.
+
+    The render publishes the checkout, so it may only run from a revision CI
+    verified: a first start, a hand-moved checkout or a refused fast-forward
+    leave HEAD different from the record, and the previous page stays up.
+    """
+    rc, out = runner.run(["git", "-C", cfg.tree, "rev-parse", "HEAD"])
+    head = out.strip() if rc == 0 else ""
+    green = load_state(cfg).get("green_sha")
+    if head and head == green:
+        return {"status": "verified", "sha": head}
+    return {"status": "unverified", "sha": head or None}
+
+
+def _extract_tar(archive: Path, dest: Path) -> None:
+    """Extract ``archive`` into ``dest``; a member that would leave ``dest`` raises."""
+    with tarfile.open(archive) as tar:
+        root = dest.resolve()
+        for member in tar.getmembers():
+            target = (dest / member.name).resolve()
+            if target != root and root not in target.parents:
+                raise ValueError("archive member outside the destination")
+            if member.issym() or member.islnk():
+                raise ValueError("archive link")
+        tar.extractall(dest, filter="data") if hasattr(tarfile, "data_filter") else tar.extractall(dest)
+
+
+def export_tree(cfg: Config, runner) -> dict:
+    """Export the verified commit to a private directory the render imports from.
+
+    The live checkout may carry local edits or untracked files; the render must
+    only see the commit the gate recorded as green. Returns ``{"status":
+    "verified", "sha", "tree"}``; any doubt leaves the previous export in place.
+    """
+    gate = verified(cfg, runner)
+    if gate["status"] != "verified":
+        return gate
+    sha = gate["sha"]
+    base = Path(cfg.state).parent
+    final = base / "render-tree"
+    # The swap below replaces `final`: it must never be, hold or sit in the served
+    # page directory or the live checkout.
+    if _overlaps(str(final), cfg.out) or _overlaps(str(final), cfg.tree):
+        return {"status": "unverified", "sha": sha}
+    staging = None
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(dir=str(base), prefix="render-tree.tmp-"))
+        archive = staging / "tree.tar"
+        rc, _ = runner.run(["git", "-C", cfg.tree, "archive", "--format=tar", "-o", str(archive), sha])
+        if rc != 0:
+            return {"status": "unverified", "sha": sha}
+        content = staging / "content"
+        content.mkdir()
+        _extract_tar(archive, content)
+        old = staging / "previous"
+        if final.exists():
+            os.replace(final, old)
+        os.replace(content, final)
+        return {"status": "verified", "sha": sha, "tree": str(final)}
+    except (OSError, ValueError, tarfile.TarError):
+        return {"status": "unverified", "sha": sha}
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
 def page_stamp(path: str) -> str | None:
     """The content of the page's <meta name="plangraph-build"> tag, else None."""
     try:
@@ -450,19 +595,18 @@ def check(cfg: Config, runner, now=time.time) -> dict:
     return {"status": "stale", "page": page, "green": green}
 
 
-def _render_revision(cfg: Config, runner) -> str | None:
-    sha = load_state(cfg).get("green_sha")
-    if not sha or not re.fullmatch(r"[0-9a-f]{40}", sha):
-        return None
-    rc, head = runner.run(["git", "-C", cfg.tree, "rev-parse", "HEAD"])
-    return sha if rc == 0 and head.strip() == sha else None
-
-
 def main(argv=None, env=None, runner=None, now=time.time) -> int:
+    """CLI: ``follow`` before the render, ``check`` after it.
+
+    Returns 0 for every follow/check outcome — a page render must never be
+    blocked by this step; only a unusable config exits 2. ``verified`` is the
+    render gate: 0 when the checkout is the recorded green head, else 3;
+    ``export`` also copies that commit to ``<state dir>/render-tree`` and prints its short sha.
+    """
     words = list(sys.argv[1:] if argv is None else argv)
     command = words[0] if words else ""
-    if command not in ("follow", "check", "render-ready"):
-        print("live_follow: usage: follow|check|render-ready", file=sys.stderr)
+    if command not in ("follow", "check", "verified", "export"):
+        print("live_follow: usage: follow|check|verified|export", file=sys.stderr)
         return 2
     try:
         cfg = Config.from_env(env or os.environ)
@@ -470,13 +614,17 @@ def main(argv=None, env=None, runner=None, now=time.time) -> int:
         print(f"live_follow: {exc}", file=sys.stderr)
         return 2
     active = runner if runner is not None else Runner()
-    if command == "render-ready":
-        sha = _render_revision(cfg, active)
-        if sha:
-            print(sha)
-            return 0
-        print("live_follow: render skipped because HEAD has no matching verified revision", file=sys.stderr)
-        return 1
+    if command in ("verified", "export"):
+        try:
+            result = (verified if command == "verified" else export_tree)(cfg, active)
+        except Exception:
+            result = {"status": "unverified", "sha": None}
+        if result["status"] != "verified":
+            print(json.dumps(result), file=sys.stderr if command == "export" else sys.stdout)
+            return 3
+        # export: only the short sha (the tree is always <state dir>/render-tree); verified: JSON.
+        print(result["sha"][:10] if command == "export" else json.dumps(result))
+        return 0
     try:
         result = (
             follow(cfg, active, now) if command == "follow" else check(cfg, active, now)

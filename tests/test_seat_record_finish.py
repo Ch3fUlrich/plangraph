@@ -21,6 +21,9 @@ def record_dir(tmp_path, **fields):
               "exit_code": 0, "served_model": "unwitnessed",
               "chosen_leg": {"model": "opencode/mimo-v2.6-free", "family": "mimo"},
               "attempts": [{}], "stdout_tail": REVIEW,
+              "item_key": "demo:A", "request": {"verdict_binding": {
+                  "key": "demo:A", "epoch": 1, "round": 1,
+                  "head": HEAD_SHA, "seat_run": seat.name}},
               "completion": {"head_sha": HEAD_SHA}}
     record.update(fields)
     (seat / "record.json").write_text(json.dumps(record), encoding="utf-8")
@@ -75,6 +78,7 @@ def test_events_only_finish_posts_pass(tmp_path, poster, capsys, finish):
     assert len(calls) == 1
     assert calls[0]["key"] == "demo:A"
     assert calls[0]["ok"] is True
+    assert calls[0]["binding"] == record["request"]["verdict_binding"]
     assert HEAD_SHA in calls[0]["reason"]
     assert capsys.readouterr().err == ""
 

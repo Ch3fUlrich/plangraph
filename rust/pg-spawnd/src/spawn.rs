@@ -108,14 +108,21 @@ fn record_validation_error(
             message,
             ..
         } => ("ParameterRefused", message.clone(), 2, Status::Refused),
+        // The one card failure of an empty review diff; other spawn refusals have their own records.
+        ToolError::Refused {
+            kind: crate::errors::RefusalKind::Spawn,
+            message,
+            ..
+        } if message.starts_with("empty_diff:") => {
+            ("SpawnRefused", message.clone(), 2, Status::Refused)
+        }
         _ => return Ok(()),
     };
-    save(
-        state,
-        host,
-        json!({"role":role,"refusal":name,"error":message,"exit_code":code,"legs":[],"evidence":[]}),
-        status,
-    )?;
+    let mut record = json!({"role":role,"refusal":name,"error":message,"exit_code":code,"legs":[],"evidence":[]});
+    if name == "SpawnRefused" {
+        record["reason"] = json!("empty_diff");
+    }
+    save(state, host, record, status)?;
     Ok(())
 }
 pub(crate) fn spawn(
@@ -132,7 +139,8 @@ pub(crate) fn spawn(
     }
     let role = args.get("role").cloned().unwrap_or(json!("implement"));
     let admitted = crate::leg_ref::admit(&crate::leg_ref::AdapterCatalog::new(state), args)
-        .and_then(|a| validate(&a).map(|()| a));
+        .and_then(|a| validate(&a).map(|()| a))
+        .and_then(|a| crate::empty_diff::check(&a).map(|()| a));
     let admitted = match admitted {
         Ok(args) => args,
         Err(error) => {
@@ -203,9 +211,20 @@ mod tests {
             legs: vec![],
         };
         assert!(record_validation_error(&state, "local", json!("implement"), &refused).is_ok());
+        assert!(!state.exists());
+        let empty = ToolError::Refused {
+            kind: crate::errors::RefusalKind::Spawn,
+            message: "empty_diff: no change between base a and head a".into(),
+            legs: vec![],
+        };
+        assert!(record_validation_error(&state, "local", json!("review"), &empty).is_ok());
+        let first = crate::records::list_runs(&state);
+        assert_eq!(first.len(), 1, "{first:?}");
+        assert_eq!(first[0]["reason"], "empty_diff");
+        assert_eq!(first[0]["role"], "review");
+        std::fs::remove_dir_all(&state).unwrap();
         let answer = error.into_error_data();
         assert_eq!(answer.message, "validation failed");
-        assert!(!state.exists());
         let key = ToolError::Key("card".into());
         assert!(record_validation_error(&state, "local", json!("review"), &key).is_ok());
         let rows = crate::records::list_runs(&state);
@@ -213,6 +232,58 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0]["refusal"], "KeyError");
         assert_eq!(rows[0]["error"], "'card'");
+        assert_eq!(rows[0]["role"], "review");
+    }
+
+    #[test]
+    fn empty_review_diff_refuses_once_before_routing_and_saves_one_record() {
+        use pg_worker_core::run::{
+            group::Confinement, supervise::Config, supervisor::SupervisorCfg,
+        };
+        let work = std::env::temp_dir().join(format!("pg-spawnd-empty-diff-{}", new_run_id()));
+        let repo = work.join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_owned()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "base"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        let state = work.join("state");
+        let runs = crate::runs::Runs::new(std::sync::Arc::new(
+            pg_worker_core::run::supervisor::Supervisor::new(SupervisorCfg::new(Config {
+                state_dir: state.clone(),
+                confinement: Confinement::Plain,
+                ..Config::default()
+            }))
+            .unwrap(),
+        ));
+        let args = json!({"role":"review","prompt":"review","writer_families":["openai"],
+            "card":{"estimate_tokens":1000,"diff_ref":{"repo":repo,"base":head,"head":head}}})
+        .as_object()
+        .unwrap()
+        .clone();
+        // No route adapter exists here: reaching routing or a leg would give another error.
+        match spawn(&state, &args, "local", &runs) {
+            Err(ToolError::Refused { message, legs, .. }) => {
+                assert!(message.starts_with("empty_diff:"), "{message}");
+                assert!(legs.is_empty());
+            }
+            other => panic!("expected an empty_diff refusal, got ok={}", other.is_ok()),
+        }
+        let rows = crate::records::list_runs(&state);
+        std::fs::remove_dir_all(&work).unwrap();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0]["reason"], "empty_diff");
+        assert_eq!(rows[0]["legs"], json!([]));
         assert_eq!(rows[0]["role"], "review");
     }
 }

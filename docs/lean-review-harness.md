@@ -60,6 +60,7 @@ Direct CLI command rendering refuses operator-retired Gemini Flash targets befor
 constructing argv; D-5903 enables Hydrogen high for implement and medium for read-only tools review (agy plan mode), both unwitnessed.
 
 Native agy reviews use plan mode for every Hydrogen effort, Neon (`gemini-4-neon-medium`) and Argon low and medium.
+Hydrogen reviews use a private AGY home seeded with account state so the CLI skips the operator’s global MCP configuration.
 The command passes session-only settings with a permission allow list (`command(*)` and the
 read tools): headless agy denies a tool without an allow rule and then answers nothing, so a
 reviewer that runs `git diff` or the tests needs the command rule. Sonnet high uses

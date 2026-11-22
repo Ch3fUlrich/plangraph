@@ -19,6 +19,7 @@ FAMILIES = [
     (2, 'github', '_pat_'),
     *((3, 'xo', 'x' + c + '-') for c in 'abprs'),
     (4, 'AK', 'IA'), (5, 'AI', 'za'),
+    (6, 'sk', '_live_'), (6, 'sk', '_test_'), (6, 'rk', '_live_'), (6, 'rk', '_test_'),
 ]
 
 
@@ -30,10 +31,10 @@ SECRETS = [token(*family) for family in FAMILIES]
 SECRETS.append('ey' + 'JAb1Ab1Ab' + '.Cd2Cd2Cd' + '.Ef3Ef3Ef')
 
 
-async def collect(text, tmp_path, monkeypatch, *, monitor=False, env=None, chunks=None, refusal=False):
+async def collect(text, tmp_path, monkeypatch, *, monitor=False, env=None):
     """Real child stream collector (and optionally the final runner monitor)."""
     child = runner.SpawnerRunner(default_cwd=str(tmp_path))
-    job = runner.JobInfo('j', 'running', '', 'synthetic', role='implement' if refusal else 'review',
+    job = runner.JobInfo('j', 'running', '', 'synthetic', role='review',
                          command=['synthetic-child'], cwd=str(tmp_path))
     job._live_log = tmp_path / 'live.log'
     job._watchdog_baseline = None
@@ -41,27 +42,20 @@ async def collect(text, tmp_path, monkeypatch, *, monitor=False, env=None, chunk
     child.jobs['j'] = job
     child._child_envs['j'] = env or {}
     streams = [asyncio.StreamReader(), asyncio.StreamReader()]
-    async def feed():
-        for part in chunks or [text]:
-            for stream in streams:
-                stream.feed_data(part.encode())
-            await asyncio.sleep(0)
-        for stream in streams:
-            stream.feed_eof()
-    feeder = asyncio.create_task(feed())
-    proc = SimpleNamespace(stdout=streams[0], stderr=streams[1], returncode=int(refusal))
-    if monitor or refusal:
+    for stream in streams:
+        stream.feed_data(text.encode())
+        stream.feed_eof()
+    proc = SimpleNamespace(stdout=streams[0], stderr=streams[1], returncode=0)
+    if monitor:
         async def noop(*args):
             pass
         monkeypatch.setattr(child, '_reap_process', noop)
-    if monitor:
         monkeypatch.setattr(child, '_check_git_config_guard', lambda *args: None)
         monkeypatch.setattr(runner, 'witness_native', noop)
         await child._monitor_process('j', proc, 'synthetic')
         assert job.status == 'completed'
     else:
         await run_watchdog.collect(child, 'j', proc)
-    await feeder
     return child, job
 
 
@@ -149,15 +143,6 @@ def test_wrapped_assignment_is_masked_whole(newline, prefix, suffix, scrub):
     assert scrub(expected) == expected
 
 
-@pytest.mark.parametrize('newline', ['\n', '\r\n'])
-@pytest.mark.parametrize('quote', ['"', "'"])
-@pytest.mark.parametrize('scrub', [env_redact.redact, env_redact.redact_source, env_redact.redact_output])
-def test_wrapped_quoted_assignment_after_floor(newline, quote, scrub):
-    prefix = 'API_KEY=' + quote
-    text = prefix + 'gh' + 'p_' + 'A9' * 12 + newline + 'B8' * 6 + quote
-    assert scrub(text + newline + 'next') == prefix + '[REDACTED]' + quote + newline + 'next'
-
-
 def test_split_token_at_source_boundary_fails_closed(monkeypatch, tmp_path):
     prompt = 'sk-' + env_redact._source_block('synthetic123')
     assert str(prompt) == 'sk-' + 'synthetic123'
@@ -237,23 +222,123 @@ def test_cli_stream_doctor_and_env_value_results_use_output_rules(monkeypatch):
     assert doctor.clean(text) == '[REDACTED] [autoos:redacted]'
 
 
-@pytest.mark.parametrize('separate', [False, True])
-def test_wrapped_token_in_child_streams(monkeypatch, tmp_path, separate):
-    first, second = 'gh' + 'p_' + 'A9' * 6, 'B8' * 7
-    text = first + '\r\n' + second + '\r\n'
-    chunks = [first + '\r', '\n' + second + '\r\n'] if separate else [text]
-    written = []
-    cli._drain_chunks((part.encode() for part in chunks), written.append)
-    _, job = asyncio.run(collect(text, tmp_path, monkeypatch, chunks=chunks))
-    for output in (b''.join(written).decode(), job.stdout, job.stderr,
-                   (tmp_path / 'live.log').read_text()):
-        assert not any(part in output for part in (first, second))
-        assert '[REDACTED]' in output
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+@pytest.mark.parametrize('quote', ['"', "'"])
+@pytest.mark.parametrize('scrub', [env_redact.redact, env_redact.redact_source, env_redact.redact_output])
+def test_quoted_wrapped_assignment_masks_final_fragment_past_the_floor(newline, quote, scrub):
+    # The first physical line already meets the family floor (20 body bytes).
+    secret = 'gh' + 'p_' + 'A9' * 10 + newline + 'A9' * 4
+    text = 'API_KEY=' + quote + secret + quote + newline + 'next retained'
+    expected = 'API_KEY=' + quote + '[REDACTED]' + quote + newline + 'next retained'
+    assert scrub(text) == expected
+    assert scrub(expected) == expected
 
 
-def test_dispatch_refusal_event_uses_output_redaction(monkeypatch, tmp_path):
+@pytest.mark.parametrize('role', ['review', 'implement'])
+def test_dispatch_refusal_diagnostic_gets_output_redaction(monkeypatch, tmp_path, role):
     value = 'ab12' * 10
-    _, job = asyncio.run(collect('Error: quota exceeded ' + value + '\n', tmp_path, monkeypatch, refusal=True))
-    event = next(event for event in job.events if event['event'] == 'dispatch_refused')
-    assert value not in event['reason']
-    assert '[REDACTED]' in event['reason']
+    text = 'Error: HTTP 429: rate limit exceeded for commit ' + value + '\n'
+
+    async def run():
+        child = runner.SpawnerRunner(default_cwd=str(tmp_path))
+        job = runner.JobInfo('j', 'running', '', 'synthetic', role=role,
+                             command=['synthetic-child'], cwd=str(tmp_path))
+        job._live_log = tmp_path / 'live.log'
+        job._watchdog_baseline = None
+        job._watchdog_limits = dict(interval=60, max_s=60, stall_s=60, first_edit_s=60)
+        child.jobs['j'] = job
+        child._child_envs['j'] = {}
+        streams = [asyncio.StreamReader(), asyncio.StreamReader()]
+        streams[0].feed_data(text.encode())
+        for stream in streams:
+            stream.feed_eof()
+        proc = SimpleNamespace(stdout=streams[0], stderr=streams[1], returncode=1)
+        async def noop(*args):
+            pass
+        monkeypatch.setattr(child, '_reap_process', noop)
+        await run_watchdog.collect(child, 'j', proc)
+        return job, job.events
+
+    job, events = asyncio.run(run())
+    assert job.stdout == 'Error: HTTP 429: rate limit exceeded for commit [REDACTED]\n'
+    assert job.refusal, 'the refusal must be booked'
+    assert value not in job.refusal
+    assert value not in json.dumps(events)
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_output_lines_hold_a_wrapped_token_across_reads(newline):
+    first = 'gh' + 'p_' + 'A9' * 10
+    lines = env_redact.OutputLines(lambda text: text)
+    assert lines.feed('before' + newline + first + newline) == 'before' + newline
+    assert lines.feed('A9A9' + newline) == ''
+    assert lines.feed('prose; retained' + newline) == '[REDACTED]' + newline + 'prose; retained' + newline
+    assert lines.feed('', final=True) == ''
+    assert env_redact.OutputLines(lambda text: text).feed(first + newline, final=True) == '[REDACTED]' + newline
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_collector_never_logs_half_a_wrapped_token_from_separate_reads(monkeypatch, tmp_path, newline):
+    first, second = 'gh' + 'p_' + 'A9' * 10, 'A9' * 4
+
+    async def run():
+        child = runner.SpawnerRunner(default_cwd=str(tmp_path))
+        job = runner.JobInfo('j', 'running', '', 'synthetic', role='review',
+                             command=['synthetic-child'], cwd=str(tmp_path))
+        job._live_log = tmp_path / 'live.log'
+        job._watchdog_baseline = None
+        job._watchdog_limits = dict(interval=60, max_s=60, stall_s=60, first_edit_s=60)
+        child.jobs['j'], child._child_envs['j'] = job, {}
+        streams = [asyncio.StreamReader(), asyncio.StreamReader()]
+        proc = SimpleNamespace(stdout=streams[0], stderr=streams[1], returncode=0)
+        task = asyncio.create_task(run_watchdog.collect(child, 'j', proc))
+        streams[0].feed_data((first + newline).encode())
+        await asyncio.sleep(.2)
+        streams[0].feed_data((second + newline + 'next retained' + newline).encode())
+        for stream in streams:
+            stream.feed_eof()
+        await task
+        return job
+
+    job = asyncio.run(run())
+    log = (tmp_path / 'live.log').read_text()
+    assert first not in log and second not in log.replace('[REDACTED]', '')
+    assert job.stdout.replace('\r\n', '\n') == '[REDACTED]\nnext retained\n'
+
+
+@pytest.mark.parametrize('newline', [b'\n', b'\r\n'])
+def test_cli_drain_masks_a_wrapped_token_split_across_lines(newline):
+    data = b'gh' + b'p_' + b'A9' * 10 + newline + b'A9' * 4 + newline + b'next retained' + newline
+    for chunks in ([data], [data[:20], data[20:]], [data[:-15], data[-15:]]):
+        written = []
+        cli._drain_chunks(chunks, written.append)
+        assert b''.join(written).replace(b'\r\n', b'\n') == b'[REDACTED]\nnext retained\n'
+
+
+def _stream_all(chunks, newline):
+    lines = env_redact.OutputLines(lambda text: text)
+    outs = [lines.feed(chunk) for chunk in chunks]
+    return outs, ''.join(outs) + lines.feed('', final=True)
+
+
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+def test_one_line_that_ends_a_wrapped_token_and_starts_another(newline):
+    # Line 2 finishes the first credential mid-line and opens a second one.
+    first = 'gh' + 'p_' + 'A9' * 2 + newline
+    second = 'A9' * 8 + ' gh' + 'p_' + 'B8' * 10 + newline
+    tail = 'next retained' + newline
+    outs, whole = _stream_all([first, second, tail], newline)
+    assert 'A9' not in ''.join(outs) + whole and 'B8' not in ''.join(outs) + whole
+    assert whole == '[REDACTED] [REDACTED]' + newline + tail
+
+
+@pytest.mark.parametrize('newline', [b'\n', b'\r\n'])
+def test_cli_drain_one_line_that_ends_a_wrapped_token_and_starts_another(newline):
+    data = (b'gh' + b'p_' + b'A9' * 2 + newline + b'A9' * 8 + b' gh' + b'p_' + b'B8' * 10 + newline
+            + b'next retained' + newline)
+    for cut in (len(data), 12, 30):
+        written = []
+        cli._drain_chunks([data[:cut], data[cut:]], written.append)
+        out = b''.join(written)
+        assert b'A9' not in out and b'B8' not in out
+        assert out.replace(b'\r\n', b'\n') == b'[REDACTED] [REDACTED]\nnext retained\n'

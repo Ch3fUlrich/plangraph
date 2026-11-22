@@ -28,23 +28,49 @@ def _wait_runs(service, result, wait):
 
 def _drain_chunks(chunks, write, observe=lambda size: None):
     """Bound unterminated stderr; retain 4 KiB for cross-chunk redaction."""
-    from .env_redact import OutputLines, redact_env_values
+    from .env_redact import redact_env_values
+    from .redact_tokens import open_wrapped_line_start
     from plangraph.routing_support.host_keys import redaction_env
     import codecs
-
     decoder = codecs.getincrementaldecoder('utf-8')(errors='replace')
+    # The parent env never holds a file key; compute the redaction env (parent
+    # plus resolvable host keys) once, not per chunk (D-2759).
     redact_base = redaction_env(os.environ)
-    lines = OutputLines(lambda text: redact_env_values(text, redact_base), keep_overlong=True)
+    def clean(data):
+        if isinstance(data, bytes):
+            data = data.decode('utf-8')
+        return redact_output(redact_env_values(data, redact_base)).encode()
+    pending, held = b'', b''
     for chunk in chunks:
-        decoded = decoder.decode(chunk)
-        observe(len(lines.pending) + len(chunk))
-        safe = lines.feed(decoded)
-        if safe:
-            write(safe.encode())
-    safe = lines.feed(decoder.decode(b'', final=True), final=True)
-    if safe:
-        write(safe.encode())
-
+        pending += decoder.decode(chunk).encode('utf-8')
+        observe(len(pending))
+        while b'\n' in pending:
+            line, pending = pending.split(b'\n', 1)
+            held += line + b'\n'
+            # Keep lines back while a wrapped credential may still continue.
+            keep = open_wrapped_line_start(held.decode('utf-8'))
+            if keep is not None and len(held) < 65536:
+                keep = len(held.decode('utf-8')[:keep].encode('utf-8'))
+                emit, held = held[:keep], held[keep:]
+            else:
+                emit, held = held, b''
+            if emit:
+                write(clean(emit))
+        if len(pending) >= 65536:
+            if held:
+                write(clean(held))
+                held = b''
+            # Redact before choosing the boundary, so a known secret spanning
+            # that boundary cannot leave either half in the output.
+            safe = clean(pending)
+            boundary = len(safe) - 4096
+            while boundary > 0 and safe[boundary] & 0xc0 == 0x80:
+                boundary -= 1
+            write(safe[:boundary] + b' [truncated chunk]\n')
+            pending = safe[boundary:]
+    pending = held + pending + decoder.decode(b'', final=True).encode('utf-8')
+    if pending:
+        write(clean(pending.decode('utf-8')))
 
 def _rotate_log(path):
     """Move the full log to `path.1` (best effort) and empty `path`, which stays present throughout."""
@@ -162,6 +188,8 @@ def main(argv=None):
         p.add_argument('--json', action='store_true')
         if verb == 'route':
             p.add_argument('--writer-snapshot', action='store_true', help=argparse.SUPPRESS)
+            p.add_argument('--leg-scores', action='store_true',
+                           help='add leg_scores: catalog intelligence (aa_intelligence) per routed leg id')
         if verb == 'spawn':
             p.add_argument('prompt', nargs='?')
             p.add_argument('--prompt-file')
@@ -177,6 +205,8 @@ def main(argv=None):
             p.add_argument('--seats', action='store_true', help='role review: spawn every seat route picks (per writer part)')
     commands.add_parser('ps').add_argument('--all-hosts', action='store_true',
                                            help='no-op alias: plain ps already includes configured SSH hosts')
+    p = commands.add_parser('runs', help='read host lifecycle transitions')
+    p.add_argument('--changed-since', required=True, type=json.loads, metavar='CURSOR_JSON')
     p = commands.add_parser('harness-report', help='runs, failures and no-verdict reviews per harness')
     p.add_argument('--hours', type=float, default=24)
     commands.add_parser('catalog')
@@ -251,7 +281,15 @@ def main(argv=None):
                 service.save_refusal(exc, args.role)
             raise
         if args.verb == 'route':
-            result = service.route(args.card, args.role, args.writer_family, args.review_of, **options).to_dict()
+            if args.role == 'review' and args.json and (args.card or {}).get('repository_review_required') is True:
+                options['repository_preview'] = True
+            routed = service.route(args.card, args.role, args.writer_family, args.review_of, **options)
+            result = routed.to_dict()
+            if args.leg_scores:
+                from plangraph.planner.review_order import catalog_score
+                from plangraph.routing_support.resolver import get_catalog_models
+                rows = get_catalog_models()
+                result['leg_scores'] = {leg.id: catalog_score(leg, rows) for leg in routed.legs}
             if args.writer_snapshot:
                 from plangraph.planner.legs import DEFAULT_LEGS
                 from plangraph.planner.review_order import catalog_score
@@ -291,6 +329,12 @@ def main(argv=None):
             from plangraph.settings import admit_review_scope
             try:
                 admit_review_scope(args.card, args.role, args.review_scope)
+            except SpawnRefused as exc:
+                service.save_refusal(exc, args.role)
+                raise
+            from .inline_diff import refuse_empty_diff
+            try:
+                refuse_empty_diff(args.card, args.role, dry_run=args.dry_run)
             except SpawnRefused as exc:
                 service.save_refusal(exc, args.role)
                 raise
@@ -454,6 +498,9 @@ raise SystemExit(code)
         elif args.verb == 'ps':
             from .remote_ps import list_runs
             result = {'runs': list_runs(service.ps()['runs'])}
+        elif args.verb == 'runs':
+            from .remote_ps import changed_runs
+            result = changed_runs(service.state, args.changed_since)
         elif args.verb == 'harness-report':
             from .exit_outcome import harness_report
             result = harness_report(service.ps()['runs'], hours=args.hours)
@@ -485,6 +532,8 @@ raise SystemExit(code)
                 # rc 0 only while some seat can still deliver a verdict (planned, running or completed).
                 return 0 if any(r.get('status') in ('dry_run', 'running', 'completed') for r in result['seats']) else 1
             if 'status' not in result:
+                if args.verb == 'route' and options.get('repository_preview') and not result.get('legs'):
+                    return 0
                 return 2 if result.get('error') else 0
             code = result.get('exit_code')
             return code if code is not None else (0 if result.get('status') == 'running' else 1)

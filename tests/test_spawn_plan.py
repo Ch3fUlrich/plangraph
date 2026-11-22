@@ -65,7 +65,7 @@ def test_seats_and_impossible_fence():
     assert {l.id for l in p.legs if l.family == "claude"} == {
         "agy-sonnet-5.5", "agy-claude-opus", "agy-opus-5.5", "agy-opus", "claude-haiku-5.5"}
     assert all(l.claude_family for l in p.legs if l.family == "claude")
-    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.family == "gpt"
+    assert plan_spawn(CARD, role="review", writer_families=("qwen",)).first_leg.id == "agy-gemini-4-hydrogen-high"
     # With all other automatic families fenced, only Claude remains.
     p = plan_spawn(CARD, role="review",
                    writer_families=("qwen", "deepseek", "glm", "gpt", "gemini", "mimo", "muse"),

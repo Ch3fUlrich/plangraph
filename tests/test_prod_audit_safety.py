@@ -179,12 +179,13 @@ def test_runtime_exits_before_status_read(tmp_path, monkeypatch):
     from pathlib import Path
 
     pidfile = tmp_path / 'pid'
-    with subprocess.Popen(['/bin/sleep', '30']) as child:
+    with subprocess.Popen(['/bin/cat'], stdin=subprocess.PIPE) as child:
         pidfile.write_text(str(child.pid))
         status = Path(f'/proc/{child.pid}/status')
         with status.open() as opened:
-            child.kill()
-            child.wait(timeout=5)
+            # EOF lets the child exit normally after the observer opens status.
+            child.stdin.close()
+            assert child.wait(timeout=5) == 0
             read_text = Path.read_text
 
             def read_after_exit(path, *args, **kwargs):

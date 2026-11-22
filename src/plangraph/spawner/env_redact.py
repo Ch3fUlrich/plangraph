@@ -1,31 +1,19 @@
 """Value-based child credential scrubbing, before any output truncation."""
-import ast
 import json
 import os
 import re
 import subprocess
 from decimal import Decimal
 from .redact_tokens import TOKENS, JWT, redact_wrapped, join_shielded_assignments
-from .redact_tokens import redact_wide_assignments, pending_wrapped_line
-
-
-_PEM_MARKER = re.compile(r'-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY-----')
-
-
-def private_key_line(line, inside):
-    """Return whether the line overlaps a private key and the state after it."""
-    overlap = inside
-    for marker in _PEM_MARKER.finditer(line):
-        inside = marker[1] == 'BEGIN'
-        overlap = overlap or inside
-    return overlap, inside
+from .redact_tokens import redact_wide_assignments, redact_bearer_wrapped, open_wrapped_line_start
+from .redact_tokens import redact_diff_wrapped, is_computed
 
 
 def _redact_pem(text):
     # Scan markers once: a lazy complete-block regex retries every unterminated
     # BEGIN against the whole suffix, quadratic on adversarial prompt text.
     out, copied, start = [], 0, None
-    for match in _PEM_MARKER.finditer(text):
+    for match in re.finditer(r'-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----', text):
         if match[1] == 'BEGIN' and start is None:
             start = match.start()
         elif match[1] == 'END' and start is not None:
@@ -36,27 +24,68 @@ def _redact_pem(text):
     return ''.join((*out, text[copied:]))
 
 
+PEM_MARKER = re.compile(r'-----(BEGIN|END) [A-Z0-9 ]*PRIVATE KEY')
+
+
+_MARKER_OPEN = re.compile(r'(-----(?:BEGIN|END) )([A-Z0-9 ]*)')
+_MARKER_START = re.compile(r'-----(?:B(?:E(?:G(?:I(?:N)?)?)?)?|E(?:N(?:D)?)?)?')
+
+
+def marker_carry(text):
+    """The tail of ``text`` to put before the next piece so no private-key marker is missed.
+
+    A marker is ``-----BEGIN|END `` plus any run of capitals, digits and blanks that
+    holds ``PRIVATE KEY``: only the opening and the last 12 characters of that run
+    can still complete one, so the carry stays short however long the run is."""
+    start = text.rfind('-----')
+    suffix = text[start:] if start >= 0 else ''
+    opened = _MARKER_OPEN.fullmatch(suffix)
+    if opened:
+        return opened[1] + opened[2][-12:]
+    if _MARKER_START.fullmatch(suffix):
+        return suffix
+    dashes = re.search(r'-{1,4}\Z', text)
+    return dashes[0] if dashes else ''
+
+
+class PrivateKeyScan:
+    """Feed lines in file order; True for a line inside or touching a private-key block.
+
+    An unterminated BEGIN runs to the end of the file, so a line far below its
+    marker is still reported. Excerpts must be judged on the whole file, never
+    on the cut text alone.
+    """
+    def __init__(self):
+        self.inside = False
+
+    def feed(self, line):
+        touched = self.inside
+        # An overlong line may carry the markers of the part that was cut off.
+        for marker in PEM_MARKER.finditer(line + getattr(line, 'dropped_markers', '')):
+            touched, self.inside = True, marker[1] == 'BEGIN'
+        return touched
+
+
+# The one credential-name pattern of the assignment rule and of the nested-assignment scan.
+_NAME = r'(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
 _ASSIGNMENT = re.compile(
-    r'(?im)((?:["\x27])?\b(?:\w*_KEY|PASSWORD|PG_DSN|TOKEN|SECRET)'
+    r'(?im)((?:["\x27])?\b' + _NAME +
     r'(?:["\x27])?\s*[=:]\s*)(?:"(?:\\.|[^"\\\r\n])*"'
     r"|'(?:\\.|[^'\\\r\n])*'|[^\r\n]+)")
 
 
-def _computed_assignment(value):
-    value = value.strip()
-    try:
-        expr = ast.parse(value, mode='eval').body
-    except (SyntaxError, ValueError, RecursionError):
-        return False
-    nodes = (ast.Call, ast.Tuple, ast.Name, ast.Attribute, ast.Load)
-    return (isinstance(expr, (ast.Call, ast.Tuple)) and ast.get_source_segment(value, expr) == value
-            and all(isinstance(node, nodes) for node in ast.walk(expr)))
+# The name and separator of an assignment, without its value (group 1 is the separator).
+_ASSIGN_HEADER = re.compile(r'(?im)(?:["\x27])?\b' + _NAME + r'(?:["\x27])?\s*([=:])')
 
 
-def _redact_assignments(text, keep=None):
+def _computed(value):
+    return is_computed(value, _ASSIGN_HEADER)
+
+
+def _redact_assignments(text, source=False):
     def replace(m):
         value = m[0][len(m[1]):]
-        if keep is not None and keep(value):
+        if source and _computed(value):
             return m[0]
         return m[1] + (value[0] + '[REDACTED]' + value[-1]
                        if value[0] in '\"\x27' and value[-1] == value[0] else '[REDACTED]')
@@ -69,7 +98,7 @@ def redact(value):
 
 
 def redact_source(value):
-    """Spawner-read source may keep recognized computed assignment values."""
+    """Spawner-read source only: leave computed credential-name assignments readable."""
     return _redact(value, source=True)
 
 
@@ -180,13 +209,17 @@ def _redact(value, *, source):
             return [_redact(v, source=source) for v in value]
         if isinstance(value, str):
             value = _redact_pem(value)
-            keep = _computed_assignment if source else lambda value: False
-            value = redact_wide_assignments(value, _ASSIGNMENT, keep)
-            value = join_shielded_assignments(value, _ASSIGNMENT)
-            value = _redact_assignments(value, keep)
+            value = re.sub(r'(?i)Bearer\s+[^\s"\x27]+', 'Bearer [REDACTED]', redact_bearer_wrapped(value))
+            if source:
+                # Source masks wrapped tokens first, as before, so no name survives them.
+                value = redact_wrapped(value)
+            # Source keeps only computed expressions readable; literals are masked.
+            value = redact_wide_assignments(value, _ASSIGNMENT, _computed if source else None)
+            if not source:
+                # P joins values behind shielded names, then main's order runs.
+                value = join_shielded_assignments(value, _ASSIGNMENT)
+            value = _redact_assignments(value, source)
             value = redact_wrapped(value)
-            value = re.sub(r'(?i)Bearer\s+(?:\[REDACTED\](?=[;,:)]*(?:[\s"\x27]|$))|[^\s"\x27]+)',
-                           'Bearer [REDACTED]', value)
             # Greedily consume through the last @ within the quoted/space boundary.
             value = re.sub(r'(\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/@:\x22\x27]+:)[^\s\x22\x27]*(@)',
                            r'\1[REDACTED]\2', value)
@@ -230,6 +263,11 @@ def _source_block(text):
     return _SourcePrompt(text, ((0, len(text)),))
 
 
+def _diff_block(text):
+    """Called only by the git-diff producer: wrapped tokens are joined across hunk markers."""
+    return _source_block(redact_diff_wrapped(text))
+
+
 def _redact_prompt(prompt, scrub):
     """Full strength outside exact producer spans, including imitated framing."""
     if type(prompt) is not _SourcePrompt:
@@ -252,46 +290,30 @@ def _redact_prompt(prompt, scrub):
 
 class OutputLines:
     """Child streams only: hold incomplete lines and scrub before logs/tail cuts."""
-    def __init__(self, scrub, allow_shas=(), *, keep_overlong=False):
-        self.keep_overlong, self.withheld = keep_overlong, False
+    def __init__(self, scrub, allow_shas=()):
         self.scrub, self.allow_shas, self.pending, self.discarding = scrub, frozenset(allow_shas), '', False
 
     def feed(self, text, final=False):
-        if self.withheld:
-            return ''
         self.pending += text
         if self.discarding:
             match = re.search(r'[\r\n]', self.pending)
             self.pending = self.pending[match.end():] if match else ''
             self.discarding = not bool(match)
-        end = len(self.pending)
+        end = len(self.pending) if final else max(self.pending.rfind('\n'), self.pending.rfind('\r')) + 1
         if not final:
-            # A trailing CR can become CRLF in the next read.
-            scan = self.pending[:-1] if self.pending.endswith('\r') else self.pending
-            end = max(scan.rfind('\n'), scan.rfind('\r')) + 1
-            safe_end = pending_wrapped_line(self.pending[:end])
-        else:
-            safe_end = end
-        text, self.pending = self.pending[:safe_end], self.pending[safe_end:]
+            # A wrapped credential may continue in a later read: keep its lines back.
+            held = open_wrapped_line_start(self.pending[:end])
+            end = end if held is None else held
+        text, self.pending = self.pending[:end], self.pending[end:]
         if len(self.pending) > 65536:
-            if safe_end < end or pending_wrapped_line(self.pending + '\n') <= len(self.pending):
-                # The context cannot be dropped while a continuation is unresolved.
-                self.pending, self.withheld = '', True
-                text += '[autoos:overlong credential output withheld]\n'
-            elif self.keep_overlong:
-                safe = self.clean(self.pending)
-                text = self.clean(text) + safe[:-4096] + ' [truncated chunk]\n'
-                self.pending = safe[-4096:]
-                return text
-            else:
-                text += '[autoos:overlong line withheld]\n'
-                self.pending, self.discarding = '', True
+            # An arbitrarily long credential cannot safely be partially emitted.
+            text += '[autoos:overlong line withheld]\n'
+            self.pending, self.discarding = '', True
         if not text:
             return ''
-        return self.clean(text)
-
-    def clean(self, text):
         try:
+            # run_watchdog's callback removes env values; broad output-only
+            # rules belong here, not in its shared prompt/record scrubber.
             return redact_output(self.scrub(text), allow_shas=self.allow_shas)
         except Exception:
             return '[autoos:redaction failed; output withheld]\n'

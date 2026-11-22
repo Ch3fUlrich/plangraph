@@ -1,0 +1,3 @@
+- `close_merged` leaves an item that ships a systemd unit or host binary open with reason `deploy_pending` until every named host has verified `deploy` evidence, and lists it in `alerts`.
+- The evidence registry and review-withdrawal checks classify deployment proof as code evidence.
+- The registry regression keeps its existing test selector.

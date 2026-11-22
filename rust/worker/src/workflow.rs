@@ -62,6 +62,10 @@ const OBSERVE_PATCH: &str = "park-observe-v1";
 /// renaming it would strand every card whose history already carries the old
 /// marker.
 const PARK_REOBSERVE_PATCH: &str = "park-reobserve-v1";
+/// `ctx.patched` marker for ending the card on a typed admission refusal of the
+/// attempt activity. Before it, the refusal counted as a worker crash and the
+/// card went on to probe a worktree; a history recorded then replays that path.
+const ADMISSION_REFUSAL_PATCH: &str = "admission-refusal-terminal-v1";
 /// How many times a park refused as stale is re-observed and retried before the
 /// workflow fails with the last cause (D3).
 const PARK_REOBSERVES: u32 = 2;
@@ -219,21 +223,24 @@ impl Card {
                     run_janitor(ctx, &cfg, &input, &base_sha).await?;
                     return Ok(cancelled(n));
                 }
-                Err(e)
-                    if crate::card_admit::is_admission_refusal(e.failure())
-                        && ctx.patched("attempt-admission-terminal-v1") =>
-                {
-                    return Err(e.into());
-                }
                 Err(e) => {
-                    // Heartbeat loss is a stall; elapsed run budgets are timeouts.
-                    let exit_class = match e.as_timeout().map(|t| t.timeout_type()) {
-                        Some(TimeoutType::Heartbeat) => ExitClass::Stall,
-                        Some(TimeoutType::StartToClose) | Some(TimeoutType::ScheduleToClose) => {
-                            ExitClass::Timeout
+                    // The worker never returned a result: what follows is the budget's call,
+                    // except for an admission refusal, which ends the card.
+                    let exit_class = match classify_attempt_failure(
+                        e.failure(),
+                        e.as_timeout().map(|t| t.timeout_type()),
+                        || ctx.patched(ADMISSION_REFUSAL_PATCH),
+                    ) {
+                        AttemptFailure::Refused(kind) => {
+                            return Err(ApplicationFailure::builder(anyhow::anyhow!(
+                                "card admission refused: {kind}"
+                            ))
+                            .type_name(kind)
+                            .non_retryable(true)
+                            .build()
+                            .into());
                         }
-                        Some(_) => ExitClass::Stall,
-                        None => ExitClass::WorkerCrash,
+                        AttemptFailure::Synthetic(class) => class,
                     };
                     AttemptResult {
                         exit_class,
@@ -244,6 +251,8 @@ impl Card {
                         branch: AttemptId::new(input.claim.card.clone(), n).branch(),
                         head: String::new(),
                         output_tail: String::new(),
+                        // The projector records a missing field as absent; a
+                        // synthetic attempt has no provider metadata of its own.
                         harness: None,
                         model: None,
                         combo: None,
@@ -276,16 +285,8 @@ impl Card {
             // (worker crash, rebase conflict, probe failure) that have none of their own.
             let diff_hash = result.diff_hash.clone();
             let check_hash = result.check_hash.clone();
-            let mut check_tail = result.check_tail.clone();
-
-            let report = AttemptReport {
-                card: input.claim.card.clone(),
-                n,
-                leg: leg.id.clone(),
-                exit_class: result.exit_class,
-                diff_hash: result.diff_hash.clone(),
-                check_tail: result.check_tail.clone(),
-            };
+            let (report, budget_entry, mut check_tail) =
+                attempt_outputs(&input.claim.card, n, &leg, &result);
             ctx.execute_activity(CardActivities::report, report, activity_options(&cfg))
                 .await?;
 
@@ -352,7 +353,7 @@ impl Card {
                     QuestionStep::Finished(out) => return Ok(out),
                 }
             }
-            history.push(to_budget_attempt(&result, &leg));
+            history.push(budget_entry);
 
             let mut probed = false;
             let mut merge_retries: u32 = 0;

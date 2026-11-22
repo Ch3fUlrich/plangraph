@@ -61,7 +61,8 @@ that skill, the skill wins.
 - One commit per task; trailers `Plan-Item:`, `Writer:`, and `Changelog: skip (...)`
   when the commit adds no fragment.
 - A test that fails without the fix. Run targeted tests before committing, then
-  `tools/preflight.py` on the committed range before pushing.
+  `tools/preflight.py` on the committed range before pushing. The push hook runs
+  the bounded affected file selection on every phase push. CI runs the full batch.
 - New code is Rust with Rust tests. New Python, shell or Node source files and
   new `tools/new_code_allowlist.txt` entries require an operator D-id (rule 9.14).
   Fixes inside existing Python files remain allowed until their port.

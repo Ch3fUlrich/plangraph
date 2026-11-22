@@ -6,16 +6,21 @@ leaves a marker that continue and abort act on: status ``creating`` (the worktre
 from __future__ import annotations
 
 import datetime
+import json
 import os
+import re
 import shlex
 import sys
+import time
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_parents, stack_sorted
-from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff,
+from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
-                              orphan_names, parse_prs, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees)
+                              orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
+                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key)
 
 
 def default_worktree(name):
@@ -248,6 +253,121 @@ def rule_problems(args, base, prs, heads):
     return problems
 
 
+def policy_runner(argv):
+    """Run pg-policy: PG_POLICY_BIN when set, else cargo run on this checkout. Returns (returncode, stdout, stderr)."""
+    root = git("rev-parse", "--show-toplevel").stdout.strip()
+    binary = os.environ.get("PG_POLICY_BIN")
+    command = ([binary] if binary else ["cargo", "run", "--quiet", "--locked", "--manifest-path",
+                                        str(Path(root) / "rust/Cargo.toml"), "-p", "pg-policy", "--"]) + argv
+    proc = run(command, cwd=root, ok=None)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def open_pr_heads(name, repo, infos):
+    """Every open pull request of the repository outside the batch: {number: {head, ref, base}}, heads fetched.
+
+    The part-entry predicate compares a part with all open heads, not only with the parts of this build."""
+    rows = gh_json("pr", "list", "--repo", repo, "--state", "open", "--limit", "1000", "--json",
+                   "number,headRefName,baseRefName,headRefOid")
+    outside = [r for r in rows if r["number"] not in infos]
+    for row in outside:
+        number, head = row["number"], row["headRefOid"]
+        fetch_error = None
+        try:
+            git("fetch", "--quiet", REMOTE, f"+refs/pull/{number}/head:refs/merge-batch/{name}/open/{number}")
+        except MergeBatchError as exc:
+            fetch_error = exc
+        if git("cat-file", "-t", head, ok=None).stdout.strip() != "commit":
+            detail = f": {first_line(str(fetch_error))}" if fetch_error else " after fetch"
+            raise MergeBatchError(f"open PR #{number} advertised head {head} unavailable{detail}") from fetch_error
+    return {r["number"]: {"head": r["headRefOid"], "ref": r["headRefName"], "base": r["baseRefName"]} for r in outside}
+
+
+def part_entry_problems(base, order, heads, parent, runner=policy_runner, opens=None, refs=None):
+    """Apply the part-entry predicate (imported_history, undeclared_dependency, shared_history) to every part.
+
+    A part's parent is the pull request its base ref names (a part of the batch or another open one); the
+    other heads are every open head outside its chain, batch parts and ``opens`` alike."""
+    universe = {num: {"head": heads[num], "ref": (refs or {}).get(num), "base": None} for num in order}
+    for num, row in (opens or {}).items():
+        universe[num] = row
+    by_ref = {row["ref"]: num for num, row in universe.items() if row.get("ref")}
+    up_of = dict(parent)
+    for num, row in universe.items():
+        if num not in up_of and row.get("base") in by_ref and by_ref[row["base"]] != num:
+            up_of[num] = by_ref[row["base"]]
+    problems = []
+    for num in order:
+        chain, up = {num}, num
+        while up in up_of and up_of[up] not in chain:
+            up = up_of[up]
+            chain.add(up)
+        grew = True
+        while grew:  # descendants: pull requests whose chain reaches num
+            grew = False
+            for child, mother in up_of.items():
+                if mother in chain and child not in chain:
+                    chain.add(child)
+                    grew = True
+        others = [row["head"] for other, row in universe.items() if other not in chain]
+        code, out, err = runner(["--part-entry", f"{REMOTE}/{base}", heads[num],
+                                 universe[up_of[num]]["head"] if num in up_of else "-", *others])
+        if code:
+            detail = "; ".join(line.strip() for line in (out or err).splitlines() if line.strip())
+            problems.append(f"PR #{num}: {detail or 'part entry check failed'}")
+    return problems
+
+
+#: PR label recording the rule 3.46 flake disposition for a red attempt that a rerun turned green.
+FLAKE_LABEL = "flake-dispositioned"
+
+
+def tests_runs(repo, pr, head, api):
+    """Tests runs explicitly associated with this pull request and commit."""
+    runs = api("api", f"repos/{repo}/actions/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")
+    return [r for r in runs.get("workflow_runs", []) if r.get("head_sha") == head
+            and any(p.get("number") == pr for p in r.get("pull_requests") or [])]
+
+
+def ci_attempts(repo, pr, head):
+    """Read actual attempt conclusions, requiring a successful ci-gate for a green Tests run."""
+    rows = []
+    for run in sorted(tests_runs(repo, pr, head, gh_json), key=lambda r: r["id"]):
+        run_id, last = run["id"], run.get("run_attempt", 1)
+        for number in range(1, last + 1):
+            endpoint = f"repos/{repo}/actions/runs/{run_id}/attempts/{number}"
+            attempt = run if number == last else gh_json("api", endpoint)
+            conclusion = attempt.get("conclusion") if attempt.get("status") == "completed" else None
+            if conclusion == "success":
+                jobs = gh_json("api", endpoint + "/jobs?per_page=100")["jobs"]
+                if not any(job.get("name") == "ci-gate" and job.get("status") == "completed"
+                           and job.get("conclusion") == "success" for job in jobs):
+                    conclusion = "ci-gate missing or unsuccessful"
+            rows.append({"run_id": run_id, "attempt": number, "conclusion": conclusion})
+    return rows
+
+
+def part_readiness_problems(repo, infos, order, attempts_for=ci_attempts):
+    """The readiness verdict (tools/ci_select.py ready_problems) of every part, from its own CI on its head.
+
+    ci-gate is green only when every selected job passed: the always-on checks, the entry suites and, when the
+    part selects Rust, the Windows job; so its rollup stands for those three facts."""
+    import ci_select
+    problems = []
+    for num in order:
+        pr = infos[num]
+        attempts = attempts_for(repo, num, pr["head"])
+        done = sorted((a for a in attempts if a.get("conclusion")), key=ci_select.attempt_key)
+        green = bool(done and done[-1]["conclusion"] == "success")
+        rust = bool(ci_select.select(pr["files"])["rust"]) if pr["files"] and not pr["truncated"] else True
+        dispositions = [ci_select.attempt_key(a) for a in done[:-1]] if FLAKE_LABEL in pr["labels"] else []
+        found = ci_select.ready_problems({
+            "fast_checks": green, "entry_set": green, "windows_required": rust, "windows": green if rust else None,
+            "attempts": attempts, "flake_dispositions": dispositions})
+        problems += [f"PR #{num}: {p}" for p in found]
+    return problems
+
+
 def cmd_build(args):
     name = check_name(args.name)
     if state_path(name).exists():
@@ -274,6 +394,15 @@ def cmd_build(args):
     heads = fetch_heads(name, base, order, infos, repo)
     try:
         forced = rule_problems(args, base, [infos[num] for num in order], heads)
+        opens = open_pr_heads(name, repo, infos)
+        entry = (part_entry_problems(base, order, heads, parent, opens=opens,
+                                     refs={n: infos[n]["ref"] for n in order})
+                 + part_readiness_problems(repo, infos, order))
+        if entry and not args.force_set:
+            raise MergeBatchError("part entry refused: " + "; ".join(entry) + " (--force-set builds it anyway and logs it)")
+        if entry:
+            print("FORCE-SET: building despite part entry: " + "; ".join(entry), file=sys.stderr)
+        forced = [*forced, *entry]
         for num in order:  # a frozen batch push cannot be fixed by a history rewrite: refuse before the build
             workflow_gate(None, f"{REMOTE}/{base}", f"refs/merge-batch/{name}/{num}")
     except MergeBatchError:
@@ -358,3 +487,186 @@ def cmd_abort(args):
     note = f"; batch PR #{st['pr']} is still open on the remote" if st.get("pr") else ""
     print(f"aborted batch {st['name']}: removed {', '.join(sorted(paths)) or 'no worktree'} and {st['branch']}{note}")
     return 0
+
+
+def _jobs_of_part(repo, pr, head):
+    """Jobs of the latest completed Tests run for this part PR and head."""
+    runs = [r for r in tests_runs(repo, pr, head, gh_json) if r.get("status") == "completed"]
+    if not runs:
+        return []
+    run = max(runs, key=lambda r: r["id"])
+    jobs = gh_json("api", f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100")["jobs"]
+    return [j for j in jobs if j.get("started_at") and j.get("completed_at") and j.get("created_at")]
+
+
+def record_part_cost(st, run_id, head, telemetry_dir=None):
+    """Append the CI queue and run cost to the part-cost telemetry: one row per merged part, from the run of its
+    own head, and one for the batch candidate's run. Never fails the push."""
+    import ci_select
+    folder = Path(telemetry_dir or os.environ.get("PLANGRAPH_TELEMETRY_DIR")
+                  or Path.home() / ".local/share/plangraph/telemetry")
+    rows = []
+    for rec in st.get("merged") or []:
+        rows.append(("part", rec["pr"], rec["head"], lambda p=rec["pr"], h=rec["head"]: _jobs_of_part(st["repo"], p, h)))
+    rows.append(("candidate", st.get("pr") or 0, head, lambda: gh_json(
+        "api", f"repos/{st['repo']}/actions/runs/{run_id}/jobs?per_page=100")["jobs"]))
+    written = []
+    for kind, number, sha, jobs_of in rows:
+        try:
+            jobs = [j for j in jobs_of() if j.get("started_at") and j.get("completed_at") and j.get("created_at")]
+            if jobs:
+                record = dict(ci_select.part_cost(jobs, number, sha), kind=kind)
+                ci_select.write_part_cost(folder / "part-cost.jsonl", record)
+                written.append(record)
+        except (MergeBatchError, KeyError, ValueError, TypeError, OSError) as exc:
+            print(f"merge_batch: part cost of #{number} not recorded: {exc}", file=sys.stderr)
+    return written
+
+
+def landing_journal(repo, action, **fields):
+    response = run(["plangraph", "landing", "journal"],
+                   input=json.dumps(dict(fields, repo=repo, action=action)), timeout=35)
+    return json.loads(response.stdout)
+
+
+def record_stage(repo, batch, stage, head, started, ended=None):
+    try:
+        landing_journal(repo, "stage", batch_key=batch, stage=stage, head=head,
+                        attempt=max(1, started), started_at_ms=started,
+                        ended_at_ms=max(started, landing_now() if ended is None else ended))
+    except MergeBatchError as exc:
+        print(f"landing stage {stage} for {batch} pending keeper delivery: {exc}", file=sys.stderr)
+
+
+def run_timing_import(repo, batch, head, run_info, attempt):
+    try:
+        run(["plangraph", "landing", "ci-import", repo, batch, head,
+             str(run_info["id"]), str(attempt)], timeout=60)
+    except MergeBatchError as exc:
+        print(f"CI stage for {batch} pending keeper delivery: {exc}", file=sys.stderr)
+
+
+def landing_report(st):
+    try:
+        result = run(["plangraph", "landing", "report", st["repo"], landing_batch_key(st)], timeout=35)
+        return json.loads(result.stdout)
+    except (MergeBatchError, ValueError) as exc:
+        print(f"landing timeline unavailable: {exc}", file=sys.stderr)
+        return {}
+
+
+def exclude_consumed(repo, parts):
+    consumed = set()
+    for start in range(0, len(parts), 100):
+        batch = [{"pr": p.get("pr", p.get("number")), "head": p["head"]} for p in parts[start:start + 100]]
+        result = landing_journal(repo, "consumed", parts=batch)
+        consumed.update((p["pr"], p["head"]) for p in result["consumed"])
+    return [p for p in parts if (p.get("pr", p.get("number")), p["head"]) not in consumed]
+
+
+def cmd_consumed(args):
+    from merge_batch_util import repo_info
+
+    repo, _ = repo_info(args.repo)
+    print(json.dumps(landing_journal(repo, "consumed", parts=[{"pr": args.pr, "head": args.head}])))
+    return 0
+
+
+@contextmanager
+def landing_lease(repo):
+    owner = uuid.uuid4().hex
+    lease = landing_journal(repo, "acquire", owner=owner)
+    try:
+        yield lease
+    finally:
+        landing_journal(repo, "release", **lease)
+
+
+def read_verified_merge(train):
+    repo, number, head = train["repo"], train["pr"], train["head"]
+    main = f"refs/remotes/{REMOTE}/main"
+    pr = gh_json("pr", "view", str(number), "--repo", repo,
+                 "--json", "state,headRefOid,mergeCommit,baseRefName")
+    if pr["state"] == "CLOSED":
+        return None, "closed"
+    merge = (pr.get("mergeCommit") or {}).get("oid")
+    if pr["state"] != "MERGED" or not merge:
+        return None, "pending"
+    if pr["headRefOid"] != head or pr["baseRefName"] != "main" or not re.fullmatch(r"[0-9a-f]{40}", merge):
+        raise MergeBatchError(f"train #{number} has inconsistent merge evidence")
+    git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
+    parents = git("show", "-s", "--format=%P", merge).stdout.split()
+    if (parents != [train["base"], head] or
+            git("merge-base", "--is-ancestor", merge, main, ok=(0, 1)).returncode or
+            git("rev-parse", f"{merge}^{{tree}}").stdout != git("rev-parse", f"{head}^{{tree}}").stdout):
+        raise MergeBatchError(f"train #{number} merge {merge} did not land the exact tested tree on main")
+    for part in train["parts"]:
+        if git("merge-base", "--is-ancestor", part["head"], head, ok=(0, 1)).returncode:
+            raise MergeBatchError(f"train #{number} did not contain part #{part['pr']}")
+    return merge, "merged"
+
+
+def prepare_train(st, lease):
+    parts = [dict(part, ref=st["prs"][str(part["pr"])]["ref"]) for part in st["merged"]]
+    return landing_journal(st["repo"], "prepare", pr=st["pr"], base=st["base_head"],
+                           head=st["head"], parts=parts, batch_key=landing_batch_key(st), **lease)
+
+
+def settle(repo, recs, wait):
+    """{pr: GitHub's state and head} of the included PRs, polled for up to ``wait`` seconds until each is MERGED
+    or has a moved head (a PR with a new commit does not merge by itself, so it is not waited for)."""
+    deadline = time.monotonic() + wait
+    views = {}
+
+    def open_rec(rec):
+        view = views.get(rec["pr"])
+        return view is None or (view["state"] != "MERGED" and view["headRefOid"] == rec["head"])
+
+    while True:
+        for rec in filter(open_rec, recs):
+            views[rec["pr"]] = gh_json("pr", "view", str(rec["pr"]), "--repo", repo, "--json", "state,headRefOid")
+        if not any(map(open_rec, recs)) or time.monotonic() >= deadline:
+            return views
+        time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
+
+
+def included_pr(repo, number, rec, view, merge, *, report):
+    """Check frozen-head ancestry and report the PR's live-head outcome.
+
+    Read an open PR again before closing it. If its head moved after the
+    build, leave it open and label it needs-update.
+    """
+    num = rec["pr"]
+    if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
+        return "problem", f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}"  # no MERGED line
+    if view["state"] != "MERGED" and view["headRefOid"] == rec["head"]:
+        view = gh_json("pr", "view", str(num), "--repo", repo, "--json", "state,headRefOid")
+        if view["state"] == "OPEN" and view["headRefOid"] == rec["head"]:
+            gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")
+    if view["headRefOid"] != rec["head"]:
+        print(f"NOT-MERGED {num} head moved")
+        if view["state"] == "OPEN" and not add_label(repo, num, NEEDS_UPDATE):
+            print(f"warning: could not add the {NEEDS_UPDATE} label to PR #{num}", file=sys.stderr)
+        return "moved", ""
+    if report:
+        print(f"MERGED {num} {merge} {','.join(rec['items']) or '-'}")
+    return "ok", ""
+
+
+def check_landed_parts(repo, number, parts, merge, wait, *, report=True):
+    views = settle(repo, parts, wait)
+    problems, moved, landed = [], [], []
+    for rec in parts:
+        outcome, why = included_pr(repo, number, rec, views[rec["pr"]], merge, report=report)
+        if outcome == "moved":
+            moved.append(rec["pr"])
+        elif outcome == "problem":
+            problems.append(why)
+        else:
+            landed.append(rec)
+    if problems:
+        raise MergeBatchError("batch PR merged, but " + "; ".join(problems) + " (state kept, land again after a fix)")
+    if moved:
+        print(f"batch PR #{number} merged without " + ", ".join(f"#{n}" for n in moved)
+              + f" (head moved after the build; labelled {NEEDS_UPDATE}): they need a new batch", file=sys.stderr)
+    return landed

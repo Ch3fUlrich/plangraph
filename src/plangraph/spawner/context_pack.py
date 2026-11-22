@@ -18,7 +18,7 @@ Safety, in order of strength:
 * Refused per entry (a ``context_path_refused`` warning, the file is never read): a secret-looking name
   (``DENY``, case-insensitive on every path part, a superset of the repo's own fences in opencode.jsonc),
   a ``.git`` path part, an untracked file.
-* A slice overlapping a private-key block is dropped before masking (``context_path_refused`` ...
+* A slice holding a private-key block is dropped before masking (``context_path_refused`` ...
   ``secret-looking content``); every remaining slice goes through ``redact_source`` before packing.
 
 Cost: ``build`` runs once per spawn.  It lists the tracked files with one ``git ls-files``, reads each
@@ -41,7 +41,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from plangraph.routing_errors import ParameterRefused
-from .env_redact import private_key_line, redact_source, _source_block, _join_prompt
+from .env_redact import redact_source, _source_block, _join_prompt, PrivateKeyScan, PEM_MARKER, marker_carry
 from .inline_diff import InlineDiffError
 
 LANGUAGE_RULE = ('new code is Rust with Rust tests; no new Python or shell file; '
@@ -54,7 +54,7 @@ MAX_ENTRIES = 64
 _SLICE = re.compile(r'^(.+):(\d+)-(\d+)$')
 _RANGE = re.compile(r':\d+(?:-\d+)?$')  # 'big.py:1-50' names big.py
 _TOKEN = re.compile(r'''[^\s`'"<>()\[\]{},;=]+''')
-_KEY_SLICE = object()
+_PRIVATE_KEY = re.compile(r'-----BEGIN [A-Z0-9 ]*PRIVATE KEY')
 #: Secret-looking path parts, fnmatch on every lower-cased part of the path.  The first group mirrors the repo's
 #: own read fences in opencode.jsonc (tests/test_spawner_context_guard.py derives its samples from that file).
 DENY = (
@@ -124,6 +124,14 @@ def _locate(root: Path, raw: str) -> Path:
     return resolved
 
 
+class _CutLine(str):
+    """An overlong line cut to the limit; ``dropped_markers`` holds the key markers of the part not kept."""
+    def __new__(cls, text, dropped_markers):
+        value = super().__new__(cls, text)
+        value.dropped_markers = dropped_markers
+        return value
+
+
 def _lines(path: Path, limit: int = 65536):
     """The lines of ``path`` without terminators: the one line convention (see the module docstring).  Undecodable
     bytes become U+FFFD and the last unterminated line counts.  A line over ``limit`` chars comes back cut to
@@ -139,10 +147,16 @@ def _lines(path: Path, limit: int = 65536):
             if len(line) <= limit:
                 yield line   # the last line, no terminator
                 return
+            # Private-key markers in the dropped part still count: keep them as a side note on the line.
+            seen, carry = [], marker_carry(line)
             rest = fh.readline(65536)
-            while rest and not rest.endswith('\n'):
+            while True:
+                seen.extend(m.group() for m in PEM_MARKER.finditer(carry + rest) if m.end() > len(carry))
+                if not rest or rest.endswith('\n'):
+                    break
+                carry = marker_carry(carry + rest)
                 rest = fh.readline(65536)
-            yield line
+            yield _CutLine(line, ''.join(seen))
 
 
 def _line_count(path: Path) -> int:
@@ -204,33 +218,27 @@ def _refusal(rel: str, files: frozenset[str]) -> str | None:
     return None if rel in files else 'not tracked by git'
 
 
-def _extract(path: Path, wanted, cap: int):
+def _extract(path: Path, wanted, cap: int, withheld=None):
     """One streaming pass over ``path`` for the ``(start, end)`` ranges in ``wanted``: each range's text (None once
     it passes ``cap`` chars: it can only be dropped) and the file's line count (None when the pass stopped at the
-    last wanted line, i.e. the file has at least that many)."""
+    last wanted line, i.e. the file has at least that many).  When ``withheld`` is a set, it receives the index of
+    every range that overlaps a private-key block, judged from line 1 so a marker above the range still counts."""
     last = max(end for _, end in wanted)
-    chunks, sizes, n = [[] for _ in wanted], [0] * len(wanted), 0
-    inside = False
-    limit = max(cap, 65536)
-    for line in _lines(path, limit):
+    chunks, sizes, n, scan = [[] for _ in wanted], [0] * len(wanted), 0, PrivateKeyScan()
+    for line in _lines(path, max(cap, 0)):
         n += 1
-        overlap, inside = private_key_line(line, inside)
-        # The unretained suffix could contain a BEGIN marker.
-        if len(line) > limit:
-            overlap = inside = True
+        if scan.feed(line) and withheld is not None:
+            withheld.update(i for i, (start, end) in enumerate(wanted) if start <= n <= end)
         for i, (start, end) in enumerate(wanted):
-            if start <= n <= end:
-                if overlap:
-                    chunks[i] = _KEY_SLICE
-                elif isinstance(chunks[i], list):
-                    sizes[i] += len(line) + 1
-                    if sizes[i] > cap:
-                        chunks[i] = None
-                    else:
-                        chunks[i].append(line)
+            if start <= n <= end and chunks[i] is not None:
+                sizes[i] += len(line) + 1
+                if sizes[i] > cap:
+                    chunks[i] = None
+                else:
+                    chunks[i].append(line)
         if n >= last:
-            break
-    return ['\n'.join(c) if isinstance(c, list) else c for c in chunks], n if n < last else None
+            return [None if c is None else '\n'.join(c) for c in chunks], None
+    return [None if c is None else '\n'.join(c) for c in chunks], n
 
 
 def _slices(root: Path, ents, files: frozenset[str], cap: int):
@@ -247,23 +255,27 @@ def _slices(root: Path, ents, files: frozenset[str], cap: int):
             plan.setdefault(path, []).append((i, raw, start, end))
     found = {}
     for path, wanted in plan.items():
+        withheld = set()
         try:
-            texts, total = _extract(path, [(start, end) for _, _, start, end in wanted], cap)
+            texts, total = _extract(path, [(start, end) for _, _, start, end in wanted], cap, withheld)
         except OSError:
             for i, raw, _, _ in wanted:
                 notes[i].append(f'context_path_refused: {raw} (unreadable)')
             continue
-        for (i, raw, start, end), text in zip(wanted, texts):
+        for slot, ((i, raw, start, end), text) in enumerate(zip(wanted, texts)):
+            if slot in withheld:
+                notes[i].append(f'context_path_refused: {raw} (secret-looking content)')
+                continue
             if total is not None and start > total:
                 notes[i].append(f'context_range_past_eof: {raw}:{start}-{end} (file has {total} lines; not packed)')
                 continue
             if total is not None and end > total:
                 notes[i].append(f'context_range_past_eof: {raw}:{start}-{end} (file has {total} lines; clamped)')
                 end = total
-            if text is _KEY_SLICE:
-                notes[i].append(f'context_path_refused: {raw} (secret-looking content)')
-                continue
             if text is not None:
+                if _PRIVATE_KEY.search(text):
+                    notes[i].append(f'context_path_refused: {raw} (secret-looking content)')
+                    continue
                 text = redact_source(text)
             found[i] = (path, raw, start, end, text)
     return [found[i] for i in sorted(found)], [w for per in notes for w in per]

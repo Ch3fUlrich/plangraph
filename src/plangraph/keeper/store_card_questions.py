@@ -68,6 +68,10 @@ class CardQuestionsMixin:
                 " VALUES((SELECT COALESCE(MAX(id), 0) + 1 FROM questions),"
                 "?,?,?,?,?,'open',?) RETURNING id",
                 (key, body, default, due, _dump(tags), self._iso(now))).fetchone()
+            self._append(principal, None, "question_asked",
+                         {"key": key, "question_id": row[0], "text": body,
+                          "default_answer": default, "deadline": due, "risk_tags": tags},
+                         now, audience_key=key)
         return {"id": row[0], "key": key, "state": "open"}
 
     def answer_question(self, principal, question_id, text=None, source="answer"):
@@ -126,6 +130,9 @@ class CardQuestionsMixin:
             self.conn.execute(
                 "INSERT INTO answers(question_id,ts,actor,text,source) VALUES(?,?,?,?,?)",
                 (question_id, self._iso(now), principal.name, body, source))
+            self._append(principal, None, "question_resolved",
+                         {"key": row["key"], "question_id": question_id, "state": state,
+                          "source": source, "text": body}, now, audience_key=row["key"])
         return {"question_id": question_id, "state": state, "source": source,
                 "text": body}
 

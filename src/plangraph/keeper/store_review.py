@@ -39,6 +39,7 @@ import re
 
 from . import auth
 from .errors import Refused
+from .store_outbox import _StoredReceipt
 from .store_waiver import _known_family
 
 
@@ -46,10 +47,14 @@ class ReviewMixin:
     """The ``verdict`` verb and the two-reviewer bookkeeping."""
 
     # ----------------------------------------------------------- verdict
-    def verdict(self, principal, key, ok, reason=""):
-        result = self._run(principal, "verdict", key,
-                           lambda now: self._verdict(principal, key, ok, reason,
-                                                     now))
+    def verdict(self, principal, key, ok, reason="", *, binding=None):
+        try:
+            if binding is not None:
+                self._seat_delivery(principal, key, ok, reason, binding)
+            result = self._run(principal, "verdict", key,
+                               lambda now: self._verdict(principal, key, ok, reason, now, binding))
+        except _StoredReceipt as settled:
+            return settled.result
         # RT-P1-JEV-SHADOW: post-commit, outside ``_write`` - see the helper.
         self._shadow_qc_accept(principal, key, ok, reason)
         return result
@@ -171,9 +176,10 @@ class ReviewMixin:
         return [p for p in payloads
                 if int(p.get("epoch", -1)) == epoch and int(p.get("round", -1)) == round_no]
 
-    def _verdict(self, principal, key, ok, reason, now):
+    def _verdict(self, principal, key, ok, reason, now, binding):
         self._require_role(principal, "reviewer")
         item = self._get_or_refuse(key)
+        self._seat_delivery(principal, key, ok, reason, binding, item)
         self._assert_unlocked(item)
         if item["state"] != "in_review":
             raise Refused("bad_state", f"{key} is {item['state']}, not in review")
@@ -189,7 +195,7 @@ class ReviewMixin:
         self._reviewer_family_ok(principal, item, self._ctx(item, now),
                                  change_request=not ok)
         if not ok:
-            return self._verdict_changes(principal, key, reason, item, now)
+            return self._verdict_changes(principal, key, reason, item, now, binding)
         self._require_evidence(item)
         # The slow re-verification runs before the write lock; it records exactly
         # which evidence rows it considered so the transaction can prove that set
@@ -198,6 +204,7 @@ class ReviewMixin:
         considered = self._reverify_all(item, now)
         with self._write():
             fresh = self._get_or_refuse(key)
+            self._seat_delivery(principal, key, ok, reason, binding, fresh)
             self._assert_unlocked(fresh)
             if fresh["state"] != "in_review":
                 raise Refused("conflict",
@@ -235,8 +242,8 @@ class ReviewMixin:
                                      sensitive=False, now=now)
                 self._append(principal, key, "review_verdict",
                              self._verdict_payload(principal, fresh), now)
-                return self._pass(principal, key, reason, fresh, now,
-                                  reviews_passed=1)
+                reply = self._pass(principal, key, reason, fresh, now, reviews_passed=1)
+                return self._seat_result(binding, reply)
             if len(prior) >= 2:
                 raise Refused("conflict",
                               f"{key} already has two verdicts this round")
@@ -266,9 +273,10 @@ class ReviewMixin:
             self._append(principal, key, "review_verdict",
                          self._verdict_payload(principal, fresh), now)
             if passed >= need:
-                return self._pass(principal, key, reason, fresh, now,
-                                  reviews_passed=passed)
-        return {"key": key, "state": "in_review", "reviews_passed": passed}
+                reply = self._pass(principal, key, reason, fresh, now, reviews_passed=passed)
+            else:
+                reply = {"key": key, "state": "in_review", "reviews_passed": passed}
+            return self._seat_result(binding, reply)
 
     def _check_coverage(self, principal, item, prior, *, need, sensitive, now):
         """Refuse a closing verdict whose writer families are not covered.
@@ -310,16 +318,20 @@ class ReviewMixin:
             + " WHERE key=? AND state='in_review' AND epoch=?",
             (principal.name, self._iso(now), key, item["epoch"]))
         self._race_guard(cursor, key, "in_review", item["epoch"])
+        # The verdict event locks the item. Carry holders cleared by the guarded update.
+        prior_holders = (item["claimed_by"], item["delegate"]) if release else ()
         self._append(principal, key, "review_passed",
                      {"reason": reason, **({"released": True} if release else {}),
-                      **({"flags": flags} if flags else {})}, now)
+                      **({"flags": flags} if flags else {})}, now,
+                     prior_holders=prior_holders)
         return {"key": key, "state": "done", "reviews_passed": reviews_passed,
                 **({"flags": flags} if flags else {})}
 
-    def _verdict_changes(self, principal, key, reason, item, now):
+    def _verdict_changes(self, principal, key, reason, item, now, binding):
         """``ok=False``: return to claimed (or open on a second change)."""
         with self._write():
             fresh = self._get_or_refuse(key)
+            self._seat_delivery(principal, key, False, reason, binding, fresh)
             self._assert_unlocked(fresh)
             if fresh["state"] != "in_review":
                 raise Refused("conflict",
@@ -374,4 +386,4 @@ class ReviewMixin:
             self._race_guard(cursor, key, "in_review", item["epoch"])
             # Both outcomes hand back new work, even when the claimant stays.
             self._exec_clear(self.conn, key, principal, now)
-        return {"key": key, "state": state, "reviews_passed": 0}
+            return self._seat_result(binding, {"key": key, "state": state, "reviews_passed": 0})

@@ -90,6 +90,21 @@ def _operator_order(reason):
     return (len(rows) == 1 and len(rows[0]) >= 2
             and rows[0][1].strip().lower() == "operator")
 
+def check_record_permissions(path, metadata=None):
+    """Refuse records writable by an unrelated POSIX user."""
+    if metadata is None:
+        metadata = path.stat()
+    # F6: bind the record to its directory and to this uid's write access.
+    windows = os.name == "nt"
+    # Drive mounts synthesize modes; only the real record location is exempt.
+    mode_unknown = windows or re.match(
+        r"^/mnt/[a-zA-Z]/", posixpath.normpath(path.resolve().as_posix()))
+    if (not windows and metadata.st_uid != os.getuid()
+            or not mode_unknown and metadata.st_mode & 0o022):
+        raise ValueError("record.json must be owned by the current uid and "
+                         "not group/world-writable")
+
+
 def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None) -> tuple[dict, str]:
     """Return (evidence, review_text) for a record.json-only seat run dir.
 
@@ -113,15 +128,7 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise RecordPending(f"record.json is not valid JSON: {exc}") from exc
     if not isinstance(record, dict):
         raise ValueError("record.json is not an object")
-    # F6: bind the record to its directory and to this uid's write access.
-    windows = os.name == "nt"
-    # Drive mounts synthesize modes; only the real record location is exempt.
-    mode_unknown = windows or re.match(
-        r"^/mnt/[a-zA-Z]/", posixpath.normpath(record_path.resolve().as_posix()))
-    if (not windows and stat.st_uid != os.getuid()
-            or not mode_unknown and stat.st_mode & 0o022):
-        raise ValueError("record.json must be owned by the current uid and "
-                         "not group/world-writable")
+    check_record_permissions(record_path, stat)
     run_id = record.get("run_id")
     if not isinstance(run_id, str) or run_id != run_dir.name:
         raise ValueError(f"record run_id {run_id!r} does not match "
@@ -146,6 +153,13 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
     if not isinstance(head_sha, str) or not _HEAD_SHA.fullmatch(head_sha):
         error = RecordPending if head_sha in (None, "") else ValueError
         raise error("record completion.head_sha missing or not 40 hex chars")
+    binding, completed = record.get("review_binding"), completion.get("review_binding")
+    if binding is not None or completed is not None:
+        if (not isinstance(binding, dict) or binding != completed
+                or binding.get("head_sha") != head_sha or record.get("head_sha") != head_sha
+                or not _HEAD_SHA.fullmatch(str(binding.get("base_sha")))
+                or not re.fullmatch(r"[0-9a-f]{64}", str(binding.get("diff_sha256")))):
+            raise ValueError("review diff binding mismatch")
     try:
         live_log = (run_dir / "live.log").read_text("utf-8")
     except FileNotFoundError:
@@ -174,6 +188,8 @@ def evidence_from_record(run_dir: Path, cli_writer_families=None, *, record=None
         raise ValueError(f"chosen_leg.family {leg_family!r} does not match "
                          f"family {_canon_family(chosen)!r} of chosen_leg.model {chosen!r}")
     evidence = {"head_sha": head_sha, "source": "record.json", "run_id": run_id}
+    if binding is not None:
+        evidence["review_binding"] = binding
     if "item_key" in record:
         evidence["item_key"] = record["item_key"]
     # F3: finish_reason is only ever recorded; never hard-coded.  The last
@@ -388,6 +404,8 @@ def eligible_records(item, records_dir, known_keys=()):
             if not isinstance(evidence.get("head_sha"), str) or not _HEAD_SHA.fullmatch(evidence["head_sha"]):
                 raise ValueError("record completion.head_sha missing or not 40 hex chars")
             if evidence["head_sha"].lower() != head.lower(): raise ValueError("head mismatch")
+            if item.get("review_binding") is not None and evidence.get("review_binding") != item["review_binding"]:
+                raise ValueError("review diff does not match expected binding")
             family = model_family(evidence.get("served_model"))
             if family is None: raise ValueError("served family unknown")
             if family in writers: raise ValueError("family same as writer")

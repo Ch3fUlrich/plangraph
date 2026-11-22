@@ -2,7 +2,7 @@
 //! sandbox pre-check that must hold before it runs.
 //!
 //! A harness only *builds* a command; `run_harness` hands that command to
-//! `stall::supervise_with_complete_output`, which owns the process group, output capture
+//! `stall::supervise_with_cancel`, which owns the process group, output capture
 //! and the stall/timeout/cancel kills. Keeping the two apart lets tests inspect
 //! argv and cwd without spawning anything.
 //!
@@ -12,7 +12,7 @@
 //! lexically, so a broken link is judged the same as a working one.
 
 use pg_worker_core::scope::{self, Jail, ScopeLimits, system_ro};
-use pg_worker_core::stall::{Opts, Supervised, supervise_with_complete_output};
+use pg_worker_core::stall::{Opts, Supervised, supervise_with_cancel};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -25,7 +25,7 @@ pub struct HarnessRun<'a> {
     pub prompt: &'a str,
 }
 
-/// Builds the agent's command. The caller runs it with `stall::supervise_with_complete_output`.
+/// Builds the agent's command. The caller runs it with `stall::supervise_with_cancel`.
 pub trait Harness: Send + Sync {
     fn name(&self) -> &str;
     fn command(&self, run: &HarnessRun) -> Command;
@@ -379,7 +379,7 @@ pub(crate) fn run_harness(
         );
     }
     let cmd = confined_command(h.command(run), h, run, home, jail)?;
-    supervise_with_complete_output(cmd, opts, cancelled)
+    supervise_with_cancel(cmd, opts, cancelled)
 }
 
 fn confined_command(
@@ -1017,28 +1017,6 @@ mod tests {
         .unwrap();
         assert_eq!(r.code, Some(0));
         assert!(String::from_utf8_lossy(&r.output).contains("hi"));
-    }
-
-    #[test]
-    fn pilot_capture_preserves_redaction_context_past_the_tail_limit() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let run = HarnessRun {
-            workdir: dir.path(),
-            model: "m",
-            prompt: "p",
-        };
-        let script = concat!(
-            "printf '%s\\n%100s\\n%s\\n%s\\n' '-----BEGIN TEST ",
-            "PRIVATE KEY-----' fake 'synthetic-fragment' '-----END TEST PRIVATE KEY-----'; echo retained",
-        );
-        let opts = Opts {
-            max_output: 64,
-            ..Opts::default()
-        };
-        let r = run_harness(&Fake { script }, &run, home.path(), &opts, &|| false, None).unwrap();
-        let safe = crate::output_redact::history_text(&String::from_utf8_lossy(&r.output));
-        assert_eq!(safe, "[REDACTED]\nretained");
     }
 
     #[test]

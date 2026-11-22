@@ -1,0 +1,1 @@
+A full dispatch or push run of another ref on main's tip is read as soon as it exists (only pull request runs need a tree-naming status), the newest `ci-full` status of an attempt wins, and batch-failure deliveries are claimed one at a time right before sending and settled only by their own claim token.

@@ -120,8 +120,6 @@ fn pilot_activity_owner_and_empty_claim() {
 
 #[test]
 fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_second_line() {
-    use crate::keeper::AttemptReport;
-    use pg_worker_core::packet::ParkPacket;
     let floor = pg_worker_core::GITHUB_TOKEN_BODY_FLOOR;
     for prefix in [["gh", "p_"].concat(), ["s", "k-"].concat()] {
         let secret = [prefix.as_str(), &random_body()].concat();
@@ -186,26 +184,15 @@ fn pilot_history_and_keeper_payloads_exclude_secrets_and_preserve_below_floor_se
                 assert_eq!(result.output_tail, "[REDACTED]");
             }
             safe(&serde_json::to_string(&result).unwrap());
-            safe(
-                &serde_json::to_string(&AttemptReport {
-                    card: inp.claim.card.clone(),
-                    n: 1,
-                    leg: inp.leg.id.clone(),
-                    exit_class: result.exit_class,
-                    diff_hash: result.diff_hash.clone(),
-                    check_tail: result.check_tail.clone(),
-                })
-                .unwrap(),
-            );
-            safe(
-                &ParkPacket {
-                    card: inp.claim.card.clone(),
-                    tier: inp.leg.tier,
-                    exit_class: result.exit_class,
-                    check_tail: result.output_tail.clone(),
-                }
-                .to_json(),
-            );
+            // The outputs the workflow itself builds for this result: the keeper
+            // report, and the tail its park packets carry.
+            let (report, entry, tail) =
+                crate::workflow::attempt_outputs(&inp.claim.card, 1, &inp.leg, &result);
+            let packet = crate::workflow::packet_from_last(&inp.claim.card, &[entry], &tail);
+            assert_eq!(report.check_tail, result.check_tail, "{mode}: report tail source");
+            assert_eq!(packet.check_tail, result.check_tail, "{mode}: park tail source");
+            safe(&serde_json::to_string(&report).unwrap());
+            safe(&packet.to_json());
         }
     }
 }

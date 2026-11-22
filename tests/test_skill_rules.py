@@ -157,3 +157,27 @@ def test_lint_other_code_paths_pass(tmp_path):
 def test_real_skills_name_no_old_routing_path():
     problems = tool.lint_dirs([str(p) for p in tool.default_skill_dirs()])
     assert [p for p in problems if "retired routing folder" in p[3]] == []
+
+
+LEARN_SKILLS = ("unattended-orchestration", "batch-writer", "review", "coding-principles")
+
+
+def learn_section(name):
+    text = (ROOT / "skills" / name / "SKILL.md").read_text(encoding="utf-8")
+    assert "\n## Learn as you go\n" in text, name
+    return text.split("\n## Learn as you go\n", 1)[1].split("\n## ", 1)[0].strip()
+
+
+def test_four_skills_carry_the_same_learn_as_you_go_section():
+    sections = {name: learn_section(name) for name in LEARN_SKILLS}
+    assert len(set(sections.values())) == 1, sections
+    text = sections["review"]
+    for needle in ("`LESSON <what happened> <evidence", "`LE-*` keeper item", "same beat",
+                   "never the fix", "read the open and done `LE-*` items", "happens twice"):
+        assert needle in text, needle
+
+
+def test_batch_writer_result_format_has_a_lesson_line():
+    text = (ROOT / "skills" / "batch-writer" / "SKILL.md").read_text(encoding="utf-8")
+    end = text.split("\n## End\n", 1)[1]
+    assert "`LESSON <what happened> <evidence" in end

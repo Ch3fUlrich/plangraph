@@ -373,7 +373,9 @@ def main(argv=None, out=None, err=None):
             if queue_attempt:
                 line(f"error: {exc}", refusal=True)
             return _done(2)
-        # Pre-validate all ops before any execution (dry-run or live)
+        # Pre-validate all ops before any execution (dry-run or live); every refused entry is
+        # listed, and one refused entry applies nothing.
+        refused = []
         for n, op in enumerate(ops, 1):
             if n < start:
                 continue
@@ -388,9 +390,15 @@ def main(argv=None, out=None, err=None):
                 json.dumps(body, allow_nan=False)
                 transport.operation_identity(data["principal"], verb, body, digest, f"index {n}")
             except BatchError as exc:
-                return fail(n, name, key, "error", str(exc))
+                refused.append((n, name, key, str(exc)))
             except (TypeError, ValueError) as exc:
-                return fail(n, name, key, "error", f"cannot encode {verb}: {exc.__class__.__name__}")
+                refused.append((n, name, key, f"cannot encode {verb}: {exc.__class__.__name__}"))
+        if refused:
+            for n, name, key, message in refused:
+                line(f"op {n} {name} {key}: error {message}", refusal=True)
+            line(f"resume with --from {refused[0][0]}")
+            line(f"refused {len(refused)} of {total - start + 1} entries; nothing applied")
+            return _done(1)
         if opts.dry_run and not opts.preview:
             for n, op in enumerate(ops, 1):
                 if n < start:

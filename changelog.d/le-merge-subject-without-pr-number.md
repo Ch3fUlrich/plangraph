@@ -1,0 +1,1 @@
+- `close_merged` now accepts a GO row's `PR N` and `GO-HEAD H` when the merge-commit subject has no `#N` and `H` was introduced by that merge; `tools/merge_batch.py land` always writes a merge subject ending `(#N)` and refuses a custom `--subject` without it.

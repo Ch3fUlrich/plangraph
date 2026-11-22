@@ -22,9 +22,8 @@ decision D-276, ``Waives:`` and ``Closes:`` tokens count only inside the
 DECISION cell (3rd column) of their D-row — a token in any other cell is
 ignored.  ``closes(decision_id)`` follows the same whole-token shape.
 
-Keyword capture stops at the next ``Word:`` (letters/hyphens followed by ``:`` and
-then whitespace or end of cell).  ``project:ID`` tokens (colon directly followed
-by a non-space) do not act as boundaries.
+Lists are read after an unquoted keyword, up to prose or the next ``Word:``
+label. A middle dot can introduce another entry after an explanation.
 """
 
 from __future__ import annotations
@@ -44,7 +43,7 @@ _FENCE_RE = re.compile(r"^ {0,3}(?:`{3,}|~{3,})")
 # Match any keyword boundary: a word of letters/hyphens followed by : and then
 # whitespace or end of cell.  Does NOT match project:ID (colon directly
 # followed by non-space).
-_KEYWORD_RE = re.compile(r"\b([A-Za-z-]+):(?=\s|$)")
+_KEYWORD_RE = re.compile(r"(?<![^\s(])[A-Za-z-]+:(?=\s|$)")
 # Waives:/Closes: keywords themselves match even without trailing space (old
 # behaviour), but capture stops at the next _KEYWORD_RE boundary.
 # FU-X7-LOWS: not after a letter, digit, ``-`` or ``_`` (``X-Waives:``,
@@ -52,6 +51,9 @@ _KEYWORD_RE = re.compile(r"\b([A-Za-z-]+):(?=\s|$)")
 _WAIVES_RE = re.compile(r"(?i)(?<![\w-])waives\s*:")
 _CLOSES_RE = re.compile(r"(?i)(?<![\w-])closes\s*:")
 _TOKEN_SPLIT_RE = re.compile(r"[,\s]+")
+_LIST_ENTRY_RE = re.compile(r"\s+·\s+")
+_TOKEN_PUNCTUATION = ".,;:)]'\"`"
+_QUOTED_TEXT_RE = re.compile(r"""\x60[^\x60]*\x60|"[^"]*"|(?<!\w)'[^']*'""")
 _WS_RE = re.compile(r"\s+")
 # A whole ``project:ID`` key (the same shape tools/apply_batch.py accepts).
 _KEY_TOKEN_RE = re.compile(r"[^:@/\s,]+:[^:@/\s,]+\Z")
@@ -151,6 +153,35 @@ def _parse_closes_token(token: str) -> tuple[str, str | None] | None:
     if _KEY_TOKEN_RE.fullmatch(token):
         return token, None
     return None
+
+
+def _listed_tokens(cell: str, pattern: re.Pattern):
+    """Yield normalized list tokens without consuming the surrounding prose."""
+    quotes = [match.span() for match in _QUOTED_TEXT_RE.finditer(cell)]
+    for match in pattern.finditer(cell):
+        start = match.start()
+        if (start and cell[start - 1] in "'\"`") or any(
+                left <= start < right for left, right in quotes):
+            continue
+        boundary = _KEYWORD_RE.search(cell, match.end())
+        end = boundary.start() if boundary else len(cell)
+        for entry in _LIST_ENTRY_RE.split(cell[match.end():end]):
+            found = False
+            for raw in _TOKEN_SPLIT_RE.split(entry):
+                token = raw.strip(_TOKEN_PUNCTUATION)
+                if not token:
+                    continue
+                key = token.partition("@")[0]
+                if key.startswith(("(", "[")) or not _KEY_TOKEN_RE.fullmatch(key):
+                    # A middle dot can resume the list after a parenthetical
+                    # explanation attached to an entry, or after a bare key.
+                    if not (raw.startswith("(") and entry.rstrip().endswith(")")):
+                        found = False
+                    break
+                found = True
+                yield token
+            if not found:
+                break
 
 
 def _decision_cell(row: str) -> str:
@@ -327,38 +358,12 @@ class DecisionsAdapter:
                 return collapsed
         return ""
 
-    def _scoped_tokens(self, decision_id: str, pattern: re.Pattern) -> set[str]:
-        """The whole tokens in the DECISION cell of *decision_id*'s rows.
-
-        Tokens are captured from each Waives:/Closes: keyword until the next
-        keyword (any Word: followed by whitespace or end of cell) or end of cell.
-        """
+    def _scoped_tokens(self, decision_id: str, pattern: re.Pattern):
+        """The whole tokens in the DECISION cell of *decision_id*'s rows."""
         canonical = self._canonical(decision_id)
-        if canonical is None:
-            return set()
-        tokens: set[str] = set()
-        for row in self._rows().get(canonical, ()):
-            cell = _decision_cell(row)
-            if not cell:
-                continue
-            # Find all keyword positions in the cell
-            keyword_positions = [(m.start(), m.group()) for m in _KEYWORD_RE.finditer(cell)]
-            # For each match of our target pattern (Waives: or Closes:)
-            for match in pattern.finditer(cell):
-                start = match.end()  # Position after "Waives:" or "Closes:"
-                # Find the next keyword position after this match
-                end = len(cell)
-                for kw_pos, kw_text in keyword_positions:
-                    if kw_pos > match.start():
-                        end = kw_pos
-                        break
-                # Extract the text between the keyword and the next keyword
-                token_text = cell[start:end].strip()
-                # Split into individual tokens
-                for token in _TOKEN_SPLIT_RE.split(token_text):
-                    if token:
-                        tokens.add(token)
-        return tokens
+        if canonical is not None:
+            for row in self._rows().get(canonical, ()):
+                yield from _listed_tokens(_decision_cell(row), pattern)
 
     def waives(self, decision_id: str, key: str) -> bool:
         """Does the DECISION cell of *decision_id*'s row name *key* as a whole ``Waives:`` token?"""
@@ -368,50 +373,25 @@ class DecisionsAdapter:
 
     def closes_with_commits(self, decision_id: str) -> dict[str, str | None]:
         """Map of key -> sha|None for valid ``Closes:`` tokens in *decision_id*'s rows."""
-        canonical = self._canonical(decision_id)
-        if canonical is None:
-            return {}
         result: dict[str, str | None] = {}
         invalid: set[str] = set()
-        for row in self._rows().get(canonical, ()):
-            cell = _decision_cell(row)
-            if not cell:
+        for token in self._scoped_tokens(decision_id, _CLOSES_RE):
+            parsed = _parse_closes_token(token)
+            if parsed is None:
                 continue
-            keyword_positions = [(m.start(), m.group()) for m in _KEYWORD_RE.finditer(cell)]
-            for match in _CLOSES_RE.finditer(cell):
-                start = match.end()
-                end = len(cell)
-                for kw_pos, kw_text in keyword_positions:
-                    if kw_pos > match.start():
-                        end = kw_pos
-                        break
-                token_text = cell[start:end].strip()
-                for token in _TOKEN_SPLIT_RE.split(token_text):
-                    if not token:
-                        continue
-                    parsed = _parse_closes_token(token)
-                    if parsed is None:
-                        continue
-                    key, sha = parsed
-                    if key in invalid:
-                        continue
-                    if key not in result:
-                        result[key] = sha
-                    else:
-                        prev = result[key]
-                        if prev is None:
-                            result[key] = sha
-                        elif sha is None:
-                            pass
-                        else:
-                            p_l, s_l = prev.lower(), sha.lower()
-                            if p_l.startswith(s_l):
-                                pass
-                            elif s_l.startswith(p_l):
-                                result[key] = sha
-                            else:
-                                invalid.add(key)
-                                del result[key]
+            key, sha = parsed
+            if key in invalid:
+                continue
+            prev = result.get(key)
+            if prev is None:
+                result[key] = sha
+            elif sha is not None:
+                p_l, s_l = prev.lower(), sha.lower()
+                if s_l.startswith(p_l) and len(sha) > len(prev):
+                    result[key] = sha
+                elif not p_l.startswith(s_l):
+                    invalid.add(key)
+                    del result[key]
         return result
 
     def closes(self, decision_id: str) -> set[str]:

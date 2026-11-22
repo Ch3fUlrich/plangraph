@@ -1,0 +1,1 @@
+- **SKILL-LEARN-AS-YOU-GO:** The orchestration, batch-writer, review and coding-principles skills carry one "Learn as you go" section: a failure becomes a `LESSON` line the same turn and an `LE-*` keeper item with evidence and a code fix the same beat; the batch-writer status format gains the `LESSON` line.

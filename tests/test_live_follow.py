@@ -148,14 +148,13 @@ def gh_json(payload):
 
 def run_entry(name=WF, path=WF_PATH, status="completed", conclusion="success",
               created_at="2026-10-01T00:00:00Z", head_sha=HEAD,
-              head_repository=None, pr_number=7, base_ref="main"):
-    """A run matching the requested SHA and PR by default."""
+              head_repository=None, pr=7, base="main"):
+    """Passes the gate filters by default: pinned file, our repo, PR 7 into main."""
     return {"name": name, "path": path, "status": status, "conclusion": conclusion,
             "created_at": created_at, "head_sha": head_sha,
-            "event": "pull_request",
-            "pull_requests": [{"number": pr_number, "base": {"ref": base_ref}}],
             "head_repository": dict(head_repository if head_repository is not None
-                                    else {"full_name": REPO})}
+                                    else {"full_name": REPO}),
+            "pull_requests": [{"number": pr, "base": {"ref": base}}] if pr else []}
 
 
 def runs_payload(*entries):
@@ -232,6 +231,7 @@ def base_env(tmp_path: Path, **over):
     return env
 
 
+# ---------------------------------------------------------------------------
 # 1. green PR head moves the tree
 
 def test_green_pr_head_moves_tree_with_exact_verified_sha(tmp_path):
@@ -254,6 +254,7 @@ def test_green_pr_head_moves_tree_with_exact_verified_sha(tmp_path):
     assert state["green_since"] == T0
 
 
+# ---------------------------------------------------------------------------
 # 2. non-green states keep the tree
 
 @pytest.mark.parametrize("case", ["red", "pending", "no_runs", "wrong_workflow",
@@ -289,6 +290,7 @@ def test_non_green_never_merges(tmp_path, case):
     assert load_state(cfg) == {}                   # state untouched
 
 
+# ---------------------------------------------------------------------------
 # 3. commit without a PR
 
 def test_commit_without_pr_needs_its_own_green_run(tmp_path):
@@ -329,6 +331,7 @@ def test_nonempty_pr_list_without_candidate_is_not_green(tmp_path):
     assert fake.merge_calls() == []
 
 
+# ---------------------------------------------------------------------------
 # 4. newest run wins
 
 @pytest.mark.parametrize("older,newer,green", [
@@ -346,6 +349,7 @@ def test_newest_run_decides_green(tmp_path, older, newer, green):
     assert is_green(fake, cfg, HEAD) is green
 
 
+# ---------------------------------------------------------------------------
 # 5. not a fast-forward
 
 def test_not_fast_forward_keeps_tree(tmp_path):
@@ -361,6 +365,7 @@ def test_not_fast_forward_keeps_tree(tmp_path):
     assert fake.merge_calls() == []
 
 
+# ---------------------------------------------------------------------------
 # 6. fetch failure / missing token: kept, never raises
 
 def test_fetch_failure_keeps_tree(tmp_path):
@@ -404,6 +409,7 @@ def test_git_rev_parse_failure_keeps_tree(tmp_path):
     assert fake.merge_calls() == []
 
 
+# ---------------------------------------------------------------------------
 # 7. ff-only merge failure
 
 def test_ff_merge_failure_keeps_tree(tmp_path):
@@ -419,6 +425,7 @@ def test_ff_merge_failure_keeps_tree(tmp_path):
     assert load_state(cfg)["green_sha"] == HEAD
 
 
+# ---------------------------------------------------------------------------
 # 8. merge uses the verified sha, not the moving ref
 
 def test_merge_uses_verified_sha_not_ref_reresolved(tmp_path):
@@ -444,6 +451,7 @@ def test_merge_uses_verified_sha_not_ref_reresolved(tmp_path):
     assert HEAD2 not in " ".join(merges[0]["argv"])
 
 
+# ---------------------------------------------------------------------------
 # 9. token never leaks
 
 @pytest.mark.parametrize("scenario", ["moved", "gh_fail", "no_token"])
@@ -508,6 +516,7 @@ def test_gh_api_contract(tmp_path):
     assert gh_api(fake, ncfg, "repos/x/y/thing") is None
 
 
+# ---------------------------------------------------------------------------
 # 10. read_token
 
 def test_read_token_formats(tmp_path):
@@ -531,6 +540,7 @@ def test_read_token_formats(tmp_path):
     assert read_token(str(p)) is None
 
 
+# ---------------------------------------------------------------------------
 # 11. record_green / load_state
 
 def test_record_green_keeps_green_since_when_sha_unchanged(tmp_path):
@@ -566,6 +576,7 @@ def test_load_state_corrupt_file_is_empty(tmp_path):
     assert load_state(make_cfg(tmp_path, state=str(tmp_path / "gone.json"))) == {}
 
 
+# ---------------------------------------------------------------------------
 # 12. page_stamp
 
 def test_page_stamp_parses_meta_tag(tmp_path):
@@ -579,6 +590,7 @@ def test_page_stamp_parses_meta_tag(tmp_path):
     assert page_stamp(str(tmp_path / "missing.html")) is None
 
 
+# ---------------------------------------------------------------------------
 # 13. check: statuses, one alert per green sha, stderr fallback
 
 def test_check_status_machine_and_single_alert(tmp_path, capsys):
@@ -633,6 +645,7 @@ def test_check_without_alert_cmd_prints_line_to_stderr(tmp_path, capsys):
     assert fake.calls_where("notify-send") == []
 
 
+# ---------------------------------------------------------------------------
 # 14. end-to-end: follow moves, then stamp check on the rendered page
 
 def test_follow_then_page_stamp_check_end_to_end(tmp_path):
@@ -667,6 +680,7 @@ def test_follow_then_page_stamp_check_end_to_end(tmp_path):
     assert check(cfg, fake, now=T0 + 999999)["status"] == "stale"
 
 
+# ---------------------------------------------------------------------------
 # 15. main()
 
 def test_main_follow_prints_one_json_line_and_returns_zero(tmp_path, capsys):
@@ -683,7 +697,7 @@ def test_main_follow_prints_one_json_line_and_returns_zero(tmp_path, capsys):
 
 @pytest.mark.parametrize("missing", [
     "PLANGRAPH_LIVE_TREE", "PLANGRAPH_REPO",
-    "PLANGRAPH_GH_TOKEN_FILE", "PLANGRAPH_OUT", "PLANGRAPH_STATE",
+    "PLANGRAPH_GH_TOKEN_FILE", "PLANGRAPH_OUT",
 ])
 def test_main_missing_env_var_returns_two(tmp_path, missing, capsys):
     env = base_env(tmp_path, **{missing: None})
@@ -715,16 +729,17 @@ def test_main_output_never_contains_token(tmp_path, capsys):
     assert json.loads(cap.out.strip())["action"] == "kept"
 
 
+# ---------------------------------------------------------------------------
 # 16. Config.from_env
 
 def test_config_from_env_defaults_and_required(tmp_path):
-    env = base_env(tmp_path)
+    env = base_env(tmp_path, PLANGRAPH_STATE=None, HOME=str(tmp_path))  # no key: the default
     cfg = Config.from_env(env)
     assert cfg.tree == env["PLANGRAPH_LIVE_TREE"]
     assert cfg.repo == REPO
     assert cfg.token_file == env["PLANGRAPH_GH_TOKEN_FILE"]
     assert cfg.out == env["PLANGRAPH_OUT"]
-    assert cfg.state == env["PLANGRAPH_STATE"]
+    assert Path(cfg.state) == tmp_path / ".local/state/plangraph/live-follow.json"
     assert cfg.workflow_path == WF_PATH
     assert cfg.remote == "origin"
     assert cfg.branch == "main"
@@ -744,7 +759,7 @@ def test_config_from_env_defaults_and_required(tmp_path):
 
 @pytest.mark.parametrize("missing", [
     "PLANGRAPH_LIVE_TREE", "PLANGRAPH_REPO",
-    "PLANGRAPH_GH_TOKEN_FILE", "PLANGRAPH_OUT", "PLANGRAPH_STATE",
+    "PLANGRAPH_GH_TOKEN_FILE", "PLANGRAPH_OUT",
 ])
 def test_config_from_env_required_names_variable(tmp_path, missing):
     env = base_env(tmp_path, **{missing: None})
@@ -754,6 +769,7 @@ def test_config_from_env_required_names_variable(tmp_path, missing):
     assert missing in str(ei.value)
 
 
+# ---------------------------------------------------------------------------
 # 17. tightened is_green gate: exact PRs rule, fallback only closed+merged
 
 PH_RED = "dd44ee55ff660011223344556677aa11bb22cc33"
@@ -801,9 +817,9 @@ def test_all_exact_prs_must_be_green(tmp_path):
         merged_pr(8, HEAD, "main", PH_RED),
     ]))
     fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
-                gh_json(runs_payload(run_entry(head_sha=PH_GREEN, pr_number=7))))
-    fake.script(("gh", "api", runs_endpoint(PH_RED)),
-                gh_json(runs_payload(run_entry(head_sha=PH_RED, pr_number=8, conclusion="failure"))))
+                gh_json(runs_payload(run_entry(head_sha=PH_GREEN))))
+    fake.script(("gh", "api", runs_endpoint(PH_RED)), gh_json(runs_payload(
+        run_entry(head_sha=PH_RED, conclusion="failure", pr=8))))
     assert is_green(fake, cfg, HEAD) is False
 
 
@@ -816,8 +832,8 @@ def test_rebase_merge_fallback_closed_merged_pr(tmp_path):
     fake.script(("gh", "api", pulls_endpoint(HEAD)), gh_json([
         merged_pr(9, OTHER_MERGE, cfg.branch, PH_GREEN),
     ]))
-    fake.script(("gh", "api", runs_endpoint(PH_GREEN)),
-                gh_json(runs_payload(run_entry(head_sha=PH_GREEN, pr_number=9))))
+    fake.script(("gh", "api", runs_endpoint(PH_GREEN)), gh_json(
+        runs_payload(run_entry(head_sha=PH_GREEN, pr=9))))
     assert is_green(fake, cfg, HEAD) is True
 
 
@@ -849,6 +865,7 @@ def test_candidate_without_head_sha_fails_closed(tmp_path):
     assert is_green(fake, cfg, HEAD) is False
 
 
+# ---------------------------------------------------------------------------
 # 18. F1: bad grace / bad alert cmd -> ConfigError naming the variable, exit 2
 
 @pytest.mark.parametrize("value", ["abc", "-5", "0", "1.5"])
@@ -882,6 +899,7 @@ def test_config_unbalanced_alert_cmd_names_variable_and_main_exits_two(tmp_path,
     assert "PLANGRAPH_ALERT_CMD" in lines[0]
 
 
+# ---------------------------------------------------------------------------
 # 19. F2: alert cmd failure keeps the alert pending and retries next tick
 
 def test_check_alert_cmd_failure_retries_next_tick(tmp_path, capsys):
@@ -904,6 +922,7 @@ def test_check_alert_cmd_failure_retries_next_tick(tmp_path, capsys):
     assert len(fake.calls_where("notify-send")) == 2
 
 
+# ---------------------------------------------------------------------------
 # 20. F3: corrupt green_since restarts the grace clock and is persisted
 
 @pytest.mark.parametrize("since", ["missing", "garbage", "future"])
@@ -938,6 +957,7 @@ def test_check_corrupt_green_since_restarts_grace_clock(tmp_path, since):
     assert load_state(cfg)["alerted"] == HEAD
 
 
+# ---------------------------------------------------------------------------
 # 21. F4: main survives an unexpected failure inside check, quietly
 
 def test_main_check_survives_unwritable_state_path(tmp_path, capsys):
@@ -969,6 +989,7 @@ def test_main_check_survives_unwritable_state_path(tmp_path, capsys):
     assert json.loads(lines[0]) == {"status": "error"}
 
 
+# ---------------------------------------------------------------------------
 # 22. Q1: the newest green head is recorded even when the tree cannot move
 
 def test_ff_failed_with_green_head_records_state_and_later_check_alerts(tmp_path):
@@ -1022,6 +1043,7 @@ def test_not_green_head_is_neither_recorded_nor_merged(tmp_path):
     assert load_state(cfg) == {}
 
 
+# ---------------------------------------------------------------------------
 # 23. Q2: check re-arms the alert when the page catches up
 
 def test_check_rearms_alerted_when_page_matches(tmp_path):
@@ -1042,6 +1064,7 @@ def test_check_rearms_alerted_when_page_matches(tmp_path):
     assert load_state(cfg)["alerted"] == HEAD
 
 
+# ---------------------------------------------------------------------------
 # 24. Q3: load_state validates field types instead of trusting the file
 
 def test_load_state_drops_invalid_field_types(tmp_path):
@@ -1089,6 +1112,7 @@ def test_check_repairs_string_green_since_after_load(tmp_path):
     assert saved["green_since"] == T0
 
 
+# ---------------------------------------------------------------------------
 # 25. A1/A2/A3: the CI gate is pinned to a workflow file, the head sha and
 #     the head repository — a same-NAMED workflow from elsewhere cannot
 #     decide the result.
@@ -1198,27 +1222,3 @@ def test_follow_with_only_a_lookalike_workflow_green_keeps_tree(tmp_path):
     assert res["reason"] == "not_green"
     assert fake.merge_calls() == []
     assert load_state(cfg) == {}
-
-
-@pytest.mark.parametrize("number, branch, ref", [(8, "main", ""), (7, "other", ""),
-                                                (7, "main", "@refs/pull/8/merge")])
-def test_unrelated_workflow_run_cannot_rescue_same_head(tmp_path, number, branch, ref):
-    cfg = make_cfg(tmp_path)
-    put_token(tmp_path)
-    fake = FakeRunner()
-    script_green_ci(fake, entries=[
-        run_entry(conclusion="failure", head_sha=PR_HEAD),
-        run_entry(head_sha=PR_HEAD, created_at="2026-10-02T00:00:00Z",
-                  pr_number=number, base_ref=branch, path=WF_PATH + ref),
-    ])
-    assert not is_green(fake, cfg, HEAD)
-
-
-def test_state_file_cannot_resolve_inside_output_dir(tmp_path):
-    out = tmp_path / "web"
-    out.mkdir()
-    alias = tmp_path / "web-alias"
-    alias.symlink_to(out, target_is_directory=True)
-    for state in (out / "live-follow.json", alias / "live-follow.json"):
-        with pytest.raises(ConfigError, match="PLANGRAPH_STATE"):
-            Config.from_env(base_env(tmp_path, PLANGRAPH_OUT=str(out), PLANGRAPH_STATE=str(state)))

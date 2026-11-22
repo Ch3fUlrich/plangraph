@@ -1,0 +1,1 @@
+`ci-full` evidence comes only from the CI publisher and the evidence attempt of a landed tip must have succeeded; a pull request run needs a tree-naming status whatever its head branch is called, and a newer attempt without one keeps main pending; a batch failure delivery has a unique claim token and the delivery command is killed at its lease.

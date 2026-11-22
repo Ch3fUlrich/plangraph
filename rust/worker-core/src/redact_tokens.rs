@@ -62,7 +62,7 @@ pub(crate) const SPECS: &[TokenSpec] = &[
     TokenSpec {
         prefix: "[sr]k_(?:live|test)_",
         body: "[A-Za-z0-9]",
-        floor: 20,
+        floor: 16,
         exact: false,
     },
 ];
@@ -108,6 +108,164 @@ pub(crate) fn redact_blob_plain(text: &str, blob_re: &regex::Regex) -> String {
             }
         })
         .into_owned()
+}
+
+/// The credential-name pattern shared by the assignment rules and the nested-assignment scan.
+pub(crate) const CREDENTIAL_NAME: &str = r"[A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*";
+
+/// The two env-style assignment rules (4a, 4b of redact.rs), built from CREDENTIAL_NAME.
+pub(crate) fn assignment_patterns() -> [String; 2] {
+    [
+        [r#"(?i)\b("#, CREDENTIAL_NAME, r#")(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#].concat(),
+        [r#"(?i)\b("#, CREDENTIAL_NAME, r#")(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#].concat(),
+    ]
+}
+
+/// True when `value` holds a credential-name assignment. Headers are found apart
+/// from their values, so one after an `==` is seen too; `==` itself compares and
+/// assigns nothing, while `:=` assigns.
+fn has_nested_assignment(value: &str) -> bool {
+    use std::sync::OnceLock;
+    static HEADER: OnceLock<regex::Regex> = OnceLock::new();
+    let header = HEADER.get_or_init(|| {
+        regex::Regex::new(&[r"(?i)\b", CREDENTIAL_NAME, r#"["']?[^\S\r\n]*([=:])"#].concat())
+            .unwrap()
+    });
+    header
+        .captures_iter(value)
+        .any(|m| !(&m[1] == "=" && value[m.get(0).unwrap().end()..].starts_with('=')))
+}
+
+/// True for None/True/False/null or an already masked value, or for one call,
+/// subscript or bracketed expression (with attribute/call chains) holding no
+/// string literal. Spawner-read source keeps these readable; anything else after a
+/// credential name is masked (src/plangraph/spawner/redact_tokens.py is_computed).
+/// `value` must be the whole right-hand side, to the end of the line.
+pub(crate) fn is_computed(value: &str) -> bool {
+    let value = value.trim();
+    if matches!(
+        value,
+        "None" | "True" | "False" | "null" | "[REDACTED]" | "\"[REDACTED]\"" | "'[REDACTED]'"
+    ) {
+        return true;
+    }
+    if value.is_empty() || value.contains(['"', '\'']) {
+        return false;
+    }
+    // A credential-name assignment nested in the expression is judged by itself.
+    if has_nested_assignment(value) {
+        return false;
+    }
+    let chars: Vec<char> = value.chars().collect();
+    let mut at = 0;
+    let named = chars[0].is_ascii_alphabetic() || chars[0] == '_';
+    if named {
+        while at < chars.len()
+            && (chars[at].is_ascii_alphanumeric() || matches!(chars[at], '_' | '.'))
+        {
+            at += 1;
+        }
+        while at < chars.len() && chars[at].is_whitespace() && !matches!(chars[at], '\r' | '\n') {
+            at += 1;
+        }
+    }
+    let closer = |c: char| match c {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        _ => None,
+    };
+    // Only a bare expression may open with a brace; after a name or a group only a
+    // call or a subscript can follow.
+    let opens = |at: usize| match chars.get(at) {
+        Some('(' | '[') => true,
+        Some('{') => at == 0,
+        _ => false,
+    };
+    if !opens(at) {
+        return false;
+    }
+    while at < chars.len() {
+        if !opens(at) {
+            return false;
+        }
+        let first = closer(chars[at]).unwrap();
+        let mut stack = vec![first];
+        at += 1;
+        while !stack.is_empty() && at < chars.len() {
+            let c = chars[at];
+            if let Some(end) = closer(c) {
+                stack.push(end);
+            } else if Some(&c) == stack.last() {
+                stack.pop();
+            } else if matches!(c, ')' | ']' | '}') {
+                return false;
+            }
+            at += 1;
+        }
+        if !stack.is_empty() {
+            return false;
+        }
+        if chars.get(at) == Some(&'.')
+            && chars
+                .get(at + 1)
+                .is_some_and(|c| c.is_ascii_alphabetic() || *c == '_')
+        {
+            at += 1;
+            while at < chars.len() && (chars[at].is_ascii_alphanumeric() || chars[at] == '_') {
+                at += 1;
+            }
+        }
+    }
+    true
+}
+
+/// Mask the value of every assignment `rule` finds. In source mode a value that is a
+/// computed expression, judged on the whole rest of its line, stays readable; any
+/// other unquoted value is masked through the end of the line, so nothing after the
+/// first closing delimiter can survive.
+pub(crate) fn replace_assignments(rule: &regex::Regex, text: &str, source: bool) -> String {
+    if !source {
+        return rule.replace_all(text, "$1$2$3[REDACTED]").into_owned();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    // The line end of the last match is the line end of every later match before it.
+    // A computed value keeps its whole line, so nothing inside it is judged again.
+    let mut line_end = 0;
+    let mut kept_until = 0;
+    for m in rule.captures_iter(text) {
+        let whole = m.get(0).unwrap();
+        if whole.start() < copied.max(kept_until) {
+            continue;
+        }
+        let value = m.get(4).unwrap();
+        if value.start() >= line_end {
+            line_end = text[value.start()..]
+                .find(['\n', '\r'])
+                .map_or(text.len(), |i| value.start() + i);
+        }
+        let judged = &text[value.start()..line_end];
+        if is_computed(judged) {
+            kept_until = line_end;
+            continue;
+        }
+        let mut end = whole.end();
+        if !value.as_str().starts_with(['"', '\'']) {
+            end = end.max(line_end);
+        }
+        out.push_str(&text[copied..whole.start()]);
+        out.push_str(&format!(
+            "{}{}{}{}",
+            &m[1],
+            &m[2],
+            &m[3],
+            crate::redact::REDACTED
+        ));
+        copied = end;
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 pub(crate) fn redact_blob(
@@ -179,6 +337,95 @@ mod tests {
     use super::*;
 
     #[test]
+    fn assignment_rules_and_nested_scan_share_one_name_pattern() {
+        for name in [
+            "PASSWORD",
+            "API_KEY",
+            "ApiKey",
+            "token",
+            "Secret",
+            "passwd",
+            "ACCESS_KEY",
+            "PRIVATE_KEY",
+            "credential",
+            "my_secret_1",
+            "KEYS",
+            "monkey",
+            "plain_name",
+        ] {
+            let text = format!("{name} = value");
+            let rule = assignment_patterns()
+                .iter()
+                .any(|rule| regex::Regex::new(rule).unwrap().is_match(&text));
+            assert_eq!(rule, has_nested_assignment(&text), "{name}");
+        }
+        assert!(assignment_patterns()
+            .iter()
+            .all(|rule| rule.contains(CREDENTIAL_NAME)));
+    }
+
+    #[test]
+    fn dense_single_line_assignments_stay_linear() {
+        let plain = "TOKEN='a' ".repeat(100_000);
+        let nested = format!(
+            "TOKEN=f({}{}",
+            "TOKEN=f(".repeat(50_000),
+            ")".repeat(50_000)
+        );
+        for input in [&plain, &nested] {
+            for source in [false, true] {
+                let start = std::time::Instant::now();
+                let out = if source {
+                    crate::redact::redact_source(input)
+                } else {
+                    crate::redact::redact(input)
+                };
+                assert!(
+                    start.elapsed().as_secs() < 3,
+                    "{}",
+                    start.elapsed().as_secs()
+                );
+                assert!(out.contains("[REDACTED]"));
+            }
+        }
+    }
+
+    #[test]
+    fn computed_values_are_single_literal_free_expressions() {
+        for yes in [
+            "tuple(sorted((left, right)))",
+            "(scope, name)",
+            "[]",
+            "{}",
+            "vault[name]",
+            "a.b(c).d(e)",
+            "f (a)",
+            "{a: b}",
+            "[1].b()",
+            "None",
+            "\"[REDACTED]\"",
+        ] {
+            assert!(is_computed(yes), "{yes}");
+        }
+        for no in [
+            "load(x) + literal",
+            "get_secret() or x",
+            "foo(bar",
+            "foo)",
+            "x{y}",
+            "f(a){b}",
+            "[a]{b}",
+            "x",
+            "123",
+            "\"x\"",
+            "os.environ[\"X\"]",
+            "",
+        ] {
+            assert!(!is_computed(no), "{no}");
+        }
+    }
+
+    #[test]
     fn wrapped_xox_underscore_is_redacted() {
         let prefix = ["xo", "xb-"].concat();
         let plain = format!("{prefix}ab_cd_ef_gh; retained");
@@ -207,6 +454,10 @@ mod tests {
             (3, "xo", "xs-"),
             (4, "AK", "IA"),
             (5, "AI", "za"),
+            (6, "sk", "_live_"),
+            (6, "sk", "_test_"),
+            (6, "rk", "_live_"),
+            (6, "rk", "_test_"),
         ];
         for (index, left, right) in families {
             let spec = &SPECS[index];

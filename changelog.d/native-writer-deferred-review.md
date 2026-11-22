@@ -1,0 +1,1 @@
+- Complete gated native writer runs with review deferred to the batch seat when the host route offers no repository-capable reviewer. Keep the committed head and record each leg's exclusion reason.

@@ -15,6 +15,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "stall_capture.rs"]
+mod stall_capture;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
@@ -39,6 +41,10 @@ pub struct Opts {
     pub grace: Duration,
     /// Keep at most this many trailing bytes of combined output.
     pub max_output: usize,
+    /// Scrub secret-shaped text from the captured output before any of it is
+    /// dropped from the front, so a secret that straddles the cut leaves no
+    /// fragment behind. Retained bytes are then redacted, not raw.
+    pub redact_discarded: bool,
 }
 
 impl Default for Opts {
@@ -48,6 +54,7 @@ impl Default for Opts {
             timeout: None,
             grace: Duration::from_secs(10),
             max_output: 1 << 20,
+            redact_discarded: false,
         }
     }
 }
@@ -62,7 +69,7 @@ pub struct Supervised {
     pub timed_out: bool,
     /// The caller's cancel closure fired, so we terminated the tree early.
     pub cancelled: bool,
-    /// Combined stdout+stderr, captured according to the selected output policy.
+    /// Trailing combined stdout+stderr.
     pub output: Vec<u8>,
 }
 
@@ -71,37 +78,18 @@ fn read_tail(
     start: Instant,
     last: &AtomicU64,
     max: usize,
-    complete: bool,
+    redact: bool,
 ) -> Vec<u8> {
-    let limit = max.saturating_mul(8).max(65536);
-    let mut withheld = false;
-    let mut buf = Vec::new();
+    let mut capture = stall_capture::Capture::new(max, redact);
     let mut chunk = [0u8; 8192];
     while let Ok(n) = r.read(&mut chunk) {
         if n == 0 {
             break;
         }
         last.store(start.elapsed().as_millis() as u64, Ordering::Relaxed);
-        if withheld {
-            continue;
-        }
-        if complete && n > limit.saturating_sub(buf.len()) {
-            buf.clear();
-            withheld = true;
-            continue;
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if !complete && buf.len() > max.saturating_mul(2) {
-            buf.drain(..buf.len() - max);
-        }
+        capture.push(&chunk[..n]);
     }
-    if withheld {
-        return b"[autoos:overlong process output withheld]".to_vec();
-    }
-    if !complete && buf.len() > max {
-        buf.drain(..buf.len() - max);
-    }
-    buf
+    capture.finish()
 }
 
 /// Run `cmd` to completion under the watchdog described in the module docs.
@@ -122,28 +110,9 @@ pub fn supervise(cmd: Command, opts: &Opts) -> io::Result<Supervised> {
 /// replaced by `CREATE_SUSPENDED | CREATE_NO_WINDOW` (the child is never
 /// interactive).
 pub fn supervise_with_cancel(
-    cmd: Command,
-    opts: &Opts,
-    cancelled: &dyn Fn() -> bool,
-) -> io::Result<Supervised> {
-    supervise_with_capture(cmd, opts, cancelled, false)
-}
-
-/// Preserve redaction and parsing context for callers that derive a public tail.
-/// Bound the raw stream separately and withhold it if that bound is exceeded.
-pub fn supervise_with_complete_output(
-    cmd: Command,
-    opts: &Opts,
-    cancelled: &dyn Fn() -> bool,
-) -> io::Result<Supervised> {
-    supervise_with_capture(cmd, opts, cancelled, true)
-}
-
-fn supervise_with_capture(
     mut cmd: Command,
     opts: &Opts,
     cancelled: &dyn Fn() -> bool,
-    complete: bool,
 ) -> io::Result<Supervised> {
     let (reader, writer) = io::pipe()?;
     cmd.stdin(Stdio::null())
@@ -153,8 +122,8 @@ fn supervise_with_capture(
     drop(cmd); // closes our copies of the write end so the reader sees EOF
     let start = Instant::now();
     let last = Arc::new(AtomicU64::new(0));
-    let (last2, max) = (last.clone(), opts.max_output);
-    let reader = thread::spawn(move || read_tail(reader, start, &last2, max, complete));
+    let (last2, max, redact) = (last.clone(), opts.max_output, opts.redact_discarded);
+    let reader = thread::spawn(move || read_tail(reader, start, &last2, max, redact));
 
     let (mut stalled, mut timed_out, mut cancelled_flag) = (false, false, false);
     let mut term_at: Option<Instant> = None;
@@ -252,6 +221,11 @@ pub fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg(unix)]
+#[path = "stall_redact_tests.rs"]
+mod redact_tests;
 
 #[cfg(test)]
 #[cfg(unix)]

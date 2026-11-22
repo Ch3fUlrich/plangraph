@@ -1,0 +1,1 @@
+- Wire the round-cap replan job into pg-spawnd: `serve` runs the queued jobs (spawner route legs, `gh` PR files and close, keeper `show`/`define`, fleet bus routing line), and the routing line is retried under one idempotency key (`fleet-msg send --msg-id`) until its delivery is acknowledged, so a crash after the send mark no longer reports done without a send.

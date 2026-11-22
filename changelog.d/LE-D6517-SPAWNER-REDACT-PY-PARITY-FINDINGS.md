@@ -1,1 +1,1 @@
-Mask wrapped tokens across child reads and Git diff markers, scrub child and gateway refusal diagnostics, and recognize Stripe and wrapped Bearer credentials.
+- Redaction (Python and Rust) now masks Stripe `sk_`/`rk_` live and test keys, masks a wrapped token that follows a Bearer word before the Bearer rule runs, holds back a possibly continuing wrapped credential across reads in the child-output collector and the CLI stderr drain, joins wrapped tokens across the +/-/space markers of a Git diff, and redacts dispatch-refusal diagnostics with the output rules (D-6517).

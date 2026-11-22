@@ -35,6 +35,11 @@ def review_priority(leg) -> int:
     return 2 if "haiku" in leg.model.lower() else 0 if leg.family == "mimo" else 1
 
 
+def has_repository_review_tools(leg):
+    """OpenCode review launches deny tools even for legs registered with tools."""
+    return leg.tool_mode == "tools" and leg.harness != "opencode"
+
+
 def implement_key(leg, tier_idx, pos):
     """Eligible Sol xhigh then Gemini precede other cost tiers (rule 3.23a/D-5212).
 

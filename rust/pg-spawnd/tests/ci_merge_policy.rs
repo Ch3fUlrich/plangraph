@@ -69,7 +69,9 @@ import sys
 sys.path.insert(0, 'tools')
 import ci_select as ci
 assert ci.select(['src/plangraph/keeper/store.py'])['browser'] is False
-for path in ['src/plangraph/web/app.js', 'tests/browser/test_ui.py', 'requirements-ci.txt', '.github/workflows/tests.yml', 'vendor/htmx.js', 'tests/conftest.py', 'pyproject.toml', 'src/plangraph/render.py']:
+workflow_selection = ci.select(['.github/workflows/tests.yml'])
+assert {job for job, selected in workflow_selection.items() if selected} == {'pytest', 'rust'}
+for path in ['src/plangraph/web/app.js', 'tests/browser/test_ui.py', 'requirements-ci.txt', 'vendor/htmx.js', 'tests/conftest.py', 'pyproject.toml', 'src/plangraph/render.py']:
     assert ci.select([path])['browser'] is True, path
 needs = {'select': {'result': 'success', 'outputs': {s: 'true' for s in ci.SUITES}}}
 needs.update({s: {'result': 'success'} for s in ci.ALWAYS + ci.SUITES})
@@ -209,14 +211,20 @@ fn red_main_freezes_land_except_a_head_bound_go_row() {
     python(
         r#"
 import pathlib, sys, tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 sys.path.insert(0, 'tools')
 import merge_batch_land as land
 head = 'a' * 40
-run = {'head_sha': 'b' * 40, 'head_branch': 'main', 'status': 'completed', 'conclusion': 'failure'}
-def api(*args):
-    return {'object': {'sha': 'b' * 40}} if '/git/ref/' in args[1] else {'workflow_runs': [run]}
-with patch.object(land, 'gh_json', side_effect=api), tempfile.TemporaryDirectory() as tmp:
+state = 'main_red'
+def admit(argv, **kwargs):
+    assert argv[:5] == ['fixture-plangraph', 'main-state', '--repo', 'o/r', '--admit'], argv
+    assert argv[5:] in ([], ['--exception', 'EXCEPTION:main-red-fix']), argv
+    allowed = state == 'green' or (state == 'main_red' and len(argv) == 7)
+    return SimpleNamespace(returncode=0 if allowed else 3, stderr='' if allowed else state)
+
+with (patch.dict(land.os.environ, PLANGRAPH_BIN='fixture-plangraph'),
+      patch.object(land.subprocess, 'run', side_effect=admit), tempfile.TemporaryDirectory() as tmp):
     path = pathlib.Path(tmp, 'GO')
     for text in ['', 'GO ' + head, 'GO ' + 'c' * 40 + ' EXCEPTION:main-red-fix', 'GO ' + head + ' EXCEPTION:main-red-fix-extra']:
         path.write_text(text)
@@ -227,14 +235,14 @@ with patch.object(land, 'gh_json', side_effect=api), tempfile.TemporaryDirectory
             assert 'main_red' in str(exc), str(exc)
     path.write_text('GO ' + head + ' EXCEPTION:main-red-fix')
     land.require_main_green('o/r', head, str(path))
-    run['conclusion'] = 'success'
+    state = 'green'
     land.require_main_green('o/r', head, None)
-    run['status'] = 'in_progress'
+    state = 'main_pending'
     try:
         land.require_main_green('o/r', head, None)
         raise AssertionError('pending main accepted')
-    except land.MergeBatchError:
-        pass
+    except land.MergeBatchError as exc:
+        assert 'main_pending' in str(exc), str(exc)
 "#,
     );
 }

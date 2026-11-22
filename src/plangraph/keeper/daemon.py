@@ -81,6 +81,7 @@ def _make_store(conn, cfg):
     store.review_overdue_s = cfg.review_overdue_s
     store.alert_window_s = cfg.alert_window_s
     store.require_seats = cfg.require_seats
+    store.backfill_alerts()
     return store
 
 

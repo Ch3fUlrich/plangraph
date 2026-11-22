@@ -204,18 +204,29 @@ def _parse_prefix_fields(text: str) -> dict[str, str]:
     return fields
 
 
+def strict_guard():
+    return os.environ.get("PLANGRAPH_GUARD_FAIL_CLOSED") == "1"
+
+
 def _read_v2_ready_marker(path: Path, expected_session_id: str | None = None) -> dict | None:
     """Return a validated v2 ready marker dict, or None when missing, corrupt, or mismatched."""
     try:
         marker = json.loads(read_text_capped(path))
+    except FileNotFoundError:
+        return None
     except (OSError, ValueError):
+        if strict_guard():
+            raise
         return None
     if not isinstance(marker, dict) or marker.get("v") != 2:
+        if strict_guard():
+            raise ValueError("invalid ready marker")
         return None
     sid = marker.get("session_id")
-    if not safe_id(sid) or path.name != ("%s.ready.json" % sid):
-        return None
-    if expected_session_id is not None and sid != expected_session_id:
+    if (not safe_id(sid) or path.name != ("%s.ready.json" % sid)
+            or (expected_session_id is not None and sid != expected_session_id)):
+        if strict_guard():
+            raise ValueError("ready marker identity mismatch")
         return None
     return marker
 
@@ -230,6 +241,8 @@ def _resolve_ready_marker(session_id) -> dict | None:
     try:
         paths = sorted(state_dir().glob("*.ready.json"))
     except OSError:
+        if strict_guard():
+            raise
         return None
     for path in paths:
         marker = _read_v2_ready_marker(path)
@@ -261,7 +274,7 @@ def deny_on_unusable_stdin(prefix: str) -> int:
         return 0
     marker = _resolve_ready_marker(fields.get("session_id"))
     if marker is None:
-        return 0
+        return 1 if strict_guard() else 0
     return _emit_ready_deny(marker)
 
 
@@ -498,7 +511,7 @@ def run_hook() -> int:
     except Exception:
         if os.environ.get("AUTOOS_CTX_DEBUG"):
             traceback.print_exc(file=sys.stderr)
-        return 0
+        return 1 if strict_guard() else 0
     finally:
         if scanned is not None:
             try:

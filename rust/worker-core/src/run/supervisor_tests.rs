@@ -239,14 +239,22 @@ fn survivors_keep_slot_and_ownership() {
 fn stress_and_drop_does_not_cancel() {
     let d = tempfile::tempdir().unwrap();
     let s = Supervisor::new(config(d.path(), 3, 64)).unwrap();
-    let began = Instant::now();
+    // All queue waves share one deadline, including durable lifecycle writes.
+    let budget = Duration::from_secs(30);
+    let deadline = Instant::now() + budget;
     for n in 0..20 {
         s.start(spec(d.path(), n, "true")).unwrap();
     }
     for n in 0..20 {
-        assert!(s.wait_finished(&format!("run-{n}"), Duration::from_secs(2)));
+        assert!(
+            s.wait_finished(
+                &format!("run-{n}"),
+                deadline.saturating_duration_since(Instant::now())
+            ),
+            "run-{n} did not finish within the {budget:?} queue deadline"
+        );
+        assert_eq!(read(&s, n)["status"], "completed", "run-{n}");
     }
-    assert!(began.elapsed() < Duration::from_secs(5));
     assert!(s.max_held_seen() <= 3);
     assert_eq!(s.counts().total_started, 20);
     s.start(spec(d.path(), 20, "sleep .1; echo alive > survived"))

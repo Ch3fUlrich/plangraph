@@ -43,13 +43,8 @@ impl Fixture {
             .spawn()
             .unwrap();
         let mut client = McpClient::connect(&socket);
-        // Spawn requests wait up to five seconds; the shared client's two-second
-        // read deadline must not expire before the requested wait completes.
-        client
-            .stream
-            .get_mut()
-            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
-            .unwrap();
+        // Allow time for the requested five-second wait and reply delivery.
+        client.set_response_timeout(std::time::Duration::from_secs(10));
         client.initialize();
         Self {
             _state: state,

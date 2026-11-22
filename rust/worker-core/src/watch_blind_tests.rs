@@ -115,6 +115,7 @@ pub(super) fn run_timeout(
         timeout: Some(timeout),
         grace: Duration::from_millis(100),
         max_output: 1024,
+        redact_discarded: false,
     };
     supervise_events(
         cmd,

@@ -115,6 +115,19 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
         run = {"id": 7, "head_sha": batch["headRefOid"] if batch else "0" * 40,
                "head_branch": batch["headRefName"] if batch else "main", "event": "pull_request",
                "status": "completed", "conclusion": "success", "run_attempt": 1}
+        if "head_sha=" in endpoint_get:
+            sha = endpoint_get.split("head_sha=", 1)[1].split("&", 1)[0]
+            matches = [pr for pr in map(follow_branch, S["prs"].values()) if pr["headRefOid"] == sha]
+            runs = [
+                dict(run, id=pr["number"], head_sha=sha, head_branch=pr["headRefName"],
+                     pull_requests=[{"number": pr["number"]}],
+                     conclusion=pr["statusCheckRollup"][0]["conclusion"].lower())
+                for pr in matches if pr["statusCheckRollup"] and pr["statusCheckRollup"][0]["conclusion"]
+            ]
+            if batch and batch in matches and not batch["statusCheckRollup"]:
+                runs.append(dict(run, pull_requests=[{"number": batch["number"]}]))
+            print(json.dumps({"workflow_runs": runs}))
+            sys.exit(0)
         if "branch=main" in endpoint_get:
             run.update(head_sha=git("rev-parse", "refs/heads/main").stdout.strip(), head_branch="main", event="push")
         if "/jobs?" in endpoint_get:
@@ -185,8 +198,9 @@ elif cmd == ["pr", "merge"]:
         die("head commit does not match --match-head-commit")
     head, base = pr["headRefOid"], f"refs/heads/{pr['baseRefName']}"
     tree = git("rev-parse", f"{head}^{{tree}}").stdout.strip()  # base has not moved in these tests
+    subject = opt("--subject") or f"Merge pull request #{pr['number']}"
     merge = git("commit-tree", tree, "-p", git("rev-parse", base).stdout.strip(), "-p", head,
-                "-m", f"Merge pull request #{pr['number']}",
+                "-m", subject,
                 *(["-m", opt("--body")] if opt("--body") else [])).stdout.strip()
     git("update-ref", base, merge)
     for other in S["prs"].values():  # GitHub marks a PR merged once its head is on the base

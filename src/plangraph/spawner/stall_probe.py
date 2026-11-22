@@ -19,7 +19,7 @@ def probe_run(state, record, now, *, dry_run=False, hung=None):
         return hung.probe(state, record, now, dry_run=dry_run)
     import asyncio
     import math
-    from .private_io import atomic_write_private
+    from subprocess import SubprocessError
     event = dict(rule='unknown')
     try:
         event.update(run_id=record.get('run_id'), leg=record.get('leg'), role=record.get('role'),
@@ -65,7 +65,11 @@ def probe_run(state, record, now, *, dry_run=False, hung=None):
                 event['rule'] = 'run-orphan'
                 record = dict(record, status='failed', reason='orphaned', ended=now, exit_code=1)
                 if not dry_run:
-                    atomic_write_private(directory / 'record.json', json.dumps(record))
+                    try:
+                        from .remote_ps import publish_run_record
+                        publish_run_record(state, directory / 'record.json', json.dumps(record))
+                    except (OSError, RuntimeError, SubprocessError):
+                        event['record_error'] = 'could not publish orphaned run'
                 return event
         silent = event['seconds_silent']
         from .run_watchdog_limits import thresholds

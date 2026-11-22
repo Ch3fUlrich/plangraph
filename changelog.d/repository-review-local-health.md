@@ -1,0 +1,1 @@
+- Check an orchestration host's local fallback memory and swap thresholds before starting a repository-required review in the local checkout.

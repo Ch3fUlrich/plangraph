@@ -225,3 +225,33 @@ def test_gap_r7_status_file_fields_shape(repo, tmp_path):
                for m in st["models"])
     for entry in st["models"]:
         assert set(entry.keys()) == {"key", "decision", "text"}
+@pytest.mark.parametrize("did, cell, expected", [
+    ("D-1993", "Closes: demo:TIME. ; keeper saw 'demo:TIME.'", {"demo:TIME": None}),
+    ("D-4564", "a row with 'Closes: key@sha' and evidence (source.py:136-184)",
+     {}),
+    ("D-5879", "Closes: demo:WITNESS CLOSE demo:WITNESS; prose 02:2xZ; "
+     "explains the 'Closes:' token then names demo:OTHER", {"demo:WITNESS": None}),
+    ("D-3444", "Rename. Closes: demo:RENAME@abcdef1 (2) another host host:1234",
+     {"demo:RENAME": "abcdef1"}),
+    ("D-2276", "Closes: demo:FIRST (prose) · demo:SECOND (see source.md:22; approved).",
+     {"demo:FIRST": None, "demo:SECOND": None}),
+    ("D-3757", "The request closes: token installed (host:1234); "
+     "Closes: demo:PLACEMENT@abcdef123;", {"demo:PLACEMENT": "abcdef123"}),
+    ("D-5955", "Closes: demo:PROTECT CLOSE demo:PROTECT. PLAN demo:OTHER",
+     {"demo:PROTECT": None}),
+    ("D-6383", "a `PLAN demo:KEY` or `Closes: demo:KEY` token", {}),
+    ("D-4881", "close on the prior row (Closes: demo:SOL), with batch evidence",
+     {"demo:SOL": None}),
+])
+def test_legacy_router_close_lists_have_no_prose_keys(tmp_path, did, cell, expected):
+    text, view = decs(tmp_path, dec_row(did, cell))
+    assert view.closes_with_commits(did) == expected
+    items = [item(key.split(":")[1], kinds=("decision",)) for key in expected]
+    for state in ("open", "done"):
+        for entry in items:
+            entry["state"] = state
+        p = build(items, text, view, None, repos_dict={})
+        status = md_sync.status_doc("dry")
+        md_sync.fill_status(status, p)
+        assert status["close_skipped"] == []
+        assert len(p.d_closes) == (len(expected) if state == "open" else 0)

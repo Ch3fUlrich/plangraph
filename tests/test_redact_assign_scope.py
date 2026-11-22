@@ -129,12 +129,7 @@ def test_a1_masks_only_grow_against_pre_a1(pre_a1, fixture, mode):
     for row in rows:
         text = row.get('input', ''.join(row.get('input_parts', []))) * row.get('repeat', 1)
         old, current = getattr(pre_a1, mode)(text), getattr(env_redact, mode)(text)
-        newly_visible = _visible_positions(text, current) - _visible_positions(text, old)
-        if mode == 'redact_source' and row.get('id', '').startswith('token-assignment-before-'):
-            # Assignment shielding now keeps the second name visible while masking both values.
-            assert current == ''.join(row['expected'])
-        else:
-            assert not newly_visible, row.get('id')
+        assert _visible_positions(text, current) <= _visible_positions(text, old), row.get('id')
         if mode == ('redact_source' if row.get('mode') == 'source' else 'redact'):
             expected = text if row.get('expected') == 'I' else ''.join(row.get('expected', ''))
             # Sweep both tables, including unlabelled tails and below-floor bodies.
@@ -160,11 +155,11 @@ def test_a1_stray_closing_bracket(pre_a1):
     text = 'API_' + 'KEY=[REDACTED]]'
     assert pre_a1.redact(text) == redact(text) == redact_output(text) == 'API_' + 'KEY=' + MASK
     # MY_SECRET's value stays readable in pre-A1 Python (not an OLD name);
-    # A1 masks it, including the stray bracket, in all current modes.
+    # A1 now masks it, including the stray bracket; D-6517: source mode masks it too,
+    # since a stray bracket after a mask is no computed expression.
     wider = NAME + '=[REDACTED]]'
-    assert pre_a1.redact(wider) == wider
-    assert redact_source(wider) == NAME + '=' + MASK
-    assert redact(wider) == redact_output(wider) == NAME + '=' + MASK
+    assert pre_a1.redact(wider) == pre_a1.redact_source(wider) == wider
+    assert redact(wider) == redact_output(wider) == redact_source(wider) == NAME + '=' + MASK
 
 
 @pytest.mark.parametrize('row', TABLE, ids=lambda r: r['id'])

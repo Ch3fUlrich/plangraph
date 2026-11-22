@@ -24,14 +24,14 @@ __all__ = ["run", "TABLES", "CopyError"]
 #: then the projector tables (migration 3; no foreign keys into the tables above).
 TABLES = ("events", "items", "evidence", "edges", "principals", "aliases", "run_tokens",
           "jev_shadow", "oversight_tokens", "oversight_ops",
-          "outbox_seen", "audit_log", "audit_findings",
+          "outbox_seen", "op_receipts", "audit_log", "audit_findings", "alerts", "alert_log",
           "cards", "attempts", "decisions", "questions", "answers", "budget", "metrics",
           "projector_applied", "projector_watermark", "projector_alarms", "merge_locks",
           "messages", "message_nonces", "message_envelopes",
           # BUS-REGISTRY-PERSIST: the host registry; absent in an older source,
           # which skips it like every other table the source does not have.
           "bus_hosts", "placement_rule_revision", "placement_rule_values", "placement_rule_audit",
-          "apply_grants")
+          "apply_grants", "event_audience", "landing_stages", "landing_trains", "landing_ci_jobs")
 _BATCH = 500
 
 

@@ -15,7 +15,7 @@
   {"id":"a1-N20","input_parts":["{\"type\":\"error\",\"max_","tokens\":4096,\"error\":{\"status\":429}}"],"expected":"I","gap":"A2 JSON-key rule","known_gap":"A2","accepted_by":"D-5703","readable_parts":["4096"]},
   {"id":"a1-N21","input_parts":["{\"usage\":{\"input_","tokens\":12,\"output_","tokens\":34}}"],"expected":"I","gap":"A2 integer counters","known_gap":"A2","accepted_by":"D-5703","readable_parts":["12","34"]},
   {"id":"a1-N37","input_parts":["{\"auth_","token \":\"V1\"}"],"expected":"I","note":"slice C trailing blank","known_gap":"slice C","accepted_by":"D-5703","readable_parts":["V1"]},
-  {"id":"a1-N45","input_parts":["MY_","SECRET=\"V1\""],"expected":["MY_","SECRET=[REDACTED]"],"mode":"source","note":"literal source assignments are masked"},
+  {"id":"a1-N45","input_parts":["MY_","SECRET=\"V1\""],"expected":["MY_","SECRET=[REDACTED]"],"mode":"source","note":"D-6517: source masks a literal credential value; only computed expressions stay readable"},
   {"id":"a1-N46","input_parts":["TO","KEN"],"repeat":20000,"expected":"I","note":"OLD unchanged no separator"},
   {"id":"a1-N48","input_parts":["MY_","SECRET=V1\\\nV2"],"expected":["MY_","SECRET=[REDACTED]\nV2"],"note":"slice C continuation remains","known_gap":"slice C","accepted_by":"D-5703","readable_parts":["V2"]},
   {"id":"a1-N53","input_parts":["e\u0301api_","token=V1"],"expected":["e\u0301api_","token=[REDACTED]"],"note":"NEW maximal mark run"},

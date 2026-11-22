@@ -614,6 +614,8 @@ class OpsMixin:
                     "INSERT INTO apply_grants(principal,project,granted_by,granted_at)"
                     " VALUES (?,?,?,?)",
                     (name, project, principal.name, self._iso(now)))
+            self._append(principal, None, "apply_granted" if grant else "apply_revoked",
+                         {"project": project, "principal": name}, now, recipient=name)
         return {"principal": name, "project": project,
                 "granted" if grant else "revoked": True}
 

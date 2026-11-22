@@ -1,1 +1,1 @@
-Mask literal credentials in source prompts and withhold private-key hunks and context slices even when their opening marker is outside the excerpt.
+- Source mode (Python and Rust) now masks literal credential-name assignments and keeps only computed expressions (calls, subscripts, bracketed values without a string literal, None/True/False/null) readable. Context slices and Git hunks are checked against private-key blocks of the whole file (both sides for a diff) before they are cut, so a slice or hunk that lies inside a key block without its marker is withheld (D-6517).

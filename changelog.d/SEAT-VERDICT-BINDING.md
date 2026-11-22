@@ -1,0 +1,1 @@
+Pin keeper seat verdicts to the item, epoch, round, head, and seat run at admission. Store the verified decision before sending and recover its receipt on repost or backfill. Surface historical verdicts without a proven binding for routing recovery.

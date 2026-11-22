@@ -4,14 +4,22 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
-from merge_batch_util import (NEEDS_UPDATE, REMOTE, MergeBatchError, add_label, all_states, drop_state, first_line, gh,
+from merge_batch_build import (
+    check_landed_parts, cmd_consumed, exclude_consumed, landing_journal, landing_lease,
+    landing_report, prepare_train, read_verified_merge, record_part_cost, record_stage, run_timing_import,
+)
+from merge_batch_util import (landing_now, landing_batch_key, keeper_landing_configured,
+                              REMOTE, MergeBatchError, all_states, drop_state, first_line, gh,
                               gh_json, git, load_state, orphan_names, save_state, short, update_pr, worktrees,
-                              batch_workflow_gate, part_review, run)
+                              batch_workflow_gate, part_review, run,
+                              cleanup_landed, close_merged_items, windows_commands, windows_gate, windows_needed, windows_report, windows_script)
 
 #: gh pr checks buckets that satisfy a required check (a skipped required check passes on GitHub too).
 GREEN = ("pass", "skipping")
@@ -107,13 +115,22 @@ def cmd_push(args):
     if git("status", "--porcelain", "--untracked-files=no", cwd=wt).stdout.strip():
         raise MergeBatchError(f"{wt} has uncommitted changes: commit them before push")
     head = git("rev-parse", "HEAD", cwd=wt).stdout.strip()
+    started = landing_now()
+    if keeper_landing_configured():
+        os.environ.update(PG_LANDING_REPO=st["repo"], PG_LANDING_BATCH=landing_batch_key(st),
+                          PG_LANDING_STAGE_HEAD=head)
+    if not st.get("pr"):
+        adopt_open_pr(st)
+    workflow = Path(wt, ".github/workflows/tests.yml")
+    if workflow.is_file():   # a red Windows run refuses the push before anything leaves the machine
+        windows_gate(st, workflow.read_text(encoding="utf-8"))
     git("push", REMOTE, f"refs/heads/{st['branch']}:refs/heads/{st['branch']}", cwd=wt)
+    if keeper_landing_configured():
+        record_stage(st["repo"], landing_batch_key(st), "push", head, started)
     title = f"batch {st['name']}: " + " ".join(f"#{rec['pr']}" for rec in st["merged"])
     with tempfile.TemporaryDirectory() as tmp:
         body = Path(tmp, "body.md")
         body.write_text(render_body(st), encoding="utf-8")
-        if not st.get("pr"):
-            adopt_open_pr(st)
         if st.get("pr"):
             if gh_json("pr", "view", str(st["pr"]), "--repo", st["repo"], "--json", "state")["state"] != "OPEN":
                 raise MergeBatchError(f"batch PR #{st['pr']} is not open any more: abort and build again")
@@ -137,6 +154,7 @@ def cmd_push(args):
             raise MergeBatchError(f"CI run {run_id} does not name pushed head {head}")
         st["ci"] = {"id": run_id, "head": head, "state": ci.get("status"), "conclusion": ci.get("conclusion")}
         save_state(st)
+        record_part_cost(st, run_id, head)
     print(f"pushed {st['branch']} {head}; {st['url']}; land needs an approval ending in 'HEAD: {head}' and "
           "'VERDICT: PASS'", file=sys.stderr)
     print(st["pr"])
@@ -213,7 +231,7 @@ def require_green(repo, number, names):
                               "not trusting the output")
 
 
-def require_full_run(repo, head, branch):
+def require_full_run(repo, head, branch, batch_key=None):
     """Use Actions evidence at the batch SHA, independent of branch protection/--checks."""
     endpoint = f"repos/{repo}/actions"
     runs = gh_json("api", f"{endpoint}/workflows/tests.yml/runs?head_sha={head}&event=pull_request&per_page=100")["workflow_runs"]
@@ -253,6 +271,8 @@ def require_full_run(repo, head, branch):
     for number in range(2, attempt + 1):
         names = ", ".join(sorted(j["name"] for j in jobs_for(number)))
         reruns.append(f"tests run {run['id']} attempt {number} at {head}: {names}")
+    if batch_key:
+        run_timing_import(repo, batch_key, head, run, attempt)
     return reruns
 
 
@@ -292,94 +312,178 @@ def record_reruns(repo, number, reruns):
             gh("api", "--method", "POST", endpoint, "-F", f"body=@{path}")
 
 
-def require_main_green(repo, head, go_row=None):
-    """Freeze land while main has no completed green full run at its current tip."""
-    tip = gh_json("api", f"repos/{repo}/git/ref/heads/main")["object"]["sha"]
-    runs = gh_json("api", f"repos/{repo}/actions/workflows/tests.yml/runs?branch=main&per_page=1")["workflow_runs"]
-    latest = runs[0] if runs else {}
-    if (latest.get("head_sha") == tip and latest.get("head_branch") == "main"
-            and latest.get("status") == "completed" and latest.get("conclusion") == "success"):
+def main_admission(repo, exception=None, binary=None):
+    """Ask ``plangraph main-state --admit`` (the one state function of main) and raise its refusal word.
+
+    ``exception`` is the GO row's ``EXCEPTION:main-red-fix`` token; the function honours it only while main is
+    red at this read. A missing binary or a failed read refuses as ``state_unknown``."""
+    binary = binary or os.environ.get("PLANGRAPH_BIN") or shutil.which("plangraph")
+    if not binary:
+        raise MergeBatchError("state_unknown: the plangraph binary is not on PATH (set PLANGRAPH_BIN)")
+    argv = [binary, "main-state", "--repo", repo, "--admit"] + (["--exception", exception] if exception else [])
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=600, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise MergeBatchError(f"state_unknown: main-state did not run: {exc}") from None
+    if proc.returncode == 0:
         return
+    word = (proc.stderr.strip().splitlines() or ["state_unknown"])[-1]
+    if proc.returncode != 3 or word not in ("main_red", "main_pending", "state_unknown", "ref_not_forward_only"):
+        word = "state_unknown"
+    raise MergeBatchError(f"{word}: main's state forbids landing (plangraph main-state --admit); "
+                          "only a GO row for this head with EXCEPTION:main-red-fix passes, and only while main is red")
+
+
+def require_main_green(repo, head, go_row=None):
+    """Freeze land while main is not green; the GO row exception is passed to the state function."""
+    exception = None
     if go_row:
         try:
             lines = Path(go_row).read_text(encoding="utf-8").splitlines()
-        except OSError as exc:
-            raise MergeBatchError(f"main_red: cannot read GO row: {exc}") from None
+        except OSError:
+            lines = []
         for line in lines:
             tokens = line.split()
             if "GO" in tokens and head in tokens and "EXCEPTION:main-red-fix" in tokens:
-                print(f"main_red: GO exception for {head} from {go_row}", file=sys.stderr)
-                return
-    raise MergeBatchError("main_red: latest tests run on main is not completed green at its tip; "
-                          "only a GO row for this head with EXCEPTION:main-red-fix permits land")
+                exception = "EXCEPTION:main-red-fix"
+    main_admission(repo, exception)
 
 
-def settle(repo, recs, wait):
-    """{pr: GitHub's state and head} of the included PRs, polled for up to ``wait`` seconds until each is MERGED
-    or has a moved head (a PR with a new commit does not merge by itself, so it is not waited for)."""
-    deadline = time.monotonic() + wait
-    views = {}
-
-    def open_rec(rec):
-        view = views.get(rec["pr"])
-        return view is None or (view["state"] != "MERGED" and view["headRefOid"] == rec["head"])
-
-    while True:
-        for rec in filter(open_rec, recs):
-            views[rec["pr"]] = gh_json("pr", "view", str(rec["pr"]), "--repo", repo, "--json", "state,headRefOid")
-        if not any(map(open_rec, recs)) or time.monotonic() >= deadline:
-            return views
-        time.sleep(min(3.0, max(0.0, deadline - time.monotonic())))
+def keeper_config_path():
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph" / "keeper.json"
 
 
-def included_pr(repo, number, rec, view, merge):
-    """Report one PR of the batch: ``("ok", "")`` after printing its MERGED line, ``("moved", "")`` after its
-    NOT-MERGED line, or ``("problem", why)``. A PR GitHub left open is closed only after its head was read once
-    more, so a push that came after ``settle`` looked is not closed as merged; a head that moved after the
-    build is neither closed nor reported merged, and its author has to update it (needs-update label). Every
-    PR is reported MERGED only when its recorded head is an ancestor of the merge commit, whatever GitHub's
-    state says."""
-    num = rec["pr"]
-    if git("merge-base", "--is-ancestor", rec["head"], merge, ok=(0, 1)).returncode != 0:
-        return "problem", f"#{num}: head {short(rec['head'])} is not in merge {short(merge)}"  # no MERGED line
-    if view["state"] != "MERGED" and view["headRefOid"] == rec["head"]:
-        view = gh_json("pr", "view", str(num), "--repo", repo, "--json", "state,headRefOid")
-        if view["state"] == "OPEN" and view["headRefOid"] == rec["head"]:
-            gh("pr", "close", str(num), "--repo", repo, "--comment", f"merged via batch PR #{number}")
-    if view["headRefOid"] != rec["head"]:
-        print(f"NOT-MERGED {num} head moved")
-        if view["state"] == "OPEN" and not add_label(repo, num, NEEDS_UPDATE):
-            print(f"warning: could not add the {NEEDS_UPDATE} label to PR #{num}", file=sys.stderr)
-        return "moved", ""
-    print(f"MERGED {num} {merge} {','.join(rec['items']) or '-'}")
-    return "ok", ""
+def _merge_subject(number, title, custom):
+    """Return a single-line merge commit subject ending ``(#N)``, or raise."""
+    suffix = f"(#{number})"
+    if custom is not None:
+        if "\n" in custom or "\r" in custom:
+            raise MergeBatchError(f"merge subject must be a single line ending with '{suffix}'")
+        text = custom.strip()
+        if not re.search(rf"\S.*{re.escape(suffix)}\Z", text):
+            raise MergeBatchError(f"merge subject must end with '{suffix}'")
+        return text
+    base = re.sub(r"[\r\n]+", " ", (title or "")).strip() or f"batch #{number}"
+    return base if base.endswith(suffix) else f"{base} {suffix}"
+
+
+def settle_train(train, lease, st=None, *, wait=0):
+    repo, number = train["repo"], train["pr"]
+    train = landing_journal(repo, "show", pr=number)["train"]
+    if train["abandoned"] or (train["merge"] and not train["open_steps"]):
+        return
+    merge, state = read_verified_merge(train)
+    if state == "closed" and not train["merge"]:
+        landing_journal(repo, "abandon", pr=number, **lease)
+        return
+    if not merge:
+        raise MergeBatchError(f"train #{number} is {state}; settlement remains pending")
+    if train["merge"] not in (None, merge):
+        raise MergeBatchError("verified merge differs from the landing journal")
+    if "included" not in train:
+        checked = check_landed_parts(repo, number, train["parts"], merge, wait, report=False)
+        train = landing_journal(repo, "landed", pr=number, merge=merge,
+                                included=[part["pr"] for part in checked], **lease)
+    if st is not None and st.get("head") != train["head"]:
+        st = None
+    landed = [part for part in train["parts"] if part["pr"] in train["included"]]
+    for step in train["open_steps"]:
+        receipt = {}
+        if step == "evidence":
+            for part in landed:
+                print(f"MERGED {part['pr']} {merge} {','.join(part['items']) or '-'}")
+        elif step == "close_parts":
+            result = run(["plangraph", "merge-close"], timeout=330)
+            sys.stderr.write(result.stdout + result.stderr)
+        elif step == "host_sync":
+            started = landing_now()
+            result = run(["plangraph", "landing", "verify-hosts", repo, merge], timeout=600)
+            receipt["verification"] = json.loads(result.stdout)["verified"]
+            sys.stderr.write(result.stdout)
+            record_stage(repo, train["batch_key"], "host_sync", merge, started)
+        elif step == "cleanup":
+            if st is not None:
+                cleanup_landed(st, landed, strict=True)
+                drop_state(st)
+            else:
+                parts = [part for part in landed if part["ref"]]
+                state = {"head": train["head"], "worktree": "", "branch": "",
+                         "prs": {str(part["pr"]): part for part in parts}}
+                cleanup_landed(state, parts, strict=True)
+        else:
+            raise MergeBatchError(f"unknown keeper landing step {step}")
+        landing_journal(repo, "advance", pr=number, merge=merge, step=step, **receipt, **lease)
+
+
+def cmd_settle(args):
+    from merge_batch_util import repo_info
+
+    repo, base = repo_info()
+    if base != "main":
+        raise MergeBatchError("settlement requires the main repository checkout")
+    states = {state.get("pr"): state for state in all_states()
+              if state.get("repo", "").lower() == repo.lower()}
+    pending = landing_journal(repo, "pending")["trains"]
+    failures = []
+    for train in pending:
+        try:
+            with landing_lease(repo) as lease:
+                settle_train(train, lease, states.get(train["pr"]))
+        except MergeBatchError as exc:
+            failures.append(str(exc))
+    if failures:
+        raise MergeBatchError("; ".join(failures))
+    return 0
 
 
 def cmd_land(args):
     st = load_state(args.name)
+    if keeper_landing_configured():
+        with landing_lease(st["repo"]) as lease:
+            return land_with_lease(args, lease, st)
+    return land_with_lease(args, None, st)
+
+
+def land_with_lease(args, lease, st):
     repo, number = st["repo"], args.batch_pr
     if st["status"] != "pushed" or st.get("pr") != number:
         raise MergeBatchError(f"batch {st['name']!r} is {st['status']} with batch PR {st.get('pr')}: "
                               f"push it first and pass its PR number (got #{number})")
+    custom_subject = getattr(args, "subject", None)
+    if custom_subject is not None:
+        _merge_subject(number, None, custom_subject)
     check_approval(args.approval, st["head"])
     require_part_seats(st)
-    fields = "state,headRefOid,isDraft,mergeCommit,baseRefName"
+    fields = "state,headRefOid,isDraft,mergeCommit,baseRefName,title"
     pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", fields)
     if pr["headRefOid"] != st["head"]:
         raise MergeBatchError(f"batch PR #{number} head moved: {short(pr['headRefOid'])} on GitHub, "
                               f"{short(st['head'])} saved at push; review and push again")
+    train = None
     if pr["state"] == "OPEN":
         if pr["isDraft"]:
             raise MergeBatchError(f"batch PR #{number} is a draft")
         if pr.get("baseRefName") != "main":
             raise MergeBatchError("full_ci: batch PR must target main")
-        reruns = require_full_run(repo, st["head"], st["branch"])
+        batch_key = landing_batch_key(st) if lease else None
+        reruns = require_full_run(repo, st["head"], st["branch"], batch_key)
         require_current_base(repo, st["head"])
         require_green(repo, number, [c for c in (args.checks or "").split(",") if c])
-        require_main_green(repo, st["head"], args.go_row)
         record_reruns(repo, number, reruns)
+        if lease:
+            main = gh_json("api", f"repos/{repo}/git/ref/heads/main")
+            if (main.get("object") or {}).get("sha") != st["base_head"]:
+                raise MergeBatchError("stale_base: main moved from the frozen landing base")
+            train = prepare_train(st, lease)
+            if st.get("go_requested_head") == st["head"]:
+                record_stage(repo, batch_key, "go", st["head"], st["go_requested_at_ms"])
+        started = landing_now()
+        subject = _merge_subject(number, pr.get("title") or f"batch {st['name']}", custom_subject)
+        require_main_green(repo, st["head"], args.go_row)
         gh("pr", "merge", str(number), "--repo", repo, "--merge", "--match-head-commit", st["head"],
-           "--body", merge_trailers(st))
+           "--subject", subject, "--body", merge_trailers(st))
+        if lease:
+            record_stage(repo, batch_key, "merge", st["head"], started)
     elif pr["state"] != "MERGED":
         raise MergeBatchError(f"batch PR #{number} is {pr['state']}")
     for _ in range(10):  # the merge commit can lag the merge by a moment
@@ -390,24 +494,17 @@ def cmd_land(args):
     merge = (pr.get("mergeCommit") or {}).get("oid")
     if pr["state"] != "MERGED" or not merge:
         raise MergeBatchError(f"batch PR #{number} is {pr['state']} with no merge commit yet: run land again")
-    git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
-    views = settle(repo, st["merged"], args.wait)
-    problems, moved, landed = [], [], []
-    for rec in st["merged"]:
-        outcome, why = included_pr(repo, number, rec, views[rec["pr"]], merge)
-        if outcome == "moved":
-            moved.append(rec["pr"])
-        elif outcome == "problem":
-            problems.append(why)
-        else:
-            landed.append(rec)
-    if problems:
-        raise MergeBatchError("batch PR merged, but " + "; ".join(problems) + " (state kept, land again after a fix)")
-    if moved:
-        print(f"batch PR #{number} merged without " + ", ".join(f"#{n}" for n in moved)
-              + f" (head moved after the build; labelled {NEEDS_UPDATE}): they need a new batch", file=sys.stderr)
     for skip in st["skipped"]:
         print(f"not merged: #{skip['pr']} ({skip['reason']})", file=sys.stderr)
+    if lease:
+        if train is None:
+            train = landing_journal(repo, "show", pr=number)["train"] or prepare_train(st, lease)
+        if train["head"] != st["head"]:
+            raise MergeBatchError("keeper landing journal names a different attempt")
+        settle_train(train, lease, st, wait=args.wait)
+        return 0
+    git("fetch", "--quiet", REMOTE, f"+refs/heads/{st['base']}:refs/remotes/{REMOTE}/{st['base']}", ok=None)
+    landed = check_landed_parts(repo, number, st["merged"], merge, args.wait)
     drop_state(st)
     try:
         cleanup_landed(st, landed)
@@ -429,42 +526,12 @@ def merge_trailers(st):
     return "\n".join([f"Plan-Item: {key}" for key in sorted(keys)] + runs)
 
 
-def close_merged_items():
-    """Run the keeper merge-close job once for the landed batch; its report goes to stderr, never fails the land."""
-    try:
-        proc = run(["plangraph", "merge-close"], ok=None, timeout=330)
-    except MergeBatchError as exc:
-        print(f"merge-close not run: {exc}", file=sys.stderr)
-        return
-    sys.stderr.write(proc.stdout + proc.stderr)
-
-
-def cleanup_landed(st, landed):
-    """Best effort cleanup with exact state SHAs; all sweep protections still apply."""
-    try:
-        repo = git("rev-parse", "--show-toplevel").stdout.strip()
-        trees = worktrees()
-        targets = [(st["worktree"], st["branch"], st["head"])]
-        for rec in landed:
-            branch = st["prs"][str(rec["pr"])]["ref"]
-            for path, name in trees:
-                if name == branch or (not name and git("rev-parse", "HEAD", cwd=path).stdout.strip() == rec["head"]):
-                    targets.append((path, name, rec["head"]))
-        pins = os.environ.get("PG_PINS", str(Path.home() / ".config/plangraph/pins.json"))
-        argv = ["pg-worktree-sweep", "--repo", repo, "--pins", pins, "--apply", "--delete-remote"]
-        for path, branch, sha in targets:
-            argv.extend(["--root", str(Path(path).parent), "--target", f"{path}:{'refs/heads/' + branch if branch else '-'}:{sha}"])
-        for rec in landed:
-            branch = st["prs"][str(rec["pr"])]["ref"]
-            argv.extend(["--remote-target", f"{branch}:{rec['head']}"])
-        result = run(argv)
-        print(result.stdout, end="", file=sys.stderr)
-    except MergeBatchError as exc:
-        print(f"cleanup sweep failed: {exc}", file=sys.stderr)
-
-
 def cmd_status(args):
     states = all_states()
+    if keeper_landing_configured():
+        for state in states:
+            if state.get("repo"):
+                state["timeline"] = landing_report(state)
     where = {branch: path for path, branch in worktrees()}
     orphans = [{"name": name, "status": "orphan", "branch": f"batch/{name}", "worktree": where.get(f"batch/{name}", "-"),
                 "merged": [], "skipped": [], "pending": []} for name in orphan_names()]
@@ -477,6 +544,8 @@ def cmd_status(args):
         print(f"{st['name']}  {st['status']}  base={st.get('base', '-')}  merged={len(st['merged'])} "
               f"skipped={len(st['skipped'])} pending={len(st['pending'])}  pr={st.get('pr') or '-'}  "
               f"head={short(st.get('head')) or '-'}  {st.get('worktree', '-')}")
+        if (st.get("timeline") or {}).get("summary"):
+            print("  timeline: " + st["timeline"]["summary"])
         if st.get("current"):
             cur = st["current"]
             print(f"  conflict in PR #{cur['pr']}: {', '.join(cur['files'])}")
@@ -510,9 +579,8 @@ def part_seat(run_id, key, head):
 
     if not isinstance(run_id, str) or not run_id.startswith("run-") or not RunRecordAdapter(None).valid_run_id(run_id):
         raise MergeBatchError("a keeper-bound review requires a spawner run id")
-    config_dir = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "plangraph"
     try:
-        config = load_config(config_dir / "keeper.json")
+        config = load_config(keeper_config_path())
         adapter = SpawnerRecordAdapter(config.spawner_records_dir)
         seats = adapter.review_seats({"key": key, "run_ids": json.dumps([run_id])}, head, "",
                                      allow_cli_reported=True, require_diff_head=True,
@@ -596,8 +664,14 @@ def cmd_go_req(args):
     deviations = [declared] if declared != "none" else []
     deviations += st.get("forced", [])
     deviation = "; ".join(deviations) or "none"
+    summary = landing_report(st).get("summary") if keeper_landing_configured() else None
+    timeline = f"timeline: {summary}; " if summary else ""
     line = (f"GO-REQ #{st['pr']} {st['repo']} head {head}; diff stat: {stat}; parts: " + "; ".join(parts) +
             f"; CI run {ci['id']} state={ci['state']} conclusion={ci['conclusion']}; "
-            f"PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}")
+            f"{timeline}PLAN {plan} conforms={'no' if deviations else 'yes'} deviations={deviation}"
+            + (f"; {windows_report(st, head)}" if windows_report(st, head) else ""))
+    if keeper_landing_configured() and st.get("go_requested_head") != head:
+        st.update(go_requested_head=head, go_requested_at_ms=landing_now())
+        save_state(st)
     print(" ".join(line.split()))
     return 0

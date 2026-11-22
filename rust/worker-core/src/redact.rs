@@ -16,6 +16,7 @@ fn patterns() -> &'static [regex::Regex] {
     static RS: OnceLock<Vec<regex::Regex>> = OnceLock::new();
     RS.get_or_init(|| {
         let tokens = super::redact_tokens::pattern();
+        let [assign_0, assign_1] = super::redact_tokens::assignment_patterns();
         let specs: [&str; 9] = [
             // 1. PEM private-key blocks, complete: header through the matching
             //    footer, newlines included. Applied FIRST and to the whole
@@ -27,7 +28,7 @@ fn patterns() -> &'static [regex::Regex] {
             //    of the text. Second, so a complete block is always preferred.
             r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*",
             // 3. Authorization/Bearer headers: keep the word "Bearer", cut the value.
-            r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}",
+            r"(?i)\bbearer\s+(?:[A-Za-z0-9._~+/=-]{8,}|\[REDACTED\])",
             // 4a. Env-style assignments: keep the credential name, cut the
             //     value. Separator whitespace is horizontal Unicode whitespace
             //     only, never CR/LF, so it never crosses a newline. Complete
@@ -40,7 +41,7 @@ fn patterns() -> &'static [regex::Regex] {
             //     the rest of the line (no closing delimiter semantics). A
             //     backslash before a line feed (or CRLF) continues the value
             //     onto the next line, quoted, unquoted, or unterminated.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*[=:][^\S\r\n]*)("(?:[^"\\\n]|\\(?:\r?\n|.))*"[^\s,;"'}\])&]*|'(?:[^'\\\n]|\\(?:\r?\n|.))*'[^\s,;"'}\])&]*|\[REDACTED\](?:\[REDACTED\]|[^\s,;"'}\])&])*|(?:\\\r?\n|[^\s"'}\])&])(?:\\\r?\n|[^\n\r}\])&])*|"(?:\\\r?\n|[^\n\r])*|'(?:\\\r?\n|[^\n\r])*)"#,
+            &assign_0,
             // 4b. Same assignment rule for `=` only: after `=` an unquoted
             //     value may start with `}`, `]`, or `)` only when at least one
             //     more character follows before the next delimiter. A bare
@@ -49,7 +50,7 @@ fn patterns() -> &'static [regex::Regex] {
             //     whitespace is horizontal Unicode whitespace only, never
             //     CR/LF. The tail class is unchanged; 4a runs first and handles
             //     the `[REDACTED]` placeholder and any glued tail after it.
-            r#"(?i)\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY|CREDENTIAL)[A-Za-z0-9_]*)(["']?)([^\S\r\n]*=[^\S\r\n]*)([}\])][^\n\r}\])&]+)"#,
+            &assign_1,
             // 5. Prefixed tokens share their body policy with wrapped joins.
             &tokens,
             // 6. JWT-like: three base64url segments, header always starts "eyJ".
@@ -70,7 +71,7 @@ fn patterns() -> &'static [regex::Regex] {
 
 /// Replace secret-shaped text, including credential-name assignments.
 pub fn redact(text: &str) -> String {
-    redact_inner(text, true, &BTreeSet::new())
+    redact_inner(text, Mode::Full, &BTreeSet::new())
 }
 
 /// Replace secret-shaped text while preserving exact word-boundary 40-hex shas in `allow_shas`.
@@ -81,27 +82,37 @@ pub fn redact_with_allowlist(text: &str, allow_shas: &BTreeSet<String>) -> Strin
         .filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
         .map(|s| s.to_ascii_lowercase())
         .collect();
-    redact_inner(text, true, &exact)
+    redact_inner(text, Mode::Full, &exact)
 }
 
-/// Spawner-read source only: omit credential-name assignments, not token rules.
+/// Spawner-read source only: leave computed credential-name assignments
+/// readable; literal values are masked like everywhere else.
 pub fn redact_source(text: &str) -> String {
-    redact_inner(text, false, &BTreeSet::new())
+    redact_inner(text, Mode::Source, &BTreeSet::new())
 }
 
-fn redact_inner(text: &str, assignments: bool, allow_shas: &BTreeSet<String>) -> String {
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Full,
+    Source,
+}
+
+fn redact_inner(text: &str, mode: Mode, allow_shas: &BTreeSet<String>) -> String {
     let rs = patterns();
     let out = rs[0].replace_all(text, REDACTED).into_owned();
     let out = rs[1].replace_all(&out, REDACTED).into_owned();
-    let out = if assignments {
-        let out = super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5]);
-        let out = rs[3].replace_all(&out, "$1$2$3[REDACTED]").into_owned();
-        rs[4].replace_all(&out, "$1$2$3[REDACTED]").into_owned()
-    } else {
-        out
-    };
-    let out = super::redact_wrapped::redact_wrapped(&out);
+    let out = super::redact_wrapped::redact_bearer_wrapped(&out);
     let out = rs[2].replace_all(&out, "Bearer [REDACTED]").into_owned();
+    let source = mode == Mode::Source;
+    let out = if source {
+        // Source masks wrapped tokens first, so no name survives them.
+        super::redact_wrapped::redact_wrapped(&out)
+    } else {
+        super::redact_wrapped::join_shielded_assignments(&out, &rs[3..5])
+    };
+    let out = super::redact_tokens::replace_assignments(&rs[3], &out, source);
+    let out = super::redact_tokens::replace_assignments(&rs[4], &out, source);
+    let out = super::redact_wrapped::redact_wrapped(&out);
     let out = super::redact_tokens::redact_url_userinfo(&out);
     let out = rs[5].replace_all(&out, REDACTED).into_owned();
     let out = rs[6].replace_all(&out, REDACTED).into_owned();

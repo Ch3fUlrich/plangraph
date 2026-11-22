@@ -12,6 +12,23 @@ import pytest
 from test_preflight import fake_runner, preflight, repo
 
 
+def test_conftest_prioritizes_its_checkout_over_inherited_pythonpath(tmp_path):
+    source = Path(__file__).resolve().parents[1]
+    planted = tmp_path / 'plangraph'
+    planted.mkdir()
+    (planted / '__init__.py').touch()
+    script = (
+        'import runpy, sys\nfrom pathlib import Path\n'
+        'runpy.run_path(sys.argv[1])\nimport plangraph\n'
+        'assert Path(plangraph.__file__).is_relative_to(Path.cwd() / "src"), plangraph.__file__\n'
+    )
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        (str(tmp_path), str(source / 'src'), str(source / 'tests'))))
+    result = subprocess.run([sys.executable, '-c', script, str(source / 'tests/conftest.py')],
+                            cwd=source, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("refuse", [False, True])
 def test_nested_fixture_keeps_its_installed_hook(repo, monkeypatch, refuse):
     caller_hooks = repo / "caller-hooks"
@@ -411,8 +428,9 @@ def test_worker_test_environment_defaults_are_scoped(repo, monkeypatch, configur
     calls = fake_runner(monkeypatch)
     monkeypatch.setattr(preflight, 'rust_commands', lambda *a: commands)
     assert preflight.main(['--base', 'HEAD', '--fast'], repo) == 0
-    worker = next(env for command, _, env in calls if command == commands[2])
+    worker_command = preflight.with_no_fail_fast(commands[2])
+    worker = next(env for command, _, env in calls if command == worker_command)
     assert {key: worker[key] for key in names if key in worker} == expected
-    others = [env for command, _, env in calls if command != commands[2]]
+    others = [env for command, _, env in calls if command != worker_command]
     assert all({key: env[key] for key in names if key in env} == configured for env in others)
     assert {key: os.environ[key] for key in names if key in os.environ} == configured

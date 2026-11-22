@@ -22,7 +22,7 @@ SPECS = (
     TokenSpec(r'xox[abprs]-', r'[A-Za-z0-9_-]', 10, False),
     TokenSpec(r'AKIA', r'[0-9A-Z]', 16, True),
     TokenSpec(r'AIza', r'[0-9A-Za-z_-]', 30, False),
-    TokenSpec(r'[sr]k_(?:live|test)_', r'[A-Za-z0-9]', 20, False),
+    TokenSpec(r'[sr]k_(?:live|test)_', r'[A-Za-z0-9]', 16, False),
 )
 
 
@@ -59,7 +59,73 @@ def redact_wrapped(text):
     return ''.join((*out, text[copied:]))
 
 
-def _wrapped_spans(text, *, unfinished=False):
+_BEARER = re.compile(r'(?i)\bBearer\s+')
+
+
+def redact_bearer_wrapped(text):
+    """Mask wrapped tokens right after a Bearer word, before the word's own rule runs.
+
+    The Bearer rule takes one whitespace-free word and would leave a wrapped
+    continuation behind; this must run first (rust/worker-core redact_wrapped.rs).
+    """
+    starts = {m.end() for m in _BEARER.finditer(text)}
+    out, copied = [], 0
+    for start, end in _wrapped_spans(text):
+        if start in starts:
+            out.extend((text[copied:start], '[REDACTED]'))
+            copied = end
+    return ''.join((*out, text[copied:]))
+
+
+def _open_start(text):
+    """Line offset of the earliest token whose joined body reaches the last line."""
+    for match in _PREFIX.finditer(text):
+        index = match.lastindex - 1
+        spec, body = SPECS[index], _BODY[index]
+        end, count = match.end(), 0
+        while end < len(text):
+            run = body.match(text, end)
+            if run:
+                count += run.end() - end
+                end = run.end()
+            if count >= MAX_WRAPPED_BODY or end >= len(text):
+                break
+            next_start = end + (2 if text.startswith('\r\n', end) else 1 if text[end] == '\n' else 0)
+            if next_start == end:
+                break
+            if next_start >= len(text):
+                return text.rfind('\n', 0, match.start()) + 1
+            next_run = body.match(text, next_start)
+            if count >= spec.floor:
+                line_end = next_run.end() if next_run else next_start
+                if (count + line_end - next_start > MAX_WRAPPED_BODY
+                        or not (line_end == len(text) or text.startswith('\n', line_end)
+                                or text.startswith('\r\n', line_end))):
+                    break
+            if not next_run:
+                break
+            end = next_start
+    return None
+
+
+def open_wrapped_line_start(text):
+    """Offset of the line from which a stream must hold lines back, or None.
+
+    ``text`` holds only complete lines. A token is open when its joined body
+    reaches the last line (same joining rules as _wrapped_spans), so that line may
+    still be extended. A finished span that reaches the held line pulls the start
+    back to its own line: one line can end a credential and open the next.
+    """
+    start = _open_start(text)
+    if start is None:
+        return None
+    for first, last in reversed(list(_wrapped_spans(text))):
+        if first < start <= last:
+            start = text.rfind('\n', 0, first) + 1
+    return start
+
+
+def _wrapped_spans(text):
     """Consume contiguous bodies across LF/CRLF, exactly like redact_wrapped.rs.
 
     Before the floor a continuation may end mid-line. After it, only whole
@@ -72,9 +138,9 @@ def _wrapped_spans(text, *, unfinished=False):
             continue
         index = match.lastindex - 1
         spec, body = SPECS[index], _BODY[index]
-        opener = text[match.start() - 1:match.start()]
-        quote = opener if opener in ('"', "'") else None
         end, count, wrapped = match.end(), 0, False
+        # A value opened by a quote ends at the same quote on a continuation line.
+        quote = text[match.start() - 1] if match.start() and text[match.start() - 1] in '"\'' else None
         while True:
             run = body.match(text, end)
             if run:
@@ -88,9 +154,6 @@ def _wrapped_spans(text, *, unfinished=False):
                 next_start = end + 1
             else:
                 break
-            if unfinished and next_start == len(text):
-                yield match.start(), end
-                return
             next_run = body.match(text, next_start)
             if count >= spec.floor:
                 line_end = next_run.end() if next_run else next_start
@@ -102,24 +165,9 @@ def _wrapped_spans(text, *, unfinished=False):
             if not next_run:
                 break
             end, wrapped = next_start, True
-        if not unfinished and wrapped and count >= spec.floor:
+        if wrapped and count >= spec.floor:
             yield match.start(), end
             copied = end
-
-
-def pending_wrapped_line(text):
-    """Start of the line whose prefixed body can still join the next read."""
-    span = next(_wrapped_spans(text, unfinished=True), None)
-    if span is None:
-        return len(text)
-    def line_start(offset):
-        return max(text.rfind('\n', 0, offset), text.rfind('\r', 0, offset)) + 1
-
-    boundary = line_start(span[0])
-    for start, end in reversed(list(_wrapped_spans(text))):
-        if start < boundary < end:
-            boundary = line_start(start)
-    return boundary
 
 
 _NAME_KEYWORD = re.compile(r'token|secret|password|passwd|api_?key|access_?key|private_?key|credential')
@@ -169,8 +217,71 @@ def _name_headers(text):
         yield header_start, index
 
 
-def redact_wide_assignments(text, assignment, keep):
-    """OLD wins; NEW consumes physical lines without exposing old wrapped masks."""
+_CALL_HEAD = re.compile(r'[A-Za-z_][\w.]*[^\S\r\n]*')
+_CLOSER = {'(': ')', '[': ']', '{': '}'}
+
+
+def _nested_assignment(value, header):
+    """True when ``value`` holds a credential-name assignment.
+
+    Headers are found apart from their values, so one after an ``==`` is seen too; ``==`` itself
+    compares and assigns nothing, while ``:=`` assigns."""
+    for m in header.finditer(value):
+        if not (m[1] == '=' and value[m.end():m.end() + 1] == '='):
+            return True
+    for start, end in _name_headers(value):
+        if not (value[start:end].rstrip()[-1:] == '=' and value[end:end + 1] == '='):
+            return True
+    return False
+
+
+def is_computed(value, header=None):
+    """True for None/True/False/null or an already masked value, or for one call, subscript or
+    bracketed expression (with attribute/call chains) holding no string literal.
+
+    Spawner-read source keeps these readable; anything else after a credential
+    name, such as a literal or a call followed by more text, is masked, as is an
+    expression holding another credential-name assignment (the Rust
+    redactor mirrors this as is_computed and must be given the whole right-hand side).
+    """
+    value = value.strip()
+    # A credential-name assignment nested in the expression is judged by itself, so it is no computed value.
+    if header is not None and _nested_assignment(value, header):
+        return False
+    if re.fullmatch(r'None|True|False|null|["\']?\[REDACTED\][\"\']?', value):
+        return True
+    if '"' in value or "'" in value or not value:
+        return False
+    head = _CALL_HEAD.match(value)
+    at = head.end() if head else 0
+    # Only a bare expression may open with a brace; after a name or a group only a call or subscript can follow.
+    if value[at:at + 1] not in (_CLOSER if not head else ('(', '[')):
+        return False
+    while at < len(value):
+        if value[at] not in ('(', '[') and not (at == 0 and value[at] in _CLOSER):
+            return False
+        stack, at = [_CLOSER[value[at]]], at + 1
+        while stack and at < len(value):
+            char = value[at]
+            if char in _CLOSER:
+                stack.append(_CLOSER[char])
+            elif char == stack[-1]:
+                stack.pop()
+            elif char in ')]}':
+                return False
+            at += 1
+        if stack:
+            return False
+        chain = re.match(r'\.[A-Za-z_]\w*', value[at:])
+        at += chain.end() if chain else 0
+    return True
+
+
+def redact_wide_assignments(text, assignment, keep=None):
+    """OLD wins; NEW consumes physical lines without exposing old wrapped masks.
+
+    ``keep`` is given a value and returns True to leave that assignment readable.
+    """
     old_matches = iter(assignment.finditer(text))
     old = next(old_matches, None)
     wrapped = iter(_wrapped_spans(text))
@@ -184,7 +295,9 @@ def redact_wide_assignments(text, assignment, keep):
         if old is not None and old.start() < end:
             continue  # OLD value containment or intersecting half-open headers.
         value_end = _LINE_REMAINDER.match(text, end).end()
-        if value_end > end and not keep(text[end:value_end]):
+        if keep and keep(text[end:value_end]):
+            continue
+        if value_end > end:
             # Keep every continuation the pre-A1 wrapped scanner would mask.
             while span is not None and span[0] < value_end:
                 value_end = _LINE_REMAINDER.match(text, max(value_end, span[1])).end()
@@ -194,3 +307,76 @@ def redact_wide_assignments(text, assignment, keep):
             while old is not None and old.start() < copied:
                 old = next(old_matches, None)
     return ''.join((*out, text[copied:]))
+
+
+def redact_diff_wrapped(text):
+    """Mask wrapped tokens in a unified diff, scanning the old and the new side apart.
+
+    Each hunk is read as two files: the old side is its ' ' and '-' lines, the new
+    side its ' ' and '+' lines, both without the one-character marker. A line that
+    either side masks is masked; a masked run that continues over a line break
+    drops the continuation's marker and text, as the plain scan does.
+    """
+    out, body, in_hunk = [], [], False
+    for line in re.findall(r'[^\n]*\n|[^\n]+', text):
+        if line.startswith('diff --git '):
+            out.extend(_mask_hunk(body))
+            body, in_hunk = [], False
+        elif line.startswith('@@'):
+            out.extend(_mask_hunk(body))
+            body, in_hunk = [], True
+            out.append(line)
+            continue
+        (body if in_hunk else out).append(line)
+    out.extend(_mask_hunk(body))
+    return ''.join(out)
+
+
+def _mask_hunk(lines):
+    """Lines of one hunk with wrapped tokens masked; masks carry the id of the span that made them."""
+    marked = [bool(line[:1] in ('+', '-', ' ')) for line in lines]
+    masks = [[0] * (len(line) - 1) if mark else [] for line, mark in zip(lines, marked)]
+    span_id = 0
+    for side in ('-', '+'):
+        members = [n for n, (line, mark) in enumerate(zip(lines, marked)) if mark and line[0] in (' ', side)]
+        stream = ''.join(lines[n][1:] for n in members)
+        offsets, total = [], 0
+        for n in members:
+            offsets.append(total)
+            total += len(lines[n]) - 1
+        at = 0
+        for first, last in _wrapped_spans(stream):
+            span_id += 1
+            while offsets[at] + len(masks[members[at]]) <= first:
+                at += 1
+            cursor = at
+            while cursor < len(members) and offsets[cursor] < last:
+                row = masks[members[cursor]]
+                low, high = max(first - offsets[cursor], 0), min(last - offsets[cursor], len(row))
+                row[low:high] = [span_id] * (high - low)
+                cursor += 1
+    out, join = [], False
+    for at, (line, mark, row) in enumerate(zip(lines, marked, masks)):
+        if not mark:
+            out.append(line)
+            join = False
+            continue
+        content = line[1:].rstrip('\r\n')
+        if not join:
+            out.append(line[0])
+        in_run = join
+        for char, flag in zip(content, row):
+            if flag:
+                if not in_run:
+                    out.append('[REDACTED]')
+                in_run = True
+            else:
+                out.append(char)
+                in_run = False
+        terminator = line[1 + len(content):]
+        # The break goes only where the next line continues this very span.
+        nxt = masks[at + 1][:1] if at + 1 < len(lines) and marked[at + 1] else []
+        join = bool(terminator) and in_run and bool(nxt) and nxt[0] != 0 and nxt[0] == row[-1]
+        if not join:
+            out.append(terminator)
+    return out
