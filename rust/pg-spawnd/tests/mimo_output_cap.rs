@@ -265,7 +265,7 @@ async def run():
         return dict(status='refused', reason=str(exc), calls=calls)
 with patch('plangraph.spawner.resolver.get_catalog_models', return_value=rows), \
      patch('plangraph.spawner.resolver.host_skip_reason_async', ready), \
-     patch('plangraph.spawner.host_ready.cargo_child_env', side_effect=lambda env, *, pin_configured: env), \
+     patch('plangraph.spawner.host_ready.cargo_child_env', side_effect=lambda env, *, pin_configured, target=None: env), \
      patch('plangraph.spawner.host_ready.cargo_lease', return_value=None), \
      patch('plangraph.spawner.opencode_isolation.record_baseline'), \
      patch('plangraph.spawner.gateway_witness.witness'), \

@@ -577,7 +577,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     check_review_resume_after_missing_client(&mut host, &base, &head, &cli);
     check_late_review_reuses_completed_run(&mut host, &head, &cli);
     check_review_replaces_unreadable_run(&mut host, &head, &cli);
-    fs::write(
+    write_review_transport_fixture(
         &cli,
         "import sys\nprint('wrapper failure', file=sys.stderr)\nsys.exit(10)\n",
     )
@@ -597,10 +597,20 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
 }
 
 #[cfg(unix)]
+fn write_review_transport_fixture(cli: &Path, script: impl AsRef<str>) -> std::io::Result<()> {
+    let route = r#"import json, sys
+if sys.argv[sys.argv.index('--state') + 2] == 'route':
+    print(json.dumps({'legs': [{'id': 'agy-gemini-4-hydrogen-high'}], 'skipped': []}))
+    sys.exit(0)
+"#;
+    fs::write(cli, format!("{route}{}", script.as_ref()))
+}
+
+#[cfg(unix)]
 fn check_review_resume_after_missing_client(host: &mut Host, base: &str, head: &str, cli: &Path) {
     let previous = json!({"head":base,"text":"HIGH src/lib.rs:1 - previous finding"});
     let diagnostic = "REVIEW run-missing FAIL client_missing /fixture/codex";
-    fs::write(
+    write_review_transport_fixture(
         cli,
         format!("import json, sys\nprint(json.dumps(dict(run_id='run-missing', stderr_tail={diagnostic:?})))\nsys.exit(10)\n"),
     ).unwrap();
@@ -608,7 +618,7 @@ fn check_review_resume_after_missing_client(host: &mut Host, base: &str, head: &
     assert_eq!(missing["status"], "client_missing");
     assert_eq!(missing["reason"], diagnostic);
 
-    fs::write(cli, r#"import json, pathlib, sys
+    write_review_transport_fixture(cli, r#"import json, pathlib, sys
 argv = sys.argv
 value = lambda flag: argv[argv.index(flag) + 1]
 card = json.loads(value('--card'))
@@ -629,7 +639,7 @@ fn check_late_review_reuses_completed_run(host: &mut Host, head: &str, cli: &Pat
     let started = pg_worker_core::run::finalize::now().floor() as u64;
     let mut receipt = json!({"run_id":"run-late","status":"running","started":started});
     fs::write(&record, receipt.to_string()).unwrap();
-    fs::write(
+    write_review_transport_fixture(
         cli,
         format!(
             "import sys\nassert sys.argv[sys.argv.index('--wait')+1] == '3600'\nprint({:?})\n",
@@ -670,7 +680,7 @@ fn check_review_replaces_unreadable_run(host: &mut Host, head: &str, cli: &Path)
     let pending = host.reviews.join(format!("late-review-{head}.json"));
     let run = host.state.join("runs/run-pruned/record.json");
     fs::create_dir_all(run.parent().unwrap()).unwrap();
-    fs::write(cli, format!("import json\nprint(json.dumps(dict(run_id='run-replacement', status='completed', host='fixture-worker', head_sha={head:?}, stdout_tail='VERDICT: REQUEST_CHANGES')))\n")).unwrap();
+    write_review_transport_fixture(cli, format!("import json\nprint(json.dumps(dict(run_id='run-replacement', status='completed', host='fixture-worker', head_sha={head:?}, stdout_tail='VERDICT: REQUEST_CHANGES')))\n")).unwrap();
     for corrupt in [false, true] {
         fs::write(&run, "corrupt record").unwrap();
         fs::write(
