@@ -1,0 +1,9 @@
+[Unit]
+Description=Check the SSH link to worker %i every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

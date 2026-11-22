@@ -24,6 +24,18 @@ def remote_native_running(record):
             and record.get('status') == 'running')
 
 
+def claim_first_dispatch(prompt_record):
+    """Commit the handoff before process creation so the watchdog can fence it."""
+    if prompt_record is None:
+        return
+    _, record, save = prompt_record
+    if isinstance(record.get('plan'), dict) and not record.get('dispatch_started'):
+        record['dispatch_started'] = True
+        save(record)
+    if record.get('status') == 'stalled_no_leg':
+        raise RuntimeError('first dispatch expired before launch')
+
+
 class SpawnService(SeatSpawnMixin):
     code_tree = staticmethod(run_tree)
     client_probe = None   # name -> is the harness client installed on the placed host; None = the host's PATH
@@ -67,6 +79,7 @@ class SpawnService(SeatSpawnMixin):
             if record.get('tree_sha') is None:
                 record.setdefault('tree_absent', 'spawner code checkout identity unavailable at process startup')
         from .private_io import atomic_write_private
+        from .notify import inbox_lock
         from .runner import redact
         from .seat_artifact import publish
         from .env_redact import IDENTIFIER_KEYS, redact_env_values
@@ -136,8 +149,20 @@ class SpawnService(SeatSpawnMixin):
         for target in [record, *record.get('attempts', [])]:
             if isinstance(target.get('stdout_tail'), str):
                 target['stdout_tail'] = keep_output(clean(target['stdout_tail']))
-        atomic_write_private(self._path(record['run_id']), json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2))
-        publish(self._path(record['run_id']).parent, record, job)
+        path = self._path(record['run_id'])
+        payload = json.dumps(dict(redact(record), **({'item_key': item_key} if 'item_key' in record else {})), indent=2)
+        with inbox_lock(path):
+            if isinstance(record.get('plan'), dict) and not record.get('pid'):
+                try:
+                    stored = json.loads(read_text_retry(path, attempts=1))
+                except (FileNotFoundError, ValueError):
+                    stored = None
+                if isinstance(stored, dict) and stored.get('status') == 'stalled_no_leg':
+                    record.clear()
+                    record.update(stored)
+                    return False
+            atomic_write_private(path, payload)
+        publish(path.parent, record, job)
         if record.get('ended'):
             getattr(self.runner, '_child_envs', {}).pop(record.get('job_id'), None)
 

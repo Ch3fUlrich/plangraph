@@ -100,7 +100,7 @@ def _resolve_launch(
 
 def is_terminal(status):
     """Only known final run states are terminal; unknown states remain visible."""
-    return status in ('completed', 'failed', 'cancelled', 'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped')
+    return status in ('completed', 'failed', 'cancelled', 'killed', 'dry_run', 'succeeded', 'timeout', 'refused', 'skipped', 'stalled_no_leg')
 
 
 @dataclass
@@ -493,6 +493,8 @@ class SpawnerRunner:
             self._cargo_leases = getattr(self, '_cargo_leases', {})
             self._cargo_leases[job_id] = await asyncio.to_thread(cargo_lease)
             try:
+                from .service import claim_first_dispatch
+                claim_first_dispatch(prompt_record)
                 proc = await self.process_factory(
                     resolved_exe,
                     *cmd[1:],
@@ -867,20 +869,16 @@ def spawn_service(*args, **kwargs):
                     if attempt.get('status') in ('failed', 'skipped') and not attempt.get('skip_reason'):
                         meta = attempt.get('leg')
                         attempt['skip_reason'] = redact(failure_reason(job, harness=meta.get('harness') if isinstance(meta, dict) else None))
-            terminal = record.get('ended') is not None and record.get('status') != 'running'
+            terminal = record.get('ended') is not None and record.get('status') not in ('running', 'stalled_no_leg')
             record.setdefault('wait_cmd', 'plangraph-spawn wait ' + record['run_id'])
-            if not retry:
-                super()._save(record)
-            changed = False
-            if terminal:
-                if 'completion' not in record:
-                    record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
-                    if record.get('role') == 'review' and record['completion'].get('head_sha'):
-                        record.setdefault('head_sha', record['completion']['head_sha'])
-                    if record.get('status') == 'needs_input':
-                        record['completion'].update(event='NEEDS_INPUT', question=record['question'])
-                    changed = True
-            if changed:
+            if not retry and super()._save(record) is False:
+                return
+            if terminal and 'completion' not in record:
+                record['completion'] = completion_event(record, record.get('cwd') or getattr(self.runner, 'default_cwd', os.getcwd()))
+                if record.get('role') == 'review' and record['completion'].get('head_sha'):
+                    record.setdefault('head_sha', record['completion']['head_sha'])
+                if record.get('status') == 'needs_input':
+                    record['completion'].update(event='NEEDS_INPUT', question=record['question'])
                 super()._save(record)
             if terminal:
                 from .notify import deliver_verdict; deliver_verdict(self._path(record['run_id']).parent, record, self.keeper_sink)
@@ -925,7 +923,7 @@ def spawn_service(*args, **kwargs):
                 if os.environ.get('PLANGRAPH_SPAWN_NOTIFY_CMD'):
                     markers += [r + '.hook.delivered' for r in ('parent', 'keeper')]
                 pending = any(not (self._path(record['run_id']).parent / m).exists() for m in markers)
-                if record.get('ended') is not None and record.get('status') != 'running' and pending:
+                if pending and record.get('ended') is not None and record.get('status') not in ('running', 'stalled_no_leg'):
                     try:
                         self._save(record, retry=True)
                     except Exception:

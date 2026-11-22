@@ -128,3 +128,15 @@ fn overflow_refuses_missing_expired_future_failed_and_wrong_sandbox_readiness() 
         );
     }
 }
+
+#[test]
+fn known_link_outage_queues_without_changing_hosts() {
+    let mut attempted = Vec::new();
+    let out = spawn(&hosts(), &policy(), 100, |host| {
+        attempted.push(host.id.clone());
+        Launch::Waiting(format!("{} unreachable since 90", host.id))
+    });
+    assert_eq!(attempted, ["worker"]);
+    assert!(out.queued && out.error.is_none());
+    assert_eq!(out.refusals[0].reason, "worker unreachable since 90");
+}

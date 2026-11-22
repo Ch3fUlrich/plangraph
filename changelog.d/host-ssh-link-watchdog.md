@@ -1,0 +1,1 @@
+- Alert once after two failed worker SSH probes with Tailscale peer and local IP-change evidence, then record recovery.

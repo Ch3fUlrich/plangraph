@@ -73,6 +73,12 @@ Usage:
 ./deploy/bootstrap.sh
 ```
 
+On Linux and WSL, run `bash deploy/bootstrap.sh --language-servers-only`
+from the host checkout after sync. The installer uses the repository Rust
+toolchain and a pinned Pyright release. Fleet sessions need the Rustup bin
+directory and `$HOME/.local/bin` on PATH, with Node.js available for Pyright.
+Append `--dry-run` to print the install commands.
+
 Normal bootstrap calls `python3 -m plangraph.spawner.stall_watchdog install --host linux`, which creates user
 units and enables `plangraph-stall-watchdog.timer`. Windows calls
 `python -m plangraph.spawner.stall_watchdog install --host windows`: it creates the recurring **Plangraph Stall Watchdog** scheduled task, not a systemd timer.

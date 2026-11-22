@@ -200,12 +200,13 @@ def _mint_token() -> str:
     """A prefixless principal token that can never collide with a namespace.
 
     ``secrets.token_urlsafe`` draws from an alphabet that includes ``_``, so
-    the text of a fresh token could start with ``pgo1_``; the dispatch would
+    the text of a fresh token could start with ``pgo1_`` or ``pgh1_``; the dispatch would
     then depend on luck.  Minting re-rolls until it cannot happen (the lookup
     order in :func:`authenticate` is the second line of defence).
     """
+    from .store_host_samples import PREFIX as HOST_PREFIX
     token = secrets.token_urlsafe(32)
-    while token.startswith(OVERSIGHT_PREFIX):
+    while token.startswith((OVERSIGHT_PREFIX, HOST_PREFIX)):
         token = secrets.token_urlsafe(32)
     return token
 
@@ -244,13 +245,13 @@ def authenticate(conn, token, *, now=None) -> Principal:
     if not token:
         raise Refused("forbidden", "missing token")
     from .store_host_samples import PREFIX, authenticate_host
-    if isinstance(token, str) and token.startswith(PREFIX):
-        return authenticate_host(conn, token)
     row = conn.execute(
         "SELECT name,role,projects,family FROM principals"
         " WHERE token_sha256=? AND active=1", (hash_token(token),)).fetchone()
     if row is not None:
         return _as_principal(row)
+    if isinstance(token, str) and token.startswith(PREFIX):
+        return authenticate_host(conn, token)
     if isinstance(token, str) and token.startswith(OVERSIGHT_PREFIX):
         return _authenticate_oversight(conn, token, now=now)
     return _authenticate_run(conn, token)

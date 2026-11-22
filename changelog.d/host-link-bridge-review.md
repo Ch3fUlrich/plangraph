@@ -1,0 +1,1 @@
+- Exercise SSH outage and recovery delivery through keeper and verify unchanged fallback forwarding.

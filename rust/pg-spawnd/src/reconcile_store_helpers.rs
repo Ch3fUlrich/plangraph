@@ -27,19 +27,24 @@ pub(super) fn terminal(
     status: Option<pg_worker_core::run::record::Status>,
 ) -> Result<bool, crate::reconcile::ReconcileError> {
     use pg_worker_core::run::record::Status;
-    match status {
-        Some(
-            Status::Completed
-            | Status::Failed
-            | Status::Cancelled
-            | Status::Stalled
-            | Status::Timeout
-            | Status::Refused
-            | Status::Limited
-            | Status::DryRun
-            | Status::NeedsInput
-            | Status::Orphaned,
-        ) => Ok(true),
-        _ => Err(crate::reconcile::ReconcileError::Unknown),
+    if status.is_some_and(Status::is_terminal) {
+        Ok(true)
+    } else {
+        Err(crate::reconcile::ReconcileError::Unknown)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::terminal;
+    use pg_worker_core::run::record::Status;
+
+    #[test]
+    fn stalled_no_leg_is_already_settled() {
+        assert!(matches!(
+            terminal(Status::parse("stalled_no_leg")),
+            Ok(true)
+        ));
+        assert!(terminal(Some(Status::Running)).is_err());
     }
 }
