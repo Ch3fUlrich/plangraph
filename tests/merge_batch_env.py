@@ -301,7 +301,8 @@ def pushed(env, name="l1", prs=(1, 2, 3), checks="pass", plan=None):
     env.branch_pr(3, {"c.txt": "c\n"}, item="ITEM-C")
     assert env.run("build", "--name", name, "--prs", ",".join(map(str, prs)),
                    *(["--plan", plan] if plan else [])).returncode == 0
-    assert env.run("push", "--name", name).stdout == "100\n"
+    push = env.run("push", "--name", name)
+    assert push.stdout == "100\n", push.stderr
     for rec in json.loads(env.state_file(name).read_text())["merged"]:
         env.attach_seat(name, rec)
     env.load()  # the stub created PR 100

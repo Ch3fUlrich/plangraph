@@ -362,10 +362,11 @@ for refused in (False, True):
         raise land.MergeBatchError('host merge boundary')
 
     with ExitStack() as stack:
-        for name in ('check_approval', 'require_part_seats', 'require_full_run', 'require_current_base',
+        for name in ('check_approval', 'require_part_seats', 'require_current_base', 'save_state',
                      'require_green', 'record_reruns', 'prepare_train', 'require_main_green', 'require_migration_go',
                      'merge_trailers'):
             stack.enter_context(patch.object(land, name, Mock()))
+        stack.enter_context(patch.object(land, 'require_full_run', return_value=[]))
         stack.enter_context(patch.object(land, 'landing_journal', journal))
         stack.enter_context(patch.object(land, 'gh', gh))
         stack.enter_context(patch.object(land, 'gh_json', side_effect=[

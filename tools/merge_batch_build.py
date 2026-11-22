@@ -727,8 +727,6 @@ def prepare_train(st, lease, mode=None):
         inputs = landing_receipt_inputs(st, attempt.get("reruns", []), attempt.get("go_row"))
         inputs["review_runs"] = {str(part["pr"]): part.get("review_runs") or {} for part in parts}
         inputs = dict(mode=mode, receipt_inputs=inputs)
-    elif (configured_mode := landing_mode_of(st)) != "train-pr-merge":
-        inputs = dict(mode=configured_mode)
     return landing_journal(st["repo"], "prepare", pr=st["pr"], base=st["base_head"],
                            head=st["head"], parts=parts, batch_key=landing_batch_key(st), **inputs, **lease)
 
