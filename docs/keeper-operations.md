@@ -178,10 +178,13 @@ and `age_seconds` since the last successful origin fetch (null / age unknown
 if none was observed). Cached failures retain their warning and age; they are
 retried after 10 seconds. Independently verified decision/merge facts can still
 require reconciliation. Unconfigured or unavailable local adapters retain the
-existing best-effort behavior. Claim refreshes the index before enforcement;
-an unverified index refuses claim with `work index unverified` unless the caller
-uses the audited force-stale override for merged-work and decision facts. An open PR refuses every claim until it closes. Ready and claim share merge PR metadata
-computed from the refreshed target topology, even when local main lags origin.
+existing best-effort behavior. Ready and claim scan registered repositories because a PR in another
+repository can carry the item's full key. An unavailable PR inventory in any scanned repository can
+put the item in `unknown` and refuse its claim. Claim refreshes the index before enforcement.
+L1 and worker claims can use the audited `force_stale` override for unverified work and decision
+facts. Phase-worker and system claims require a verified PR inventory. A known open PR refuses
+every claim until it closes. Ready and claim share merge PR metadata computed from the refreshed
+target topology, even when local main lags origin.
 
 `PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims` prints exactly `{"paths":[...],"branches":[...]}` for active
 claimed/in_review items across every project, using a fresh snapshot and each

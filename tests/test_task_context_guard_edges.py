@@ -354,3 +354,47 @@ def test_open_pull_trailers_block_ready_and_all_claims_until_close(
     ready = w.store.ready_data(l1)
     assert key in [row["key"] for row in ready["items"]]
     assert w.store.claim(l1, key)["epoch"] == 1
+
+
+@pytest.mark.parametrize("failure", ["pr-list", "origin-fetch"])
+def test_unverified_pr_inventory_in_another_repo_blocks_ready_and_claims(
+        w, repo, tmp_path, monkeypatch, failure):
+    import subprocess
+
+    from plangraph.keeper.auth import add_principal, authenticate
+    from plangraph.keeper.evidence_git import GitAdapter
+
+    key, = seed(w, [("A", [])])
+    phase = authenticate(w.conn, add_principal(w.conn, "phase", "phase-worker", ["demo"]))
+    data = tmp_path / "data"
+    _git(tmp_path, "clone", "-q", str(repo), str(data))
+    _git(data, "remote", "set-url", "origin", "https://github.com/example/data")
+    adapter = GitAdapter({"demo": str(repo), "data": str(data)})
+    w.store.ctx["git"] = adapter
+    real_git, real_run = adapter._run, subprocess.run
+
+    def git(path, args, **kwargs):
+        if args == ["fetch", "--no-tags", "origin"]:
+            assert path == str(data)
+            return _Proc(int(failure == "origin-fetch"))
+        return real_git(path, args, **kwargs)
+
+    def run(args, **kwargs):
+        if args[:3] == ["gh", "pr", "list"]:
+            assert kwargs["cwd"] == str(data)
+            return _Proc(int(failure == "pr-list"), "[]")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(adapter, "_run", git)
+    monkeypatch.setattr(subprocess, "run", run)
+    assert not getattr(adapter, "_context_work_index", {})
+    message = "open PR inventory unavailable: data"
+    with pytest.raises(Refused, match=f"^bad_state: {message}$"):
+        w.store.claim(phase, key, force_stale="checked")
+    ready = w.store.ready_data(w.p("reader"), project="demo")
+    assert ready["items"] == []
+    row, = ready["unknown"]
+    assert (row["key"], row["ready_status"], row["work_index"]["reason"]) == (key, "unknown", message)
+    with pytest.raises(Refused, match=message):
+        w.store.claim(w.p("l1main"), key)
+    assert w.store._item(key)["epoch"] == 0
