@@ -11,7 +11,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from _split_ci_environment import wait_for_test_child_exit
 from plangraph.mcp_supervise import supervisor
 from plangraph.mcp_supervise.config import load_config
 from plangraph.mcp_supervise.procutil import (
@@ -130,7 +129,7 @@ class TestAdoption(WorkdirCase):
                    "--timeout", "30"],
             capture_output=True, text=True, env=CLI_ENV)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        self.assertTrue(wait_for_test_child_exit(orphan_pid), "check must kill the pid from the pid file")
+        self.assertFalse(pid_alive(orphan_pid), "check must kill the pid from the pid file")
         self.assertNotEqual(self.pid_of("a"), orphan_pid)
 
 

@@ -158,24 +158,6 @@ def _test_subreaper(enabled=None):
     return previous.value
 
 
-def wait_for_test_child_exit(pid, *, timeout=5):
-    """Wait for a fixture PID to exit, reaping it if the test worker adopted it."""
-    from plangraph.mcp_supervise.procutil import pid_alive
-
-    deadline = time.monotonic() + timeout
-    while pid_alive(pid):
-        if os.name == "posix":
-            try:
-                if os.waitpid(pid, os.WNOHANG)[0] == pid:
-                    return True
-            except ChildProcessError:
-                pass  # Its parent is still responsible for reaping it.
-        if time.monotonic() >= deadline:
-            return False
-        time.sleep(0.02)
-    return True
-
-
 _active_test_deadline = ContextVar('active_test_deadline', default=None)
 
 
