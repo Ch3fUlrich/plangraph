@@ -585,6 +585,27 @@ pub(crate) fn finish_with_allowlist(
         if value["role"] == "review" {
             let text = crate::review_artifacts::review_text(&state, &value)
                 .unwrap_or_else(|_| "Full rendered review unavailable.\nVERDICT: HALT\n".into());
+            if !dry && status != Status::Cancelled {
+                let answer = if text == crate::review_artifacts::DIAGNOSTIC_REVIEW_TEXT
+                    || text.starts_with("Agy review unavailable:")
+                {
+                    let raw = value["stdout_tail"].as_str().unwrap_or("");
+                    pg_worker_core::review_split::extract_review_text_from_live_log(raw)
+                        .unwrap_or_else(|| {
+                            if raw.trim_start().starts_with('{') {
+                                String::new()
+                            } else {
+                                raw.to_owned()
+                            }
+                        })
+                } else {
+                    text.clone()
+                };
+                record.set(
+                    "review_result",
+                    json!(crate::review_health::classify(&value, &answer)),
+                );
+            }
             let result = crate::review_artifacts::write_review_artifacts_with_allowlist(
                 &state, &value, &text, allow_shas,
             );

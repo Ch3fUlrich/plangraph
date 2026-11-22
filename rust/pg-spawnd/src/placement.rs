@@ -136,7 +136,14 @@ pub(crate) fn route(state: &Path, args: &Args) -> Result<String, ToolError> {
         argv.push("--writer-snapshot".into());
     }
     let text = crate::cli_review::select(args, run(state, argv, Duration::from_secs(30), false)?)?;
-    resolve_work_mode(mode, &text)
+    let text = resolve_work_mode(mode, &text)?;
+    if args.get("role").and_then(Value::as_str) != Some("review") || args.contains_key("leg") {
+        return Ok(text);
+    }
+    let mut plan: Value = serde_json::from_str(&text)
+        .map_err(|_| ToolError::Internal("invalid review plan".into()))?;
+    crate::review_health::demote(&mut plan, &crate::records::list_runs(state));
+    Ok(plan.to_string())
 }
 
 fn resolve_work_mode(

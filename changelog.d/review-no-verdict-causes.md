@@ -1,0 +1,1 @@
+Review run records explain missing verdicts using transport and launch evidence. The Rust review route puts legs with more than three missing verdicts in their last ten completed runs after healthier candidates and returns an alert naming the affected runs.

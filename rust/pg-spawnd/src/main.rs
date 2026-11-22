@@ -46,6 +46,7 @@ mod reconcile_watch;
 mod records;
 mod review_artifacts;
 mod review_citation;
+mod review_health;
 mod review_retry;
 mod review_split;
 mod role_header;
