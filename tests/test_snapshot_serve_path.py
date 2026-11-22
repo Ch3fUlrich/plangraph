@@ -233,7 +233,8 @@ def test_print_refuses_worktree_checkout(tmp_path, capsys):
     assert ".claude/worktrees" in err
 
 
-def test_print_refuses_relative_checkout(tmp_path, capsys):
+def test_print_refuses_relative_checkout(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     code = ssp.main(["print", "--checkout", "rel/co", "--config", "/abs/k.json"])
     assert code == 1
     out, err = capsys.readouterr()
