@@ -358,7 +358,10 @@ impl Host {
         if record["status"] != "completed" {
             return Err(format!("review run incomplete: {}", record["reason"]));
         }
-        let text = review_run_text(&self.state, &record)?;
+        let mut text = review_run_text(&self.state, &record)?;
+        if crate::review_test_evidence::tests_line(&text).is_none_or(str::is_empty) {
+            text.insert_str(0, "TESTS: none: reviewer supplied no test result\n");
+        }
         let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
         let mut verdict = review_verdict(&text, head, &paths);
         let id = record["run_id"].as_str().unwrap_or("run-unknown");
@@ -405,7 +408,8 @@ pub(crate) fn review_verdict(text: &str, head: &str, paths: &[String]) -> Value 
     if verdict == "ACCEPT" && !crate::review_artifacts::has_repository_evidence(text, paths) {
         return weak("weak_verdict");
     }
-    json!({"verdict":verdict,"head":head,"text":text})
+    let tested = crate::review_test_evidence::reported(text).is_some();
+    json!({"verdict":verdict,"head":head,"text":text,"tested":tested})
 }
 /// Spawner CLI argv prefix for review runs; PLANGRAPH_NATIVE_REVIEW_CLI (a JSON string
 /// array) replaces the default `python3 -m plangraph.spawner.cli`.

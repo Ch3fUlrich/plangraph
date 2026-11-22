@@ -381,10 +381,18 @@ class SpawnerRunner:
             if cmd[0] == 'agy' and (prepare_launch or not dry_run):
                 from plangraph.routing_support.clients import prepare_agy_review_home
                 render_reason = prepare_agy_review_home(child_env, role, model_or_combo, self._ocdata_dirs, job_id)
-        if render_reason is None:
-            self._child_envs[job_id] = child_env
-
         try:
+            if cmd[0] == 'claude' and role == 'review' and (prepare_launch or not dry_run):
+                from plangraph.planner.legs import REVIEW_SONNET
+                if leg is not None and leg.id == REVIEW_SONNET and leg.tool_mode == 'tools':
+                    from tempfile import mkdtemp
+                    from plangraph.routing_support.claude_seat import configure_review_tests
+                    scratch = Path(mkdtemp(prefix='plangraph-claude-review-')).resolve()
+                    self._ocdata_dirs[job_id] = scratch
+                    configure_review_tests(cmd, child_env, scratch)
+            if render_reason is None:
+                self._child_envs[job_id] = child_env
+
             if dry_run:
                 served_model = model_or_combo
                 served_family = detect_model_family(model_or_combo)

@@ -1,11 +1,14 @@
-"""Tool scope of a claude harness run (D-3835, D-3872: pytest on the review seat only).
+"""Tool scope of a Claude harness run.
 
-Only the review role leaves plan mode. Its Bash is pytest on named paths: options
-(--junit-xml, --basetemp) write outside the review; quotes and backslashes could hide one.
-Repo settings stay unread: the diff under review must not widen its own seat.
+The legacy seat has pytest on named paths. Sonnet uses a sandbox because even
+an allowed test command runs code from the reviewed checkout.
 """
 
 from importlib.resources import files
+import json
+import os
+from pathlib import Path
+import sys
 
 REVIEW_TOOLS = "Read,Grep,Glob,Bash(python3 -m pytest -q *)"
 REVIEW_DENIED = ("Write,Edit,Bash(python3 -m pytest -q -*),Bash(python3 -m pytest -q * -*),"
@@ -22,3 +25,42 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--strict-mcp-config", "--mcp-config",
             str(files("plangraph").joinpath("config/empty-mcp.json")),
             "--disable-slash-commands"]
+
+
+def configure_review_tests(argv: list[str], env: dict[str, str], scratch: Path) -> None:
+    """Apply the Sonnet review profile to the actual launch and its subprocesses."""
+    target = scratch / "cargo-target"
+    target.mkdir()
+    env.update(CARGO_TARGET_DIR=str(target), CLAUDE_CODE_TMPDIR=str(scratch),
+               TMPDIR=str(scratch), PYTHONDONTWRITEBYTECODE="1",
+               PYTEST_ADDOPTS="-p no:cacheprovider", CARGO_NET_OFFLINE="true",
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    # The installed service's venv is outside the disposable review clone.
+    for bin_dir in (Path(sys.prefix) / "bin", Path(__file__).resolve().parents[3] / ".venv/bin"):
+        if (bin_dir / "pytest").is_file():
+            env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", os.defpath)
+            break
+    allowed = ",".join([
+        REVIEW_TOOLS, "Bash(pytest *)", "Bash(cargo test -p *)", "Bash(cargo build -p *)",
+        "Bash(cargo test --manifest-path rust/Cargo.toml -p *)",
+        "Bash(cargo build --manifest-path rust/Cargo.toml -p *)",
+        "Bash(git log *)", "Bash(git show *)", "Bash(git diff *)", "Bash(git grep *)",
+        "Bash(rg *)",
+    ])
+    credentials = ["~/.aws", "~/.ssh", "~/.gnupg", "~/.config", "~/.claude",
+                   "~/.claude.json", "~/.git-credentials", "~/.netrc"]
+    if config := env.get("CLAUDE_CONFIG_DIR"):
+        credentials.append(str(Path(config).resolve()))
+    settings = {"sandbox": {
+        "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+        "autoAllowBashIfSandboxed": False, "excludedCommands": [],
+        "filesystem": {"denyWrite": ["."], "allowWrite": [str(scratch)],
+                       "denyRead": credentials},
+    }}
+    for flag, value in [
+        ("--permission-mode", "dontAsk"), ("--setting-sources", ""),
+        ("--allowedTools", allowed),
+        ("--disallowedTools", REVIEW_DENIED + ",Bash(git push *)"),
+    ]:
+        argv[argv.index(flag) + 1] = value
+    argv.extend(["--restricted", "--settings", json.dumps(settings)])

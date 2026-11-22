@@ -8,6 +8,8 @@ Rules:
   exact format supplied by the seat when it specifies one.
 - An inline-only seat must name what it could not verify; never claim repository access.
   Keep the host's inherited sccache wrapper and cache settings for Cargo builds.
+- Include one standalone TESTS: line with the test commands you ran and their results.
+  If you ran none, report TESTS: none: followed by the reason.
 Language: new code is Rust with Rust tests. New Python, shell or Node source files
 and allowlist additions require an operator D-id; fixes in existing Python stay allowed.
 Gates: cheap checks, changed and affected tests, fast-checks on the exact head, then review.

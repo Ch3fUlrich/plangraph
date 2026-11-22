@@ -345,7 +345,7 @@ fn stderr_quota_survives_missing_log_and_sonnet_uses_the_model_store() {
 }
 
 #[test]
-fn real_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind() {
+fn batch89_sonnet_launch_adapter_keeps_the_selected_harness_and_python_rejects_kind() {
     let dir = tempfile::tempdir().unwrap();
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     // CI may have no fetchable default branch in its detached source checkout.
@@ -380,10 +380,22 @@ from plangraph.spawner.mcp import MCPSpawnerServer, ParameterRefused, TOOLS_META
 state = str(Path(sys.argv[1]).resolve())
 request = dict(run_id='run-'+'a'*32, job_id='fixture', role='review', dry_run=True,
     leg=dict(id='claude-sonnet-5-5-high'), prompt='review', writer_families=['openai'], card=dict(estimate_tokens=1000), cwd=str(Path.cwd()), state=state)
-argv = build(request)['argv']
+spec = build(request)
+argv = spec['argv']
 assert argv[0] == 'claude', argv
 assert argv[argv.index('--model')+1] == 'claude-sonnet-5-5', argv
 assert argv[argv.index('--effort')+1] == 'high', argv
+allowed = argv[argv.index('--allowedTools')+1].split(',')
+assert {'Bash(cargo test -p *)', 'Bash(pytest *)', 'Bash(git diff *)', 'Bash(rg *)'} <= set(allowed), argv
+denied = argv[argv.index('--disallowedTools')+1].split(',')
+assert {'Write', 'Edit', 'Bash(git push *)'} <= set(denied), argv
+sandbox = json.loads(argv[argv.index('--settings')+1])['sandbox']
+assert sandbox['enabled'] and sandbox['failIfUnavailable'] and not sandbox['allowUnsandboxedCommands'], sandbox
+assert not sandbox['autoAllowBashIfSandboxed'] and sandbox['excludedCommands'] == [], sandbox
+assert sandbox['filesystem']['denyWrite'] == ['.'], sandbox
+target = Path(spec['env']['CARGO_TARGET_DIR'])
+assert target.is_dir() and sandbox['filesystem']['allowWrite'] == [str(target.parent)], sandbox
+assert not target.is_relative_to(Path.cwd()), target
 record = asyncio.run(SpawnService(state=state).spawn(card=dict(estimate_tokens=1000),
     prompt='review', role='review', leg='claude-sonnet-5-5-high', writer_families=['openai'],
     override_reason='fixture direct native Sonnet', dry_run=True))

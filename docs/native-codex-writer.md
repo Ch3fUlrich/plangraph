@@ -43,7 +43,10 @@ at the head; `PLANGRAPH_NATIVE_REVIEW_CLI`, a JSON argv array, replaces
 `python3 -m plangraph.spawner.cli`). The review prompt starts with the versioned review brief (`render_brief`, review skill as its rules) whose item context carries the whole done criteria and invariants of the writer brief (feeder or batch layout), both SHAs, the public symbols the diff adds with their first callers, and the exact-head fast-check log (`<git-dir>/fast-checks/<head>.log`) and writer session log. The verdict is read from that run's record
 (`review_artifacts::review_text`), never from a file name: the last `VERDICT:`
 line must be canonical. ACCEPT requires repository access and evidence in a
-`FILES READ:` line. A different `HEAD:` or weak ACCEPT is `no_verdict`,
+`FILES READ:` line. The review record sets `tested` from the reviewer's standalone
+`TESTS:` report. An absent report or `TESTS: none:` gives `tested: false`.
+The Sonnet seat runs its scoped Bash commands in a read-only review checkout
+with disposable writable build and test scratch space. A different `HEAD:` or weak ACCEPT is `no_verdict`,
 retried twice, then the run ends BLOCKED with
 exit 4. The review text is kept in `review_dir` as `<head8>-<n>-<run-id>.txt`.
 REQUEST_CHANGES resumes the same session with a pointer to a private brief
