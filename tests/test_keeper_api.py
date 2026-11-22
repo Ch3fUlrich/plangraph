@@ -480,3 +480,175 @@ def test_incident_migration_on_existing_sqlite_store(tmp_path):
         ).fetchone()[0] == "idx_events_incidents"
     finally:
         conn.close()
+
+
+def test_parallel_claims_and_reads_stay_within_client_bound(srv, w, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from contextlib import contextmanager
+    from time import perf_counter, sleep
+    from plangraph.keeper import context_sources
+
+    ids = [f"LOAD-{i}" for i in range(16)]
+    w.store.create_items(w.p("router"), [*(defn(key) for key in ids),
+                                           defn("LOAD-GOAL", ids, kind="goal")])
+    keys = [f"demo:{key}" for key in ids]
+    original = context_sources.work_index
+    phases = {name: [] for name in ("index", "dependency", "transaction", "event", "snapshot")}
+
+    def measure(name, fn):
+        def run(*args, **kwargs):
+            start = perf_counter()
+            try:
+                return fn(*args, **kwargs)
+            finally:
+                phases[name].append(perf_counter() - start)
+        return run
+
+    def work_index(*args, **kwargs):
+        if kwargs.get("fresh"):
+            sleep(.75)  # Simulate a responsive remote fetch and forge inventory.
+        return original(*args, **kwargs)
+
+    @contextmanager
+    def transaction():
+        start = perf_counter()
+        with write():
+            yield
+        phases["transaction"].append(perf_counter() - start)
+
+    write = w.store._write
+    monkeypatch.setattr(w.store, "_write", transaction)
+    monkeypatch.setattr(w.store, "_claim_train_for", measure("dependency", w.store._claim_train_for))
+    monkeypatch.setattr(w.store, "_append", measure("event", w.store._append))
+    monkeypatch.setattr(context_sources, "work_index", measure("index", work_index))
+    monkeypatch.setattr(api.KeeperHandler, "_snapshot", measure("snapshot", api.KeeperHandler._snapshot))
+    barrier = threading.Barrier(12)
+
+    def request(i):
+        is_writer = i < 8
+        session = Session(url=srv.base_url)
+        session._token = w.tok("l1main" if is_writer else "reader")
+        barrier.wait(timeout=10)
+        start = perf_counter()
+        if is_writer:
+            assert session.call("POST", "claim", body={"key": keys[i]}, timeout=10)["key"] == keys[i]
+        else:
+            assert session.call("GET", f"show/{keys[i]}", timeout=10)["key"] == keys[i]
+        return perf_counter() - start
+
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        samples = sorted(pool.map(request, range(12)))
+    print("HTTP p95", round(samples[-1], 3),
+          "phase maxima", {name: round(max(values), 4) for name, values in phases.items()})
+    assert samples[-1] < 5
+
+
+def test_batch_claim_and_heartbeat_commit_once_and_replay(srv, w, monkeypatch):
+    ids = [f"BATCH-{i}" for i in range(100)]
+    w.store.create_items(w.p("router"), [*(defn(key) for key in ids),
+                                           defn("BATCH-GOAL", ids, kind="goal")])
+    keys = [f"demo:{key}" for key in ids]
+    commits = []
+    from contextlib import contextmanager
+
+    @contextmanager
+    def transaction():
+        with write():
+            yield
+        commits.append("commit")
+
+    write = w.store._write
+    monkeypatch.setattr(w.store, "_write", transaction)
+    session = Session(url=srv.base_url)
+    session._token = w.tok("l1main")
+
+    request = {"keys": [*keys, "demo:missing"]}
+    claimed = session.call("POST", "claim_batch", body=request, idempotency_key="claim-fixture")
+    assert [row["key"] for row in claimed["results"]] == request["keys"]
+    assert all(row["epoch"] == 1 for row in claimed["results"][:-1])
+    assert claimed["results"][-1]["error"] == "not_found"
+    assert commits == ["commit"]
+    assert session.call("POST", "claim_batch", body=request,
+                        idempotency_key="claim-fixture") == claimed
+    assert commits == ["commit"]
+
+    w.clock.advance(60)
+    claims = [{"key": key, "epoch": 1} for key in keys]
+    claims[-1]["epoch"] = 2
+    renewed = session.call("POST", "heartbeat_batch", body={"claims": claims})
+    assert [row["key"] for row in renewed["results"]] == keys
+    assert all(row["lease_until"] > claimed["results"][0]["lease_until"]
+               for row in renewed["results"][:-1])
+    assert renewed["results"][-1]["error"] == "epoch_stale"
+    assert commits == ["commit", "commit"]
+
+
+@pytest.mark.parametrize("verb", ["claim", "claim_batch"])
+def test_claim_preflight_deadline_refuses_without_claiming(srv, w, monkeypatch, verb):
+    from types import SimpleNamespace
+    from keeper_util import Clock
+    from plangraph.keeper import context_sources, timing
+
+    clock = Clock(0)
+    monkeypatch.setattr(timing, "time", SimpleNamespace(monotonic=clock))
+
+    def work_index(*args, **kwargs):
+        assert timing.io_timeout(30) == 3.0
+        clock.advance(3.1)
+        return None
+
+    monkeypatch.setattr(context_sources, "work_index", work_index)
+    body = {"key": "demo:A"} if verb == "claim" else {"keys": ["demo:A"]}
+    status, _, raw = call(srv, f"/v1/{verb}", method="POST", body=body,
+                          token=w.tok("l1main"))
+    result = {"error": "conflict", "msg": "claim preflight exceeded its deadline"}
+    if verb == "claim_batch":
+        assert (status, jbody(raw)) == (200, {"results": [{"key": "demo:A", **result}]})
+    else:
+        assert (status, jbody(raw)) == (409, result)
+    assert w.store._item("demo:A")["state"] == "open"
+    assert not w.conn.execute("SELECT 1 FROM events WHERE type='claimed'").fetchone()
+
+
+@pytest.mark.parametrize("verb", ["claim_batch", "heartbeat_batch"])
+@pytest.mark.parametrize("keys", [["demo:A", "demo:A"], [f"demo:KEY-{i}" for i in range(201)]],
+                         ids=["duplicate", "over-limit"])
+def test_lease_batch_validates_keys_before_writing(srv, w, monkeypatch, verb, keys):
+    def must_not_write():
+        pytest.fail("invalid batch entered a write transaction")
+
+    monkeypatch.setattr(w.store, "_write", must_not_write)
+    body = ({"keys": keys} if verb == "claim_batch"
+            else {"claims": [{"key": key, "epoch": 1} for key in keys]})
+    status, _, raw = call(srv, f"/v1/{verb}", method="POST", body=body,
+                          token=w.tok("l1main"))
+    assert (status, jbody(raw)) == (400, {
+        "error": "validation", "msg": "expected 1 to 200 distinct item keys"})
+
+
+def test_claim_rechecks_item_after_waiting_on_authority(srv, w, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from plangraph.keeper import context_sources
+
+    started, finish = threading.Event(), threading.Event()
+
+    def work_index(*args, **kwargs):
+        started.set()
+        assert finish.wait(5)
+        return None
+
+    monkeypatch.setattr(context_sources, "work_index", work_index)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        claim = pool.submit(call, srv, "/v1/claim", method="POST",
+                            body={"key": "demo:A"}, token=w.tok("l1main"))
+        try:
+            assert started.wait(5)
+            with srv.lock:
+                w.store.set_priority(w.p("router"), "demo:A", 9)
+        finally:
+            finish.set()
+        status, _, raw = claim.result(timeout=5)
+    assert (status, jbody(raw)) == (409, {
+        "error": "conflict", "msg": "demo:A changed while checking claim eligibility"})
+    assert w.store._item("demo:A")["state"] == "open"
+    assert not w.conn.execute("SELECT 1 FROM events WHERE type='claimed'").fetchone()

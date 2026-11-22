@@ -21,7 +21,7 @@ from .errors import KeeperLocked
 from .schema_guards import RECEIPTS_DDL
 from .schema import ATTEMPTS_GUARDS, ATTEMPTS_TABLE, ATTEMPT_SPAWN_INDEXES
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
-from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, INCIDENTS_DDL, JEV_DDL,
+from .schema import (ALERTS_DDL, ALIASES_DDL, CLAIM_DEFINITION_INDEX_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, INCIDENTS_DDL, JEV_DDL,
                      LANDING_CLAIMS_DDL, LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
                      LOCKS_DDL, METRICS_DDL, OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL,
                      SCHEMA, TRIGGERS)
@@ -236,6 +236,7 @@ def _upgrade(conn):
     conn.executescript(PLACEMENT_RULES_DDL)
     conn.executescript(GRANTS_DDL)
     conn.executescript(EVENT_AUDIENCE_DDL)
+    conn.executescript(CLAIM_DEFINITION_INDEX_DDL)
     conn.executescript(LANDING_STAGES_DDL)
     conn.executescript(LANDING_TRAINS_DDL)
     conn.executescript(LANDING_JOBS_DDL)
