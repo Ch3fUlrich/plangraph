@@ -110,15 +110,11 @@ elif ARGV[0] == "api":  # the REST calls the tool makes: add labels, update titl
             behind = int(git("rev-list", "--count", f"{head_sha}..refs/heads/main").stdout.strip() or 0)
         print(json.dumps({"behind_by": behind, "ahead_by": 1}))
         sys.exit(0)
-    if re.search(r"/issues/\d+/events", endpoint_get):  # label events of a PR (the READY time of a part)
-        print(json.dumps(S.get("events", {}).get(re.search(r"/issues/(\d+)/", endpoint_get).group(1), [])))
-        sys.exit(0)
     if "/actions/" in endpoint_get:
         batch = next((follow_branch(p) for p in S["prs"].values() if p["headRefName"].startswith("batch/")), None)
         run = {"id": 7, "head_sha": batch["headRefOid"] if batch else "0" * 40,
                "head_branch": batch["headRefName"] if batch else "main", "event": "pull_request",
-               "status": "completed", "conclusion": "success", "run_attempt": 1,
-               "run_started_at": "2026-11-21T09:50:00Z", "updated_at": "2026-11-21T10:01:00Z"}
+               "status": "completed", "conclusion": "success", "run_attempt": 1}
         if "head_sha=" in endpoint_get:
             sha = endpoint_get.split("head_sha=", 1)[1].split("&", 1)[0]
             matches = [pr for pr in map(follow_branch, S["prs"].values()) if pr["headRefOid"] == sha]

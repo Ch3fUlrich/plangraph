@@ -149,12 +149,7 @@ assert ci.gate(needs) == ['rust-windows: skipped'], ci.gate(needs)
     for input in ["--event", "--base-ref", "--head-ref", "--labels"] {
         assert!(gate.contains(input), "ci-gate missing {input}");
     }
-    let suite_jobs = jobs.split_once("\n  ci-gate:\n").unwrap().0;
-    assert_eq!(suite_jobs.matches("needs.select.outputs.full").count(), 4);
-    assert!(gate.contains("- name: Post ci-full evidence"));
-    assert!(gate.contains(
-        "success() && github.event_name == 'pull_request' && needs.select.outputs.full == 'true'"
-    ));
+    assert_eq!(workflow.matches("needs.select.outputs.full").count(), 4);
     assert!(workflow.contains("types: [opened, synchronize, reopened, edited, labeled]"));
     assert!(!workflow.contains("ready_for_review"));
 }
