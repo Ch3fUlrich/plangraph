@@ -274,9 +274,14 @@ fn schema_fields_required_and_patterns_match_rust() {
             .collect();
         assert_eq!(required, expected, "required fields for {name}");
     }
+    let host_entry = &schema["$defs"]["hostEntry"];
     assert_eq!(
-        schema["$defs"]["hostEntry"]["properties"]["id"]["pattern"],
+        host_entry["else"]["properties"]["id"]["pattern"],
         HOST_ID_PATTERN
+    );
+    assert_eq!(
+        host_entry["properties"]["id"]["pattern"],
+        "^[a-z][a-z0-9.-]{0,31}$"
     );
     assert_eq!(
         schema["$defs"]["hostEntry"]["properties"]["repos"]["propertyNames"]["pattern"],
