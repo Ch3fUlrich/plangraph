@@ -228,16 +228,18 @@ class LegStateStore:
         except sqlite3.Error:
             return None
 
-    def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None):
+    def record_harness_limit(self, leg, line, caller, now=None, account=None, combo=None, down_s=None, *, harness=None):
         if not leg or not caller or not line.strip():
             raise LegStateError('requires leg, quota line and caller')
         # An elapsed cooldown permits neither a fallback booking nor a reset-less limit.
         if _elapsed_cooldown({}, line):
             return
-        leg = quota_key(leg)
+        is_agy_harness = harness in (None, 'agy')
+        leg = quota_key(leg) if is_agy_harness else leg
         now = time.time() if now is None else now
         reset = _reset({}, line, now)
-        if reset is not None and leg.startswith(('agy:', 'agy/')) and 'individual quota reached' in line.lower():
+        if (reset is not None and is_agy_harness and leg.startswith(('agy:', 'agy/'))
+                and 'individual quota reached' in line.lower()):
             leg, combo = 'agy:account-wide', None
         if reset is None and down_s is not None:
             # D-3605 (a): no provider reset time; _down_seconds is capped, so
@@ -362,8 +364,8 @@ def record_probe_pass(leg, caller, now=None, account=None, combo=None):
     return _default_store().record_probe_pass(leg, caller, now, account, combo)
 
 
-def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, down_s=None):
-    return _default_store().record_harness_limit(leg, line, caller, now, account, combo, down_s)
+def record_harness_limit(leg, line, caller, now=None, account=None, combo=None, down_s=None, *, harness=None):
+    return _default_store().record_harness_limit(leg, line, caller, now, account, combo, down_s, harness=harness)
 
 
 def leg_status(leg, now=None, account=None, combo=None, *, harness=None):

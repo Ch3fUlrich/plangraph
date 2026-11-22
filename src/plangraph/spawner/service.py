@@ -422,7 +422,7 @@ class SpawnService(SeatSpawnMixin):
                             served_witness_reason=job.served_witness_reason,
                             stdout_tail=job.stdout, stderr_tail=job.stderr, events=job.events, provider_response=stop))
                         break
-                    unavailable = fallthrough_reason(self, chosen, job, record)
+                    unavailable = fallthrough_reason(self, chosen, job, record, card=card)
                     if unavailable: job.status, job.exit_code = 'failed', job.exit_code or 1
                     reason = unavailable or (failure_reason(job, stop, harness=chosen.harness)
                         if job.status in ('failed', 'skipped') else None)

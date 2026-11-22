@@ -502,7 +502,14 @@ fn book_attempt(base: &mut Value, leg: &Value) -> u32 {
     u32::try_from(attempts.len()).expect("attempt count fits u32")
 }
 pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, attempt_id: u32) {
-    finish_with_allowlist(record, status, leg, attempt_id, &BTreeSet::new());
+    finish_with_allowlist(
+        record,
+        status,
+        leg,
+        attempt_id,
+        &BTreeSet::new(),
+        &Value::Null,
+    );
 }
 pub(crate) fn finish_with_allowlist(
     record: &mut RunRecord,
@@ -510,6 +517,7 @@ pub(crate) fn finish_with_allowlist(
     leg: &Value,
     attempt_id: u32,
     allow_shas: &BTreeSet<String>,
+    card: &Value,
 ) {
     let diagnostic = crate::gitconfig_guard::guard_diagnostic(record, status, leg, attempt_id);
     let status = crate::gitconfig_guard::enforce(record, status, diagnostic);
@@ -531,7 +539,7 @@ pub(crate) fn finish_with_allowlist(
         record.set("attempts_error", json!("unknown or invalid attempt id"));
         return;
     };
-    crate::cli_review::finish(record, status, leg);
+    crate::cli_review::finish(record, status, leg, card);
     let (dry, unwitnessed) = (status == Status::DryRun, json!("unwitnessed"));
     let completion = json!({"leg":leg,"status":status.as_str(),
         "served_model":if dry { &leg["model"] } else { &unwitnessed },

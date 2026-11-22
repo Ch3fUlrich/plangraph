@@ -161,7 +161,7 @@ fn read_log(record: &RunRecord) -> std::io::Result<String> {
     std::fs::read_to_string(path)
 }
 
-fn quota_args(record: &RunRecord, leg: &Value) -> Option<Vec<String>> {
+fn quota_args(record: &RunRecord, leg: &Value, card: &Value) -> Option<Vec<String>> {
     // stderr remains useful when logging failed, was disabled, or rotated away.
     let log = read_log(record).unwrap_or_default();
     let mut errors = Vec::new();
@@ -218,13 +218,18 @@ fn quota_args(record: &RunRecord, leg: &Value) -> Option<Vec<String>> {
         "--error".into(),
         errors.join("\n").chars().take(8192).collect(),
     ];
+    for field in ["account", "combo"] {
+        if let Some(value) = card[field].as_str() {
+            argv.push(format!("--{field}={value}"));
+        }
+    }
     if let Some(reset) = reset {
         argv.extend(["--reset-at".into(), reset.to_string()]);
     }
     Some(argv)
 }
 
-pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
+pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value, card: &Value) {
     if record.get("role").and_then(Value::as_str) != Some("review")
         || !eligible(leg)
         || status == Status::DryRun
@@ -256,7 +261,7 @@ pub(crate) fn finish(record: &mut RunRecord, status: Status, leg: &Value) {
         || text.is_empty()
         || text.contains("VERDICT: HALT")
     {
-        if let Some(argv) = quota_args(record, leg) {
+        if let Some(argv) = quota_args(record, leg, card) {
             if !matches!(
                 crate::adapter::Adapter(&state).run(&argv, Duration::from_secs(10)),
                 Ok((0, _, _))

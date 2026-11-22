@@ -238,3 +238,16 @@ def test_provider_stop_is_redacted_before_recording(replay, monkeypatch, refusal
     assert secret not in replay.service._path(record['run_id']).read_text()
     assert replay.calls == (['agy-claude-opus'] if refusal_event else ['agy-claude-opus', 'agy-opus-5.5'])
     assert record['status'] == ('failed' if refusal_event else 'completed')
+
+
+def test_review_quota_booking_retains_the_card_account(tmp_path):
+    store = LegStateStore(tmp_path / "legs.sqlite")
+    job = SimpleNamespace(exit_code=3, stdout="", stderr=QUOTA)
+    leg = SimpleNamespace(model="gemini-4-hydrogen-high", harness="agy")
+    record = {"role": "review"}
+    fallthrough_reason(SimpleNamespace(leg_reader=store), leg, job, record,
+                       card={"account": "fixture-A"})
+    other_model = "agy:gemini-4-argon"
+    assert store.leg_status(other_model, account="fixture-A")["state"] == "limited"
+    assert store.leg_status(other_model, account="fixture-B")["state"] == "ok"
+    assert store.leg_status(other_model)["state"] == "ok"

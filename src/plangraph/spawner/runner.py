@@ -1070,7 +1070,7 @@ def spawn_service(*args, **kwargs):
                                 stdout_tail=job.stdout, stderr_tail=job.stderr, provider_response=stop))
                             return
                         reason = None
-                        unavailable = fallthrough_reason(self, chosen, job, record)
+                        unavailable = fallthrough_reason(self, chosen, job, record, card=card)
                         if unavailable:
                             job.status = 'failed'
                             job.exit_code = job.exit_code or 1

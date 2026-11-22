@@ -198,6 +198,8 @@ def main(argv=None):
     p.add_argument('--harness', choices=('agy', 'claude'), default='agy')
     p.add_argument('--error', required=True)
     p.add_argument('--reset-at', type=float)
+    p.add_argument('--account')
+    p.add_argument('--combo')
     commands.add_parser('launch-spec')
     p = commands.add_parser('probe')
     p.add_argument('--leg', action='append', default=[])
@@ -221,7 +223,8 @@ def main(argv=None):
             if args.reset_at is not None and args.reset_at > time.time():
                 line += f' Resets in {args.reset_at - time.time()}s.'
             record_harness_limit(key(SimpleNamespace(model=args.model, harness=args.harness)),
-                                 line, 'pg-spawnd:cli-result')
+                                 line, 'pg-spawnd:cli-result', harness=args.harness,
+                                 account=args.account, combo=args.combo)
         print('{}')
         return 0
     if args.verb == 'catalog':

@@ -160,7 +160,7 @@ def _limit_target(service):
     return target if hasattr(target, 'record_harness_limit') else leg_state
 
 
-def _book_failure(service, chosen, line):
+def _book_failure(service, chosen, line, card=None):
     """Book legacy evidence and quarantine the enabled reader's cached identity.
 
     The adapter replaces its served set on authoritative refresh, so this
@@ -170,7 +170,9 @@ def _book_failure(service, chosen, line):
     from plangraph.routing_support.leg_state import LegAdapter
     from .leg_probe import key
     target = _limit_target(service)
-    target.record_harness_limit(key(chosen), line, 'spawner:harness', down_s=_booking_seconds())
+    scope = {name: card[name] for name in ('account', 'combo') if name in (card or {})}
+    target.record_harness_limit(key(chosen), line, 'spawner:harness', down_s=_booking_seconds(),
+                                harness=getattr(chosen, 'harness', None), **scope)
     if isinstance(target, LegAdapter) and target.enabled:
         target.quarantine(key(chosen))
 
@@ -202,7 +204,7 @@ def tool_call_only(job, record):
     return True
 
 
-def fallthrough_reason(service, chosen, job, record):
+def fallthrough_reason(service, chosen, job, record, *, card=None):
     if any(e.get('event') == 'disk_run_stopped' for e in getattr(job, 'events', ())):
         refusal_record(record, job)
         return None  # host capacity never books a provider down or launches another leg
@@ -246,7 +248,7 @@ def fallthrough_reason(service, chosen, job, record):
         # 'Resets in ...' lines keep their own reset because
         # record_harness_limit applies down_s only when the line carries no
         # reset time.
-        _book_failure(service, chosen, line)
+        _book_failure(service, chosen, line, card)
         # M9/M15: a guard or cancel verdict is never stomped by a fallthrough.
         if record.get('reason') not in TERMINAL_REASONS:
             record['reason'] = 'harness_limit'
@@ -264,7 +266,7 @@ def fallthrough_reason(service, chosen, job, record):
         # not_served_on_host is a fact about this host's environment (a detached unit without the
         # login opencode config), not provider evidence: never book it as a 429 down window.
         if 'not_served_on_host' not in reason.lower():
-            _book_failure(service, chosen, 'model_unavailable: ' + reason)
+            _book_failure(service, chosen, 'model_unavailable: ' + reason, card)
         notify_leg_refused(service, record, chosen, reason)
     stop = getattr(getattr(service, 'runner', None), 'provider_responses', {}).get(getattr(job, 'job_id', None))
     if (not reason and record.get('role') == 'review' and stop

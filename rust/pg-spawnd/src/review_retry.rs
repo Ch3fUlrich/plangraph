@@ -37,7 +37,14 @@ pub(crate) fn hook_with_group(
         {
             record.set("reason", json!(reason));
         }
-        runs::finish_with_allowlist(record, status, &leg, attempt, &allow_shas);
+        runs::finish_with_allowlist(
+            record,
+            status,
+            &leg,
+            attempt,
+            &allow_shas,
+            args.get("card").unwrap_or(&Value::Null),
+        );
         if quota.is_none()
             || status == Status::Cancelled
             || record.path().with_file_name("cancelled").exists()
