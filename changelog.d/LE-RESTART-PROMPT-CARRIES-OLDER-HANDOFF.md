@@ -1,1 +1,1 @@
-- Generate Rust session restart prompts from the newest role card and the effective launch settings, and refuse supplied prompts that reference stale handoffs or caps.
+- Generate Rust session restart prompts from the newest role card and the effective launch settings, preserve the original prompt body, and refuse stale handoff or cap declarations.

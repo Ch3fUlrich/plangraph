@@ -12,8 +12,6 @@ use std::{
 };
 
 pub(super) struct Restart {
-    pub caps: Caps,
-    pub saved_caps: bool,
     pub card: PathBuf,
     pub handoff: PathBuf,
     pub prompt: String,
@@ -31,18 +29,7 @@ pub(super) fn prepare(
     let Some(card) = card::newest(request, paths)? else {
         return Ok(None);
     };
-    let spec = &request.spec;
-    let saved_caps = if args.guard.is_some() {
-        None
-    } else {
-        (spec["ctx_guard_source"] == "operator")
-            .then(|| Caps::from_value(&spec["ctx_guard"]))
-            .flatten()
-            .or_else(|| Caps::from_value(&spec["launched_caps"]))
-    };
-    let caps = saved_caps.unwrap_or_else(|| {
-        policy::select_caps(active_policy, &args.role, request.override_cap.as_ref()).caps
-    });
+    let caps = policy::select_caps(active_policy, &args.role, request.override_cap.as_ref()).caps;
     let supplied = Path::new(&args.prompt);
     let supplied =
         read_text(supplied).map_err(|e| format!("prompt file: {}", io_text(&e, supplied)))?;
@@ -58,13 +45,28 @@ pub(super) fn prepare(
         }
     }
     check_caps(&supplied, caps, &window)?;
-    let prompt = format!(
-        "Restart from handoff {}. Run `resume-digest` first.\n\nModel: {}\nEffort: {}\nCaps: handoff {}, hard {}.\n",
+    const RESTART_PREFIX: &str = "Restart from handoff ";
+    let mut prompt = format!(
+        "{RESTART_PREFIX}{}. Run `resume-digest` first.\n\nModel: {}\nEffort: {}\nCaps: handoff {}, hard {}.\n",
         card.handoff.display(), args.model, args.effort, caps.handoff, caps.hard
     );
+    // The watchdog supplies a restart line and a blank separator. A forwarded
+    // Rust restart can already carry the entire generated preamble.
+    let body = supplied
+        .strip_prefix(&prompt)
+        .or_else(|| {
+            supplied
+                .starts_with(RESTART_PREFIX)
+                .then(|| supplied.split_once('\n').map_or("", |(_, body)| body))
+        })
+        .map_or(supplied.as_str(), |body| {
+            body.strip_prefix('\n').unwrap_or(body)
+        });
+    if !body.is_empty() {
+        prompt.push('\n');
+        prompt.push_str(body);
+    }
     Ok(Some(Restart {
-        caps,
-        saved_caps: saved_caps.is_some(),
         card: card.path,
         handoff: card.handoff,
         prompt,
@@ -97,8 +99,7 @@ fn handoff_paths(text: &str) -> impl Iterator<Item = &str> {
             || prefix.rsplit_once('[').is_some_and(|(before, label)| {
                 label.trim() == "handoff" || before.trim_end().ends_with("handoff:")
             });
-        let handoff = named.split('/').any(|part| part.contains("handoff"));
-        ((introduced || handoff) && !named.ends_with(".card.md")).then_some(path)
+        (introduced && !named.ends_with(".card.md")).then_some(path)
     })
 }
 

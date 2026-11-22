@@ -3,7 +3,7 @@ use super::{
     placement::Host,
     process::capture,
     storage::{next_seq, record_path, register_child},
-    Request,
+    Caps, Request,
 };
 use crate::pyjson::preserve_order;
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -69,10 +69,15 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
             "--handoff".into(),
             restart.handoff.to_string_lossy().into_owned(),
         ]);
-        if args.guard.is_none() {
+        if let Some(caps) = request
+            .override_cap
+            .as_ref()
+            .and_then(Caps::from_value)
+            .filter(|_| args.guard.is_none())
+        {
             argv.extend([
                 "--ctx-guard".into(),
-                format!("{},{}", restart.caps.handoff, restart.caps.hard),
+                format!("{},{}", caps.handoff, caps.hard),
             ]);
         }
         restart.prompt.clone()

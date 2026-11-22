@@ -32,7 +32,8 @@ fn sandbox(launcher: &Launcher) -> Sandbox {
         json!({
             "name": "review", "cwd": s.path("work"), "card": "status/handoff-old.card.md",
             "handoff": "status/handoff-old.md", "host": LOCAL, "model": "saved-model",
-            "effort": "medium", "launched_caps": {"handoff": 550000, "hard": 600000}
+            "effort": "medium", "ctx_guard_source": "operator",
+            "ctx_guard": {"handoff": 550000, "hard": 600000}, "launched_caps": {"handoff": 550000, "hard": 600000}
         }),
     );
     s
@@ -66,7 +67,7 @@ pub fn check(launcher: &Launcher) {
         1,
         "{prompt}"
     );
-    assert!(!prompt.contains("Old brief text"), "{prompt}");
+    assert!(prompt.ends_with("Old brief text.\n"), "{prompt}");
     assert!(!prompt.contains("handoff-old"), "{prompt}");
     assert!(
         prompt.contains("Model: requested-model") && prompt.contains("Effort: high"),
@@ -91,7 +92,7 @@ pub fn check(launcher: &Launcher) {
 
     for (prompt, found, expected) in [
         (
-            "Restart from handoff $NEW.\nThen read [older]($OLD).",
+            "Restart from handoff $NEW.\nThen read [handoff]($OLD).",
             "handoff-old.md",
             "handoff-new.md",
         ),
@@ -134,6 +135,7 @@ pub fn check(launcher: &Launcher) {
     assert!(!s.path("child.json").exists());
     check_ready_card(launcher);
     check_forward(launcher);
+    check_policy_caps(launcher);
     check_explicit_guard(launcher);
     check_card_order(launcher);
     check_unrelated_prose(launcher);
@@ -194,6 +196,11 @@ fn check_forward(launcher: &Launcher) {
     assert!(argv
         .windows(2)
         .any(|pair| pair == ["--ctx-guard", "550000,600000"]));
+    assert_eq!(payload["spec"]["ctx_guard_source"], "operator");
+    assert_eq!(
+        payload["spec"]["ctx_guard"],
+        json!({"handoff": 550000, "hard": 600000})
+    );
     let out = launch(&s)
         .args(["--host", REMOTE, "--ctx-guard", "425000,500000"])
         .output()
@@ -286,10 +293,51 @@ fn check_unrelated_prose(launcher: &Launcher) {
     let s = sandbox(launcher);
     fs::write(
         s.path("prompt"),
-        "The model has a context window 200000. Difficulty hard: 12.",
+        "The model has a context window 200000. Difficulty hard: 12. See docs/handoffs/plan.md.",
     )
     .unwrap();
     let out = launch(&s).output().unwrap();
     assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
     assert!(s.path("child.json").exists());
+}
+
+fn check_policy_caps(launcher: &Launcher) {
+    for forwarded in [true, false] {
+        let s = sandbox(launcher);
+        let mut record = s.json("state/launch/review.json");
+        record["ctx_guard_source"] = json!("role");
+        s.write_json("state/launch/review.json", record);
+        let mut policy = s.json("router/ops/fleet-launch-policy.json");
+        policy["caps"]["roles"]["review"] = json!({"handoff": 450000, "hard": 510000});
+        s.write_json("router/ops/fleet-launch-policy.json", policy);
+        let mut command = launch(&s);
+        if forwarded {
+            s.hosts(json!([{"name": REMOTE, "ssh": "fixture-hop", "memory_floor_gib": 0}]));
+            fs::write(s.path("memory-fixture-hop"), "MemAvailable: 1024 kB\n").unwrap();
+            fs::write(s.path("ssh.stdout"), "forwarded\n").unwrap();
+            command.args(["--host", REMOTE]);
+        }
+        let out = command.output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+        if forwarded {
+            let wire = s.json("ssh.json");
+            let payload = &wire["payload"];
+            assert!(!payload["argv"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg == "--ctx-guard"));
+            assert!(payload["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("Caps: handoff 450000, hard 510000."));
+        } else {
+            let record = s.json("state/launch/review.json");
+            assert_eq!(
+                record["launched_caps"],
+                json!({"handoff": 450000, "hard": 510000})
+            );
+            assert!(record["ctx_guard_source"].is_null());
+        }
+    }
 }

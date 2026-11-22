@@ -33,13 +33,14 @@ card by its header timestamp, with modification time and path as tie-breakers.
 Cards without a valid timestamp use modification time and path and rank below
 dated cards. The launcher considers the saved and explicit references,
 the recorded session's ready marker, and cards for the role in the applicable
-status and referenced directories. It uses the card's drill-down handoff, its
+status and referenced directories. It uses the card's labeled drill-down handoff, its
 companion file, or the associated ready or launch record path. The successor's
 prompt is generated from that one handoff, the positional model and effort,
-and the effective caps. An explicit `--ctx-guard` takes precedence over saved
-caps. The caller's file is checked before launch. Conflicting handoff references,
-context guard settings, or explicit compact-window values produce `PROMPT-STALE`
-with the supplied and expected values.
+and the effective caps. Cap precedence is explicit `--ctx-guard`, saved operator
+override, then current policy. The caller's original prompt body follows the
+generated preamble. Conflicting labeled handoff references, context guard
+settings, or explicit compact-window values produce `PROMPT-STALE` with the
+supplied and expected values.
 Legacy respawns with neither a card reference nor a discoverable card keep
 their existing prompt behavior. A referenced card with no usable replacement
 causes a refusal.
@@ -126,7 +127,7 @@ Rust target invokes that test.
 | 65 | Data test `test_ctx_watchdog_role_lock.py`, watchdog-owned launch stamp and duplicate rejection. |
 | 66 | Data test `test_ctx_watchdog.py`, watchdog-owned recycle record and pending evidence. |
 | 67 | `dry_run` verifies the launcher’s read-only preview. Data test `test_ctx_watchdog.py` verifies preflight failure prevents stopping. |
-| 68 | `records::check_respawn` covers the deferred launch handoff. Data test `test_ctx_watchdog.py` covers restart prompt generation. |
+| 68 | `records::check_respawn` covers the deferred launch handoff. The pinned watchdog fixture checks that a respawn with a card keeps the original prompt body. |
 | 69 | `records::check` verifies the last stdout line the watchdog consumes. Data test `test_ctx_watchdog.py` covers confirmation and stop ordering. |
 | 70 | Data test `test_ctx_watchdog.py`, watchdog adopts a younger replacement before any launch. |
 | 71 | Data test `test_ctx_watchdog.py`, cleanup after failed/unconfirmed start. |

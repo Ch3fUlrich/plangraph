@@ -1,4 +1,4 @@
-use super::sandbox::{install_pinned_file, Launcher, Sandbox, SID};
+use super::sandbox::{install_pinned_file, Launcher, Sandbox, PROMPT, SID};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -43,9 +43,15 @@ pub fn check(checkout: &Path) {
                 "projects:\n  - id: fixture\n    path: work\n    worktrees: worktrees\n",
             )
             .unwrap();
+            fs::write(s.path("handoff.md"), "# Fixture handoff\n").unwrap();
+            fs::write(
+                s.path("handoff.card.md"),
+                "# review card · review-0001 · 2026-11-22T05:00Z\n",
+            )
+            .unwrap();
             let previous = json!({
                 "name": "review", "cwd": s.path("work"), "model": "sonnet", "effort": "high",
-                "prompt_file": s.path("prompt"), "mcp": s.path("mcp.json"), "session_id": OLD,
+                "prompt_file": s.path("prompt"), "card": s.path("handoff.card.md"), "mcp": s.path("mcp.json"), "session_id": OLD,
                 "session_name": "review-0001", "job_id": "old", "seq": 1, "ts": 1
             });
             s.write_json("state/launch/review.json", previous.clone());
@@ -70,6 +76,22 @@ pub fn check(checkout: &Path) {
             assert!(fs::read_to_string(s.path("watchdog-inbox"))
                 .unwrap()
                 .contains("launch output has no id"));
+            let child = s.json("child.json");
+            let prompt = child["argv"]
+                .as_array()
+                .unwrap()
+                .last()
+                .unwrap()
+                .as_str()
+                .unwrap();
+            let handoff = s.path("handoff.md");
+            assert!(prompt.starts_with(&format!("Restart from handoff {}.", handoff.display())));
+            assert!(prompt.ends_with(PROMPT), "{prompt}");
+            assert_eq!(
+                prompt.matches(handoff.to_str().unwrap()).count(),
+                1,
+                "{prompt}"
+            );
             fs::remove_file(s.path("child.json")).unwrap();
 
             if adopt {
