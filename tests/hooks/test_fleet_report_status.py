@@ -4,6 +4,7 @@ one session-name check it shares with the other hooks.
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -51,3 +52,23 @@ def test_the_name_check_is_the_shared_one(hooks) -> None:
         assert report.safe_name(name)
     for name in ("", "-a", ".a", "a/b", "a b", "A" * 129, None, 5):
         assert not report.safe_name(name)
+
+
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_fix_stop_holds_done_until_class_search_passes(hooks, monkeypatch, tmp_path, exit_code):
+    report = hooks[0]
+    fix = "a" * 40
+    monkeypatch.setenv("PG_LESSON_FIX_COMMIT", fix)
+    monkeypatch.setenv("PG_POLICY_BIN", "fixture-policy")
+    checked = []
+
+    def validate(argv, **kwargs):
+        checked.append(argv)
+        return subprocess.CompletedProcess(argv, exit_code)
+
+    monkeypatch.setattr(subprocess, "run", validate)
+    rows = run_stop(report, monkeypatch, tmp_path, "DONE fix landed")
+    assert checked == [["fixture-policy", "--class-search", fix]]
+    expected = ("FAIL", "FAIL LESSON-TO-GATE Class-Search missing or invalid on fix commit")
+    assert [(row["status"], row["line"]) for row in rows] == [
+        expected if exit_code else ("DONE", "DONE fix landed")]

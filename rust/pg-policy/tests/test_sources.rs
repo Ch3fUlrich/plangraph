@@ -1,9 +1,18 @@
 use std::{fs, process::Command};
 
 fn check(source: &str) -> std::process::Output {
+    check_with_runner(source, None)
+}
+
+fn check_with_runner(source: &str, runner: Option<&str>) -> std::process::Output {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("tests")).unwrap();
     fs::write(dir.path().join("tests/case.rs"), source).unwrap();
+    if let Some(runner) = runner {
+        let dir = dir.path().join("rust/worker-core/src/bin");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("pg-test-deadline.rs"), runner).unwrap();
+    }
     Command::new(env!("CARGO_BIN_EXE_pg-policy"))
         .arg("--test-sources")
         .arg(dir.path())
@@ -90,5 +99,71 @@ fn repository_test_sources_are_portable() {
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
+fn a_second_nested_cargo_case_needs_its_own_build_override() {
+    let output = check_with_runner(
+        r#"
+#[test]
+#[doc = "deadline-build: case=first"]
+fn first() { std::process::Command::new("cargo").arg("build").status().unwrap(); }
+#[test]
+fn second() { let cargo = env!("CARGO"); std::process::Command::new(cargo).status().unwrap(); }
+#[test]
+fn prebuilt() { std::process::Command::new(env!("CARGO_BIN_EXE_fixture")).status().unwrap(); }
+"#,
+        Some(
+            r#"fn build_deadline(suite: &str, case: &str) -> Option<u64> {
+            match (suite, case) { ("case", "first") => Some(600), _ => None }
+        }"#,
+        ),
+    );
+    let diagnostics = String::from_utf8(output.stdout).unwrap();
+    assert!(!output.status.success(), "{diagnostics}");
+    assert!(
+        diagnostics.contains("tests/case.rs:6: second"),
+        "{diagnostics}"
+    );
+    assert_eq!(diagnostics.lines().count(), 1, "{diagnostics}");
+}
+
+#[test]
+fn an_override_for_another_case_does_not_cover_a_cargo_build() {
+    let output = check(
+        r#"
+#[test]
+fn first() {}
+#[test]
+#[doc = "deadline-build: case=first"]
+fn second() { std::process::Command::new("cargo").status().unwrap(); }
+"#,
+    );
+    let diagnostics = String::from_utf8(output.stdout).unwrap();
+    assert!(!output.status.success(), "{diagnostics}");
+    assert!(
+        diagnostics.contains("tests/case.rs:6: second"),
+        "{diagnostics}"
+    );
+}
+
+#[test]
+fn a_declared_runner_must_have_the_named_override() {
+    let output = check_with_runner(
+        r#"#[test]
+#[doc = "deadline-build: case=build"]
+fn build() { std::process::Command::new(env!("CARGO", "Cargo needed")); }"#,
+        Some(
+            r#"fn build_deadline(suite: &str, case: &str) -> Option<u64> {
+            match (suite, case) { ("another_suite", "build") => Some(600), _ => None }
+        }"#,
+        ),
+    );
+    let diagnostics = String::from_utf8(output.stdout).unwrap();
+    assert!(!output.status.success(), "{diagnostics}");
+    assert!(
+        diagnostics.contains("tests/case.rs:3: build"),
+        "{diagnostics}"
     );
 }

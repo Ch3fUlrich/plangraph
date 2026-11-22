@@ -1,22 +1,23 @@
 //! Compile production targets without dev-dependency feature unification.
 use std::{path::Path, process::Command};
 
-fn check(manifest: &Path, defaults: bool, features: &[String]) -> std::process::Output {
-    let mut command = Command::new(env!("CARGO"));
-    command
-        .args(["check", "--workspace", "--lib", "--bins", "--manifest-path"])
-        .arg(manifest);
-    if !defaults {
-        command.arg("--no-default-features");
-    }
-    if !features.is_empty() {
-        command.arg("--features").arg(features.join(","));
-    }
-    command.output().expect("run production cargo check")
-}
-
 #[test]
+#[doc = "deadline-build: case=unrestricted_policy_is_test_only"]
 fn unrestricted_policy_is_test_only() {
+    fn check(manifest: &Path, defaults: bool, features: &[String]) -> std::process::Output {
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .args(["check", "--workspace", "--lib", "--bins", "--manifest-path"])
+            .arg(manifest);
+        if !defaults {
+            command.arg("--no-default-features");
+        }
+        if !features.is_empty() {
+            command.arg("--features").arg(features.join(","));
+        }
+        command.output().expect("run production cargo check")
+    }
+
     // Allow Cargo to fetch dependencies: CI may not have cached the parent
     // workspace's dev-dependencies. Resolution/build failures must still fail.
     // Nested checks inherit Cargo's target configuration, including the host's

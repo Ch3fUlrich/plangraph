@@ -1,4 +1,5 @@
 //! Portable-test guard: inspect Rust expressions rather than matching stringified fixtures.
+use crate::deadline_cases;
 use regex::Regex;
 use std::{collections::HashMap, fs, path::Path};
 use syn::{visit::Visit, Expr, Lit, Pat};
@@ -132,7 +133,12 @@ impl<'ast> Visit<'ast> for Reads {
     }
 }
 
-fn scan(path: &Path, relative: &Path, errors: &mut Vec<String>) -> Result<(), String> {
+fn scan(
+    path: &Path,
+    relative: &Path,
+    runner: Option<&deadline_cases::Runner>,
+    errors: &mut Vec<String>,
+) -> Result<(), String> {
     let source = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let name = relative.to_string_lossy().replace('\\', "/");
     let in_tests = relative
@@ -147,7 +153,7 @@ fn scan(path: &Path, relative: &Path, errors: &mut Vec<String>) -> Result<(), St
                 || s.ends_with(".spec")
         });
     let rust = path.extension().is_some_and(|s| s == "rs");
-    if !in_tests && !(rust && source.contains("#[test]")) {
+    if !in_tests && !(rust && (source.contains("#[test]") || source.contains("::test]"))) {
         return Ok(());
     }
     let homes = Regex::new(r"/home/[A-Za-z0-9_.-]+").unwrap();
@@ -161,6 +167,7 @@ fn scan(path: &Path, relative: &Path, errors: &mut Vec<String>) -> Result<(), St
     }
     if rust {
         let tree = syn::parse_file(&source).map_err(|e| format!("{name}: {e}"))?;
+        deadline_cases::scan(&tree, relative, &name, runner, errors);
         let mut reads = Reads::default();
         reads.visit_file(&tree);
         errors.extend(reads.lines.into_iter().map(|line| {
@@ -171,7 +178,12 @@ fn scan(path: &Path, relative: &Path, errors: &mut Vec<String>) -> Result<(), St
 }
 
 pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
-    fn walk(root: &Path, dir: &Path, errors: &mut Vec<String>) -> Result<(), String> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        runner: Option<&deadline_cases::Runner>,
+        errors: &mut Vec<String>,
+    ) -> Result<(), String> {
         for entry in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
@@ -188,7 +200,7 @@ pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
                 .iter()
                 .any(|s| entry.file_name() == *s)
                 {
-                    walk(root, &path, errors)?;
+                    walk(root, &path, runner, errors)?;
                 }
             } else if kind.is_file()
                 && path.extension().is_some_and(|s| {
@@ -197,13 +209,14 @@ pub(crate) fn check(root: &Path) -> Result<Vec<String>, String> {
                         .any(|ext| s == *ext)
                 })
             {
-                scan(&path, path.strip_prefix(root).unwrap(), errors)?;
+                scan(&path, path.strip_prefix(root).unwrap(), runner, errors)?;
             }
         }
         Ok(())
     }
     let mut errors = Vec::new();
-    walk(root, root, &mut errors)?;
+    let runner = deadline_cases::runner(root)?;
+    walk(root, root, runner.as_ref(), &mut errors)?;
     errors.sort();
     Ok(errors)
 }

@@ -43,6 +43,7 @@ fn unshared_cli_uses_cargos_executable_without_building() {
 }
 
 #[test]
+#[doc = "deadline-build: case=cli_builds_stay_with_their_checkout"]
 fn cli_builds_stay_with_their_checkout() {
     let scratch = tempfile::tempdir().unwrap();
     let shared = scratch.path().join("shared");
