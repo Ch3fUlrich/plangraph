@@ -192,7 +192,7 @@ than the coarse window label. Sol and Astra have a 1,000,000-token configured
 context, including Sol effort variants and native package sessions.
 Review routes follow rule 3.61 (D-6481, amending rule 3.58 / D-6366):
 `gpt-6.2-sol-medium` first, as a native Codex run (harness `codex`) with repository
-access, then `mimo/mimo-v2.6-pro`, `opencode/deepseek-v4.1-flash-free`,
+access, then `opencode/deepseek-v4.1-flash-free`,
 `opencode-go/deepseek-v4.1-flash` and `opencode-go/glm-5.3-flash`, with
 `agy-gemini-4-neon-medium`, `claude-sonnet-5-5-high` and `mimo/mimo-v2.6-flash` as fallbacks and
 the agy argon legs (`agy-gemini-4-argon-low`, `agy-gemini-4-argon-medium`; plan mode, review only,
@@ -200,7 +200,10 @@ never an implement leg) last of the whole route, behind the non-order extras. A 
 recorded `failed` with reason `no_verdict`. The reviewer's family differs from the writer's (a gpt writer skips the gpt leg, a gemini writer skips argon).
 `opencode-flint-40b-free`, `opencode-big-pickle`, and `opencode-go-beam-free` are restricted
 to low-risk job routes (`low_risk_only` otherwise, never HIGH reviews). `opencode/glm-5.3-flash-free`
-stays disabled because it is not served by `opencode models`.
+stays disabled because it is not served by `opencode models`. The shipped policy parks
+`mimo/mimo-v2.6-pro` for automatic reviews with reason `opencode_tools_denied`.
+The Rust route reports legs with more than three missing verdicts in their last
+ten completed reviews under `review_health_alerts` and puts them after healthier candidates.
 
 ## Automatic work mode (D-5952 / rule 3.41)
 

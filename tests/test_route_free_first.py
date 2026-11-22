@@ -429,7 +429,8 @@ def test_main_policy_gpt_first_and_retained_routes():
         assert not {leg.family for leg in review.legs} & set(writers)
         assert not {leg.family for leg in review.review_seats} & set(writers)
         families = {leg.id: leg.family for leg in review_route_pool()}
-        assert review.first_leg.id == next(id for id in REVIEW_ORDER if families[id] not in writers)
+        assert review.first_leg.id == next(leg_id for leg_id in REVIEW_ORDER
+                                           if families[leg_id] not in writers and leg_id != "mimo-v2.6-pro")
         assert "deepseek" in {leg.family for leg in review.legs}
         assert "glm" in {leg.family for leg in review.legs}
     assert {leg.id for leg in DEFAULT_LEGS} == {

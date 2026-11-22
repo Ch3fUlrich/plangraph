@@ -252,3 +252,32 @@ fn which_python() -> std::path::PathBuf {
         .find(|file| file.is_file())
         .expect("Python compatibility adapter")
 }
+
+#[test]
+fn review_route_skips_mimo_pro_with_tools_denied_reason() {
+    let sources = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src");
+    let script = r#"
+from pathlib import Path
+from plangraph.planner.legs import DEFAULT_LEGS
+from plangraph.planner.route_policy import DEFAULT_POLICY_PATH, load_route_policy
+from plangraph.planner.routing import plan_spawn
+policy = load_route_policy(DEFAULT_POLICY_PATH)
+card = dict(estimate_tokens=2000, diff_ref=dict(repo=str(Path.cwd()), base='HEAD~1', head='HEAD'))
+pro = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-pro')
+plan = plan_spawn(card, role='review', writer_families=('gpt',), policy=policy,
+    catalog_rows=(), leg_reader=lambda *args, **kwargs: dict(state='available', evidence=None))
+assert pro.id not in {leg.id for leg in (*plan.legs, *plan.review_seats)}
+assert any(row['leg'] == pro.id and row['reason'] == 'opencode_tools_denied' for row in plan.skipped), plan.skipped
+assert policy.skip_reason(pro, 'implement') is None
+"#;
+    let output = std::process::Command::new(which_python())
+        .args(["-c", script])
+        .env("PYTHONPATH", sources)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

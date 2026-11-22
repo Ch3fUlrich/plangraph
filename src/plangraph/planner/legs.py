@@ -326,8 +326,11 @@ def review_route_pool(base=None) -> tuple[Leg, ...]:
 
 def routed_review_legs() -> list[Leg]:
     """Active legs the native review route can offer, in REVIEW_ORDER."""
+    from .route_policy import load_route_policy
+    denied = set(load_route_policy().review_tools_denied_legs)
     pool = {leg.id: leg for leg in review_route_pool()}
-    return [pool[leg_id] for leg_id in REVIEW_ORDER if leg_id in pool and leg_active(pool[leg_id])]
+    return [pool[leg_id] for leg_id in REVIEW_ORDER
+            if leg_id not in denied and leg_id in pool and leg_active(pool[leg_id])]
 
 
 def _is_int(value) -> bool:

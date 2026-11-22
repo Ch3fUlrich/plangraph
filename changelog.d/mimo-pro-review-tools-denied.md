@@ -1,0 +1,1 @@
+Automatic review routing parks MiMo Pro with an `opencode_tools_denied` reason while its file-capable review path is unverified. Intentional OpenCode review isolation and explicit audited probes are preserved.
