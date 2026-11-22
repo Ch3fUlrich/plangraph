@@ -1,7 +1,7 @@
 [Unit]
-Description=Remove safely merged idle worktrees
+Description=Report worktrees eligible for approved cleanup
 
 [Service]
 Type=oneshot
 EnvironmentFile=%h/.config/plangraph/disk-hygiene.env
-ExecStart=%h/.local/bin/pg-worktree-sweep --repo ${PG_REPO} --root ${PG_WORKTREES} --root ${PG_CLAUDE_WORKTREES} --root ${PG_RUNS} --root ${PG_RUN_WORKTREES} --pins ${PG_PINS} --apply
+ExecStart=%h/.local/bin/pg-worktree-sweep --repo ${PG_REPO} --root ${PG_WORKTREES} --root ${PG_CLAUDE_WORKTREES} --root ${PG_RUNS} --root ${PG_RUN_WORKTREES} --pins ${PG_PINS} --reap

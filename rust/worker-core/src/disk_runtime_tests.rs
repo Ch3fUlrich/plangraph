@@ -105,16 +105,16 @@ fn disk_hygiene_process_inventory_reads_builds_and_cwds() {
     fs::create_dir(&pid).unwrap();
     fs::write(pid.join("comm"), "cargo\n").unwrap();
     std::os::unix::fs::symlink("/protected/tree", pid.join("cwd")).unwrap();
-    let (cwds, building) = scan_processes(tmp.path()).unwrap();
+    let (cwds, building) = scan_process_paths(tmp.path(), false).unwrap();
     assert!(building);
     assert_eq!(cwds, vec![std::path::PathBuf::from("/protected/tree")]);
     fs::remove_file(pid.join("cwd")).unwrap();
     fs::write(pid.join("comm"), "node\n").unwrap();
-    let (cwds, building) = scan_processes(tmp.path()).unwrap();
+    let (cwds, building) = scan_process_paths(tmp.path(), false).unwrap();
     assert!(!building);
     assert!(cwds.is_empty());
     fs::create_dir(pid.join("cwd")).unwrap();
-    assert!(scan_processes(tmp.path()).is_err());
+    assert!(scan_process_paths(tmp.path(), false).is_err());
 }
 #[test]
 #[cfg(target_os = "linux")]
@@ -129,7 +129,7 @@ fn disk_hygiene_denied_foreign_cwd_cannot_be_ignored() {
     assert_eq!(probe.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     let tmp = tempfile::tempdir().unwrap();
     std::os::unix::fs::symlink("/proc/1", tmp.path().join("1")).unwrap();
-    let result = scan_processes(tmp.path());
+    let result = scan_process_paths(tmp.path(), false);
     assert!(
         result.is_err(),
         "denied foreign cwd must not disappear from inventory"
@@ -313,4 +313,22 @@ fn shared_cache_honors_run_and_cleanup_leases_through_reclaim() {
         .unwrap()
         .is_some());
     assert!(tmp.path().join("cargo-target.plangraph-lock").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn reaper_inventory_includes_open_files_and_executables() {
+    use std::{os::unix::fs::symlink, path::PathBuf};
+    let tmp = tempfile::tempdir().unwrap();
+    let pid = tmp.path().join("42");
+    fs::create_dir_all(pid.join("fd")).unwrap();
+    fs::write(pid.join("comm"), "example").unwrap();
+    symlink("/", pid.join("cwd")).unwrap();
+    symlink("/candidate/program", pid.join("exe")).unwrap();
+    symlink("/candidate/file", pid.join("fd/4")).unwrap();
+    symlink("pipe:[123]", pid.join("fd/5")).unwrap();
+    let (paths, _) = scan_process_paths(tmp.path(), true).unwrap();
+    assert!(paths.contains(&PathBuf::from("/candidate/program")));
+    assert!(paths.contains(&PathBuf::from("/candidate/file")));
+    assert!(paths.iter().all(|p| p.is_absolute()));
 }

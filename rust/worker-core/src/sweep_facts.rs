@@ -125,10 +125,19 @@ mod tests {
 }
 impl Protection {
     pub fn load(pins: &Path, state: &Path, reader: Option<&Path>) -> io::Result<Self> {
+        Self::load_with_processes(pins, state, reader, disk_runtime::processes)
+    }
+
+    pub(crate) fn load_with_processes(
+        pins: &Path,
+        state: &Path,
+        reader: Option<&Path>,
+        processes: impl FnOnce() -> io::Result<(Vec<PathBuf>, bool)>,
+    ) -> io::Result<Self> {
         let reader =
             reader.ok_or_else(|| io::Error::other("claims reader unavailable: protected"))?;
         let guards = Guards::load(pins, state)?;
-        let cwds = disk_runtime::processes()?.0;
+        let cwds = processes()?.0;
         // Live process cwds are matched below only when inside the candidate.
         let units = unit_paths()?;
         let home = std::env::var_os("HOME").ok_or_else(|| io::Error::other("HOME unset"))?;
@@ -219,18 +228,7 @@ pub fn facts(
     };
     Ok(Facts {
         idle_hours: idle_minutes(tree, now)? / 60,
-        clean: git(
-            path,
-            &[
-                "--no-optional-locks",
-                "status",
-                "--porcelain=v1",
-                "--untracked-files=all",
-                "--ignored",
-            ],
-        )?
-        .trim()
-        .is_empty(),
+        clean: clean_status(path)?,
         merged_into_main: merged.trim() == "0",
         pushed: !pushed.trim().is_empty(),
         failed: false,
@@ -257,6 +255,21 @@ pub fn facts(
             || branch == "refs/heads/main"
             || branch == "refs/heads/master",
     })
+}
+
+pub(crate) fn clean_status(path: &Path) -> io::Result<bool> {
+    Ok(git(
+        path,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--ignored",
+        ],
+    )?
+    .trim()
+    .is_empty())
 }
 
 /// Age uses the newest HEAD/index mtime, including detached HEADs.

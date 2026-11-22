@@ -33,7 +33,7 @@ pub fn eligible(tree: &Worktree, facts: &pg_reap::Facts, inventory: &[Worktree])
         }
     )
 }
-fn inventory(repo: &Path) -> io::Result<Vec<Worktree>> {
+pub(crate) fn inventory(repo: &Path) -> io::Result<Vec<Worktree>> {
     parse_porcelain(&git(repo, &["worktree", "list", "--porcelain"])?).map_err(io::Error::other)
 }
 fn escape(s: &str) -> String {
@@ -53,7 +53,7 @@ pub fn restore_row(repo: &Path, tree: &Worktree, pr: Option<u64>) -> String {
     )
 }
 /// No --force, and branch deletion compares the recorded SHA atomically.
-pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
+pub(crate) fn verify_checkout(tree: &Worktree) -> io::Result<()> {
     if git(Path::new(&tree.path), &["rev-parse", "HEAD"])?.trim() != tree.head
         || git(
             Path::new(&tree.path),
@@ -76,6 +76,10 @@ pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
     {
         return Err(io::Error::other("worktree changed before removal"));
     }
+    Ok(())
+}
+pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
+    verify_checkout(tree)?;
     git(repo, &["worktree", "remove", "--", &tree.path])?;
     if let Some(branch) = &tree.branch {
         git(repo, &["update-ref", "-d", branch, &tree.head])?;
@@ -83,14 +87,18 @@ pub fn remove(repo: &Path, tree: &Worktree) -> io::Result<()> {
     Ok(())
 }
 pub fn run(options: &Options<'_>) -> io::Result<String> {
-    run_using(options, |options, branch| {
-        if options.claims_reader.is_none() {
-            return Err(io::Error::other("claims reader unavailable: protected"));
-        }
-        let prs = sweep_facts::pulls(options.repo, branch)?;
-        let protection = Protection::load(options.pins, options.state, options.claims_reader)?;
-        Ok((protection, prs))
-    })
+    run_using(options, authority)
+}
+fn authority(
+    options: &Options<'_>,
+    branch: &str,
+) -> io::Result<(Protection, Vec<sweep_facts::Pull>)> {
+    if options.claims_reader.is_none() {
+        return Err(io::Error::other("claims reader unavailable: protected"));
+    }
+    let prs = sweep_facts::pulls(options.repo, branch)?;
+    let protection = Protection::load(options.pins, options.state, options.claims_reader)?;
+    Ok((protection, prs))
 }
 /// Inject authorities only in hermetic tests; the mutation and restore path is shared.
 #[cfg(feature = "test-support")]

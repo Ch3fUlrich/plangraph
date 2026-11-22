@@ -33,8 +33,8 @@ Process discovery fails closed; symlinked cache roots and children are refused.
 Linux may hide cwds of non-dumpable user services even from their owner. Install
 `pg-process-cwds` root-owned at `/usr/local/libexec/pg-process-cwds` with only
 `cap_sys_ptrace=ep` (operator installation: `install -o root -g root -m 0755`
-then `setcap cap_sys_ptrace=ep`). This read-only helper accepts no arguments,
-reads process metadata, prints JSON and never starts children or mutates state.
+then `setcap cap_sys_ptrace=ep`). This read-only helper accepts no arguments for cwd discovery and `--references` for reaper
+process paths. It reads process metadata, prints JSON and never starts children.
 `PG_PROCESS_CWD_READER` can select an absolute path to an equivalent authoritative
 reader; its output is `[absolute_cwd_paths, build_running_boolean]`. The helper is
 used only when direct discovery is denied. An absent/failed reader still blocks
@@ -61,7 +61,8 @@ stopping at 2 GiB free. The spawner owns admission and runtime stopping;
 this timer reports pressure and reclaims idle rebuildable state.
 Live deployment is separate from repository validation.
 
-The separate hourly `pg-worktree-sweep.timer` invokes `pg-worktree-sweep --apply`.
+The separate daily `pg-worktree-sweep.timer` invokes the report-only
+`pg-worktree-sweep --reap`.
 Install its service and timer, the binary, mint a mode-0600 unscoped `sweep`
 token at `~/.config/plangraph/sweep.token`, run `deploy/bootstrap.sh` to create
 `~/.config/plangraph/disk-hygiene.env` (with `PG_SWEEP_CLAIMS_READER`, `PG_URL`,

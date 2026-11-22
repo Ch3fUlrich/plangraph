@@ -1,0 +1,1 @@
+- Make the daily worktree reaper report first. Require routing approval against exact worktree or run-directory rows, stage approved paths in quarantine, and recheck live safety and approval after seven days before deleting.

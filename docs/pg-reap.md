@@ -10,7 +10,7 @@ Pure `state` labels clone/active/duplicate-branch/bare/locked/prunable/main path
 TSV columns: `repo path branch state status reason needs_backup`, sorted by raw repo/path; detached/bare branch is `-` (detached HEADs do not share a branch).
 Backslashes/tabs/LF/CR are escaped. Missing facts label `live` and protect. Empty/blank or malformed porcelain, duplicate repos, duplicate decoded paths (within or across repos), and facts keys absent from their own repo inventory all fail without partial TSV. Foreign facts cannot stand in for missing facts.
 Only stdin/stdout/stderr I/O: no git invocation, worktree access, moves, removals or locks. Eligibility is not approval.
-The live adapter below implements clean-worktree removal. Future slices: quarantine, shared RUN-WORKTREE host locking, detached archive refs, verified dirty/untracked backup and seven-day deletion approval.
+The live adapter below shares the commit and protection policy. The approved reaper adds quarantine, a seven-day retention period and a separate deletion plan.
 Test: `cargo test -p pg-reap` (hermetic boundary/protection/parser tests and stable report in a read-only temp directory).
 
 ## Live merged-worktree sweep
@@ -71,7 +71,7 @@ branch), then `git worktree add PATH SHORT_BRANCH`. For detached rows (branch
 recorded SHA, and a remote SHA lease. The timer never passes it. A missing PR does
 not relax ancestry or push safety. `--apply --dry-run` is a refusal.
 
-The separate `pg-worktree-sweep.timer` invokes the sweep hourly; disk checks stay
+The `pg-worktree-sweep.timer` invokes the report-only reaper daily. Disk checks stay
 on their 15-minute timer. Install both sweep units and both binaries. See
 `deploy/systemd/disk-hygiene.env.example` for all four roots, pins, and the
 claims-reader settings (`PG_SWEEP_CLAIMS_READER`, `PG_URL`, `PG_TOKEN_FILE`).
@@ -94,8 +94,7 @@ batch-closed PRs, after fresh claims/PR checks and origin/main containment. Each
 remote deletion writes and syncs a restore row and uses
 `--force-with-lease=refs/heads/BRANCH:SHA`; an advanced remote branch survives.
 Restore remote rows (path `-`) with `git push origin SHA:refs/heads/BRANCH`.
-Cleanup errors are printed without failing land. The hourly timer never deletes
-remote branches. Missing authorities protect. Configure and inspect a dry run
+Cleanup errors are printed without failing land. The daily timer only reports. Missing authorities protect. Configure and inspect a dry run
 before enabling. Repository validation does not install timers or clean live host
 trees. Keep build/start scheduling quiescent during host maintenance; the separate
 spawner admission gate owns concurrent start prevention.
@@ -123,3 +122,33 @@ Empty path arguments (including unset systemd root variables) refuse the whole
 sweep rather than interpreting them as the current directory. The sweep exports
 its canonical `--state` as `PG_SWEEP_STATE` to the claims reader, so local run
 metadata follows the same state root. A reader's explicit `--state` overrides it.
+
+## Approved host reaping
+
+Run `pg-worktree-sweep --reap --repo REPO --root WORKTREES --pins PINS.json`
+with the same roots, state and keeper reader as the service. It prints reasons
+for protected paths and one JSON row for each worktree or run directory eligible
+for quarantine or deletion. Worktrees need over seven days of idle time, clean
+status including ignored files, and commits present on origin/main. Run
+directories need a terminal record owning the native checkout, a final head
+present on origin/main, seven days of idle time, and no remaining checkout.
+Directories with nested checkouts, symlinks or mounts stay protected. Main and
+push clones stay protected. Cargo target roots are listed for disk hygiene.
+
+Send the desired JSON rows to routing for approval. Save the approved rows,
+one per line, and repeat the command with `--approval D-NUMBER --plan FILE`.
+The approval ID is recorded as supplied by routing. Every row must still
+match the live report. The reaper rechecks keeper claims, run ownership,
+GitHub PRs, processes and user units. It serializes Git worktree creation and
+quarantine moves, and also takes the legacy attempt root lock for legacy paths.
+A missing authority protects the path. Process discovery checks cwd,
+executable, root and open descriptors. A host that needs the privileged process
+reader must install the version supporting `pg-process-cwds --references`.
+
+The approved quarantine step records the move in a private receipt under
+`STATE/reap-quarantine` and preserves local and remote refs. The source and
+quarantine must share a filesystem. After seven days, request approval for
+the new deletion rows and apply that list. `STATE/reap.ndjson` records the
+approval, original path, quarantine path and logical bytes for each deletion.
+A move interrupted before the retention timestamp is recorded stays in
+quarantine for manual inspection. The daily timer remains report-only.
