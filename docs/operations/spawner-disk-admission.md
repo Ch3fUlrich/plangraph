@@ -7,15 +7,17 @@ all meet it. A refusal reports `disk_low` and measured GB and uses RAM's overflo
 or queue mechanism. Remote readiness uses `disk_floor_gb` (default 5); the
 receiving spawner also checks live disk before launching.
 
-Every harness child, including writers and fixers, receives `CARGO_TARGET_DIR`
+Writers, fixers, and reviews without a worker lease receive `CARGO_TARGET_DIR`
 from `PLANGRAPH_CARGO_TARGET_DIR` (default `~/.cache/plangraph/cargo-target`).
 Spawned builds also use host-configured cache variables. See the sccache
 settings in [Worker disk rollout](worker-disks.md).
 Caller and per-worktree target overrides are replaced; children also receive
 `CARGO_INCREMENTAL=0`. The cache cap is
 `PLANGRAPH_CARGO_TARGET_CAP_GB` (default 12 GiB). Over-cap busy hosts refuse a building role with
-`cargo_target_cap`, which names the measured cache path; a `review` builds nothing and is exempt from
-the cap at admission and during the run (the free-space floor still binds it); idle hosts clear the cache before checking free space. A run keeps the
+`cargo_target_cap`, which names the measured cache path. Native writer reviews use
+a disposable Cargo target alongside the exact-head checkout on a worker. The
+free-space floor applies to reviews. Idle hosts clear the shared cache before
+checking free space. A run keeps the
 host busy only while a recorded child or supervisor pid is alive (or it has survivors): ended,
 `timed_out`, `stalled` and `queued` records, and `running` records whose recorded pids are all gone, do
 not (ps marks the latter `stale`). Cleanup takes the exclusive cargo lease and waits up to
@@ -57,7 +59,23 @@ targets. Continuous cap sampling in these two paths and exact-head fast-check
 stamps remain open.
 
 Worktree cache cleanup requires a clean worktree idle for over 24 hours.
-Hygiene also reclaims Cargo-marked private targets up to two levels under the
-host scratch directory and /tmp after 30 minutes without writes. Scratch
-cleanup runs without disk pressure. Shared targets, pinned/live paths, active
-builds, process cwds, foreign ownership, leases and symlinks prevent deletion.
+Hygiene additionally reclaims Cargo-marked private targets under host scratch and /tmp (two levels)
+and ignored, untracked rust/target directories in registered worktrees under
+--root after 30 minutes without writes. This cleanup runs without disk pressure;
+shared targets, pinned/live paths, active builds, process cwds, foreign ownership,
+leases and symlinks prevent deletion. Worktree source dirtiness alone does not
+protect ignored build artifacts in this narrower cleanup.
+
+## Dell data-drive handoff (D-5122)
+
+`SKIPPED plangraph:DELL-DATA-DRIVE` in batch84-disk. The fleet host policy and
+`dell_writer.remote.sh` live outside the Plangraph checkout used for this batch.
+The batch review directory holds the skip reason in `STATUS` and the
+repository-only follow-up `DELL-DATA-DRIVE-POLICY` in `slices.json`.
+
+The follow-up covers registry and launcher paths for worktrees, writer and seat
+scratch, Cargo, pip, npm and uv caches, run records, and the OpenCode archive.
+It also covers the `/mnt/data` entry in the D-5118 disk check and a per-path
+backup and rollback mapping. Deployment evidence includes the backup inventory,
+one probe that shows the resolved paths, and ten runs with disk usage readings
+for `/` and `/tmp` before and after.

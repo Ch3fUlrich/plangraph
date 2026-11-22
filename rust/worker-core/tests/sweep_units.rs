@@ -131,6 +131,7 @@ fn sweep_refuses_a_worktree_a_user_unit_names_and_removes_an_unreferenced_one() 
             pins: &f.state.join("pins.json"),
             claims_reader: None,
             apply: true,
+            include_merged: false,
             delete_remote: false,
         },
         |_, _| {
@@ -193,6 +194,7 @@ fn sweep_keeps_a_worktree_named_through_a_dangling_intermediate_link() {
             pins: &f.state.join("pins.json"),
             claims_reader: None,
             apply: true,
+            include_merged: false,
             delete_remote: false,
         },
         |_, _| {

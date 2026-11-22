@@ -427,7 +427,7 @@ if verb == 'route':
     else:
         print(json.dumps({'legs': [{'id':'agy-gemini-4-hydrogen-high'}], 'skipped': []}))
     sys.exit(0)
-assert verb == 'spawn' and pathlib.Path(value('--cwd')) == pathlib.Path.cwd()
+assert verb == 'spawn' and '--cwd' not in argv
 families = [argv[i + 1] for i, a in enumerate(argv) if a == '--exclude-family']
 # The Writer trailers of base..head (google, anthropic) and the served writer model (openai).
 assert sorted(families) == ['anthropic', 'google', 'openai'], families
@@ -441,7 +441,8 @@ assert 'Done criteria: By test: first line\nsecond criteria line\n' in inline, i
 assert 'Invariants named by the item: never push\n\nWriter brief (item keys and Done-when lines):\nkeep this quoted heading' in inline, inline
 head = card['diff_ref']['head']
 repo = pathlib.Path(card['diff_ref']['repo'])
-assert repo != pathlib.Path.cwd()
+assert repo == pathlib.Path.cwd()
+assert card['review_workspace'] is True
 assert subprocess.check_output(['git', '-C', str(repo), 'rev-parse', head], text=True).strip() == head
 assert 'Writer brief' in prompt and 'the item brief' in prompt and head in prompt, prompt
 assert 'SKIPPED plangraph:OTHER-HOST-ITEM Fixture contract unavailable.\n' in prompt, prompt
@@ -473,13 +474,12 @@ excerpt = re.search(r'with their cargo runs: (\S+\.session\.log)', prompt).group
 assert excerpt.endswith('/fast-checks/' + head + '.session.log') and 'cargo test: 3 passed' in pathlib.Path(excerpt).read_text(), prompt
 assert '== ci_commit_gate.py (exit status: 0)' in pathlib.Path(log).read_text(), prompt
 assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == head
-assert subprocess.check_output(['git', 'remote', 'get-url', '--push', 'origin'], text=True).strip() == '/dev/null/no-push'
 run = state / 'runs' / 'run-rv1'
 run.mkdir(parents=True, exist_ok=True)
 text = 'FILES READ: src/lib.rs:1\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type': 'result', 'is_error': False, 'result': text}) + '\n')
 print('banner line')
-print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'agy-gemini-4-hydrogen-high', 'harness': 'agy', 'tool_mode': 'tools'}}, indent=2))
+print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-worker', 'head_sha': head, 'live_log': str(run / 'live.log'), 'chosen_leg': {'id': 'agy-gemini-4-hydrogen-high', 'harness': 'agy', 'tool_mode': 'tools'}}, indent=2))
 "#,
     )
     .unwrap();
@@ -537,6 +537,7 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'live_log': str(ru
     assert_eq!(review["run_id"], "run-rv1");
     assert_eq!(review["leg"], "agy-gemini-4-hydrogen-high");
     assert_eq!(review["harness"], "agy");
+    assert_eq!(review["host"], "fixture-worker");
     assert!(Path::new(review["path"].as_str().unwrap()).is_file());
     assert!(!host
         .reviews

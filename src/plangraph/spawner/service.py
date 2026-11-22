@@ -29,7 +29,10 @@ def claim_first_dispatch(prompt_record):
     """Commit the handoff before process creation so the watchdog can fence it."""
     if prompt_record is None:
         return
-    _, record, save = prompt_record
+    path, record, save = prompt_record
+    if record.get('review_checkout') and path.with_name('cancelled').exists():
+        record.update(status='cancelled', exit_code=1)
+        raise asyncio.CancelledError
     if isinstance(record.get('plan'), dict) and not record.get('dispatch_started'):
         record['dispatch_started'] = True
         save(record)
@@ -441,7 +444,26 @@ class SpawnService(SeatSpawnMixin):
         if not (run_worktree and not dry_run) and not await admit_base(self, record, card): return self.result(record['run_id'])
         pack = await asyncio.to_thread(self._annotate_spawn, record, prompt, card, record['cwd'], plan, model is not None or leg is not None); annotate_item(record, card); self._save(record)  # D-3622, D-3649: one pack per spawn, off the loop
         async def execute():
+            lease = None
+            review_launch = {}
             try:
+                if role == 'review' and card.get('review_workspace') is True and not dry_run:
+                    import tempfile
+                    from .prompt_input import checkout_review
+                    lease = tempfile.TemporaryDirectory(prefix='review-', dir=self._path(record['run_id']).parent)
+                    checkout = Path(lease.name) / 'checkout'
+                    target = Path(lease.name) / 'target'
+                    diff = card.get('diff_ref') or {}
+                    creating = asyncio.create_task(asyncio.to_thread(checkout_review, diff, checkout))
+                    try:
+                        head = await asyncio.shield(creating)
+                    except asyncio.CancelledError:
+                        await asyncio.gather(creating, return_exceptions=True)
+                        raise
+                    record.update(review_source=diff['repo'], review_checkout=str(checkout),
+                                  review_target=str(target), head_sha=head)
+                    self._save(record)
+                    review_launch['cwd'] = str(checkout)
                 from .run_watchdog import leg_limits, prepare_run, terminal_record
                 limits, live_log = prepare_run(self, record, card)
                 launched = False
@@ -459,9 +481,13 @@ class SpawnService(SeatSpawnMixin):
                         continue
                     launched = True
                     leg_prompt, writer_env = writer_launch(leg_prompt, role, chosen.model, record['run_id'])
-                    record['base_admitted'] = False; worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run)
+                    record['base_admitted'] = False
+                    worktree = await prepare_worktree(self, record, card, run_worktree and not dry_run and lease is None)
                     if not await admit_base(self, record, card, launch=True): return
                     if (watchdog := leg_limits(record, limits)) is None: self._save(record); break
+                    if lease is not None:
+                        worktree = review_launch
+                        writer_env = dict(writer_env, CARGO_TARGET_DIR=record['review_target'])
                     job = await self._launch_leg(record, chosen, prompt=leg_prompt, model_or_combo=chosen.model,
                         role=role, dry_run=dry_run, client=chosen.harness, watchdog=watchdog, live_log=live_log, extra_env=writer_env, **worktree,
                         allow_shas=await asyncio.to_thread(allow_shas_for_run, worktree.get('cwd', record['cwd']), leg_prompt, card),
@@ -501,7 +527,8 @@ class SpawnService(SeatSpawnMixin):
                         stdout_tail=record.get('stdout_tail', '') + job.stdout,
                         stderr_tail=record.get('stderr_tail', '') + job.stderr, events=record.get('events', []) + getattr(job, 'events', []))
                     if role == 'review' and (unavailable or (stop and chosen != plan.legs[-1])) and not (no_fallthrough or dry_run): record.update(status='running', exit_code=None)
-                    self._save(record)
+                    if lease is None or record['status'] == 'running':
+                        self._save(record)
                     if record.get('reason') == 'model_refusal' or (not stop and not unavailable) or no_fallthrough or dry_run:
                         if not dry_run and record.get('reason') != 'model_refusal':
                             await self._continue_writer(record, job.stdout)
@@ -510,6 +537,12 @@ class SpawnService(SeatSpawnMixin):
                 if not launched and record.get('status') not in ('timed_out', 'timeout'):
                     record.update(status='failed', exit_code=1, error='; '.join(
                         a['skip_reason'] for a in record['attempts']) or 'no leg launched')
+            except asyncio.CancelledError:
+                if lease is not None:
+                    if record.get('job_id') in getattr(self.runner, 'jobs', {}):
+                        await self.runner.cancel(record['job_id'])
+                    record.update(status='cancelled', exit_code=1)
+                raise
             except Exception as exc:
                 from plangraph.planner.routing import BenchRequired, BenchmarkError, SpawnRefused
                 if isinstance(exc, SpawnRefused):
@@ -521,6 +554,12 @@ class SpawnService(SeatSpawnMixin):
                 else:
                     record.update(status='failed', exit_code=1, error=str(exc))
             finally:
+                if lease is not None:
+                    try:
+                        await asyncio.to_thread(lease.cleanup)
+                    except OSError as exc:
+                        record.update(status='failed', exit_code=1, reason='review_workspace_cleanup_failed',
+                                      error=f'review workspace cleanup failed: {type(exc).__name__}')
                 record['ended'] = time.time()
                 terminal_reason(record)
                 release_attempts(self, record)

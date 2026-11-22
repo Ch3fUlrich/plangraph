@@ -91,9 +91,11 @@ configured for that unscoped `sweep` (or `router`) token. This verb reads every 
 from keeper, refuses unknown/truncated open lanes and changing snapshots, and
 never falls back to a local copy. The reader setting is a trusted shell invocation.
 
-`merge_batch.py land` invokes `--apply --delete-remote` for exact
+`merge_batch.py land` invokes one `--apply --delete-remote --include-merged` sweep for exact
 `--target PATH:refs/heads/BRANCH:SHA` tuples taken from batch state and the matching
-local inventory. Skipped or moved parts are excluded. Explicit
+local inventory. The same pass checks other idle worktrees under the scanned roots
+with the usual live protections and restore records. Only exact landed targets
+can trigger remote deletion. Explicit
 `--remote-target BRANCH:SHA` entries also clean branches without local trees and
 batch-closed PRs, after fresh claims/PR checks and origin/main containment. Each
 remote deletion writes and syncs a restore row and uses

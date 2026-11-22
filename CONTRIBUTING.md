@@ -102,9 +102,11 @@ stand in for the batch's PLAN key. `tools/merge_batch.py land` always passes a m
 standalone `MIGRATION <version>` field into the GO statement for the exact PR
 head and pass that row with `land --go-row PATH`. See [keeper migrations](docs/keeper-postgres.md#schema-and-migrations).
 
-After land reports included parts as merged,
-cleanup invokes `pg-worktree-sweep --apply --delete-remote` with exact saved
-SHAs, worktree paths and branches; moved/skipped parts are excluded. Configure
+
+After land reports included parts as merged, cleanup
+invokes `pg-worktree-sweep --apply --delete-remote --include-merged` with exact
+saved SHAs, worktree paths and branches for landed parts. The same pass checks
+other idle worktrees under the scanned roots for local removal. Configure
 `PG_PINS` and `PG_SWEEP_CLAIMS_READER="PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims"`; authority failures
 protect host state and cleanup errors never fail land. See [pg-reap](docs/pg-reap.md)
 for idle thresholds, run records, restore TSVs and remote SHA leases.

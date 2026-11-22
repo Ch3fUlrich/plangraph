@@ -172,7 +172,7 @@ if 'reject marker' in prompt:
 else:
     text = 'FILES READ: writer.txt\nHEAD: ' + head + '\nVERDICT: ACCEPT\n'
 (run / 'live.log').write_text(json.dumps({'type':'result','is_error':False,'result':text}) + '\n')
-print(json.dumps({'run_id':run_id,'status':'completed','live_log':str(run / 'live.log'),'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
+print(json.dumps({'run_id':run_id,'status':'completed','head_sha':head,'host':'fixture-worker','overflow_remote':True,'stdout_tail':text,'chosen_leg':{'id':'claude-sonnet-5-5-high','harness':'claude','tool_mode':'tools'}}))
 "#).unwrap();
     fs::create_dir_all(dir.join("supervisor-bin")).unwrap();
     // The fixture does not depend on free space on the host's /tmp mount.

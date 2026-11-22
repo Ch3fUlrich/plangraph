@@ -536,13 +536,16 @@ def test_land_sweep_targets_only_landed_parts_and_failure_is_nonfatal(env, exit_
     log = env.tmp / "sweep.json"
     sweep = env.stubs / "pg-worktree-sweep"
     sweep.write_text("#!/usr/bin/env python3\nimport json,sys\nfrom pathlib import Path\n"
-                     f"Path({str(log)!r}).write_text(json.dumps(sys.argv[1:]))\nsys.exit({exit_code})\n")
+                     f"with Path({str(log)!r}).open('a') as f: print(json.dumps(sys.argv[1:]), file=f)\n"
+                     f"sys.exit({exit_code})\n")
     sweep.chmod(0o755)
     result = land(env, approval)
     assert result.returncode == 0
     assert ("cleanup sweep failed" in result.stderr) == bool(exit_code)
-    args = json.loads(log.read_text())
+    invocation, = log.read_text().splitlines()
+    args = json.loads(invocation)
     assert "--apply" in args and "--delete-remote" in args
+    assert args.count("--include-merged") == 1
     assert args[args.index("--target") + 1] == (
         f"{saved['worktree']}:refs/heads/{saved['branch']}:{saved['head']}")
     targets = [args[i + 1] for i, arg in enumerate(args) if arg == "--target"]

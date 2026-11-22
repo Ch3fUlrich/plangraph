@@ -242,18 +242,26 @@ def admit(service, options, *, card=None, preview=False):
     role = options.get('role', 'implement')
     registry = overflow.registry_caps()
     config = overflow.placement_config(registry, role)
-    local, remote_first = overflow.placement_policy(registry, config)
+    local, orchestration_only = overflow.placement_policy(registry, config)
+    remote_first = orchestration_only
+    review_workspace = role == 'review' and (card or {}).get('review_workspace') is True
     native = (card or {}).get('run_kind') == 'native-codex'
     placed = bool(local) and os.environ.get('PLANGRAPH_PLACED_HOST') == local
-    repository_review = role == 'review' and (card or {}).get('repository_review_required') is True
+    local_repository_review = (role == 'review' and (card or {}).get('repository_review_required') is True
+                               and not review_workspace)
     explicit_cwd = options.get('cwd') is not None or 'cwd' in (card or {})
-    compare_local = (config.get('registry') and not (placed or explicit_cwd or repository_review)
+    compare_local = (config.get('registry') and not (placed or explicit_cwd or local_repository_review)
                      and (native or role == 'review' and (card or {}).get('diff_ref') is not None))
-    if placed or repository_review:
+    if review_workspace:
+        remote_first = False
+        compare_local = not (placed or explicit_cwd)
+    if placed or local_repository_review:
         config['hosts'] = {}
     # A repository review stays local but still needs orchestration fallback health.
-    if placed and not repository_review:
+    if placed and not local_repository_review:
         remote_first = False
+    local_host = overflow.host_config(registry, local)
+    local_worker = bool(local_host) and not orchestration_only
     if preview and not (remote_first or compare_local):
         return None
     role_mb, floor = overflow.local_limits(registry, role)
@@ -263,7 +271,10 @@ def admit(service, options, *, card=None, preview=False):
                 (card or {}).get('repo') or
                 getattr(service.runner, 'default_cwd', None) or os.getcwd()).resolve()
     from .host_ready import local_disk_refusal
-    disk = local_disk_refusal(repo, service, role)
+    if review_workspace and not local_worker:
+        disk = 'review workspace requires a registered worker host'
+    else:
+        disk = local_disk_refusal(repo, service, role)
     if not (remote_first or compare_local) and not disk and not overflow.memory_refusal(memory, role_mb, floor):
         if native or placed:
             options['_placement'] = dict(host=local, reason=os.environ.get(
@@ -289,6 +300,13 @@ def admit(service, options, *, card=None, preview=False):
             for row in rows.values():
                 if type(row.get('disk_free_gb')) is not int or row['disk_free_gb'] < 5:
                     row.setdefault('refusal', 'disk_low: need 5 GB free to start')
+        if review_workspace:
+            for name, row in rows.items():
+                host = overflow.host_config(registry, name)
+                if not host or host.get('orchestration_only') is True or row.get('orchestration_only') is True:
+                    row.setdefault('refusal', 'review workspace requires a registered worker host')
+                elif row.get('disk_free_gb') is None:
+                    row.setdefault('refusal', 'review workspace requires a disk readiness measurement')
         rows.pop(local, None)
         return rows
     rows = load_rows()
@@ -310,7 +328,7 @@ def admit(service, options, *, card=None, preview=False):
             decision = overflow.decide(memory, role_mb, floor, rows, public,
                                        remote_first=remote_first, local_refusal=health,
                                        host_order=tuple(config.get('hosts', {})), compare_local=compare_local,
-                                       local_fallback=overflow.host_config(registry, local).get('placement_fallback', False))
+                                       local_fallback=local_host.get('placement_fallback', False))
             if benchmark_local and decision.reason == 'local_fallback_no_remote':
                 decision = overflow.Decision(None, 'local_benchmark_database')
             if options.get('benchmark') is not None and decision.host is not None:

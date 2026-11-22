@@ -192,6 +192,86 @@ def test_review_launch_refuses_placeholder_author(launch_leg_case):
     assert calls == []
 
 
+@pytest.mark.parametrize('outcome', ['completed', 'launch_failed', 'cancelled'])
+def test_worker_review_releases_exact_checkout_and_build_target(tmp_path, monkeypatch, outcome):
+    import asyncio
+    from pathlib import Path
+    import subprocess
+    from plangraph.planner.legs import DEFAULT_LEGS
+    from plangraph.planner.routing import SpawnPlan
+    from plangraph.spawner.notify import completion_event
+    from plangraph.spawner.runner import JobInfo
+    from plangraph.spawner.service import SpawnService
+
+    receiver = tmp_path / 'receiver'
+    receiver.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(receiver), *args], text=True).strip()
+
+    git('init', '-qb', 'main')
+    for message in ('base', 'head'):
+        (receiver / 'source').write_text(message)
+        git('add', 'source')
+        git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', message)
+    base, head = git('rev-parse', 'HEAD^', 'HEAD').splitlines()
+    git('checkout', '--detach', base)
+    leg = next(leg for leg in DEFAULT_LEGS if leg.id == 'mimo-v2.6-flash')
+    service = SpawnService(state=tmp_path / 'state')
+    service.runner.default_cwd = str(receiver)
+    async def admit(*args, **kwargs):
+        return True
+    monkeypatch.setattr('plangraph.spawner.service.admit_base', admit)
+    monkeypatch.setattr('plangraph.spawner.service.writer_launch',
+                        lambda prompt, *_: (prompt, {'FIXTURE_HARNESS_ENV': 'keep'}))
+    monkeypatch.setattr(service, '_annotate_spawn', lambda *args: None)
+    async def prompt(*args, **kwargs):
+        return 'fixture'
+    monkeypatch.setattr(service, '_prepare_leg_prompt', prompt)
+    monkeypatch.setattr(service, '_continue_writer', admit)
+    ready = asyncio.Event()
+    paths = []
+
+    async def launch(record, chosen, **options):
+        checkout = Path(options.get('cwd', record['cwd']))
+        assert checkout != receiver
+        assert (checkout / 'source').read_text() == 'head'
+        assert options['extra_env']['FIXTURE_HARNESS_ENV'] == 'keep'
+        target = Path(options['extra_env']['CARGO_TARGET_DIR'])
+        assert checkout.parent == target.parent
+        assert checkout.parent.is_relative_to(service.state)
+        target.mkdir(exist_ok=True)
+        (target / 'build-output').touch()
+        paths.extend([checkout, target])
+        ready.set()
+        if outcome == 'launch_failed':
+            raise OSError('fixture launch failed')
+        if outcome == 'cancelled':
+            await asyncio.Future()
+        return JobInfo('fixture', 'completed', 'review', chosen.model, role='review', exit_code=0,
+                       stdout='Reviewed source.\nVERDICT: ACCEPT\n')
+
+    monkeypatch.setattr(service, '_launch_leg', launch)
+    async def run():
+        record = await service._spawn(
+            card={'review_workspace': True, 'diff_ref': {'repo': str(receiver), 'base': base, 'head': head}},
+            prompt='fixture', role='review', writer_families=('openai',),
+            _plan=SpawnPlan((leg,), (), 'fixture', (), ()), _placement={'host': 'worker'})
+        task = service.tasks[record['run_id']]
+        if outcome == 'cancelled':
+            await asyncio.wait_for(ready.wait(), 5)
+            await service.cancel(record['run_id'])
+        await asyncio.gather(task, return_exceptions=True)
+        final = service.result(record['run_id'])
+        assert final['status'] == {'launch_failed': 'failed'}.get(outcome, outcome), final.get('error')
+        assert final['head_sha'] == head
+        assert len(paths) == 2 and all(not path.exists() for path in paths)
+        assert completion_event(final, paths[0])['head_sha'] == head
+        assert git('rev-parse', 'HEAD') == base
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("case", ["admitted", "missing-cwd", "refused", "down", "dry-run"])
 def test_seat_admission_at_launch_boundary(launch_leg_case, monkeypatch, case):
     import asyncio

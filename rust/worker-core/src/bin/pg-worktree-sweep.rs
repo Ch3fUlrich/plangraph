@@ -49,6 +49,7 @@ fn run() -> io::Result<()> {
         .or_else(|| env::var_os("HOME").map(|p| PathBuf::from(p).join(".local/state/plangraph")));
     let mut reader = env::var_os("PG_SWEEP_CLAIMS_READER").map(PathBuf::from);
     let (mut apply, mut dry, mut daily, mut remote) = (false, false, false, false);
+    let mut include_merged = false;
     let mut remote_targets = Vec::new();
     let (mut targets, mut idle_minutes) = (Vec::new(), 60);
     let mut args = env::args().skip(1);
@@ -73,6 +74,7 @@ fn run() -> io::Result<()> {
             "--dry-run" => dry = true,
             "--daily" => daily = true,
             "--delete-remote" => remote = true,
+            "--include-merged" => include_merged = true,
             "--repo" | "--root" | "--pins" | "--state" | "--claims-reader" => {
                 let path = PathBuf::from(
                     args.next()
@@ -133,6 +135,7 @@ fn run() -> io::Result<()> {
             state: &state,
             claims_reader: reader.as_deref(),
             apply,
+            include_merged,
             delete_remote: remote
         })?
     );

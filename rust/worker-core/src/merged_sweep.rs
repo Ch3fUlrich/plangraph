@@ -23,6 +23,7 @@ pub struct Options<'a> {
     pub state: &'a Path,
     pub claims_reader: Option<&'a Path>,
     pub apply: bool,
+    pub include_merged: bool,
     pub delete_remote: bool,
 }
 pub fn eligible(tree: &Worktree, facts: &pg_reap::Facts, inventory: &[Worktree]) -> bool {
@@ -179,16 +180,19 @@ fn run_using(
             else {
                 return Err(io::Error::other("worktree changed"));
             };
-            if !options.targets.is_empty()
-                && !options.targets.iter().any(|target| {
-                    target
-                        == &format!(
-                            "{}:{}:{}",
-                            current.path,
-                            current.branch.as_deref().unwrap_or("-"),
-                            current.head
-                        )
-                })
+            let exact = format!(
+                "{}:{}:{}",
+                current.path,
+                current.branch.as_deref().unwrap_or("-"),
+                current.head
+            );
+            let exact_match = options.targets.contains(&exact);
+            let selected_path = options
+                .targets
+                .iter()
+                .any(|target| target.rsplitn(3, ':').nth(2) == Some(current.path.as_str()));
+            if !exact_match
+                && (selected_path || !options.include_merged && !options.targets.is_empty())
             {
                 return Err(io::Error::other("outside exact targets"));
             }
@@ -234,6 +238,7 @@ fn run_using(
                 remove(options.repo, current)?;
                 if options.delete_remote
                     && options.remote_targets.is_empty()
+                    && (!options.include_merged || exact_match)
                     && merged_pr.is_some()
                     && current.branch.is_some()
                 {

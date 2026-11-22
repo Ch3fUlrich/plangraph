@@ -124,6 +124,7 @@ fn sweep_cli_dry_run_then_apply_saves_restore_and_keeps_remote() {
                 pins: &f.state.join("pins.json"),
                 claims_reader: None,
                 apply,
+                include_merged: false,
                 delete_remote: false,
             },
             |_, _| {
@@ -196,6 +197,7 @@ fn sweep_apply_restore_failure_prevents_removal_and_remote_requires_merged_pr() 
             pins: &f.state.join("pins.json"),
             claims_reader: None,
             apply: true,
+            include_merged: false,
             delete_remote: true,
         };
         let mut authority = |_: &Options<'_>, _: &str| {
@@ -328,6 +330,7 @@ fn detached_terminal_runs_multiple_roots_and_idle_threshold() {
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: true,
+        include_merged: false,
         delete_remote: false,
     };
     let out = run_with_authority(&opts, authority).unwrap();
@@ -358,6 +361,7 @@ fn detached_unmerged_and_unpushed_commits_and_failed_claims_survive() {
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: true,
+        include_merged: false,
         delete_remote: false,
     };
     let out = run_with_authority(&opts, authority).unwrap();
@@ -389,6 +393,7 @@ fn exact_targets_remote_leases_and_claim_failure_are_safe() {
             pins: &f.state.join("pins.json"),
             claims_reader: None,
             apply: true,
+            include_merged: false,
             delete_remote: true,
         };
         let out = run_with_authority(&opts, |o, b| {
@@ -427,6 +432,7 @@ fn exact_targets_remote_leases_and_claim_failure_are_safe() {
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: true,
+        include_merged: false,
         delete_remote: false,
     };
     assert!(run_with_authority(&opts, authority)
@@ -471,6 +477,7 @@ fn relative_state_still_protects_running_run_worktrees() {
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: true,
+        include_merged: false,
         delete_remote: false,
     };
     let out = run_with_authority(&opts, authority).unwrap();
@@ -505,6 +512,7 @@ fn exact_targets_remove_only_selected_tree_and_missing_optional_root_is_safe() {
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: true,
+        include_merged: false,
         delete_remote: false,
     };
     let out = run_with_authority(&opts, authority).unwrap();
@@ -576,6 +584,7 @@ fn native_terminals_and_verified_legacy_aliases_work_and_unknown_statuses_protec
             pins: &f.state.join("pins.json"),
             claims_reader: None,
             apply: true,
+            include_merged: false,
             delete_remote: false,
         };
         let out = run_with_authority(&opts, authority).unwrap();
@@ -606,6 +615,7 @@ fn protected_branch_names_survive_both_remote_deletion_modes() {
                 pins: &f.state.join("pins.json"),
                 claims_reader: None,
                 apply: true,
+                include_merged: false,
                 delete_remote: true,
             };
             let out = run_with_authority(&opts, |_, _| {
@@ -689,6 +699,7 @@ fn legacy_attempts_require_a_matching_terminal_record() {
             pins: &f.state.join("pins.json"),
             claims_reader: None,
             apply: true,
+            include_merged: false,
             delete_remote: false,
         };
         let out = run_with_authority(&opts, authority).unwrap();
@@ -750,6 +761,7 @@ fn remote_sha_lease_preserves_an_advanced_unmerged_branch() {
         pins: &f.state.join("pins.json"),
         claims_reader: None,
         apply: true,
+        include_merged: false,
         delete_remote: true,
     };
     let out = run_with_authority(&opts, authority).unwrap();
@@ -760,3 +772,6 @@ fn remote_sha_lease_preserves_an_advanced_unmerged_branch() {
         "{out}"
     );
 }
+
+#[path = "sweep_cli/landing.rs"]
+mod landing;

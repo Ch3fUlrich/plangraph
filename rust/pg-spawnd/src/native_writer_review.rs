@@ -1,6 +1,6 @@
 //! Review rounds of the native writer: fast checks with a per-head stamp, then one
 //! spawner review run on the exact head, its verdict read from the run record.
-use super::{context, output, Host};
+use super::{context, Host};
 use crate::native_writer::Driver;
 use pg_worker_core::run::record_io::atomic_write_private;
 use serde_json::{json, Value};
@@ -237,7 +237,7 @@ impl Host {
         Ok(prompt)
     }
     /// One review run through the spawner, role review with every writer family of the range excluded,
-    /// in a disposable no-push clone at `head`; the verdict comes from that run's record.
+    /// in a disposable worker checkout at `head`; the verdict comes from that run's record.
     pub(super) fn review_run(
         &mut self,
         head: &str,
@@ -247,38 +247,7 @@ impl Host {
         self.reviews_started += 1;
         let tag = format!("{}-{}", &head[..8.min(head.len())], self.reviews_started);
         fs::create_dir_all(&self.reviews).map_err(|e| e.to_string())?;
-        let clone = self.reviews.join(format!("checkout-{tag}"));
-        let _ = fs::remove_dir_all(&clone);
-        let origin = self.git(&["remote", "get-url", "origin"])?;
-        output(
-            self.command("git")
-                .args(["clone", "-q", "--shared", "--no-checkout"])
-                .arg(&self.cwd)
-                .arg(&clone),
-        )?;
-        let result = self.review_in(&clone, &tag, &origin, &base, head, previous);
-        let _ = fs::remove_dir_all(&clone);
-        result
-    }
-    fn review_in(
-        &mut self,
-        clone: &Path,
-        tag: &str,
-        origin: &str,
-        base: &str,
-        head: &str,
-        previous: Option<&Value>,
-    ) -> Result<Value, String> {
-        let git = |host: &Self, args: &[&str]| {
-            output(host.command("git").arg("-C").arg(clone).args(args))
-        };
-        git(self, &["checkout", "-q", "--detach", head])?;
-        git(self, &["remote", "set-url", "origin", origin])?;
-        git(
-            self,
-            &["remote", "set-url", "--push", "origin", "/dev/null/no-push"],
-        )?;
-        git(self, &["update-ref", "refs/review/base", base])?;
+        let base = base.as_str();
         let prev = previous
             .and_then(|review| Some((review["head"].as_str()?, review["text"].as_str()?)))
             .filter(|(prev, _)| {
@@ -301,10 +270,10 @@ impl Host {
             &trusted_python,
         )?;
         let card = json!({"estimate_tokens":300000, "max_min":60, "stall_min":20,
-            "repository_review_required":true,
+            "repository_review_required":true, "review_workspace":true,
             "diff_ref":{"repo":self.repo, "base":review_diff_base(base, head, prev), "head":head}});
         if self.review_override.is_none() {
-            if let Some(deferred) = self.review_preflight(clone, &card, &families, head)? {
+            if let Some(deferred) = self.review_preflight(&self.repo, &card, &families, head)? {
                 return Ok(deferred);
             }
         }
@@ -334,12 +303,10 @@ impl Host {
             ]);
         }
         let printed = command
-            .arg("--cwd")
-            .arg(clone)
             .arg("--prompt-file")
             .arg(&prompt_path)
             .args(["--wait", "3300", "--json"])
-            .current_dir(clone)
+            .current_dir(&self.repo)
             .output()
             .map_err(|e| e.to_string())?;
         let record =
@@ -358,6 +325,11 @@ impl Host {
         if record["status"] != "completed" {
             return Err(format!("review run incomplete: {}", record["reason"]));
         }
+        if record["head_sha"] != head
+            || !record["host"].as_str().is_some_and(|host| !host.is_empty())
+        {
+            return Err("review worker returned no exact-head receipt with host".into());
+        }
         let text = review_run_text(&self.state, &record)?;
         let paths = crate::review_citation::diff_paths(&self.cwd, Some(&self.base_pin()), head);
         let mut verdict = review_verdict(&text, head, &paths);
@@ -368,6 +340,7 @@ impl Host {
         verdict["path"] = json!(path);
         verdict["leg"] = chosen["id"].clone();
         verdict["harness"] = chosen["harness"].clone();
+        verdict["host"] = record["host"].clone();
         if verdict["verdict"] == "ACCEPT" {
             verdict["accepted_at"] = record["ended"].as_f64().map_or_else(
                 || json!(chrono::Utc::now().to_rfc3339()),
@@ -439,6 +412,12 @@ pub(super) fn printed_record(stdout: &str) -> Option<Value> {
 pub(super) fn review_run_text(state: &Path, record: &Value) -> Result<String, String> {
     if let Some(error) = record["review_binding_error"].as_str() {
         return Err(error.to_owned());
+    }
+    if record["overflow_remote"] == true {
+        return Ok(record["stdout_tail"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned());
     }
     let rendered = crate::review_artifacts::review_text(state, record)
         .map_err(|_| "review run record unreadable".to_owned())?;

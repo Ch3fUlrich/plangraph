@@ -28,8 +28,10 @@ def shared_cargo_target():
                                '~/.cache/plangraph/cargo-target')).expanduser().absolute()
 
 
-def cargo_child_env(env, *, pin_configured=False):
-    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(shared_cargo_target()))
+def cargo_child_env(env, *, pin_configured=False, target=None):
+    result = dict(_cargo_cache_env(env), CARGO_TARGET_DIR=str(target or shared_cargo_target()))
+    if target is not None:
+        result['CARGO_BUILD_BUILD_DIR'] = str(target)
     if pin_configured:
         for name in ('RUSTC_WRAPPER', 'SCCACHE_CACHE_SIZE', 'SCCACHE_DIR', 'CARGO_HOME',
                      'PIP_CACHE_DIR', 'npm_config_cache', 'UV_CACHE_DIR', 'TMPDIR'):
