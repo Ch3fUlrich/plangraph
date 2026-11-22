@@ -211,8 +211,10 @@ def test_tested_ff_settlement_abandons_a_closed_unlanded_pr(env, journal):
     assert "refused" in land(env, approval).stderr
     assert journal()["train"]["merge"] is None
     assert env.run_gh("pr", "close", "100").returncode == 0
+    recovery = env.fresh_clone()
+    assert not env.has_commit(recovery, head_of(env))
 
-    resumed = env.run("settle")
+    resumed = env.run("settle", cwd=recovery)
     assert resumed.returncode == 0, resumed.stderr
     assert journal()["train"]["abandoned"]
     assert main_tip(env) == base and rows(env) == []

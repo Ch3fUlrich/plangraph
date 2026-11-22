@@ -674,7 +674,10 @@ def read_verified_merge(train):
     main = f"refs/remotes/{REMOTE}/main"
     if train.get("mode") == TESTED_FF:
         git("fetch", "--quiet", REMOTE, f"+refs/heads/main:{main}")
-        if git("merge-base", "--is-ancestor", head, main, ok=(0, 1)).returncode:
+        missing = git("rev-parse", "--verify", "--quiet", f"{head}^{{commit}}", ok=(0, 1)).returncode
+        if missing or git("merge-base", "--is-ancestor", head, main, ok=(0, 1)).returncode:
+            if git("rev-parse", "--is-shallow-repository").stdout.strip() == "true":
+                raise MergeBatchError(f"train #{number} is missing from local main history; use a full checkout to settle")
             pr = gh_json("pr", "view", str(number), "--repo", repo, "--json", "state")
             return None, "closed" if pr["state"] == "CLOSED" else "pending"
         if git("merge-base", "--is-ancestor", train["base"], head, ok=(0, 1)).returncode:
