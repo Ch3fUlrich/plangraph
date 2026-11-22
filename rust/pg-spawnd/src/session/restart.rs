@@ -12,8 +12,6 @@ use std::{
 };
 
 pub(super) struct Restart {
-    pub model: String,
-    pub effort: String,
     pub caps: Caps,
     pub saved_caps: bool,
     pub card: PathBuf,
@@ -34,19 +32,17 @@ pub(super) fn prepare(
         return Ok(None);
     };
     let spec = &request.spec;
-    let saved_caps = (spec["ctx_guard_source"] == "operator")
-        .then(|| Caps::from_value(&spec["ctx_guard"]))
-        .flatten()
-        .or_else(|| Caps::from_value(&spec["launched_caps"]));
+    let saved_caps = if args.guard.is_some() {
+        None
+    } else {
+        (spec["ctx_guard_source"] == "operator")
+            .then(|| Caps::from_value(&spec["ctx_guard"]))
+            .flatten()
+            .or_else(|| Caps::from_value(&spec["launched_caps"]))
+    };
     let caps = saved_caps.unwrap_or_else(|| {
         policy::select_caps(active_policy, &args.role, request.override_cap.as_ref()).caps
     });
-    if let Some(guard) = args.guard.filter(|guard| *guard != caps) {
-        return Err(format!(
-            "--ctx-guard {},{}; expected {},{}",
-            guard.handoff, guard.hard, caps.handoff, caps.hard
-        ));
-    }
     let supplied = Path::new(&args.prompt);
     let supplied =
         read_text(supplied).map_err(|e| format!("prompt file: {}", io_text(&e, supplied)))?;
@@ -62,22 +58,11 @@ pub(super) fn prepare(
         }
     }
     check_caps(&supplied, caps, &window)?;
-    let saved = |key: &str, fallback: &str| {
-        spec[key]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .unwrap_or(fallback)
-            .to_owned()
-    };
-    let model = saved("model", &args.model);
-    let effort = saved("effort", &args.effort);
     let prompt = format!(
-        "Restart from handoff {}. Run `resume-digest` first.\n\nModel: {model}\nEffort: {effort}\nCaps: handoff {}, hard {}.\n",
-        card.handoff.display(), caps.handoff, caps.hard
+        "Restart from handoff {}. Run `resume-digest` first.\n\nModel: {}\nEffort: {}\nCaps: handoff {}, hard {}.\n",
+        card.handoff.display(), args.model, args.effort, caps.handoff, caps.hard
     );
     Ok(Some(Restart {
-        model,
-        effort,
         caps,
         saved_caps: saved_caps.is_some(),
         card: card.path,
@@ -126,10 +111,10 @@ fn check_caps(prompt: &str, caps: Caps, window: &str) -> Result<(), String> {
     static SINGLE: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(
         r#"(?ix)
-        (AUTOOS_CTX_HANDOFF|AUTOOS_CTX_HARD|CLAUDE_CODE_AUTO_COMPACT_WINDOW|CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS)
+        \b(AUTOOS_CTX_HANDOFF|AUTOOS_CTX_HARD|CLAUDE_CODE_AUTO_COMPACT_WINDOW|CLAUDE_CODE_IDLE_COMPACT_MIN_TOKENS)
             \s*[:=]\s*["']?([0-9][0-9_,]*[km]?)
         |
-        \b((?:handoff|hard)\s+(?:cap|threshold)|(?:handoff|hard)\s*[:=]|(?:compact(?:ion)?\s+)?window)
+        \b((?:handoff|hard)\s+(?:cap|threshold)|compact(?:ion)?\s+window)
             \s*(?:above\s+|at\s+|is\s+|of\s+|[:=]\s*)?([0-9][0-9_,]*[km]?)
         "#
     ).unwrap()

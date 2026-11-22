@@ -112,7 +112,6 @@ fn launch(args: Vec<String>, paths: &Paths, out: &mut dyn Write) -> io::Result<i
     };
     match restart::prepare(&request, paths, policy.as_ref()) {
         Ok(Some(restart)) => {
-            request.args.set_harness(&restart.model, &restart.effort);
             request.restart = Some(restart);
         }
         Ok(None) => {}

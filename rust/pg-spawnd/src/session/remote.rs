@@ -68,9 +68,13 @@ fn send(request: &Request, paths: &Paths, host: &Host) -> Result<Output, String>
             restart.card.to_string_lossy().into_owned(),
             "--handoff".into(),
             restart.handoff.to_string_lossy().into_owned(),
-            "--ctx-guard".into(),
-            format!("{},{}", restart.caps.handoff, restart.caps.hard),
         ]);
+        if args.guard.is_none() {
+            argv.extend([
+                "--ctx-guard".into(),
+                format!("{},{}", restart.caps.handoff, restart.caps.hard),
+            ]);
+        }
         restart.prompt.clone()
     } else {
         read_text(prompt).map_err(|e| io_text(&e, prompt))?

@@ -3,6 +3,7 @@ use crate::session::{
     paths::{read_text, resolve, var, Paths},
     policy, role_of, Request,
 };
+use chrono::NaiveDateTime;
 use serde_json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -77,15 +78,16 @@ pub(super) fn newest(request: &Request, paths: &Paths) -> Result<Option<Card>, S
                 return None;
             }
             let text = read_text(&path).ok()?;
-            belongs(&args.role, &path, &text).then_some((
-                info.modified().ok()?,
-                path,
-                handoff,
-                text,
-            ))
+            let header = card_header(&text);
+            let (session, stamp) = header.unwrap_or_default();
+            if !belongs(&args.role, &path, session) {
+                return None;
+            }
+            let date = NaiveDateTime::parse_from_str(stamp, "%Y-%m-%dT%H:%MZ").ok();
+            Some((date, info.modified().ok(), path, handoff, text))
         })
-        .max_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-    let Some((_, path, associated, text)) = selected else {
+        .max_by(|a, b| (&a.0, &a.1, &a.2).cmp(&(&b.0, &b.1, &b.2)));
+    let Some((_, _, path, associated, text)) = selected else {
         return match referenced_card {
             Some(path) => Err(format!(
                 "no readable card for {} (referenced {})",
@@ -115,13 +117,15 @@ pub(super) fn newest(request: &Request, paths: &Paths) -> Result<Option<Card>, S
     Ok(Some(Card { path, handoff }))
 }
 
-fn belongs(role: &str, path: &Path, card: &str) -> bool {
-    if let Some((_, session)) = card
-        .lines()
-        .next()
-        .and_then(|line| line.split_once(" card · "))
-    {
-        return role_of(session.split('·').next().unwrap_or_default().trim()) == role;
+fn card_header(card: &str) -> Option<(&str, &str)> {
+    let (_, fields) = card.lines().next()?.split_once(" card · ")?;
+    let (session, stamp) = fields.split_once('·').unwrap_or((fields, ""));
+    Some((session.trim(), stamp.trim()))
+}
+
+fn belongs(role: &str, path: &Path, session: &str) -> bool {
+    if !session.is_empty() {
+        return role_of(session) == role;
     }
     path.file_name()
         .and_then(|n| n.to_str())

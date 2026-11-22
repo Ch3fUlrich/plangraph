@@ -29,13 +29,17 @@ same installation path relative to the destination home. Set
 These fixtures use temporary state and fake peers for every launch.
 
 For a Rust respawn with a role card, the launcher selects the newest readable
-card by modification time. It considers the saved and explicit references,
+card by its header timestamp, with modification time and path as tie-breakers.
+Cards without a valid timestamp use modification time and path and rank below
+dated cards. The launcher considers the saved and explicit references,
 the recorded session's ready marker, and cards for the role in the applicable
 status and referenced directories. It uses the card's drill-down handoff, its
 companion file, or the associated ready or launch record path. The successor's
-prompt is generated from that one handoff and the saved model, effort and caps.
-The caller's file is checked before launch and any conflicting handoff, caps,
-or compact window produces `PROMPT-STALE` with the supplied and expected values.
+prompt is generated from that one handoff, the positional model and effort,
+and the effective caps. An explicit `--ctx-guard` takes precedence over saved
+caps. The caller's file is checked before launch. Conflicting handoff references,
+context guard settings, or explicit compact-window values produce `PROMPT-STALE`
+with the supplied and expected values.
 Legacy respawns with neither a card reference nor a discoverable card keep
 their existing prompt behavior. A referenced card with no usable replacement
 causes a refusal.

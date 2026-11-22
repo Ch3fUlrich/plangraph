@@ -12,12 +12,12 @@ const NEW: &str = "work/status/handoff-new.md";
 fn sandbox(launcher: &Launcher) -> Sandbox {
     let s = Sandbox::new(launcher);
     fs::create_dir(s.path("work/status")).unwrap();
-    for (name, age) in [(OLD, 1), (NEW, 2)] {
+    for (name, age, time) in [(OLD, 1, "04:00"), (NEW, 2, "04:01")] {
         fs::write(s.path(name), "# Fixture handoff\n").unwrap();
         let card = s.path(name).with_extension("card.md");
         fs::write(
             &card,
-            "# review card · review-0001 · 2026-11-22T04:00Z\n## Drill-down\n",
+            format!("# review card · review-0001 · 2026-11-22T{time}Z\n## Drill-down\n"),
         )
         .unwrap();
         fs::File::options()
@@ -31,7 +31,7 @@ fn sandbox(launcher: &Launcher) -> Sandbox {
         "state/launch/review.json",
         json!({
             "name": "review", "cwd": s.path("work"), "card": "status/handoff-old.card.md",
-            "handoff": "status/handoff-old.md", "host": LOCAL, "model": "current-model",
+            "handoff": "status/handoff-old.md", "host": LOCAL, "model": "saved-model",
             "effort": "medium", "launched_caps": {"handoff": 550000, "hard": 600000}
         }),
     );
@@ -43,7 +43,7 @@ fn launch(s: &Sandbox) -> Command {
     command
         .arg("review")
         .arg(s.path("work"))
-        .args(["old-model", "high"])
+        .args(["requested-model", "high"])
         .arg(s.path("prompt"))
         .arg("--respawn");
     command
@@ -69,7 +69,7 @@ pub fn check(launcher: &Launcher) {
     assert!(!prompt.contains("Old brief text"), "{prompt}");
     assert!(!prompt.contains("handoff-old"), "{prompt}");
     assert!(
-        prompt.contains("current-model") && prompt.contains("medium"),
+        prompt.contains("Model: requested-model") && prompt.contains("Effort: high"),
         "{prompt}"
     );
     assert!(
@@ -78,9 +78,11 @@ pub fn check(launcher: &Launcher) {
     );
     assert!(argv
         .windows(2)
-        .any(|pair| pair == ["--model", "current-model"]));
-    assert!(argv.windows(2).any(|pair| pair == ["--effort", "medium"]));
+        .any(|pair| pair == ["--model", "requested-model"]));
+    assert!(argv.windows(2).any(|pair| pair == ["--effort", "high"]));
     let saved = s.json("state/launch/review.json");
+    assert_eq!(saved["model"], "requested-model");
+    assert_eq!(saved["effort"], "high");
     assert_eq!(
         saved["launched_caps"],
         json!({"handoff": 550000, "hard": 600000})
@@ -132,6 +134,9 @@ pub fn check(launcher: &Launcher) {
     assert!(!s.path("child.json").exists());
     check_ready_card(launcher);
     check_forward(launcher);
+    check_explicit_guard(launcher);
+    check_card_order(launcher);
+    check_unrelated_prose(launcher);
     println!("fleet-launch restart prompt checks passed");
 }
 
@@ -184,11 +189,26 @@ fn check_forward(launcher: &Launcher) {
     let argv = payload["argv"].as_array().unwrap();
     assert_eq!(
         (&argv[2], &argv[3]),
-        (&json!("current-model"), &json!("medium"))
+        (&json!("requested-model"), &json!("high"))
     );
     assert!(argv
         .windows(2)
         .any(|pair| pair == ["--ctx-guard", "550000,600000"]));
+    let out = launch(&s)
+        .args(["--host", REMOTE, "--ctx-guard", "425000,500000"])
+        .output()
+        .unwrap();
+    s.expect(&out, 0, "forwarded\n", "");
+    let wire = s.json("ssh.json");
+    let payload = &wire["payload"];
+    assert!(payload["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("Caps: handoff 425000, hard 500000."));
+    let argv = payload["argv"].as_array().unwrap();
+    let mut guards = argv.windows(2).filter(|pair| pair[0] == "--ctx-guard");
+    assert_eq!(guards.next().unwrap()[1], "425000,500000");
+    assert!(guards.next().is_none());
 
     fs::remove_file(s.path("ssh.json")).unwrap();
     fs::write(
@@ -200,4 +220,76 @@ fn check_forward(launcher: &Launcher) {
     assert_eq!(out.status.code(), Some(2));
     assert!(s.normalize(&out.stderr).contains("PROMPT-STALE"));
     assert!(!s.path("ssh.json").exists());
+}
+
+fn check_explicit_guard(launcher: &Launcher) {
+    let s = sandbox(launcher);
+    fs::write(s.path("prompt"), "Caps: handoff 425000, hard 500000.").unwrap();
+    let out = launch(&s)
+        .args(["--ctx-guard", "425000,500000"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    let child = s.json("child.json");
+    let prompt = child["argv"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    assert!(
+        prompt.contains("Caps: handoff 425000, hard 500000."),
+        "{prompt}"
+    );
+    let saved = s.json("state/launch/review.json");
+    assert_eq!(
+        saved["launched_caps"],
+        json!({"handoff": 425000, "hard": 500000})
+    );
+    assert_eq!(saved["ctx_guard"], saved["launched_caps"]);
+
+    let s = sandbox(launcher);
+    fs::write(s.path("prompt"), "Caps: handoff 550000, hard 600000.").unwrap();
+    let out = launch(&s)
+        .args(["--ctx-guard", "425000,500000"])
+        .output()
+        .unwrap();
+    let error = s.normalize(&out.stderr);
+    assert_eq!(out.status.code(), Some(2), "{error}");
+    assert!(
+        error.contains("PROMPT-STALE caps 550000,600000; expected 425000,500000"),
+        "{error}"
+    );
+    assert!(!s.path("child.json").exists());
+}
+
+fn check_card_order(launcher: &Launcher) {
+    for old_mtime in [3, 4] {
+        let s = sandbox(launcher);
+        for (handoff, mtime) in [(OLD, old_mtime), (NEW, 3)] {
+            fs::File::options()
+                .write(true)
+                .open(s.path(handoff).with_extension("card.md"))
+                .unwrap()
+                .set_modified(UNIX_EPOCH + Duration::from_secs(mtime))
+                .unwrap();
+        }
+        let out = launch(&s).output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+        let saved = s.json("state/launch/review.json");
+        assert_eq!(saved["handoff"], json!(s.path(NEW)));
+    }
+}
+
+fn check_unrelated_prose(launcher: &Launcher) {
+    let s = sandbox(launcher);
+    fs::write(
+        s.path("prompt"),
+        "The model has a context window 200000. Difficulty hard: 12.",
+    )
+    .unwrap();
+    let out = launch(&s).output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "{}", s.normalize(&out.stderr));
+    assert!(s.path("child.json").exists());
 }
