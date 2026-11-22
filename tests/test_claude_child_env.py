@@ -132,12 +132,14 @@ def drive_spawn(monkeypatch, tmp_path, *, extra_env=None, path_dirs=(), system_p
 def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path):
     monkeypatch.setenv('RUSTC_WRAPPER', 'sccache')
     monkeypatch.setenv('SCCACHE_CACHE_SIZE', '12G')
+    cache = str(tmp_path / 'sccache')
+    monkeypatch.setenv('SCCACHE_DIR', cache)
     env, _ = drive_spawn(monkeypatch, tmp_path, path_dirs=[fake_binary(tmp_path / 'bin', 'claude')],
                          extra_env={'SMUGGLED_BY_CALLER': 'v', 'XDG_DATA_HOME': '/d'})
     assert env is not None
     check_env(env)
     configured_cache_reaches_child = env.get('RUSTC_WRAPPER') == 'sccache' and env.get('SCCACHE_CACHE_SIZE') == '12G'
-    assert configured_cache_reaches_child
+    assert configured_cache_reaches_child and env.get('SCCACHE_DIR') == cache
     expected = {name for name in os.environ if policy_allows(name)} | {'PWD', 'XDG_DATA_HOME', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL'}
     if sys.platform != 'win32':  # the runner pins the agent shell even when the parent has none
         expected.add('CLAUDE_CODE_SHELL')
