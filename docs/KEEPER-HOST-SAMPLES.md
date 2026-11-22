@@ -5,7 +5,7 @@ SQLite refuses these verbs with `unavailable`. Code: `store_host_samples.py` (ve
 `host_samples_rollup.py` (rollups, retention); schema = migration 12 in `schema_pg.py`.
 
 - **Tables:** `host_samples_raw` (range-partitioned by `received_at`, daily partitions, two future days kept ready by
-  `host_samples_partitions()`, an owner-installed `SECURITY DEFINER` function, so `keeper_rt` needs no DDL),
+  `host_samples_partitions()`, an owner-installed `SECURITY DEFINER` function, so `keeper_rt` needs no DDL; migration 14 revokes `PUBLIC` execute, so a deployment grants `EXECUTE` on it to `keeper_rt`),
   `host_samples_1m`, `host_samples_1h` (rollups), `host_sample_tokens` (sha256 only).
 - **Host token:** `pg token --host <host_id>` (router/l1) mints a `pgh1_` token shown once; `pg token --revoke-host <id>`
   revokes it (unknown ids refuse with `not_found`; repeat revocation is idempotent). A host token authenticates as a host principal that may only call `ingest_host_sample` for its own

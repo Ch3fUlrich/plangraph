@@ -7,6 +7,7 @@ pub mod env;
 mod fast_check_packages;
 pub mod fast_checks;
 pub mod feeder;
+pub mod host_link_bridge;
 pub mod host_sync;
 pub mod merge_close;
 pub mod paths;

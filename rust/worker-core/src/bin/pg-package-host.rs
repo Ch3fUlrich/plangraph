@@ -86,7 +86,7 @@ fn run() -> io::Result<u8> {
     if let Some(mut request) = spawn_request {
         request["wait_seconds"] = 0.into();
         let outcome = host_overflow::spawn(&hosts, &policy, now, |host| {
-            host_launch::launch(&registry, host, &request)
+            host_launch::launch_with_state(&registry, host, &request, &state)
         });
         let bytes = serde_json::to_vec(&outcome)?;
         record_io::atomic_write_private(

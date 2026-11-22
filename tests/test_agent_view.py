@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from pathlib import Path
 import shutil
@@ -15,6 +16,25 @@ def put(root, path, value):
 @pytest.fixture
 def home(tmp_path):
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def spawnd(monkeypatch):
+    """Publication runs the spawner binary built for this tree (``agents-view --publish``)."""
+    from _spawnd import build_spawnd
+    from plangraph import fleet_snapshot
+    binary = build_spawnd()
+    monkeypatch.setattr(fleet_snapshot, '_projection_binary', lambda: str(binary))
+    return binary
+
+
+@pytest.fixture(autouse=True)
+def words_file(tmp_path_factory, monkeypatch):
+    """A present, empty private-word policy; tests of the policy overwrite it."""
+    path = tmp_path_factory.mktemp('words') / 'scrub-words.txt'
+    path.write_text('# no private words\n')
+    monkeypatch.setenv('PLANGRAPH_SCRUB_WORDS', str(path))
+    return path
 
 def unavailable(host, reason):
     return dict(host=host, readable=False, reason=reason, agents=[])
@@ -47,7 +67,7 @@ def test_render_masks_private_view_strings(tmp_path, monkeypatch):
     assert ('operator' + '/' + 'syntheticpass') not in document
     view = json.loads(re.search(
         r'<script[^>]*id="snapshot-data"[^>]*>(.*?)</script>', document, re.S).group(1))['agents_view']
-    assert view['generated_at'] == 'login [redacted]'
+    assert view['generated_at'] is None  # not the collector's timestamp shape: dropped
     host = view['hosts'][0]
     assert host['host'] == 'login [redacted]'
     assert host['reason'] is None
@@ -62,7 +82,7 @@ def test_render_clean_private_view_unchanged(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
     row = dict(host='local', name='worker', runtime='opencode', model='model',
                state='idle', item=None, age_s=3)
-    view = dict(generated_at='stamp', hosts=[dict(
+    view = dict(generated_at='2026-11-21T06:30:00Z', hosts=[dict(
         host='local', readable=True, reason=None, agents=[row]),
         unavailable('remote', 'unreadable')])
     put(tmp_path, '.local/state/plangraph/agents-view.json', view)
@@ -74,15 +94,7 @@ def test_render_unreadable_private_view_is_null(tmp_path, monkeypatch):
     from plangraph.render import render
 
     monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
-    target = put(tmp_path, '.local/state/plangraph/agents-view.json', {'hosts': []})
-    read_text = Path.read_text
-
-    def unreadable(path, *args, **kwargs):
-        if path == target:
-            raise PermissionError('private inventory unreadable')
-        return read_text(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, 'read_text', unreadable)
+    (tmp_path / '.local/state/plangraph/agents-view.json').mkdir(parents=True)  # unreadable as a file
     document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
     assert '"agents_view":null' in document
 
@@ -191,3 +203,93 @@ def test_live_missing_private_never_uses_snapshot(home, monkeypatch, private):
     document = render({'items': [], 'agents_view': {'hosts': [unavailable('unvetted', 'timeout')]}}, home, live_agents=True)
     assert 'unvetted' not in document
     assert '"agents_view":null' in document
+
+
+def _published_view(document):
+    return json.loads(re.search(
+        r'"agents_view":(.*?)(?:,"items"|\}\s*</script>)', document, re.S).group(1))
+
+
+def _store(tmp_path, view):
+    put(tmp_path, '.local/state/plangraph/agents-view.json', view)
+
+
+def _row(**fields):
+    return dict(dict(name='worker', model='model', state='idle', item=None, age_s=3,
+                     runtime='opencode'), **fields)
+
+
+def test_render_masks_secret_shapes_in_stored_view(tmp_path, monkeypatch):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    secret = 'synthetic' + 'Credential' + '0123456789'
+    _store(tmp_path, dict(generated_at='2026-11-21T06:30:00Z', hosts=[dict(
+        host='Bearer ' + secret, readable=True, agents=[
+            _row(name='Authorization: Bearer ' + secret, model='password=' + secret)])]))
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert secret not in document
+
+
+def test_render_applies_current_private_words_to_stored_view(tmp_path, monkeypatch, words_file):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    label, longer = 'synth' + 'label', 'synth' + 'label-display'
+    _store(tmp_path, dict(generated_at=label, hosts=[dict(host=label, readable=True, agents=[
+        _row(name=longer, model='x-' + label)])]))
+    words_file.write_text(label + '\n' + longer + '\n' + 're:\\p{Greek}+\n')
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert label not in document and '-display' not in document
+    view = _published_view(document)
+    assert view['generated_at'] is None
+    assert view['hosts'][0]['agents'][0]['name'] == '[redacted]'
+
+
+@pytest.mark.parametrize('policy', ['missing', 'bad_regex'])
+def test_render_suppresses_stored_view_without_usable_private_words(
+        tmp_path, monkeypatch, words_file, policy):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    label = 'synth' + 'label'
+    _store(tmp_path, dict(generated_at=label, hosts=[dict(host=label, readable=True, agents=[
+        _row()])]))
+    if policy == 'missing':
+        words_file.unlink()
+    else:
+        words_file.write_text('re:[\n')
+    document = render({'items': []}, tmp_path, cdn=True, live_agents=True)
+    assert label not in document
+    view = _published_view(document)
+    assert view['generated_at'] is None
+    assert view['hosts'][0]['readable'] is False
+    assert view['hosts'][0]['reason'] == 'scrub_words_unavailable'
+    assert view['hosts'][0]['agents'] == []
+
+
+def test_render_without_the_spawner_binary_publishes_no_inventory(tmp_path, monkeypatch):
+    from plangraph import fleet_snapshot
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    _store(tmp_path, dict(hosts=[unavailable('remote', 'timeout')]))
+    monkeypatch.setattr(fleet_snapshot, '_projection_binary',
+                        lambda: str(tmp_path / 'absent-binary'))
+    assert '"agents_view":null' in render({'items': []}, tmp_path, cdn=True, live_agents=True)
+
+
+def test_scheduled_local_write_keeps_configured_hosts_unknown_through_render(
+        tmp_path, monkeypatch, spawnd):
+    from plangraph.render import render
+
+    monkeypatch.setattr(Path, 'home', classmethod(lambda cls: tmp_path))
+    put(tmp_path, 'overflow.json', dict(hosts={'far-host': dict(ssh='far.invalid')}))
+    env = dict(os.environ, HOME=str(tmp_path), PLANGRAPH_OVERFLOW_HOSTS=str(tmp_path / 'overflow.json'),
+               PLANGRAPH_STATE=str(tmp_path / 'state'))
+    subprocess.run([str(spawnd), 'agents-view', '--write', '--local'], env=env, check=True,
+                   stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=30)
+    view = _published_view(render({'items': []}, tmp_path, cdn=True, live_agents=True))
+    far = [h for h in view['hosts'] if h['host'] == 'far-host']
+    assert far and far[0]['readable'] is False and far[0]['reason'] == 'not_collected'
+

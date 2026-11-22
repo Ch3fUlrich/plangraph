@@ -277,10 +277,33 @@ def _project_agents_view(data: dict) -> dict | None:
             if row['runtime'] not in schema['runtimes']:
                 row['runtime'] = None
             agents.append(row)
+        reason = entry.get('reason')
         hosts.append(dict(host=host, readable=readable,
-                          reason=None if readable else 'unreadable', agents=agents))
+                          reason=None if readable else (
+                              reason if reason in schema['reasons'] else 'unreadable'),
+                          agents=agents))
     return dict(generated_at=data.get('generated_at') if isinstance(
         data.get('generated_at'), str) else None, hosts=hosts)
+
+
+def _published_agents_view() -> dict | None:
+    """The stored inventory after ``pg-spawnd agents-view --publish``, or ``None``.
+
+    The spawner binary owns the private-word list and the secret redactor, so a stored
+    inventory is masked with the *current* policy at publication; a missing binary, a
+    failed run or unreadable output publishes nothing.
+    """
+    try:
+        from plangraph.fleet_snapshot import _projection_binary
+        result = subprocess.run(
+            [_projection_binary(), "agents-view", "--publish"], check=False,
+            env=dict(os.environ, HOME=str(Path.home())), stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        if result.returncode:
+            return None
+        return _project_agents_view(json.loads(result.stdout))
+    except (OSError, RuntimeError, ValueError, TypeError, subprocess.SubprocessError):
+        return None
 
 
 def render(
@@ -309,12 +332,7 @@ def render(
     if live_agents:
         # The page is served as a single bind-mounted file, not a JSON API.
         # Read the independent collector output; never add it to keeper snapshots.
-        try:
-            private_agents = _project_agents_view(json.loads(
-                (Path.home() / '.local/state/plangraph/agents-view.json').read_text(encoding='utf-8')))
-        except (OSError, ValueError, TypeError):
-            private_agents = None
-        safe_snapshot['agents_view'], _ = mask_all(private_agents)
+        safe_snapshot['agents_view'], _ = mask_all(_published_agents_view())
     safe_snapshot["items"] = items
 
     if not cdn and _new_ui(safe_snapshot):  # §14b: the new page is --cdn only (v1)

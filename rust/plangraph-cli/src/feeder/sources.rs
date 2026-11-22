@@ -299,7 +299,7 @@ mod tests {
             "free_ram_bytes":4000000000u64,"free_disk_bytes":20000000000u64,
             "quota_remaining_percent":80,"observed_at":1000}))
         .unwrap();
-        let runs: Vec<Run> = ["stalled", "terminated_after_answer"]
+        let runs: Vec<Run> = ["stalled", "stalled_no_leg", "terminated_after_answer"]
             .into_iter()
             .map(|status| {
                 serde_json::from_value(json!({"run_id":status,

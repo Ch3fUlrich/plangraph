@@ -394,6 +394,14 @@ def model_admitted(model, *, enabled=False):
                      and not mid.lower().startswith('cxa/gpt-6-luna')))
 
 
+class DiscoveryFailed(list):
+    """The empty result of a model discovery that failed (timeout, missing binary, error)."""
+
+    def __init__(self, reason):
+        super().__init__()
+        self.reason = reason
+
+
 class LegAdapter:
     """Explicit opt-in reader; one cached boundary shared by routing and probes.
 
@@ -411,12 +419,15 @@ class LegAdapter:
         return getattr(self.store, name)
     @staticmethod
     def standalone_models():
+        """Standalone model ids; a failed discovery is an empty :class:`DiscoveryFailed`."""
         import subprocess
+        from .opencode_render import drop_parent_only_env
         try:
             result = subprocess.run(['opencode', 'models', '--standalone'], capture_output=True,
-                                    text=True, timeout=8, shell=False, check=True)
-        except (OSError, subprocess.SubprocessError):
-            return []
+                                    text=True, timeout=8, shell=False, check=True,
+                                    env=drop_parent_only_env(dict(os.environ)))
+        except (OSError, subprocess.SubprocessError) as exc:
+            return DiscoveryFailed(type(exc).__name__)
         return result.stdout.splitlines()
     @staticmethod
     def identity(model):
@@ -441,7 +452,11 @@ class LegAdapter:
             self._auth_error = None
             try:
                 states = self.provider.snapshot()
-                served = {self.identity(mid) for mid in (self.models() if callable(self.models) else self.models)}
+                listed = self.models() if callable(self.models) else self.models
+                if isinstance(listed, DiscoveryFailed):
+                    # Not "every model is unlisted": keep the snapshot-error retry and probe.
+                    raise RuntimeError(f'model discovery failed: {listed.reason}')
+                served = {self.identity(mid) for mid in listed}
                 self._states, self._served = states, served
                 self._error = None if states else 'unreachable'
             except OmniRouteAuthRefused as exc:

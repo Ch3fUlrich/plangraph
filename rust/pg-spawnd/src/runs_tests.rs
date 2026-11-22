@@ -601,3 +601,18 @@ fn review_seat_keeps_allowlisted_shas_and_masks_others() {
         assert!(text.contains("long64: [REDACTED]"), "{text}");
     }
 }
+
+#[test]
+fn wait_returns_a_never_launched_terminal_record() {
+    let dir = Dir(std::env::temp_dir().join(new_run_id()));
+    let path = dir.0.join("runs/run-test/record.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let record = json!({"run_id": "run-test", "status": "stalled_no_leg", "ended": 600});
+    std::fs::write(path, record.to_string()).unwrap();
+
+    let Ok(result) = wait(&dir.0, "run-test", Duration::from_secs(1)) else {
+        panic!("wait could not read the watchdog record");
+    };
+    assert_eq!(result, record);
+    assert!(terminal(&result));
+}
