@@ -265,12 +265,12 @@ class LegStateStore:
                 if leg.startswith(('agy:', 'agy/')):
                     pool = db.execute(
                         "SELECT * FROM leg_events WHERE leg_key='agy:account-wide' "
-                        "AND (account IS NULL OR account IS ?) AND ts<=? AND reset_at>? "
+                        "AND account IS ? AND ts<=? AND reset_at>? "
                         "ORDER BY reset_at DESC,id DESC LIMIT 1", (account, now, now)).fetchone()
                     if pool is not None:
                         return {"state": "limited", "evidence": dict(
                             {k: pool[k] for k in ('status', 'body_excerpt', 'reset_at', 'ts', 'caller')},
-                            event_id=pool['id'], quota_scope='account')}
+                            event_id=pool['id'], quota_scope='account', harness='agy', account=pool['account'])}
                 rows = db.execute(
                     "SELECT * FROM leg_events WHERE leg_key IN (" + ",".join("?" for _ in keys) + ") AND " + _SCOPE + " AND ts<=? ORDER BY ts DESC,id DESC",
                     (*keys, account, combo, now))

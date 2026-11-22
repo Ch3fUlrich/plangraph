@@ -374,6 +374,9 @@ def plan_spawn(card, *, role, writer_families=(), exclude_families=(), leg_reade
             alt = reader(leg_key(leg_obj), now=now, account=card.get("account"), combo=card.get("combo"))
             if unavailable(alt) and (not unavailable(st) or (alt.get('evidence') or {}).get('quota_scope') == 'account'):
                 return alt
+        evidence = st.get('evidence') or {}
+        if evidence.get('quota_scope') == 'account' and evidence.get('harness') == 'agy' and leg_obj.harness != 'agy':
+            return {'state': 'ok', 'evidence': None}
         return st
 
     states = {l.id: _leg_status(l) for l in candidates}
