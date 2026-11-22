@@ -223,13 +223,16 @@ def read_record_identity(seat_dir, key=None):
     return identity
 
 
-def send_saved_verdict(directory, key, url, token_dir):
+def send_saved_verdict(directory, key, url, token_dir, head=None):
     try:
         check_record_permissions(directory / "record.json")
         decision = read_verdict_payload(directory)
         identity = read_record_identity(directory, key)
-        if decision["payload"].get("binding") != identity.get("binding"):
+        binding = decision["payload"].get("binding")
+        if not isinstance(binding, dict) or binding != identity.get("binding"):
             raise ValueError("stored verdict differs from the seat record binding")
+        if head and str(binding.get("head") or "").lower() != head.strip().lower():
+            raise ValueError(f"stored verdict head {binding.get('head')!r} does not match --head {head!r}")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         print(f"seat_verdict: refused, {exc}", file=sys.stderr)
         return EXIT_REFUSED
@@ -275,7 +278,7 @@ def main(argv=None, *, record_wait=30, clock=time.monotonic, sleep=time.sleep):
     if any(v is None for v in (args.key, args.seat_dir, args.writer_family, args.token_dir)):
         ap.error("single-record mode requires --key, --seat-dir, --writer-family, --token-dir")
     if not args.dry_run and args.url and (args.seat_dir / "verdict.payload.json").is_file():
-        return send_saved_verdict(args.seat_dir, args.key, args.url, args.token_dir)
+        return send_saved_verdict(args.seat_dir, args.key, args.url, args.token_dir, args.head)
     writer_families = parse_writer_families(args.writer_family)
     paired = (args.seat_dir / "evidence.json").exists()
     from_record = (not paired or args.head) and (args.seat_dir / "record.json").exists()

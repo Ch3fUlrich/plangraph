@@ -394,6 +394,15 @@ def test_named_cwd_posts_witnessed_seat_with_artifacts(service, checkouts, tmp_p
 
     caller, reviewed = checkouts
     head = git(reviewed, 'rev-parse', 'HEAD')
+    monkeypatch.setenv('PG_URL', 'http://fixture.invalid')
+    monkeypatch.setenv('PG_TOKEN_FILE', str(tmp_path / 'spawner.token'))
+
+    def admit(_sink, record, cwd):
+        assert Path(cwd) == reviewed
+        record['request']['verdict_binding'] = dict(
+            key='demo:CWD', epoch=1, round=1, head=head, seat_run=record['run_id'])
+
+    monkeypatch.setattr(notify.KeeperSink, 'admit_seat_verdict', admit)
     service.witness_finish = 'stop'
     service.witness_text = 'TEST-GAMING: no - searched the supplied change: 0 hits\nVERDICT: ACCEPT'
     record = asyncio.run(service.spawn(
@@ -414,6 +423,7 @@ def test_named_cwd_posts_witnessed_seat_with_artifacts(service, checkouts, tmp_p
             '--token-dir', str(token_dir), '--url', 'http://fixture.invalid']
     assert seat_verdict.main(argv + ['--head', head], record_wait=0) == 0
     assert len(calls) == 1 and calls[0]['ok'] and head in calls[0]['reason']
+    assert calls[0]['binding'] == record['request']['verdict_binding']
     assert seat_verdict.main(argv + ['--head', git(caller, 'rev-parse', 'HEAD')], record_wait=0) == 2
     assert 'does not match --head' in capsys.readouterr().err
     assert len(calls) == 1
