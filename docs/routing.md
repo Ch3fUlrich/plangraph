@@ -246,3 +246,7 @@ without an own client (deepseek, glm, mimo, free legs) stay on OpenCode. Pinning
 OpenCode leg with `--leg` while its own client is installed needs `--override-reason`.
 
 Merge paths and main's state: the keeper's phase finish asks `plangraph main-state --admit` after CI is green on the phase head and refuses to merge with `main_red`, `main_pending`, `state_unknown` or `ref_not_forward_only` (docs/ci-parallel.md, "Red main and runner switches").
+
+## Worker claim bases
+
+A worker card claimed against an accepted landing-train part receives the train head in `base_sha`. A retry of the same live lease uses the pinned SHA. Ordinary claims use the phase branch tip when one is available, otherwise the configured base branch tip.
