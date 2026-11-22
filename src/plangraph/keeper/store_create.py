@@ -55,7 +55,6 @@ def incident_lines(*texts) -> int:
 
 def _blank(value):
     return not (isinstance(value, str) and value.strip())
-_MAX_DEPS = 200
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
@@ -263,6 +262,18 @@ class CreateMixin:
                     affected.add(gate["key"])
         self._validate_change(candidate, before, affected=affected)
         with self._write():
+            if attach or any(definition["depends_on"] for definition in defs):
+                locked = {item["key"]: item for item in self._all_items()}
+                targets = {**locked, **{definition["key"]: definition for definition in defs}}
+                for definition in defs:
+                    self._check_dependency_cap(definition["key"],
+                                               definition["depends_on"], targets)
+                children = {}
+                for definition, gate in attach:
+                    children.setdefault(gate["key"], []).append(definition["key"])
+                for gate_key, added in children.items():
+                    old = locked[gate_key]["depends_on"]
+                    self._check_dependency_cap(gate_key, [*old, *added], targets, old)
             for definition in defs:
                 self._insert_item(principal, definition, now)
             for definition, gate in attach:
@@ -405,7 +416,7 @@ class CreateMixin:
         return self._run(principal, "edit_definition", key,
                          lambda now: self._edit(principal, key, fields, now))
 
-    def _edit(self, principal, key, fields, now, deps_derived=False):
+    def _edit(self, principal, key, fields, now):
         has_priority = isinstance(fields, dict) and "priority" in fields
         prio = fields["priority"] if has_priority else None
         rest = ({name: value for name, value in fields.items()
@@ -453,7 +464,6 @@ class CreateMixin:
             # ``{"add": [...], "remove": [...]}``: edges named one by one, so a gate
             # over the list cap can still drop one without passing the whole list.
             rest["depends_on"] = self._deps_from_form(item, rest["depends_on"])
-            deps_derived = True
         edit_fields = dict(rest)
         self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
@@ -507,13 +517,6 @@ class CreateMixin:
             if field == "depends_on":
                 if not isinstance(value, (list, tuple)):
                     raise Refused("validation", "depends_on must be a list")
-                # A list derived from add/remove may not grow past the cap or the
-                # list the item already holds (a legacy gate over the cap shrinks).
-                limit = max(_MAX_DEPS, len(item.get("depends_on") or [])) \
-                    if deps_derived else _MAX_DEPS
-                if len(value) > limit:
-                    raise Refused("validation",
-                                  f"depends_on exceeds {limit} entries")
                 if any(not isinstance(d, str) for d in value):
                     raise Refused("validation",
                                   "depends_on entries must be strings")
@@ -718,6 +721,8 @@ class CreateMixin:
         message (``cycle`` first) and nothing of it is written.
         """
         current = self._all_items()
+        index = {row["key"]: row for row in current}
+        self._check_dependency_cap(key, deps, index, index[key]["depends_on"])
         after = []
         for row in current:
             candidate = dict(row)

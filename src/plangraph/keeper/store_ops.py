@@ -48,7 +48,7 @@ from . import events
 from . import db_errors
 from . import oversight_policy
 from .errors import Refused
-from .store_create import CreateMixin, _MAX_DEPS
+from .store_create import CreateMixin
 
 MAX_OPS = 500
 _OPS = {
@@ -274,9 +274,6 @@ class OpsMixin:
         if not isinstance(add_list, list) or not isinstance(remove_list, list):
             raise Refused("validation",
                           "depends_on form takes only add/remove lists of keys")
-        if len(add_list) > _MAX_DEPS or len(remove_list) > _MAX_DEPS:
-            raise Refused("validation",
-                          "depends_on form takes only add/remove lists of keys")
         if not all(isinstance(x, str) for x in add_list) or not all(isinstance(x, str) for x in remove_list):
             raise Refused("validation",
                           "depends_on form takes only add/remove lists of keys")
@@ -293,7 +290,6 @@ class OpsMixin:
     def _edit_op(self, principal, key, fields, now):
         """Execute an edit op, expanding depends_on forms and tracking dropped deps."""
         has_deps = isinstance(fields, dict) and "depends_on" in fields
-        derived = has_deps and isinstance(fields["depends_on"], dict)
         old_deps = []
         if has_deps:
             item = self._get_or_refuse(key)
@@ -301,7 +297,7 @@ class OpsMixin:
             dep_spec = fields["depends_on"]
             if isinstance(dep_spec, dict):
                 fields = dict(fields, depends_on=self._deps_from_form(item, dep_spec))
-        res = self._edit(principal, key, fields, now, deps_derived=derived)
+        res = self._edit(principal, key, fields, now)
         if has_deps:
             after_item = self._item(key)
             new_deps_set = set(after_item.get("depends_on") or []) if after_item else set()
@@ -362,8 +358,7 @@ class OpsMixin:
                 return self._dep_noop(principal, item,
                                       [f"dependency {target} already present"])
             deps = current + [target]
-        return self._edit(principal, key, {"depends_on": deps}, now,
-                          deps_derived=True)
+        return self._edit(principal, key, {"depends_on": deps}, now)
 
     def _dep_noop(self, principal, item, warnings):
         """The answer for a dep op that would not change the graph.

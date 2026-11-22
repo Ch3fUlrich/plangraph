@@ -61,8 +61,6 @@ class InputMixin:
         raw_deps = raw.get("depends_on") or []
         if not isinstance(raw_deps, (list, tuple)):
             raise Refused("validation", "depends_on must be a list")
-        if len(raw_deps) > _MAX_DEPS:
-            raise Refused("validation", f"depends_on exceeds {_MAX_DEPS} entries")
         deps = []
         for dep in raw_deps:
             if not isinstance(dep, str):
@@ -108,6 +106,19 @@ class InputMixin:
             "kg_refs": check_kg_refs(raw.get("kg_refs"), key),
             "state": raw.get("state", "open"),
         }
+
+    @staticmethod
+    def _check_dependency_cap(key, deps, items, previous=()):
+        """Count distinct unfinished targets, permitting removal from legacy overages."""
+        def unfinished(keys):
+            return {dep for dep in keys
+                    if items.get(dep, {}).get("state") not in ("done", "cancelled")}
+
+        active = unfinished(deps)
+        if len(active) > _MAX_DEPS and active - unfinished(previous):
+            raise Refused("validation",
+                          f"{key}: depends_on has {len(active)} open dependencies "
+                          f"(limit {_MAX_DEPS})")
 
     def _qualify(self, project, dep):
         """``project:dep`` for a bare id, then through the alias table."""
