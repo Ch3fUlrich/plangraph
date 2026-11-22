@@ -141,8 +141,10 @@ class VerbsMixin:
         force_stale = self._force_stale_reason(force_stale)
         override = None
         first = self._item(key)
-        if first is not None and first["state"] == "open" and self._ready(first) \
-                and principal.role in ("l1", "worker"):
+        check_guard = principal.role in ("l1", "worker")
+        checked = (check_guard and first is not None and first["state"] == "open"
+                   and self._claim_train_for(first) is not False)
+        if checked:
             # The slow repo/decision reads run before the write lock.
             self._require_project(principal, first["project"])
             override = self._claim_guard(first, force_stale)
@@ -158,13 +160,16 @@ class VerbsMixin:
                 self._require_project(principal, item["project"])
             if item["state"] == "claimed":
                 raise Refused("conflict", f"{key} already claimed")
-            if item["state"] != "open" or not self._ready(item):
+            train = self._claim_train_for(item) if item["state"] == "open" else False
+            if train is False:
                 index = {it["key"]: it for it in self._all_items()}
                 facts = self._not_open_facts(item, index)
                 if item["state"] != "open":
                     raise Refused("bad_state", f"{key} is {item['state']}, not open"
                                   + (f" ({facts})" if facts else ""))
                 raise Refused("bad_state", f"{key} has unfinished dependencies: {facts}")
+            if check_guard and not checked:
+                raise Refused("conflict", f"{key} became ready during claim; retry")
             epoch = item["epoch"] + 1
             lease = self._iso(now + lease_seconds)
             payload = {
@@ -176,19 +181,24 @@ class VerbsMixin:
                 payload["via"] = "worker_claim"
             if override is not None:
                 payload["force_stale"] = override
-            base = self._ref_head(item["project"])
+            base = train["base_sha"] if train is not None else self._ref_head(item["project"])
             if base is not None:
                 payload["base"] = base
             bases = record_bases(item, self._adapter("git"))
+            if train is not None:
+                bases[item["project"]] = base
+                payload["train"] = train
             if bases:  # recorded only with a head, like base: legacy payloads
                 payload["bases"] = bases      # stay byte-identical (D-3335)
             self._append(principal, key, "claimed", payload, now)
+            self._record_claim_train(key, epoch, train)
             self.conn.execute(
                 "UPDATE items SET state='claimed', epoch=?, round=0,"
                 " claimed_by=?, delegate=NULL, reviewer=NULL, lease_until=?,"
                 " review_waiver=NULL, updated_at=? WHERE key=?",
                 (epoch, principal.name, lease, self._iso(now), key))
-        return {"key": key, "epoch": epoch, "lease_until": lease}
+        return {"key": key, "epoch": epoch, "lease_until": lease,
+                **({"base_sha": base, "train": train} if train is not None else {})}
 
     def delegate(self, principal, key, worker_principal):
         return self._run(principal, "delegate", key,
@@ -291,16 +301,20 @@ class VerbsMixin:
             payload = {"base": base} if base is not None else {}
             if bases:  # recorded only with a head, like base: legacy payloads
                 payload["bases"] = bases      # stay byte-identical (D-3335)
-            self._append(principal, key, "released", payload, now)
-            cursor = self.conn.execute(
-                "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
-                " reviewer=NULL, lease_until=NULL, review_waiver=NULL,"
-                " updated_at=?"
-                " WHERE key=? AND state='claimed' AND epoch=?",
-                (self._iso(now), key, epoch))
-            self._race_guard(cursor, key, "claimed", epoch)
-            self._exec_clear(self.conn, key, principal, now)
+            self._release_claim(principal, fresh, payload, now)
+            self._record_claim_train(key, epoch, None)
         return {"key": key}
+
+    def _release_claim(self, principal, item, payload, now):
+        key, state, epoch = item["key"], item["state"], item["epoch"]
+        self._append(principal, key, "released", payload, now)
+        cursor = self.conn.execute(
+            "UPDATE items SET state='open', claimed_by=NULL, delegate=NULL,"
+            " reviewer=NULL, lease_until=NULL, review_waiver=NULL, updated_at=?"
+            " WHERE key=? AND state=? AND epoch=?",
+            (self._iso(now), key, state, epoch))
+        self._row_guard(cursor, key, state, epoch)
+        self._exec_clear(self.conn, key, principal, now)
 
     # ----------------------------------------------------------- submit
     def submit(self, principal, key, epoch, *, source_round=None, receipt=None):

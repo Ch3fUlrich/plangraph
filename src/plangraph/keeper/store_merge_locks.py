@@ -43,8 +43,16 @@ def _land_manifest(body):
         ref = part.get("ref", "")
         if not isinstance(ref, str) or len(ref) > 256 or any(ch.isspace() for ch in ref):
             raise Refused("validation", "landing part ref must be a Git branch")
-        manifest.append({"pr": _land_number(part.get("pr")), "head": _land_sha(part.get("head")),
-                         "items": sorted(set(items)), "ref": ref})
+        entry = {"pr": _land_number(part.get("pr")), "head": _land_sha(part.get("head")),
+                 "items": sorted(set(items)), "ref": ref}
+        reviews = part.get("review_runs", {})
+        if not isinstance(reviews, dict) or not set(reviews).issubset(items) or any(
+                not isinstance(run, str) or not re.fullmatch(r"run-[A-Za-z0-9._-]{1,120}", run)
+                for run in reviews.values()):
+            raise Refused("validation", "landing reviews must cite a run for a manifest item")
+        if reviews:
+            entry["review_runs"] = dict(sorted(reviews.items()))
+        manifest.append(entry)
     if len({part["pr"] for part in manifest}) != len(manifest):
         raise Refused("validation", "landing part PR appears twice")
     return sorted(manifest, key=lambda part: part["pr"])
@@ -144,6 +152,10 @@ class MergeLocksMixin:
                 raise Refused("conflict", "landing mutation requires the current keeper lease")
             if action == "prepare":
                 parts = _land_manifest(body)
+                previous = self.conn.execute(select, identity).fetchone()
+                previous_data = _landing_data(previous) if previous else None
+                if previous_data is None or previous_data["parts"] != parts:
+                    self._verify_train_reviews(parts)
                 batch = _text("batch_key", body.get("batch_key", f"train-{identity[1]}"), required=True, cap=256)
                 manifest = {"parts": parts, "batch_key": batch}
                 frozen = (_land_sha(body.get("base")), _land_sha(body.get("head")),
@@ -158,6 +170,9 @@ class MergeLocksMixin:
                 if ((row["base"], row["head"], data["parts"], data["batch_key"]) !=
                         (*frozen[:2], parts, batch) or row["abandoned"]):
                     raise Refused("conflict", "landing manifest differs from prepared train")
+                if previous_data is not None and (previous_data["head"] != data["head"]
+                                                    or previous_data["parts"] != data["parts"]):
+                    self._reconcile_train_claims(principal, repo, f"train #{identity[1]} changed", now)
                 return data
             row = self.conn.execute(select, identity).fetchone()
             if row is None:
@@ -165,20 +180,31 @@ class MergeLocksMixin:
             if action == "abandon" and row["merged"] is None:
                 self.conn.execute("UPDATE landing_trains SET abandoned=1 WHERE repo=? AND pr=? AND abandoned=0",
                                   identity)
+                self._reconcile_train_claims(principal, repo, f"train #{identity[1]} abandoned", now)
                 return _landing_data(self.conn.execute(select, identity).fetchone())
+            if action == "check_dependencies":
+                if row["abandoned"] or row["merged"] is not None or body.get("head", row["head"]) != row["head"]:
+                    raise Refused("conflict", "dependency check requires the current open train head")
+                self._check_train_dependencies(repo, _landing_data(row))
+                return {}
             merge = _land_sha(body.get("merge"))
             if row["abandoned"] or row["merged"] not in (None, merge):
                 raise Refused("conflict", "verified merge differs from the landing journal")
             manifest = _saved_manifest(row)
             if action == "landed":
+                if row["merged"] is None and "included" not in body:
+                    self._check_train_dependencies(repo, _landing_data(row))
                 if "included" in body:
                     included = _included_parts(body["included"], manifest["parts"])
                     if manifest.get("included", included) != included:
                         raise Refused("conflict", "part outcomes differ from the landing journal")
+                    if row["merged"] is None or "included" not in manifest:
+                        self._check_train_dependencies(repo, _landing_data(row), included)
                     manifest["included"] = included
                 if row["merged"] is None or "included" in body:
                     self.conn.execute("UPDATE landing_trains SET merged=?,manifest=? WHERE repo=? AND pr=?",
                                       (merge, json.dumps(manifest, separators=(",", ":")), *identity))
+                    self._reconcile_train_claims(principal, repo, f"train #{identity[1]} dropped a part", now)
             elif action == "advance" and row["merged"] == merge:
                 if "included" not in manifest:
                     raise Refused("conflict", "landing requires checked part outcomes")
@@ -195,6 +221,20 @@ class MergeLocksMixin:
             else:
                 raise Refused("conflict", "invalid landing journal transition")
             return _landing_data(self.conn.execute(select, identity).fetchone())
+
+    def _verify_train_reviews(self, parts):
+        adapter = self._adapter("spawner_records")
+        for part in parts:
+            for key, run in part.get("review_runs", {}).items():
+                try:
+                    seats = adapter.review_seats(
+                        {"key": key, "run_ids": json.dumps([run])}, part["head"], "",
+                        allow_cli_reported=True, require_diff_head=True, require_explicit_accept=True,
+                    ) if adapter is not None else []
+                except (ValueError, OSError):
+                    seats = []
+                if len(seats) != 1 or seats[0]["verdict"] != "pass":
+                    raise Refused("evidence_unverified", f"{key}: no explicit ACCEPT for part #{part['pr']}")
 
     def _landing_timing(self, principal, repo, action, body):
         roles = ("router", "system", "spawner") if action == "stage" else ("router", "system")

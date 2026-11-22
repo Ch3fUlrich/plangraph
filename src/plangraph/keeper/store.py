@@ -355,13 +355,6 @@ class Store(SupportMixin, InputMixin, CreateMixin, VerbsMixin, ReviewMixin,
         raise Refused("bad_state",
                       f"{key} is {fresh['state']}, not {expected_state}")
 
-    def _ready(self, item):
-        for dep in self._dep_map().get(item["key"], []):
-            target = self._item(dep)
-            if target is None or target["state"] != "done":
-                return False
-        return True
-
     @staticmethod
     def _problem_affects(problem, affected):
         """Does *problem* concern one of the new/changed keys?

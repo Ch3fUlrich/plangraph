@@ -20,7 +20,8 @@ from merge_batch_plan import high_patterns, plan_batches, set_problems, stack_pa
 from merge_batch_util import (BATCH_READY, EXIT_CONFLICT, NEEDS_UPDATE, REMOTE, MergeBatchError, refresh_diff, run,
                               add_label, check_name, drop_refs, drop_state, fetch_pr, git, items_in, load_state,
                               orphan_names, parse_prs, first_line, repo_info, save_state, short, state_dir, state_path,
-                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key)
+                              workflow_gate, worktrees, gh, gh_json, landing_now, landing_batch_key,
+                              keeper_landing_configured)
 
 
 def default_worktree(name):
@@ -470,6 +471,11 @@ def cmd_abort(args):
         print(f"batch {name!r} has no state file: removing what its build left", file=sys.stderr)
     else:
         raise MergeBatchError(f"no batch {name!r} in progress (merge_batch.py status lists them)")
+    if st.get("pr") and keeper_landing_configured():
+        with landing_lease(st["repo"]) as lease:
+            train = landing_journal(st["repo"], "show", pr=st["pr"])["train"]
+            if train is not None and not train["merge"]:
+                landing_journal(st["repo"], "abandon", pr=st["pr"], **lease)
     os.chdir(state_dir().parent)  # the git dir: the cwd may be the worktree that is about to go
     registered = dict(worktrees())
     paths = {path for path, branch in registered.items() if branch == st["branch"]}
@@ -587,8 +593,8 @@ def read_verified_merge(train):
     main = f"refs/remotes/{REMOTE}/main"
     pr = gh_json("pr", "view", str(number), "--repo", repo,
                  "--json", "state,headRefOid,mergeCommit,baseRefName")
-    if pr["state"] == "CLOSED":
-        return None, "closed"
+    if pr["state"] in ("OPEN", "CLOSED"):
+        return None, pr["state"].lower()
     merge = (pr.get("mergeCommit") or {}).get("oid")
     if pr["state"] != "MERGED" or not merge:
         return None, "pending"
@@ -607,7 +613,13 @@ def read_verified_merge(train):
 
 
 def prepare_train(st, lease):
-    parts = [dict(part, ref=st["prs"][str(part["pr"])]["ref"]) for part in st["merged"]]
+    parts = []
+    for part in st["merged"]:
+        entry = dict(part, ref=st["prs"][str(part["pr"])]["ref"])
+        review = entry.get("review")
+        if review and (review.get("verdict"), review.get("head")) != ("ACCEPT", entry["head"]):
+            entry.pop("review_runs", None)
+        parts.append(entry)
     return landing_journal(st["repo"], "prepare", pr=st["pr"], base=st["base_head"],
                            head=st["head"], parts=parts, batch_key=landing_batch_key(st), **lease)
 
