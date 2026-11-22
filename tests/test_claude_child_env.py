@@ -16,7 +16,7 @@ import pytest
 from plangraph.planner.legs import DEFAULT_LEGS
 from plangraph.planner.routing import plan_spawn
 from plangraph.routing_support import resolver
-from plangraph.spawner import claude_env
+from plangraph.spawner import claude_env, host_ready
 from plangraph.spawner.runner import SpawnerRunner
 
 from registry_route_util import CARD, live_policy  # noqa: F401
@@ -129,22 +129,40 @@ def drive_spawn(monkeypatch, tmp_path, *, extra_env=None, path_dirs=(), system_p
     return seen.get('env'), job
 
 
-def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path):
+@pytest.mark.parametrize('cache_mode', ['configured', 'blank-discovered', 'blank-unavailable'])
+def test_spawn_path_child_env_is_exactly_the_allowlist(monkeypatch, tmp_path, cache_mode):
     monkeypatch.setenv('RUSTC_WRAPPER', 'sccache')
     monkeypatch.setenv('SCCACHE_CACHE_SIZE', '12G')
-    cache = str(tmp_path / 'sccache')
+    cache = str(tmp_path / 'sccache') if cache_mode == 'configured' else ''
     monkeypatch.setenv('SCCACHE_DIR', cache)
+    monkeypatch.delenv('PLANGRAPH_SCCACHE', raising=False)
+    which = host_ready.shutil.which
+
+    def find_binary(name, *args, **kwargs):
+        if os.path.basename(name) == 'sccache':
+            return str(tmp_path / 'bin' / 'sccache') if cache_mode == 'blank-discovered' else None
+        return which(name, *args, **kwargs)
+
+    monkeypatch.setattr(host_ready.shutil, 'which', find_binary)
     env, _ = drive_spawn(monkeypatch, tmp_path, path_dirs=[fake_binary(tmp_path / 'bin', 'claude')],
                          extra_env={'SMUGGLED_BY_CALLER': 'v', 'XDG_DATA_HOME': '/d'})
     assert env is not None
     check_env(env)
     configured_cache_reaches_child = env.get('RUSTC_WRAPPER') == 'sccache' and env.get('SCCACHE_CACHE_SIZE') == '12G'
-    assert configured_cache_reaches_child and env.get('SCCACHE_DIR') == cache
+    assert configured_cache_reaches_child
     expected = {name for name in os.environ if policy_allows(name)} | {'PWD', 'XDG_DATA_HOME', 'CARGO_TARGET_DIR', 'CARGO_INCREMENTAL'}
+    if cache_mode == 'blank-unavailable':
+        expected.remove('SCCACHE_DIR')
+    elif cache_mode == 'blank-discovered':
+        cache_ok = env.get('SCCACHE_DIR') == str(host_ready.Path.home() / '.cache/plangraph/sccache')
+        assert cache_ok
+    else:
+        cache_ok = env.get('SCCACHE_DIR') == cache
+        assert cache_ok
     if sys.platform != 'win32':  # the runner pins the agent shell even when the parent has none
         expected.add('CLAUDE_CODE_SHELL')
         assert env['CLAUDE_CODE_SHELL'] == '/bin/bash'
-    assert set(env) == expected, 'allowlisted names went missing: ' + ', '.join(sorted(expected - set(env)))
+    assert set(env) == expected, 'allowlisted name mismatch: ' + ', '.join(sorted(set(env) ^ expected))
     home_ok, cfg_ok = env.get('HOME') == '/h', env.get('CLAUDE_CONFIG_DIR') == '/cfg'
     pwd_ok, xdg_ok = env.get('PWD') == str(tmp_path), env.get('XDG_DATA_HOME') == '/d'
     assert home_ok and cfg_ok and pwd_ok and xdg_ok
