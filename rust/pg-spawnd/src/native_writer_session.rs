@@ -67,16 +67,42 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         command.process_group(0);
     }
     let mut child = command.spawn().map_err(|e| e.to_string())?;
-    let status: Result<_, String> = (|| loop {
-        if host.free()? < 2 {
-            return Err("disk_low: under 2 GB stop floor".into());
+    let result = (|| {
+        loop {
+            if host.free()? < 2 {
+                return Err("disk_low: under 2 GB stop floor".into());
+            }
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                if !status.success() {
+                    return Err(format!("codex failed: {status}"));
+                }
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(1));
         }
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            return Ok(status);
+        let mut log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
+        log.seek(SeekFrom::Start(log_start))
+            .map_err(|e| e.to_string())?;
+        let mut completed = false;
+        let mut thread_id = session.map(str::to_owned);
+        for line in BufReader::new(log).lines() {
+            let line = line.map_err(|e| e.to_string())?;
+            let Ok(event) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if event["type"] == "turn.completed" {
+                completed = true;
+            }
+            if event["type"] == "thread.started" {
+                thread_id = event["thread_id"].as_str().map(str::to_owned);
+            }
         }
-        std::thread::sleep(Duration::from_secs(1));
+        if !completed {
+            return Err("codex ended without a result line".into());
+        }
+        thread_id.ok_or_else(|| "codex did not report a session id".into())
     })();
-    if status.is_err() {
+    if result.is_err() {
         #[cfg(unix)]
         unsafe {
             libc::killpg(child.id() as i32, libc::SIGKILL);
@@ -84,29 +110,5 @@ pub(super) fn execute(host: &Host, session: Option<&str>, prompt: &str) -> Resul
         let _ = child.kill();
         let _ = child.wait();
     }
-    let status: std::process::ExitStatus = status?;
-    if !status.success() {
-        return Err(format!("codex failed: {status}"));
-    }
-    let mut log = fs::File::open(&log_path).map_err(|e| e.to_string())?;
-    log.seek(SeekFrom::Start(log_start))
-        .map_err(|e| e.to_string())?;
-    let mut completed = false;
-    let mut thread_id = session.map(str::to_owned);
-    for line in BufReader::new(log).lines() {
-        let line = line.map_err(|e| e.to_string())?;
-        let Ok(event) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        if event["type"] == "turn.completed" {
-            completed = true;
-        }
-        if event["type"] == "thread.started" {
-            thread_id = event["thread_id"].as_str().map(str::to_owned);
-        }
-    }
-    if !completed {
-        return Err("codex ended without a result line".into());
-    }
-    thread_id.ok_or_else(|| "codex did not report a session id".into())
+    result
 }
