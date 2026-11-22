@@ -1,10 +1,13 @@
 use super::Result;
 use pg_worker_core::cargo_pool;
 use pg_worker_core::cargo_pool::{LockWaitSample, LockWaitTracker};
-use std::io::{BufRead, Write};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+const SLOT_WAIT_LIMIT: Duration = Duration::from_secs(30);
+const SLOT_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 
 pub(super) fn jail_binary(target: &Path) -> PathBuf {
     target
@@ -105,8 +108,39 @@ fn resolve_with_cap(
     }
     let mut report = pg_worker_core::disk_hygiene::Report::default();
     let _ = cargo_pool::enforce_pool(primary, cap_bytes, true, &mut report);
-    cargo_pool::acquire_slot(primary, slots.len(), run, None)
-        .map_err(|e| format!("cargo pool: {e}"))
+    acquire_slot_with_wait(primary, slots.len(), run, SLOT_WAIT_LIMIT)
+}
+
+/// Wait for a real pool lease so concurrent checks still respect the pool size.
+fn acquire_slot_with_wait(
+    primary: &Path,
+    count: usize,
+    run: &str,
+    timeout: Duration,
+) -> Result<cargo_pool::SlotLease> {
+    let deadline = Instant::now() + timeout;
+    let mut announced = false;
+    loop {
+        let busy = match cargo_pool::acquire_slot(primary, count, run, None) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => error,
+            result => return result.map_err(|error| format!("cargo pool: {error}")),
+        };
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(format!(
+                "cargo pool: {busy}; timed out after {}s waiting for a slot",
+                timeout.as_secs_f32()
+            ));
+        }
+        if !announced {
+            eprintln!(
+                "fast-checks: {busy}; waiting up to {}s for a slot",
+                timeout.as_secs_f32()
+            );
+            announced = true;
+        }
+        std::thread::sleep(remaining.min(SLOT_RETRY_INTERVAL));
+    }
 }
 
 #[cfg(unix)]
@@ -126,6 +160,49 @@ fn resolve_cargo_target_uses_shared_pool_instead_of_worktree_target() {
         jail_binary(&lease.path),
         primary.join(format!("debug/pg-jail{}", std::env::consts::EXE_SUFFIX))
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn resolve_cargo_target_waits_when_all_pool_slots_are_busy() {
+    use std::{sync::mpsc, thread};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let worktree = tmp.path().join("wt");
+    std::fs::create_dir_all(&worktree).unwrap();
+    let primary = tmp.path().join("cache/cargo-target");
+    let count = cargo_pool::configured_slot_count(&primary);
+    let mut leases: Vec<_> = (0..count)
+        .map(|i| cargo_pool::acquire_slot(&primary, count, &format!("busy-{i}"), None).unwrap())
+        .collect();
+    let released = leases.last().unwrap().path.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let _ = tx.send(resolve_cargo_target(&worktree, &primary, "waiting-run"));
+        });
+        let early = rx.recv_timeout(Duration::from_millis(150));
+        drop(leases.pop());
+        assert!(matches!(early, Err(mpsc::RecvTimeoutError::Timeout)));
+        let lease = rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        assert_eq!(lease.path, released);
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn wait_for_pool_slot_times_out_if_every_lease_stays_busy() {
+    let tmp = tempfile::tempdir().unwrap();
+    let primary = tmp.path().join("cargo-target");
+    let _lease = cargo_pool::acquire_slot(&primary, 1, "busy", None).unwrap();
+    let timeout = Duration::from_millis(25);
+    let start = Instant::now();
+
+    let error = acquire_slot_with_wait(&primary, 1, "waiting-run", timeout).unwrap_err();
+
+    assert!(start.elapsed() >= timeout);
+    assert!(error.contains("all 1 cargo pool slots are busy"), "{error}");
+    assert!(error.contains("timed out"), "{error}");
 }
 
 #[cfg(unix)]

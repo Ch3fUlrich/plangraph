@@ -4,11 +4,12 @@ Disk admission uses the production Python CLI/MCP path (`seat_spawn.admit` and
 `overflow`), alongside RAM admission. `PLANGRAPH_DISK_FLOOR_GB` defaults to 5
 (GiB). With `work_drives` configured, an unnamed local run launches from the
 first configured path that is a Git checkout with enough free disk. Immediate
-and queued admission both pass this checkout to the launcher. A run with
-`--cwd`, card `cwd`, `diff_ref.repo`, or `repo` is pinned, and its checkout
-uses its configured floor or falls back to the first matching filesystem floor.
-Both paths also check the
-Cargo target, run state, supervisor tree, and worktree root filesystems. Before refusing `disk_low`, admission cleans idle rebuildable caches
+and queued admission both pass this checkout to the launcher. If no configured
+path is a launchable Git checkout, admission reports that configuration error.
+A run with `--cwd`, card `cwd`, `diff_ref.repo`, or `repo` is pinned, and its
+checkout uses its configured floor or falls back to the first matching
+filesystem floor. Both paths also check the Cargo target, run state, supervisor
+tree, and worktree root filesystems. Before refusing `disk_low`, admission cleans idle rebuildable caches
 (`shared_cargo_target`, its pool slots `<target>-pool/slot-N`, `~/.cache/pg-target-po`,
 `~/.cache/pg-target-warm`, and idle worktree `rust/target` directories) once and re-measures free space; a
 persistent breach records a `disk-hygiene.json` floor alarm (`alarm: true`).
@@ -55,6 +56,9 @@ Its alarm and cleanup defaults are 5 GiB and 10 GB (decimal) respectively.
 nested `__pycache__` / `.pytest_cache` directories in eligible idle worktrees.
 Other ignored data, tracked cache files, dirty trees and protection records
 prevent reclaim. Worktree removal remains a separate `pg-worktree-sweep` step.
+
+When every Cargo pool slot is leased, `plangraph fast-checks` waits up to 30 seconds
+for a slot. It reports exhaustion if every slot stays busy.
 
 Pre-push preflight also pins the shared target, disables incremental builds and
 holds its shared lease while Cargo runs. Cap checks run before and after each

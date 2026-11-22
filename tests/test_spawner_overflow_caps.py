@@ -612,6 +612,17 @@ def test_local_work_drives_branch_admits_selected_drive_and_records_alarm(tmp_pa
     assert json.loads((state / 'disk-hygiene.json').read_text())['alarm'] is True
 
 
+def test_movable_run_names_the_missing_checkout_configuration(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+
+    monkeypatch.setenv('PLANGRAPH_WORK_DRIVES', json.dumps(
+        [{'path': str(tmp_path / 'missing'), 'disk_floor_gb': 5}]))
+    service = SimpleNamespace(state=tmp_path / 'state', ps=lambda: {'runs': []})
+    assert h.local_disk_admission(tmp_path / 'checkout', service, role='review', movable=True) == (
+        None, 'disk_low: no configured work drive is a launchable Git checkout')
+
+
 def test_pinned_run_is_measured_on_its_own_checkout_not_an_alternate_drive(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from plangraph.spawner import host_ready as h

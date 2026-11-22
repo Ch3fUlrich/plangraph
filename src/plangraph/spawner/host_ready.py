@@ -364,6 +364,8 @@ def local_disk_admission(worktree, service, role='implement', movable=False):
         place = movable and configured
         drives = (work_drive_checkouts(configured) if place else
                   [(worktree, checkout_floor(worktree, configured, floor))])
+        if not drives:
+            return None, 'disk_low: no configured work drive is a launchable Git checkout'
 
         def check(checkout):
             unsafe_cache_dir(target, checkout)
