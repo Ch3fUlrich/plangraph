@@ -2,6 +2,7 @@
 use super::evaluate_seat_record;
 use pg_worker_core::{
     review_completion::{self, GRACE_SECONDS},
+    review_split::SeatVerdict,
     run::{
         finalize::now,
         record::{releases_ownership, run_dir, RunRecord, Status},
@@ -62,10 +63,11 @@ pub(super) fn finish(args: &[String]) -> Result<(), String> {
             });
             if record["run_id"] == id.as_str() && terminal {
                 let seat = evaluate_seat_record(1, 1, head, &[], &record, Some(&dir));
-                let verdict = if seat.passed {
-                    "PASS"
-                } else {
-                    "REQUEST_CHANGES"
+                let verdict = match (seat.status.as_str(), seat.exit_code, seat.verdict) {
+                    ("completed", 0, Some(SeatVerdict::Pass)) if seat.passed => "PASS",
+                    ("completed", 0, Some(SeatVerdict::RequestChanges)) => "REQUEST_CHANGES",
+                    ("completed", 0, None) => "MISSING",
+                    _ => "ERROR",
                 };
                 let text = format!(
                     "RUN: {id}\nHEAD: {head}\nSTATUS: {}\nVERDICT: {verdict}\n",

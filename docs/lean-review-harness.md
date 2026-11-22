@@ -106,4 +106,4 @@ Native review launches resolve the client from `PLANGRAPH_CODEX_BIN`, the user i
 or PATH. A missing executable returns exit 10 and a `client_missing` diagnostic before
 the review process starts.
 
-If the wait ends while a seat is live, `plangraph review` exits 3 and prints its run ID, expected end, and late review file path. The file records the seat's terminal verdict. Approvals are issued only by the foreground review command after all its seats pass.
+If the wait ends while a seat is live, `plangraph review` prints its run ID, expected end, and late review file path. It exits 3 while the review is pending, or exits 1 if a seat has already failed. Late files use `MISSING` for successful runs without a verdict and `ERROR` for failed runs or unusable verdicts. The foreground command issues approvals after all seats pass.

@@ -543,6 +543,15 @@ fn binary_file_is_measured_as_the_inlined_base85_patch() {
 
 #[test]
 fn live_leg_returns_pending_and_publishes_late_review_file() {
+    check_live_leg("late", 3, "PENDING");
+}
+
+#[test]
+fn mixed_failed_and_live_seats_report_failure_and_keep_the_live_run() {
+    check_live_leg("late_mixed", 1, "REQUEST_CHANGES");
+}
+
+fn check_live_leg(mode: &str, expected_exit: i32, expected_verdict: &str) {
     let (tmp, work, _, base) = init_repo_with_origin();
     fs::write(work.join("file.rs"), "fn changed() {}\n").unwrap();
     git(&work, &["add", "file.rs"]);
@@ -553,7 +562,7 @@ fn live_leg_returns_pending_and_publishes_late_review_file() {
     let head = git(&work, &["rev-parse", "HEAD"]);
     let state = tmp.path().join("state");
     let log = tmp.path().join("spawner.jsonl");
-    let spawner = write_mock_spawner(tmp.path(), &state, &log, "late");
+    let spawner = write_mock_spawner(tmp.path(), &state, &log, mode);
     let approval = tmp.path().join("approval.txt");
     let output = Command::new(plangraph_bin())
         .current_dir(tmp.path())
@@ -568,7 +577,7 @@ fn live_leg_returns_pending_and_publishes_late_review_file() {
             "--wait",
             "0",
         ])
-        .args(["--state", "state"])
+        .args(["--state", "state", "--seats"])
         .arg("--approval")
         .arg(&approval)
         .env("PLANGRAPH_SPAWNER_CMD", spawner)
@@ -578,7 +587,7 @@ fn live_leg_returns_pending_and_publishes_late_review_file() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert_eq!(
         output.status.code(),
-        Some(3),
+        Some(expected_exit),
         "{stdout}\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
@@ -587,9 +596,13 @@ fn live_leg_returns_pending_and_publishes_late_review_file() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("verdict=PENDING") && !stdout.contains("verdict=MISSING"),
+        stdout.lines().any(|line| line.starts_with("REVIEW ")
+            && line.contains(&format!("verdict={expected_verdict} "))),
         "{stdout}"
     );
+    if mode == "late_mixed" {
+        assert!(stdout.contains("run=run-failed status=failed"), "{stdout}");
+    }
     let run = state.join("runs/run-test0001");
     let record: Value =
         serde_json::from_slice(&fs::read(run.join("record.json")).unwrap()).unwrap();
@@ -620,4 +633,56 @@ fn live_leg_returns_pending_and_publishes_late_review_file() {
         "{text}"
     );
     assert!(!approval.exists());
+}
+
+#[test]
+fn late_review_file_marks_a_missing_verdict() {
+    check_late_verdict("completed", 0, "Reviewed the change", "MISSING");
+}
+
+#[test]
+fn late_review_file_marks_a_failed_or_killed_run() {
+    check_late_verdict("failed", 7, "VERDICT: REQUEST_CHANGES", "ERROR");
+    check_late_verdict("killed", 137, "", "ERROR");
+}
+
+#[test]
+fn late_review_file_preserves_a_request_for_changes() {
+    check_late_verdict(
+        "completed",
+        0,
+        "VERDICT: REQUEST_CHANGES",
+        "REQUEST_CHANGES",
+    );
+}
+
+fn check_late_verdict(status: &str, code: i32, answer: &str, expected: &str) {
+    let state = tempfile::tempdir().unwrap();
+    let head = "a".repeat(40);
+    let run = state.path().join("runs/run-terminal");
+    fs::create_dir_all(&run).unwrap();
+    fs::write(
+        run.join("record.json"),
+        serde_json::json!({
+            "run_id":"run-terminal", "status":status, "exit_code":code, "stdout_tail":answer,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = Command::new(plangraph_bin())
+        .args(["review", "--finish-seat"])
+        .arg(state.path())
+        .args([&head, "run-terminal", "0"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let artifact = fs::read_to_string(run.join("late-review.txt")).unwrap();
+    assert_eq!(
+        artifact,
+        format!("RUN: run-terminal\nHEAD: {head}\nSTATUS: {status}\nVERDICT: {expected}\n")
+    );
 }

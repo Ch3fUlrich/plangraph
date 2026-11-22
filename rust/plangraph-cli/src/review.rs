@@ -626,10 +626,13 @@ pub fn execute(args: &ReviewArgs) -> Result<i32, String> {
         return Ok(0);
     }
 
-    if outcomes
+    let has_pending = outcomes
         .iter()
-        .any(|seat| seat.verdict == Some(SeatVerdict::Pending))
-    {
+        .any(|seat| seat.verdict == Some(SeatVerdict::Pending));
+    let has_failure = outcomes
+        .iter()
+        .any(|seat| !seat.passed && seat.verdict != Some(SeatVerdict::Pending));
+    if has_pending && !has_failure {
         println!(
             "REVIEW head={} seats={} verdict=PENDING approval=none",
             resolved.head_sha,
