@@ -55,7 +55,6 @@ def incident_lines(*texts) -> int:
 
 def _blank(value):
     return not (isinstance(value, str) and value.strip())
-_MAX_DEPS = 200
 #: B3: every field ``Store._normalise`` reads; anything else folds into ``note``.
 KNOWN_ITEM_FIELDS = frozenset(
     ("project", "id", "key", "title", "description", "host", "wait", "layer", "role",
@@ -263,6 +262,12 @@ class CreateMixin:
                     affected.add(gate["key"])
         self._validate_change(candidate, before, affected=affected)
         with self._write():
+            if any(definition["depends_on"] for definition in defs):
+                locked = {item["key"]: item for item in self._all_items()}
+                targets = {**locked, **{definition["key"]: definition for definition in defs}}
+                for definition in defs:
+                    self._check_dependency_cap(definition["key"],
+                                               definition["depends_on"], targets)
             for definition in defs:
                 self._insert_item(principal, definition, now)
             for definition, gate in attach:
@@ -405,7 +410,7 @@ class CreateMixin:
         return self._run(principal, "edit_definition", key,
                          lambda now: self._edit(principal, key, fields, now))
 
-    def _edit(self, principal, key, fields, now, deps_derived=False):
+    def _edit(self, principal, key, fields, now, *, deps_derived=False):
         has_priority = isinstance(fields, dict) and "priority" in fields
         prio = fields["priority"] if has_priority else None
         rest = ({name: value for name, value in fields.items()
@@ -507,13 +512,6 @@ class CreateMixin:
             if field == "depends_on":
                 if not isinstance(value, (list, tuple)):
                     raise Refused("validation", "depends_on must be a list")
-                # A list derived from add/remove may not grow past the cap or the
-                # list the item already holds (a legacy gate over the cap shrinks).
-                limit = max(_MAX_DEPS, len(item.get("depends_on") or [])) \
-                    if deps_derived else _MAX_DEPS
-                if len(value) > limit:
-                    raise Refused("validation",
-                                  f"depends_on exceeds {limit} entries")
                 if any(not isinstance(d, str) for d in value):
                     raise Refused("validation",
                                   "depends_on entries must be strings")
@@ -647,7 +645,7 @@ class CreateMixin:
                 # unchecked.  Repeat it on the graph as it is under the lock,
                 # through the same call, so the refusal code is identical and
                 # no cycle can be stored.
-                self._recheck_change_under_lock(key, me["depends_on"])
+                self._recheck_change_under_lock(key, me["depends_on"], deps_derived)
                 self.conn.execute("DELETE FROM edges WHERE src=?", (key,))
                 for dep in me["depends_on"]:
                     self.conn.execute(
@@ -707,7 +705,7 @@ class CreateMixin:
         if lease is None or lease.timestamp() <= now:
             raise Refused("forbidden", "a live claim lease is required to add operator dependencies")
 
-    def _recheck_change_under_lock(self, key, deps):
+    def _recheck_change_under_lock(self, key, deps, deps_derived):
         """Repeat the pre-lock ``_validate_change`` on the graph under the lock.
 
         D-2458/1: the holder's cycle check runs before ``BEGIN IMMEDIATE``, so
@@ -718,6 +716,9 @@ class CreateMixin:
         message (``cycle`` first) and nothing of it is written.
         """
         current = self._all_items()
+        index = {row["key"]: row for row in current}
+        previous = index[key]["depends_on"] if deps_derived else None
+        self._check_dependency_cap(key, deps, index, previous)
         after = []
         for row in current:
             candidate = dict(row)

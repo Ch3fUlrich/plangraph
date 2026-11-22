@@ -35,7 +35,7 @@ priority, source, note, description, host, corrects, state, epoch, claimed_by, d
 `audit_log(id PK, ts, actor, role, action, key, ok, code, msg)` — **every** attempt incl. refused ones; never locked ·
 `audit_findings(id PK, ts, key, code, msg)`.
 Event types: `item_created, item_defined, claimed, delegated, released, lease_expired, evidence_added, submitted,
-changes_requested, review_passed, cancelled, priority_set, kind_set`. `items.state`, `epoch`, `claimed_by`, … are a CACHE written in the same
+changes_requested, review_passed, cancelled, priority_set, kind_set, incident_appended`. `items.state`, `epoch`, `claimed_by`, … are a CACHE written in the same
 transaction as the event; `verify_integrity` proves cache == fold. Retired exec run fences are uncapped per card and survive close; delayed parks without an observed state cannot overwrite newer attempt state writes, and park state moves follow the forward table while legal parks release claims. See `adr-exec-ownership.md`.
 
 **Unknown event types (PG-FOLD-UNKNOWN-TYPE).** A `type` outside `schema.EVENT_TYPES` was written by a newer keeper: this build cannot
@@ -143,6 +143,7 @@ worker that is not the recorded owner, a card whose observed state fails the liv
 | `heartbeat(p, key, epoch)` | claimant or delegate | extends lease; stale epoch → `epoch_stale` |
 | `release(p, key, epoch)` | claimant, router | `claimed`→`open` |
 | `add_evidence(p, key, epoch, kind, ref)` | claimant or delegate, state `claimed` | runs the verifier for `kind`; stores `verified` + detail; unverified evidence is stored but does not count |
+| `incident(p, key, text, evidence=None)` | router or L1 in its project | `pg incident KEY --text TEXT [--evidence URL]` appends an attributed, timestamped report to a live item. Read the log in show, snapshot or the item card. PostgreSQL migration 21 and the SQLite v22 upgrade add the event index. |
 | `submit(p, key, epoch)` | claimant or delegate | `claimed`→`in_review` iff every kind in `evidence_kinds` has verified evidence; lease frozen (cleared) |
 | `request_changes` / `pass_review` as `verdict(p, key, ok, reason)` | reviewer | `in_review`: ok → records `review_verdict` and re-verifies ALL evidence; on a `standard` item this one cross-family verdict → `done` (event `review_passed`, locks), on a `high` item a second distinct reviewer (two distinct resolved families unless waived) is required; not ok → `claimed` (same epoch; 2nd time in a row → `open` + audit_finding). Refused: reviewer == claimant/delegate (`same_principal`); reviewer.family == delegate-or-claimant family (`same_family`); either family NULL (`family_unknown`, fail closed) |
 | `waive_second_family(p, key, D-NNN)` | router | **`high` items only (D-228)** — `claimed`/`in_review`: runs the `decision` verifier on `{id: D-NNN}` **and** requires that D-row to contain the whole token `Waives: <key>` (X6c3); on success emits `waiver_set` and sets `items.review_waiver`. An active D-id waiver permits one passing verdict to close, with writer independence and single-seat sensitive coverage intact (D-5658), **except cards tagged `auth` or `secrets` still require two distinct non-Anthropic families (`need=2`)**. Refused: non-router (`forbidden`), unverified decision or a D-row that does not name the key (`evidence_unverified`), `standard` or `none` tiers (`bad_state`), DONE (`locked`), other states (`bad_state`) |
@@ -389,7 +390,7 @@ the lock, and `close_on_decision` re-reads its batch and decision files in the
 lock as it always did.
 
 `add_dep {op, key, dep}` / `remove_dep {op, key, dep}` (PG-LE-DEPS-OPS) change ONE entry of `key`'s
-`depends_on`: they read the item's current edges inside the transaction (later ops see earlier ones) and delegate to the very same `edit_definition` write, so auth, `open`-state, cycle/unknown-dep/`_MAX_DEPS` validation and the `item_defined` event are the edit's. A dep `add_dep` already has or `remove_dep` lacks writes nothing, appends no event and answers `{"key", "warnings": [...]}`; a dep naming an item whose state is `cancelled` is dropped from the resulting list with `warnings ["dropped cancelled dependency <key>"]` (a full `edit` of `depends_on` drops it the same way, so `views.validate`'s `depends_on_cancelled` no longer refuses the write), an unknown dep key is still `validation`. The result keeps `{"key": ...}` alone unless something was dropped or skipped.
+`depends_on`: they read the item's current edges inside the transaction (later ops see earlier ones) and delegate to the very same `edit_definition` write, so auth, `open`-state, cycle and unknown-dependency validation and the `item_defined` event are the edit's. Explicit dependency lists allow up to 200 distinct open targets. Named edits can repair a legacy overage without adding open targets. A dep `add_dep` already has or `remove_dep` lacks writes nothing, appends no event and answers `{"key", "warnings": [...]}`; a dep naming an item whose state is `cancelled` is dropped from the resulting list with `warnings ["dropped cancelled dependency <key>"]` (a full `edit` of `depends_on` drops it the same way, so `views.validate`'s `depends_on_cancelled` no longer refuses the write), an unknown dep key is still `validation`. The result keeps `{"key": ...}` alone unless something was dropped or skipped.
 
 **Credential-shape guard (D-374, `credential_guard.py`).** `create_items`/`edit_definition`/`import_items`/`apply_ops` refuse (`validation`, naming the field,
 never echoing the value) a `title`/`note`/`done_criteria`/`description` (or any other folded field; `description` is its own column, cap 2000) in which a `word/secretish` token (`\w+/\w{6,}`) sits within 120
@@ -711,7 +712,7 @@ record can count only when the caller has requested head-based evidence.
 
 `ready` uses the claim guard's merged-work and newer-decision checks. Its JSON
 reply separates startable `items`, `needs_reconcile` rows (with `reason`), and
-`in_progress` rows (with `prs`, the open PR numbers), and `unknown` rows when
+`in_progress` rows (shown as `in_review` with `prs`, the open PR numbers), and `unknown` rows when
 remote facts cannot be verified. Text and CLI print startable rows first, then
 separate, indented Needs reconcile, In progress and Unknown sections; only
 startable rows retain the top-level `key | ...` line format. `-n` caps only
@@ -730,9 +731,9 @@ retried after 10 seconds. Independently verified decision/merge facts can still
 require reconciliation. Unconfigured or unavailable local adapters retain the
 existing best-effort behavior. Claim refreshes the index before enforcement;
 an unverified index refuses claim with `work index unverified` unless the caller
-uses the existing audited force-stale override. Its override, audit and
-authorization rules remain unchanged. Ready and claim share merge PR metadata
-computed from the refreshed target topology, even when local main lags origin.
+uses the audited force-stale override for merged-work and decision facts. An open PR refuses every claim,
+including worker and force-stale requests, until it closes. Ready and claim share merge PR metadata
+from the refreshed target topology, even when local main lags origin.
 
 `PYTHONPATH=/path/to/plangraph/src /path/to/plangraph/.venv/bin/python3 -m plangraph.keeper.cli sweep-claims` prints exactly `{"paths":[...],"branches":[...]}` for active
 claimed/in_review items across every project, using a fresh snapshot and each

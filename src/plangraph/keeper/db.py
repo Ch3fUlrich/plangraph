@@ -20,7 +20,7 @@ from ..projector.ddl import SQLITE as PROJECTOR_SQLITE
 from .errors import KeeperLocked
 from .schema_guards import RECEIPTS_DDL
 from .placement_rules_schema import SQLITE as PLACEMENT_RULES_DDL
-from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, JEV_DDL,
+from .schema import (ALERTS_DDL, ALIASES_DDL, DESIGN3_DDL, EVENT_AUDIENCE_DDL, GRANTS_DDL, INCIDENTS_DDL, JEV_DDL,
                      LANDING_JOBS_DDL, LANDING_STAGES_DDL, LANDING_TRAINS_DDL,
                      LOCKS_DDL, METRICS_DDL, OUTBOX_DDL, OVERSIGHT_DDL, RUN_TOKENS_DDL,
                      SCHEMA, TRIGGERS)
@@ -236,6 +236,7 @@ def _upgrade(conn):
         raise
     conn.executescript(PROJECTOR_SQLITE)
     _upgrade_lock_triggers(conn)
+    conn.executescript(INCIDENTS_DDL)
 
 
 def open_db(path, *, create: bool = False,
