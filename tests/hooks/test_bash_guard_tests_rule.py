@@ -122,3 +122,39 @@ def test_unresolvable_home(guard, monkeypatch):
     monkeypatch.setattr(Path, "home", missing_home)
     assert tests_required() is False
     assert guard.check("pytest") is None
+
+
+@pytest.mark.parametrize(("branch", "command", "grant", "denied"), [
+    ("land/train-fixture", "pytest -q -n 3 tests", "", True),
+    ("lane/fastgates-fixture", "python3 -m pytest -q ./tests/", "", True),
+    ("lane/fastgates-fixture", "pytest -k example", "", True),
+    ("lane/fastgates-fixture", "bash -c 'pytest -q .'", "", True),
+    ("lane/fastgates-fixture", "pgtest pytest -q tests", "", True),
+    ("lane/fastgates-fixture", "pytest -q tests/test_sample.py tests", "", True),
+    ("lane/fastgates-fixture", "pytest -q tests/test_sample.py::test_sample", "", False),
+    ("lane/fastgates-fixture", "pytest --collect-only tests", "", False),
+    ("lane/fastgates-fixture", "python3 tools/affected_tests.py --run", "", False),
+    ("lane/fastgates-fixture", "pytest -q tests", "D-123", False),
+    ("lane/fastgates-fixture", "pytest -q tests", "approved", True),
+    ("main", "pytest -q -n 3 tests", "", False),
+])
+def test_train_worktree_guards_full_pytest(tmp_path, monkeypatch, branch, command, grant, denied):
+    import json
+    import subprocess
+    import sys
+
+    from bash_guard_support import HOOK
+
+    subprocess.run(["git", "init", "-q", "-b", branch, str(tmp_path)], check=True)
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests/test_sample.py").touch()
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("PLANGRAPH_FULL_PYTEST_D_ID", grant)
+    result = subprocess.run(
+        [sys.executable, "-I", str(HOOK)],
+        input=json.dumps({"cwd": str(tmp_path), "tool_name": "Bash", "tool_input": {"command": command}}),
+        text=True, capture_output=True, timeout=10,
+    )
+    assert result.returncode == (2 if denied else 0), result.stderr
+    if denied:
+        assert "use python3 tools/affected_tests.py" in result.stderr

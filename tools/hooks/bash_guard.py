@@ -76,6 +76,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bash_guard_rules import check_command  # noqa: E402
+from bash_guard_tests_rule import train_checkout  # noqa: E402
 from hook_common import STDIN_MAX, TooLarge, read_stdin_text  # noqa: E402
 
 
@@ -112,7 +113,9 @@ def main():
     if not isinstance(command, str) or not command:
         return 1 if strict else 0
     try:
-        reason = check_command(command)
+        cwd = payload.get("cwd")
+        checkout = train_checkout(cwd if isinstance(cwd, str) else None)
+        reason = check_command(command, checkout=checkout)
     except Exception as exc:  # check_command never raises; this is the last net
         if strict:
             return 1

@@ -247,7 +247,7 @@ def _pgrep_matches_parent(args, command):
     return bool(pattern) and pattern in command and not args[-1].live and not re.search(r"[\\^$*+?{}\[\]()|]", pattern)
 
 
-def _check_simple(cmd, depth, placement_required, pending_loop, command):
+def _check_simple(cmd, depth, placement_required, pending_loop, command, checkout):
     pos = [w for w in cmd if not w.redir]
     i = lead(pos)
     loop_condition = pending_loop or any(w.text in ("while", "until") for w in pos[:i])
@@ -255,8 +255,8 @@ def _check_simple(cmd, depth, placement_required, pending_loop, command):
         i += 1
     if i >= len(pos):
         return None
-    if placement_required:
-        reason = check_bare_tests(pos[i:], False)
+    if placement_required or checkout:
+        reason = check_bare_tests(pos[i:], False, placement_required=placement_required, checkout=checkout)
         if reason:
             return reason
     wrapped = _basename(pos[i].text) in _WRAPPERS
@@ -277,12 +277,12 @@ def _check_simple(cmd, depth, placement_required, pending_loop, command):
                 return _CLAUDE_BG_LAUNCHER_MSG
         elif name in _SHELLS:
             for string in _shell_strings(pos, j + 1):
-                reason = check_command(string, depth + 1, placement_required)
+                reason = check_command(string, depth + 1, placement_required, checkout=checkout)
                 if reason:
                     return reason
         elif name == "eval" and not evaled:
             evaled = True
-            reason = check_command(" ".join(w.text for w in pos[j + 1:]), depth + 1, placement_required)
+            reason = check_command(" ".join(w.text for w in pos[j + 1:]), depth + 1, placement_required, checkout=checkout)
             if reason:
                 return reason
     return None
@@ -290,7 +290,7 @@ def _check_simple(cmd, depth, placement_required, pending_loop, command):
 
 # ─── deny-rule entry point ──────────────────────────────────────────────
 
-def check_command(command, depth=0, placement_required=None):
+def check_command(command, depth=0, placement_required=None, *, checkout=None):
     """The deny message for `command`, or None to allow. Never raises: a
     command that cannot be scanned is denied (fail closed)."""
     if depth > _MAX_C_DEPTH:
@@ -306,7 +306,7 @@ def check_command(command, depth=0, placement_required=None):
                 return _HEREDOC_MSG % (delim, delim)
         pending_loop = False
         for cmd in commands:
-            reason = _check_simple(cmd, depth, placement_required, pending_loop, command)
+            reason = _check_simple(cmd, depth, placement_required, pending_loop, command, checkout)
             if reason:
                 return reason
             pending_loop = (cmd[-1].plain and cmd[-1].text in ("while", "until")

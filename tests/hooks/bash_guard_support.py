@@ -45,12 +45,12 @@ def payload(command, tool="Bash"):
     return json.dumps({"tool_name": tool, "tool_input": {"command": command}})
 
 
-def run_hook(stdin):
+def run_hook(stdin, *, cwd=None):
     """Run tools/hooks/bash_guard.py with `stdin` (str or bytes); returns the CompletedProcess."""
     data = stdin if isinstance(stdin, bytes) else stdin.encode("utf-8")
     return subprocess.run([sys.executable, "-I", str(HOOK)], input=data,
-                          capture_output=True, timeout=60)
+                          capture_output=True, timeout=60, cwd=cwd)
 
 
-def run_bash(command):
-    return run_hook(payload(command))
+def run_bash(command, *, cwd=None):
+    return run_hook(payload(command), cwd=cwd)
