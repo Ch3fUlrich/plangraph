@@ -250,3 +250,16 @@ def test_check_lists_gates_with_cancelled_dependencies(json_mode, capsys):
         assert "CANCELLED-GATE-DEP demo:G -> demo:X" in out
         assert "CANCELLED-GATE-DEP demo:GOAL -> demo:X" in out
         assert "CANCELLED-GATE-DEP demo:WORK" not in out
+
+
+def test_check_lists_open_items_with_named_review_models(world, tmp_path, monkeypatch, capsys):
+    world.store.import_items(world.p("router"), [
+        defn("GOAL", ["A", "B"], kind="goal"),
+        defn("A", done_criteria="Receive one gpt-6.2-sol high review."),
+        defn("B", done_criteria="Receive an outside-family review."),
+    ])
+    assert run_main(world, tmp_path, monkeypatch, ["--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["named_review_models"] == [
+        {"key": "demo:A", "field": "done_criteria", "model": "gpt-6.2-sol"},
+    ]

@@ -68,6 +68,60 @@ def check_seat_clause_tier(done_criteria: str | None, tier: str) -> None:
             "(raise the tier or reduce the clause)")
 
 
+_REVIEW_FIELD_NAMES = ("done_criteria", "description")
+_REVIEW_ACTOR = r"review(?:s|ed|ing|er|ers)?|seats?|approv(?:e|es|al)|verdicts?|sign[- ]?off"
+_MODEL_WORD = re.compile(r"[a-z0-9][a-z0-9._/-]*", re.IGNORECASE)
+_BEFORE_MODEL = re.compile(
+    rf"\b(?:{_REVIEW_ACTOR})(?:[ \t]+(?:seat|model|from|by|with|on|using|via|is|of|a|an|the)){{0,4}}"
+    r"(?:[ \t]+|[ \t]*[:=][ \t]*)[`*'\"]*$", re.IGNORECASE)
+_AFTER_MODEL = re.compile(
+    rf"^[`*'\"]*(?:[ \t]+(?:low|medium|high|xhigh|max|ultra|independent|external))?"
+    rf"(?:[ \t]+|[ \t]*-[ \t]*)(?:{_REVIEW_ACTOR})\b", re.IGNORECASE)
+
+
+def _review_model_names():
+    from ..planner.legs import spawnable_legs
+
+    names = set()
+    for leg in spawnable_legs():
+        for name in (leg.id, leg.model, leg.model.rsplit("/", 1)[-1]):
+            name = name.lower()
+            names.update((name, name.removeprefix("cx-")))
+            if leg.effort:
+                base = name.removesuffix("-" + leg.effort)
+                names.update((base, base.removeprefix("cx-")))
+    return names
+
+
+def named_review_models(fields, *, names=None):
+    """Yield (field, model or leg ID) for review clauses in a definition."""
+    names = _review_model_names() if names is None else names
+    for field in _REVIEW_FIELD_NAMES:
+        text = fields.get(field) or ""
+        for match in _MODEL_WORD.finditer(text):
+            word = match.group().rstrip(".")
+            if word.lower() not in names:
+                continue
+            end = match.start() + len(word)
+            if _BEFORE_MODEL.search(text[:match.start()]) or _AFTER_MODEL.match(text[end:]):
+                yield field, word
+
+
+def review_model_findings(items):
+    """List review clauses that pin a model on nonterminal snapshot items."""
+    names = _review_model_names()
+    return sorted({(item["key"], field, model)
+                   for item in items if item.get("key")
+                   and item.get("state") not in ("done", "closed", "cancelled")
+                   for field, model in named_review_models(item, names=names)})
+
+
+def check_named_review_model(fields, key):
+    for field, model in named_review_models(fields):
+        raise Refused("validation", f"{key} {field} names {model!r} in a review clause; "
+                      "require a review seat outside every writer family")
+
+
 def default_review_tier(project: str, identifier: str, title: str, track: str) -> str:
     """The tier an item gets when nobody named one: ``high`` for risky work."""
     if project == "plangraph":

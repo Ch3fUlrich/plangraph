@@ -278,3 +278,23 @@ def test_description_edit_reports_the_superseded_contract(world_like):
     })
     assert "warnings" not in corrected
     assert "stale" not in world.store.show(router, key, brief=True)
+
+
+@pytest.mark.parametrize("field,clause", [
+    ("done_criteria", "Receive one gpt-6.2-sol high review."),
+    ("description", "Review by agy-gemini-4-hydrogen-high."),
+    ("done_criteria", "Get a review from `omniroute/cx-gpt-6.2-sol`."),
+])
+def test_define_and_edit_refuse_named_review_seats(world_like, field, clause):
+    fields = {field: clause}
+    with pytest.raises(Refused, match="a review seat outside every writer family"):
+        _create(world_like, **fields)
+    key = _create(world_like, done_criteria="Get a review from a seat outside every writer family.")
+    with pytest.raises(Refused, match="a review seat outside every writer family"):
+        world_like.store.edit_definition(world_like.p("router"), key, fields)
+
+
+def test_model_name_outside_review_clause_is_allowed(world_like):
+    _create(world_like,
+            description="Compare gpt-6.2-sol settings. A seat outside every writer family reviews the result.",
+            done_criteria="Review report records tests on gpt-6.2-sol.")

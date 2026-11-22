@@ -24,6 +24,7 @@ from .store_tiers import (
     REVIEW_TIERS,
     _REVIEW_KEYWORD,
     _TIER_FIELDS,
+    check_named_review_model,
     check_seat_clause_tier,
     default_review_tier,
     decision_tier_conflict,
@@ -206,6 +207,7 @@ class CreateMixin:
                                   "import only honours open/claimed/in_review")
         else:
             for definition in defs:
+                check_named_review_model(definition, definition["key"])
                 check_seat_clause_tier(definition.get("done_criteria"),
                                        definition["review_tier"])
                 definition["state"] = "open"
@@ -456,6 +458,7 @@ class CreateMixin:
             deps_derived = True
         edit_fields = dict(rest)
         self._check_text(edit_fields, key)        # caps + credential guard (incl. estimate_src)
+        check_named_review_model(edit_fields, key)
         # PG-ESTIMATE-SRC-EDIT: an estimate needs a stated source, otherwise the
         # audit-meta ``default`` marker keeps flagging the item forever.  An
         # ``estimate_h`` edit that does not say where the number came from
