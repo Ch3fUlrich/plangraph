@@ -142,7 +142,7 @@ def read_skill(name: str, cwd: str | None) -> str | None:
     return None
 
 
-_LEGACY_REVIEW_TOOLS_END = '\n<!-- PLANGRAPH NATIVE REVIEW TOOLS END -->'
+_LEGACY_REVIEW_TOOLS_END = '\n<!-- PLANGRAPH NATIVE REVIEW TOOLS END -->\n=== ITEM CONTEXT\n'
 _REVIEW_SKILL_OPEN = '[review-skill]\n'
 _REVIEW_SKILL_CLOSE = '\n[/review-skill]\n\n'
 _LEADING_TOOLS_BLOCK = re.compile(r'\s*\[tools-only\](?P<text>.*?)\[/tools-only\]\s*', re.DOTALL)
@@ -191,9 +191,8 @@ def compose(prompt: str, role: str, harness: str | None, cwd: str | None, leg_id
             native = brief if inline_review else block + '\n\n' + body
             return head + '\n\n' + native
     if inline_review:
-        rules, context_boundary, context = body.partition('\n=== ITEM CONTEXT\n')
-        if (body.startswith('Role: independent reviewer;') and context_boundary
-                and rules.endswith(_LEGACY_REVIEW_TOOLS_END)):
+        _, boundary, context = body.partition(_LEGACY_REVIEW_TOOLS_END)
+        if boundary and body.startswith('Role: independent reviewer;'):
             return head + '\n\n=== ITEM CONTEXT\n' + context
         body = _without_review_skill(body, cwd)
     name = None if inline_review else skill_name(role, body)
