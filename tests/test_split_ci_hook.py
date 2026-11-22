@@ -44,7 +44,8 @@ def test_hook_preflight_keeps_policy_context(tmp_path, monkeypatch, ref, fast, e
     monkeypatch.setitem(scope, 'read_train_manifest', lambda _: manifest)
     monkeypatch.setitem(scope, 'train_gate', lambda head, parts: train_gates.append((head, parts)))
     monkeypatch.setitem(scope, 'commit_gate',
-                        lambda head, open_prs=True: commit_gates.append((head, open_prs)) or 0)
+                        lambda head, remote_ref, remote_sha, *, open_prs=True:
+                        commit_gates.append((head, remote_ref, remote_sha, open_prs)) or 0)
     monkeypatch.setitem(scope, 'base_commit', lambda *a: 'base')
     monkeypatch.setitem(scope, 'affected_base_commit', lambda *a: 'affected-base')
     monkeypatch.setitem(scope, 'main_baselines', lambda *a: [])
@@ -71,7 +72,7 @@ def test_hook_preflight_keeps_policy_context(tmp_path, monkeypatch, ref, fast, e
     assert hook['push_main']() == result
     assert size_heads == [pushed_head]
     assert train_gates == ([(pushed_head, manifest)] if expected_train else [])
-    assert commit_gates == [(pushed_head, not expected_train)]
+    assert commit_gates == [(pushed_head, f"refs/heads/{ref}", "0" * 40, not expected_train)]
     assert len(calls) == 1
     assert worktrees == []
     command, options = calls[0]
