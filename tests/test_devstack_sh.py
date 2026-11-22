@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from _split_ci_environment import wait_for_test_child_exit
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "devstack.sh"
 BASH = shutil.which("bash") or "/bin/bash"
@@ -181,7 +183,7 @@ def test_stop_kills_temporal_and_stops_container_but_keeps_state(stack):
     pid = int((stack.state / "temporal.pid").read_text().strip())
     assert alive(pid)
     assert stack.run("stop").returncode == 0
-    assert not alive(pid)
+    assert wait_for_test_child_exit(pid), f"temporal PID {pid} did not exit"
     lines = stack.lines()
     assert "docker stop devstack-test-pg" in lines
     assert not any(l.startswith("docker rm") for l in lines)
