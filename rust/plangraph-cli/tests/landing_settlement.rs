@@ -279,6 +279,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import merge_batch_build as build
 import merge_batch_land as land
+import merge_batch_util as util
 
 with TemporaryDirectory() as directory, ExitStack() as stack:
     path = Path(directory)
@@ -294,6 +295,7 @@ with TemporaryDirectory() as directory, ExitStack() as stack:
         for name, value in dict(landing_journal=journal, keeper_landing_configured=lambda: True,
                                 load_state=lambda name: state).items():
             stack.enter_context(patch.object(module, name, value))
+    stack.enter_context(patch.object(util, 'git', return_value=Mock(stdout='')))
     for name, value in dict(git=Mock(side_effect=[Mock(stdout=''), Mock(stdout='c'*40), Mock()]),
                             gh=Mock(return_value=Mock(stdout='https://example.org/example/repo/pull/17')),
                             adopt_open_pr=Mock(), render_body=Mock(return_value='body'),
@@ -340,10 +342,12 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 import merge_batch_land as land
+import merge_batch_util as util
 
 repo, base, head = 'example/repo', 'a'*40, 'b'*40
 state = dict(repo=repo, status='pushed', pr=17, name='train', base_head=base, head=head,
-             branch='batch/train')
+             branch='batch/train', worktree='fixture',
+             merged=[dict(pr=5, head='c'*40, merge='d'*40, items=['example:PART'])])
 args = SimpleNamespace(batch_pr=17, approval='approval.txt', checks='', go_row=None)
 lease = {'token': 42, 'owner': 'test'}
 
@@ -362,6 +366,7 @@ for refused in (False, True):
         raise land.MergeBatchError('host merge boundary')
 
     with ExitStack() as stack:
+        stack.enter_context(patch.object(util, 'git', return_value=Mock(stdout='')))
         for name in ('check_approval', 'require_part_seats', 'require_current_base', 'save_state',
                      'require_green', 'record_reruns', 'prepare_train', 'require_main_green', 'require_migration_go',
                      'merge_trailers'):
