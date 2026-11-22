@@ -75,3 +75,23 @@ fn tool_dependent_review_instructions_sit_inside_the_tools_only_block() {
         "{outside}"
     );
 }
+
+#[test]
+fn review_tests_evidence_distinguishes_untested_accepts() {
+    let head = "b".repeat(40);
+    let paths = ["src/lib.rs".to_owned()];
+    for (evidence, expected) in [
+        ("", false),
+        ("TESTS: none: Bash denied\n", false),
+        (
+            "```text\nTESTS: cargo test -p fixture — 1 passed\n```\n",
+            false,
+        ),
+        ("TESTS: cargo test -p fixture — 1 passed\n", true),
+    ] {
+        let text = format!("FILES READ: src/lib.rs\n{evidence}VERDICT: ACCEPT\n");
+        let review = review_verdict(&text, &head, &paths);
+        assert_eq!(review["verdict"], "ACCEPT");
+        assert_eq!(review["tested"], expected, "{text}");
+    }
+}

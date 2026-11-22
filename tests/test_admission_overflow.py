@@ -563,3 +563,77 @@ def test_build_review_refuses_remote_orchestration_route(orchestration, monkeypa
     assert record['status'] == 'refused'
     assert 'host-b: review workspace requires a registered worker host' in record['reason']
     remote.assert_not_called()
+
+
+def test_native_disk_refusal_is_terminal_and_notifies_named_parent(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready, seat_spawn
+
+    state = tmp_path / 'state'
+    keeper = Mock()
+    service = overflow.cli.SpawnService(state=state, keeper_sink=keeper)
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '0')
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
+    monkeypatch.setattr(o, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(o, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(o, 'ready_records', lambda *args: {})
+    monkeypatch.setattr(host_ready, 'local_disk_admission', lambda *args, **kwargs:
+                        (None, 'cargo_target_cap: cache full'))
+    card = dict(run_kind='native-codex', repo=str(tmp_path), item_key='demo:A',
+                parent_session='fixture-parent')
+
+    refusal = service.admit_spawn({'role': 'implement'}, card=card)
+    assert overflow.cli.spawn_exit_code(refusal) != 0
+    assert refusal['status'] == 'refused' and refusal['ended'] >= refusal['started']
+    event = json.loads((state / 'inbox/fixture-parent.jsonl').read_text())
+    assert event['event'] == 'REFUSED' and event['run_id'] == refusal['run_id']
+    assert event['item'] == 'demo:A' and 'cargo_target_cap' in event['reason']
+    keeper.deliver.assert_called_once_with('keeper', event)
+
+
+def test_native_spawn_cli_returns_nonzero_for_zero_exit_refusal(tmp_path, monkeypatch, capsys):
+    receipt = dict(status='refused', exit_code=0, reason='cargo_target_cap: cache full')
+    child = Mock(stdin=ioverflow.StringIO(), stdout=ioverflow.StringIO(json.dumps(receipt) + '\n'))
+    monkeypatch.setattr(overflow.cli, '_start_supervisor', Mock(return_value=child))
+    card = json.dumps(dict(run_kind='native-codex', repo=str(tmp_path)))
+    assert overflow.cli.main(['--state', str(tmp_path), 'spawn', '--card', card, 'fixture']) == 1
+    assert json.loads(capsys.readouterr().out) == receipt
+
+
+def test_placed_native_writer_retries_a_cleared_cache_cap(tmp_path, monkeypatch):
+    from plangraph.spawner import host_ready, seat_spawn
+
+    service = overflow.cli.SpawnService(state=tmp_path / 'state', keeper_sink=Mock())
+    monkeypatch.setenv('PLANGRAPH_PLACED_HOST', 'fixture')
+    monkeypatch.setenv('PLANGRAPH_ADMISSION_WAIT_S', '60')
+    monkeypatch.setattr(seat_spawn, '_sleep', lambda _: None)
+    monkeypatch.setattr(seat_spawn, 'resources', lambda service: (0, 50000))
+    monkeypatch.setattr(o, 'placement_policy', lambda *args: ('fixture', False))
+    monkeypatch.setattr(o, 'placement_config', lambda *args: {'hosts': {}})
+    monkeypatch.setattr(o, 'ready_records', lambda *args: {})
+    disk = Mock(side_effect=[(None, 'cargo_target_cap: cache full'), (None, None)])
+    monkeypatch.setattr(host_ready, 'local_disk_admission', disk)
+    options = {'role': 'implement'}
+    card = dict(run_kind='native-codex', repo=str(tmp_path))
+    assert service.admit_spawn(options, card=card) is None
+    assert disk.call_count == 2
+    assert options['_placement']['host'] == 'fixture'
+    assert service.ps()['runs'] == []
+
+
+def test_native_shared_cache_cap_scales_and_probes_symlink_target(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from plangraph.spawner import host_ready as h
+
+    target = tmp_path / 'target'
+    target.mkdir()
+    link = tmp_path / 'target-link'
+    link.symlink_to(target)
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_DIR', str(link))
+    monkeypatch.setenv('PLANGRAPH_CARGO_TARGET_CAP_GB', '12')
+    monkeypatch.setattr(h, 'cargo_target_size_gb', lambda path: 20)
+    probe = Mock(return_value=10)
+    monkeypatch.setattr(h, 'disk_free_gb', probe)
+    monkeypatch.setattr(h, 'cargo_run_busy', lambda row: True)
+    service = SimpleNamespace(ps=lambda: {'runs': [dict(role='implement', status='running')]})
+    assert h.local_disk_refusal(tmp_path / 'checkout', service, native=True) is None
+    probe.assert_any_call(target)
