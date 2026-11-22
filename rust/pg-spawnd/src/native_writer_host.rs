@@ -8,7 +8,6 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
     process::Command,
-    time::Duration,
 };
 
 /// Lead writer leg cx-gpt-6.2-sol-medium (operator D-6397).
