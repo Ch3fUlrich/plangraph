@@ -59,7 +59,7 @@ def transcript(answer, *, result=True, tool_turn=False, stop="end_turn", is_erro
     return lines
 
 
-ANSWER = "Finding: none.\nTEST-GAMING: no\nVERDICT: PASS"
+ANSWER = "Finding: none.\nTEST-GAMING: no\nFILES READ: src/lib.rs\nVERDICT: PASS"
 
 
 def test_the_raw_stream_has_no_parseable_verdict():
