@@ -28,17 +28,20 @@ def claude_access_args(role: str, tool_mode: str = "tools") -> list[str]:
             "--disable-slash-commands"]
 
 
-def configure_review_tests(argv, env, leg, role, run_dirs, job_id):
+def configure_review_tests(argv, env, leg, role, run_dirs, job_id, *, review_target=None):
     """Apply the Sonnet review profile to the actual launch and its subprocesses."""
     from plangraph.planner.legs import REVIEW_SONNET
 
     if role != "review" or leg is None or leg.id != REVIEW_SONNET or leg.tool_mode != "tools":
         return
-    scratch = Path(mkdtemp(prefix="plangraph-claude-review-")).resolve()
+    target = Path(review_target).resolve() if review_target else None
+    scratch = Path(mkdtemp(prefix="plangraph-claude-review-",
+                           dir=target.parent if target else None)).resolve()
     run_dirs[job_id] = scratch
-    target = scratch / "cargo-target"
-    target.mkdir()
-    env.update(CARGO_TARGET_DIR=str(target), CLAUDE_CODE_TMPDIR=str(scratch),
+    target = target or (scratch / "cargo-target")
+    target.mkdir(exist_ok=True)
+    env.update(CARGO_TARGET_DIR=str(target), CARGO_BUILD_BUILD_DIR=str(target),
+               CLAUDE_CODE_TMPDIR=str(scratch),
                TMPDIR=str(scratch), PYTHONDONTWRITEBYTECODE="1",
                PYTEST_ADDOPTS="-p no:cacheprovider", CARGO_NET_OFFLINE="true",
                GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
@@ -58,10 +61,13 @@ def configure_review_tests(argv, env, leg, role, run_dirs, job_id):
                    "~/.claude.json", "~/.git-credentials", "~/.netrc"]
     if config := env.get("CLAUDE_CONFIG_DIR"):
         credentials.append(str(Path(config).resolve()))
+    writable = [str(scratch)]
+    if review_target:
+        writable.append(str(target))
     settings = {"sandbox": {
         "enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
         "autoAllowBashIfSandboxed": False, "excludedCommands": [],
-        "filesystem": {"denyWrite": ["."], "allowWrite": [str(scratch)],
+        "filesystem": {"denyWrite": ["."], "allowWrite": writable,
                        "denyRead": credentials},
     }}
     for flag, value in [

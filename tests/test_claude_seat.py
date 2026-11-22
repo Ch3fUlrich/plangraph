@@ -93,6 +93,25 @@ def test_package_resource():
     assert "config/*.json" in packaging["tool"]["setuptools"]["package-data"]["plangraph"]
 
 
+def test_sonnet_keeps_worker_cargo_target(tmp_path):
+    from plangraph.planner.legs import EXPLICIT_LEGS, REVIEW_SONNET
+    from plangraph.routing_support.claude_seat import configure_review_tests
+
+    leg = next(leg for leg in EXPLICIT_LEGS if leg.id == REVIEW_SONNET)
+    argv = claude_access_args("review")
+    target = tmp_path / "target"
+    env, run_dirs = {"CARGO_TARGET_DIR": str(target)}, {}
+    configure_review_tests(argv, env, leg, "review", run_dirs, "fixture",
+                           review_target=str(target))
+
+    sandbox = json.loads(argv[argv.index("--settings") + 1])["sandbox"]
+    assert Path(env["CARGO_TARGET_DIR"]) == target
+    assert Path(env["CARGO_BUILD_BUILD_DIR"]) == target
+    assert Path(env["TMPDIR"]) == run_dirs["fixture"]
+    assert run_dirs["fixture"].parent == target.parent
+    assert set(sandbox["filesystem"]["allowWrite"]) == {str(target), env["TMPDIR"]}
+
+
 def test_unknown_model_tools(monkeypatch):
     from plangraph.routing_support import clients
 
