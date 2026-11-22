@@ -142,6 +142,15 @@ def test_wrapped_assignment_is_masked_whole(newline, prefix, suffix, scrub):
     assert scrub(expected) == expected
 
 
+@pytest.mark.parametrize('newline', ['\n', '\r\n'])
+@pytest.mark.parametrize('quote', ['"', "'"])
+@pytest.mark.parametrize('scrub', [env_redact.redact, env_redact.redact_source, env_redact.redact_output])
+def test_wrapped_quoted_assignment_after_floor(newline, quote, scrub):
+    prefix = 'API_KEY=' + quote
+    text = prefix + 'gh' + 'p_' + 'A9' * 12 + newline + 'B8' * 6 + quote
+    assert scrub(text + newline + 'next') == prefix + '[REDACTED]' + quote + newline + 'next'
+
+
 def test_split_token_at_source_boundary_fails_closed(monkeypatch, tmp_path):
     prompt = 'sk-' + env_redact._source_block('synthetic123')
     assert str(prompt) == 'sk-' + 'synthetic123'
