@@ -573,6 +573,20 @@ print(json.dumps({'run_id': 'run-rv1', 'status': 'completed', 'host': 'fixture-w
     assert_eq!(deferred["status"], "deferred_to_batch_seat");
     assert_eq!(deferred["causes"][0]["reason"], "limited");
     assert_eq!(deferred["causes"][1]["leg"], "mimo-v2.6-pro");
+    fs::remove_file(state.join("no-review-seat")).unwrap();
+    check_review_resume_after_missing_client(&mut host, &base, &head, &cli);
+    check_late_review_reuses_completed_run(&mut host, &head, &cli);
+    check_review_replaces_unreadable_run(&mut host, &head, &cli);
+    fs::write(
+        &cli,
+        "import sys\nprint('wrapper failure', file=sys.stderr)\nsys.exit(10)\n",
+    )
+    .unwrap();
+    let error = host.review(&head, None).unwrap_err();
+    assert!(
+        error.contains("review CLI failed with exit code 10: wrapper failure"),
+        "{error}"
+    );
     // A spawner that prints no run record is an error, never a verdict.
     host.review_cli = vec!["true".into()];
     host.review_override = Some(("fixture".into(), "explicit fixture seat".into()));
@@ -601,7 +615,7 @@ card = json.loads(value('--card'))
 prompt = pathlib.Path(value('--prompt-file')).read_text()
 assert 'HIGH src/lib.rs:1 - previous finding' in prompt, prompt
 assert 'delta ' + card['diff_ref']['base'] + '..' + card['diff_ref']['head'] in prompt, prompt
-print(json.dumps(dict(run_id='run-retry', status='completed', stdout_tail='VERDICT: REQUEST_CHANGES')))
+print(json.dumps(dict(run_id='run-retry', status='completed', host='fixture-worker', head_sha=card['diff_ref']['head'], stdout_tail='VERDICT: REQUEST_CHANGES')))
 "#).unwrap();
     let retried = host.review(head, Some(&previous)).unwrap();
     assert_eq!(retried["verdict"], "REQUEST_CHANGES", "{retried}");
